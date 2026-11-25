@@ -153,10 +153,22 @@ function membershipDigest(ids: readonly string[]): string {
 }
 export function getDreamingHygieneCandidatesInDb(
 	db: ReadDb,
-	input: { readonly agentId: string; readonly limit?: number; readonly caps?: GraphHygieneCaps },
+	input: {
+		readonly agentId: string;
+		readonly limit?: number;
+		readonly caps?: GraphHygieneCaps;
+		readonly compartmentId?: number | null;
+	},
 ): readonly DreamingHygieneCandidate[] {
 	const limit = Math.min(Math.max(Math.floor(input.limit ?? 50), 1), 100);
 	const caps = input.caps;
+	const compartmentId = input.compartmentId ?? null;
+	const partitionSql = `WITH
+		entities AS (SELECT * FROM main.entities WHERE agent_id = ?1 AND compartment_id IS ?2),
+		entity_aspects AS (SELECT * FROM main.entity_aspects WHERE agent_id = ?1 AND compartment_id IS ?2),
+		entity_attributes AS (SELECT * FROM main.entity_attributes WHERE agent_id = ?1 AND compartment_id IS ?2),
+		entity_dependencies AS (SELECT * FROM main.entity_dependencies WHERE agent_id = ?1 AND compartment_id IS ?2)
+	`;
 	const candidates = new Map<string, DreamingHygieneCandidate>();
 	const add = (candidate: DreamingHygieneCandidate): void => {
 		const existing = candidates.get(candidate.subjectRef);
@@ -165,7 +177,7 @@ export function getDreamingHygieneCandidatesInDb(
 	if (caps !== undefined) {
 		const overCapAspects = db
 			.prepare(
-				`SELECT asp.id, asp.entity_id, asp.name, COUNT(attr.id) AS attribute_count
+				`${partitionSql}SELECT asp.id, asp.entity_id, asp.name, COUNT(attr.id) AS attribute_count
 				 FROM entity_aspects asp
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 				 LEFT JOIN entity_attributes attr ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id AND attr.status = 'active'
@@ -175,12 +187,19 @@ export function getDreamingHygieneCandidatesInDb(
 				 ORDER BY attribute_count DESC
 				 LIMIT ?`,
 			)
-			.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, caps.maxAttributesPerAspect, limit) as Array<{
-			id: string;
-			entity_id: string;
-			name: string;
-			attribute_count: number;
-		}>;
+			.all<{
+				id: string;
+				entity_id: string;
+				name: string;
+				attribute_count: number;
+			}>(
+				input.agentId,
+				compartmentId,
+				input.agentId,
+				...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
+				caps.maxAttributesPerAspect,
+				limit,
+			);
 		for (const aspect of overCapAspects) {
 			add({
 				subjectRef: `aspect:${aspect.id}`,
@@ -198,7 +217,7 @@ export function getDreamingHygieneCandidatesInDb(
 
 		const overCapEntities = db
 			.prepare(
-				`SELECT e.id, e.name, COUNT(asp.id) AS aspect_count
+				`${partitionSql}SELECT e.id, e.name, COUNT(asp.id) AS aspect_count
 				 FROM entities e
 				 LEFT JOIN entity_aspects asp ON asp.entity_id = e.id AND asp.agent_id = e.agent_id AND COALESCE(asp.status, 'active') = 'active'
 				 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
@@ -207,11 +226,18 @@ export function getDreamingHygieneCandidatesInDb(
 				 ORDER BY aspect_count DESC
 				 LIMIT ?`,
 			)
-			.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, caps.maxAspectsPerEntity, limit) as Array<{
-			id: string;
-			name: string;
-			aspect_count: number;
-		}>;
+			.all<{
+				id: string;
+				name: string;
+				aspect_count: number;
+			}>(
+				input.agentId,
+				compartmentId,
+				input.agentId,
+				...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
+				caps.maxAspectsPerEntity,
+				limit,
+			);
 		for (const entity of overCapEntities) {
 			add({
 				subjectRef: `entity:${entity.id}`,
@@ -229,19 +255,19 @@ export function getDreamingHygieneCandidatesInDb(
 
 	const entities = db
 		.prepare(
-			`SELECT e.id, e.name, e.canonical_name, e.entity_type, e.mentions
+			`${partitionSql}SELECT e.id, e.name, e.canonical_name, e.entity_type, e.mentions
 			 FROM entities e
 			 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 			 ORDER BY e.updated_at ASC
 			 LIMIT ?`,
 		)
-		.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit * 4) as Array<{
-		id: string;
-		name: string;
-		canonical_name: string | null;
-		entity_type: string;
-		mentions: number | null;
-	}>;
+		.all<{
+			id: string;
+			name: string;
+			canonical_name: string | null;
+			entity_type: string;
+			mentions: number | null;
+		}>(input.agentId, compartmentId, input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit * 4);
 	for (const entity of entities) {
 		const reason = reasonForEntity(
 			entity.name,
@@ -258,8 +284,14 @@ export function getDreamingHygieneCandidatesInDb(
 	}
 
 	const zeroAttributeEntities = db
-		.prepare(ZERO_ACTIVE_ATTRIBUTE_ENTITIES_SQL)
-		.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit) as Array<{ id: string; name: string }>;
+		.prepare(`${partitionSql}${ZERO_ACTIVE_ATTRIBUTE_ENTITIES_SQL}`)
+		.all<{ id: string; name: string }>(
+			input.agentId,
+			compartmentId,
+			input.agentId,
+			...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
+			limit,
+		);
 	for (const entity of zeroAttributeEntities) {
 		add({
 			subjectRef: `entity:${entity.id}`,
@@ -270,7 +302,7 @@ export function getDreamingHygieneCandidatesInDb(
 
 	const missingClaimKeys = db
 		.prepare(
-			`SELECT attr.id, attr.aspect_id, asp.entity_id
+			`${partitionSql}SELECT attr.id, attr.aspect_id, asp.entity_id
 			 FROM entity_attributes attr
 			 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
 			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
@@ -279,11 +311,11 @@ export function getDreamingHygieneCandidatesInDb(
 			 ORDER BY attr.updated_at ASC
 			 LIMIT ?`,
 		)
-		.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit) as Array<{
-		id: string;
-		aspect_id: string;
-		entity_id: string;
-	}>;
+		.all<{
+			id: string;
+			aspect_id: string;
+			entity_id: string;
+		}>(input.agentId, compartmentId, input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit);
 	for (const attribute of missingClaimKeys) {
 		add({
 			subjectRef: `attribute:${attribute.id}`,
@@ -299,7 +331,7 @@ export function getDreamingHygieneCandidatesInDb(
 
 	const genericAspects = db
 		.prepare(
-			`SELECT asp.id, asp.entity_id, asp.name
+			`${partitionSql}SELECT asp.id, asp.entity_id, asp.name
 			 FROM entity_aspects asp
 			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE asp.agent_id = ? AND COALESCE(asp.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
@@ -307,11 +339,11 @@ export function getDreamingHygieneCandidatesInDb(
 			 ORDER BY asp.updated_at ASC
 			 LIMIT ?`,
 		)
-		.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, ...GENERIC_ASPECTS, limit) as Array<{
-		id: string;
-		entity_id: string;
-		name: string;
-	}>;
+		.all<{
+			id: string;
+			entity_id: string;
+			name: string;
+		}>(input.agentId, compartmentId, input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, ...GENERIC_ASPECTS, limit);
 	for (const aspect of genericAspects) {
 		add({
 			subjectRef: `aspect:${aspect.id}`,
@@ -322,26 +354,32 @@ export function getDreamingHygieneCandidatesInDb(
 
 	const duplicateGroups = db
 		.prepare(
-			`SELECT e.canonical_name, COUNT(*) AS entity_count
+			`${partitionSql}SELECT e.canonical_name, COUNT(*) AS entity_count
 			 FROM entities e
 			 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 			   AND e.canonical_name IS NOT NULL AND TRIM(e.canonical_name) != ''
 			 GROUP BY e.canonical_name HAVING COUNT(*) > 1
 			 ORDER BY COUNT(*) DESC, e.canonical_name ASC LIMIT ?`,
 		)
-		.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit) as Array<{
-		canonical_name: string;
-		entity_count: number;
-	}>;
+		.all<{
+			canonical_name: string;
+			entity_count: number;
+		}>(input.agentId, compartmentId, input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit);
 	for (const group of duplicateGroups) {
 		const memberIds = db
 			.prepare(
-				`SELECT e.id FROM entities e
+				`${partitionSql}SELECT e.id FROM entities e
 				 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 				   AND e.canonical_name = ?
 				 ORDER BY e.id ASC`,
 			)
-			.all(input.agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, group.canonical_name) as Array<{ id: string }>;
+			.all<{ id: string }>(
+				input.agentId,
+				compartmentId,
+				input.agentId,
+				...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
+				group.canonical_name,
+			);
 		add({
 			subjectRef: `duplicate:${group.canonical_name}`,
 			details: {
@@ -356,7 +394,7 @@ export function getDreamingHygieneCandidatesInDb(
 
 	const genericLinks = db
 		.prepare(
-			`SELECT dep.id, dep.source_entity_id, dep.target_entity_id
+			`${partitionSql}SELECT dep.id, dep.source_entity_id, dep.target_entity_id
 			 FROM entity_dependencies dep
 			 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
 			 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
@@ -366,12 +404,14 @@ export function getDreamingHygieneCandidatesInDb(
 			   AND ${SEMANTIC_ENTITY_FRAGMENT.replaceAll("e.", "dst.")}
 			 ORDER BY dep.updated_at ASC LIMIT ?`,
 		)
-		.all(
+		.all<{ id: string; source_entity_id: string; target_entity_id: string }>(
+			input.agentId,
+			compartmentId,
 			input.agentId,
 			...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
 			...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
 			limit,
-		) as Array<{ id: string; source_entity_id: string; target_entity_id: string }>;
+		);
 	for (const link of genericLinks) {
 		add({
 			subjectRef: `link:${link.id}`,

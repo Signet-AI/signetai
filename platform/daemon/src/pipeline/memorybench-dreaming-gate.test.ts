@@ -4,10 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import type { DreamingConfig } from "@signet/core";
-import { runMigrations } from "../../../core/src/migrations";
-import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { MIGRATIONS } from "../../../core/src/migrations";
+import { type DbAccessor, prepareTypedStatement, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { searchEpisodicSources } from "../episodic-sources";
+import { writeSessionTranscriptRow } from "../session-transcripts";
 import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "../transcript-capture-worker";
 import { getDreamingToolCalls, runDreamingAgentPass } from "./dreaming";
 import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
@@ -222,7 +224,7 @@ describe("MemoryBench Dreaming gate", () => {
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		for (const migration of MIGRATIONS) migration.up(db);
 		accessor = wrapDb(db);
 	});
 
@@ -271,61 +273,60 @@ describe("MemoryBench Dreaming gate", () => {
 				corpus.scenarios.flatMap((scenario) => scenario.sessions.map((session) => session.agentId ?? scenario.agentId)),
 			),
 		];
-		const result = await runDreamingAgentPass(
-			accessor,
-			{
-				async run(input) {
-					const search = input.tools.find((tool) => tool.name === "search_evidence");
-					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
-					if (!search || !apply) throw new Error("MemoryBench gate requires canonical Dreaming tools");
+		const passes: Array<{ agentId: string; passId: string; applied: number; failed: number }> = [];
+		for (const agentId of agentIds) {
+			const result = await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
+						if (!search || !apply) throw new Error("MemoryBench gate requires canonical Dreaming tools");
 
-					for (const agentId of agentIds) {
-						await search.execute("search", { agentId }, undefined, undefined, {} as never);
-					}
-					for (const scenario of corpus.scenarios) {
-						const outcome = scenario.expected.semanticOutcome;
-						const operations = scenario.expected.sourceQuotes.map((quote, index) => ({
-							operation: "add_claim_value",
-							payload: {
-								entityId: fixtureEntityId(scenario),
-								aspectId: fixtureAspectId(scenario),
-								claimKey: outcome.claimKey,
-								value: outcome.value,
-							},
-							reason: "Committed MemoryBench fixture evidence supports this semantic outcome.",
-							evidence: [
-								{
-									source_ref: `transcript:${scenario.expected.sourceSessionIds[index]}`,
-									source_kind: "transcript",
-									source_id: scenario.expected.sourceSessionIds[index],
-									quote,
+						await search.execute("search", { agentId });
+						for (const scenario of corpus.scenarios.filter((scenario) => scenario.agentId === agentId)) {
+							const outcome = scenario.expected.semanticOutcome;
+							const operations = scenario.expected.sourceQuotes.map((quote, index) => ({
+								operation: "add_claim_value",
+								payload: {
+									entityId: fixtureEntityId(scenario),
+									aspectId: fixtureAspectId(scenario),
+									claimKey: outcome.claimKey,
+									value: outcome.value,
 								},
-							],
-						}));
-						const toolResult = readToolResult(
-							await apply.execute(
-								"apply",
-								{ agentId: scenario.agentId, operations },
-								undefined,
-								undefined,
-								{} as never,
-							),
-						);
-						if (!toolResult.ok)
-							throw new Error(`Canonical apply failed for ${scenario.id}: ${JSON.stringify(toolResult)}`);
-					}
-					return { summary: "Applied committed MemoryBench fixture semantics" };
+								reason: "Committed MemoryBench fixture evidence supports this semantic outcome.",
+								evidence: [
+									{
+										source_ref: `transcript:${scenario.expected.sourceSessionIds[index]}`,
+										source_kind: "transcript",
+										source_id: scenario.expected.sourceSessionIds[index],
+										quote,
+									},
+								],
+							}));
+							const toolResult = readToolResult(
+								await apply.execute("apply", { agentId: scenario.agentId, operations }),
+							);
+							if (!toolResult.ok)
+								throw new Error(`Canonical apply failed for ${scenario.id}: ${JSON.stringify(toolResult)}`);
+						}
+						return { summary: "Applied committed MemoryBench fixture semantics" };
+					},
 				},
-			},
-			defaultCfg(),
-			"/tmp",
-			"memorybench",
-			agentIds,
-			"incremental",
-		);
+				defaultCfg(),
+				"/tmp",
+				agentId,
+				[agentId],
+				"incremental",
+			);
 
-		expect(result).toMatchObject({ applied: corpus.scenarios.length, failed: 0 });
-		const calls = await getDreamingToolCalls(accessor, "memorybench", result.passId);
+			passes.push({ agentId, ...result });
+		}
+		expect(passes.reduce((sum, pass) => sum + pass.applied, 0)).toBe(corpus.scenarios.length);
+		expect(passes.every((pass) => pass.failed === 0)).toBe(true);
+		const calls = (
+			await Promise.all(passes.map((pass) => getDreamingToolCalls(accessor, pass.agentId, pass.passId)))
+		).flat();
 		for (const scenario of corpus.scenarios) {
 			for (const sourceSessionId of scenario.expected.sourceSessionIds) {
 				expect(
@@ -356,6 +357,150 @@ describe("MemoryBench Dreaming gate", () => {
 					.get(scenario.agentId, outcome.entity, outcome.aspect, outcome.claimKey),
 			).toMatchObject({ content: outcome.value, proposal_evidence: expect.stringContaining("transcript:") });
 		}
+	});
+
+	it("files unnamed shared-agent speakers on distinct authenticated people in the deterministic fixture", async () => {
+		const corpus = z
+			.object({
+				agentId: z.string(),
+				users: z.array(
+					z.object({
+						id: z.string(),
+						username: z.string(),
+						displayName: z.string(),
+						sessionId: z.string(),
+						quote: z.string(),
+						claimKey: z.string(),
+						value: z.string(),
+					}),
+				),
+			})
+			.parse(
+				JSON.parse(
+					readFileSync(new URL("../../../../memorybench/config/dreaming-gate/speakers.json", import.meta.url), "utf8"),
+				),
+			);
+		db.prepare("UPDATE organization SET claimed_at='2026-01-01', agent_model='single'").run();
+		for (const user of corpus.users) {
+			expect(user.quote).not.toContain(user.displayName);
+			expect(user.quote).not.toContain(user.username);
+			db.prepare("INSERT INTO users (id,username,display_name,role) VALUES (?,?,?,'member')").run(
+				user.id,
+				user.username,
+				user.displayName,
+			);
+			expect(
+				writeSessionTranscriptRow(db, {
+					agentId: corpus.agentId,
+					sessionKey: user.sessionId,
+					transcript: `User: ${user.quote}`,
+					harness: "codex",
+					project: null,
+					author: { userId: user.id, credential: `key:${user.username}` },
+					completedAt: "2026-01-01T00:00:00.000Z",
+				}),
+			).toBe("written");
+		}
+		const deliveredSchema = z.object({
+			ok: z.literal(true),
+			items: z.array(
+				z.object({
+					sourceRef: z.string(),
+					content: z.string(),
+					speaker: z.object({
+						kind: z.literal("person"),
+						userId: z.string(),
+						personEntityId: z.string(),
+						personEntityName: z.string(),
+					}),
+				}),
+			),
+		});
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
+					if (!search || !apply) throw new Error("Canonical Dreaming tools required");
+					const delivered = deliveredSchema.parse(
+						readToolResult(await search.execute("search", { agentId: corpus.agentId })),
+					);
+					expect(delivered.items).toHaveLength(corpus.users.length);
+					for (const item of delivered.items) {
+						const user = corpus.users.find((user) => item.content.includes(user.quote));
+						if (!user) throw new Error("Unexpected fixture source");
+						expect(item.speaker.userId).toBe(user.id);
+						const evidence = [{ source_ref: item.sourceRef, quote: user.quote }];
+						const aspect = z
+							.object({ ok: z.literal(true), items: z.array(z.object({ result: z.object({ aspectId: z.string() }) })) })
+							.parse(
+								readToolResult(
+									await apply.execute("aspect", {
+										agentId: corpus.agentId,
+										operations: [
+											{
+												operation: "create_aspect",
+												payload: { entityId: item.speaker.personEntityId, name: "preferences" },
+												evidence,
+												reason: "The speaker disclosed a preference.",
+											},
+										],
+									}),
+								),
+							);
+						const aspectId = aspect.items[0]?.result.aspectId;
+						if (!aspectId) throw new Error("Canonical aspect creation did not return an aspect id");
+						expect(
+							readToolResult(
+								await apply.execute("claim", {
+									agentId: corpus.agentId,
+									operations: [
+										{
+											operation: "add_claim_value",
+											payload: {
+												entityId: item.speaker.personEntityId,
+												aspectId,
+												claimKey: user.claimKey,
+												value: user.value,
+											},
+											evidence,
+											reason: "The authenticated speaker disclosed this preference.",
+										},
+									],
+								}),
+							),
+						).toMatchObject({ ok: true });
+					}
+					return { summary: "Filed each authenticated speaker's disclosed preference." };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			corpus.agentId,
+			[corpus.agentId],
+			"incremental",
+		);
+		expect(result).toMatchObject({ failed: 0 });
+		const people = prepareTypedStatement<{
+			person_user_id: string;
+			name: string;
+			content: string;
+			proposal_evidence: string;
+		}>(
+			db,
+			`SELECT e.person_user_id, e.name, a.content, a.proposal_evidence FROM entities e
+			JOIN entity_aspects aspect ON aspect.entity_id=e.id JOIN entity_attributes a ON a.aspect_id=aspect.id WHERE e.agent_id=? ORDER BY e.person_user_id`,
+		).all(corpus.agentId);
+		expect(people).toHaveLength(2);
+		for (const user of corpus.users) {
+			expect(people.find((person) => person.person_user_id === user.id)).toMatchObject({
+				name: `${user.displayName} (${user.username})`,
+				content: user.value,
+				proposal_evidence: expect.stringContaining(`transcript:${user.sessionId}`),
+			});
+		}
+		expect(new Set(people.map((person) => person.name)).size).toBe(2);
 	});
 
 	it("indexes committed fixture sources through the transcript-capture boundary in their declared scopes", async () => {

@@ -431,6 +431,8 @@ export type DbOwnerRequest =
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }
 	| { readonly kind: "dreaming_episodic_backlog_probe"; readonly input: DbOwnerDreamingEpisodicBacklogProbe }
 	| { readonly kind: "dreaming_episodic_backlog_exists"; readonly input: DbOwnerDreamingEpisodicBacklogExists }
+	| { readonly kind: "dreaming_read_scope"; readonly input: { readonly agentId: string; readonly passId?: string } }
+	| { readonly kind: "dreaming_graph_read"; readonly input: DbOwnerDreamingGraphRead }
 	| { readonly kind: "dreaming_evidence_search"; readonly input: DbOwnerDreamingEvidenceSearch }
 	| { readonly kind: "dreaming_evidence_source"; readonly input: DbOwnerDreamingEvidenceSource }
 	| { readonly kind: "dreaming_evidence_review"; readonly input: DbOwnerDreamingEvidenceReview }
@@ -515,6 +517,7 @@ export interface DbOwnerVectorRepairResult {
 
 export interface DbOwnerDreamingHygieneAttention {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly limit?: number;
 	readonly caps?: {
 		readonly maxAspectsPerEntity: number;
@@ -524,6 +527,7 @@ export interface DbOwnerDreamingHygieneAttention {
 
 export interface DbOwnerDreamingSurprisalAttention {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly config: {
 		readonly enabled: boolean;
 		readonly sampleSize: number;
@@ -536,18 +540,38 @@ export interface DbOwnerDreamingSurprisalAttention {
 }
 export interface DbOwnerDreamingEpisodicBacklog {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 }
 export interface DbOwnerDreamingEpisodicBacklogProbe {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly tokenThreshold: number;
 	readonly maxSources: number;
 }
 export interface DbOwnerDreamingEpisodicBacklogExists {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
+}
+
+export interface DbOwnerDreamingGraphRead {
+	readonly tool: "search_entities" | "get_entity" | "list_aspect_claims" | "validate_proposal";
+	readonly agentId: string;
+	readonly passId?: string;
+	readonly query?: string;
+	readonly type?: string;
+	readonly entityId?: string;
+	readonly aspectId?: string;
+	readonly include?: readonly string[];
+	readonly direction?: "incoming" | "outgoing" | "both";
+	readonly limit?: number;
+	readonly offset?: number;
+	readonly name?: string;
+	readonly value?: string;
 }
 
 export interface DbOwnerDreamingEvidenceSearch {
 	readonly agentId: string;
+	readonly evidenceLeaseMs?: number;
 	readonly query?: string;
 	readonly since?: string;
 	readonly before?: string;
@@ -562,6 +586,7 @@ export interface DbOwnerDreamingEvidenceSearch {
 
 export interface DbOwnerDreamingEvidenceSource {
 	readonly agentId: string;
+	readonly passId?: string;
 	readonly sourceRef: string;
 }
 
@@ -599,6 +624,7 @@ export interface DbOwnerDreamingPassFinalize {
 
 export interface DbOwnerDreamingReviewDue {
 	readonly agentId?: string;
+	readonly readScope?: import("./read-scope").ReadScope;
 	readonly nowMs: number;
 	readonly limit: number;
 }

@@ -534,6 +534,7 @@ export function runDbOwnerWorker(): void {
 				enqueueDreamingAttentionInTx(db as never, {
 					agentId: request.input.agentId,
 					kind: "hygiene",
+					compartmentId: request.input.compartmentId,
 					subjectRef: candidate.subjectRef,
 					details: candidate.details,
 					priority: candidate.priority,
@@ -555,7 +556,13 @@ export function runDbOwnerWorker(): void {
 		context?: JobExecutionContext,
 	): unknown {
 		if (request.input.config.enabled === false) return null;
-		const selection = selectDreamingSurprisalInDb(db as never, request.input.agentId, request.input.config, null);
+		const selection = selectDreamingSurprisalInDb(
+			db as never,
+			request.input.agentId,
+			request.input.config,
+			null,
+			request.input.compartmentId,
+		);
 		if (selection.candidates.length === 0) return selection;
 		db.exec("BEGIN IMMEDIATE");
 		try {
@@ -563,6 +570,7 @@ export function runDbOwnerWorker(): void {
 				enqueueDreamingAttentionInTx(db as never, {
 					agentId: request.input.agentId,
 					kind: "surprisal",
+					compartmentId: request.input.compartmentId,
 					subjectRef: `memory:${candidate.id}`,
 					details: {
 						selector: DREAMING_SURPRISAL_SELECTOR_VERSION,
@@ -590,7 +598,11 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog" }>,
 	): Promise<number> {
 		const { getDreamingEpisodicTokenBacklogInDb } = await import("./pipeline/dreaming");
-		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId);
+		return await getDreamingEpisodicTokenBacklogInDb(
+			db as never,
+			request.input.agentId,
+			request.input.compartmentId ?? null,
+		);
 	}
 
 	async function executeDreamingEpisodicBacklogProbe(
@@ -602,6 +614,7 @@ export function runDbOwnerWorker(): void {
 			request.input.agentId,
 			request.input.tokenThreshold,
 			request.input.maxSources,
+			request.input.compartmentId ?? null,
 		);
 	}
 
@@ -609,14 +622,14 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_exists" }>,
 	): Promise<boolean> {
 		const { hasDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
-		return hasDreamingEpisodicBacklogInDb(db as never, request.input.agentId);
+		return hasDreamingEpisodicBacklogInDb(db as never, request.input.agentId, request.input.compartmentId ?? null);
 	}
 
 	async function executeDreamingEvidenceSearch(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_search" }>,
 	): Promise<unknown> {
 		const { searchDreamingEvidenceInDb } = await import("./pipeline/dreaming-capabilities");
-		return searchDreamingEvidenceInDb(db as never, request.input);
+		return withBusyRetry(() => searchDreamingEvidenceInDb(db as never, request.input));
 	}
 
 	async function executeDreamingEvidenceSource(
@@ -1249,6 +1262,14 @@ export function runDbOwnerWorker(): void {
 			return await executeDreamingEpisodicBacklogProbe(job.request);
 		if (job.request.kind === "dreaming_episodic_backlog_exists")
 			return await executeDreamingEpisodicBacklogExists(job.request);
+		if (job.request.kind === "dreaming_read_scope") {
+			const { readDreamingScopeInDb } = await import("./pipeline/dreaming-capabilities");
+			return readDreamingScopeInDb(db, job.request.input);
+		}
+		if (job.request.kind === "dreaming_graph_read") {
+			const { readDreamingGraphInDb } = await import("./pipeline/dreaming-capabilities");
+			return readDreamingGraphInDb(db, job.request.input);
+		}
 		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
 		if (job.request.kind === "dreaming_evidence_review") return await executeDreamingEvidenceReview(job.request);

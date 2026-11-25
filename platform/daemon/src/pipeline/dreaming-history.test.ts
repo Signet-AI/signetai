@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { up as upgradeDreaming } from "../../../core/src/migrations/179-dreaming-evidence-leases";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "../db-owner-client";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
@@ -25,6 +26,7 @@ describe("dreaming history", () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-dreaming-history-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		getDbAccessor().withWriteTx((db) => upgradeDreaming(db));
 	});
 
 	afterEach(async () => {
@@ -106,6 +108,105 @@ describe("dreaming history", () => {
 				}>,
 		);
 	}
+
+	it("keeps hidden history out of default render and zoom", async () => {
+		insertPass("secret-pass", 1);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_passes SET compartment_id=1 WHERE id='secret-pass'").run();
+			db.prepare(
+				"INSERT INTO dreaming_history_nodes(agent_id,scope_key,level,idx,pass_id,text,compartment_id) VALUES(?,?,0,0,'secret-pass','secret-history',1)",
+			).run(AGENT, SCOPE);
+		});
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("(no earlier passes)");
+		expect(
+			await zoomDreamingHistory(getDbAccessor(), {
+				agentId: AGENT,
+				scopeKey: SCOPE,
+				allowedScopes: [SCOPE],
+				id: 0,
+				n: 1,
+			}),
+		).toEqual({ ok: false, error: "No line 0+1." });
+	});
+
+	it("builds independent immutable label streams without sharing compaction inputs", async () => {
+		insertPass("public-pass", 1);
+		insertPass("classified-pass", 2);
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"UPDATE dreaming_passes SET compartment_id=1 WHERE id='classified-pass'; UPDATE dreaming_tool_calls SET compartment_id=1 WHERE pass_id='classified-pass'",
+			);
+		});
+		const publicCompleter = recordingCompleter(() => "public-line");
+		const classifiedCompleter = recordingCompleter(() => "classified-line");
+		expect(await compactDreamingHistory(getDbAccessor(), publicCompleter, AGENT, SCOPE)).toBe(1);
+		expect(await compactDreamingHistory(getDbAccessor(), classifiedCompleter, AGENT, SCOPE, { compartmentId: 1 })).toBe(
+			1,
+		);
+		expect(publicCompleter.prompts.join("\n")).not.toContain("Summary of classified-pass");
+		expect(classifiedCompleter.prompts.join("\n")).not.toContain("Summary of public-pass");
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("0+1|public-line");
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE], 1)).toBe("0+1|classified-line");
+	});
+
+	it("quarantines legacy streams whose leaves were relabeled after compaction", async () => {
+		insertPass("reclassified", 1);
+		await compactDreamingHistory(
+			getDbAccessor(),
+			recordingCompleter(() => "legacy mixed secret"),
+			AGENT,
+			SCOPE,
+		);
+		getDbAccessor().withWriteTx((db) => db.exec("UPDATE dreaming_passes SET compartment_id=1 WHERE id='reclassified'"));
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("(no earlier passes)");
+		expect(
+			await zoomDreamingHistory(getDbAccessor(), {
+				agentId: AGENT,
+				scopeKey: SCOPE,
+				allowedScopes: [SCOPE],
+				id: 0,
+				n: 1,
+			}),
+		).toEqual({ ok: false, error: "No line 0+1." });
+		getDbAccessor().withWriteTx((db) => db.exec("DELETE FROM dreaming_passes WHERE id='reclassified'"));
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("(no earlier passes)");
+	});
+
+	it("rejects a history result when classification changes during inference", async () => {
+		insertPass("race", 1);
+		const completer = recordingCompleter(() => {
+			getDbAccessor().withWriteTx((db) => db.exec("UPDATE dreaming_classification_epoch SET epoch=epoch+1 WHERE id=1"));
+			return "stale line";
+		});
+		await expect(compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)).rejects.toThrow(
+			"compartment_mismatch",
+		);
+		expect(storedNodes()).toEqual([]);
+	});
+
+	it("rechecks the pass label at history publication even when the epoch is unchanged", async () => {
+		insertPass("label-race", 1);
+		const completer = recordingCompleter(() => {
+			getDbAccessor().withWriteTx((db) => db.exec("UPDATE dreaming_passes SET compartment_id=1 WHERE id='label-race'"));
+			return "old label line";
+		});
+		await expect(compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)).rejects.toThrow(
+			"compartment_mismatch",
+		);
+		expect(storedNodes()).toEqual([]);
+	});
+
+	it("refuses to move a pass after its immutable history stream exists", async () => {
+		insertPass("fixed", 1);
+		await compactDreamingHistory(
+			getDbAccessor(),
+			recordingCompleter(() => "fixed line"),
+			AGENT,
+			SCOPE,
+		);
+		await expect(narrowDreamingPassScopeKey(getDbAccessor(), "fixed", ["other-scope"])).rejects.toThrow("immutable");
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("0+1|fixed line");
+	});
 
 	it("compresses finished passes in order with a fresh directive, skipping passes that did no work", async () => {
 		insertPass("p1", 1);

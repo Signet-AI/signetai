@@ -1112,6 +1112,13 @@ describe("Dreaming", () => {
 		});
 	});
 
+	it("isolates failure backoff between compartments of one agent", async () => {
+		await recordDreamingFailure(accessor, AGENT, 7);
+		expect((await getDreamingState(accessor, AGENT)).consecutiveFailures).toBe(0);
+		expect((await getDreamingState(accessor, AGENT, 7)).consecutiveFailures).toBe(1);
+		expect((await getDreamingState(accessor, AGENT, 8)).consecutiveFailures).toBe(0);
+	});
+
 	it("uses wall-clock backoff independently of later evidence volume", async () => {
 		seedSummary(db, "first", "episodic source", 10);
 		await recordDreamingFailure(accessor, AGENT);
@@ -1465,7 +1472,7 @@ describe("Dreaming", () => {
 		const first = pendingDreamingEvidenceContinuations(tracedDb, AGENT, 20);
 		expect(continuationQueries).toHaveLength(1);
 		expect(continuationQueries[0]).toContain("LIMIT ?");
-		expect(continuationArgs).toEqual([[AGENT, 3, null, null, 20]]);
+		expect(continuationArgs).toEqual([[AGENT, 3, null, null, null, null, null, null, 20]]);
 		expect(first.map((source) => source.id)).toEqual(
 			Array.from({ length: 20 }, (_, index) => `prior-partial-${index.toString().padStart(2, "0")}`),
 		);
@@ -1899,7 +1906,7 @@ describe("Dreaming", () => {
 		const plan = explainSqliteQueryPlan(db, query);
 
 		expect(query.parameters[query.parameters.length - 1]).toBe(51);
-		expect(plan.some((row) => row.detail.includes("idx_memories_agent_kind"))).toBe(true);
+		expect(plan.some((row) => /SEARCH memories .*USING INDEX/.test(row.detail))).toBe(true);
 		expect(plan.some((row) => /SEARCH (memory_artifacts|ma) /.test(row.detail))).toBe(true);
 		expect(plan.some((row) => /SCAN (dec|der)\b/.test(row.detail))).toBe(false);
 		expect(plan.some((row) => row.detail.includes("SEARCH session_transcripts"))).toBe(true);
@@ -1909,7 +1916,11 @@ describe("Dreaming", () => {
 		);
 		if (filteredSearch === undefined) throw new Error("expected the candidate-filtered source search");
 		const filteredPlan = explainSqliteQueryPlan(db, filteredSearch);
-		expect(filteredPlan.some((row) => row.detail.includes("sqlite_autoindex_memory_artifacts_1"))).toBe(true);
+		expect(
+			filteredPlan.some((row) =>
+				/SEARCH ma .*\(agent_id=\? AND compartment_id=\? AND source_path=\?\)/.test(row.detail),
+			),
+		).toBe(true);
 		expect(filteredPlan.some((row) => row.detail.includes("idx_memory_artifacts_agent_sha"))).toBe(true);
 		expect(filteredPlan.some((row) => row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(false);
 	});
@@ -2111,9 +2122,9 @@ describe("Dreaming", () => {
 		const owner = await probeDreamingEpisodicBacklog(accessor, agentId, 100_000, ownerMaintenance);
 
 		expect(owner).toEqual(inline);
-		expect(ownerInputs).toEqual([{ agentId, tokenThreshold: 100_000, maxSources: 50 }]);
+		expect(ownerInputs).toEqual([{ agentId, compartmentId: null, tokenThreshold: 100_000, maxSources: 50 }]);
 		expect(await hasDreamingEpisodicBacklog(accessor, agentId, ownerMaintenance)).toBe(true);
-		expect(existenceInputs).toEqual([{ agentId }]);
+		expect(existenceInputs).toEqual([{ agentId, compartmentId: null }]);
 	});
 
 	it("uses an unknown backlog state from an indeterminate probe for max-interval liveness", async () => {

@@ -25,7 +25,7 @@ import {
 	MAX_DB_OWNER_WORK_UNITS,
 } from "./db-owner-client";
 import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
-import { findSqliteVecExtension } from "@signet/core";
+import { findSqliteVecExtension, runMigrations } from "@signet/core";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { closeDbOwnerDuringShutdown } from "./daemon-shutdown";
 import {
@@ -134,6 +134,75 @@ describe("DB owner client", () => {
 			throw new Error(`DB owner survivor(s) detected: ${survivors.join(", ")}`);
 		}
 	}
+
+	test("finalizes a classified content head without creating a plaintext head", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-classified-head-"));
+		mkdirSync(join(directory, "data"));
+		const path = join(directory, "data", "signet.db");
+		const db = new Database(path);
+		runMigrations(db);
+		db.exec("INSERT OR IGNORE INTO agents(id,name) VALUES('ant','Ant')");
+		db.exec("INSERT INTO classifications(id,name) VALUES('private','Private')");
+		db.exec("INSERT INTO compartments(id,key) VALUES(9,'private')");
+		db.exec("INSERT INTO compartment_members(compartment_id,classification_id) VALUES(9,'private')");
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status,compartment_id) VALUES('private-pass','ant','ant','incremental-content','running',9)",
+		);
+		db.close();
+		client = createDbOwnerClient({ dbPath: path });
+		const metadata = {
+			operation: "classified-head-fixture",
+			lane: "write",
+			deadlineMs: 10_000,
+			estimatedWorkUnits: 500,
+		} as const;
+		await client.submit(
+			{ kind: "memory_head", request: { action: "read", agentId: "ant", passId: "private-pass" } },
+			metadata,
+		).result;
+		await client.submit(
+			{
+				kind: "dreaming_pass_finalize",
+				input: {
+					passId: "private-pass",
+					mode: "incremental-content",
+					agentId: "ant",
+					scopes: ["ant"],
+					transcriptManifestEntries: [],
+					tokensConsumed: null,
+					inputTokens: null,
+					outputTokens: null,
+					cacheReadTokens: null,
+					cacheCreationTokens: null,
+					peakContextTokens: null,
+					totalCost: null,
+					applied: 0,
+					failed: 0,
+					summary: "Private pass",
+					rejectedEvidence: [],
+					memoryHeadCommitInput: { agentId: "ant", passId: "private-pass", entries: [] },
+					hasBacklogByScope: [],
+					nextWatermarkByScope: [],
+				},
+			},
+			metadata,
+		).result;
+		expect(
+			readdirSync(directory, { recursive: true, encoding: "utf8" }).some((path) => path.endsWith("MEMORY.md")),
+		).toBe(false);
+		const result = await client.submit(
+			{
+				kind: "query",
+				statement: {
+					sql: "SELECT status,compartment_id FROM dreaming_passes WHERE id='private-pass'",
+					params: [],
+					result: "get",
+				},
+			},
+			{ ...metadata, lane: "read" },
+		).result;
+		expect(result).toEqual({ status: "completed", compartment_id: 9 });
+	});
 
 	test("closes the owner during maintenance drain without waiting for the job deadline", async () => {
 		if (process.platform === "win32") return;

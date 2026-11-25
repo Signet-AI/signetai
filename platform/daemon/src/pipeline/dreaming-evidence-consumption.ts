@@ -813,6 +813,8 @@ export function pendingDreamingEvidenceContinuations(
 	agentId: string,
 	limit: number,
 	kind?: EpisodicSourceKind,
+	compartmentId: number | null = null,
+	excludeSourceRefs: readonly string[] = [],
 ): readonly EpisodicSourceRecord[] {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return [];
 	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
@@ -843,10 +845,11 @@ export function pendingDreamingEvidenceContinuations(
 			   AND dec.stalled_passes < ?
 			   ${reviewedPredicate}
 			   AND (? IS NULL OR dec.source_kind = ?)
+			   ${excludeSourceRefs.length ? `AND dec.source_kind || ':' || dec.source_id NOT IN (${excludeSourceRefs.map(() => "?").join(",")})` : ""}
 			   AND (
 			     (dec.source_kind = 'memory' AND EXISTS (
 			       SELECT 1 FROM memories m
-			       WHERE m.agent_id = dec.agent_id AND m.id = dec.source_id
+			       WHERE m.agent_id = dec.agent_id AND m.id = dec.source_id AND m.compartment_id IS ?
 			         AND m.memory_kind = 'episodic' AND COALESCE(m.is_deleted, 0) = 0
 			         AND m.visibility != 'archived' AND m.scope IS NULL
 			         AND COALESCE(m.type, '') != 'session_summary'
@@ -855,7 +858,7 @@ export function pendingDreamingEvidenceContinuations(
 			     ))
 			     OR (dec.source_kind = 'artifact' AND EXISTS (
 			       SELECT 1 FROM memory_artifacts ma
-			       WHERE ma.agent_id = dec.agent_id AND ma.source_path = dec.source_id
+			       WHERE ma.agent_id = dec.agent_id AND ma.source_path = dec.source_id AND ma.compartment_id IS ?
 			         AND COALESCE(ma.is_deleted, 0) = 0 AND length(ma.content) > 0
 			         AND dec.source_captured_at = ma.captured_at
 			         AND dec.source_entry_id = COALESCE(ma.source_id, '')
@@ -866,14 +869,14 @@ export function pendingDreamingEvidenceContinuations(
 			     ))
 			     OR (dec.source_kind = 'transcript' AND EXISTS (
 			       SELECT 1 FROM session_transcripts st
-			       WHERE st.agent_id = dec.agent_id AND st.session_key = dec.source_id
+			       WHERE st.agent_id = dec.agent_id AND st.session_key = dec.source_id AND st.compartment_id IS ?
 			         AND dec.source_captured_at = ${transcriptRevision}
 			         AND dec.source_entry_id = COALESCE(${transcriptSourceId}, '')
 			         AND dec.source_revision = CASE WHEN ${transcriptSourceId} IS NULL OR ${transcriptSourceId} = '' THEN ${transcriptRevision} ELSE COALESCE(${transcriptContentHash}, ${transcriptRevision}) END
 			     ))
 			     OR (dec.source_kind = 'summary' AND EXISTS (
 			       SELECT 1 FROM session_summaries ss
-			       WHERE ss.agent_id = dec.agent_id AND ss.id = dec.source_id
+			       WHERE ss.agent_id = dec.agent_id AND ss.id = dec.source_id AND ss.compartment_id IS ?
 			         AND ss.depth = 0
 			         AND COALESCE(ss.source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			         AND dec.source_captured_at = ss.latest_at
@@ -883,7 +886,18 @@ export function pendingDreamingEvidenceContinuations(
 			 ORDER BY pass.rowid ASC, dec.source_kind ASC, dec.source_id ASC, dec.source_captured_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, DREAMING_EVIDENCE_STALL_PASSES, kind ?? null, kind ?? null, boundedLimit) as Array<{
+		.all(
+			agentId,
+			DREAMING_EVIDENCE_STALL_PASSES,
+			kind ?? null,
+			kind ?? null,
+			...excludeSourceRefs,
+			compartmentId,
+			compartmentId,
+			compartmentId,
+			compartmentId,
+			boundedLimit,
+		) as Array<{
 		kind: EpisodicSourceKind;
 		id: string;
 		capturedAt: string;
@@ -891,7 +905,7 @@ export function pendingDreamingEvidenceContinuations(
 		sourceRevision: string;
 	}>;
 	return rows.flatMap((row) => {
-		const source = readEpisodicSource(db, { agentId, from: `${row.kind}:${row.id}` });
+		const source = readEpisodicSource(db, { agentId, from: `${row.kind}:${row.id}`, exactCompartment: compartmentId });
 		if (
 			source === null ||
 			source.capturedAt !== row.capturedAt ||

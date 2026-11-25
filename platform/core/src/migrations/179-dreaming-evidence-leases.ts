@@ -181,6 +181,14 @@ function partitionMemoryHeads(db: MigrationDb): void {
 		for (const operation of ["UPDATE", "DELETE"]) {
 			const suffix = operation === "UPDATE" ? "au" : "ad";
 			const agents = operation === "UPDATE" ? "(OLD.agent_id,NEW.agent_id)" : "(OLD.agent_id)";
+			const globalMemory =
+				operation === "UPDATE"
+					? "(COALESCE(OLD.visibility,'global')='global' OR COALESCE(NEW.visibility,'global')='global')"
+					: "COALESCE(OLD.visibility,'global')='global'";
+			const publicAgents =
+				table === "memories"
+					? `(agent_id IN ${agents} OR (${globalMemory} AND (agent_id IN (SELECT id FROM agents WHERE read_policy='shared') OR agent_id IN (SELECT id FROM agents WHERE read_policy='group' AND policy_group IN (SELECT policy_group FROM agents WHERE id IN ${agents})))) )`
+					: `agent_id IN ${agents}`;
 			const visible =
 				operation === "UPDATE"
 					? "(OLD.compartment_id IS NULL OR NEW.compartment_id IS NULL)"
@@ -200,14 +208,16 @@ function partitionMemoryHeads(db: MigrationDb): void {
 						? "OLD.content IS NOT NEW.content OR OLD.is_deleted IS NOT NEW.is_deleted"
 						: table === "session_transcripts"
 							? "(OLD.completed_at IS NOT NULL AND (OLD.content IS NOT NEW.content OR NEW.completed_at IS NULL))"
-							: "(OLD.depth=0 AND (OLD.content IS NOT NEW.content OR OLD.source_ref IS NOT NEW.source_ref OR OLD.source_type IS NOT NEW.source_type OR OLD.depth IS NOT NEW.depth))";
+							: "(OLD.content IS NOT NEW.content OR OLD.source_ref IS NOT NEW.source_ref OR OLD.source_type IS NOT NEW.source_type OR OLD.depth IS NOT NEW.depth)";
 			const changed =
 				operation === "UPDATE"
-					? ` WHEN OLD.agent_id IS NOT NEW.agent_id OR OLD.compartment_id IS NOT NEW.compartment_id OR ${contentChanged}`
-					: "";
+					? ` WHEN ${table === "session_summaries" ? "(OLD.depth=0 OR NEW.depth=0) AND" : ""} (OLD.agent_id IS NOT NEW.agent_id OR OLD.compartment_id IS NOT NEW.compartment_id OR ${contentChanged})`
+					: table === "session_summaries"
+						? " WHEN OLD.depth=0"
+						: "";
 			db.exec(`DROP TRIGGER IF EXISTS ${table}_head_freshness_${suffix};
 				CREATE TRIGGER ${table}_head_freshness_${suffix} AFTER ${operation} ON ${table}${changed} BEGIN
-					UPDATE memory_md_heads SET revision=revision+1,is_current=0 WHERE agent_id IN ${agents} AND ${visible};
+					UPDATE memory_md_heads SET revision=revision+1,is_current=0 WHERE ${publicAgents} AND ${visible};
 					UPDATE memory_head_revisions SET is_current=0 WHERE agent_id IN ${agents} AND ${revisionVisible};
 					UPDATE dreaming_passes SET head_base_revision=-1 WHERE status='running' AND mode='incremental-content' AND agent_id IN ${agents} AND ${passVisible};
 				END;`);

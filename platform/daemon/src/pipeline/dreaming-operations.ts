@@ -1,15 +1,24 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import { SYSTEM_AUTHOR } from "../auth/audit-owner";
-import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { prepareTypedStatement, runWriteTxAsync, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
 import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
 import { withContentPassWrites } from "../memory-head-owner";
 import {
 	applyOntologyOperationBatchInTx,
+	assertOntologyOperationPartitionInTx,
 	createOntologyProposalsInTx,
 	type GraphWriteCaps,
 	type OntologyOperationInput,
 } from "../ontology-proposals";
+import { readScopeSql, type ReadScope } from "../read-scope";
 import { runWriteBatches } from "../yielding-writes";
+import {
+	assertDreamingAgentInDb,
+	assertDreamingMutationLabelInDb,
+	dreamingPassPartitionInDb,
+	dreamingReadScopeInDb,
+	type DreamingPartition,
+} from "./dreaming-scope";
 import { findUnresolvedRelativeTime, findUntimedIsoDate } from "./claim-relative-time";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { createDreamingAgentEvidence, type DreamingAgentEvidence } from "./dreaming-evidence";
@@ -93,7 +102,12 @@ interface CitationResolution {
 	readonly sourceAgentIds: readonly string[];
 }
 
-function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown): CitationResolution {
+function citeEvidence(
+	accessor: DbAccessor,
+	agentId: string,
+	citation: unknown,
+	readScope: ReadScope,
+): CitationResolution {
 	const requested = citationRecord(citation);
 	if (requested === null) return { evidence: null, sourceAgentIds: [] };
 	const result: {
@@ -102,11 +116,14 @@ function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown):
 	} =
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		accessor.withReadDb((db: ReadDb) => {
-			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
+			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef, readScope });
 			if (source !== null && (source.kind !== "transcript" || source.completed)) {
 				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
 			}
-			return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
+			return {
+				evidence: [],
+				sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef).filter((owner) => owner !== agentId),
+			};
 		}, "db:dreaming.operations.cite-evidence.read");
 	return {
 		evidence:
@@ -138,7 +155,13 @@ type ValidatedDreamingOperation = {
 	readonly reviewOnly?: boolean;
 };
 
-function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalName: string): ReadonlySet<string> {
+function semanticDuplicateIds(
+	accessor: DbAccessor,
+	agentId: string,
+	canonicalName: string,
+	readScope: ReadScope,
+): ReadonlySet<string> {
+	const scope = readScopeSql("", readScope, { visibility: null });
 	const placeholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb((db: ReadDb) => {
@@ -148,9 +171,9 @@ function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalNa
 				 WHERE agent_id = ? AND COALESCE(status, 'active') = 'active'
 				   AND canonical_name = ?
 				   AND COALESCE(pinned, 0) = 0
-				   AND NOT (entity_type IN (${placeholders}) OR (entity_type = 'source' AND source_root IS NOT NULL))`,
+				   AND NOT (entity_type IN (${placeholders}) OR (entity_type = 'source' AND source_root IS NOT NULL)) ${scope.sql} ORDER BY id`,
 			)
-			.all(agentId, canonicalName, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as Array<{ id: string }>;
+			.all(agentId, canonicalName, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, ...scope.args) as Array<{ id: string }>;
 		return new Set(rows.map((row) => row.id));
 	}, "db:dreaming.operations.duplicate-group.read");
 }
@@ -167,6 +190,7 @@ async function mintFlags(
 	accessor: DbAccessor,
 	agentId: string,
 	operations: readonly DreamingOperationRequest[],
+	passId?: string,
 ): Promise<Map<number, string>> {
 	const flagged = operations.flatMap((operation, index) =>
 		operation.operation === FLAG_OP ? [{ index, operation }] : [],
@@ -175,6 +199,8 @@ async function mintFlags(
 		accessor,
 		flagged,
 		(db, entry) => {
+			const partition = operationPartitionInDb(db, agentId, passId);
+			preflightDreamingRequestInTx(db, { accessor, agentId, actor: "dreaming", operations, passId });
 			const subjectRef =
 				typeof entry.operation.payload.subjectRef === "string" ? entry.operation.payload.subjectRef.trim() : "";
 			if (!subjectRef) return { index: entry.index, attentionId: null };
@@ -183,6 +209,8 @@ async function mintFlags(
 			const attentionId = enqueueDreamingAttentionInTx(db, {
 				agentId,
 				kind: "hygiene",
+				compartmentId: partition.compartmentId,
+				passId,
 				subjectRef,
 				details: asStringRecord(entry.operation.payload.details),
 				priority,
@@ -206,26 +234,27 @@ function attentionProvenance(
 	mintedById: ReadonlyMap<number, string>,
 	operations: readonly DreamingOperationRequest[],
 	operationIndex: number,
+	readScope: ReadScope,
 ): { readonly provenance: DreamingOperationProvenance; readonly attentionId: string } | null {
 	const reference = operation.provenance?.trim();
 	if (!reference?.startsWith("attention:")) return null;
 	if (!DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) return null;
-	const payload = operation.payload;
 
 	let attention: DreamingAttention | null = null;
 	const sameBatch = reference.match(/^attention:\$(\d+)$/);
 	if (sameBatch !== null) {
-		const flagIndex = sameBatchFlagIndex(accessor, agentId, operations, operationIndex, operation);
+		const flagIndex = sameBatchFlagIndex(accessor, agentId, operations, operationIndex, operation, readScope);
 		if (flagIndex === null) return null;
 		const attentionId = mintedById.get(flagIndex);
-		if (attentionId !== undefined) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
+		if (attentionId !== undefined)
+			attention = getDreamingAttentionById(accessor, { agentId, id: attentionId, readScope });
 	} else {
 		const attentionId = reference.slice("attention:".length);
-		if (attentionId) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
+		if (attentionId) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId, readScope });
 	}
 	if (attention === null || !attentionAuthorizesArchive(attention, operation)) return null;
 
-	if (!hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return null;
+	if (!hasExpectedAttentionTarget(accessor, agentId, operation, attention, readScope)) return null;
 
 	return {
 		provenance: {
@@ -256,15 +285,20 @@ function attentionAuthorizesArchive(attention: DreamingAttention, operation: Dre
 const HYGIENE_PROVENANCE_ERROR =
 	"Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
 
-function hygieneProvenanceError(accessor: DbAccessor, agentId: string, operation: DreamingOperationRequest): string {
+function hygieneProvenanceError(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: DreamingOperationRequest,
+	readScope: ReadScope,
+): string {
 	const reference = operation.provenance?.trim() ?? "";
 	if (!reference.startsWith("attention:") || /^attention:\$\d+$/.test(reference)) return HYGIENE_PROVENANCE_ERROR;
 	const id = reference.slice("attention:".length);
-	const attention = id ? getDreamingAttentionById(accessor, { agentId, id }) : null;
+	const attention = id ? getDreamingAttentionById(accessor, { agentId, id, readScope }) : null;
 	if (attention === null || !attentionAuthorizesArchive(attention, operation)) {
 		return `${HYGIENE_PROVENANCE_ERROR}: ${id} is not a pending hygiene attention in this agent (already resolved, or the id is mistyped); copy a pending id from attention_list`;
 	}
-	const mismatch = attentionTargetMismatch(accessor, agentId, operation, attention);
+	const mismatch = attentionTargetMismatch(accessor, agentId, operation, attention, readScope);
 	return mismatch === null ? HYGIENE_PROVENANCE_ERROR : `${HYGIENE_PROVENANCE_ERROR}: ${mismatch}`;
 }
 function pinnedBySubjectRef(subjectRef: string, prefix: string): string | null {
@@ -277,8 +311,9 @@ function hasExpectedAttentionTarget(
 	agentId: string,
 	operation: DreamingOperationRequest,
 	attention: DreamingAttention,
+	readScope: ReadScope,
 ): boolean {
-	return attentionTargetMismatch(accessor, agentId, operation, attention) === null;
+	return attentionTargetMismatch(accessor, agentId, operation, attention, readScope) === null;
 }
 
 function attentionTargetMismatch(
@@ -286,6 +321,7 @@ function attentionTargetMismatch(
 	agentId: string,
 	operation: DreamingOperationRequest,
 	attention: DreamingAttention,
+	readScope: ReadScope,
 ): string | null {
 	const payload = operation.payload;
 	if (operation.operation === "archive_entity") {
@@ -310,7 +346,7 @@ function attentionTargetMismatch(
 		if (canonicalName.length === 0 || attention.subjectRef !== `duplicate:${canonicalName}`) {
 			return `attention ${attention.id} flags ${attention.subjectRef}, not a duplicate group`;
 		}
-		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName);
+		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName, readScope);
 		if (groupIds.size <= 1) {
 			return `no duplicate group named "${canonicalName}" remains; decline_attention if the flag no longer applies`;
 		}
@@ -350,6 +386,7 @@ function sameBatchFlagIndex(
 	operations: readonly DreamingOperationRequest[],
 	operationIndex: number,
 	operation: DreamingOperationRequest,
+	readScope: ReadScope,
 ): number | null {
 	const reference = operation.provenance?.trim();
 	const sameBatch = reference?.match(/^attention:\$(\d+)$/);
@@ -370,7 +407,7 @@ function sameBatchFlagIndex(
 			priority: 0,
 			createdAt: "",
 		};
-		return hasExpectedAttentionTarget(accessor, agentId, operation, attention) ? referencedIndex : null;
+		return hasExpectedAttentionTarget(accessor, agentId, operation, attention, readScope) ? referencedIndex : null;
 	}
 	for (let index = operationIndex - 1; index >= 0; index -= 1) {
 		const candidate = operations[index];
@@ -385,7 +422,7 @@ function sameBatchFlagIndex(
 			priority: 0,
 			createdAt: "",
 		};
-		if (hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return index;
+		if (hasExpectedAttentionTarget(accessor, agentId, operation, attention, readScope)) return index;
 	}
 	return null;
 }
@@ -435,6 +472,7 @@ function provenanceForEvidence(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
+	readScope: ReadScope,
 ): {
 	readonly provenance: DreamingOperationProvenance | null;
 	readonly scopeMismatch: string | null;
@@ -444,7 +482,7 @@ function provenanceForEvidence(
 	if (citations.length === 0) return { provenance: null, scopeMismatch: null };
 	const matched: DreamingAgentEvidence[] = [];
 	for (const citation of citations) {
-		const resolution = citeEvidence(accessor, agentId, citation);
+		const resolution = citeEvidence(accessor, agentId, citation, readScope);
 		if (resolution.evidence === null) {
 			if (resolution.sourceAgentIds.length > 0) {
 				const scopes = resolution.sourceAgentIds.map((sourceAgentId) => `'${sourceAgentId}'`).join(", ");
@@ -766,7 +804,7 @@ function unresolvedTarget(index: number, operation: string, detail: string): str
 	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
 }
 
-function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): string | null {
+function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams, readScope: ReadScope): string | null {
 	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
 			if (stringField(operation.payload, "subjectRef") === null) return "flag requires payload.subjectRef";
@@ -801,25 +839,102 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			const reference = operation.provenance?.trim();
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
 			if (sameBatch) {
-				if (sameBatchFlagIndex(params.accessor, params.agentId, params.operations, index, operation) === null) {
+				if (
+					sameBatchFlagIndex(params.accessor, params.agentId, params.operations, index, operation, readScope) === null
+				) {
 					return HYGIENE_PROVENANCE_ERROR;
 				}
 				continue;
 			}
 			if (
-				attentionProvenance(params.accessor, params.agentId, operation, new Map(), params.operations, index) === null
+				attentionProvenance(
+					params.accessor,
+					params.agentId,
+					operation,
+					new Map(),
+					params.operations,
+					index,
+					readScope,
+				) === null
 			) {
-				return hygieneProvenanceError(params.accessor, params.agentId, operation);
+				return hygieneProvenanceError(params.accessor, params.agentId, operation, readScope);
 			}
 			continue;
 		}
 
-		const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
+		const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation, readScope);
 		if (evidenceResult.provenance === null) {
 			return evidenceResult.scopeMismatch ?? evidenceError(index, evidenceResult.unmatched);
 		}
 	}
 	return null;
+}
+
+function operationPartitionInDb(db: ReadDb, agentId: string, passId?: string): DreamingPartition {
+	if (passId !== undefined) return dreamingPassPartitionInDb(db, passId, agentId);
+	assertDreamingAgentInDb(db, agentId);
+	return { agentId, compartmentId: null };
+}
+
+function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperationsParams): void {
+	const partition = operationPartitionInDb(db, params.agentId, params.passId);
+	for (const operation of params.operations) {
+		if (operation.operation === FLAG_OP) {
+			const subject = stringField(operation.payload, "subjectRef");
+			const separator = subject?.indexOf(":") ?? -1;
+			const kind = subject?.slice(0, separator) ?? "";
+			const sourceId = subject?.slice(separator + 1) ?? "";
+			const definitions: Readonly<Record<string, readonly [string, string]>> = {
+				entity: ["entities", "id"],
+				aspect: ["entity_aspects", "id"],
+				attribute: ["entity_attributes", "id"],
+				claim: ["entity_attributes", "id"],
+				link: ["entity_dependencies", "id"],
+				memory: ["memories", "id"],
+				artifact: ["memory_artifacts", "source_path"],
+				transcript: ["session_transcripts", "session_key"],
+				summary: ["session_summaries", "id"],
+			};
+			const definition = Object.hasOwn(definitions, kind) ? definitions[kind] : undefined;
+			if (separator > 0 && definition) {
+				const [table, key] = definition;
+				const source = prepareTypedStatement<{ compartment_id: number | null }>(
+					db,
+					`SELECT compartment_id FROM ${table} WHERE ${key} = ? AND agent_id = ?`,
+				).get(sourceId, params.agentId);
+				const readable = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+				if (
+					source?.compartment_id != null &&
+					readable.compartments !== "all" &&
+					!readable.compartments.includes(source.compartment_id)
+				)
+					throw new Error("compartment_mismatch");
+			}
+			for (const row of prepareTypedStatement<{ id: string }>(
+				db,
+				"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = 'hygiene' AND subject_ref = ?",
+			).all(params.agentId, subject))
+				assertDreamingMutationLabelInDb(db, "dreaming_attention", row.id, partition);
+			continue;
+		}
+		const attentionId =
+			operation.operation === DECLINE_ATTENTION_OP
+				? stringField(operation.payload, "attentionId")
+				: operation.provenance?.startsWith("attention:") && !operation.provenance.startsWith("attention:$")
+					? operation.provenance.slice("attention:".length)
+					: null;
+		if (attentionId) assertDreamingMutationLabelInDb(db, "dreaming_attention", attentionId, partition);
+		if (operation.operation === DECLINE_ATTENTION_OP) continue;
+		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		if ("error" in applicator) throw new Error(applicator.error);
+		assertOntologyOperationPartitionInTx(db, {
+			agentId: params.agentId,
+			passId: params.passId,
+			operation: operation.operation,
+			payload: applicator.payload,
+			evidence: operation.evidence,
+		});
+	}
 }
 
 function existingReviewProposalId(
@@ -829,18 +944,23 @@ function existingReviewProposalId(
 		readonly operation: string;
 		readonly payload: Readonly<Record<string, unknown>>;
 		readonly evidence: readonly unknown[];
+		readonly passId?: string;
 	},
 ): string | null {
 	const row = db
 		.prepare(
 			`SELECT id FROM ontology_proposals
 			 WHERE agent_id = ? AND operation = ? AND status IN ('pending', 'applied', 'rejected')
-			   AND payload = ? AND evidence = ?
+			   AND payload = ? AND evidence = ? AND compartment_id IS ?
 			 ORDER BY updated_at DESC LIMIT 1`,
 		)
-		.get(params.agentId, params.operation, JSON.stringify(params.payload), JSON.stringify(params.evidence)) as
-		| { id?: unknown }
-		| undefined;
+		.get(
+			params.agentId,
+			params.operation,
+			JSON.stringify(params.payload),
+			JSON.stringify(params.evidence),
+			operationPartitionInDb(db, params.agentId, params.passId).compartmentId,
+		) as { id?: unknown } | undefined;
 	return typeof row?.id === "string" ? row.id : null;
 }
 
@@ -903,6 +1023,7 @@ function applyValidatedOperationBody(
 	if (entry.reviewOnly) {
 		const existingId = existingReviewProposalId(db, {
 			agentId: params.agentId,
+			passId: params.passId,
 			operation: entry.input.operation,
 			payload: entry.input.payload,
 			evidence: entry.input.evidence ?? [],
@@ -918,6 +1039,7 @@ function applyValidatedOperationBody(
 			{
 				author: SYSTEM_AUTHOR,
 				agentId: params.agentId,
+				passId: params.passId,
 				operation: entry.input.operation,
 				payload: entry.input.payload,
 				confidence: entry.input.confidence,
@@ -958,6 +1080,7 @@ function applyValidatedOperationBody(
 	const batch = applyOntologyOperationBatchInTx(db, {
 		author: SYSTEM_AUTHOR,
 		agentId: params.agentId,
+		passId: params.passId,
 		actor: params.actor,
 		operations: [entry.input],
 		writeCaps: params.writeCaps,
@@ -985,6 +1108,9 @@ function applyValidatedOperationInTx(
 	const savepoint = `signet_dream_op_${entry.index}`;
 	db.exec(`SAVEPOINT ${savepoint}`);
 	try {
+		const partition = operationPartitionInDb(db, params.agentId, params.passId);
+		if (entry.attentionId !== null)
+			assertDreamingMutationLabelInDb(db, "dreaming_attention", entry.attentionId, partition);
 		const result = applyValidatedOperationBody(db, entry, params);
 		db.exec(`RELEASE SAVEPOINT ${savepoint}`);
 		return result;
@@ -1022,10 +1148,24 @@ export async function applyDreamingOperations(
 		}
 	}
 
-	const validationError = validateRequestBeforeWrites(params);
+	let readScope: ReadScope;
+	try {
+		readScope = await runWriteTxAsync(params.accessor, (db) => {
+			const partition = operationPartitionInDb(db, params.agentId, params.passId);
+			return dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+		});
+	} catch (error) {
+		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };
+	}
+	const validationError = validateRequestBeforeWrites(params, readScope);
 	if (validationError !== null) return { ok: false, items: [], error: validationError };
 
-	const minted = await mintFlags(params.accessor, params.agentId, params.operations);
+	try {
+		await runWriteTxAsync(params.accessor, (db) => preflightDreamingRequestInTx(db, params));
+	} catch (error) {
+		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };
+	}
+	const minted = await mintFlags(params.accessor, params.agentId, params.operations, params.passId);
 
 	const validated: ValidatedDreamingOperation[] = [];
 	for (const [index, operation] of params.operations.entries()) {
@@ -1056,16 +1196,21 @@ export async function applyDreamingOperations(
 				minted,
 				params.operations,
 				index,
+				readScope,
 			);
 			if (resolved !== null) {
 				provenance = resolved.provenance;
 				attentionId = resolved.attentionId;
 			}
 			if (provenance === null) {
-				return { ok: false, items: [], error: hygieneProvenanceError(params.accessor, params.agentId, operation) };
+				return {
+					ok: false,
+					items: [],
+					error: hygieneProvenanceError(params.accessor, params.agentId, operation, readScope),
+				};
 			}
 		} else {
-			const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
+			const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation, readScope);
 			provenance = evidenceResult.provenance;
 			if (provenance === null) {
 				return {

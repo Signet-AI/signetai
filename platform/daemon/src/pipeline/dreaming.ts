@@ -1,4 +1,8 @@
 import type { Database } from "bun:sqlite";
+import { compartmentForWrite } from "@signet/core";
+import { readScopeSql, type ReadScope } from "../read-scope";
+import { dreamingPassPartitionInDb } from "./dreaming-scope";
+import { evidenceLeasedByOtherPassesInScopes, releaseDreamingEvidenceLeasesInTx } from "./dreaming-evidence-leases";
 import { createHash, randomUUID } from "node:crypto";
 import type {
 	AccountingProvenance,
@@ -150,8 +154,9 @@ export async function enqueueDreamingHygieneAttention(
 	limit = 50,
 	caps?: GraphHygieneCaps,
 	ownerMaintenance?: DbOwnerMaintenance,
+	compartmentId: number | null = null,
 ): Promise<number> {
-	const input: DbOwnerDreamingHygieneAttention = { agentId, limit, caps };
+	const input: DbOwnerDreamingHygieneAttention = { agentId, limit, caps, compartmentId };
 	const options = { deadlineMs: 60_000, estimatedWorkUnits: 100 };
 	if (ownerMaintenance) return await ownerMaintenance.dreamingHygieneAttention(input, options);
 	return await runDbOwnerDomainOperation(accessor, {
@@ -164,6 +169,7 @@ export async function enqueueDreamingHygieneAttention(
 						...candidate,
 						agentId: input.agentId,
 						kind: "hygiene",
+						compartmentId: input.compartmentId,
 						reopen: false,
 					});
 				}
@@ -176,23 +182,27 @@ export async function enqueueDreamingSurprisalAttention(
 	agentId: string,
 	cfg: DreamingConfig,
 	ownerMaintenance?: DbOwnerMaintenance,
+	compartmentId: number | null = null,
 ): Promise<DreamingSurprisalSelection | null> {
 	const surprisal = cfg.surprisal;
 	if (!surprisal?.enabled) return null;
-	const input: DbOwnerDreamingSurprisalAttention = { agentId, config: surprisal };
+	const input: DbOwnerDreamingSurprisalAttention = { agentId, config: surprisal, compartmentId };
 	const options = { deadlineMs: 60_000, estimatedWorkUnits: 500 };
 	const selection = ownerMaintenance
 		? await ownerMaintenance.dreamingSurprisalAttention(input, options)
 		: await runDbOwnerDomainOperation(accessor, {
 				runWithOwner: async (owner) => await ownerDreamingSurprisalAttention(owner, input, options),
 				runInline: ({ read, write }) => {
-					const selected = read((db) => selectDreamingSurprisalInDb(db, input.agentId, input.config, null));
+					const selected = read((db) =>
+						selectDreamingSurprisalInDb(db, input.agentId, input.config, null, input.compartmentId),
+					);
 					if (selected.candidates.length === 0) return selected;
 					write((db) => {
 						for (const candidate of selected.candidates) {
 							enqueueDreamingAttentionInTx(db, {
 								agentId: input.agentId,
 								kind: "surprisal",
+								compartmentId: input.compartmentId,
 								subjectRef: `memory:${candidate.id}`,
 								details: {
 									selector: DREAMING_SURPRISAL_SELECTOR_VERSION,
@@ -400,7 +410,11 @@ function deferredEvidenceKeys(value: unknown, primaryAgentId: string): ReadonlyS
 	return keys;
 }
 
-export async function getDreamingState(accessor: DbAccessor, agentId: string): Promise<DreamingState> {
+export async function getDreamingState(
+	accessor: DbAccessor,
+	agentId: string,
+	compartmentId: number | null = null,
+): Promise<DreamingState> {
 	const row = await ownerQueryOne<{
 		consecutive_failures: number;
 		last_failure_at: string | null;
@@ -413,8 +427,8 @@ export async function getDreamingState(accessor: DbAccessor, agentId: string): P
 		"dreaming.state.read",
 		`SELECT consecutive_failures, last_failure_at,
 		        last_pass_at, evidence_cursor, last_pass_id, last_pass_mode
-		 FROM dreaming_state WHERE agent_id = ?`,
-		[agentId],
+		 FROM dreaming_state WHERE agent_id = ? AND compartment_id IS ?`,
+		[agentId, compartmentId],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 	if (!row) {
@@ -444,42 +458,45 @@ function resetDreamingTokens(
 	mode: string,
 	evidenceCursor: EpisodicCursor | null,
 	lastPassAt: string | null,
+	compartmentId: number | null,
 ): void {
-	const exists = db.prepare("SELECT 1 FROM dreaming_state WHERE agent_id = ?").get(agentId);
-	if (exists) {
-		db.prepare(
-			`UPDATE dreaming_state
-			 SET consecutive_failures = 0,
-			     last_failure_at = NULL,
-			     last_pass_at = ?,
-			     evidence_cursor = ?,
-			     last_pass_id = ?,
-			     last_pass_mode = ?,
-			     updated_at = datetime('now')
-			 WHERE agent_id = ?`,
-		).run(lastPassAt, evidenceCursor === null ? null : JSON.stringify(evidenceCursor), passId, mode, agentId);
-	} else {
-		db.prepare(
-			`INSERT INTO dreaming_state
-			 (agent_id, consecutive_failures, last_failure_at, last_pass_at, evidence_cursor, last_pass_id, last_pass_mode)
-			 VALUES (?, 0, NULL, ?, ?, ?, ?)`,
-		).run(agentId, lastPassAt, evidenceCursor === null ? null : JSON.stringify(evidenceCursor), passId, mode);
-	}
+	db.prepare(`INSERT INTO dreaming_state
+		(agent_id, compartment_id, consecutive_failures, last_failure_at, last_pass_at, evidence_cursor, last_pass_id, last_pass_mode)
+		VALUES (?, ?, 0, NULL, ?, ?, ?, ?)
+		ON CONFLICT(agent_id, COALESCE(compartment_id,0)) DO UPDATE SET
+			consecutive_failures = CASE WHEN julianday(dreaming_state.last_failure_at) > julianday(excluded.last_pass_at) THEN dreaming_state.consecutive_failures ELSE 0 END,
+			last_failure_at = CASE WHEN julianday(dreaming_state.last_failure_at) > julianday(excluded.last_pass_at) THEN dreaming_state.last_failure_at ELSE NULL END,
+			last_pass_at = CASE WHEN julianday(dreaming_state.last_pass_at) > julianday(excluded.last_pass_at) OR excluded.last_pass_at IS NULL THEN dreaming_state.last_pass_at ELSE excluded.last_pass_at END,
+			evidence_cursor = CASE WHEN julianday(dreaming_state.last_pass_at) > julianday(excluded.last_pass_at) THEN dreaming_state.evidence_cursor ELSE excluded.evidence_cursor END,
+			last_pass_id = CASE WHEN julianday(dreaming_state.last_pass_at) > julianday(excluded.last_pass_at) THEN dreaming_state.last_pass_id ELSE excluded.last_pass_id END,
+			last_pass_mode = CASE WHEN julianday(dreaming_state.last_pass_at) > julianday(excluded.last_pass_at) THEN dreaming_state.last_pass_mode ELSE excluded.last_pass_mode END,
+			updated_at = datetime('now')`).run(
+		agentId,
+		compartmentId,
+		lastPassAt,
+		evidenceCursor === null ? null : JSON.stringify(evidenceCursor),
+		passId,
+		mode,
+	);
 }
 
-export async function recordDreamingFailure(accessor: DbAccessor, agentId: string): Promise<void> {
+export async function recordDreamingFailure(
+	accessor: DbAccessor,
+	agentId: string,
+	compartmentId: number | null = null,
+): Promise<void> {
 	await ownerTransaction(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.state.record-failure",
 		[
 			ownerRunStatement(
-				`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass, consecutive_failures, last_failure_at)
-				 VALUES (?, 0, 1, datetime('now'))
-				 ON CONFLICT(agent_id) DO UPDATE SET
+				`INSERT INTO dreaming_state (agent_id, compartment_id, tokens_since_last_pass, consecutive_failures, last_failure_at)
+				 VALUES (?, ?, 0, 1, datetime('now'))
+				 ON CONFLICT(agent_id, COALESCE(compartment_id,0)) DO UPDATE SET
 				 consecutive_failures = dreaming_state.consecutive_failures + 1,
 				 last_failure_at = datetime('now'),
 				 updated_at = datetime('now')`,
-				[agentId],
+				[agentId, compartmentId],
 			),
 		],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
@@ -523,6 +540,7 @@ function createDreamingPassStatements(
 	mode: DreamingMode,
 	policy: DreamingPassPolicy,
 	author?: WriteAuthor,
+	compartmentId: number | null = null,
 ): DbOwnerStatement[] {
 	const hash = createHash("sha256").update(policy.text).digest("hex");
 	return [
@@ -533,10 +551,10 @@ function createDreamingPassStatements(
 			[hash, policy.text],
 		),
 		ownerRunStatement(
-			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at, policy_hash, policy_source)
-			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'), ?, ?)
+			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at, policy_hash, policy_source, compartment_id, scope_key)
+			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'), ?, ?, ?, ?)
 			 ON CONFLICT(id) DO NOTHING`,
-			[id, agentId, mode, hash, policy.source],
+			[id, agentId, mode, hash, policy.source, compartmentId, agentId],
 		),
 		...authoredAuditStatements(author, "dreaming.started", "dreaming_pass", id, agentId),
 	];
@@ -548,12 +566,13 @@ export async function createDreamingPass(
 	mode: DreamingMode,
 	policy: DreamingPassPolicy,
 	author?: WriteAuthor,
+	compartmentId: number | null = null,
 ): Promise<string> {
 	const id = randomUUID();
 	await ownerTransaction(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.pass.create",
-		createDreamingPassStatements(id, agentId, mode, policy, author),
+		createDreamingPassStatements(id, agentId, mode, policy, author, compartmentId),
 		{ deadlineMs: 10_000, estimatedWorkUnits: 2 },
 	);
 	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
@@ -566,11 +585,12 @@ export async function createDreamingPassThroughOwner(
 	mode: DreamingMode,
 	policy: DreamingPassPolicy,
 	author?: WriteAuthor,
+	compartmentId: number | null = null,
 ): Promise<string> {
 	const id = randomUUID();
 	const request = {
 		kind: "transaction" as const,
-		transaction: { statements: createDreamingPassStatements(id, agentId, mode, policy, author) },
+		transaction: { statements: createDreamingPassStatements(id, agentId, mode, policy, author, compartmentId) },
 	};
 	let creationMayHaveCommitted = false;
 	for (;;) {
@@ -626,11 +646,28 @@ async function failDreamingPass(accessor: DbAccessor, passId: string, error: str
 	);
 }
 
+function passReadPredicate(agentId: string, readScope?: ReadScope, alias = "") {
+	const scope: ReadScope = readScope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null };
+	const predicate =
+		scope.projects !== null
+			? { sql: " AND 0", args: [] }
+			: readScopeSql(alias, scope, { visibility: null, memory: null, session: null, source: null });
+	return {
+		sql: predicate.sql,
+		args: predicate.args.map((value) => {
+			if (typeof value === "string" || typeof value === "number" || value === null) return value;
+			throw new Error("invalid_read_scope");
+		}),
+	};
+}
+
 export async function getDreamingPasses(
 	accessor: DbAccessor,
 	agentId: string,
 	limit = 10,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingPassRow[]> {
+	const predicate = passReadPredicate(agentId, readScope);
 	return await ownerQueryAll<DreamingPassRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.list",
@@ -646,10 +683,10 @@ export async function getDreamingPasses(
 		        summary, error,
 		        policy_hash AS policyHash, policy_source AS policySource
 		 FROM dreaming_passes
-		 WHERE agent_id = ?
+		 WHERE 1=1 ${predicate.sql}
 		 ORDER BY created_at DESC
 		 LIMIT ?`,
-		[agentId, limit],
+		[...predicate.args, limit],
 		{ deadlineMs: 30_000, estimatedWorkUnits: Math.max(1, Math.min(limit, 100)) },
 	);
 }
@@ -664,7 +701,9 @@ export async function getDreamingPassPolicy(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<{ readonly policy: DreamingPassPolicyRecord | null } | null> {
+	const predicate = passReadPredicate(agentId, readScope, "pass");
 	const row = await ownerQueryOne<{
 		readonly hash: string | null;
 		readonly source: "default" | "custom" | null;
@@ -675,9 +714,9 @@ export async function getDreamingPassPolicy(
 		`SELECT pass.policy_hash AS hash, pass.policy_source AS source, policy.text AS text
 		 FROM dreaming_passes pass
 		 LEFT JOIN dreaming_policies policy ON policy.hash = pass.policy_hash
-		 WHERE pass.agent_id = ? AND pass.id = ?
+		 WHERE pass.id = ? ${predicate.sql}
 		 LIMIT 1`,
-		[agentId, passId],
+		[passId, ...predicate.args],
 		{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
 	);
 	if (row == null) return null;
@@ -691,6 +730,7 @@ export interface DreamingPassScope extends DreamingPassRow {
 
 interface DreamingPassReadOptions {
 	readonly signal?: AbortSignal;
+	readonly readScope?: ReadScope;
 }
 
 function dreamingPassSelect(includeAgent = false): string {
@@ -714,12 +754,13 @@ export async function getDreamingPass(
 	passId: string,
 	options: DreamingPassReadOptions = {},
 ): Promise<DreamingPassScope | null> {
+	const predicate = passReadPredicate(agentId, options.readScope);
 	return (
 		(await ownerQueryOne<DreamingPassScope>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.pass.read",
-			`${dreamingPassSelect(true)} WHERE agent_id = ? AND id = ? LIMIT 1`,
-			[agentId, passId],
+			`${dreamingPassSelect(true)} WHERE id = ? ${predicate.sql} LIMIT 1`,
+			[passId, ...predicate.args],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1, signal: options.signal },
 		)) ?? null
 	);
@@ -730,11 +771,12 @@ export async function getActiveDreamingPasses(
 	agentId: string,
 	options: DreamingPassReadOptions = {},
 ): Promise<readonly DreamingPassScope[]> {
+	const predicate = passReadPredicate(agentId, options.readScope);
 	return await ownerQueryAll<DreamingPassScope>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.active",
-		`${dreamingPassSelect(true)} WHERE agent_id = ? AND status = 'running' ORDER BY started_at ASC, id ASC`,
-		[agentId],
+		`${dreamingPassSelect(true)} WHERE status = 'running' ${predicate.sql} ORDER BY started_at ASC, id ASC`,
+		[...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10, signal: options.signal },
 	);
 }
@@ -794,8 +836,8 @@ async function recordDreamingToolCall(
 		[
 			ownerRunStatement(
 				`INSERT INTO dreaming_tool_calls
-				 (id, agent_id, pass_id, sequence, tool_call_id, tool_name, input_json, output_json, success, latency_ms)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (id, agent_id, pass_id, sequence, tool_call_id, tool_name, input_json, output_json, success, latency_ms, compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT compartment_id FROM dreaming_passes WHERE id = ?))`,
 				[
 					randomUUID(),
 					agentId,
@@ -807,6 +849,7 @@ async function recordDreamingToolCall(
 					serializeToolTrace(trace.output),
 					trace.output.ok ? 1 : 0,
 					Math.max(0, Math.floor(trace.latencyMs)),
+					passId,
 				],
 			),
 		],
@@ -817,7 +860,9 @@ export async function getDreamingToolCalls(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingToolCall[]> {
+	const predicate = passReadPredicate(agentId, readScope);
 	const rows = await ownerQueryAll<{
 		id: string;
 		passId: string;
@@ -836,9 +881,9 @@ export async function getDreamingToolCalls(
 		        tool_name AS toolName, input_json AS inputJson, output_json AS outputJson,
 		        success, latency_ms AS latencyMs, created_at AS createdAt
 		 FROM dreaming_tool_calls
-		 WHERE agent_id = ? AND pass_id = ?
+		 WHERE pass_id = ? ${predicate.sql}
 		 ORDER BY sequence ASC`,
-		[agentId, passId],
+		[passId, ...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
 	);
 	return rows.map((typed) => ({
@@ -978,6 +1023,7 @@ export async function renderPendingDreamingAttention(
 	accessor: DbAccessor,
 	scopes: readonly string[],
 	mode: DreamingMode,
+	compartmentId: number | null = null,
 ): Promise<string> {
 	const focus = dreamingFocusOfMode(mode) ?? "all";
 	const lines: string[] = [];
@@ -985,6 +1031,11 @@ export async function renderPendingDreamingAttention(
 		for (const kind of ATTENTION_KINDS_BY_FOCUS[focus]) {
 			const items = await listDreamingAttention(accessor, {
 				agentId: scope,
+				readScope: {
+					reach: { kind: "own", agentId: scope },
+					compartments: compartmentId === null ? [] : [compartmentId],
+					projects: null,
+				},
 				kind,
 				status: "pending",
 				limit: ATTENTION_ITEMS_PER_KIND + 1,
@@ -1048,6 +1099,8 @@ export function selectDreamingPassMode(
 
 export interface DreamingPassLiveOptions {
 	readonly hub?: DreamingLiveEventHub;
+	readonly compartmentId?: number | null;
+	readonly sharedScope?: { readonly evidenceLeaseMs: number; readonly attentionScopes: readonly string[] };
 	readonly userRequest?: { readonly sourceRef: string; readonly content: string };
 	readonly memoryHeadReader?: (agentId: string, passId?: string) => Promise<Record<string, unknown>>;
 }
@@ -1474,8 +1527,15 @@ export async function runDreamingAgentPass(
 	const passId =
 		existingPassId ??
 		(await (ownerMaintenance
-			? createDreamingPassThroughOwner(ownerMaintenance, agentId, mode, policy)
-			: createDreamingPass(accessor, agentId, mode, policy)));
+			? createDreamingPassThroughOwner(
+					ownerMaintenance,
+					agentId,
+					mode,
+					policy,
+					undefined,
+					liveOptions?.compartmentId ?? null,
+				)
+			: createDreamingPass(accessor, agentId, mode, policy, undefined, liveOptions?.compartmentId ?? null)));
 	const live = liveOptions?.hub ?? dreamingLiveEvents;
 	live.startPass({ passId, agentId, mode });
 	live.publish(passId, "lifecycle", { phase: "preparing", mode });
@@ -1485,6 +1545,30 @@ export async function runDreamingAgentPass(
 	let applied = 0;
 	let failed = 0;
 	try {
+		const historyScopes = liveOptions?.userRequest !== undefined ? [agentId] : scopes;
+		await ownerTransaction(
+			await getDbOwnerForAccessor(accessor),
+			"dreaming.pass.scope-key",
+			[
+				ownerRunStatement("UPDATE dreaming_passes SET scope_key = ? WHERE id = ? AND status = 'running'", [
+					dreamingScopeKey(historyScopes),
+					passId,
+				]),
+			],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		);
+		const persistedPartition = await ownerQueryOne<{ compartmentId: number | null; valid: number; excluded: number }>(
+			await getDbOwnerForAccessor(accessor),
+			"dreaming.pass.partition",
+			`SELECT p.compartment_id AS compartmentId, (p.classification_epoch = e.epoch AND NOT EXISTS (SELECT 1 FROM org_jobs WHERE kind IN ('classify','unclassify') AND status IN ('pending','running'))) AS valid, EXISTS(SELECT 1 FROM agents a JOIN organization o ON o.id = 1 WHERE a.id = p.agent_id AND a.kind = 'organization' AND o.claimed_at IS NOT NULL AND o.agent_model = 'personal') AS excluded FROM dreaming_passes p JOIN dreaming_classification_epoch e ON e.id = 1 WHERE p.id = ? AND p.agent_id = ? AND p.status = 'running'`,
+			[passId, agentId],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		);
+		if (!persistedPartition || !persistedPartition.valid) throw new Error("compartment_mismatch");
+		if (persistedPartition.excluded) throw new Error("org_policy");
+		const compartmentId = persistedPartition.compartmentId;
+		if (liveOptions?.compartmentId !== undefined && liveOptions.compartmentId !== compartmentId)
+			throw new Error("compartment_mismatch");
 		const basePrompt =
 			scopes.length > 1 ? `${policy.text}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>` : policy.text;
 		const toolPrompt = cfg.codemode ? `${basePrompt}\n\n${DREAMING_CODEMODE_PROMPT}` : basePrompt;
@@ -1504,39 +1588,40 @@ ${JSON.stringify(liveOptions.userRequest)}
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		);
 		const cutoff = cutoffRow?.now ?? new Date().toISOString();
+		const attentionScopes = liveOptions?.sharedScope?.attentionScopes ?? scopes;
 		const [hasPendingHygieneAttention, hasPendingContentAttention, hasPendingAttention] = await Promise.all([
 			Promise.all(
-				scopes.map(
+				attentionScopes.map(
 					async (scope) =>
 						(await ownerQueryOne<{ present: number }>(
 							await getDbOwnerForAccessor(accessor),
 							"dreaming.attention.hygiene-present",
-							"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND kind = 'hygiene' AND resolved_at IS NULL LIMIT 1",
-							[scope],
+							"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND compartment_id IS ? AND kind = 'hygiene' AND resolved_at IS NULL LIMIT 1",
+							[scope, compartmentId],
 							{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 						)) !== undefined,
 				),
 			).then((values) => values.some(Boolean)),
 			Promise.all(
-				scopes.map(
+				attentionScopes.map(
 					async (scope) =>
 						(await ownerQueryOne<{ present: number }>(
 							await getDbOwnerForAccessor(accessor),
 							"dreaming.attention.content-present",
-							"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND kind IN ('review_due', 'contested_claim', 'evidence_requeue', 'surprisal') AND resolved_at IS NULL LIMIT 1",
-							[scope],
+							"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND compartment_id IS ? AND kind IN ('review_due', 'contested_claim', 'evidence_requeue', 'surprisal') AND resolved_at IS NULL LIMIT 1",
+							[scope, compartmentId],
 							{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 						)) !== undefined,
 				),
 			).then((values) => values.some(Boolean)),
 			Promise.all(
-				scopes.map(
+				attentionScopes.map(
 					async (scope) =>
 						(await ownerQueryOne<{ present: number }>(
 							await getDbOwnerForAccessor(accessor),
 							"dreaming.attention.present",
-							"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND resolved_at IS NULL LIMIT 1",
-							[scope],
+							"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND compartment_id IS ? AND resolved_at IS NULL LIMIT 1",
+							[scope, compartmentId],
 							{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 						)) !== undefined,
 				),
@@ -1545,7 +1630,8 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const hasBacklogByScope = new Map(
 			await Promise.all(
 				scopes.map(
-					async (scope) => [scope, await hasDreamingEpisodicBacklog(accessor, scope, ownerMaintenance)] as const,
+					async (scope) =>
+						[scope, await hasDreamingEpisodicBacklog(accessor, scope, ownerMaintenance, compartmentId)] as const,
 				),
 			),
 		);
@@ -1573,13 +1659,13 @@ ${JSON.stringify(liveOptions.userRequest)}
 						statements.push(
 							ownerRunStatement(
 								`INSERT INTO dreaming_state
-									 (agent_id, consecutive_failures, last_failure_at, last_pass_at, evidence_cursor, last_pass_id, last_pass_mode)
-									 VALUES (?, 0, NULL, ?, NULL, ?, ?)
-									 ON CONFLICT(agent_id) DO UPDATE SET
-									   consecutive_failures = 0, last_failure_at = NULL, last_pass_at = excluded.last_pass_at,
+									 (agent_id, compartment_id, consecutive_failures, last_failure_at, last_pass_at, evidence_cursor, last_pass_id, last_pass_mode)
+									 VALUES (?, ?, 0, NULL, ?, NULL, ?, ?)
+									 ON CONFLICT(agent_id, COALESCE(compartment_id,0)) DO UPDATE SET
+									   consecutive_failures = 0, last_failure_at = NULL, last_pass_at = CASE WHEN julianday(dreaming_state.last_pass_at) > julianday(excluded.last_pass_at) THEN dreaming_state.last_pass_at ELSE excluded.last_pass_at END,
 									   evidence_cursor = NULL, last_pass_id = excluded.last_pass_id,
 									   last_pass_mode = excluded.last_pass_mode, updated_at = datetime('now')`,
-								[scope, cutoff, passId, mode],
+								[scope, compartmentId, cutoff, passId, mode],
 							),
 						);
 					}
@@ -1655,6 +1741,8 @@ ${JSON.stringify(liveOptions.userRequest)}
 						),
 					}),
 			evidenceDeliveryDeadline: Date.now() + Math.floor(cfg.timeout / 2),
+			evidenceLeaseMs: liveOptions?.sharedScope?.evidenceLeaseMs ?? cfg.timeout * 2,
+			compartmentId,
 			passDeadline: Date.now() + cfg.timeout,
 			...(cfg.maxPassTokens === undefined ? {} : { evidenceTokenBudget: cfg.maxPassTokens }),
 			evidenceChars: dreamingEvidencePageChars(cfg.maxInputTokens),
@@ -1733,22 +1821,15 @@ ${JSON.stringify(liveOptions.userRequest)}
 				}
 			},
 		});
-		const historyScopes = liveOptions?.userRequest !== undefined ? [agentId] : scopes;
-		await ownerTransaction(
-			await getDbOwnerForAccessor(accessor),
-			"dreaming.pass.scope-key",
-			[
-				ownerRunStatement("UPDATE dreaming_passes SET scope_key = ? WHERE id = ?", [
-					dreamingScopeKey(historyScopes),
-					passId,
-				]),
-			],
-			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
-		);
 		const passPrompt = dreamingPassPrompt(
 			prompt,
-			await renderDreamingHistoryForPass(accessor, agentId, historyScopes),
-			await renderPendingDreamingAttention(accessor, historyScopes, mode),
+			await renderDreamingHistoryForPass(accessor, agentId, historyScopes, compartmentId),
+			await renderPendingDreamingAttention(
+				accessor,
+				liveOptions?.sharedScope?.attentionScopes ?? historyScopes,
+				mode,
+				compartmentId,
+			),
 		).concat("\n\n", dreamingPassClock(new Date(), detectLocalTimeZone()));
 		logger.info("dreaming", "Starting agentic dreaming pass", {
 			mode,
@@ -1790,8 +1871,8 @@ ${JSON.stringify(liveOptions.userRequest)}
 					await ownerQueryOne<{ lastPassAt: string | null }>(
 						await getDbOwnerForAccessor(accessor),
 						"dreaming.state.watermark",
-						"SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id = ?",
-						[scope],
+						"SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id = ? AND compartment_id IS ?",
+						[scope, compartmentId],
 						{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 					)
 				)?.lastPassAt ?? null;
@@ -1852,9 +1933,9 @@ ${JSON.stringify(liveOptions.userRequest)}
 					finalizeDreamingPassInDb(db, finalizeInput);
 					return null;
 				});
-				if (mode === "incremental-content") {
+				if (mode === "incremental-content" && compartmentId === null) {
 					try {
-						const projection = await memoryHeadCommitter.read(agentId);
+						const projection = await (liveOptions?.memoryHeadReader ?? readCuratedMemoryHead)(agentId);
 						if (projection.publication === "pending") {
 							logger.warn("dreaming", "Content pass completed with a pending MEMORY.md projection", {
 								passId,
@@ -1966,8 +2047,8 @@ function writeDreamingTranscriptManifestInTx(
 		`INSERT INTO session_summaries (
 			id, project, depth, kind, content, token_count,
 			earliest_at, latest_at, session_key, harness,
-			agent_id, source_type, source_ref, meta_json, created_at
-		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'transcript', ?, ?, ?)
+			agent_id, source_type, source_ref, meta_json, created_at, compartment_id
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'transcript', ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			content = excluded.content,
@@ -1979,7 +2060,8 @@ function writeDreamingTranscriptManifestInTx(
 			agent_id = excluded.agent_id,
 			source_type = excluded.source_type,
 			source_ref = excluded.source_ref,
-			meta_json = excluded.meta_json`,
+			meta_json = excluded.meta_json,
+			compartment_id = excluded.compartment_id`,
 	);
 	const now = new Date().toISOString();
 	for (const entry of params.entries) {
@@ -1993,17 +2075,26 @@ function writeDreamingTranscriptManifestInTx(
 			})
 		)
 			continue;
+		const partition = dreamingPassPartitionInDb(db, params.passId, entry.scope);
+		const compartmentId = compartmentForWrite(db, {
+			agentId: entry.scope,
+			sessionKey: entry.source.id,
+			parentCompartment: partition.compartmentId,
+		});
+		if (compartmentId !== partition.compartmentId) throw new Error("compartment_mismatch");
 		const content = entry.content.trim();
 		const contentHash = createHash("sha256").update(content).digest("hex");
 		const existing = db
 			.prepare(
 				`SELECT id FROM session_summaries
 				 WHERE agent_id = ? AND session_key = ? AND depth = 0
-				   AND COALESCE(source_type, 'summary') IN ('summary', 'checkpoint')
+				   AND COALESCE(source_type, 'summary') IN ('summary', 'checkpoint') AND compartment_id IS ?
 				 LIMIT 1`,
 			)
-			.get(entry.scope, entry.source.id) as { id: string } | null;
-		const nodeId = existing?.id ?? `transcript:${entry.scope}:${entry.source.id}`;
+			.get(entry.scope, entry.source.id, compartmentId) as { id: string } | null;
+		const nodeId =
+			existing?.id ??
+			`transcript:${entry.scope}:${entry.source.id}${compartmentId === null ? "" : `:c${compartmentId}`}`;
 		statement.run(
 			nodeId,
 			entry.source.project,
@@ -2022,7 +2113,9 @@ function writeDreamingTranscriptManifestInTx(
 				contentHash,
 			}),
 			now,
+			compartmentId,
 		);
+		if (compartmentId !== null) continue;
 		upsertThreadHead(db as unknown as Database, {
 			agentId: entry.scope,
 			nodeId,
@@ -2037,6 +2130,9 @@ function writeDreamingTranscriptManifestInTx(
 	}
 }
 export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPassFinalize): void {
+	const partition = dreamingPassPartitionInDb(db, input.passId, input.agentId);
+	for (const scope of input.scopes) dreamingPassPartitionInDb(db, input.passId, scope);
+	const peerHeldEvidence = evidenceLeasedByOtherPassesInScopes(db, input.passId, input.scopes);
 	let memoryHeadResult: Record<string, unknown> | null = null;
 	withContentPassWrites(db, input.passId, () =>
 		writeDreamingTranscriptManifestInTx(db, {
@@ -2086,6 +2182,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		input.summary,
 		input.passId,
 	);
+	releaseDreamingEvidenceLeasesInTx(db, input.passId);
 	recordRejectedDreamingEvidenceInTx(db, input.passId, input.rejectedEvidence as RejectedDreamingEvidence[]);
 	if (memoryHeadResult !== null) {
 		const row = db.prepare("SELECT runbook_json AS runbookJson FROM dreaming_passes WHERE id = ?").get(input.passId) as
@@ -2114,7 +2211,8 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		}
 		const runbookDeferred = parsedRunbook === null ? null : deferredEvidenceKeys(parsedRunbook, input.agentId);
 		const failedEvidence = failedOperationEvidence(db, input.passId, input.agentId, input.scopes);
-		const deferredEvidence = runbookDeferred === null ? null : new Set([...runbookDeferred, ...failedEvidence.sources]);
+		const deferredEvidence =
+			runbookDeferred === null ? null : new Set([...runbookDeferred, ...failedEvidence.sources, ...peerHeldEvidence]);
 		const reviewedExcludedEvidence =
 			parsedRunbook === null ? null : parseDreamingReviewedExcludedEvidence(parsedRunbook);
 		if (deferredEvidence !== null && reviewedExcludedEvidence !== null) {
@@ -2143,7 +2241,15 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		const watermarks = new Map(input.nextWatermarkByScope.map((item) => [item.scope, item.watermark]));
 		for (const item of input.hasBacklogByScope) {
 			if (!item.hasBacklog) continue;
-			resetDreamingTokens(db, item.scope, input.passId, input.mode, null, watermarks.get(item.scope) ?? null);
+			resetDreamingTokens(
+				db,
+				item.scope,
+				input.passId,
+				input.mode,
+				null,
+				watermarks.get(item.scope) ?? null,
+				partition.compartmentId,
+			);
 		}
 	}
 }
@@ -2159,8 +2265,9 @@ export async function isDreamingHaltActive(
 	accessor: DbAccessor,
 	agentId: string,
 	nowMs = Date.now(),
+	compartmentId: number | null = null,
 ): Promise<boolean> {
-	return isDreamingScopeHalted(await getDreamingState(accessor, agentId), nowMs);
+	return isDreamingScopeHalted(await getDreamingState(accessor, agentId, compartmentId), nowMs);
 }
 
 interface DreamingBacklogRead {
@@ -2224,11 +2331,20 @@ function withCandidateScanResult(
 	};
 }
 
-function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimit: number | null): DreamingBacklogRead {
-	const candidateScan = sourceLimit === null ? null : scanEpisodicSourceCandidates(db, agentId, sourceLimit);
+function readDreamingEpisodicBacklogInDb(
+	db: ReadDb,
+	agentId: string,
+	sourceLimit: number | null,
+	compartmentId: number | null = null,
+): DreamingBacklogRead {
+	const candidateScan =
+		sourceLimit === null
+			? null
+			: scanEpisodicSourceCandidates(db, agentId, sourceLimit, { exactCompartment: compartmentId });
 	const candidateRefs = candidateScan?.refs;
 	const queued = searchEpisodicSources(db, {
 		agentId,
+		exactCompartment: compartmentId,
 		query: "",
 		excludeDelivered: true,
 		limit: sourceLimit === null ? null : sourceLimit + 1,
@@ -2240,9 +2356,16 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 		candidateScan,
 	);
 }
-export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): Promise<number> {
-	const read = readDreamingEpisodicBacklogInDb(db, agentId, null);
-	return refreshDreamingBacklogTokenCache(agentId, read.entries);
+export function getDreamingEpisodicTokenBacklogInDb(
+	db: ReadDb,
+	agentId: string,
+	compartmentId: number | null = null,
+): Promise<number> {
+	const read = readDreamingEpisodicBacklogInDb(db, agentId, null, compartmentId);
+	return refreshDreamingBacklogTokenCache(
+		compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`,
+		read.entries,
+	);
 }
 
 function ensureDreamingTokenThreshold(value: number): number {
@@ -2256,56 +2379,71 @@ export function probeDreamingEpisodicBacklogInDb(
 	agentId: string,
 	tokenThreshold: number,
 	maxSources: number,
+	compartmentId: number | null = null,
 ): Promise<DreamingEpisodicBacklogProbe> {
 	const threshold = ensureDreamingTokenThreshold(tokenThreshold);
 	const sourceLimit = boundedDreamingBacklogSourceLimit(maxSources);
-	const read = readDreamingEpisodicBacklogInDb(db, agentId, sourceLimit);
-	return countDreamingBacklogTokenEntries(agentId, read.entries, read.complete ? undefined : threshold).then(
-		(result) => {
-			if (read.complete && read.hasBacklog !== null) {
-				return {
-					kind: "exact",
-					tokens: result.tokens,
-					hasBacklog: read.hasBacklog,
-					sourcesScanned: read.sourcesScanned,
-				};
-			}
-			if (result.entriesCounted > 0 && result.tokens >= threshold) {
-				return {
-					kind: "threshold-reached",
-					tokenLowerBound: result.tokens,
-					hasBacklog: true,
-					sourcesScanned: result.entriesCounted,
-				};
-			}
+	const read = readDreamingEpisodicBacklogInDb(db, agentId, sourceLimit, compartmentId);
+	return countDreamingBacklogTokenEntries(
+		compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`,
+		read.entries,
+		read.complete ? undefined : threshold,
+	).then((result) => {
+		if (read.complete && read.hasBacklog !== null) {
 			return {
-				kind: "indeterminate",
-				tokenLowerBound: result.tokens,
+				kind: "exact",
+				tokens: result.tokens,
 				hasBacklog: read.hasBacklog,
+				sourcesScanned: read.sourcesScanned,
+			};
+		}
+		if (result.entriesCounted > 0 && result.tokens >= threshold) {
+			return {
+				kind: "threshold-reached",
+				tokenLowerBound: result.tokens,
+				hasBacklog: true,
 				sourcesScanned: result.entriesCounted,
 			};
-		},
-	);
+		}
+		return {
+			kind: "indeterminate",
+			tokenLowerBound: result.tokens,
+			hasBacklog: read.hasBacklog,
+			sourcesScanned: result.entriesCounted,
+		};
+	});
 }
-export function hasDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string): boolean {
-	return readDreamingEpisodicBacklogInDb(db, agentId, 1).hasBacklog ?? true;
+export function hasDreamingEpisodicBacklogInDb(
+	db: ReadDb,
+	agentId: string,
+	compartmentId: number | null = null,
+): boolean {
+	return readDreamingEpisodicBacklogInDb(db, agentId, 1, compartmentId).hasBacklog ?? true;
 }
 
 export async function getDreamingEpisodicTokenBacklog(
 	accessor: DbAccessor,
 	agentId: string,
 	ownerMaintenance?: DbOwnerMaintenance,
+	compartmentId: number | null = null,
 ): Promise<number> {
-	const input: DbOwnerDreamingEpisodicBacklog = { agentId };
-	const measurementGeneration = beginDreamingEpisodicTokenBacklogMeasurement(agentId);
+	const input: DbOwnerDreamingEpisodicBacklog = { agentId, compartmentId };
+	const measurementGeneration = beginDreamingEpisodicTokenBacklogMeasurement(
+		compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`,
+	);
 	const options = { deadlineMs: 60_000, estimatedWorkUnits: DB_OWNER_MAX_WORK_UNITS };
 	const count = ownerMaintenance
 		? await ownerMaintenance.dreamingEpisodicBacklog(input, options)
 		: await runDbOwnerDomainOperation(accessor, {
 				runWithOwner: async (owner) => await ownerDreamingEpisodicBacklog(owner, input, options),
-				runInline: ({ read }) => read((db) => getDreamingEpisodicTokenBacklogInDb(db, input.agentId)),
+				runInline: ({ read }) =>
+					read((db) => getDreamingEpisodicTokenBacklogInDb(db, input.agentId, input.compartmentId)),
 			});
-	recordDreamingEpisodicTokenBacklog(agentId, count, measurementGeneration);
+	recordDreamingEpisodicTokenBacklog(
+		compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`,
+		count,
+		measurementGeneration,
+	);
 	return count;
 }
 
@@ -2314,10 +2452,14 @@ export async function probeDreamingEpisodicBacklog(
 	agentId: string,
 	tokenThreshold: number,
 	ownerMaintenance?: DbOwnerMaintenance,
+	compartmentId: number | null = null,
 ): Promise<DreamingEpisodicBacklogProbe> {
-	const measurementGeneration = beginDreamingEpisodicTokenBacklogMeasurement(agentId);
+	const measurementGeneration = beginDreamingEpisodicTokenBacklogMeasurement(
+		compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`,
+	);
 	const input: DbOwnerDreamingEpisodicBacklogProbe = {
 		agentId,
+		compartmentId,
 		tokenThreshold: ensureDreamingTokenThreshold(tokenThreshold),
 		maxSources: DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES,
 	};
@@ -2327,10 +2469,23 @@ export async function probeDreamingEpisodicBacklog(
 		: await runDbOwnerDomainOperation(accessor, {
 				runWithOwner: async (owner) => await ownerDreamingEpisodicBacklogProbe(owner, input, options),
 				runInline: ({ read }) =>
-					read((db) => probeDreamingEpisodicBacklogInDb(db, input.agentId, input.tokenThreshold, input.maxSources)),
+					read((db) =>
+						probeDreamingEpisodicBacklogInDb(
+							db,
+							input.agentId,
+							input.tokenThreshold,
+							input.maxSources,
+							input.compartmentId,
+						),
+					),
 			});
-	if (result.kind === "exact") recordDreamingEpisodicTokenBacklog(agentId, result.tokens, measurementGeneration);
-	else invalidateDreamingEpisodicTokenBacklog(agentId);
+	if (result.kind === "exact")
+		recordDreamingEpisodicTokenBacklog(
+			compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`,
+			result.tokens,
+			measurementGeneration,
+		);
+	else invalidateDreamingEpisodicTokenBacklog(compartmentId === null ? agentId : `${agentId}\u0000${compartmentId}`);
 	return result;
 }
 
@@ -2338,13 +2493,14 @@ export async function hasDreamingEpisodicBacklog(
 	accessor: DbAccessor,
 	agentId: string,
 	ownerMaintenance?: DbOwnerMaintenance,
+	compartmentId: number | null = null,
 ): Promise<boolean> {
-	const input: DbOwnerDreamingEpisodicBacklogExists = { agentId };
+	const input: DbOwnerDreamingEpisodicBacklogExists = { agentId, compartmentId };
 	const options = { deadlineMs: 30_000, estimatedWorkUnits: 10 };
 	if (ownerMaintenance) return await ownerMaintenance.dreamingEpisodicBacklogExists(input, options);
 	return await runDbOwnerDomainOperation(accessor, {
 		runWithOwner: async (owner) => await ownerDreamingEpisodicBacklogExists(owner, input, options),
-		runInline: ({ read }) => read((db) => hasDreamingEpisodicBacklogInDb(db, input.agentId)),
+		runInline: ({ read }) => read((db) => hasDreamingEpisodicBacklogInDb(db, input.agentId, input.compartmentId)),
 	});
 }
 
@@ -2371,16 +2527,17 @@ export async function evaluateDreamingTrigger(
 	agentId: string,
 	backlog: DreamingEpisodicBacklogProbe,
 	nowMs = Date.now(),
+	compartmentId: number | null = null,
 ): Promise<DreamingTriggerDecision> {
-	const state = await getDreamingState(accessor, agentId);
+	const state = await getDreamingState(accessor, agentId, compartmentId);
 	const hasAttention =
 		(await ownerQueryOne<{ present: number }>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.attention.present",
 			`SELECT 1 AS present FROM dreaming_attention
-			 WHERE agent_id = ? AND resolved_at IS NULL
+			 WHERE agent_id = ? AND compartment_id IS ? AND resolved_at IS NULL
 			   AND NOT ${STALLED_EVIDENCE_ATTENTION_SQL} AND NOT ${SEEN_IMPORTED_SOURCE_ATTENTION_SQL} LIMIT 1`,
-			[agentId],
+			[agentId, compartmentId],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		)) !== undefined;
 	if (isDreamingScopeHalted(state, nowMs)) return { trigger: false };

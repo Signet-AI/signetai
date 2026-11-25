@@ -1,4 +1,5 @@
 import type { ReadDb } from "./db-accessor";
+import { readScopeSql, type ReadScope } from "./read-scope";
 export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
 export const EPISODIC_CAPTURED_AT_FLOOR = "2000-01-01T00:00:00.000Z";
 export function utcTimestampMs(value: string): number {
@@ -18,7 +19,58 @@ export interface EpisodicCursor {
 	readonly fragmentOffset?: number;
 }
 
+export type DreamingSpeaker =
+	| {
+			readonly kind: "person";
+			readonly userId: string;
+			readonly displayName: string;
+			readonly personEntityId: string;
+			readonly personEntityName: string;
+	  }
+	| { readonly kind: "external" }
+	| { readonly kind: "local_anonymous" };
+
+export interface EpisodicSourceScopeOptions {
+	readonly readScope?: ReadScope;
+	readonly exactCompartment?: number | null;
+}
+
+function sourceScopeSql(
+	kind: EpisodicSourceKind,
+	alias: string,
+	options: EpisodicSourceScopeOptions,
+): { sql: string; args: unknown[] } {
+	alias =
+		alias ||
+		{
+			memory: "memories",
+			artifact: "memory_artifacts",
+			transcript: "session_transcripts",
+			summary: "session_summaries",
+		}[kind];
+	const scope = options.readScope
+		? readScopeSql(alias, options.readScope, {
+				visibility: kind === "memory" ? "visibility" : null,
+				memory: kind === "memory" ? "id" : null,
+				session: kind === "memory" ? "source_id" : "session_key",
+				source: kind === "summary" ? "source_ref" : "source_id",
+			})
+		: { sql: "", args: [] };
+	if (options.exactCompartment !== undefined) {
+		if (
+			options.exactCompartment !== null &&
+			(!Number.isSafeInteger(options.exactCompartment) || options.exactCompartment < 1)
+		)
+			throw new Error("Invalid compartment");
+		scope.sql += ` AND ${alias ? `${alias}.` : ""}compartment_id IS ?`;
+		scope.args.push(options.exactCompartment);
+	}
+	return scope;
+}
+
 export interface EpisodicSourceRecord {
+	readonly speakerUserId?: string | null;
+	readonly speaker?: DreamingSpeaker;
 	readonly kind: EpisodicSourceKind;
 	readonly id: string;
 	readonly content: string;
@@ -44,7 +96,7 @@ export interface EpisodicSourceCandidateScan {
 	readonly complete: boolean;
 }
 
-export interface ReadEpisodicSourceOptions {
+export interface ReadEpisodicSourceOptions extends EpisodicSourceScopeOptions {
 	readonly agentId: string;
 	readonly from: string;
 }
@@ -117,6 +169,7 @@ export const ARTIFACT_IS_DREAMING_INPUT = `NOT (
 		AND EXISTS (
 			SELECT 1 FROM session_transcripts AS st
 			WHERE st.agent_id = ma.agent_id AND st.session_key = ma.session_key
+			  AND st.compartment_id IS ma.compartment_id
 		)
 	)
 	OR (
@@ -124,6 +177,7 @@ export const ARTIFACT_IS_DREAMING_INPUT = `NOT (
 		AND EXISTS (
 			SELECT 1 FROM session_summaries AS ss
 			WHERE ss.agent_id = ma.agent_id
+			  AND ss.compartment_id IS ma.compartment_id
 			  AND ss.depth = 0
 			  AND COALESCE(ss.source_type, 'summary') = ma.source_kind
 			  AND (
@@ -138,6 +192,18 @@ export const ARTIFACT_IS_DREAMING_INPUT = `NOT (
 	)
 )`;
 
+function artifactInputSql(options: EpisodicSourceScopeOptions): { sql: string; args: unknown[] } {
+	const transcript = sourceScopeSql("transcript", "st", options);
+	const summary = sourceScopeSql("summary", "ss", options);
+	return {
+		sql: ARTIFACT_IS_DREAMING_INPUT.replace("WHERE st.agent_id", `WHERE 1 ${transcript.sql} AND st.agent_id`).replace(
+			"WHERE ss.agent_id",
+			`WHERE 1 ${summary.sql} AND ss.agent_id`,
+		),
+		args: [...transcript.args, ...summary.args],
+	};
+}
+
 function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
 	try {
 		const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
@@ -151,6 +217,7 @@ export function scanEpisodicSourceCandidates(
 	db: ReadDb,
 	agentId: string,
 	maxCandidates: number,
+	options: EpisodicSourceScopeOptions = {},
 ): EpisodicSourceCandidateScan {
 	if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 50) {
 		throw new RangeError("Episodic source candidate limit must be an integer between 1 and 50");
@@ -158,6 +225,7 @@ export function scanEpisodicSourceCandidates(
 	const rows = selectEpisodicSourceRefs(db, {
 		agentId,
 		query: "",
+		...options,
 		excludeDelivered: true,
 		limit: maxCandidates + 1,
 		order: "none",
@@ -206,14 +274,20 @@ export function sourceIdCandidates(value: string): string[] {
 	];
 }
 
-export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicMemory(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	options: EpisodicSourceScopeOptions = {},
+): EpisodicSourceRecord | null {
+	const scope = sourceScopeSql("memory", "", options);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
+			`SELECT author_user_id, id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
 			 FROM memories
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${scope.sql}
 			   AND memory_kind = 'episodic'
 			   AND COALESCE(is_deleted, 0) = 0
 			   AND visibility != 'archived'
@@ -221,7 +295,7 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 			   AND id IN (${placeholders})
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids) as
+		.get(agentId, ...scope.args, ...ids) as
 		| {
 				readonly id: string;
 				readonly content: string;
@@ -231,6 +305,7 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 				readonly runtime_path: string | null;
 				readonly project: string | null;
 				readonly who: string | null;
+				readonly author_user_id: string | null;
 				readonly created_at: string;
 				readonly evidence_meta: string | null;
 		  }
@@ -238,6 +313,7 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 	if (!row) return null;
 	return {
 		kind: "memory",
+		speakerUserId: row.author_user_id,
 		id: row.id,
 		content: row.content,
 		sourceKind: row.source_type ?? "manual",
@@ -252,15 +328,21 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 	};
 }
 
-export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicArtifact(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	options: EpisodicSourceScopeOptions = {},
+): EpisodicSourceRecord | null {
+	const scope = sourceScopeSql("artifact", "", options);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
+			`SELECT author_user_id, source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
 			        project, harness, content, captured_at, updated_at
 			 FROM memory_artifacts
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${scope.sql}
 			   AND COALESCE(is_deleted, 0) = 0
 			   AND (
 			     source_path = ?
@@ -272,9 +354,10 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 			 ORDER BY captured_at DESC
 			 LIMIT 1`,
 		)
-		.get(agentId, id, ...ids, ...ids, ...ids, ...ids) as
+		.get(agentId, ...scope.args, id, ...ids, ...ids, ...ids, ...ids) as
 		| {
 				readonly source_path: string;
+				readonly author_user_id: string | null;
 				readonly source_sha256: string | null;
 				readonly source_kind: string;
 				readonly source_id: string | null;
@@ -292,6 +375,7 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 	if (!row) return null;
 	return {
 		kind: "artifact",
+		speakerUserId: row.author_user_id,
 		id: row.source_path,
 		content: row.content,
 		sourceKind: row.source_kind,
@@ -307,7 +391,13 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 	};
 }
 
-export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicTranscript(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	options: EpisodicSourceScopeOptions = {},
+): EpisodicSourceRecord | null {
+	const scope = sourceScopeSql("transcript", "st", options);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const hasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
@@ -327,16 +417,17 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	const completed = hasCompleted ? "st.completed_at IS NOT NULL" : "0";
 	const row = db
 		.prepare(
-			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
+			`SELECT st.speaker_user_id, st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
 			        ${completedAt} AS completed_at, ${completed} AS completed, ${sourceId} AS source_id,
 			        ${sourceRecordId} AS source_record_id, ${sourceMeta} AS source_meta_json, ${contentHash} AS content_hash
 			 FROM session_transcripts AS st
-			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
+			 WHERE st.agent_id = ? ${scope.sql} AND st.session_key IN (${placeholders})
 			 ORDER BY ${orderBy}
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids) as
+		.get(agentId, ...scope.args, ...ids) as
 		| {
+				readonly speaker_user_id: string | null;
 				readonly session_key: string;
 				readonly content: string;
 				readonly harness: string | null;
@@ -354,6 +445,7 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	if (!row) return null;
 	return {
 		kind: "transcript",
+		speakerUserId: row.speaker_user_id,
 		id: row.session_key,
 		content: row.content,
 		sourceKind: "transcript",
@@ -371,21 +463,27 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	};
 }
 
-export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicSummary(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	options: EpisodicSourceScopeOptions = {},
+): EpisodicSourceRecord | null {
+	const scope = sourceScopeSql("summary", "", options);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT id, content, project, harness, session_key, source_type, source_ref, latest_at
+			`SELECT author_user_id, id, content, project, harness, session_key, source_type, source_ref, latest_at
 			 FROM session_summaries
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${scope.sql}
 			   AND depth = 0
 			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))
 			 ORDER BY latest_at DESC
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids, ...ids) as
+		.get(agentId, ...scope.args, ...ids, ...ids) as
 		| {
 				readonly id: string;
 				readonly content: string;
@@ -393,6 +491,7 @@ export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): Ep
 				readonly harness: string | null;
 				readonly session_key: string | null;
 				readonly source_type: string | null;
+				readonly author_user_id: string | null;
 				readonly source_ref: string | null;
 				readonly latest_at: string;
 		  }
@@ -400,6 +499,7 @@ export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): Ep
 	if (!row) return null;
 	return {
 		kind: "summary",
+		speakerUserId: row.author_user_id,
 		id: row.id,
 		content: row.content,
 		sourceKind: row.source_type ?? "summary",
@@ -422,13 +522,17 @@ export function readRecentEpisodicSources(
 	order: "newest" | "oldest" | "none" = "newest",
 	cursor?: EpisodicCursor | null,
 	candidateRefs?: readonly EpisodicSourceCandidateRef[],
+	options: EpisodicSourceScopeOptions = {},
 ): EpisodicSourceRecord[] {
 	const boundedLimit = limit === null ? -1 : Math.max(1, Math.min(Math.floor(limit), 500));
 	const newer = newerThan?.trim() || null;
 	const direction = order === "oldest" ? "ASC" : "DESC";
 	const sourceOrder = (timestamp: string, tieBreaker: string): string =>
 		order === "none" ? "" : `ORDER BY julianday(${timestamp}) ${direction}, ${tieBreaker} ${direction}`;
+	const memoryScope = sourceScopeSql("memory", "", options);
 	const memoryCursor = cursorPredicate("created_at", "id", "memory", newer, cursor);
+	const artifactInput = artifactInputSql(options);
+	const artifactScope = sourceScopeSql("artifact", "ma", options);
 	const artifactCursor = cursorPredicate("captured_at", "source_path", "artifact", newer, cursor);
 	const transcriptHasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
 	const transcriptHasCompleted = tableHasColumn(db, "session_transcripts", "completed_at");
@@ -444,7 +548,9 @@ export function readRecentEpisodicSources(
 		? "st.source_meta_json"
 		: "NULL";
 	const transcriptContentHash = tableHasColumn(db, "session_transcripts", "content_hash") ? "st.content_hash" : "NULL";
+	const transcriptScope = sourceScopeSql("transcript", "st", options);
 	const transcriptCursor = cursorPredicate(transcriptTime, "session_key", "transcript", newer, cursor);
+	const summaryScope = sourceScopeSql("summary", "", options);
 	const summaryCursor = cursorPredicate("latest_at", "id", "summary", newer, cursor);
 	const allowedKinds = kinds ? new Set(kinds) : null;
 	const candidateKinds =
@@ -457,22 +563,20 @@ export function readRecentEpisodicSources(
 	const memories: EpisodicSourceRecord[] = wants("memory")
 		? db
 				.prepare(
-					`SELECT id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
+					`SELECT author_user_id, id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
 				 FROM memories
-				 WHERE agent_id = ?
+				 WHERE agent_id = ? ${memoryScope.sql}
 				   AND memory_kind = 'episodic'
 				   AND COALESCE(is_deleted, 0) = 0
 				   AND visibility != 'archived'
 				   AND scope IS NULL
-				   -- Session summaries are retained in memories for ordinary recall,
-				   -- but their temporal-DAG node is the one canonical Dreaming input.
 				   AND COALESCE(type, '') != 'session_summary'
 				   AND ${memoryCursor.sql}
 				   ${memoryCandidate.sql}
 				 ${sourceOrder("created_at", "id")}
 				 LIMIT ?`,
 				)
-				.all(agentId, ...memoryCursor.args, ...memoryCandidate.args, boundedLimit)
+				.all(agentId, ...memoryScope.args, ...memoryCursor.args, ...memoryCandidate.args, boundedLimit)
 				.map((row) => {
 					const memory = row as {
 						readonly id: string;
@@ -483,11 +587,13 @@ export function readRecentEpisodicSources(
 						readonly runtime_path: string | null;
 						readonly project: string | null;
 						readonly who: string | null;
+						readonly author_user_id: string | null;
 						readonly created_at: string;
 						readonly evidence_meta: string | null;
 					};
 					return {
 						kind: "memory",
+						speakerUserId: memory.author_user_id,
 						id: memory.id,
 						content: memory.content,
 						sourceKind: memory.source_type ?? "manual",
@@ -505,20 +611,28 @@ export function readRecentEpisodicSources(
 	const artifacts: EpisodicSourceRecord[] = wants("artifact")
 		? db
 				.prepare(
-					`SELECT source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
+					`SELECT author_user_id, source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
 			        project, harness, content, captured_at, updated_at
 			 FROM memory_artifacts AS ma
-			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
-			   AND ${ARTIFACT_IS_DREAMING_INPUT}
+			 WHERE ma.agent_id = ? ${artifactScope.sql} AND COALESCE(ma.is_deleted, 0) = 0
+			   AND ${artifactInput.sql}
 			   AND ${artifactCursor.sql}
 			   ${artifactCandidate.sql}
 			   ${sourceOrder("captured_at", "source_path")}
 			   LIMIT ?`,
 				)
-				.all(agentId, ...artifactCursor.args, ...artifactCandidate.args, boundedLimit)
+				.all(
+					agentId,
+					...artifactScope.args,
+					...artifactInput.args,
+					...artifactCursor.args,
+					...artifactCandidate.args,
+					boundedLimit,
+				)
 				.map((row) => {
 					const artifact = row as {
 						readonly source_path: string;
+						readonly author_user_id: string | null;
 						readonly source_sha256: string | null;
 						readonly source_kind: string;
 						readonly source_id: string | null;
@@ -534,6 +648,7 @@ export function readRecentEpisodicSources(
 					};
 					return {
 						kind: "artifact",
+						speakerUserId: artifact.author_user_id,
 						id: artifact.source_path,
 						content: artifact.content,
 						sourceKind: artifact.source_kind,
@@ -552,22 +667,23 @@ export function readRecentEpisodicSources(
 	const transcripts: EpisodicSourceRecord[] = wants("transcript")
 		? db
 				.prepare(
-					`SELECT st.session_key, st.content, st.harness, st.project, st.created_at,
+					`SELECT st.speaker_user_id, st.session_key, st.content, st.harness, st.project, st.created_at,
 					        ${transcriptUpdatedAt} AS updated_at, ${transcriptCompletedAt} AS completed_at,
 					        ${transcriptTime} AS captured_at, ${transcriptCompleted} AS completed,
 					        ${transcriptSourceId} AS source_id, ${transcriptSourceRecordId} AS source_record_id,
 					        ${transcriptSourceMeta} AS source_meta_json, ${transcriptContentHash} AS content_hash
 				 FROM session_transcripts AS st
-				 WHERE st.agent_id = ?
+				 WHERE st.agent_id = ? ${transcriptScope.sql}
 				   AND ${transcriptCompleted}
 				   AND ${transcriptCursor.sql}
 				   ${transcriptCandidate.sql}
 				 ${sourceOrder(transcriptTime, "st.session_key")}
 				 LIMIT ?`,
 				)
-				.all(agentId, ...transcriptCursor.args, ...transcriptCandidate.args, boundedLimit)
+				.all(agentId, ...transcriptScope.args, ...transcriptCursor.args, ...transcriptCandidate.args, boundedLimit)
 				.map((row) => {
 					const transcript = row as {
+						readonly speaker_user_id: string | null;
 						readonly session_key: string;
 						readonly content: string;
 						readonly harness: string | null;
@@ -584,6 +700,7 @@ export function readRecentEpisodicSources(
 					};
 					return {
 						kind: "transcript",
+						speakerUserId: transcript.speaker_user_id,
 						id: transcript.session_key,
 						content: transcript.content,
 						sourceKind: "transcript",
@@ -605,16 +722,16 @@ export function readRecentEpisodicSources(
 	const summaries: EpisodicSourceRecord[] = wants("summary")
 		? db
 				.prepare(
-					`SELECT id, content, project, harness, session_key, source_type, source_ref, latest_at
+					`SELECT author_user_id, id, content, project, harness, session_key, source_type, source_ref, latest_at
 			 FROM session_summaries
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${summaryScope.sql}
 			   AND depth = 0
 			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			   AND ${summaryCursor.sql}
 			 ${sourceOrder("latest_at", "id")}
 			 LIMIT ?`,
 				)
-				.all(agentId, ...summaryCursor.args, boundedLimit)
+				.all(agentId, ...summaryScope.args, ...summaryCursor.args, boundedLimit)
 				.map((row) => {
 					const summary = row as {
 						readonly id: string;
@@ -623,11 +740,13 @@ export function readRecentEpisodicSources(
 						readonly harness: string | null;
 						readonly session_key: string | null;
 						readonly source_type: string | null;
+						readonly author_user_id: string | null;
 						readonly source_ref: string | null;
 						readonly latest_at: string;
 					};
 					return {
 						kind: "summary",
+						speakerUserId: summary.author_user_id,
 						id: summary.id,
 						content: summary.content,
 						sourceKind: summary.source_type ?? "summary",
@@ -656,12 +775,15 @@ export function countEpisodicDreamingEvidenceSources(
 	agentId: string,
 	kinds: readonly EpisodicSourceKind[],
 	bound: number,
+	options: EpisodicSourceScopeOptions = {},
 ): DreamingEvidenceSourceCount {
+	const artifactInput = artifactInputSql(options);
 	const branches: string[] = [];
 	const wants = new Set(kinds);
 	if (wants.has("memory")) {
+		const scope = sourceScopeSql("memory", "", options);
 		branches.push(`SELECT 'memory' AS kind, id FROM memories
-		 WHERE agent_id = ?
+		 WHERE agent_id = ? ${scope.sql}
 		   AND memory_kind = 'episodic'
 		   AND COALESCE(is_deleted, 0) = 0
 		   AND visibility != 'archived'
@@ -670,24 +792,27 @@ export function countEpisodicDreamingEvidenceSources(
 		   AND length(content) > 0`);
 	}
 	if (wants.has("artifact")) {
+		const scope = sourceScopeSql("artifact", "ma", options);
 		branches.push(`SELECT 'artifact' AS kind, ma.source_path AS id FROM memory_artifacts AS ma
-		 WHERE ma.agent_id = ?
+		 WHERE ma.agent_id = ? ${scope.sql}
 		   AND COALESCE(ma.is_deleted, 0) = 0
 		   AND length(ma.content) > 0
-		   AND ${ARTIFACT_IS_DREAMING_INPUT}`);
+		   AND ${artifactInput.sql}`);
 	}
 	if (wants.has("transcript")) {
+		const scope = sourceScopeSql("transcript", "", options);
 		const completed = tableHasColumn(db, "session_transcripts", "completed_at")
 			? "session_transcripts.completed_at IS NOT NULL"
 			: "0";
 		branches.push(`SELECT 'transcript' AS kind, session_key AS id FROM session_transcripts
-		 WHERE agent_id = ?
+		 WHERE agent_id = ? ${scope.sql}
 		   AND ${completed}
 		   AND length(content) > 0`);
 	}
 	if (wants.has("summary")) {
+		const scope = sourceScopeSql("summary", "", options);
 		branches.push(`SELECT 'summary' AS kind, id FROM session_summaries
-		 WHERE agent_id = ?
+		 WHERE agent_id = ? ${scope.sql}
 		   AND depth = 0
 		   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 		   AND length(content) > 0`);
@@ -696,7 +821,11 @@ export function countEpisodicDreamingEvidenceSources(
 	const boundedLimit = Math.max(1, Math.floor(bound));
 	const selected = (["memory", "artifact", "transcript", "summary"] as const)
 		.filter((kind) => wants.has(kind))
-		.map(() => agentId);
+		.flatMap((kind) => [
+			agentId,
+			...sourceScopeSql(kind, kind === "artifact" ? "ma" : "", options).args,
+			...(kind === "artifact" ? artifactInput.args : []),
+		]);
 	const row: unknown = db
 		.prepare(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT kind, id FROM (
 	  ${branches.join(" UNION ALL ")}
@@ -711,25 +840,25 @@ export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOption
 	const from = options.from.trim();
 	if (!from) return null;
 	if (from.startsWith("memory:")) {
-		return readEpisodicMemory(db, options.agentId, from.replace(/^memory:/, ""));
+		return readEpisodicMemory(db, options.agentId, from.replace(/^memory:/, ""), options);
 	}
 	if (from.startsWith("transcript:") || from.startsWith("session:")) {
-		return readEpisodicTranscript(db, options.agentId, from);
+		return readEpisodicTranscript(db, options.agentId, from, options);
 	}
-	if (from.startsWith("summary:")) return readEpisodicSummary(db, options.agentId, from);
+	if (from.startsWith("summary:")) return readEpisodicSummary(db, options.agentId, from, options);
 	if (from.startsWith("artifact:") || from.startsWith("source:")) {
-		return readEpisodicArtifact(db, options.agentId, from.replace(/^(artifact|source):/, ""));
+		return readEpisodicArtifact(db, options.agentId, from.replace(/^(artifact|source):/, ""), options);
 	}
 	return (
-		readEpisodicMemory(db, options.agentId, from) ??
-		readEpisodicArtifact(db, options.agentId, from) ??
-		readEpisodicTranscript(db, options.agentId, from) ??
-		readEpisodicSummary(db, options.agentId, from)
+		readEpisodicMemory(db, options.agentId, from, options) ??
+		readEpisodicArtifact(db, options.agentId, from, options) ??
+		readEpisodicTranscript(db, options.agentId, from, options) ??
+		readEpisodicSummary(db, options.agentId, from, options)
 	);
 }
 export function resolveStrictEpisodicSourceRef(
 	db: ReadDb,
-	params: { readonly agentId: string; readonly sourceRef: unknown },
+	params: EpisodicSourceScopeOptions & { readonly agentId: string; readonly sourceRef: unknown },
 ): StrictEpisodicSourceRefResolution {
 	if (typeof params.sourceRef !== "string") return { status: "invalid", sourceRef: "" };
 	const sourceRef = params.sourceRef.trim();
@@ -741,15 +870,26 @@ export function resolveStrictEpisodicSourceRef(
 		return { status: "invalid", sourceRef };
 	}
 	const canonicalRef = `${kind}:${id}`;
-	const source = readEpisodicSource(db, { agentId: params.agentId, from: canonicalRef });
+	const source = readEpisodicSource(db, {
+		agentId: params.agentId,
+		from: canonicalRef,
+		readScope: params.readScope,
+		exactCompartment: params.exactCompartment,
+	});
 	if (source !== null) return { status: "resolved", source };
+	if (params.readScope || params.exactCompartment !== undefined)
+		return { status: "not_found", sourceRef: canonicalRef };
 	const owners = findEpisodicSourceAgentIds(db, canonicalRef);
 	if (owners.some((agentId) => agentId !== params.agentId)) {
 		return { status: "cross_agent", sourceRef: canonicalRef };
 	}
 	return { status: "not_found", sourceRef: canonicalRef };
 }
-export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly string[] {
+export function findEpisodicSourceAgentIds(
+	db: ReadDb,
+	from: string,
+	options: EpisodicSourceScopeOptions = {},
+): readonly string[] {
 	const trimmed = from.trim();
 	const colon = trimmed.indexOf(":");
 	if (colon <= 0) return [];
@@ -760,23 +900,25 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
 	let rows: Array<{ agent_id: string | null }>;
 
 	if (kind === "memory") {
+		const scope = sourceScopeSql("memory", "", options);
 		rows = db
 			.prepare(
 				`SELECT DISTINCT agent_id
 				 FROM memories
-				 WHERE memory_kind = 'episodic'
+				 WHERE 1 ${scope.sql} AND memory_kind = 'episodic'
 				   AND COALESCE(is_deleted, 0) = 0
 				   AND visibility != 'archived'
 				   AND scope IS NULL
 				   AND id IN (${placeholders})`,
 			)
-			.all(...ids) as Array<{ agent_id: string | null }>;
+			.all(...scope.args, ...ids) as Array<{ agent_id: string | null }>;
 	} else if (kind === "artifact" || kind === "source") {
+		const scope = sourceScopeSql("artifact", "", options);
 		rows = db
 			.prepare(
 				`SELECT DISTINCT agent_id
 				 FROM memory_artifacts
-				 WHERE COALESCE(is_deleted, 0) = 0
+				 WHERE 1 ${scope.sql} AND COALESCE(is_deleted, 0) = 0
 				   AND (
 				     source_path = ?
 				     OR source_node_id IN (${placeholders})
@@ -785,25 +927,27 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
 				     OR session_token IN (${placeholders})
 				   )`,
 			)
-			.all(sourceId, ...ids, ...ids, ...ids, ...ids) as Array<{ agent_id: string | null }>;
+			.all(...scope.args, sourceId, ...ids, ...ids, ...ids, ...ids) as Array<{ agent_id: string | null }>;
 	} else if (kind === "transcript" || kind === "session") {
+		const scope = sourceScopeSql("transcript", "", options);
 		rows = db
 			.prepare(
 				`SELECT DISTINCT agent_id
 				 FROM session_transcripts
-				 WHERE session_key IN (${placeholders})`,
+				 WHERE 1 ${scope.sql} AND session_key IN (${placeholders})`,
 			)
-			.all(...ids) as Array<{ agent_id: string | null }>;
+			.all(...scope.args, ...ids) as Array<{ agent_id: string | null }>;
 	} else if (kind === "summary") {
+		const scope = sourceScopeSql("summary", "", options);
 		rows = db
 			.prepare(
 				`SELECT DISTINCT agent_id
 				 FROM session_summaries
-				 WHERE depth = 0
+				 WHERE 1 ${scope.sql} AND depth = 0
 				   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 				   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))`,
 			)
-			.all(...ids, ...ids) as Array<{ agent_id: string | null }>;
+			.all(...scope.args, ...ids, ...ids) as Array<{ agent_id: string | null }>;
 	} else {
 		return [];
 	}
@@ -835,7 +979,7 @@ export function episodicQueryTerms(query: string): readonly string[] {
 		.slice(0, MAX_QUERY_TERMS);
 }
 
-interface EpisodicSourceSearchParams {
+export interface EpisodicSourceSearchParams extends EpisodicSourceScopeOptions {
 	readonly agentId: string;
 	readonly query: string;
 	readonly since?: string;
@@ -851,7 +995,14 @@ interface EpisodicSourceSearchParams {
 
 export function searchEpisodicSources(db: ReadDb, params: EpisodicSourceSearchParams): EpisodicSourceRecord[] {
 	return selectEpisodicSourceRefs(db, params)
-		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
+		.map((row) =>
+			readEpisodicSource(db, {
+				agentId: params.agentId,
+				from: `${row.kind}:${row.id}`,
+				readScope: params.readScope,
+				exactCompartment: params.exactCompartment,
+			}),
+		)
 		.filter((source): source is EpisodicSourceRecord => source !== null);
 }
 
@@ -943,9 +1094,15 @@ function selectEpisodicSourceRefs(
 	const wants = (kind: EpisodicSourceKind): boolean =>
 		(kind === "summary" ? params.kind === "summary" : params.kind === undefined || params.kind === kind) &&
 		(candidateKinds === null || candidateKinds.has(kind));
+	const memoryScope = sourceScopeSql("memory", "", params);
 	const memoryCandidate = candidateRefFilter(params.candidateRefs, "memory", "id");
+	const artifactInput = artifactInputSql(params);
+	const artifactDuplicateScope = sourceScopeSql("artifact", "ma2", params);
+	const artifactScope = sourceScopeSql("artifact", "ma", params);
 	const artifactCandidate = candidateRefFilter(params.candidateRefs, "artifact", "ma.source_path");
+	const transcriptScope = sourceScopeSql("transcript", "session_transcripts", params);
 	const transcriptCandidate = candidateRefFilter(params.candidateRefs, "transcript", "session_key");
+	const summaryScope = sourceScopeSql("summary", "", params);
 	const summaryCandidate = candidateRefFilter(params.candidateRefs, "summary", "id");
 	const excluded = params.excludeSourceRefs ?? [];
 	const excludeRefs = (kind: EpisodicSourceKind, id: string): { readonly sql: string; readonly args: unknown[] } =>
@@ -970,9 +1127,10 @@ function selectEpisodicSourceRefs(
 			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
 			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}
+			        ${memoryScope.sql}
 			        ${memoryCandidate.sql}
 			        ${memoryExcluded.sql}`,
-			args: [...commonArgs, ...memoryCandidate.args, ...memoryExcluded.args],
+			args: [...commonArgs, ...memoryScope.args, ...memoryCandidate.args, ...memoryExcluded.args],
 		});
 	}
 	if (wants("artifact")) {
@@ -982,7 +1140,7 @@ function selectEpisodicSourceRefs(
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			        AND length(ma.content) > 0
-			        AND ${ARTIFACT_IS_DREAMING_INPUT}
+			        AND ${artifactInput.sql}
 			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
@@ -991,14 +1149,28 @@ function selectEpisodicSourceRefs(
 			             OR ma.source_path = (
 			               SELECT ma2.source_path FROM memory_artifacts ma2
 			               WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
+			                 AND ma2.compartment_id IS ma.compartment_id ${artifactDuplicateScope.sql}
 			                 AND ma2.source_sha256 = ma.source_sha256
 			                 AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
 			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
 			               LIMIT 1
 			             ))
+			        ${artifactScope.sql}
 			        ${artifactCandidate.sql}
 			        ${artifactExcluded.sql}`,
-			args: [...commonArgs, ...artifactCandidate.args, ...artifactExcluded.args],
+			args: [
+				...contentArgs,
+				params.agentId,
+				...artifactInput.args,
+				...sinceArgs,
+				...beforeArgs,
+				...deliveredArgs,
+				...reviewedArgs,
+				...artifactDuplicateScope.args,
+				...artifactScope.args,
+				...artifactCandidate.args,
+				...artifactExcluded.args,
+			],
 		});
 	}
 	if (wants("transcript")) {
@@ -1012,9 +1184,10 @@ function selectEpisodicSourceRefs(
 			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
 			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
 			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
+			        ${transcriptScope.sql}
 			        ${transcriptCandidate.sql}
 			        ${transcriptExcluded.sql}`,
-			args: [...commonArgs, ...transcriptCandidate.args, ...transcriptExcluded.args],
+			args: [...commonArgs, ...transcriptScope.args, ...transcriptCandidate.args, ...transcriptExcluded.args],
 		});
 	}
 	if (wants("summary")) {
@@ -1028,9 +1201,10 @@ function selectEpisodicSourceRefs(
 			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
 			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}
+			        ${summaryScope.sql}
 			        ${summaryCandidate.sql}
 			        ${summaryExcluded.sql}`,
-			args: [...commonArgs, ...summaryCandidate.args, ...summaryExcluded.args],
+			args: [...commonArgs, ...summaryScope.args, ...summaryCandidate.args, ...summaryExcluded.args],
 		});
 	}
 

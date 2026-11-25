@@ -1,6 +1,7 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
+import { readScopeSql, type ReadScope } from "../read-scope";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import type { DreamingReviewedExcludedEvidenceEntry } from "./dreaming-evidence-reviews";
 
@@ -56,13 +57,15 @@ export interface DreamingRunbookPass {
 	readonly quarantines: readonly { readonly sourceKind: string; readonly sourceId: string; readonly reason: string }[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseRecord(value: string | null): Record<string, unknown> | null {
 	if (!value) return null;
 	try {
 		const parsed: unknown = JSON.parse(value);
-		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-			? (parsed as Record<string, unknown>)
-			: null;
+		return isRecord(parsed) ? parsed : null;
 	} catch {
 		return null;
 	}
@@ -80,8 +83,8 @@ function parseDeferredEvidenceList(value: unknown): readonly DreamingDeferredEvi
 			entries.push(item);
 			continue;
 		}
-		if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
-		const entry = item as Record<string, unknown>;
+		if (!isRecord(item)) continue;
+		const entry = item;
 		if (typeof entry.agentId === "string" && typeof entry.sourceRef === "string") {
 			entries.push({ agentId: entry.agentId, sourceRef: entry.sourceRef });
 		}
@@ -92,8 +95,8 @@ function parseDeferredEvidenceList(value: unknown): readonly DreamingDeferredEvi
 function parseReviewedExcludedEvidenceList(value: unknown): readonly DreamingReviewedExcludedEvidenceEntry[] {
 	if (!Array.isArray(value)) return [];
 	return value.flatMap((item) => {
-		if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
-		const entry = item as Record<string, unknown>;
+		if (!isRecord(item)) return [];
+		const entry = item;
 		if (typeof entry.agentId !== "string" || typeof entry.sourceRef !== "string" || typeof entry.reason !== "string")
 			return [];
 		const agentId = entry.agentId.trim();
@@ -124,13 +127,13 @@ function parseRunbook(value: string | null): DreamingRunbookEntry | null {
 
 function parseEvidenceWindow(value: string | null): DreamingEvidenceWindow | null {
 	const row = parseRecord(value);
-	if (!row || typeof row.cursor !== "object" || row.cursor === null || Array.isArray(row.cursor)) return null;
-	const cursor = row.cursor as Record<string, unknown>;
+	if (!row || !isRecord(row.cursor)) return null;
+	const cursor = row.cursor;
 	if (typeof cursor.capturedAt !== "string" || typeof cursor.id !== "string") return null;
 	const sources = Array.isArray(row.sources)
 		? row.sources.flatMap((source) => {
-				if (typeof source !== "object" || source === null || Array.isArray(source)) return [];
-				const item = source as Record<string, unknown>;
+				if (!isRecord(source)) return [];
+				const item = source;
 				if (
 					typeof item.sourceRef !== "string" ||
 					typeof item.sourceKind !== "string" ||
@@ -173,12 +176,11 @@ function operationResults(
 	const items = Array.isArray(output?.items) ? output.items : [];
 	const fallbackError = typeof output?.error === "string" ? output.error : null;
 	return operations.flatMap((operation, index) => {
-		if (typeof operation !== "object" || operation === null || Array.isArray(operation)) return [];
-		const name = (operation as Record<string, unknown>).operation;
+		if (!isRecord(operation)) return [];
+		const name = operation.operation;
 		if (typeof name !== "string") return [];
 		const item = items[index];
-		const result =
-			typeof item === "object" && item !== null && !Array.isArray(item) ? (item as Record<string, unknown>) : null;
+		const result = isRecord(item) ? item : null;
 		return [
 			{
 				operation: name,
@@ -254,15 +256,39 @@ export async function readDreamingPassRecord(
 	owner: DbOwnerClient,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<DreamingRunbookPass | null> {
-	const row = await ownerQueryOne<Record<string, unknown>>(
+	if (readScope?.projects !== null && readScope?.projects !== undefined) return null;
+	const scope = readScope
+		? readScopeSql("", readScope, { visibility: null, memory: null, session: null, source: null })
+		: { sql: "", args: [] };
+	const parentScope = readScope
+		? readScopeSql("p", readScope, { visibility: null, memory: null, session: null, source: null })
+		: { sql: "", args: [] };
+	const scopeArgs = scope.args.map((value) => {
+		if (typeof value === "string" || typeof value === "number") return value;
+		throw new Error("Invalid read scope parameter");
+	});
+	const row = await ownerQueryOne<{
+		id: string;
+		mode: string;
+		status: string;
+		startedAt: string;
+		completedAt: string | null;
+		summary: string | null;
+		error: string | null;
+		mutationsApplied: number | null;
+		mutationsFailed: number | null;
+		evidenceWindowJson: string | null;
+		runbookJson: string | null;
+	}>(
 		owner,
 		"dreaming.pass-record.read",
 		`SELECT id, mode, status, started_at AS startedAt, completed_at AS completedAt,
 		        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
 		        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
-		 FROM dreaming_passes WHERE agent_id = ? AND id = ?`,
-		[agentId, passId],
+		 FROM dreaming_passes WHERE agent_id = ? AND id = ? ${scope.sql}`,
+		[agentId, passId, ...scopeArgs],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 	if (row === undefined) return null;
@@ -271,34 +297,35 @@ export async function readDreamingPassRecord(
 			owner,
 			"dreaming.pass-record.operations",
 			`SELECT input_json AS inputJson, output_json AS outputJson
-			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops'
+			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops' ${scope.sql}
 			 ORDER BY sequence ASC`,
-			[agentId, passId],
+			[agentId, passId, ...scopeArgs],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		),
 		ownerQueryAll<DreamingRunbookPass["quarantines"][number]>(
 			owner,
 			"dreaming.pass-record.quarantines",
-			`SELECT source_kind AS sourceKind, source_id AS sourceId, reason
-			 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND pass_id = ? AND resolved_at IS NULL
-			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
-			[agentId, passId],
+			`SELECT x.source_kind AS sourceKind, x.source_id AS sourceId, x.reason
+			 FROM dreaming_evidence_exclusions x JOIN dreaming_passes p ON p.id=x.pass_id AND p.agent_id=x.agent_id
+			 WHERE x.agent_id = ? AND x.pass_id = ? AND x.resolved_at IS NULL ${parentScope.sql}
+			 ORDER BY x.excluded_at DESC, x.source_kind ASC, x.source_id ASC`,
+			[agentId, passId, ...scopeArgs],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		),
 	]);
 	return {
-		passId: row.id as string,
-		mode: row.mode as string,
-		status: row.status as string,
-		startedAt: row.startedAt as string,
-		completedAt: (row.completedAt as string) ?? null,
-		summary: (row.summary as string) ?? null,
-		error: (row.error as string) ?? null,
+		passId: row.id,
+		mode: row.mode,
+		status: row.status,
+		startedAt: row.startedAt,
+		completedAt: row.completedAt,
+		summary: row.summary,
+		error: row.error,
 		mutationsApplied: typeof row.mutationsApplied === "number" ? row.mutationsApplied : null,
 		mutationsFailed: typeof row.mutationsFailed === "number" ? row.mutationsFailed : null,
 		operations: summarizeOperations(calls.flatMap((call) => operationResults(call.inputJson, call.outputJson))),
-		evidenceWindow: parseEvidenceWindow((row.evidenceWindowJson as string) ?? null),
-		runbook: parseRunbook((row.runbookJson as string) ?? null),
+		evidenceWindow: parseEvidenceWindow(row.evidenceWindowJson),
+		runbook: parseRunbook(row.runbookJson),
 		quarantines,
 	};
 }

@@ -1,3 +1,4 @@
+import { up as upgradeDreamingPartitions } from "../../../core/src/migrations/179-dreaming-evidence-leases";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +14,11 @@ describe("dreaming operations", () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-dreaming-ops-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		getDbAccessor().withWriteTx((db) => {
+			upgradeDreamingPartitions(db);
+			for (const id of ["pass-1", "pass-2", "pass-3", "pass-4", "pass-merge"])
+				db.prepare("INSERT INTO dreaming_passes (id, agent_id, scope_key) VALUES (?, 'agent-a', 'agent-a')").run(id);
+		});
 	});
 
 	afterEach(async () => {
@@ -75,6 +81,245 @@ describe("dreaming operations", () => {
 			],
 		};
 	}
+
+	it("rejects mixed-label cascades and merge targets before minting flags", async () => {
+		insertEntity("partition-source", "Partition source", "partition source");
+		insertEntity("partition-target", "Partition target", "partition target");
+		insertAspect("partition-aspect", "partition-source", "facts");
+		insertEpisodicMemory("partition-evidence", "Partition evidence");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (91, 'alpha', datetime('now'))").run();
+			db.prepare("INSERT INTO compartment_members (compartment_id, classification_id) VALUES (91, 'alpha')").run();
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES ('partition-pass', 'agent-a', 'agent-a', 91)",
+			).run();
+			db.prepare("UPDATE entities SET compartment_id = 91 WHERE id IN ('partition-source', 'partition-target')").run();
+		});
+		const archive = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "partition-pass",
+			operations: [
+				flag({ subjectRef: "entity:partition-source", details: { entityId: "partition-source" } }),
+				{ operation: "archive_entity", payload: { target: "partition-source" }, provenance: "attention:$0" },
+			],
+		});
+		expect(archive).toMatchObject({ ok: false, error: "compartment_mismatch", items: [] });
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
+		).toEqual({ count: 0 });
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entity_aspects SET compartment_id = 91 WHERE id = 'partition-aspect'").run();
+			db.prepare("UPDATE entities SET compartment_id = NULL WHERE id = 'partition-target'").run();
+			db.prepare("UPDATE entities SET canonical_name = 'partition duplicate'").run();
+		});
+		const merge = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "partition-pass",
+			operations: [
+				flag({ subjectRef: "duplicate:partition duplicate" }),
+				{
+					operation: "merge_entities",
+					payload: { targets: ["partition-source", "partition-target"], survivor: "partition-target" },
+					provenance: "attention:$0",
+				},
+			],
+		});
+		expect(merge).toMatchObject({ ok: false, error: "compartment_mismatch", items: [] });
+		expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM entities").get())).toEqual({
+			count: 2,
+		});
+	});
+
+	it("rejects a foreign-agent archive target before minting its same-batch flag", async () => {
+		insertEntity("foreign-archive-target", "Foreign archive target", "foreign archive target", "agent-b");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "pass-1",
+			operations: [
+				flag({ subjectRef: "entity:foreign-archive-target" }),
+				{ operation: "archive_entity", payload: { target: "foreign-archive-target" }, provenance: "attention:$0" },
+			],
+		});
+		expect(result).toMatchObject({ ok: false, items: [], error: "compartment_mismatch" });
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
+		).toEqual({ count: 0 });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status FROM entities WHERE id = 'foreign-archive-target'").get(),
+			),
+		).toEqual({ status: "active" });
+	});
+
+	it("rejects a stale classification epoch before flags", async () => {
+		insertEntity("epoch-target", "Epoch target", "epoch target");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, scope_key) VALUES ('epoch-pass', 'agent-a', 'agent-a')",
+			).run();
+			db.prepare("UPDATE dreaming_classification_epoch SET epoch = epoch + 1 WHERE id = 1").run();
+		});
+		const stale = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "epoch-pass",
+			operations: [flag({ subjectRef: "entity:epoch-target" })],
+		});
+		expect(stale).toMatchObject({ ok: false, error: "compartment_mismatch", items: [] });
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
+		).toEqual({ count: 0 });
+	});
+
+	it("records attention under the durable pass label and rejects evidence above that label", async () => {
+		insertEntity("attention-source", "Attention source", "attention source");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO compartments (id, key, created_at) VALUES (91, 'cls_alpha', datetime('now')), (93, 'cls_alpha,cls_beta', datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO compartment_members (compartment_id, classification_id) VALUES (91, 'cls_alpha'), (93, 'cls_alpha'), (93, 'cls_beta')",
+			).run();
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES ('attention-pass', 'agent-a', 'agent-a', 91)",
+			).run();
+			db.prepare("UPDATE entities SET compartment_id = 91 WHERE id = 'attention-source'").run();
+		});
+		const first = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "attention-pass",
+			operations: [flag({ subjectRef: "entity:attention-source" })],
+		});
+		expect(first.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id, dreaming_pass_id FROM dreaming_attention").get(),
+			),
+		).toEqual({ compartment_id: 91, dreaming_pass_id: "attention-pass" });
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM dreaming_attention").run();
+			db.prepare("UPDATE entities SET compartment_id = 93 WHERE id = 'attention-source'").run();
+		});
+		const rejected = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "attention-pass",
+			operations: [flag({ subjectRef: "entity:attention-source" })],
+		});
+		expect(rejected).toMatchObject({ ok: false, error: "compartment_mismatch", items: [] });
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
+		).toEqual({ count: 0 });
+	});
+
+	it("keeps hidden duplicate-group ids out of hygiene correction errors", async () => {
+		for (const [id, name, canonicalName] of [
+			["e-group-first", "Group first", "group"],
+			["e-group-second", "Group second", "group"],
+			["e-hidden-group", "Hidden group", "group"],
+			["e-outside", "Outside group", "outside"],
+		]) {
+			if (id === undefined || name === undefined || canonicalName === undefined)
+				throw new Error("Invalid group fixture");
+			insertEntity(id, name, canonicalName);
+		}
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO compartments (id, key, created_at) VALUES (91, 'cls_alpha', datetime('now')), (93, 'cls_alpha,cls_beta', datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO compartment_members (compartment_id, classification_id) VALUES (91, 'cls_alpha'), (93, 'cls_alpha'), (93, 'cls_beta')",
+			).run();
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES ('group-pass', 'agent-a', 'agent-a', 91)",
+			).run();
+			db.prepare("UPDATE entities SET compartment_id = CASE WHEN id = 'e-hidden-group' THEN 93 ELSE 91 END").run();
+		});
+		const first = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "group-pass",
+			operations: [flag({ subjectRef: "duplicate:group" })],
+		});
+		const result = first.items[0]?.result;
+		if (typeof result !== "object" || result === null) throw new Error("Missing attention result");
+		const attentionId = Reflect.get(result, "attentionId");
+		if (typeof attentionId !== "string") throw new Error("Missing attention id");
+		const rejected = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "group-pass",
+			operations: [
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-group-first", "e-outside"], survivor: "e-group-first" },
+					provenance: `attention:${attentionId}`,
+				},
+			],
+		});
+		expect(rejected.ok).toBe(false);
+		expect(rejected.error).toContain("e-group-second");
+		expect(rejected.error).not.toContain("e-hidden-group");
+	});
+
+	it.each([
+		{ agentId: "agent-b", compartmentId: null, error: "authorized agent scope" },
+		{ agentId: "agent-a", compartmentId: 93, error: "compartment_mismatch" },
+	])("rejects forbidden copied provenance before minting flags (%j)", async (source) => {
+		insertEntity("copy-target", "Copy target project", "copy target project");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO compartments (id, key, created_at) VALUES (91, 'cls_alpha', datetime('now')), (93, 'cls_alpha,cls_beta', datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO compartment_members (compartment_id, classification_id) VALUES (91, 'cls_alpha'), (93, 'cls_alpha'), (93, 'cls_beta')",
+			).run();
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES ('copy-pass', 'agent-a', 'agent-a', 91)",
+			).run();
+			db.prepare("UPDATE entities SET compartment_id = 91 WHERE id = 'copy-target'").run();
+			db.prepare(
+				"INSERT INTO memories (id, content, agent_id, memory_kind, compartment_id, created_at, updated_at) VALUES ('copied-source', 'Copied source evidence', ?, 'episodic', ?, datetime('now'), datetime('now'))",
+			).run(source.agentId, source.compartmentId);
+			db.prepare(
+				"INSERT INTO evidence_citations (derived_kind, derived_id, agent_id, evidence_kind, evidence_id) VALUES ('entity', 'copy-target', 'agent-a', 'memory', 'copied-source')",
+			).run();
+		});
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			passId: "copy-pass",
+			operations: [
+				flag({ subjectRef: "entity:copy-target" }),
+				{ operation: "archive_entity", payload: { target: "copy-target" }, provenance: "attention:$0" },
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.items).toEqual([]);
+		expect(result.error).toContain(source.error);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT (SELECT COUNT(*) FROM dreaming_attention) AS flags, (SELECT COUNT(*) FROM ontology_proposals) AS proposals",
+					)
+					.get(),
+			),
+		).toEqual({ flags: 0, proposals: 0 });
+	});
 
 	it("mints hygiene attention for a flag op and returns the id", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
@@ -163,12 +408,18 @@ describe("dreaming operations", () => {
 		for (let index = 0; index < 25; index += 1) {
 			insertEpisodicMemory(`m-1414-${index}`, `Evidence for retry operation ${index}.`);
 		}
-		let transactions = 0;
 		const accessor: DbAccessor = {
 			...base,
 			withWriteTxAsync: (fn) => {
-				transactions += 1;
-				if (transactions === 3) return Promise.reject(new Error("injected writer rejection"));
+				const committed = base.withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM ontology_proposals").get());
+				if (
+					committed !== null &&
+					typeof committed === "object" &&
+					"count" in committed &&
+					typeof committed.count === "number" &&
+					committed.count >= 20
+				)
+					return Promise.reject(new Error("injected writer rejection"));
 				return enqueue(fn);
 			},
 		};
@@ -186,6 +437,7 @@ describe("dreaming operations", () => {
 		}));
 
 		const partial = await applyDreamingOperations({ accessor, agentId: "agent-a", actor: "dreaming", operations });
+		expect(partial.error).toContain("injected");
 		expect(partial.ok).toBe(false);
 		expect(partial.retryable).toBe(true);
 		expect(partial.retryFrom).toBe(20);
@@ -222,12 +474,18 @@ describe("dreaming operations", () => {
 		for (let index = 0; index < 20; index += 1) {
 			insertEpisodicMemory(`m-1414-suffix-${index}`, `Evidence for suffix retry ${index}.`);
 		}
-		let transactions = 0;
 		const accessor: DbAccessor = {
 			...base,
 			withWriteTxAsync: (fn) => {
-				transactions += 1;
-				if (transactions === 4) return Promise.reject(new Error("injected suffix writer rejection"));
+				const committed = base.withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM ontology_proposals").get());
+				if (
+					committed !== null &&
+					typeof committed === "object" &&
+					"count" in committed &&
+					typeof committed.count === "number" &&
+					committed.count >= 20
+				)
+					return Promise.reject(new Error("injected suffix writer rejection"));
 				return enqueue(fn);
 			},
 		};
@@ -256,6 +514,7 @@ describe("dreaming operations", () => {
 		);
 
 		const partial = await applyDreamingOperations({ accessor, agentId: "agent-a", actor: "dreaming", operations });
+		expect(partial.error).toContain("injected");
 		expect(partial.ok).toBe(false);
 		expect(partial.retryable).toBe(true);
 		expect(partial.retryFrom).toBe(20);
@@ -306,12 +565,18 @@ describe("dreaming operations", () => {
 		for (let index = 0; index < 100; index += 1) {
 			insertEpisodicMemory(`m-1414-in-range-${index}`, `Evidence for in-range retry ${index}.`);
 		}
-		let transactions = 0;
 		const accessor: DbAccessor = {
 			...base,
 			withWriteTxAsync: (fn) => {
-				transactions += 1;
-				if (transactions === 3) return Promise.reject(new Error("injected in-range writer rejection"));
+				const committed = base.withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM ontology_proposals").get());
+				if (
+					committed !== null &&
+					typeof committed === "object" &&
+					"count" in committed &&
+					typeof committed.count === "number" &&
+					committed.count >= 10
+				)
+					return Promise.reject(new Error("injected in-range writer rejection"));
 				return enqueue(fn);
 			},
 		};
@@ -344,6 +609,7 @@ describe("dreaming operations", () => {
 		});
 
 		const partial = await applyDreamingOperations({ accessor, agentId: "agent-a", actor: "dreaming", operations });
+		expect(partial.error).toContain("injected");
 		expect(partial.ok).toBe(false);
 		expect(partial.retryable).toBe(true);
 		expect(partial.retryFrom).toBe(10);
@@ -402,8 +668,11 @@ describe("dreaming operations", () => {
 			operations: [reviewLinkOperation()],
 		});
 		expect(result.ok).toBe(true);
-		expect((result.items[0]?.result as { reviewRequired?: boolean }).reviewRequired).toBe(true);
-		const proposalId = (result.items[0]?.proposal as { id: string }).id;
+		expect(result.items[0]?.result).toMatchObject({ reviewRequired: true });
+		const proposal = result.items[0]?.proposal;
+		if (typeof proposal !== "object" || proposal === null) throw new Error("Missing proposal");
+		const proposalId = Reflect.get(proposal, "id");
+		if (typeof proposalId !== "string") throw new Error("Missing proposal id");
 		expect(await getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({
 			operation: "create_link",
 			status: "pending",
@@ -446,9 +715,12 @@ describe("dreaming operations", () => {
 				operations: [reviewLinkOperation()],
 			});
 		const first = await run();
-		const proposalId = (first.items[0]?.proposal as { id: string }).id;
+		const proposal = first.items[0]?.proposal;
+		if (typeof proposal !== "object" || proposal === null) throw new Error("Missing proposal");
+		const proposalId = Reflect.get(proposal, "id");
+		if (typeof proposalId !== "string") throw new Error("Missing proposal id");
 		const second = await run();
-		expect((second.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
+		expect(second.items[0]?.result).toMatchObject({ deduped: true });
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>
@@ -462,7 +734,7 @@ describe("dreaming operations", () => {
 			reason: "Not the same relationship",
 		});
 		const third = await run();
-		expect((third.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
+		expect(third.items[0]?.result).toMatchObject({ deduped: true });
 		expect(await getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({ status: "rejected" });
 	});
 
@@ -993,32 +1265,61 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 1 });
 	});
 
-	it("rejects evidence cited from another agent scope with a corrective error", async () => {
-		insertEpisodicMemory("mem-other", "The source belongs to the default scope.", "default");
-		const result = await applyDreamingOperations({
-			accessor: getDbAccessor(),
-			agentId: "hermes-agent",
-			actor: "dreaming",
-			operations: [
-				{
-					operation: "create_entity",
-					payload: { name: "Wrong Scope", type: "project" },
-					evidence: [
-						{
-							source_ref: "memory:mem-other",
-							source_kind: "manual",
-							source_id: "mem-other",
-							quote: "The source belongs to the default scope.",
-						},
-					],
-				},
-			],
-		});
-		expect(result.ok).toBe(false);
-		expect(result.error).toBe(
-			"Cited evidence belongs to scope 'default' but this operation targets 'hermes-agent'. Search evidence in the target scope before applying the operation.",
-		);
-	});
+	it.each(["memory", "artifact", "transcript"])(
+		"rejects cross-agent %s citations before flags or semantic writes (AC6)",
+		async (kind) => {
+			const content = "The source belongs to the default scope.";
+			let sourceRef = "memory:mem-other";
+			if (kind === "memory") insertEpisodicMemory("mem-other", content, "default");
+			if (kind === "artifact") {
+				sourceRef = "artifact:memory/ac6.md";
+				getDbAccessor().withWriteTx((db) =>
+					db
+						.prepare(`INSERT INTO memory_artifacts
+				(agent_id, source_path, source_sha256, source_kind, session_id, session_token, captured_at, content, updated_at)
+				VALUES ('default', 'memory/ac6.md', 'ac6-hash', 'manual', 'ac6-session', 'ac6-token', datetime('now'), ?, datetime('now'))`)
+						.run(content),
+				);
+			}
+			if (kind === "transcript") {
+				sourceRef = "transcript:ac6-session";
+				getDbAccessor().withWriteTx((db) =>
+					db
+						.prepare(`INSERT INTO session_transcripts
+				(session_key, agent_id, content, created_at) VALUES ('ac6-session', 'default', ?, datetime('now'))`)
+						.run(content),
+				);
+			}
+			const result = await applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "hermes-agent",
+				actor: "dreaming",
+				operations: [
+					flag({ subjectRef: "entity:unminted-flag" }),
+					{
+						operation: "create_entity",
+						payload: { name: "Wrong Scope", type: "project" },
+						evidence: [{ source_ref: sourceRef, quote: content }],
+					},
+				],
+			});
+			expect(result).toMatchObject({
+				ok: false,
+				items: [],
+				error:
+					"Cited evidence belongs to scope 'default' but this operation targets 'hermes-agent'. Search evidence in the target scope before applying the operation.",
+			});
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db
+						.prepare(
+							"SELECT (SELECT COUNT(*) FROM dreaming_attention) AS flags, (SELECT COUNT(*) FROM ontology_proposals) AS proposals, (SELECT COUNT(*) FROM entities) AS entities",
+						)
+						.get(),
+				),
+			).toEqual({ flags: 0, proposals: 0, entities: 0 });
+		},
+	);
 
 	it("rejects a content op without evidence", async () => {
 		const result = await applyDreamingOperations({

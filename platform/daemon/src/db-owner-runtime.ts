@@ -276,6 +276,8 @@ async function executeInlineOwnerRequest(
 		case "dreaming_episodic_backlog":
 		case "dreaming_episodic_backlog_probe":
 		case "dreaming_episodic_backlog_exists":
+		case "dreaming_read_scope":
+		case "dreaming_graph_read":
 		case "dreaming_evidence_search":
 		case "dreaming_evidence_source":
 		case "dreaming_evidence_review":

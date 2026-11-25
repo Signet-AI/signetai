@@ -31,6 +31,8 @@ const DERIVED: Readonly<Record<string, string>> = {
 	assertion: "epistemic_assertions",
 	head_entry: "memory_head_entries",
 	reflection: "daily_reflections",
+	temporal_edge: "temporal_edges",
+	attention: "dreaming_attention",
 	contradiction: "ontology_contradictions",
 	head_revision: "memory_head_revision_entries",
 	proposal: "ontology_proposals",
@@ -195,6 +197,7 @@ function tableInfo(db: MigrationDb, table: string): TableInfo | undefined {
 		"compartment_id",
 		"pass_id",
 		"dreaming_pass_id",
+		"proposal_id",
 		"memory_id",
 		"project",
 		"visibility",
@@ -316,7 +319,14 @@ function covers(db: MigrationDb, target: ClassificationTarget, item: ContentRow,
 	);
 }
 function passLabels(db: MigrationDb, item: ContentRow): string[] {
-	const pass = text(item.row.pass_id ?? item.row.dreaming_pass_id);
+	let pass = text(item.row.pass_id ?? item.row.dreaming_pass_id);
+	const proposalId = text(item.row.proposal_id);
+	if (!pass && proposalId && tableInfo(db, "ontology_proposals")?.columns.has("dreaming_pass_id")) {
+		const proposal = db
+			.prepare("SELECT dreaming_pass_id FROM ontology_proposals WHERE id=? AND agent_id=?")
+			.get(proposalId, item.row.agent_id);
+		pass = text(proposal?.dreaming_pass_id);
+	}
 	if (!pass) return [];
 	return db
 		.prepare(
@@ -490,7 +500,7 @@ function authorize(
 	)
 		throw new Error("permission");
 }
-const COPY_KINDS = new Set(["contradiction", "head_revision", "proposal", "telemetry"]);
+const COPY_KINDS = new Set(["contradiction", "head_revision", "proposal", "telemetry", "temporal_edge", "attention"]);
 function referencedRows(db: MigrationDb, kind: unknown, key: unknown, agent: unknown): ContentRow[] {
 	if (typeof kind !== "string" || typeof key !== "string" || typeof agent !== "string") return [];
 	const tables =
@@ -539,7 +549,7 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 			if (item.kind)
 				for (const link of db
 					.prepare(
-						"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_id=? AND derived_kind IN ('contradiction','head_revision','proposal','telemetry')",
+						"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_id=? AND derived_kind IN ('contradiction','head_revision','proposal','telemetry','temporal_edge','attention')",
 					)
 					.all(item.row.agent_id, item.key))
 					add(referencedRows(db, link.derived_kind, link.derived_id, item.row.agent_id), true);

@@ -13,9 +13,25 @@ import {
 } from "@signet/core";
 import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { runWriteTxAsync } from "./db-accessor";
+import { prepareTypedStatement, runWriteTxAsync } from "./db-accessor";
 import { requireDependencyReason } from "./dependency-history";
-import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
+import {
+	evidenceCitationInDb,
+	linkDerivedMemorySourcesInTx,
+	markDerivedMemoriesStaleForSourceInTx,
+	recordSemanticCitationsInTx,
+	type SemanticEvidenceCitation,
+	type SemanticCitationKind,
+} from "./derived-memory-provenance";
+import {
+	assertDreamingAgentInDb,
+	assertDreamingMutationLabelInDb,
+	dreamingPassPartitionInDb,
+	dreamingReadScopeInDb,
+	type DreamingPartition,
+	type DreamingMutationTable,
+} from "./pipeline/dreaming-scope";
+import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { classifyEntityQuality } from "./entity-quality";
 import { readEpisodicSource, resolveStrictEpisodicSourceRef } from "./episodic-sources";
 import {
@@ -29,10 +45,14 @@ import {
 	resolveOntologyEvidenceRef,
 	uniqueOntologyEvidenceRefs,
 } from "./ontology-evidence";
+import { readScopeSql } from "./read-scope";
 import { type MemoryTemporalEdgeInput, txInsertMemoryTemporalEdges } from "./temporal-edges";
 import { insertHistoryEvent, txForgetMemory, txIngestEnvelope, txSupersedeMemory } from "./transactions";
 
 type ProposalRow = {
+	readonly dreaming_pass_id: string | null;
+	readonly compartment_id: number | null;
+	readonly author_user_id: string | null;
 	readonly id: string;
 	readonly agent_id: string;
 	readonly operation: string;
@@ -57,6 +77,7 @@ type ProposalRow = {
 };
 
 export interface CreateOntologyProposalInput {
+	readonly passId?: string;
 	readonly agentId: string;
 	readonly operation: string;
 	readonly payload: Readonly<Record<string, unknown>>;
@@ -190,6 +211,7 @@ export interface ListOntologyProposalsParams {
 }
 
 export interface ApplyOntologyProposalParams {
+	readonly passId?: string;
 	readonly agentId: string;
 	readonly id: string;
 	readonly actor: string;
@@ -228,6 +250,7 @@ export interface OntologyOperationInput {
 }
 
 export interface ApplyOntologyOperationParams extends OntologyOperationInput {
+	readonly passId?: string;
 	readonly agentId: string;
 	readonly actor: string;
 	readonly author: WriteAuthor;
@@ -244,6 +267,7 @@ export interface ApplyOntologyOperationResult {
 }
 
 export interface ApplyOntologyOperationBatchParams {
+	readonly passId?: string;
 	readonly agentId: string;
 	readonly actor: string;
 	readonly author: WriteAuthor;
@@ -270,7 +294,7 @@ export interface OntologyOperationBatchError {
 }
 export function applyOntologyOperationBatchInTx(
 	db: WriteDb,
-	params: Pick<ApplyOntologyOperationBatchParams, "agentId" | "actor" | "author" | "operations"> & {
+	params: Pick<ApplyOntologyOperationBatchParams, "agentId" | "actor" | "author" | "operations" | "passId"> & {
 		readonly writeCaps?: GraphWriteCaps;
 	},
 ): ApplyOntologyOperationBatchResult {
@@ -278,12 +302,15 @@ export function applyOntologyOperationBatchInTx(
 	if (params.operations.length > 500)
 		throw new OntologyProposalError("cannot apply more than 500 operations at once", 400);
 
+	for (const operation of params.operations)
+		assertOntologyOperationPartitionInTx(db, { ...operation, agentId: params.agentId, passId: params.passId });
 	const items: ApplyOntologyOperationResult[] = [];
 	for (const operation of params.operations) {
 		const inserted = insertProposalInTx(
 			db,
 			{
 				agentId: params.agentId,
+				passId: params.passId,
 				operation: operation.operation,
 				payload: operation.payload,
 				confidence: operation.confidence,
@@ -606,7 +633,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 				| undefined;
 			return row ?? null;
 		},
-		{ siteToken: "ontology-proposals.ts:602" },
+		{ siteToken: "ontology-proposals.ts:629" },
 	);
 }
 
@@ -616,8 +643,23 @@ function readBackInTx(db: WriteDb, id: string, agentId: string): OntologyProposa
 	return toProposal(row);
 }
 
-function requireStrictEpisodicSourceRefInTx(db: WriteDb, agentId: string, sourceRef: unknown) {
-	const resolved = resolveStrictEpisodicSourceRef(db, { agentId, sourceRef });
+function requireStrictEpisodicSourceRefInTx(
+	db: WriteDb,
+	agentId: string,
+	sourceRef: unknown,
+	partition?: DreamingPartition,
+) {
+	const resolved = resolveStrictEpisodicSourceRef(db, {
+		agentId,
+		sourceRef,
+		readScope: partition ? dreamingReadScopeInDb(db, agentId, partition.compartmentId) : undefined,
+	});
+	if (partition && resolved.status === "not_found") {
+		const unscoped = resolveStrictEpisodicSourceRef(db, { agentId, sourceRef });
+		if (unscoped.status === "resolved") throw new OntologyProposalError("compartment_mismatch", 409);
+		if (unscoped.status === "cross_agent")
+			throw new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409);
+	}
 	if (resolved.status === "resolved") return resolved.source;
 	if (resolved.status === "invalid") {
 		throw new OntologyProposalError("Evidence source_ref must name a canonical episodic source", 409);
@@ -649,28 +691,27 @@ function isDreamingAttentionEvidenceInTx(
 	return row !== undefined;
 }
 
-function validateProposalEvidenceSourcesInTx(db: WriteDb, agentId: string, evidence: readonly unknown[]): void {
-	for (const value of evidence) {
-		const ref = readOntologyEvidenceRef(value);
-		if (ref === null || !isRecord(ref.reference) || !("source_ref" in ref.reference)) continue;
-		if (isDreamingAttentionEvidenceInTx(db, agentId, ref.reference)) continue;
-		requireStrictEpisodicSourceRefInTx(db, agentId, ref.reference.source_ref);
-	}
-}
-
 function insertProposalInTx(db: WriteDb, input: CreateOntologyProposalInput, ts: string): OntologyProposal {
 	const id = crypto.randomUUID();
 	const agentId = requireText(input.agentId, "agentId");
 	const operation = requireText(input.operation, "operation");
 	if (Object.keys(input.payload).length === 0) throw new OntologyProposalError("payload is required", 400);
 	const evidence = input.evidence ?? [];
-	validateProposalEvidenceSourcesInTx(db, agentId, evidence);
+	const partition: DreamingPartition = ontologyPartitionInDb(db, agentId, input.passId);
+	const targets = assertOntologyOperationPartitionInTx(db, { ...input, agentId });
+	const citations = [
+		...proposalCitationsInDb(db, agentId, evidence, partition),
+		...proposalTargetCitationsInDb(db, targets, partition),
+	];
+	const authors = citations.map((citation) => evidenceCitationInDb(db, partition, citation).authorUserId);
+	const authorUserId =
+		authors.length > 0 && authors.every((author) => author !== null && author === authors[0]) ? authors[0] : null;
 	db.prepare(
 		`INSERT INTO ontology_proposals
 		 (id, agent_id, operation, status, payload, confidence, rationale,
 		  evidence, risk, source_kind, source_id, source_path, source_root,
-		  created_by, created_at, updated_at,author_user_id)
-		 VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  created_by, created_at, updated_at,author_user_id, compartment_id, dreaming_pass_id)
+		 VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		agentId,
@@ -687,8 +728,11 @@ function insertProposalInTx(db: WriteDb, input: CreateOntologyProposalInput, ts:
 		input.createdBy?.trim() || "operator",
 		ts,
 		ts,
-		input.author?.userId ?? null,
+		authorUserId ?? (input.passId ? null : (input.author?.userId ?? null)),
+		partition.compartmentId,
+		input.passId ?? null,
 	);
+	recordSemanticCitationsInTx(db, { kind: "proposal", id, partition, evidence: citations });
 	auditAuthoredWriteInTx(db, input.author, "ontology.proposed", "proposal", id, agentId);
 	return readBackInTx(db, id, agentId);
 }
@@ -730,7 +774,12 @@ function derivedMemorySourcesForProposalInTx(
 		const evidence = ref.reference as Readonly<Record<string, unknown>>;
 		if (!("source_ref" in evidence)) continue;
 		if (isDreamingAttentionEvidenceInTx(db, proposal.agent_id, evidence)) continue;
-		const source = requireStrictEpisodicSourceRefInTx(db, proposal.agent_id, evidence.source_ref);
+		const source = requireStrictEpisodicSourceRefInTx(
+			db,
+			proposal.agent_id,
+			evidence.source_ref,
+			ontologyPartitionInDb(db, proposal.agent_id, proposal.dreaming_pass_id ?? undefined),
+		);
 		sources.push({
 			sourceKind: source.kind,
 			sourceId: source.id,
@@ -816,9 +865,23 @@ function resolveEntity(db: WriteDb, agentId: string, name: string): string | nul
 	return row[0]?.id ?? null;
 }
 
-function resolveOrCreateEntity(db: WriteDb, agentId: string, name: string, type: EntityType): string {
+function resolveOrCreateEntity(
+	db: WriteDb,
+	agentId: string,
+	name: string,
+	type: EntityType,
+	proposal: ProposalRow,
+): string {
 	const existing = resolveEntity(db, agentId, name);
-	if (existing !== null) return existing;
+	if (existing !== null) {
+		assertDreamingMutationLabelInDb(
+			db,
+			"entities",
+			existing,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
+		);
+		return existing;
+	}
 	const quality = classifyEntityQuality(name, type === "person" ? type : undefined);
 	if (!quality.ok) throw new OntologyProposalError(`Entity name rejected: ${quality.reason}`, 400);
 	const id = crypto.randomUUID();
@@ -827,10 +890,17 @@ function resolveOrCreateEntity(db: WriteDb, agentId: string, name: string, type:
 		 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`,
 	).run(id, name.trim(), canonical(name), type, agentId);
+	labelProposalRowInTx(db, "entities", "entity", id, proposal);
 	return id;
 }
 
-function resolveOrCreateAspect(db: WriteDb, entityId: string, agentId: string, name: string): string {
+function resolveOrCreateAspect(
+	db: WriteDb,
+	entityId: string,
+	agentId: string,
+	name: string,
+	proposal: ProposalRow,
+): string {
 	const key = canonical(name);
 	const existing = db
 		.prepare(
@@ -840,6 +910,12 @@ function resolveOrCreateAspect(db: WriteDb, entityId: string, agentId: string, n
 		)
 		.get(entityId, agentId, key) as { id: string; status: string | null } | undefined;
 	if (existing) {
+		assertDreamingMutationLabelInDb(
+			db,
+			"entity_aspects",
+			existing.id,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
+		);
 		if ((existing.status ?? "active") !== "active") {
 			db.prepare(
 				`UPDATE entity_aspects
@@ -857,6 +933,7 @@ function resolveOrCreateAspect(db: WriteDb, entityId: string, agentId: string, n
 		 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
 	).run(id, entityId, agentId, name.trim(), key);
+	labelProposalRowInTx(db, "entity_aspects", "aspect", id, proposal);
 	return id;
 }
 
@@ -883,7 +960,7 @@ function applyCreateEntity(
 	const existingEntityId = resolveEntity(db, agentId, name);
 	const entityId =
 		existingEntityId ??
-		resolveOrCreateEntity(db, agentId, name, normalizeEntityType(readString(payload, "entity_type")));
+		resolveOrCreateEntity(db, agentId, name, normalizeEntityType(readString(payload, "entity_type")), proposal);
 	const proposalEvidence = JSON.stringify(proposalAuditEvidence(proposal));
 	if (existingEntityId !== null) {
 		db.prepare(
@@ -1031,6 +1108,19 @@ function materializeAttributeMemoryInTx(
 			createdAt: now(),
 		});
 	}
+	labelProposalRowInTx(db, "entity_attributes", "attribute", input.attributeId, input.proposal);
+	labelProposalRowInTx(db, "memories", "memory", input.attributeId, input.proposal);
+	recordSemanticCitationsInTx(db, {
+		kind: "memory",
+		id: input.attributeId,
+		partition: ontologyPartitionInDb(db, input.agentId, input.proposal.dreaming_pass_id ?? undefined),
+		evidence: [{ kind: "attribute", id: input.attributeId }],
+	});
+	db.prepare("UPDATE memories SET author_user_id = ? WHERE id = ? AND agent_id = ?").run(
+		input.proposal.author_user_id,
+		input.attributeId,
+		input.agentId,
+	);
 	db.prepare("UPDATE entity_attributes SET memory_id = ? WHERE id = ? AND agent_id = ?").run(
 		input.attributeId,
 		input.attributeId,
@@ -1048,6 +1138,7 @@ function materializeAttributeMemoryInTx(
 	linkDerivedMemorySourcesInTx(db, {
 		derivedMemoryId: input.attributeId,
 		agentId: input.agentId,
+		passId: input.proposal.dreaming_pass_id ?? undefined,
 		sources: derivedMemorySourcesForProposalInTx(db, input.proposal),
 		createdAt: now(),
 	});
@@ -1058,6 +1149,18 @@ function materializeAttributeMemoryInTx(
 		inputs: claimTemporalEdges(input.time, input.attributeId, input.proposal),
 		now: now(),
 	});
+	for (const edge of prepareTypedStatement<{ id: string }>(
+		db,
+		"SELECT id FROM temporal_edges WHERE subject_type = 'memory' AND subject_id = ? AND agent_id = ?",
+	).all(input.attributeId, input.agentId)) {
+		labelProposalRowInTx(db, "temporal_edges", "temporal_edge", edge.id, input.proposal);
+		recordSemanticCitationsInTx(db, {
+			kind: "temporal_edge",
+			id: edge.id,
+			partition: ontologyPartitionInDb(db, input.agentId, input.proposal.dreaming_pass_id ?? undefined),
+			evidence: [{ kind: "memory", id: input.attributeId }],
+		});
+	}
 	return input.attributeId;
 }
 
@@ -1087,6 +1190,7 @@ function supersedeAttributeMemoryInTx(
 		sourceId: input.memoryId,
 		agentId: input.proposal.agent_id,
 		staleAt: now(),
+		partition: ontologyPartitionInDb(db, input.proposal.agent_id, input.proposal.dreaming_pass_id ?? undefined),
 	});
 }
 
@@ -1116,6 +1220,7 @@ function archiveAttributeMemoryInTx(
 		sourceId: memoryId,
 		agentId: proposal.agent_id,
 		staleAt: now(),
+		partition: ontologyPartitionInDb(db, proposal.agent_id, proposal.dreaming_pass_id ?? undefined),
 	});
 }
 
@@ -1163,12 +1268,27 @@ function applyAddClaimValue(
 	if (claimKey === null) throw new OntologyProposalError("payload.claim_key is required", 400);
 	if (value === null) throw new OntologyProposalError("payload.value is required", 400);
 
-	const entityId = resolveOrCreateEntity(db, agentId, entity, normalizeEntityType(readString(payload, "entity_type")));
+	const entityId = resolveOrCreateEntity(
+		db,
+		agentId,
+		entity,
+		normalizeEntityType(readString(payload, "entity_type")),
+		proposal,
+	);
 	const addEntityRow = db.prepare("SELECT id, name FROM entities WHERE id = ?").get(entityId) as
 		| { id: string; name: string }
 		| undefined;
-	if (addEntityRow !== undefined) enforceAspectCapForNewAspect(db, addEntityRow, agentId, aspect, writeCaps);
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect);
+	if (addEntityRow !== undefined) enforceAspectCapForNewAspect(db, addEntityRow, agentId, aspect, proposal, writeCaps);
+	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect, proposal);
+	const scope = readScopeSql(
+		"",
+		dreamingReadScopeInDb(
+			db,
+			agentId,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		),
+		{ visibility: null },
+	);
 	const groupKey = readString(payload, "group_key") ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const normalized = canonical(value);
@@ -1181,17 +1301,21 @@ function applyAddClaimValue(
 			   AND normalized_content = ?
 			   AND COALESCE(group_key, 'general') = ?
 			   AND claim_key = ?
-			   AND status = 'active'
+			   AND status = 'active' ${scope.sql}
 			 LIMIT 1`,
 		)
-		.get(aspectId, agentId, kind, normalized, groupKey, claimKey) as { id: string } | undefined;
+		.get(aspectId, agentId, kind, normalized, groupKey, claimKey, ...scope.args) as { id: string } | undefined;
 	if (existing) {
 		return {
 			entityId,
 			aspectId,
 			attributeId: existing.id,
 			deduped: true,
-			contradictionIds: recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: existing.id }),
+			contradictionIds: recordOntologyContradictionsForAttributeInTx(db, {
+				agentId,
+				partition: ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
+				attributeId: existing.id,
+			}),
 		};
 	}
 
@@ -1199,9 +1323,9 @@ function applyAddClaimValue(
 		const attrCount = db
 			.prepare(
 				`SELECT COUNT(*) AS c FROM entity_attributes
-				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
+				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active' ${scope.sql}`,
 			)
-			.get(aspectId, agentId) as { c: number };
+			.get(aspectId, agentId, ...scope.args) as { c: number };
 		if (attrCount.c >= writeCaps.maxAttributesPerAspect) {
 			const aspectName = db.prepare("SELECT name FROM entity_aspects WHERE id = ?").get(aspectId) as
 				| { name: string }
@@ -1274,7 +1398,11 @@ function applyAddClaimValue(
 		attributeId: id,
 		memoryId,
 		deduped: false,
-		contradictionIds: recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: id }),
+		contradictionIds: recordOntologyContradictionsForAttributeInTx(db, {
+			agentId,
+			partition: ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
+			attributeId: id,
+		}),
 	};
 }
 
@@ -1296,8 +1424,23 @@ function applySetClaimValue(
 	if (claimKey === null) throw new OntologyProposalError("payload.claim_key is required", 400);
 	if (value === null) throw new OntologyProposalError("payload.value is required", 400);
 
-	const entityId = resolveOrCreateEntity(db, agentId, entity, normalizeEntityType(readString(payload, "entity_type")));
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect);
+	const entityId = resolveOrCreateEntity(
+		db,
+		agentId,
+		entity,
+		normalizeEntityType(readString(payload, "entity_type")),
+		proposal,
+	);
+	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect, proposal);
+	const scope = readScopeSql(
+		"",
+		dreamingReadScopeInDb(
+			db,
+			agentId,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		),
+		{ visibility: null },
+	);
 	const groupKey = canonicalKey(readString(payload, "group_key") ?? readString(payload, "group")) ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const slot = db
@@ -1309,10 +1452,10 @@ function applySetClaimValue(
 			   AND agent_id = ?
 			   AND kind = ?
 			   AND COALESCE(group_key, 'general') = ?
-			   AND claim_key = ?
+			   AND claim_key = ? ${scope.sql}
 			 ORDER BY version DESC, updated_at DESC`,
 		)
-		.all(aspectId, agentId, kind, groupKey, claimKey) as Array<{
+		.all(aspectId, agentId, kind, groupKey, claimKey, ...scope.args) as Array<{
 		id: string;
 		memory_id: string | null;
 		content: string;
@@ -1349,9 +1492,9 @@ function applySetClaimValue(
 		const attrCount = db
 			.prepare(
 				`SELECT COUNT(*) AS c FROM entity_attributes
-				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
+				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active' ${scope.sql}`,
 			)
-			.get(aspectId, agentId) as { c: number };
+			.get(aspectId, agentId, ...scope.args) as { c: number };
 		if (attrCount.c >= writeCaps.maxAttributesPerAspect) {
 			const aspectName = db.prepare("SELECT name FROM entity_aspects WHERE id = ?").get(aspectId) as
 				| { name: string }
@@ -1459,7 +1602,11 @@ function applySetClaimValue(
 			contradictionIds: [],
 		};
 	}
-	const contradictionIds = recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: id });
+	const contradictionIds = recordOntologyContradictionsForAttributeInTx(db, {
+		agentId,
+		partition: ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
+		attributeId: id,
+	});
 
 	if (active.length > 0) {
 		db.prepare(
@@ -1699,31 +1846,41 @@ function enforceAspectCapForNewAspect(
 	entity: { readonly id: string; readonly name: string },
 	agentId: string,
 	name: string,
+	proposal: ProposalRow,
 	writeCaps?: GraphWriteCaps,
 ): void {
 	if (writeCaps === undefined) return;
+	const scope = readScopeSql(
+		"",
+		dreamingReadScopeInDb(
+			db,
+			agentId,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		),
+		{ visibility: null },
+	);
 	const key = canonical(name);
 	const activeAspect = db
 		.prepare(
 			`SELECT id FROM entity_aspects
-			 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ? AND COALESCE(status, 'active') = 'active'`,
+			 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ? AND COALESCE(status, 'active') = 'active' ${scope.sql}`,
 		)
-		.get(entity.id, agentId, key);
+		.get(entity.id, agentId, key, ...scope.args);
 	if (activeAspect != null) return;
 	const aspectCount = db
 		.prepare(
 			`SELECT COUNT(*) AS c FROM entity_aspects
-			 WHERE entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'`,
+			 WHERE entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active' ${scope.sql}`,
 		)
-		.get(entity.id, agentId) as { c: number };
+		.get(entity.id, agentId, ...scope.args) as { c: number };
 	if (aspectCount.c >= writeCaps.maxAspectsPerEntity) {
 		const aspects = db
 			.prepare(
 				`SELECT id, name FROM entity_aspects
-				 WHERE entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'
+				 WHERE entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active' ${scope.sql}
 				 ORDER BY name`,
 			)
-			.all(entity.id, agentId) as Array<{ id: string; name: string }>;
+			.all(entity.id, agentId, ...scope.args) as Array<{ id: string; name: string }>;
 		throw new OntologyProposalError(
 			`entity '${entity.name}' is at aspect cap (${aspectCount.c}/${writeCaps.maxAspectsPerEntity}), so '${name}' cannot be added as a new aspect. File the claim under the existing aspect that covers it, or make room: merge overlapping aspects (merge_aspects) or rename one to cover both (rename_aspect), with a reason. Existing aspects: ${aspects.map((aspect) => `${aspect.name} (${aspect.id})`).join("; ")}`,
 			409,
@@ -1744,9 +1901,9 @@ function applyCreateAspect(
 	if (name === null) throw new OntologyProposalError("payload.name is required", 400);
 	const entity = resolveEntityStrict(db, agentId, entitySelector);
 
-	enforceAspectCapForNewAspect(db, entity, agentId, name, writeCaps);
+	enforceAspectCapForNewAspect(db, entity, agentId, name, proposal, writeCaps);
 
-	const aspectId = resolveOrCreateAspect(db, entity.id, agentId, name);
+	const aspectId = resolveOrCreateAspect(db, entity.id, agentId, name, proposal);
 	db.prepare(
 		`UPDATE entity_aspects
 		 SET proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
@@ -1844,7 +2001,7 @@ function applyArchiveClaimValue(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
-	author: WriteAuthor,
+	_author: WriteAuthor,
 ): Readonly<Record<string, unknown>> {
 	const attributeId = readString(payload, "attribute_id");
 	if (attributeId === null) throw new OntologyProposalError("payload.attribute_id is required", 400);
@@ -1933,11 +2090,67 @@ function applyRestoreClaimVersion(
 		     archive_reason = NULL, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
 		 WHERE id = ? AND agent_id = ?`,
 	).run(proposal.id, JSON.stringify(proposalAuditEvidence(proposal)), attributeId, agentId);
-	recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId });
+	recordOntologyContradictionsForAttributeInTx(db, {
+		agentId,
+		partition: ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
+		attributeId,
+	});
 	return { attributeId, versionRootId: row.version_root_id ?? attributeId, restored: true };
 }
 
-function mergeEntityAspects(db: WriteDb, agentId: string, sourceId: string, targetId: string): number {
+function mergeSemanticEvidenceInTx(
+	db: WriteDb,
+	table: "entities" | "entity_aspects" | "entity_dependencies",
+	kind: "entity" | "aspect" | "dependency",
+	sourceId: string,
+	targetId: string,
+	proposal: ProposalRow,
+	removeSource: boolean,
+): void {
+	const partition: DreamingPartition = ontologyPartitionInDb(
+		db,
+		proposal.agent_id,
+		proposal.dreaming_pass_id ?? undefined,
+	);
+	assertDreamingMutationLabelInDb(db, table, sourceId, partition);
+	assertDreamingMutationLabelInDb(db, table, targetId, partition);
+	const citations = prepareTypedStatement<{
+		evidence_kind: "memory" | "transcript" | "artifact" | "summary" | "attribute";
+		evidence_id: string;
+	}>(
+		db,
+		"SELECT evidence_kind, evidence_id FROM evidence_citations WHERE derived_kind = ? AND derived_id = ? AND agent_id = ?",
+	)
+		.all(kind, sourceId, proposal.agent_id)
+		.map((row) => ({ kind: row.evidence_kind, id: row.evidence_id }));
+	recordSemanticCitationsInTx(db, { kind, id: targetId, partition, evidence: citations });
+	const evidence = prepareTypedStatement<{ proposal_evidence: string }>(
+		db,
+		`SELECT proposal_evidence FROM ${table} WHERE id IN (?, ?) AND agent_id = ?`,
+	)
+		.all(sourceId, targetId, proposal.agent_id)
+		.flatMap((row) => parseJsonArray(row.proposal_evidence));
+	db.prepare(`UPDATE ${table} SET proposal_id = ?, proposal_evidence = ? WHERE id = ? AND agent_id = ?`).run(
+		proposal.id,
+		JSON.stringify([...evidence, ...proposalAuditEvidence(proposal)]),
+		targetId,
+		proposal.agent_id,
+	);
+	if (removeSource)
+		db.prepare("DELETE FROM evidence_citations WHERE derived_kind = ? AND derived_id = ? AND agent_id = ?").run(
+			kind,
+			sourceId,
+			proposal.agent_id,
+		);
+}
+
+function mergeEntityAspects(
+	db: WriteDb,
+	agentId: string,
+	sourceId: string,
+	targetId: string,
+	proposal: ProposalRow,
+): number {
 	const aspects = db
 		.prepare("SELECT id, canonical_name FROM entity_aspects WHERE entity_id = ? AND agent_id = ?")
 		.all(sourceId, agentId) as Array<{ id: string; canonical_name: string }>;
@@ -1950,6 +2163,7 @@ function mergeEntityAspects(db: WriteDb, agentId: string, sourceId: string, targ
 			)
 			.get(targetId, agentId, aspect.canonical_name) as { id: string } | undefined;
 		if (target) {
+			mergeSemanticEvidenceInTx(db, "entity_aspects", "aspect", aspect.id, target.id, proposal, true);
 			db.prepare("UPDATE entity_attributes SET aspect_id = ? WHERE aspect_id = ? AND agent_id = ?").run(
 				target.id,
 				aspect.id,
@@ -1967,8 +2181,14 @@ function mergeEntityAspects(db: WriteDb, agentId: string, sourceId: string, targ
 	return aspects.length;
 }
 
-function mergeEntityEdges(db: WriteDb, agentId: string, sourceId: string, targetId: string): number {
-	let relationshipChanges = mergeEntityDependencies(db, agentId, sourceId, targetId);
+function mergeEntityEdges(
+	db: WriteDb,
+	agentId: string,
+	sourceId: string,
+	targetId: string,
+	proposal: ProposalRow,
+): number {
+	let relationshipChanges = mergeEntityDependencies(db, agentId, sourceId, targetId, proposal);
 
 	relationshipChanges += db
 		.prepare(
@@ -2016,7 +2236,13 @@ function mergeEntityAssertions(db: WriteDb, agentId: string, sourceId: string, t
 	).run(targetId, agentId, sourceId);
 }
 
-function mergeEntityDependencies(db: WriteDb, agentId: string, sourceId: string, targetId: string): number {
+function mergeEntityDependencies(
+	db: WriteDb,
+	agentId: string,
+	sourceId: string,
+	targetId: string,
+	proposal: ProposalRow,
+): number {
 	const rows = db
 		.prepare(
 			`SELECT id, source_entity_id, target_entity_id, dependency_type
@@ -2034,6 +2260,9 @@ function mergeEntityDependencies(db: WriteDb, agentId: string, sourceId: string,
 		const nextSource = row.source_entity_id === sourceId ? targetId : row.source_entity_id;
 		const nextTarget = row.target_entity_id === sourceId ? targetId : row.target_entity_id;
 		if (nextSource === nextTarget) {
+			db.prepare(
+				"DELETE FROM evidence_citations WHERE derived_kind = 'dependency' AND derived_id = ? AND agent_id = ?",
+			).run(row.id, agentId);
 			changes += db
 				.prepare("DELETE FROM entity_dependencies WHERE id = ? AND agent_id = ?")
 				.run(row.id, agentId).changes;
@@ -2049,6 +2278,7 @@ function mergeEntityDependencies(db: WriteDb, agentId: string, sourceId: string,
 			)
 			.get(agentId, row.id, nextSource, nextTarget, row.dependency_type) as { id: string } | undefined;
 		if (duplicate) {
+			mergeSemanticEvidenceInTx(db, "entity_dependencies", "dependency", row.id, duplicate.id, proposal, true);
 			changes += db
 				.prepare("DELETE FROM entity_dependencies WHERE id = ? AND agent_id = ?")
 				.run(row.id, agentId).changes;
@@ -2068,6 +2298,7 @@ function mergeEntityDependencies(db: WriteDb, agentId: string, sourceId: string,
 function applyMergeEntities(
 	db: WriteDb,
 	agentId: string,
+	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const sources = sourceMergeSpecs(payload);
@@ -2119,8 +2350,8 @@ function applyMergeEntities(
 	const merged: Array<{ readonly name: string; readonly entityId: string; readonly movedAspects: number }> = [];
 	let relationshipChanges = 0;
 	for (const source of plan.sources) {
-		const movedAspects = mergeEntityAspects(db, agentId, source.id, plan.target.id);
-		relationshipChanges += mergeEntityEdges(db, agentId, source.id, plan.target.id);
+		const movedAspects = mergeEntityAspects(db, agentId, source.id, plan.target.id, proposal);
+		relationshipChanges += mergeEntityEdges(db, agentId, source.id, plan.target.id, proposal);
 		mergeEntityAliases(db, agentId, source.id, plan.target.id);
 		mergeEntityAssertions(db, agentId, source.id, plan.target.id);
 		db.prepare(
@@ -2129,6 +2360,7 @@ function applyMergeEntities(
 			     updated_at = datetime('now')
 			 WHERE id = ? AND agent_id = ?`,
 		).run(source.id, plan.target.id, agentId);
+		mergeSemanticEvidenceInTx(db, "entities", "entity", source.id, plan.target.id, proposal, true);
 		db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(source.id, agentId);
 		merged.push({ name: source.name, entityId: source.id, movedAspects });
 	}
@@ -2181,6 +2413,7 @@ function applyMergeAspects(
 		const source = resolveAspectStrict(db, agentId, entity.id, raw);
 		if (seen.has(source.id)) continue;
 		seen.add(source.id);
+		mergeSemanticEvidenceInTx(db, "entity_aspects", "aspect", source.id, target.id, proposal, false);
 		const attributes = db
 			.prepare("SELECT id FROM entity_attributes WHERE aspect_id = ? AND agent_id = ?")
 			.all(source.id, agentId) as Array<{ id: string }>;
@@ -2242,10 +2475,10 @@ function applyCreateLink(
 	const dependencyType = normalizeDependencyType(readString(payload, "link_type"));
 	const sourceId = sourceIdSelector
 		? resolveEntityStrict(db, agentId, source).id
-		: resolveOrCreateEntity(db, agentId, source, normalizeEntityType(readString(payload, "source_type")));
+		: resolveOrCreateEntity(db, agentId, source, normalizeEntityType(readString(payload, "source_type")), proposal);
 	const targetId = targetIdSelector
 		? resolveEntityStrict(db, agentId, target).id
-		: resolveOrCreateEntity(db, agentId, target, normalizeEntityType(readString(payload, "target_type")));
+		: resolveOrCreateEntity(db, agentId, target, normalizeEntityType(readString(payload, "target_type")), proposal);
 	const reason = requireDependencyReason(dependencyType, readString(payload, "reason") ?? proposal.rationale);
 	const strength = clamp01(readNumber(payload, "strength") ?? 0.5);
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
@@ -2433,7 +2666,7 @@ function applyUnpinEntity(
 function applyCreateEntityAlias(
 	db: WriteDb,
 	agentId: string,
-	proposal: ProposalRow,
+	_proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
@@ -2457,7 +2690,7 @@ function applyCreateEntityAlias(
 function applyArchiveEntityAlias(
 	db: WriteDb,
 	agentId: string,
-	proposal: ProposalRow,
+	_proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
@@ -2476,6 +2709,284 @@ function applyArchiveEntityAlias(
 	return { aliasId, entityId: entity.id, archived: true };
 }
 
+function ontologyPartitionInDb(db: ReadDb, agentId: string, passId?: string): DreamingPartition {
+	if (passId !== undefined) return dreamingPassPartitionInDb(db, passId, agentId);
+	assertDreamingAgentInDb(db, agentId);
+	return { agentId, compartmentId: null };
+}
+
+function proposalCitationsInDb(
+	db: WriteDb,
+	agentId: string,
+	evidence: readonly unknown[],
+	partition?: DreamingPartition,
+): SemanticEvidenceCitation[] {
+	const citations: SemanticEvidenceCitation[] = [];
+	for (const value of evidence) {
+		if (!isRecord(value)) continue;
+		if (isDreamingAttentionEvidenceInTx(db, agentId, value)) continue;
+		if ("source_ref" in value) {
+			const source = requireStrictEpisodicSourceRefInTx(db, agentId, value.source_ref, partition);
+			if (typeof value.quote === "string" && !renderDreamingEvidence(source).includes(value.quote))
+				throw new OntologyProposalError("Evidence quote no longer matches its source", 409);
+			citations.push({ kind: source.kind, id: source.id });
+		} else if (typeof value.memory_id === "string") {
+			citations.push({ kind: "memory", id: value.memory_id });
+		}
+	}
+	return citations;
+}
+
+function proposalTargetCitationsInDb(
+	db: WriteDb,
+	targets: readonly OntologyMutationTarget[],
+	partition: DreamingPartition,
+): SemanticEvidenceCitation[] {
+	const citations: SemanticEvidenceCitation[] = [];
+	const kinds: Readonly<Partial<Record<DreamingMutationTable, SemanticCitationKind>>> = {
+		entities: "entity",
+		entity_aspects: "aspect",
+		entity_dependencies: "dependency",
+		epistemic_assertions: "assertion",
+	};
+	for (const target of targets) {
+		if (target.table === "entity_attributes") citations.push({ kind: "attribute", id: target.id });
+		else if (target.table === "memories") citations.push({ kind: "memory", id: target.id });
+		else {
+			const kind = kinds[target.table];
+			if (kind === undefined) continue;
+			for (const row of prepareTypedStatement<{ evidence_kind: SemanticEvidenceCitation["kind"]; evidence_id: string }>(
+				db,
+				"SELECT evidence_kind, evidence_id FROM evidence_citations WHERE derived_kind = ? AND derived_id = ? AND agent_id = ?",
+			).all(kind, target.id, partition.agentId))
+				citations.push({ kind: row.evidence_kind, id: row.evidence_id });
+		}
+	}
+	return citations;
+}
+
+function labelProposalRowInTx(
+	db: WriteDb,
+	table: DreamingMutationTable,
+	kind: SemanticCitationKind,
+	id: string,
+	proposal: ProposalRow,
+): void {
+	const partition: DreamingPartition = ontologyPartitionInDb(
+		db,
+		proposal.agent_id,
+		proposal.dreaming_pass_id ?? undefined,
+	);
+	const proposalOwned =
+		table === "entities" ||
+		table === "entity_aspects" ||
+		table === "entity_attributes" ||
+		table === "entity_dependencies";
+	db.prepare(
+		`UPDATE ${table} SET compartment_id = ?${proposalOwned ? `, proposal_id = ${table === "entity_attributes" ? "COALESCE(proposal_id, ?)" : "?"}, proposal_evidence = CASE WHEN proposal_id IS NULL AND proposal_evidence = '[]' THEN ? ELSE proposal_evidence END` : ""}${table === "entities" ? ", dreaming_pass_id = ?" : ""} WHERE id = ? AND agent_id = ?`,
+	).run(
+		partition.compartmentId,
+		...(proposalOwned ? [proposal.id, JSON.stringify(proposalAuditEvidence(proposal))] : []),
+		...(table === "entities" ? [proposal.dreaming_pass_id] : []),
+		id,
+		partition.agentId,
+	);
+
+	recordSemanticCitationsInTx(db, {
+		kind,
+		id,
+		partition,
+		evidence: proposalCitationsInDb(db, proposal.agent_id, proposalAuditEvidence(proposal), partition),
+	});
+}
+
+interface OntologyMutationTarget {
+	readonly table: DreamingMutationTable;
+	readonly id: string;
+}
+
+export function assertOntologyOperationPartitionInTx(
+	db: WriteDb,
+	input: {
+		readonly agentId: string;
+		readonly passId?: string;
+		readonly operation: string;
+		readonly payload: Readonly<Record<string, unknown>>;
+		readonly evidence?: readonly unknown[];
+	},
+): readonly OntologyMutationTarget[] {
+	const partition: DreamingPartition = ontologyPartitionInDb(db, input.agentId, input.passId);
+	for (const evidence of proposalCitationsInDb(db, input.agentId, input.evidence ?? [], partition))
+		evidenceCitationInDb(db, partition, evidence);
+	const targets = new Map<string, OntologyMutationTarget>();
+	const add = (table: DreamingMutationTable, id: string): void => {
+		assertDreamingMutationLabelInDb(db, table, id, partition);
+		targets.set(`${table}:${id}`, { table, id });
+	};
+	const select = (table: DreamingMutationTable, where: string, args: readonly unknown[]): string[] => {
+		const ids = prepareTypedStatement<{ id: string }>(db, `SELECT id FROM ${table} WHERE ${where}`)
+			.all(...args)
+			.map((row) => row.id);
+		for (const id of ids) add(table, id);
+		return ids;
+	};
+	const entity = (selector: string | null): string | null => {
+		if (selector === null) return null;
+		const direct = prepareTypedStatement<{ id: string }>(db, "SELECT id FROM entities WHERE id = ?").get(selector);
+		const id = direct?.id ?? resolveEntity(db, input.agentId, selector);
+		if (id !== null) add("entities", id);
+		return id;
+	};
+	const aspect = (entityId: string | null, selector: string | null): string | null => {
+		if (entityId === null || selector === null) return null;
+		const row = prepareTypedStatement<{ id: string }>(
+			db,
+			"SELECT id FROM entity_aspects WHERE entity_id = ? AND agent_id = ? AND (id = ? OR canonical_name = ? OR LOWER(name) = ?) LIMIT 1",
+		).get(entityId, input.agentId, selector, canonical(selector), canonical(selector));
+		if (row) add("entity_aspects", row.id);
+		return row?.id ?? null;
+	};
+	const p = input.payload;
+	const op = input.operation;
+	const e = entity(
+		op === "create_policy"
+			? readPayloadSelector(p, "target_entity", "entity", "entity_id")
+			: readPayloadSelector(p, "entity", "entity_id"),
+	);
+	const a = aspect(e, readPayloadSelector(p, "aspect", "aspect_id"));
+	if (["create_entity", "create_action_type", "create_interface"].includes(op))
+		entity(readPayloadSelector(p, "name", "action_type", "interface"));
+	if (["rename_entity", "archive_entity", "pin_entity", "unpin_entity"].includes(op))
+		entity(readPayloadSelector(p, "selector", "entity", "entity_id", "name", "id"));
+	if (["create_aspect", "rename_aspect", "archive_aspect"].includes(op))
+		aspect(e, readPayloadSelector(p, "selector", "aspect", "aspect_id", "name"));
+	if (op === "create_policy") {
+		const policyAspect = aspect(e, "policy");
+		if (policyAspect !== null)
+			select(
+				"entity_attributes",
+				"aspect_id = ? AND kind = 'constraint' AND group_key = 'policy' AND claim_key = ? AND normalized_content = ? AND status = 'active'",
+				[policyAspect, canonicalKey(readString(p, "kind")), canonical(readString(p, "content") ?? "")],
+			);
+	}
+	if (op === "create_link" || op === "attach_interface") {
+		const source = entity(readPayloadSelector(p, "source_entity_id", "source_entity", "entity"));
+		const target = entity(
+			readPayloadSelector(p, "target_entity_id", "target_entity", "interface", "interface_name", "target_interface"),
+		);
+		if (source && target)
+			select(
+				"entity_dependencies",
+				"source_entity_id = ? AND target_entity_id = ? AND agent_id = ? AND dependency_type = ?",
+				[
+					source,
+					target,
+					input.agentId,
+					op === "attach_interface" ? "implements" : normalizeDependencyType(readString(p, "link_type")),
+				],
+			);
+	}
+	if (op === "update_link" || op === "archive_link") {
+		const id = readPayloadSelector(p, "id", "dependency_id", "link_id");
+		if (id !== null) select("entity_dependencies", "id = ?", [id]);
+	}
+	if (op === "merge_entities") {
+		const roots = new Set<string>();
+		const target = entity(readPayloadSelector(p, "target_entity_id", "target_id", "target_entity", "target"));
+		if (target) roots.add(target);
+		for (const spec of sourceMergeSpecs(p)) {
+			const id = entity(spec.id ?? spec.selector);
+			if (id) roots.add(id);
+		}
+		for (const id of roots) {
+			select("entity_aspects", "entity_id = ?", [id]);
+			select("entity_dependencies", "source_entity_id = ? OR target_entity_id = ?", [id, id]);
+			select("epistemic_assertions", "subject_entity_id = ?", [id]);
+			select("memories", "id IN (SELECT memory_id FROM memory_entity_mentions WHERE entity_id = ?)", [id]);
+			const neighbors = prepareTypedStatement<{ id: string }>(
+				db,
+				"SELECT source_entity_id AS id FROM relations WHERE target_entity_id = ? UNION SELECT target_entity_id AS id FROM relations WHERE source_entity_id = ?",
+			).all(id, id);
+			for (const neighbor of neighbors) add("entities", neighbor.id);
+		}
+	}
+	if (op === "merge_aspects") {
+		aspect(e, readPayloadSelector(p, "target", "target_aspect", "target_aspect_id", "aspect"));
+		for (const raw of [...readStringArray(p, "sources"), ...readStringArray(p, "source_aspects")]) aspect(e, raw);
+	}
+	const cascade =
+		op === "merge_entities" || op === "merge_aspects" || op === "archive_entity" || op === "archive_aspect";
+	if (op === "archive_entity") {
+		for (const target of [...targets.values()])
+			if (target.table === "entities") select("entity_aspects", "entity_id = ?", [target.id]);
+	}
+	if (cascade) {
+		for (const target of [...targets.values()])
+			if (target.table === "entity_aspects") {
+				select("entity_attributes", "aspect_id = ?", [target.id]);
+				if (op === "merge_entities") select("entity_dependencies", "aspect_id = ?", [target.id]);
+			}
+	}
+	const replacementId = readString(p, "superseded_by");
+	if (replacementId !== null) select("entity_attributes", "id = ?", [replacementId]);
+	const attributeId = readString(p, "attribute_id");
+	if (attributeId !== null) {
+		const row = prepareTypedStatement<{ aspect_id: string; kind: string; group_key: string | null; claim_key: string }>(
+			db,
+			"SELECT aspect_id, kind, group_key, claim_key FROM entity_attributes WHERE id = ?",
+		).get(attributeId);
+		add("entity_attributes", attributeId);
+		if (row && op === "restore_claim_version")
+			select(
+				"entity_attributes",
+				"aspect_id = ? AND kind = ? AND COALESCE(group_key, 'general') = COALESCE(?, 'general') AND claim_key = ? AND status = 'active'",
+				[row.aspect_id, row.kind, row.group_key, row.claim_key],
+			);
+	}
+	if (a !== null && ["add_claim_value", "set_claim_value", "supersede_claim_value"].includes(op)) {
+		const group = readString(p, "group_key") ?? readString(p, "group") ?? "general";
+		const claim = readString(p, "claim_key") ?? readString(p, "claim");
+		const duplicate = op === "add_claim_value";
+		select(
+			"entity_attributes",
+			`aspect_id = ? AND kind = ? AND COALESCE(group_key, 'general') = ? AND claim_key = ? ${duplicate ? "AND normalized_content = ? AND status = 'active'" : "AND status = 'active'"}`,
+			[
+				a,
+				normalizeAttributeKind(readString(p, "kind")),
+				duplicate ? group : canonicalKey(group),
+				duplicate ? claim : canonicalKey(claim),
+				...(duplicate ? [canonical(readString(p, "value") ?? "")] : []),
+			],
+		);
+	}
+
+	for (const target of [...targets.values()]) {
+		if (target.table !== "entity_attributes") continue;
+		const row = prepareTypedStatement<{ memory_id: string | null }>(
+			db,
+			"SELECT memory_id FROM entity_attributes WHERE id = ?",
+		).get(target.id);
+		if (row?.memory_id) {
+			add("memories", row.memory_id);
+			select(
+				"memories",
+				"id IN (SELECT derived_memory_id FROM derived_memory_sources WHERE source_kind IN ('ontology_claim', 'memory') AND source_id = ?)",
+				[row.memory_id],
+			);
+			select("temporal_edges", "subject_type = 'memory' AND subject_id = ?", [row.memory_id]);
+		}
+		select("ontology_contradictions", "left_attribute_id = ? OR right_attribute_id = ?", [target.id, target.id]);
+	}
+	if (op === "archive_entity" || op === "merge_entities")
+		for (const target of [...targets.values()])
+			if (target.table === "entities")
+				select("ontology_contradictions", "entity_id = ? AND status = 'active'", [target.id]);
+	const resolvedTargets = [...targets.values()];
+	for (const evidence of proposalTargetCitationsInDb(db, resolvedTargets, partition))
+		evidenceCitationInDb(db, partition, evidence);
+	return resolvedTargets;
+}
+
 function applyOperation(
 	db: WriteDb,
 	proposal: ProposalRow,
@@ -2483,58 +2994,150 @@ function applyOperation(
 	author: WriteAuthor,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
-	try {
-		validateProposalEvidenceSourcesInTx(db, proposal.agent_id, proposalAuditEvidence(proposal));
-		const payload = parseJsonRecord(proposal.payload);
-		if (proposal.operation === "create_entity") return applyCreateEntity(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "rename_entity") return applyRenameEntity(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "archive_entity")
-			return applyArchiveEntity(db, proposal.agent_id, proposal, payload, actor);
-		if (proposal.operation === "create_aspect")
-			return applyCreateAspect(db, proposal.agent_id, proposal, payload, writeCaps);
-		if (proposal.operation === "rename_aspect") return applyRenameAspect(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "archive_aspect")
-			return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
-		if (proposal.operation === "add_claim_value")
-			return applyAddClaimValue(db, proposal.agent_id, proposal, payload, actor, author, writeCaps);
-		if (proposal.operation === "set_claim_value")
-			return applySetClaimValue(db, proposal.agent_id, proposal, payload, actor, author, writeCaps);
-		if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, payload);
-		if (proposal.operation === "merge_aspects") return applyMergeAspects(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "supersede_claim_value") {
-			return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload, actor, author);
-		}
-		if (proposal.operation === "archive_claim_value")
-			return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor, author);
-		if (proposal.operation === "restore_claim_version") {
-			return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload, actor, author);
-		}
-		if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
-		if (proposal.operation === "create_policy")
-			return applyCreatePolicy(db, proposal.agent_id, proposal, payload, actor, author);
-		if (proposal.operation === "create_action_type")
-			return applyCreateActionType(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "create_interface")
-			return applyCreateInterface(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "attach_interface")
-			return applyAttachInterface(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "pin_entity") return applyPinEntity(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "unpin_entity") return applyUnpinEntity(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "create_entity_alias")
-			return applyCreateEntityAlias(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "archive_entity_alias")
-			return applyArchiveEntityAlias(db, proposal.agent_id, proposal, payload);
-		throw new OntologyProposalError(`Unsupported ontology proposal operation: ${proposal.operation}`, 400);
-	} finally {
-		reconcileOntologyContradictionsInTx(db, { agentId: proposal.agent_id });
+	const partition: DreamingPartition = ontologyPartitionInDb(
+		db,
+		proposal.agent_id,
+		proposal.dreaming_pass_id ?? undefined,
+	);
+	assertDreamingMutationLabelInDb(db, "ontology_proposals", proposal.id, partition);
+	const targets = [
+		...assertOntologyOperationPartitionInTx(db, {
+			agentId: proposal.agent_id,
+			passId: proposal.dreaming_pass_id ?? undefined,
+			operation: proposal.operation,
+			payload: parseJsonRecord(proposal.payload),
+			evidence: proposalAuditEvidence(proposal),
+		}),
+	];
+	const result = dispatchOperation(db, proposal, actor, author, writeCaps);
+	const kinds = {
+		entities: "entity",
+		entity_aspects: "aspect",
+		entity_attributes: "attribute",
+		entity_dependencies: "dependency",
+		epistemic_assertions: "assertion",
+		memories: "memory",
+		ontology_contradictions: "contradiction",
+		temporal_edges: "temporal_edge",
+	} as const;
+	for (const table of Object.keys(kinds)) {
+		if (
+			table !== "entities" &&
+			table !== "entity_aspects" &&
+			table !== "entity_attributes" &&
+			table !== "entity_dependencies"
+		)
+			continue;
+		for (const row of prepareTypedStatement<{ id: string }>(
+			db,
+			`SELECT id FROM ${table} WHERE proposal_id = ? AND agent_id = ?`,
+		).all(proposal.id, proposal.agent_id))
+			targets.push({ table, id: row.id });
 	}
+	const contradictions = new Set(
+		targets.filter((target) => target.table === "ontology_contradictions").map((target) => target.id),
+	);
+	for (const target of [...targets]) {
+		if (target.table !== "entity_attributes") continue;
+		for (const row of prepareTypedStatement<{ id: string }>(
+			db,
+			"SELECT id FROM ontology_contradictions WHERE agent_id = ? AND (left_attribute_id = ? OR right_attribute_id = ?)",
+		).all(proposal.agent_id, target.id, target.id)) {
+			assertDreamingMutationLabelInDb(db, "ontology_contradictions", row.id, partition);
+			contradictions.add(row.id);
+		}
+	}
+	for (const id of contradictions) {
+		reconcileOntologyContradictionsInTx(db, { agentId: proposal.agent_id, contradictionId: id, partition });
+		targets.push({ table: "ontology_contradictions", id });
+	}
+	for (const target of targets) {
+		if (!(target.table in kinds)) continue;
+		const kind = Reflect.get(kinds, target.table);
+		if (typeof kind !== "string") continue;
+		if (
+			kind !== "entity" &&
+			kind !== "aspect" &&
+			kind !== "attribute" &&
+			kind !== "dependency" &&
+			kind !== "assertion" &&
+			kind !== "memory" &&
+			kind !== "contradiction" &&
+			kind !== "temporal_edge"
+		)
+			continue;
+		if (prepareTypedStatement<{ id: string }>(db, `SELECT id FROM ${target.table} WHERE id = ?`).get(target.id))
+			labelProposalRowInTx(db, target.table, kind, target.id, proposal);
+	}
+	return result;
 }
 
-async function markFailed(accessor: DbAccessor, id: string, agentId: string, err: unknown): Promise<void> {
+function dispatchOperation(
+	db: WriteDb,
+	proposal: ProposalRow,
+	actor: string,
+	author: WriteAuthor,
+	writeCaps?: GraphWriteCaps,
+): Readonly<Record<string, unknown>> {
+	const payload = parseJsonRecord(proposal.payload);
+	if (proposal.operation === "create_entity") return applyCreateEntity(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "rename_entity") return applyRenameEntity(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_entity")
+		return applyArchiveEntity(db, proposal.agent_id, proposal, payload, actor);
+	if (proposal.operation === "create_aspect")
+		return applyCreateAspect(db, proposal.agent_id, proposal, payload, writeCaps);
+	if (proposal.operation === "rename_aspect") return applyRenameAspect(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_aspect")
+		return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
+	if (proposal.operation === "add_claim_value")
+		return applyAddClaimValue(db, proposal.agent_id, proposal, payload, actor, author, writeCaps);
+	if (proposal.operation === "set_claim_value")
+		return applySetClaimValue(db, proposal.agent_id, proposal, payload, actor, author, writeCaps);
+	if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "merge_aspects") return applyMergeAspects(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "supersede_claim_value") {
+		return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload, actor, author);
+	}
+	if (proposal.operation === "archive_claim_value")
+		return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor, author);
+	if (proposal.operation === "restore_claim_version") {
+		return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload, actor, author);
+	}
+	if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
+	if (proposal.operation === "create_policy")
+		return applyCreatePolicy(db, proposal.agent_id, proposal, payload, actor, author);
+	if (proposal.operation === "create_action_type")
+		return applyCreateActionType(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "create_interface") return applyCreateInterface(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "attach_interface") return applyAttachInterface(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "pin_entity") return applyPinEntity(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "unpin_entity") return applyUnpinEntity(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "create_entity_alias")
+		return applyCreateEntityAlias(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_entity_alias")
+		return applyArchiveEntityAlias(db, proposal.agent_id, proposal, payload);
+	throw new OntologyProposalError(`Unsupported ontology proposal operation: ${proposal.operation}`, 400);
+}
+
+async function markFailed(
+	accessor: DbAccessor,
+	id: string,
+	agentId: string,
+	err: unknown,
+	passId?: string,
+): Promise<void> {
 	const message = err instanceof Error ? err.message : String(err);
 	await runWriteTxAsync(accessor, (db) => {
+		const proposal = getProposalInTx(db, id, agentId);
+		if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
+		assertDreamingMutationLabelInDb(
+			db,
+			"ontology_proposals",
+			id,
+			ontologyPartitionInDb(db, agentId, passId ?? proposal.dreaming_pass_id ?? undefined),
+		);
 		db.prepare(
 			`UPDATE ontology_proposals
 			 SET status = 'failed', result = ?, updated_at = ?
@@ -2589,7 +3192,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2590" },
+		{ siteToken: "ontology-proposals.ts:3193" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2627,7 +3230,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2607" },
+		{ siteToken: "ontology-proposals.ts:3210" },
 	);
 }
 
@@ -2685,7 +3288,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2639" },
+		{ siteToken: "ontology-proposals.ts:3242" },
 	);
 }
 
@@ -2780,7 +3383,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2723" },
+		{ siteToken: "ontology-proposals.ts:3326" },
 	);
 }
 
@@ -3201,7 +3804,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3203",
+		siteToken: "ontology-proposals.ts:3806",
 	});
 }
 
@@ -3212,7 +3815,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3214",
+		siteToken: "ontology-proposals.ts:3817",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3264,7 +3867,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3265" },
+		{ siteToken: "ontology-proposals.ts:3868" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
@@ -3289,30 +3892,36 @@ export async function applyOntologyProposal(
 ): Promise<OntologyProposal> {
 	try {
 		return await runWriteTxAsync(accessor, (db) => {
-			const proposal = getProposalInTx(db, params.id, params.agentId);
+			let proposal = getProposalInTx(db, params.id, params.agentId);
 			if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 			if (proposal.status !== "pending") {
 				throw new OntologyProposalError(`Proposal is ${proposal.status}, not pending`, 409);
 			}
 
+			if (params.passId !== undefined) {
+				const partition: DreamingPartition = ontologyPartitionInDb(db, params.agentId, params.passId);
+				assertDreamingMutationLabelInDb(db, "ontology_proposals", proposal.id, partition);
+				proposal = { ...proposal, dreaming_pass_id: params.passId };
+			}
 			const result = applyOperation(db, proposal, params.actor, params.author, params.writeCaps);
 			const ts = now();
 			db.prepare(
 				`UPDATE ontology_proposals
 				 SET status = 'applied', applied_by = ?, result = ?,
-				     applied_at = ?, updated_at = ?
+				     applied_at = ?, updated_at = ?, dreaming_pass_id = ?
 				 WHERE id = ? AND agent_id = ?`,
-			).run(params.actor, JSON.stringify(result), ts, ts, params.id, params.agentId);
+			).run(params.actor, JSON.stringify(result), ts, ts, proposal.dreaming_pass_id, params.id, params.agentId);
 			return readBackInTx(db, params.id, params.agentId);
 		});
 	} catch (err) {
 		if (err instanceof OntologyProposalError && err.status !== 404 && err.status !== 409) {
 			try {
-				await markFailed(accessor, params.id, params.agentId, err);
+				await markFailed(accessor, params.id, params.agentId, err, params.passId);
 			} catch (markError) {
 				console.error("[ontology] failed to mark proposal as failed", {
 					proposalId: params.id,
 					agentId: params.agentId,
+					passId: params.passId,
 					error: markError instanceof Error ? markError.message : String(markError),
 				});
 			}
@@ -3332,6 +3941,7 @@ function operationToProposalInput(params: ApplyOntologyOperationParams): CreateO
 	return {
 		author: params.author,
 		agentId: params.agentId,
+		passId: params.passId,
 		operation: params.operation,
 		payload: params.payload,
 		confidence: params.confidence,
@@ -3378,6 +3988,7 @@ export async function applyOntologyOperation(
 	let preview: ApplyOntologyOperationResult | null = null;
 	try {
 		const result = await runWriteTxAsync(accessor, (db) => {
+			assertOntologyOperationPartitionInTx(db, params);
 			const inserted = insertProposalInTx(db, operationToProposalInput(params), now());
 			const row = getProposalInTx(db, inserted.id, params.agentId);
 			if (row === null) throw new OntologyProposalError("Proposal not found", 404);
@@ -3413,6 +4024,7 @@ export async function applyOntologyOperationBatch(
 			accessor,
 			params.operations.map((operation) => ({
 				agentId: params.agentId,
+				passId: params.passId,
 				operation: operation.operation,
 				payload: operation.payload,
 				confidence: operation.confidence,
@@ -3449,6 +4061,7 @@ export async function applyOntologyOperationBatch(
 						db,
 						{
 							agentId: params.agentId,
+							passId: params.passId,
 							operation: operation.operation,
 							payload: operation.payload,
 							confidence: operation.confidence,
@@ -3511,6 +4124,12 @@ export async function rejectOntologyProposal(
 			throw new OntologyProposalError(`Proposal is ${proposal.status}, not pending`, 409);
 		}
 
+		const partition: DreamingPartition = ontologyPartitionInDb(
+			db,
+			params.agentId,
+			params.passId ?? proposal.dreaming_pass_id ?? undefined,
+		);
+		assertDreamingMutationLabelInDb(db, "ontology_proposals", proposal.id, partition);
 		const ts = now();
 		db.prepare(
 			`UPDATE ontology_proposals

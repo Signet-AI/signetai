@@ -1,0 +1,7 @@
+{
+  "agentId": "dreaming-gate-shared",
+  "users": [
+    { "id": "usr_gate_alice", "username": "alice", "displayName": "Alex", "sessionId": "speaker-tea", "quote": "I prefer tea.", "claimKey": "preferred-drink", "value": "Prefers tea." },
+    { "id": "usr_gate_bob", "username": "bob", "displayName": "Alex", "sessionId": "speaker-coffee", "quote": "I prefer coffee.", "claimKey": "preferred-drink", "value": "Prefers coffee." }
+  ]
+}

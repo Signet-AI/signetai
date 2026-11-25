@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	type EpisodicCursor,
+	countEpisodicDreamingEvidenceSources,
+	scanEpisodicSourceCandidates,
+	resolveStrictEpisodicSourceRef,
 	readEpisodicSource,
 	readRecentEpisodicSources,
 	searchEpisodicSources,
@@ -25,6 +28,128 @@ describe("episodic source selection", () => {
 	afterEach(async () => {
 		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("filters every evidence branch before ranking, limits, counts and reference resolution", () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, compartment, project] of [
+				["public", null, "atlas"],
+				["secret", 17, "atlas"],
+				["elsewhere", null, "other"],
+			] as const) {
+				db.prepare("INSERT INTO compartments (id,key) VALUES (17,'secret') ON CONFLICT DO NOTHING").run();
+				db.prepare(`INSERT INTO memories (id,content,agent_id,memory_kind,type,visibility,project,compartment_id,created_at,updated_at)
+				 VALUES (?,?,'ant','episodic','fact','global',?,?,?,?)`).run(
+					id,
+					id === "secret" ? "needle needle" : "needle",
+					project,
+					compartment,
+					id === "public" ? "2026-01-01" : "2026-02-01",
+					"2026-02-01",
+				);
+				db.prepare(`INSERT INTO session_transcripts (session_key,content,agent_id,project,compartment_id,created_at,completed_at)
+				 VALUES (?, 'needle', 'ant', ?, ?, ?, ?)`).run(
+					id,
+					project,
+					compartment,
+					id === "public" ? "2026-01-01" : "2026-02-01",
+					id === "public" ? "2026-01-01" : "2026-02-01",
+				);
+				db.prepare(`INSERT INTO memory_artifacts (source_path,source_sha256,source_kind,session_id,session_token,content,agent_id,project,compartment_id,captured_at,updated_at)
+				 VALUES (?, '', 'note', ?, ?, 'needle', 'ant', ?, ?, ?, ?)`).run(
+					id,
+					id,
+					id,
+					project,
+					compartment,
+					id === "public" ? "2026-01-01" : "2026-02-01",
+					"2026-02-01",
+				);
+				db.prepare(`INSERT INTO session_summaries (id,content,agent_id,project,compartment_id,depth,kind,token_count,earliest_at,latest_at,created_at)
+				 VALUES (?, 'needle', 'ant', ?, ?, 0, 'session', 1, ?, ?, ?)`).run(
+					id,
+					project,
+					compartment,
+					"2026-01-01",
+					id === "public" ? "2026-01-01" : "2026-02-01",
+					"2026-02-01",
+				);
+			}
+		});
+		const readScope = { reach: { kind: "own", agentId: "ant" }, compartments: [], projects: ["atlas"] } as const;
+		getDbAccessor().withReadDb((db) => {
+			for (const kind of ["memory", "artifact", "transcript", "summary"] as const) {
+				expect(
+					searchEpisodicSources(db, { agentId: "ant", query: "needle", kind, limit: 1, readScope }).map(
+						(row) => row.id,
+					),
+				).toEqual(["public"]);
+				expect(readEpisodicSource(db, { agentId: "ant", from: `${kind}:secret`, readScope })).toBeNull();
+				expect(
+					resolveStrictEpisodicSourceRef(db, { agentId: "ant", sourceRef: `${kind}:secret`, readScope }).status,
+				).toBe("not_found");
+				expect(
+					readRecentEpisodicSources(db, "ant", 1, [kind], null, "newest", null, undefined, { readScope }).map(
+						(row) => row.id,
+					),
+				).toEqual(["public"]);
+			}
+			expect(
+				countEpisodicDreamingEvidenceSources(db, "ant", ["memory", "artifact", "transcript", "summary"], 4, {
+					readScope,
+				}),
+			).toEqual({ eligible: 4, bounded: true });
+			expect(scanEpisodicSourceCandidates(db, "ant", 3, { readScope }).refs.map((row) => row.id)).toEqual([
+				"public",
+				"public",
+				"public",
+			]);
+			expect(
+				searchEpisodicSources(db, { agentId: "ant", query: "", exactCompartment: null }).some(
+					(row) => row.id === "secret",
+				),
+			).toBe(false);
+			expect(
+				searchEpisodicSources(db, { agentId: "ant", query: "", exactCompartment: 17 }).map((row) => row.id),
+			).toEqual(["secret", "secret", "secret"]);
+		});
+	});
+
+	it("does not let a hidden artifact revision suppress the readable duplicate during classification", () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (const id of ["visible", "hidden"]) {
+				db.prepare(`INSERT INTO memory_artifacts (agent_id,source_path,source_sha256,source_kind,source_id,session_id,session_key,session_token,project,captured_at,content,updated_at,is_deleted)
+				VALUES ('ant',?,'same-hash','note','managed',?,?,?,'atlas',?,'needle','2026-02-01',0)`).run(
+					id,
+					id,
+					id,
+					id,
+					id === "visible" ? "2026-01-01" : "2026-02-01",
+				);
+			}
+			db.prepare("INSERT INTO org_jobs (id,kind,status,params_json) VALUES ('classify','classify','pending',?)").run(
+				JSON.stringify({ id: "secret", target: { kind: "session", id: "hidden", agentId: "ant" } }),
+			);
+		});
+		const readScope = {
+			reach: { kind: "own", agentId: "ant" },
+			compartments: [],
+			projects: ["atlas"],
+			inFlightUserId: "reader",
+		} as const;
+		const snapshot = () =>
+			getDbAccessor().withReadDb((db) => ({
+				results: searchEpisodicSources(db, { agentId: "ant", query: "needle", kind: "artifact", limit: 1, readScope }),
+				count: countEpisodicDreamingEvidenceSources(db, "ant", ["artifact"], 1, { readScope }),
+			}));
+		const hidden = snapshot();
+		expect(hidden.results.map((row) => row.id)).toEqual(["visible"]);
+		expect(hidden.count).toEqual({ eligible: 1, bounded: true });
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM memory_artifacts WHERE source_path='hidden'").run();
+			db.prepare("DELETE FROM org_jobs WHERE id='classify'").run();
+		});
+		expect(snapshot()).toEqual(hidden);
 	});
 
 	it("resolves artifacts, live transcripts, and compaction summaries without crossing agents", () => {

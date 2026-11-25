@@ -3,7 +3,9 @@ import { executeClassificationJob, resumeClassificationJobs } from "./classifica
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { expect, test } from "bun:test";
 import { executeClassification } from "./classification-owner";
+import { up as dreamingPartitionMigration } from "../../core/src/migrations/179-dreaming-evidence-leases";
 import type { ClassificationActor } from "./classifications";
+import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 
 const compliance: ClassificationActor = {
 	userId: "carol",
@@ -25,8 +27,33 @@ const alice: ClassificationActor = {
 };
 const bob: ClassificationActor = { ...alice, userId: "bob" };
 const target = { kind: "memory", id: "m", agentId: "default" } as const;
+test("rebuild preserves the pass label when an entity cites only public evidence", () => {
+	const db = classificationFixture();
+	try {
+		dreamingPartitionMigration(db);
+		db.exec(`INSERT INTO classifications(id,name) VALUES('cls_secret','Secret');
+			INSERT INTO compartments(id,key) VALUES(4,'cls_secret');
+			INSERT INTO compartment_members VALUES(4,'cls_secret');
+			INSERT INTO dreaming_passes(id,agent_id,status,compartment_id) VALUES('pass-labeled','default','completed',4);
+			INSERT INTO ontology_proposals(id,agent_id,operation,payload,evidence,created_by,created_at,updated_at,compartment_id,dreaming_pass_id)
+			VALUES('proposal-labeled','default','create_entity','{}','[]','dreaming','now','now',4,'pass-labeled');
+			UPDATE entities SET proposal_id='proposal-labeled',compartment_id=4 WHERE id='e';`);
+		executeClassification(db, { op: "rebuild", agentId: "default" });
+		expect(db.prepare("SELECT compartment_id FROM entities WHERE id='e'").get()).toEqual({ compartment_id: 4 });
+	} finally {
+		db.close();
+	}
+});
+
 test("owners apply, only compliance removes, hidden definitions are absent and fanout is atomic", () => {
 	const db = classificationFixture();
+	dreamingPartitionMigration(db);
+	const attentionId = enqueueDreamingAttentionInTx(db, {
+		agentId: "default",
+		kind: "evidence_requeue",
+		subjectRef: "memory:m",
+		details: { summary: "private secret" },
+	});
 	const created = executeClassification(db, {
 		op: "create",
 		actor: compliance,
@@ -53,6 +80,7 @@ test("owners apply, only compliance removes, hidden definitions are absent and f
 	const m = db.prepare("SELECT compartment_id FROM memories WHERE id=?").get("m");
 	expect(m?.compartment_id).toBeNumber();
 	expect(db.prepare("SELECT compartment_id FROM entities WHERE id=?").get("e")).toEqual(m);
+	expect(db.prepare("SELECT compartment_id FROM dreaming_attention WHERE id=?").get(attentionId)).toEqual(m);
 	expect(executeClassification(db, { op: "readable", subject: alice })).toEqual([m?.compartment_id]);
 	expect(executeClassification(db, { op: "readable", subject: compliance })).toEqual([]);
 	expect(() => executeClassification(db, { op: "enqueue", actor: alice, id, target, remove: true })).toThrow(

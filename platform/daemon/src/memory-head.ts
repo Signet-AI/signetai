@@ -50,7 +50,7 @@ export type MemoryHeadResult = {
 };
 export type MemoryHeadCommitInput = Extract<MemoryHeadRequest, { action: "commit" }>["input"];
 export interface MemoryHeadCommitter {
-	read(agentId: string): Promise<Record<string, unknown>>;
+	read(agentId: string, passId?: string): Promise<Record<string, unknown>>;
 	commit(input: MemoryHeadCommitInput): Promise<MemoryHeadResult>;
 }
 export function readCuratedMemoryHead(agentId: string, passId?: string): Promise<Record<string, unknown>> {
