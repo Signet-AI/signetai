@@ -1,7 +1,9 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { MigrationDb } from "@signet/core";
 
-function binding(value: unknown): SQLQueryBindings {
+type ScalarBinding = string | number | boolean | bigint | null | Uint8Array | Float32Array;
+
+function scalarBinding(value: unknown): ScalarBinding {
 	if (value === null) return null;
 	if (
 		typeof value === "string" ||
@@ -12,18 +14,13 @@ function binding(value: unknown): SQLQueryBindings {
 		value instanceof Float32Array
 	)
 		return value;
-
 	throw new Error("Invalid migration fixture binding");
 }
-function bindings(values: readonly unknown[]): SQLQueryBindings[] {
-	return values.map(binding);
-}
 
-function namedBindings(values: readonly unknown[]): Record<string, SQLQueryBindings> | undefined {
-	const value = values[0];
-	if (values.length !== 1 || typeof value !== "object" || value === null || ArrayBuffer.isView(value)) return undefined;
-	const named: Record<string, SQLQueryBindings> = {};
-	for (const [key, nested] of Object.entries(value)) named[key] = binding(nested);
+function binding(value: unknown): SQLQueryBindings {
+	if (typeof value !== "object" || value === null || ArrayBuffer.isView(value)) return scalarBinding(value);
+	const named: Record<string, ScalarBinding> = {};
+	for (const [key, nested] of Object.entries(value)) named[key] = scalarBinding(nested);
 	return named;
 }
 
@@ -33,21 +30,11 @@ export function migrationFixtureDb(db: Database): MigrationDb {
 			db.exec(sql);
 		},
 		prepare: (sql) => {
-			const positional = db.prepare<Record<string, unknown>, SQLQueryBindings[]>(sql);
-			const named = db.prepare<Record<string, unknown>, Record<string, SQLQueryBindings>>(sql);
+			const statement = db.prepare<Record<string, unknown>, SQLQueryBindings[]>(sql);
 			return {
-				run: (...values) => {
-					const params = namedBindings(values);
-					return params ? named.run(params) : positional.run(...bindings(values));
-				},
-				get: (...values) => {
-					const params = namedBindings(values);
-					return (params ? named.get(params) : positional.get(...bindings(values))) ?? undefined;
-				},
-				all: (...values) => {
-					const params = namedBindings(values);
-					return params ? named.all(params) : positional.all(...bindings(values));
-				},
+				run: (...values) => statement.run(...values.map(binding)),
+				get: (...values) => statement.get(...values.map(binding)) ?? undefined,
+				all: (...values) => statement.all(...values.map(binding)),
 			};
 		},
 	};
