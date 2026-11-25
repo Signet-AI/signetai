@@ -1258,6 +1258,31 @@ describe("session control permissions in team mode", () => {
 		expect(tracker.claimSession("sess-a", "plugin", "agent-a", "codex").ok).toBe(true);
 	});
 
+	it("does not let transcript hooks move a transcript out of the credential's project", async () => {
+		await seed("sess-a", "User: scoped evidence");
+		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
+		for (const [name, body] of [
+			["session-end", { cwd: "proj-b", lastAssistantMessage: "moved reply" }],
+			["stop", { cwd: "proj-b", lastAssistantMessage: "moved reply" }],
+			["user-prompt-submit", { project: "proj-b", userPrompt: "moved reply" }],
+		] as const) {
+			const res = await hook(
+				teamApp(),
+				name,
+				{ harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "plugin", ...body },
+				projectA,
+			);
+			expect({ name, status: res.status }).toEqual({ name, status: 403 });
+		}
+		const row = await readOne(
+			"SELECT project, content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			"sess-a",
+			"agent-a",
+		);
+		expect(row?.project).toBe("proj-a");
+		expect(String(row?.content)).not.toContain("moved reply");
+	});
+
 	it("requires a recorded project before a project-limited credential controls a claim-only session", async () => {
 		const projectB = bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } });
 		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
