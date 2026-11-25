@@ -184,6 +184,31 @@ describe("reflection routes", () => {
 		expect(await hidden.text()).toBe(await absent.text());
 	});
 
+	it("reflection reads hide citing rows while a classification batch is pending", async () => {
+		seedReflection("public-pending", "default", "2026-11-25", "Public", "2026-11-25T08:00:00.000Z");
+		const memoryId = seedMemory("default", "Restricted source");
+		seedReflection("pending-derived", "default", "2026-11-25", "Restricted reflection", "2026-11-25T09:00:00.000Z");
+		dbAccessor.withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_pending','Pending'); INSERT INTO classification_audience VALUES('cls_pending','user','carol')",
+			);
+			db.prepare(
+				"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('reflection','pending-derived','default','memory',?)",
+			).run(memoryId);
+			db.prepare(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('memory',?,'default','cls_pending')",
+			).run(memoryId);
+			db.prepare("INSERT INTO org_jobs(id,kind,status,params_json) VALUES('job_pending','classify','pending',?)").run(
+				JSON.stringify({ id: "cls_pending", target: { kind: "memory", id: memoryId, agentId: "default" } }),
+			);
+		});
+		const response = await app("alice").request("/api/reflections?limit=1");
+		expect(response.status).toBe(200);
+		expect((await response.json()).reflections.map((item: { id: string }) => item.id)).toEqual(["public-pending"]);
+		const allowed = await app("carol").request("/api/reflections?limit=1");
+		expect((await allowed.json()).reflections[0].id).toBe("pending-derived");
+	});
+
 	it("local reflection reads retain their agent boundary under group sharing", async () => {
 		dbAccessor.withWriteTx((db) => {
 			db.exec(

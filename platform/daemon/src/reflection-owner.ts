@@ -58,18 +58,66 @@ export async function readReflection(scope: ReadScope, id: string): Promise<Refl
 }
 
 function reflectionPredicate(scope: ReadScope): ReturnType<typeof readScopeSql> {
-	return readScopeSql(
+	const normalized: ReadScope = {
+		...scope,
+		reach:
+			scope.reach.kind === "shared" || scope.reach.kind === "group"
+				? { kind: "own", agentId: scope.reach.agentId }
+				: scope.reach,
+	};
+	const predicate = readScopeSql(
 		"r",
 		{
-			...scope,
-			reach:
-				scope.reach.kind === "shared" || scope.reach.kind === "group"
-					? { kind: "own", agentId: scope.reach.agentId }
-					: scope.reach,
-			projects: scope.projects === null ? null : [],
+			...normalized,
+			projects: normalized.projects === null ? null : [],
 		},
 		{ visibility: null, memory: null, session: null, source: null },
 	);
+	if (scope.compartments === "all" && scope.projects === null) return predicate;
+	const checks: string[] = [];
+	const args = [...predicate.args];
+	for (const evidence of [
+		{
+			kind: "memory",
+			table: "memories",
+			key: "id",
+			visibility: "visibility",
+			session: "source_id",
+			source: "source_id",
+		},
+		{
+			kind: "artifact",
+			table: "memory_artifacts",
+			key: "source_path",
+			visibility: null,
+			session: "session_key",
+			source: "source_id",
+		},
+		{
+			kind: "transcript",
+			table: "session_transcripts",
+			key: "session_key",
+			visibility: null,
+			session: "session_key",
+			source: "source_id",
+		},
+		{ kind: "summary", table: "session_summaries", key: "id", visibility: null, session: "session_key", source: null },
+	] as const) {
+		const readable = readScopeSql("e", normalized, {
+			visibility: evidence.visibility,
+			memory: evidence.kind === "memory" ? "id" : null,
+			session: evidence.session,
+			source: evidence.source,
+		});
+		checks.push(
+			`(citation.evidence_kind='${evidence.kind}' AND NOT EXISTS (SELECT 1 FROM ${evidence.table} e WHERE e.agent_id=r.agent_id AND e.${evidence.key}=citation.evidence_id ${readable.sql}))`,
+		);
+		args.push(...readable.args);
+	}
+	return {
+		sql: `${predicate.sql} AND NOT EXISTS (SELECT 1 FROM evidence_citations citation WHERE citation.agent_id=r.agent_id AND citation.derived_kind='reflection' AND citation.derived_id=r.id AND (${checks.join(" OR ")}))`,
+		args,
+	};
 }
 
 export interface ReflectionAnswerInput {
