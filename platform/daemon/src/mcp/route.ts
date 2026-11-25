@@ -88,8 +88,15 @@ export function mountMcpRoute(app: Hono): void {
 				sessionIdGenerator: undefined,
 				enableJsonResponse: true,
 			});
+			const cookie = c.req.header("cookie");
+			const csrf = c.req.header("x-signet-csrf");
 			server = await createMcpServer({
 				authorizationHeader: c.req.header("authorization"),
+				allowEnvironmentAuth: false,
+				forwardedHeaders: {
+					...(cookie ? { cookie } : {}),
+					...(csrf ? { "x-signet-csrf": csrf } : {}),
+				},
 				agentId: requestedMcpAgentId(c),
 			});
 			await server.connect(transport);

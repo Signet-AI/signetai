@@ -18,6 +18,8 @@ interface McpServerOptions {
 	readonly daemonUrl?: string;
 	readonly version?: string;
 	readonly authorizationHeader?: string;
+	readonly forwardedHeaders?: Readonly<Record<string, string>>;
+	readonly allowEnvironmentAuth?: boolean;
 	readonly agentId?: string;
 	readonly pluginHost?: GraphiqPluginPolicyHost;
 }
@@ -104,11 +106,12 @@ export async function daemonFetch<T>(
 		readonly timeout?: number;
 		readonly extraHeaders?: Readonly<Record<string, string>>;
 		readonly authorizationHeader?: string;
+		readonly allowEnvironmentAuth?: boolean;
 	} = {},
 ): Promise<FetchResult<T>> {
 	const { method = "GET", body, timeout = 10_000, extraHeaders } = options;
 
-	const token = readDaemonAuthToken();
+	const token = options.allowEnvironmentAuth === false ? undefined : readDaemonAuthToken();
 	const authorizationHeader =
 		normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
 	const init: RequestInit = {
@@ -116,8 +119,6 @@ export async function daemonFetch<T>(
 		headers: {
 			"Content-Type": "application/json",
 			"x-signet-runtime-path": "plugin",
-			"x-signet-actor": "mcp-server",
-			"x-signet-actor-type": "harness",
 			...(authorizationHeader ? { Authorization: authorizationHeader } : {}),
 			...extraHeaders,
 		},
@@ -388,7 +389,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		requestBaseUrl: string,
 		path: string,
 		options?: Parameters<typeof daemonFetch<T>>[2],
-	): Promise<FetchResult<T>> => daemonFetch<T>(requestBaseUrl, path, { ...options, authorizationHeader });
+	): Promise<FetchResult<T>> =>
+		daemonFetch<T>(requestBaseUrl, path, {
+			...options,
+			authorizationHeader,
+			allowEnvironmentAuth: opts?.allowEnvironmentAuth,
+			extraHeaders: { ...options?.extraHeaders, ...opts?.forwardedHeaders },
+		});
 	const pluginHostProvider: GraphiqPluginPolicyHostProvider = opts?.pluginHost
 		? () => opts.pluginHost as GraphiqPluginPolicyHost
 		: () => createDefaultPluginHost({ persistRegistry: false });
