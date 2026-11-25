@@ -726,24 +726,17 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.use("/api/dream/operations", async (c, next) => {
 		return requirePermission("modify", authConfig)(c, next);
 	});
-	app.use("/api/dream/tools/*", async (c, next) => {
-		const readOnly = getDreamingCapabilityManifest().find((item) => item.id === c.req.path.split("/").at(-1))?.readOnly;
-		return requirePermission(c.get("organization") && readOnly ? "recall" : "modify", authConfig)(c, next);
-	});
-	app.use("/api/dream/tools", async (c, next) => {
-		return requirePermission(c.get("organization") && c.req.method === "GET" ? "recall" : "modify", authConfig)(
-			c,
-			next,
-		);
-	});
+	app.use("/api/dream/tools/*", async (c, next) => requirePermission("modify", authConfig)(c, next));
+	app.use("/api/dream/tools", async (c, next) => requirePermission("modify", authConfig)(c, next));
 	app.use("/api/dream/*", async (c, next) => {
+		if (c.req.method === "GET") return requirePermission("admin", authConfig)(c, next);
 		if (
 			c.req.path === "/api/dream/operations" ||
 			c.req.path === "/api/dream/tools" ||
 			c.req.path.startsWith("/api/dream/tools/")
 		)
 			return next();
-		return requirePermission(c.get("organization") && c.req.method === "GET" ? "recall" : "admin", authConfig)(c, next);
+		return requirePermission("admin", authConfig)(c, next);
 	});
 
 	app.get("/api/dream/evidence/coverage", async (c) => {
@@ -900,6 +893,10 @@ export function registerPipelineRoutes(app: Hono): void {
 					if (cursor !== undefined) lastCursor = cursor;
 					return true;
 				};
+				const finishScoped = (reason: string) => {
+					producer.writeFinal({ type: "overflow", reason, after: lastCursor, reconnect: true }, { event: "overflow" });
+					producer.close();
+				};
 				const pending: DreamingLiveEvent[] = [];
 				let pendingBytes = 0;
 				let draining = false;
@@ -924,7 +921,7 @@ export function registerPipelineRoutes(app: Hono): void {
 								signal: producer.signal,
 							});
 							if (!visible) {
-								producer.close();
+								finishScoped("scope_changed");
 								return;
 							}
 							send(event);
@@ -935,7 +932,8 @@ export function registerPipelineRoutes(app: Hono): void {
 								passId,
 								error: error instanceof Error ? error.message : String(error),
 							});
-						producer.close();
+						if (!producer.signal.aborted) finishScoped("scope_unavailable");
+						else producer.close();
 					} finally {
 						draining = false;
 					}
@@ -947,7 +945,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					}
 					pendingBytes += Buffer.byteLength(JSON.stringify(event));
 					if (pendingBytes > DREAMING_LIVE_STREAM_HIGH_WATER_MARK_BYTES || pending.length >= 256) {
-						producer.close();
+						finishScoped("queue_limit");
 						return;
 					}
 					pending.push(event);

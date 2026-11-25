@@ -474,10 +474,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/knowledge/expand", async (c) => {
-		const readScope = await resolveRouteReadScope(c);
-
 		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
+		const readScope = await resolveRouteReadScope(c);
 
 		const resolvedReadAgentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));

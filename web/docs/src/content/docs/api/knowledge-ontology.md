@@ -572,7 +572,8 @@ memory:
 In a claimed organization, passes and logs are visible only through the caller's
 agent reach and the pass compartment's audience. This also gates policy, runbook,
 tool-call, history, attention, and SSE reads. Hidden SSE attachment returns the
-same 404 as a missing pass; a stream closes if its pass becomes unreadable.
+same 404 as a missing pass. A stream emits a terminal `overflow` event before
+closing when its pass becomes unreadable or its scoped pending queue overflows.
 Unscoped `state`, `scheduler`, and `episodicTokensPending` values are `null` rather
 than exposing shared counters.
 

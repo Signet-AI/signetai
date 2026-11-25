@@ -152,6 +152,35 @@ async function capture(app: Hono, paths: readonly string[]): Promise<readonly un
 }
 
 describe("knowledge and ontology organization reads", () => {
+	test("knowledge expansion checks recall permission before resolving an unauthorized scope", async () => {
+		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("principal", { ...localPrincipal(), kind: "user", userId: "reader", permissions: new Set() });
+			c.set("organization", await readOrganization());
+			await next();
+		});
+		registerKnowledgeRoutes(app);
+		const response = await app.request("/api/knowledge/expand", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ entity: "public" }),
+		});
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({ reason: "permission", required: "recall" });
+	});
+	test("an evidence quote is dropped with its unreadable memory rather than keeping an orphan quote", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO memories(id,agent_id,content,created_at,updated_at,compartment_id) VALUES('quote-secret','default','private','now','now',9); UPDATE entity_attributes SET proposal_evidence=json_array(json_object('memory_id','quote-secret','quote','SECRETQUOTE'),json_object('quote','public quote')) WHERE id='public-attribute'",
+			),
+		);
+		const path = "/api/knowledge/entities/public/aspects/public-aspect/attributes";
+		const outside = JSON.stringify(await (await (await appFor()).request(path)).json());
+		expect(outside).not.toContain("SECRETQUOTE");
+		expect(outside).toContain("public quote");
+		expect(JSON.stringify(await (await (await appFor("audience")).request(path)).json())).toContain("SECRETQUOTE");
+	});
+
 	let dir = "";
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "signet-knowledge-read-scope-"));

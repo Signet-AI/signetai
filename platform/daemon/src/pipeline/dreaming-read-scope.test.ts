@@ -135,12 +135,12 @@ test("public evidence search excludes classified sources before its limit", asyn
 	expect(await invoke(audience)).toMatchObject({ ok: true, items: [{ id: "hidden-memory" }] });
 });
 
-function orgApp(userId: string): Hono {
+function orgApp(userId: string, permissions: Principal["permissions"] = rolePermissions("admin")): Hono {
 	const principal: Principal = {
 		kind: "user",
 		userId,
 		role: "admin",
-		permissions: rolePermissions("admin"),
+		permissions,
 		compliance: false,
 		groupIds: [],
 		credential: { kind: "session", id: "test" },
@@ -170,6 +170,23 @@ function orgApp(userId: string): Hono {
 	registerPipelineRoutes(app);
 	return app;
 }
+
+test("Dreaming GET routes retain their admin permission", async () => {
+	const member = orgApp("outside", new Set(["recall", "modify"]));
+	for (const path of [
+		"/api/dream/status",
+		"/api/dream/passes/active",
+		"/api/dream/passes/visible/tools",
+		"/api/dream/passes/visible/policy",
+		"/api/dream/passes/visible/events",
+		"/api/dream/tools",
+	]) {
+		const response = await member.request(path);
+		expect(response.status).toBe(403);
+		if (response.body) await response.body.cancel();
+	}
+	expect((await orgApp("outside").request("/api/dream/status")).status).toBe(200);
+});
 
 test("organization diagnostic aggregates omit unscoped corpus state", async () => {
 	const app = orgApp("outside");
@@ -260,11 +277,31 @@ test("an open organization stream stops before sending newly hidden events", asy
 	);
 	dreamingLiveEvents.publish("visible", "assistant_delta", { delta: "new secret" });
 	try {
+		const next = await reader.read();
+		expect(next.done).toBe(false);
+		expect(new TextDecoder().decode(next.value)).toContain("event: overflow");
 		expect(await reader.read()).toMatchObject({ done: true });
 	} finally {
 		await reader.cancel();
 	}
 	dreamingLiveEvents.reset();
+});
+
+test("scoped Dreaming SSE emits overflow before closing a saturated pending queue", async () => {
+	dreamingLiveEvents.startPass({ passId: "visible", agentId: "agent-b", mode: "incremental" });
+	const response = await orgApp("outside").request("/api/dream/passes/visible/events?agentId=agent-b");
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("missing stream");
+	await reader.read();
+	for (let index = 0; index < 300; index++)
+		dreamingLiveEvents.publish("visible", "assistant_delta", { delta: "queued" });
+	let text = "";
+	for (;;) {
+		const next = await reader.read();
+		if (next.done) break;
+		text += new TextDecoder().decode(next.value);
+	}
+	expect(text).toContain("event: overflow");
 });
 
 test("head, review attention, and graph capabilities preserve visible results when hidden content changes", async () => {
