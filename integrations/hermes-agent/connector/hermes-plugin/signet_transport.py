@@ -791,6 +791,9 @@ class LoginStore:
         except Exception as error:
             self.reason="refresh_in_doubt"
             raise SignetCredentialError(error,"refresh_in_doubt") from error
+        if saved is None and self.reason is not None:
+            self.reason="refresh_in_doubt"
+            raise SignetCredentialError(RuntimeError("Cannot verify current login credential"),"refresh_in_doubt")
         if saved is None and self.reason is None:
             self.pending_rotation=self.pending_previous_refresh=None
             raise SignetUnauthorizedError("missing_credential")
@@ -1476,7 +1479,7 @@ class DurableOutbox:
         except (SignetNetworkError,SignetTimeoutError) as error:
             return {"state":"failed","pending":None,"sent":0,"failure":{"code":type(error).__name__,"status":None,"reason":None}}
         if origin is not None and origin != self.origin or harness is not None and harness != self.harness:
-            return {"state":"deferred","pending":0,"sent":0,"failure":{"code":"partition_mismatch","status":None,"reason":None}}
+            return {"state":"deferred","pending":None,"sent":0,"failure":{"code":"partition_mismatch","status":None,"reason":None}}
         legacy = self._legacy_pending()
         if legacy:
             try:
@@ -1502,7 +1505,7 @@ class DurableOutbox:
                 with _claim_execution(claim[1]):
                     try:
                         _check_control(end,cancel)
-                        send(claim[0],end*1000)
+                        send(claim[0],min(end,time.time()+60)*1000)
                         self._settle(claim,end=end,cancel=cancel)
                         sent += 1
                     except Exception as error:

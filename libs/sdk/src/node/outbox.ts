@@ -780,7 +780,18 @@ export class DurableOutbox {
 				if (!claim) continue;
 				try {
 					scope.signal.throwIfAborted();
-					await abortable(send(claim.entry, { signal: scope.signal, deadline }), scope.signal);
+					const sendScope = requestSignal(
+						{ signal: scope.signal, deadline: Math.min(deadline, Date.now() + 60_000) },
+						60_000,
+					);
+					try {
+						await abortable(
+							send(claim.entry, { signal: sendScope.signal, deadline: Date.now() + sendScope.timeoutMs }),
+							sendScope.signal,
+						);
+					} finally {
+						sendScope.cleanup();
+					}
 					await this.settle(claim, null, scope.signal);
 					sent++;
 				} catch (error) {

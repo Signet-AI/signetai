@@ -593,6 +593,35 @@ sys.exit(78)
                 self.assertTrue(worker.closed.is_set())
                 self.assertTrue(all(child.poll() is not None for child in children))
 
+    def test_partition_mismatch_pending_is_unknown(self):
+        box = transport.DurableOutbox(self.url, env=self.env)
+        result = box.flush(lambda *_: self.fail("sent"), origin="https://other.example")
+        self.assertIsNone(result["pending"])
+        self.assertEqual(result["failure"]["code"], "partition_mismatch")
+
+    def test_replay_send_deadline_is_bounded(self):
+        box = transport.DurableOutbox(self.url, env=self.env)
+        box.enqueue("POST", "/api/hooks/session-end", {})
+        deadlines = []
+        start = time.time() * 1000
+        result = box.flush(lambda entry, deadline: deadlines.append(deadline), timeout=300, force=True)
+        self.assertEqual(result["state"], "complete")
+        self.assertLessEqual(deadlines[0] - start, 61000)
+
+    def test_rotation_load_failure_with_reason_does_not_write(self):
+        store = transport.LoginStore(self.url, env=self.env)
+        store.pending_rotation = {"accessToken": "rotated", "refreshToken": "new"}
+        store.pending_previous_refresh = "old"
+        def unavailable(*args):
+            store.reason = "unavailable"
+            return None
+        with patch.object(store, "load", side_effect=unavailable), patch.object(store, "_write") as write:
+            with self.assertRaises(transport.SignetCredentialError) as caught:
+                store._persist_rotation(time.time() + 10, None)
+            self.assertEqual(caught.exception.reason, "refresh_in_doubt")
+            write.assert_not_called()
+        self.assertIsNotNone(store.pending_rotation)
+
     def test_outbox_same_origin_is_partitioned_by_harness(self):
         a = transport.NodeTransport(transport.resolve_target(harness="hermes", flag_url=self.url, flag_key="fixture", env=self.env), env=self.env)
         b = transport.NodeTransport(transport.resolve_target(harness="claude", flag_url=self.url, flag_key="fixture", env=self.env), env=self.env)

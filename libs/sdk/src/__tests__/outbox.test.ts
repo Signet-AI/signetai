@@ -611,3 +611,19 @@ test("a refresh 401 preserves its original typed rejection", async () => {
 		body: { error: "already used" },
 	});
 });
+
+test("replay sends have a bounded deadline", async () => {
+	const outbox = new DurableOutbox("https://org.example", { env });
+	await outbox.enqueue({ method: "POST", path: "/api/hooks/session-end", body: {} });
+	const start = Date.now();
+	let deadline = 0;
+	const result = await outbox.flush(
+		async (_entry, control) => {
+			deadline = control.deadline ?? 0;
+		},
+		{ timeoutMs: 300_000, force: true },
+	);
+	expect(result.state).toBe("complete");
+	expect(deadline).toBeGreaterThan(start);
+	expect(deadline - start).toBeLessThanOrEqual(61_000);
+});
