@@ -60,7 +60,8 @@ Each line has `kind` (`memories`, `session_transcripts`, or `memory_artifacts`)
 and explicit public fields, including `authorUserId`. Internal storage columns
 are omitted, and credentials in content are redacted. It does not include
 unreadable contributions or documents. Owner pages are bounded to about 4 MiB;
-a larger record is transferred alone, up to a 16 MiB record limit. A failure after
+large content is fetched through byte-range reads and formatted outside the
+daemon event loop, so the owner IPC limit does not truncate larger records. A failure after
 streaming begins ends with a terminal `{"kind":"error"}` record rather than a
 successfully truncated export. The response is not cached.
 
@@ -70,10 +71,16 @@ snapshots accept up to 1,000 readable artifacts per request. Embedding projectio
 are computed outside the DB owner from bounded readable selections, with a
 5,000-item maximum. Their cache is keyed by readable agents, compartments, and
 project scope; a projection never reuses geometry from another audience.
+UMAP fitting runs in a worker thread, with at most two concurrent content workers
+and a 30-second fitting deadline. Request abort and daemon shutdown terminate
+active workers. Population counts and pagination metadata are refreshed on each
+request rather than cached with the geometry.
 
 In organization mode, an imported file's `content` endpoint returns only its
 readable inventoried JSONL records, in file order. It has
 `X-Signet-Import-View: readable-records` and no original-file `Content-Length`.
+Bulk transcript exports accept offsets up to 10,000, applied in the scoped SQL
+query before streaming begins.
 Records are unavailable until inventory has identified them. Import counters
 exclude unreadable records and sources. Local-mode downloads retain the original
 uploaded bytes.

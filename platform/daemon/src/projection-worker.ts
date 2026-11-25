@@ -1,6 +1,8 @@
+import { parentPort } from "node:worker_threads";
 import type { ProjectionInputRow } from "./umap-projection";
-declare const self: Worker;
-self.onmessage = async (event: MessageEvent<{ rows: ProjectionInputRow[]; dimensions: 2 | 3 }>) => {
+const port = parentPort;
+if (!port) throw new Error("Projection requires a worker thread");
+port.on("message", async (data: { rows: ProjectionInputRow[]; dimensions: 2 | 3 }) => {
 	const { computeProjectionInput } = await import("./umap-projection");
-	self.postMessage(computeProjectionInput(event.data.rows, event.data.dimensions));
-};
+	port.postMessage(computeProjectionInput(data.rows, data.dimensions));
+});

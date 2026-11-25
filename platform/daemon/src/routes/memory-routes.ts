@@ -1,6 +1,6 @@
+import { encodeExportRecord } from "../projection-worker-client";
 import { readPointerMiddleware } from "../read-pointers";
 import { projectVisibleMemories } from "../umap-projection";
-import { redactReadPointers } from "../read-pointers";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -1013,10 +1013,39 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							{ op: "export", table, author, scope: resolved.scope, cursor, limit: 100 },
 							c.req.raw.signal,
 						);
-						for (const { exportCursor: _cursor, ...row } of rows)
-							await output.write(
-								`${JSON.stringify({ kind: table, ...row, ...(typeof row.content === "string" ? { content: redactCredentials(row.content) } : {}) })}\n`,
-							);
+						for (const { exportCursor, exportContentBytes, ...row } of rows) {
+							if (typeof exportContentBytes !== "number") {
+								await output.write(
+									`${JSON.stringify({ kind: table, ...row, ...(typeof row.content === "string" ? { content: redactCredentials(row.content) } : {}) })}\n`,
+								);
+								continue;
+							}
+							if (typeof exportCursor !== "number") throw new Error("Invalid export cursor");
+							const parts: Uint8Array[] = [];
+							for (let offset = 0; offset < exportContentBytes; offset += 1024 * 1024) {
+								c.req.raw.signal.throwIfAborted();
+								const part = await contentRead<{ content: string } | null>(
+									{
+										op: "export_content",
+										table,
+										author,
+										scope: resolved.scope,
+										row: exportCursor,
+										offset,
+										length: Math.min(1024 * 1024, exportContentBytes - offset),
+										expectedBytes: exportContentBytes,
+										expectedUpdatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
+									},
+									c.req.raw.signal,
+								);
+								if (!part) throw new Error("Export row changed during streaming");
+								parts.push(Buffer.from(part.content, "hex"));
+							}
+							const encoded = await encodeExportRecord({ kind: table, ...row }, parts, c.req.raw.signal);
+							for (let offset = 0; offset < encoded.length; offset += 65536)
+								await output.write(encoded.slice(offset, offset + 65536));
+						}
+
 						if (rows.length === 0) break;
 						const next = rows.at(-1)?.exportCursor;
 						if (typeof next !== "number" || next <= cursor) throw new Error("Invalid export cursor");
@@ -2246,17 +2275,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? row.source_id
 				: undefined;
 
-		return c.json(
-			await redactReadPointers(
-				{
-					...row,
-					sourcePath: row.source_path,
-					runtimePath: row.runtime_path,
-					sessionId,
-				},
-				scope.readScope,
-			),
-		);
+		return c.json({
+			...row,
+			sourcePath: row.source_path,
+			runtimePath: row.runtime_path,
+			sessionId,
+		});
 	});
 	app.get("/api/memory/:id/history", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
@@ -2308,38 +2332,33 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			{ operation: "memory.history", lane: "read", deadlineMs: 5_000 },
 		);
 
-		return c.json(
-			await redactReadPointers(
-				{
-					memoryId,
-					count: history.length,
-					history: history.map((row) => {
-						let metadata: unknown = row.metadata;
-						if (row.metadata) {
-							try {
-								metadata = JSON.parse(row.metadata);
-							} catch {
-								metadata = row.metadata;
-							}
-						}
-						return {
-							id: row.id,
-							event: row.event,
-							oldContent: row.old_content,
-							newContent: row.new_content,
-							changedBy: row.changed_by,
-							actorType: row.actor_type ?? undefined,
-							reason: row.reason,
-							metadata,
-							createdAt: row.created_at,
-							sessionId: row.session_id ?? undefined,
-							requestId: row.request_id ?? undefined,
-						};
-					}),
-				},
-				scope.readScope,
-			),
-		);
+		return c.json({
+			memoryId,
+			count: history.length,
+			history: history.map((row) => {
+				let metadata: unknown = row.metadata;
+				if (row.metadata) {
+					try {
+						metadata = JSON.parse(row.metadata);
+					} catch {
+						metadata = row.metadata;
+					}
+				}
+				return {
+					id: row.id,
+					event: row.event,
+					oldContent: row.old_content,
+					newContent: row.new_content,
+					changedBy: row.changed_by,
+					actorType: row.actor_type ?? undefined,
+					reason: row.reason,
+					metadata,
+					createdAt: row.created_at,
+					sessionId: row.session_id ?? undefined,
+					requestId: row.request_id ?? undefined,
+				};
+			}),
+		});
 	});
 	app.get("/api/memory/:id/lineage", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
@@ -2392,52 +2411,44 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const rows: LineageRow[] = [];
 		const head = await selectLineage(memoryId);
 		if (!head) return c.json({ error: "Not found" }, 404);
-		if (head) {
-			const seen = new Set<string>([head.id]);
-			const byId = new Map<string, LineageRow>([[head.id, head]]);
-			let current = head;
-			while (current.superseded_by && !seen.has(current.superseded_by) && byId.size < limit) {
-				seen.add(current.superseded_by);
-				const next = await selectLineage(current.superseded_by);
-				if (!next) break;
-				byId.set(next.id, next);
-				current = next;
-			}
-			let cursor = head;
-			while (byId.size < limit) {
-				const predecessor = await selectPredecessor(cursor.id);
-				if (!predecessor || seen.has(predecessor.id)) break;
-				seen.add(predecessor.id);
-				byId.set(predecessor.id, predecessor);
-				cursor = predecessor;
-			}
-			rows.push(
-				...[...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version),
-			);
-		}
 
-		return c.json(
-			await redactReadPointers(
-				{
-					memoryId,
-					count: rows.length,
-					lineage: rows.map((row) => ({
-						id: row.id,
-						content: redactCredentials(row.content),
-						type: row.type,
-						importance: row.importance,
-						version: row.version,
-						createdAt: row.created_at,
-						updatedAt: row.updated_at,
-						supersededBy: row.superseded_by,
-						supersededAt: row.superseded_at,
-						supersededReason: row.superseded_reason,
-						authorUserId: row.authorUserId,
-					})),
-				},
-				scope.readScope,
-			),
-		);
+		const seen = new Set<string>([head.id]);
+		const byId = new Map<string, LineageRow>([[head.id, head]]);
+		let current = head;
+		while (current.superseded_by && !seen.has(current.superseded_by) && byId.size < limit) {
+			seen.add(current.superseded_by);
+			const next = await selectLineage(current.superseded_by);
+			if (!next) break;
+			byId.set(next.id, next);
+			current = next;
+		}
+		let cursor = head;
+		while (byId.size < limit) {
+			const predecessor = await selectPredecessor(cursor.id);
+			if (!predecessor || seen.has(predecessor.id)) break;
+			seen.add(predecessor.id);
+			byId.set(predecessor.id, predecessor);
+			cursor = predecessor;
+		}
+		rows.push(...[...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version));
+
+		return c.json({
+			memoryId,
+			count: rows.length,
+			lineage: rows.map((row) => ({
+				id: row.id,
+				content: redactCredentials(row.content),
+				type: row.type,
+				importance: row.importance,
+				version: row.version,
+				createdAt: row.created_at,
+				updatedAt: row.updated_at,
+				supersededBy: row.superseded_by,
+				supersededAt: row.superseded_at,
+				supersededReason: row.superseded_reason,
+				authorUserId: row.authorUserId,
+			})),
+		});
 	});
 	app.get("/api/memory/jobs/:id", async (c) => {
 		const jobId = c.req.param("id")?.trim();

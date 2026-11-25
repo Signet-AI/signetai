@@ -933,3 +933,66 @@ test("B6 readable deleted superseders remain superseding in every mode", async (
 		expect(detail.status).toBe(200);
 	}
 });
+
+test("B7 per-user export includes a 17MiB transcript instead of truncating", async () => {
+	const payload = "z".repeat(17 * 1024 * 1024),
+		content = `User: ${payload}`;
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES ('b7-huge','beta',?,'b7',?,?,'bob')",
+			)
+			.run(content, at, at),
+	);
+	const response = await request("/api/org/export?author=bob", "bob");
+	expect(response.status).toBe(200);
+	const rows: unknown[] = response.body
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	const row = rows.find(
+		(row) => row !== null && typeof row === "object" && "sessionKey" in row && row.sessionKey === "b7-huge",
+	);
+	expect(row).toMatchObject({ kind: "session_transcripts", sessionKey: "b7-huge", authorUserId: "bob", content });
+	expect(response.body).not.toContain('"kind":"error"');
+	const transcript = await request("/api/sources/imports/export/transcripts?harness=b7&limit=1", "bob");
+	expect(transcript.status).toBe(200);
+	const exported: unknown = JSON.parse(transcript.body.trim());
+	expect(exported).toMatchObject({ messages: [{ role: "user", content: payload }] });
+	getDbAccessor().withWriteTx((db) => db.prepare("DELETE FROM session_transcripts WHERE session_key='b7-huge'").run());
+}, 60000);
+test("B8 transcript export offset uses bounded owner work", async () => {
+	getDbAccessor().withWriteTx((db) => {
+		const insert = db.prepare(
+			"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES (?,'beta',?,'b8-export',?,?,'bob')",
+		);
+		for (let n = 0; n < 200; n++) insert.run(`b8-${String(n).padStart(3, "0")}`, `User: message ${n}`, at, at);
+	});
+	const { getDbRuntimeMetrics } = await import("../db-observability");
+	const before = getDbRuntimeMetrics().completed;
+	const response = await request("/api/sources/imports/export/transcripts?harness=b8-export&offset=190&limit=1", "bob");
+	expect(response.status).toBe(200);
+	expect(response.body).toContain("message 190");
+	expect(getDbRuntimeMetrics().completed - before).toBeLessThan(15);
+});
+test("B8 scoped owner caches schema column inspection", async () => {
+	const { executeContentRead } = await import("../content-read-owner");
+	const { resolveReadScope } = await import("../read-scope");
+	const scope = await resolveReadScope(
+		{ reach: { kind: "all" }, projects: null },
+		{ local: true, userId: null, groupIds: [] },
+	);
+	getDbAccessor().withReadDb((db) => {
+		let inspections = 0;
+		const observed = {
+			prepare(sql: string) {
+				if (sql.startsWith("PRAGMA table_info")) inspections++;
+				return db.prepare(sql);
+			},
+		};
+		const input = { op: "sources.stats_artifacts", scope, parameters: ["beta", "b8-empty"] };
+		expect(Reflect.apply(executeContentRead, null, [observed, input])).toEqual({ n: 0 });
+		expect(Reflect.apply(executeContentRead, null, [observed, input])).toEqual({ n: 0 });
+		expect(inspections).toBe(1);
+	});
+});

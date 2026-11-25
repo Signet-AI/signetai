@@ -1,11 +1,24 @@
 import type { ftsShardTables } from "@signet/core";
-type FtsBase = Parameters<typeof ftsShardTables>[0];
+
 import type { ReadScope } from "./read-scope";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
 import type { NamedContentReadRequest } from "./named-content-reads";
+type FtsBase = Parameters<typeof ftsShardTables>[0];
+export type AuthoredExportTable = "memories" | "session_transcripts" | "memory_artifacts";
 export type ContentReadRequest =
+	| {
+			readonly op: "export_content";
+			readonly table: AuthoredExportTable;
+			readonly author: string;
+			readonly scope: ReadScope;
+			readonly row: number;
+			readonly offset: number;
+			readonly length: number;
+			readonly expectedBytes: number;
+			readonly expectedUpdatedAt: string | null;
+	  }
 	| NamedContentReadRequest
 	| {
 			readonly op: "readable_pointers";
@@ -155,7 +168,7 @@ export type ContentReadRequest =
 	| { readonly op: "shards"; readonly base: FtsBase; readonly scope: ReadScope }
 	| {
 			readonly op: "export";
-			readonly table: "memories" | "session_transcripts" | "memory_artifacts";
+			readonly table: AuthoredExportTable;
 			readonly author: string;
 			readonly scope: ReadScope;
 			readonly cursor: number;
@@ -163,6 +176,8 @@ export type ContentReadRequest =
 	  };
 
 function estimatedReadWork(request: ContentReadRequest): number {
+	if ("parameters" in request && request.op === "sources.import.export")
+		return 1 + (request.filters?.cursor ? 0 : (request.filters?.offset ?? 0));
 	if ("parameters" in request)
 		return request.op === "memory.projection.ledger"
 			? 5000
@@ -178,6 +193,8 @@ function estimatedReadWork(request: ContentReadRequest): number {
 								? 10000
 								: 32;
 	switch (request.op) {
+		case "export_content":
+			return Math.ceil(request.length / 65536);
 		case "readable_pointers":
 			return request.references.length;
 		case "projection_rows":

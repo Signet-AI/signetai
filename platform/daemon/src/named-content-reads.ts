@@ -39,6 +39,7 @@ export interface NamedContentReadRequest {
 	readonly subject?: AudienceSubject;
 	readonly filters?: {
 		readonly harnesses: number;
+		readonly offset?: number;
 		readonly since: boolean;
 		readonly until: boolean;
 		readonly cursor: boolean;

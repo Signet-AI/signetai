@@ -1,3 +1,4 @@
+import { encodeTranscriptExport } from "../projection-worker-client";
 import { namedReadOperation } from "../named-content-reads";
 import { readPointerMiddleware } from "../read-pointers";
 import { contentRead } from "../content-read";
@@ -6,11 +7,10 @@ import { resolveRouteReadScope } from "./read-scope";
 import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
-	buildExportTranscriptRecord,
+	type buildExportTranscriptRecord,
 	deterministicImportedSourceId,
 	loadSourcesConfig,
 	resolveDefaultBasePath,
-	redactCredentials,
 } from "@signet/core";
 import { type Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -69,7 +69,13 @@ async function readImportQuery<T>(
 			scope,
 			parameters,
 			subject: principal ? audienceSubjectFromPrincipal(principal) : { local: true, userId: null, groupIds: [] },
-			filters: { harnesses, since, until, cursor: parameters.length > 1 + harnesses + Number(since) + Number(until) },
+			filters: {
+				offset: Number(c.req.query("offset") ?? 0),
+				harnesses,
+				since,
+				until,
+				cursor: parameters.length > 1 + harnesses + Number(since) + Number(until),
+			},
 		},
 		c.req.raw.signal,
 	);
@@ -239,7 +245,14 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		const limit = Number(c.req.query("limit") ?? Number.MAX_SAFE_INTEGER),
 			skip = Number(c.req.query("offset") ?? 0);
 		const harnesses = c.req.queries("harness") ?? [];
-		if (!Number.isSafeInteger(limit) || limit < 0 || !Number.isSafeInteger(skip) || skip < 0 || harnesses.length > 25)
+		if (
+			!Number.isSafeInteger(limit) ||
+			limit < 0 ||
+			!Number.isSafeInteger(skip) ||
+			skip < 0 ||
+			skip > 10000 ||
+			harnesses.length > 25
+		)
 			return c.json({ error: "invalid export bounds" }, 400);
 		const since = c.req.query("since"),
 			until = c.req.query("until");
@@ -256,7 +269,6 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		const json = c.req.query("json") === "true",
 			messagesOnly = c.req.query("messagesOnly") === "true";
 		let cursor: [string, string, string] | undefined,
-			visited = 0,
 			emitted = 0,
 			opened = false;
 		const encoder = new TextEncoder();
@@ -287,13 +299,8 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 							return;
 						}
 						cursor = [row.created_at, row.session_key, row.agent_id];
-						if (visited++ < skip) {
-							controller.enqueue(new Uint8Array());
-							return;
-						}
-						if (row.bytes > 16 * 1024 ** 2) throw new Error("Transcript exceeds the 16 MiB export record limit");
 						const parts: Buffer[] = [];
-						for (let offset = 0; offset < row.bytes; offset += 64 * 1024) {
+						for (let offset = 0; offset < row.bytes; offset += 1024 * 1024) {
 							c.req.raw.signal.throwIfAborted();
 							const part = await readImportQuery<{ content: string }>(c, "sources.import.export.content", [
 								offset + 1,
@@ -305,18 +312,8 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 							if (!part) throw new Error("Transcript changed during export; retry the export");
 							parts.push(Buffer.from(part.content, "hex"));
 						}
-						const record = buildExportTranscriptRecord({
-							...row,
-							content: redactCredentials(Buffer.concat(parts).toString("utf8")),
-						});
-						const messages = messagesOnly
-							? record.messages.filter((message) => message.role === "user" || message.role === "assistant")
-							: record.messages;
-						controller.enqueue(
-							encoder.encode(
-								`${json && emitted ? "," : ""}${JSON.stringify({ ...record, authorUserId: row.speaker_user_id, speakerUserId: row.speaker_user_id, messages, message_count: messages.length })}${json ? "" : "\n"}`,
-							),
-						);
+						const encoded = await encodeTranscriptExport(row, parts, messagesOnly, c.req.raw.signal);
+						controller.enqueue(encoder.encode(`${json && emitted ? "," : ""}${encoded}${json ? "" : "\n"}`));
 						emitted++;
 					} catch {
 						controller.enqueue(

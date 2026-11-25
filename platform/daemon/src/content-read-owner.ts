@@ -14,6 +14,7 @@ import { exportSourceSnapshotInDb } from "./source-snapshots";
 import { expandTemporalNodeInDb } from "./temporal-expand";
 import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
 
+const schemaColumns = new WeakMap<ReadDb, { version: number; tables: Map<string, Set<string>> }>();
 function scopedContentDb(
 	db: ReadDb,
 	scope: import("./read-scope").ReadScope,
@@ -24,13 +25,25 @@ function scopedContentDb(
 		prepare(sql) {
 			const args: unknown[] = [];
 			if (sql.trimStart().toUpperCase().startsWith("PRAGMA ")) return db.prepare(sql);
+			const version = db.prepare("PRAGMA schema_version").get()?.schema_version;
+			if (typeof version !== "number") throw new Error("Invalid schema version");
+			let cached = schemaColumns.get(db);
+			if (!cached || cached.version !== version) {
+				cached = { version, tables: new Map() };
+				schemaColumns.set(db, cached);
+			}
 			const views = tables.map((table) => {
-				const columns = new Set(
-					db
-						.prepare(`PRAGMA table_info(${table})`)
-						.all<Record<string, unknown>>()
-						.flatMap((column) => (typeof column.name === "string" ? [column.name] : [])),
-				);
+				let columns = cached.tables.get(table);
+				if (!columns) {
+					columns = new Set(
+						db
+							.prepare(`PRAGMA table_info(${table})`)
+							.all<Record<string, unknown>>()
+							.flatMap((column) => (typeof column.name === "string" ? [column.name] : [])),
+					);
+					cached.tables.set(table, columns);
+				}
+
 				if (!columns.has("compartment_id")) {
 					if (!subject && scope.compartments !== "all") throw new Error("Import read requires a principal");
 					const access = readScopeSql(
@@ -135,8 +148,8 @@ export function executeContentRead(
 		if (request.references.length > 2000) throw new Error("Pointer admission limit exceeded");
 		return request.references.flatMap((ref) => {
 			if (ref.kind === "session") {
-				const { cte, args } = sessionReadOwners(request.scope);
 				const id = ref.id.replace(/^session:/, "");
+				const { cte, args } = sessionReadOwners(request.scope, [id, ref.id]);
 				return db
 					.prepare(`${cte} SELECT 1 FROM readable_sessions WHERE session_key IN (?,?) LIMIT 1`)
 					.get(...args, id, ref.id)
@@ -344,7 +357,11 @@ export function executeContentRead(
 		const definition = namedReadStatement(request);
 		if (!definition) throw new Error("Unknown content read operation");
 		const statement = scopedContentDb(db, request.scope, definition.tables, request.subject).prepare(definition.sql);
-		return definition.result === "all" ? statement.all(...request.parameters) : statement.get(...request.parameters);
+		const offset = request.filters?.cursor ? 0 : (request.filters?.offset ?? 0);
+		if (request.op === "sources.import.export" && (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000))
+			throw new Error("Invalid export offset");
+		const parameters = request.op === "sources.import.export" ? [...request.parameters, offset] : request.parameters;
+		return definition.result === "all" ? statement.all(...parameters) : statement.get(...parameters);
 	}
 	if (request.op === "source_eligibility") {
 		const scoped = scopedContentDb(db, request.scope, ["memory_artifacts", "session_transcripts"]);
@@ -597,6 +614,40 @@ export function executeContentRead(
 				Math.max(1, Math.min(request.limit, 500)),
 			);
 	}
+	if (request.op === "export_content") {
+		if (
+			!Number.isSafeInteger(request.offset) ||
+			request.offset < 0 ||
+			!Number.isSafeInteger(request.length) ||
+			request.length < 1 ||
+			request.length > 1024 * 1024
+		)
+			throw new Error("Invalid export byte range");
+		const memory = request.table === "memories",
+			transcript = request.table === "session_transcripts";
+		const access = readScopeSql("r", request.scope, {
+			visibility: memory ? "visibility" : null,
+			memory: memory ? "id" : null,
+			session: memory ? "source_id" : "session_key",
+			source: "source_id",
+		});
+		const author = transcript ? "speaker_user_id" : "author_user_id";
+		return (
+			db
+				.prepare(
+					`SELECT hex(substr(CAST(r.content AS BLOB),?,?)) AS content FROM ${request.table} r WHERE r.rowid=? AND r.${author}=? AND length(CAST(r.content AS BLOB))=? AND r.updated_at IS ?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${access.sql}`,
+				)
+				.get(
+					request.offset + 1,
+					request.length,
+					request.row,
+					request.author,
+					request.expectedBytes,
+					request.expectedUpdatedAt,
+					...access.args,
+				) ?? null
+		);
+	}
 	if (request.op !== "export") throw new Error("Unknown content read operation");
 	const transcript = request.table === "session_transcripts";
 	const memory = request.table === "memories";
@@ -608,12 +659,12 @@ export function executeContentRead(
 	});
 	const author = transcript ? "speaker_user_id" : "author_user_id";
 	const columns = memory
-		? "r.id,r.content,r.type,r.importance,r.tags,r.pinned,r.agent_id AS agentId,r.project,r.created_at AS createdAt,r.updated_at AS updatedAt"
+		? "r.id,r.type,r.importance,r.tags,r.pinned,r.agent_id AS agentId,r.project,r.created_at AS createdAt,r.updated_at AS updatedAt"
 		: transcript
-			? "r.session_key AS sessionKey,r.agent_id AS agentId,r.project,r.harness,r.content,r.created_at AS createdAt,r.updated_at AS updatedAt"
-			: "r.agent_id AS agentId,r.source_kind AS sourceKind,r.source_path AS sourcePath,r.content,r.captured_at AS capturedAt,r.updated_at AS updatedAt";
+			? "r.session_key AS sessionKey,r.agent_id AS agentId,r.project,r.harness,r.created_at AS createdAt,r.updated_at AS updatedAt"
+			: "r.agent_id AS agentId,r.source_kind AS sourceKind,r.source_path AS sourcePath,r.captured_at AS capturedAt,r.updated_at AS updatedAt";
 	const statement = db.prepare(
-		`SELECT ${columns},r.rowid AS exportCursor,r.${author} AS authorUserId FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+		`SELECT ${columns},r.content,r.rowid AS exportCursor,r.${author} AS authorUserId FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
 	);
 	const rows: Record<string, unknown>[] = [];
 	let cursor = request.cursor,
@@ -625,14 +676,21 @@ export function executeContentRead(
 				`SELECT length(CAST(r.content AS BLOB)) AS bytes FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
 			)
 			.get(request.author, cursor, ...predicate.args);
-		if (typeof meta?.bytes === "number" && meta.bytes > 16 * 1024 * 1024)
-			throw new RangeError("Export record exceeds the 16 MiB byte admission limit");
+		if (typeof meta?.bytes === "number" && meta.bytes > 4 * 1024 * 1024) {
+			if (rows.length) break;
+			const large = db
+				.prepare(
+					`SELECT ${columns},r.rowid AS exportCursor,r.${author} AS authorUserId,length(CAST(r.content AS BLOB)) AS exportContentBytes FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+				)
+				.get(request.author, cursor, ...predicate.args);
+			return large ? [large] : [];
+		}
+
 		const row = statement.get(request.author, cursor, ...predicate.args);
 		check();
 		if (!row) break;
 		const size = Buffer.byteLength(JSON.stringify(row));
 		check();
-		if (size > 16 * 1024 * 1024) throw new RangeError("Export record exceeds the 16 MiB byte admission limit");
 		if (rows.length && bytes + size > 4 * 1024 * 1024) break;
 		rows.push(row);
 		bytes += size;
@@ -782,13 +840,13 @@ function namedReadStatement(request: NamedContentReadRequest): {
 			};
 		case "sources.import.export":
 			return {
-				sql: `SELECT speaker_user_id,session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${exportWhere(request).join(" AND ")} ${request.filters?.cursor ? "AND (created_at,session_key,agent_id) > (?,?,?)" : ""} ORDER BY created_at,session_key,agent_id LIMIT 1`,
+				sql: `SELECT speaker_user_id,session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${exportWhere(request).join(" AND ")} ${request.filters?.cursor ? "AND (created_at,session_key,agent_id) > (?,?,?)" : ""} ORDER BY created_at,session_key,agent_id LIMIT 1 OFFSET ?`,
 				tables: ["session_transcripts"],
 				result: "get",
 			};
 		case "sources.import.export.content":
 			return {
-				sql: "SELECT hex(substr(CAST(content AS BLOB),?,65536)) AS content FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND created_at = ? AND length(CAST(content AS BLOB)) = ?",
+				sql: "SELECT hex(substr(CAST(content AS BLOB),?,1048576)) AS content FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND created_at = ? AND length(CAST(content AS BLOB)) = ?",
 				tables: ["session_transcripts"],
 				result: "get",
 			};
@@ -843,7 +901,10 @@ function namedReadStatement(request: NamedContentReadRequest): {
 	}
 }
 
-function sessionReadOwners(scope: ReadScope): { cte: string; args: readonly unknown[] } {
+function sessionReadOwners(scope: ReadScope, keys: readonly string[] = []): { cte: string; args: readonly unknown[] } {
+	const keyWhere = (alias = "") =>
+		keys.length ? ` WHERE ${alias}session_key IN (${keys.map(() => "?").join(",")})` : "";
+
 	const access = readScopeSql("t", scope, {
 		visibility: null,
 		memory: null,
@@ -854,9 +915,13 @@ function sessionReadOwners(scope: ReadScope): { cte: string; args: readonly unkn
 		scope.compartments === "all"
 			? ""
 			: ` AND (t.is_claim=0 OR NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=t.agent_id AND (ca.target_kind='agent' OR (ca.target_kind='session' AND ca.target_id=t.session_key)) AND NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=ca.classification_id AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN(SELECT group_id FROM group_members WHERE user_id=?))))))`;
-	const cte = `WITH known_owners AS (SELECT session_key,agent_id FROM session_transcripts UNION SELECT session_key,agent_id FROM session_claims UNION SELECT session_key,agent_id FROM session_summaries), owners AS (SELECT session_key,agent_id,compartment_id,project,source_id,0 AS is_claim FROM session_transcripts UNION ALL SELECT session_key,agent_id,NULL,NULL,NULL,1 FROM session_claims UNION ALL SELECT session_key,agent_id,compartment_id,project,NULL,0 FROM session_summaries UNION ALL SELECT c.session_key,COALESCE(c.agent_id,k.agent_id),c.compartment_id,c.project,NULL,0 FROM session_checkpoints c LEFT JOIN known_owners k ON c.agent_id IS NULL AND k.session_key=c.session_key),readable AS (SELECT t.session_key,t.agent_id,t.compartment_id,t.project,t.source_id,t.is_claim FROM owners t WHERE 1=1${access.sql}${blocked}),readable_sessions AS (SELECT DISTINCT t.session_key FROM readable t WHERE NOT EXISTS(SELECT 1 FROM owners o WHERE o.session_key=t.session_key AND NOT EXISTS(SELECT 1 FROM readable r WHERE r.session_key=o.session_key AND r.agent_id IS o.agent_id AND r.compartment_id IS o.compartment_id AND r.project IS o.project AND r.source_id IS o.source_id AND r.is_claim=o.is_claim)))`;
+	const cte = `WITH known_owners AS (SELECT session_key,agent_id FROM session_transcripts${keyWhere()} UNION SELECT session_key,agent_id FROM session_claims${keyWhere()} UNION SELECT session_key,agent_id FROM session_summaries${keyWhere()}), owners AS (SELECT session_key,agent_id,compartment_id,project,source_id,0 AS is_claim FROM session_transcripts${keyWhere()} UNION ALL SELECT session_key,agent_id,NULL,NULL,NULL,1 FROM session_claims${keyWhere()} UNION ALL SELECT session_key,agent_id,compartment_id,project,NULL,0 FROM session_summaries${keyWhere()} UNION ALL SELECT c.session_key,COALESCE(c.agent_id,k.agent_id),c.compartment_id,c.project,NULL,0 FROM session_checkpoints c LEFT JOIN known_owners k ON c.agent_id IS NULL AND k.session_key=c.session_key${keyWhere("c.")}),readable AS (SELECT t.session_key,t.agent_id,t.compartment_id,t.project,t.source_id,t.is_claim FROM owners t WHERE 1=1${access.sql}${blocked}),readable_sessions AS (SELECT DISTINCT t.session_key FROM readable t WHERE NOT EXISTS(SELECT 1 FROM owners o WHERE o.session_key=t.session_key AND NOT EXISTS(SELECT 1 FROM readable r WHERE r.session_key=o.session_key AND r.agent_id IS o.agent_id AND r.compartment_id IS o.compartment_id AND r.project IS o.project AND r.source_id IS o.source_id AND r.is_claim=o.is_claim)))`;
 	return {
 		cte,
-		args: [...access.args, ...(blocked ? [scope.inFlightUserId ?? null, scope.inFlightUserId ?? null] : [])],
+		args: [
+			...Array.from({ length: 7 }, () => keys).flat(),
+			...access.args,
+			...(blocked ? [scope.inFlightUserId ?? null, scope.inFlightUserId ?? null] : []),
+		],
 	};
 }

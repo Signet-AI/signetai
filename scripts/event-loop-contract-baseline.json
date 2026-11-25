@@ -3478,7 +3478,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1595,
+      "line": 1624,
       "api": "withReadDbAsync",
       "source": "const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3486,7 +3486,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1603,
+      "line": 1632,
       "api": "withReadDbAsync",
       "source": "const existingChunks = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3494,7 +3494,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1636,
+      "line": 1665,
       "api": "withReadDbAsync",
       "source": "const byHash = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3502,7 +3502,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1843,
+      "line": 1872,
       "api": "withReadDbAsync",
       "source": ": await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3510,7 +3510,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1980,
+      "line": 2009,
       "api": "withReadDbAsync",
       "source": "const existing = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3518,7 +3518,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3635,
+      "line": 3646,
       "api": "withReadDbAsync",
       "source": "const index = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3526,7 +3526,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3649,
+      "line": 3660,
       "api": "withReadDbAsync",
       "source": "const report = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",

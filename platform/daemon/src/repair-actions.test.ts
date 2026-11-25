@@ -3184,10 +3184,13 @@ describe("deduplicateMemories", () => {
 		expect(keeperHistory.some((h) => h.event === "merged")).toBe(true);
 
 		const loserHistory = db
-			.prepare("SELECT event, reason FROM memory_history WHERE memory_id = 'audit-loser'")
-			.all() as Array<{ event: string; reason: string }>;
+			.query<{ event: string; reason: string; metadata: string | null }, []>(
+				"SELECT event,reason,metadata FROM memory_history WHERE memory_id='audit-loser'",
+			)
+			.all();
 		expect(loserHistory.some((h) => h.event === "deleted")).toBe(true);
-		expect(loserHistory.some((h) => h.reason.includes("audit-keeper"))).toBe(true);
+		expect(loserHistory.every((h) => !h.reason.includes("audit-keeper"))).toBe(true);
+		expect(loserHistory.some((h) => h.metadata?.includes('"duplicateOf":"audit-keeper"'))).toBe(true);
 	});
 
 	it("respects dry-run mode", async () => {
