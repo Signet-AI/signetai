@@ -91,10 +91,9 @@ describe("PiConnector", () => {
 		const content = readFileSync(installedPath, "utf8");
 		expect(content).toContain("SIGNET_MANAGED_PI_EXTENSION");
 		expect(content).toContain("Managed by Signet (@signet/pi-extension)");
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "agent-from-env")');
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:4123")');
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_API_KEY", "sig_sk_test_connector")');
-		expect(content).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(tmpRoot)})`);
+		expect(content).not.toContain("agent-from-env");
+		expect(content).not.toContain("http://127.0.0.1:4123");
+		expect(content).not.toContain("sig_sk_test_connector");
 		expect(content.length).toBeGreaterThan(1_000);
 	});
 
@@ -114,7 +113,7 @@ describe("PiConnector", () => {
 		chmodSync(installedPath, 0o644);
 		process.env.SIGNET_API_KEY = "sig_sk_test_rotated";
 		const rotated = await connector.install(tmpRoot);
-		expect(rotated.filesWritten).toContain(installedPath);
+		expect(rotated.filesWritten).not.toContain(installedPath);
 		expect(mode()).toBe(0o600);
 	});
 
@@ -124,25 +123,25 @@ describe("PiConnector", () => {
 		const content = readFileSync(join(tmpRoot, "agent", "extensions", "signet-pi.js"), "utf8");
 		expect(content).not.toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_PATH"');
 		expect(content).not.toContain(tmpRoot);
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL"');
+		expect(content).not.toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL"');
 	});
 
-	it("falls back to default agent id when none is configured at install time", async () => {
+	it("does not inject a default agent into the runtime environment", async () => {
 		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		const connector = new PiConnector();
 		await connector.install(tmpRoot);
-		const content = readFileSync(join(tmpRoot, "agent", "extensions", "signet-pi.js"), "utf8");
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
+		await import(join(tmpRoot, "agent", "extensions", "signet-pi.js"));
+		expect(process.env.SIGNET_AGENT_ID).toBeUndefined();
 	});
 
-	it("treats blank runtime env values as missing when generating the managed bootstrap", async () => {
+	it("does not rewrite blank runtime environment values", async () => {
 		process.env.SIGNET_AGENT_ID = "   ";
-		process.env.SIGNET_DAEMON_URL = "\n\t";
+		process.env.SIGNET_DAEMON_URL = "\n	";
 		const connector = new PiConnector();
 		await connector.install(tmpRoot);
-		const content = readFileSync(join(tmpRoot, "agent", "extensions", "signet-pi.js"), "utf8");
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+		await import(join(tmpRoot, "agent", "extensions", "signet-pi.js"));
+		expect(process.env.SIGNET_AGENT_ID).toBe("   ");
+		expect(process.env.SIGNET_DAEMON_URL).toBe("\n	");
 	});
 
 	it("persists a custom Pi agent dir so later maintenance still finds the managed install", async () => {
@@ -240,10 +239,5 @@ describe("EXTENSION_BUNDLE integrity", () => {
 		expect(EXTENSION_BUNDLE).toContain("signet_source_search");
 		expect(EXTENSION_BUNDLE).toContain("signet_session_search");
 		expect(EXTENSION_BUNDLE).not.toContain("signet_memory_feedback");
-	});
-
-	it("uses 127.0.0.1 for the default daemon URL (not localhost)", () => {
-		expect(EXTENSION_BUNDLE).toContain("127.0.0.1");
-		expect(EXTENSION_BUNDLE).not.toContain("localhost");
 	});
 });
