@@ -1,6 +1,13 @@
 import { createRequire } from "node:module";
-import { attempt, deleteCompartmentVectors, syncEmbeddingCompartment, activeVectorProjectionTable } from "@signet/core";
-import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
+import {
+	attempt,
+	compartmentFor,
+	compartmentForWrite,
+	deleteCompartmentVectors,
+	syncEmbeddingCompartment,
+	activeVectorProjectionTable,
+} from "@signet/core";
+import { type ReadDb, type WriteDb, readVecEmbeddingDimensions, prepareTypedStatement } from "./db-accessor";
 let native: typeof import("@signet/native") | null = null;
 try {
 	const esmRequire = createRequire(import.meta.url);
@@ -97,6 +104,79 @@ export function syncVecDeleteBySourceExceptHash(
 			rows.map((row) => row.id),
 		);
 	} catch {}
+}
+export interface CitationEvidence {
+	readonly kind: "memory" | "transcript" | "artifact" | "summary" | "attribute";
+	readonly id: string;
+}
+export type CitationDerivedKind =
+	| "memory"
+	| "reflection"
+	| "contradiction"
+	| "head_entry"
+	| "head_revision"
+	| "entity"
+	| "dependency"
+	| "aspect"
+	| "telemetry";
+const EVIDENCE_ROWS = {
+	memory: { table: "memories", key: "id", session: "NULL", source: "source_id" },
+	transcript: { table: "session_transcripts", key: "session_key", session: "session_key", source: "source_id" },
+	artifact: { table: "memory_artifacts", key: "source_path", session: "session_key", source: "source_id" },
+	summary: { table: "session_summaries", key: "id", session: "session_key", source: "source_ref" },
+	attribute: { table: "entity_attributes", key: "id", session: "NULL", source: "source_id" },
+} as const;
+export function evidenceCompartmentInTx(
+	db: WriteDb,
+	agentId: string,
+	evidence: readonly CitationEvidence[],
+	parentCompartment?: number | null,
+): number | null {
+	let compartment = compartmentForWrite(db, { agentId, parentCompartment });
+	for (const ref of evidence) {
+		const source = EVIDENCE_ROWS[ref.kind];
+		const row = prepareTypedStatement<{
+			compartment_id: number | null;
+			session_key: string | null;
+			source_id: string | null;
+		}>(
+			db,
+			`SELECT compartment_id,${source.session} AS session_key,${source.source} AS source_id FROM ${source.table} WHERE ${source.key}=? AND agent_id=?`,
+		).get(ref.id, agentId);
+		if (!row) throw new Error("evidence_not_in_agent");
+		const inherited = compartmentForWrite(db, {
+			agentId,
+			sessionKey: typeof row.session_key === "string" ? row.session_key : null,
+			sourceId: typeof row.source_id === "string" ? row.source_id : null,
+			memoryId: ref.kind === "memory" ? ref.id : null,
+			parentCompartment: typeof row.compartment_id === "number" ? row.compartment_id : null,
+		});
+		if (inherited !== null) {
+			const labels = prepareTypedStatement<{ classification_id: string }>(
+				db,
+				"SELECT classification_id FROM compartment_members WHERE compartment_id IN (?,?)",
+			).all(compartment, inherited);
+			const ids = labels.flatMap((row) => (typeof row.classification_id === "string" ? [row.classification_id] : []));
+			compartment = compartmentFor(db, ids);
+		}
+	}
+	return compartment;
+}
+export function recordEvidenceCitationsInTx(
+	db: WriteDb,
+	input: {
+		readonly agentId: string;
+		readonly derivedKind: CitationDerivedKind;
+		readonly derivedId: string;
+		readonly evidence: readonly CitationEvidence[];
+	},
+): number | null {
+	const compartment = evidenceCompartmentInTx(db, input.agentId, input.evidence);
+	const insert = db.prepare(
+		"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES(?,?,?,?,?)",
+	);
+	for (const ref of input.evidence) insert.run(input.derivedKind, input.derivedId, input.agentId, ref.kind, ref.id);
+	return compartment;
 }
 export function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
 	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
