@@ -19,6 +19,24 @@ function compartment(c: number): number {
 	if (!Number.isSafeInteger(c) || c < 1) throw new Error("Invalid compartment");
 	return c;
 }
+export function selectShardTables(names: readonly string[], readable: readonly number[] | "all"): string[] {
+	const allowed = readable === "all" ? null : new Set(readable.map(compartment));
+	const bases = new Set<string>([...FTS_BASES, "vec_embeddings", "vec_embeddings_staging"]);
+	return [...new Set(names)]
+		.filter((name) => {
+			if (bases.has(name)) return true;
+			const match = /^(.*)__c([1-9][0-9]*)$/.exec(name);
+			if (!match || !bases.has(match[1] ?? "")) return false;
+			const value = Number(match[2]);
+			return Number.isSafeInteger(value) && (allowed === null || allowed.has(value));
+		})
+		.sort((left, right) => {
+			const l = left.split("__c"),
+				r = right.split("__c");
+			return (l[0] ?? "").localeCompare(r[0] ?? "") || Number(l[1] ?? 0) - Number(r[1] ?? 0);
+		});
+}
+
 function physicalShardTables(db: MigrationDb, base: string, readable: readonly number[] | "all"): string[] {
 	const allowed = readable === "all" ? null : new Set(readable.map(compartment));
 	return db

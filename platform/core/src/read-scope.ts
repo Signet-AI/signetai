@@ -9,6 +9,47 @@ export interface ReadScope {
 	readonly compartments: "all" | readonly number[];
 	readonly projects: readonly string[] | null;
 }
+const REACH_KINDS: ReadonlySet<string> = new Set(["all", "own", "shared", "group"]);
+function field(value: object, key: string): unknown {
+	return Object.getOwnPropertyDescriptor(value, key)?.value;
+}
+function validReach(value: unknown): value is AgentReach {
+	if (typeof value !== "object" || value === null) return false;
+	const kind = field(value, "kind");
+	if (typeof kind !== "string" || !REACH_KINDS.has(kind)) return false;
+	if (kind === "all") return true;
+	const agentId = field(value, "agentId");
+	if (typeof agentId !== "string" || agentId.length === 0) return false;
+	return kind !== "group" || typeof field(value, "group") === "string";
+}
+function validCompartments(value: unknown): value is ReadScope["compartments"] {
+	return (
+		value === "all" ||
+		(Array.isArray(value) &&
+			value.every((entry) => typeof entry === "number" && Number.isSafeInteger(entry) && entry > 0))
+	);
+}
+function validProjects(value: unknown): value is ReadScope["projects"] {
+	return value === null || (Array.isArray(value) && value.every((entry) => typeof entry === "string"));
+}
+export function isReadScope(value: unknown): value is ReadScope {
+	if (typeof value !== "object" || value === null) return false;
+	const inFlightUserId = field(value, "inFlightUserId");
+	return (
+		validReach(field(value, "reach")) &&
+		validCompartments(field(value, "compartments")) &&
+		validProjects(field(value, "projects")) &&
+		(inFlightUserId === undefined || typeof inFlightUserId === "string")
+	);
+}
+export function requireReadScope<T>(value: T): T & ReadScope {
+	if (!isReadScope(value)) throw new Error("read scope required");
+	return value;
+}
+export function localAllReadScope(reach: AgentReach): ReadScope {
+	if (!validReach(reach)) throw new Error("read scope required");
+	return { reach, compartments: "all", projects: null };
+}
 function identifier(value: string): string {
 	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) throw new Error("Invalid SQL identifier");
 	return value;
@@ -35,6 +76,7 @@ export function readScopeSql(
 		source?: string | null;
 	},
 ): { sql: string; args: unknown[] } {
+	requireReadScope(scope);
 	const prefix = alias ? `${identifier(alias)}.` : "";
 	const col = (name: string) => `${prefix}${identifier(name)}`;
 	const agent = col(cols?.agent ?? "agent_id");

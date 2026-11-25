@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
-import { ftsShardTables, vecShardTables } from "./compartment-shards";
+import { selectShardTables } from "./compartment-shards";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { redactCredentials } from "./credential-detection";
 import type { Memory } from "./types";
@@ -20,7 +20,7 @@ function safeParseTags(raw: string | null): string[] {
 }
 
 export interface SearchOptions {
-	readScope?: ReadScope;
+	readScope: ReadScope;
 	query: string;
 	limit?: number;
 	alpha?: number;
@@ -30,7 +30,8 @@ export interface SearchOptions {
 }
 
 export interface VectorSearchOptions {
-	readScope?: ReadScope;
+	readonly shardNames?: readonly string[];
+	readScope: ReadScope;
 	limit?: number;
 	type?: string;
 	excludeAggregateRecall?: boolean;
@@ -38,7 +39,7 @@ export interface VectorSearchOptions {
 }
 
 export interface HybridSearchOptions {
-	readScope?: ReadScope;
+	readScope: ReadScope;
 	limit?: number;
 	alpha?: number;
 	minScore?: number;
@@ -188,7 +189,7 @@ function boundedCosineFallback(
 	if (options.excludeAggregateRecall) {
 		predicates.push("COALESCE(m.source_type, '') != 'aggregate-recall'");
 	}
-	const scope = options.readScope ? readScopeSql("m", options.readScope) : { sql: "", args: [] };
+	const scope = readScopeSql("m", options.readScope);
 	params.push(...scope.args);
 	params.push(maxScanRows + 1);
 
@@ -221,80 +222,87 @@ function boundedCosineFallback(
 	};
 }
 
+function searchShardNames(db: SQLiteDatabase, scope: ReadScope): string[] {
+	if (scope.compartments !== "all" && scope.compartments.length === 0) return [];
+	return db
+		.prepare("SELECT name FROM sqlite_master WHERE type='table'")
+		.all()
+		.flatMap((row) => (typeof row.name === "string" ? [row.name] : []));
+}
+
+function selectedSearchTables(base: string, scope: ReadScope, names: readonly string[]): string[] {
+	if (scope.compartments !== "all" && scope.compartments.length === 0) return [base];
+	return selectShardTables(names, scope.compartments).filter((name) => name === base || name.startsWith(`${base}__c`));
+}
+
 export function vectorSearchWithMetadata(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
-	options?: VectorSearchOptions,
+	options: VectorSearchOptions,
 ): VectorSearchResponse {
-	const effectiveOptions = options ?? {};
-	const limit = effectiveOptions.limit ?? 20;
+	if (!options?.readScope) throw new Error("readScope is required for vector search");
+	const limit = options.limit ?? 20;
+	if (limit <= 0) return { results: [], completeness: "complete" };
 	const results: Array<{ id: string; score: number }> = [];
-
 	try {
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
-			const queryBlob = new Float32Array(queryVector);
-			const scope = effectiveOptions.readScope ? readScopeSql("m", effectiveOptions.readScope) : { sql: "", args: [] };
-			const catalog = {
-				prepare: db.prepare.bind(db),
-				exec: () => {
-					throw new Error("Read-only shard catalogue");
-				},
-			};
-			const shards = vecShardTables(
-				effectiveOptions.readScope?.compartments ?? "all",
-				catalog,
-				searchTables.projection,
-			);
+			const scope = readScopeSql("m", options.readScope);
+			const names = options.shardNames ?? searchShardNames(db, options.readScope);
+			const shards = selectedSearchTables(searchTables.projection, options.readScope, names);
+			if (shards.length === 0) throw new Error("Vector projection unavailable");
 			for (const table of shards) {
-				const params: unknown[] = [queryBlob, limit];
-				let filter = "";
-				if (effectiveOptions.type) {
-					filter += " AND m.type = ?";
-					params.push(effectiveOptions.type);
-				}
-				if (effectiveOptions.excludeAggregateRecall) filter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
-				params.push(...scope.args);
-				const rows = db
-					.prepare(`
-					SELECT e.source_id, v.distance
-					FROM ${table} v JOIN ${searchTables.embeddings} e ON v.id=e.id
-					WHERE v.embedding MATCH ? AND k=? AND v.id IN (
-						SELECT eligible.id FROM ${table} eligible JOIN ${searchTables.embeddings} e ON eligible.id=e.id JOIN memories m ON e.source_id=m.id
-						WHERE 1=1${filter}${scope.sql}
-					) ORDER BY v.distance
-				`)
-					.all(...params);
-				for (const row of rows) {
-					if (typeof row.source_id === "string" && typeof row.distance === "number")
-						results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
+				const size = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count;
+				if (typeof size !== "number") throw new Error("Vector shard size unavailable");
+				let requested = Math.min(size, limit * 4);
+				while (requested > 0) {
+					const params: unknown[] = [new Float32Array(queryVector), requested];
+					let filter = "";
+					if (options.type) {
+						filter += " AND m.type = ?";
+						params.push(options.type);
+					}
+					if (options.excludeAggregateRecall) filter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
+					params.push(...scope.args, limit);
+					const rows = db
+						.prepare(`WITH hits AS MATERIALIZED (
+						SELECT id,distance FROM ${table} WHERE embedding MATCH ? AND k=?
+					) SELECT e.source_id,hits.distance FROM hits
+					JOIN ${searchTables.embeddings} e ON e.id=hits.id
+					JOIN memories m ON m.id=e.source_id
+					WHERE 1=1${filter}${scope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
+						.all(...params);
+					if (rows.length >= limit || requested >= size) {
+						for (const row of rows)
+							if (typeof row.source_id === "string" && typeof row.distance === "number")
+								results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
+						break;
+					}
+					requested = Math.min(size, requested * 2);
 				}
 			}
-			if (shards.length === 0) throw new Error("Vector projection unavailable");
 			results.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 			results.splice(limit);
 		});
-	} catch (e) {
+	} catch (error) {
 		try {
-			let fallbackResponse: VectorSearchResponse | undefined;
+			let fallback: VectorSearchResponse | undefined;
 			withReadTransaction(db, () => {
-				const searchTables = activeVectorSearchTables(db);
-				fallbackResponse = boundedCosineFallback(db, queryVector, searchTables, effectiveOptions);
+				fallback = boundedCosineFallback(db, queryVector, activeVectorSearchTables(db), options);
 			});
-			return fallbackResponse ?? { results: [], completeness: "unavailable" };
+			return fallback ?? { results: [], completeness: "unavailable" };
 		} catch (fallbackError) {
-			console.warn("Vector search failed, including bounded cosine fallback:", fallbackError, e);
+			console.warn("Vector search failed, including bounded cosine fallback:", fallbackError, error);
 			return { results: [], completeness: "unavailable" };
 		}
 	}
-
 	return { results, completeness: "complete" };
 }
 
 export function vectorSearch(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
-	options?: VectorSearchOptions,
+	options: VectorSearchOptions,
 ): Array<{ id: string; score: number }> {
 	return vectorSearchWithMetadata(db, queryVector, options).results;
 }
@@ -302,19 +310,16 @@ export function keywordSearch(
 	db: SQLiteDatabase,
 	query: string,
 	limit = 20,
-	readScope?: ReadScope,
+	readScope: ReadScope,
+	shardNames?: readonly string[],
 ): Array<{ id: string; score: number }> {
 	const match = buildFtsMatchQuery(query);
 	if (match === null) return [];
-	const scope = readScope ? readScopeSql("m", readScope) : { sql: "", args: [] };
-	const catalog = {
-		prepare: db.prepare.bind(db),
-		exec: () => {
-			throw new Error("Read-only shard catalogue");
-		},
-	};
+	if (!readScope) throw new Error("readScope is required for keyword search");
+	const scope = readScopeSql("m", readScope);
+	const names = shardNames ?? searchShardNames(db, readScope);
 	const candidates: Array<{ id: string; raw: number }> = [];
-	for (const table of ftsShardTables("memories_fts", readScope?.compartments ?? "all", catalog)) {
+	for (const table of selectedSearchTables("memories_fts", readScope, names)) {
 		const rows = db
 			.prepare(`SELECT m.id,bm25(${table}) AS raw_score FROM ${table}
 			JOIN memories m ON ${table}.rowid=m.rowid WHERE ${table} MATCH ?${scope.sql}
@@ -333,16 +338,18 @@ export function hybridSearch(
 	db: SQLiteDatabase,
 	queryVector: Float32Array | null,
 	queryText: string,
-	options?: HybridSearchOptions,
+	options: HybridSearchOptions,
 ): SearchResult[] {
-	const alpha = options?.alpha ?? DEFAULT_HYBRID_ALPHA;
+	if (!options?.readScope) throw new Error("readScope is required for hybrid search");
+	const shardNames = searchShardNames(db, options.readScope);
+	const alpha = options.alpha ?? DEFAULT_HYBRID_ALPHA;
 	const limit = options?.limit ?? 10;
 	const topK = options?.topK ?? 50;
 	const minScore = options?.minScore ?? 0.1;
 	const vectorResults = queryVector
-		? vectorSearch(db, queryVector, { limit: topK, type: options?.type, readScope: options?.readScope })
+		? vectorSearch(db, queryVector, { limit: topK, type: options?.type, readScope: options.readScope, shardNames })
 		: [];
-	const keywordResults = keywordSearch(db, queryText, topK, options?.readScope);
+	const keywordResults = keywordSearch(db, queryText, topK, options.readScope, shardNames);
 	let scored: Array<{
 		id: string;
 		score: number;
@@ -417,7 +424,7 @@ export function hybridSearch(
 	for (let offset = 0; offset < candidateIds.length; offset += 400) {
 		const batch = candidateIds.slice(offset, offset + 400);
 		const placeholders = batch.map(() => "?").join(", ");
-		const scope = options?.readScope ? readScopeSql("", options.readScope) : { sql: "", args: [] };
+		const scope = readScopeSql("", options.readScope);
 		const params: unknown[] = [...batch];
 		const typeFilter = options?.type ? " AND type = ?" : "";
 		if (options?.type) params.push(options.type);
@@ -488,24 +495,5 @@ export async function search(db: SQLiteDatabase | DatabaseWrapper, options: Sear
 			return results;
 		}
 	}
-	if (options.readScope) return [];
-	try {
-		const wrapper = db as DatabaseWrapper;
-		const memories = typeof wrapper.getMemories === "function" ? wrapper.getMemories(options.type) : [];
-
-		return memories
-			.filter((m: Memory) => m.content.toLowerCase().includes(query.toLowerCase()))
-			.slice(0, limit)
-			.map((m: Memory) => ({
-				id: m.id,
-				content: redactCredentials(m.content),
-				score: 1.0,
-				type: m.type,
-				source: "keyword" as const,
-				tags: m.tags,
-				confidence: m.confidence,
-			}));
-	} catch {
-		return [];
-	}
+	return [];
 }
