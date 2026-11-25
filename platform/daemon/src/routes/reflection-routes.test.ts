@@ -149,6 +149,17 @@ describe("reflection routes", () => {
 		expect(await (await app("carol").request("/api/reflections")).json()).toMatchObject({
 			reflections: [{ id: "pointer-reflection", answerMemoryId: "private-answer" }],
 		});
+		await dbAccessor.withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('answer-copy','copied answer','default','now','now'); INSERT INTO evidence_citations VALUES('memory','answer-copy','default','memory','private-answer'); UPDATE daily_reflections SET answer_memory_id='answer-copy' WHERE id='pointer-reflection'",
+			),
+		);
+		expect(await (await app("alice").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: null }],
+		});
+		expect(await (await app("carol").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: "answer-copy" }],
+		});
 	});
 	it("reflection reads do not observe hidden inserts, edits, or reclassification", async () => {
 		const date = new Date().toISOString().slice(0, 10);

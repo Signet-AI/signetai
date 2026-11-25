@@ -187,6 +187,19 @@ describe("knowledge and ontology organization reads", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	test("typed proposal references cannot borrow another table's visibility", async () => {
+		seed(true);
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('hidden','visible unrelated memory','default',?,?)",
+			).run(NOW, NOW);
+			db.exec("UPDATE ontology_proposals SET payload=json_object('entityId','hidden') WHERE id='public-proposal'");
+		});
+		const path = "/api/ontology/proposals/public-proposal";
+		expect(JSON.stringify(await capture(await appFor(), [path]))).not.toContain('"entityId":"hidden"');
+		expect(JSON.stringify(await capture(await appFor("audience"), [path]))).toContain('"entityId":"hidden"');
+	});
+
 	test("public graph pointers hide unreadable targets and internal fields", async () => {
 		seed(true);
 		await getDbAccessor().withWriteTxAsync((db) =>

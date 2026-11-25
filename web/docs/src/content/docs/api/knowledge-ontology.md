@@ -1306,3 +1306,5 @@ Get all checkpoints for a specific session.
   "count": 3
 }
 ```
+
+For public `zoom_history` reads, `id` is a zero-based position among readable leaf passes, not a stored history index. Ranges contain at most 128 readable leaf passes. Internal Dreaming passes retain their compressed history-tree addressing. Hidden passes and physical rowid changes do not shift public positions.

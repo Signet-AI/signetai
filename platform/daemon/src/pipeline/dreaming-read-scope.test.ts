@@ -94,6 +94,27 @@ test("history zoom hides classified nodes and records while admitting their audi
 		record: { passId: "hidden" },
 	});
 });
+test("public history ordinals ignore hidden sequence gaps and inherit pass visibility", async () => {
+	await getDbAccessor().withWriteTxAsync((db) =>
+		db.exec(
+			"INSERT INTO dreaming_history_nodes(agent_id,scope_key,level,idx,pass_id,text) VALUES('agent-b','agent-b',0,100,'visible','public history'); UPDATE dreaming_history_nodes SET compartment_id=NULL WHERE pass_id='hidden'",
+		),
+	);
+	const input = { agentId: "agent-b", scopeKey: "agent-b", allowedScopes: ["agent-b"], id: 0, n: 1, readScope: scope };
+	const before = await zoomDreamingHistory(getDbAccessor(), input);
+	expect(before).toMatchObject({ ok: true, record: { passId: "visible" } });
+	await getDbAccessor().withWriteTxAsync((db) =>
+		db.exec(
+			"UPDATE dreaming_history_nodes SET idx=99 WHERE pass_id='hidden'; UPDATE dreaming_history_nodes SET rowid=rowid+1000",
+		),
+	);
+	expect(await zoomDreamingHistory(getDbAccessor(), input)).toEqual(before);
+	expect(await zoomDreamingHistory(getDbAccessor(), { ...input, readScope: audience })).toMatchObject({
+		ok: true,
+		record: { passId: "hidden" },
+	});
+});
+
 test("public evidence search excludes classified sources before its limit", async () => {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(

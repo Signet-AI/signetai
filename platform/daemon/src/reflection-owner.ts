@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ReadDb, WriteDb } from "./db-accessor";
 import { dbOwnerReflectionGet, dbOwnerReflectionList } from "./db-owner-runtime";
 import { readScopeSql, type ReadScope } from "./read-scope";
+import { citedEvidenceReadScopeSql } from "./diagnostics";
 import { txIngestEnvelope } from "./transactions";
 
 export interface ReflectionRow {
@@ -53,9 +54,10 @@ export function readReflection(scope: ReadScope, id: string): Promise<Reflection
 
 function reflectionProjection(scope: ReadScope): ReturnType<typeof readScopeSql> {
 	const answer = readScopeSql("answer_memory", scope);
+	const copied = citedEvidenceReadScopeSql("answer_memory", scope, "memory");
 	return {
-		sql: `r.id,r.agent_id,r.date,r.summary,r.patterns,r.question,r.answer,CASE WHEN EXISTS(SELECT 1 FROM memories answer_memory WHERE answer_memory.id=r.answer_memory_id${answer.sql}) THEN r.answer_memory_id ELSE NULL END AS answer_memory_id,r.memory_ids,r.summary_ids,r.model,r.created_at,r.answered_at`,
-		args: answer.args,
+		sql: `r.id,r.agent_id,r.date,r.summary,r.patterns,r.question,r.answer,CASE WHEN EXISTS(SELECT 1 FROM memories answer_memory WHERE answer_memory.id=r.answer_memory_id${answer.sql}${copied.sql}) THEN r.answer_memory_id ELSE NULL END AS answer_memory_id,r.memory_ids,r.summary_ids,r.model,r.created_at,r.answered_at`,
+		args: [...answer.args, ...copied.args],
 	};
 }
 
@@ -154,10 +156,12 @@ function reflectionPredicate(scope: ReadScope): ReturnType<typeof readScopeSql> 
 			session: evidence.session,
 			source: evidence.source,
 		});
+		const copied =
+			evidence.kind === "memory" ? citedEvidenceReadScopeSql("e", normalized, "memory") : { sql: "", args: [] };
 		checks.push(
-			`(citation.evidence_kind='${evidence.kind}' AND NOT EXISTS (SELECT 1 FROM ${evidence.table} e WHERE e.agent_id=r.agent_id AND e.${evidence.key}=citation.evidence_id ${readable.sql}))`,
+			`(citation.evidence_kind='${evidence.kind}' AND NOT EXISTS (SELECT 1 FROM ${evidence.table} e WHERE e.agent_id=r.agent_id AND e.${evidence.key}=citation.evidence_id ${readable.sql}${copied.sql}))`,
 		);
-		args.push(...readable.args);
+		args.push(...readable.args, ...copied.args);
 	}
 	return {
 		sql: `${predicate.sql} AND NOT EXISTS (SELECT 1 FROM evidence_citations citation WHERE citation.agent_id=r.agent_id AND citation.derived_kind='reflection' AND citation.derived_id=r.id AND (${checks.join(" OR ")}))`,

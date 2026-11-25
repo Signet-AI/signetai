@@ -47,7 +47,11 @@ export interface WriteCheckpointParams {
 	readonly surfacedConstraintCount?: number;
 	readonly traversalMemoryCount?: number;
 }
-export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
+export type CheckpointReadRow = Omit<CheckpointRow, "session_key"> & { readonly session_key: string | null };
+
+export function redactCheckpointRow(row: CheckpointRow): CheckpointRow;
+export function redactCheckpointRow(row: CheckpointReadRow): CheckpointReadRow;
+export function redactCheckpointRow(row: CheckpointReadRow): CheckpointReadRow {
 	return {
 		...row,
 		digest: redactCredentials(row.digest),
@@ -119,7 +123,7 @@ export async function writeCheckpointAsync(
 					.run(params.sessionKey, excess);
 			}
 		},
-		{ siteToken: "session-checkpoints.ts:69" },
+		{ siteToken: "session-checkpoints.ts:73" },
 	);
 
 	logger.info("checkpoints", "Checkpoint written", {
@@ -185,7 +189,7 @@ export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, m
 				)
 				.run(params.sessionKey, excess);
 		}
-	}, "session-checkpoints.ts:139");
+	}, "session-checkpoints.ts:143");
 
 	logger.info("checkpoints", "Checkpoint written", {
 		id,
@@ -255,7 +259,7 @@ export function getLatestCheckpoint(
 			)
 			.get(projectNormalized, cutoff) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:247");
+	}, "session-checkpoints.ts:251");
 }
 export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string): CheckpointRow | undefined {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -269,7 +273,7 @@ export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string)
 			)
 			.get(sessionKey) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:262");
+	}, "session-checkpoints.ts:266");
 }
 export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): ReadonlyArray<CheckpointRow> {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -281,7 +285,7 @@ export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): Rea
 				 ORDER BY created_at DESC, rowid DESC`,
 			)
 			.all(sessionKey) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:276");
+	}, "session-checkpoints.ts:280");
 }
 export async function getCheckpointsBySessionAsync(
 	db: DbAccessor,
@@ -296,7 +300,7 @@ export async function getCheckpointsBySessionAsync(
 					 ORDER BY created_at DESC, rowid DESC`,
 				)
 				.all(sessionKey) as unknown as CheckpointRow[],
-		{ siteToken: "session-checkpoints.ts:290", operation: "http.checkpoints-by-session" },
+		{ siteToken: "session-checkpoints.ts:294", operation: "http.checkpoints-by-session" },
 	);
 }
 export function getCheckpointsByProject(
@@ -314,7 +318,7 @@ export function getCheckpointsByProject(
 				 LIMIT ?`,
 			)
 			.all(projectNormalized, limit) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:308");
+	}, "session-checkpoints.ts:312");
 }
 export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -331,7 +335,7 @@ export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number 
 			});
 		}
 		return deleted;
-	}, "session-checkpoints.ts:323");
+	}, "session-checkpoints.ts:327");
 }
 export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -342,7 +346,7 @@ export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: numbe
 			if (deleted > 0) logger.info("checkpoints", "Pruned old checkpoints", { deleted, retentionDays });
 			return deleted;
 		},
-		{ siteToken: "session-checkpoints.ts:338", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
+		{ siteToken: "session-checkpoints.ts:342", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
 	);
 }
 

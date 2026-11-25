@@ -582,3 +582,5 @@ admission cap returns HTTP 503 with a JSON-RPC error and should be retried.
 **GET /mcp** — Open an SSE stream for server-initiated notifications.
 
 **DELETE /mcp** — Terminate MCP session (no-op in stateless mode).
+
+Organization-mode memory-search snapshots are omitted when a referenced result cannot be authorized, including incomplete legacy snapshots. Snapshot result metadata omits secondary source and session pointers and opaque source bookkeeping; use the authorized result ID to inspect its source. Snapshot inspection accepts arrays up to 128 results and 64 KiB. Checkpoint session links and graph references are checked independently of the checkpoint, focal names are read from authorized entities, and cached constraint and traversal counters are omitted. Database samples omit opaque JSON bookkeeping and unresolved foreign-key fields.

@@ -1,3 +1,4 @@
+import { citedEvidenceReadScopeSql } from "./diagnostics";
 import { z } from "zod";
 import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import type { DbOwnerParameter } from "./db-owner-protocol";
@@ -1004,7 +1005,7 @@ const KNOWLEDGE_READ_COLUMNS: Readonly<Record<string, readonly string[]>> = {
 		"compartment_id",
 	],
 };
-function knowledgeTargetSql(table: string, alias: string, scope: ReadScope): { sql: string; args: unknown[] } {
+export function knowledgeTargetSql(table: string, alias: string, scope: ReadScope): { sql: string; args: unknown[] } {
 	const columns = KNOWLEDGE_READ_COLUMNS[table] ?? [];
 	const own = readScopeSql(alias, knowledgeScopeForTable(scope, table), {
 		visibility: table === "memories" ? "visibility" : null,
@@ -1018,37 +1019,105 @@ function knowledgeTargetSql(table: string, alias: string, scope: ReadScope): { s
 			: table === "entity_aspects"
 				? { table: "entities", key: "entity_id" }
 				: null;
-	if (!parent) return own;
+	const kinds: Readonly<Record<string, string>> = {
+		entities: "entity",
+		entity_aspects: "aspect",
+		entity_attributes: "attribute",
+		entity_dependencies: "dependency",
+		epistemic_assertions: "assertion",
+		ontology_proposals: "proposal",
+		ontology_contradictions: "contradiction",
+		memories: "memory",
+	};
+	const kind = kinds[table];
+	const citation = kind ? citedEvidenceReadScopeSql(alias, scope, kind) : { sql: "", args: [] };
+	const checked = {
+		sql:
+			own.sql +
+			citation.sql.replace(
+				/\bFROM (memories|entity_attributes|session_transcripts|session_summaries|memory_artifacts)\b/g,
+				"FROM main.$1",
+			),
+		args: [...own.args, ...citation.args],
+	};
+	if (!parent) return checked;
 	const parentAlias = alias + "_parent";
 	const readable = knowledgeTargetSql(parent.table, parentAlias, scope);
 	return {
-		sql: `${own.sql} AND EXISTS(SELECT 1 FROM main.${parent.table} ${parentAlias} WHERE ${parentAlias}.id=${alias}.${parent.key}${readable.sql})`,
-		args: [...own.args, ...readable.args],
+		sql: `${checked.sql} AND EXISTS(SELECT 1 FROM main.${parent.table} ${parentAlias} WHERE ${parentAlias}.id=${alias}.${parent.key}${readable.sql})`,
+		args: [...checked.args, ...readable.args],
 	};
 }
 function knowledgeJsonProjection(column: string, scope: ReadScope): { sql: string; args: unknown[] } {
 	const targets = [
-		{ table: "memories", key: "id", prefix: "memory:" },
-		{ table: "entities", key: "id", prefix: "entity:" },
-		{ table: "entity_attributes", key: "id", prefix: "attribute:" },
-		{ table: "ontology_proposals", key: "id", prefix: "proposal:" },
-		{ table: "session_transcripts", key: "session_key", prefix: "transcript:" },
-		{ table: "session_summaries", key: "id", prefix: "summary:" },
-		{ table: "memory_artifacts", key: "source_path", prefix: "artifact:" },
+		{
+			table: "memories",
+			key: "id",
+			prefix: "memory:",
+			kind: "memory",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*memoryid*'",
+		},
+		{
+			table: "entities",
+			key: "id",
+			prefix: "entity:",
+			kind: "entity",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*entityid*'",
+		},
+		{
+			table: "entity_attributes",
+			key: "id",
+			prefix: "attribute:",
+			kind: "attribute",
+			typed:
+				"(LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*attributeid*' OR LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('supersededby','versionrootid'))",
+		},
+		{
+			table: "ontology_proposals",
+			key: "id",
+			prefix: "proposal:",
+			kind: "proposal",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*proposalid*'",
+		},
+		{
+			table: "session_transcripts",
+			key: "session_key",
+			prefix: "transcript:",
+			kind: "transcript",
+			typed:
+				"LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sessionkey','sessionkeys','sessionid','sessionids','sessiontoken')",
+		},
+		{
+			table: "session_summaries",
+			key: "id",
+			prefix: "summary:",
+			kind: "summary",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*summaryid*'",
+		},
+		{
+			table: "memory_artifacts",
+			key: "source_path",
+			prefix: "artifact:",
+			kind: "artifact",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sourcepath','artifactid','artifactids')",
+		},
 	];
 	const args: unknown[] = [];
 	const checks = targets.map((target) => {
 		const allowed = knowledgeTargetSql(target.table, "json_target", scope);
 		args.push(...allowed.args);
-		return `EXISTS(SELECT 1 FROM main.${target.table} json_target WHERE (json_target.${target.key}=field.value OR '${target.prefix}'||json_target.${target.key}=field.value)${allowed.sql})`;
+		const sourceKind = `COALESCE(json_extract(r.${column},field.parent_path||'.source_kind'),json_extract(r.${column},field.parent_path||'.sourceKind'),json_extract(r.${column},field.parent_path||'.kind'),json_extract(r.${column},field.parent_path||'.type'))`;
+		const eligible = `(${target.typed} OR field.value GLOB '${target.prefix}*' OR (LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sourceid','sourceref','reference','id') AND ${sourceKind}='${target.kind}'))`;
+		return `(${eligible} AND EXISTS(SELECT 1 FROM main.${target.table} json_target WHERE (json_target.${target.key}=field.value OR '${target.prefix}'||json_target.${target.key}=field.value)${allowed.sql}))`;
 	});
-	const fields = `SELECT ROW_NUMBER() OVER(ORDER BY node.fullkey) AS n,node.fullkey AS path,node.value FROM json_tree(CASE WHEN json_valid(r.${column}) THEN r.${column} ELSE 'null' END) node WHERE node.type IN ('text','integer') AND (node.key IN ('id','reference','sourceRef','source_ref','parent','child','sourcePath','source_path','sessionKey','session_key') OR node.key GLOB '*_id' OR node.key GLOB '*Id' OR node.value GLOB 'memory:*' OR node.value GLOB 'attribute:*' OR node.value GLOB 'entity:*' OR node.value GLOB 'proposal:*' OR node.value GLOB 'transcript:*' OR node.value GLOB 'summary:*' OR node.value GLOB 'artifact:*')`;
+	const nodes = `SELECT key,value,type,id,parent,fullkey,path FROM json_tree(CASE WHEN json_valid(r.${column}) THEN r.${column} ELSE 'null' END)`;
+	const fields =
+		"SELECT ROW_NUMBER() OVER(ORDER BY node.fullkey) AS n,node.fullkey AS path,node.value,CASE WHEN parent.type='array' THEN parent.key ELSE node.key END AS key,CASE WHEN parent.type='array' THEN parent.path ELSE node.path END AS parent_path FROM nodes node LEFT JOIN nodes parent ON parent.id=node.parent WHERE node.type IN ('text','integer') AND (node.key IN ('id','reference','sourceRef','source_ref','parent','child','sourcePath','source_path','sessionKey','session_key') OR node.key GLOB '*_id' OR node.key GLOB '*Id' OR parent.key GLOB '*_ids' OR parent.key GLOB '*Ids' OR node.value GLOB 'memory:*' OR node.value GLOB 'attribute:*' OR node.value GLOB 'entity:*' OR node.value GLOB 'proposal:*' OR node.value GLOB 'transcript:*' OR node.value GLOB 'summary:*' OR node.value GLOB 'artifact:*')";
 	return {
-		sql: `CASE WHEN NOT json_valid(r.${column}) THEN r.${column} WHEN length(CAST(r.${column} AS BLOB))>65536 THEN 'null' ELSE (WITH RECURSIVE fields AS (${fields}),safe(n,value) AS (SELECT 0,r.${column} WHERE (SELECT COUNT(*) FROM fields)<=128 UNION ALL SELECT safe.n+1,CASE WHEN ${checks.join(" OR ")} THEN safe.value ELSE json_set(safe.value,field.path,NULL) END FROM safe JOIN fields field ON field.n=safe.n+1) SELECT value FROM safe ORDER BY n DESC LIMIT 1) END AS ${column}`,
+		sql: `CASE WHEN NOT json_valid(r.${column}) THEN r.${column} WHEN length(CAST(r.${column} AS BLOB))>65536 THEN 'null' ELSE (WITH RECURSIVE nodes AS (${nodes}),fields AS (${fields}),safe(n,value) AS (SELECT 0,r.${column} WHERE (SELECT COUNT(*) FROM fields)<=128 UNION ALL SELECT safe.n+1,CASE WHEN ${checks.join(" OR ")} THEN safe.value ELSE json_set(safe.value,field.path,NULL) END FROM safe JOIN fields field ON field.n=safe.n+1) SELECT value FROM safe ORDER BY n DESC LIMIT 1) END AS ${column}`,
 		args,
 	};
 }
-
 function knowledgeReadableProjection(table: string, scope: ReadScope): { sql: string; args: unknown[] } {
 	const columns = KNOWLEDGE_READ_COLUMNS[table];
 	if (!columns) return { sql: "r.*", args: [] };

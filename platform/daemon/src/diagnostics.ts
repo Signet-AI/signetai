@@ -904,7 +904,8 @@ export function citedEvidenceReadScopeSql(
 	kind: string,
 	keys: readonly string[] = ["id"],
 ): { sql: string; args: unknown[] } {
-	if (!scope.inFlightUserId) return { sql: "", args: [] };
+	if (!scope.inFlightUserId && scope.reach.kind === "all" && scope.compartments === "all" && scope.projects === null)
+		return { sql: "", args: [] };
 	if (![alias, ...keys].every((value) => /^[a-z_][a-z0-9_]*$/i.test(value)) || keys.length === 0)
 		throw new Error("invalid_citation_identifier");
 	const key =
@@ -968,9 +969,63 @@ export function citedEvidenceReadScopeSql(
 	 UNION
 	 SELECT child.evidence_kind,child.evidence_id,child.agent_id FROM evidence_citations child INDEXED BY sqlite_autoindex_evidence_citations_1 JOIN cited_evidence parent ON child.derived_kind=parent.kind AND child.derived_id=parent.id AND child.agent_id=parent.agent_id
 	 )
-	 SELECT 1 FROM cited_evidence citation WHERE CASE ${sources.map((source) => `WHEN citation.kind='${source.kind}' THEN NOT EXISTS(SELECT 1 FROM ${source.table} ${source.alias} WHERE ${source.alias}.${source.key}=citation.id AND ${source.alias}.agent_id=citation.agent_id${source.scope.sql})`).join(" ")} ELSE 1 END
+	 SELECT 1 FROM cited_evidence citation WHERE CASE ${sources.map((source) => `WHEN citation.kind='${source.kind}' THEN NOT EXISTS(SELECT 1 FROM main.${source.table} ${source.alias} WHERE ${source.alias}.${source.key}=citation.id AND ${source.alias}.agent_id=citation.agent_id${source.scope.sql})`).join(" ")} ELSE 1 END
 	 )`,
 		args: [kind, ...sources.flatMap((source) => source.scope.args)],
+	};
+}
+
+async function telemetrySnapshotReadScopeSql(
+	alias: string,
+	scope: ReadScope,
+): Promise<{ sql: string; args: unknown[] }> {
+	const { knowledgeTargetSql } = await import("./knowledge-graph-hygiene");
+	const targets = [
+		{
+			table: "memories",
+			key: "id",
+			id: "json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.id')",
+			kinds: "'memory','vector','keyword','hybrid','traversal','ka_traversal','structured','temporal_window','graph'",
+			owner: false,
+		},
+		{
+			table: "entity_attributes",
+			key: "id",
+			id: "COALESCE(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.source_id'),substr(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.id'),16))",
+			kinds: "'ontology_claim'",
+			owner: false,
+		},
+		{
+			table: "session_transcripts",
+			key: "session_key",
+			id: "COALESCE(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.source_id'),json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.id'))",
+			kinds: "'transcript'",
+			owner: true,
+		},
+		{
+			table: "session_summaries",
+			key: "id",
+			id: "COALESCE(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.source_id'),json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.id'))",
+			kinds: "'summary'",
+			owner: false,
+		},
+		{
+			table: "memory_artifacts",
+			key: "source_path",
+			id: "COALESCE(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.source_path'),json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.source_id'))",
+			kinds: "'artifact','source_chunk'",
+			owner: true,
+		},
+	];
+	const args: unknown[] = [];
+	const checks = targets.map((target) => {
+		const allowed = knowledgeTargetSql(target.table, "snapshot_target", scope);
+		args.push(...allowed.args);
+		return `WHEN json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.source') IN (${target.kinds}) THEN NOT EXISTS(SELECT 1 FROM main.${target.table} snapshot_target WHERE snapshot_target.${target.key}=${target.id}${target.owner ? ` AND snapshot_target.agent_id=${alias}.agent_id` : ""}${allowed.sql})`;
+	});
+	return {
+		sql: ` AND length(CAST(${alias}.results_json AS BLOB))<=65536 AND json_valid(${alias}.results_json) AND json_type(CASE WHEN json_valid(${alias}.results_json) THEN ${alias}.results_json ELSE 'null' END)='array' AND json_array_length(CASE WHEN json_valid(${alias}.results_json) THEN ${alias}.results_json ELSE '[]' END)<=128 AND NOT EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(${alias}.results_json) THEN ${alias}.results_json ELSE '[]' END) item WHERE item.type<>'object' OR CASE ${checks.join(" ")} ELSE 1 END)`,
+		args,
 	};
 }
 
@@ -984,7 +1039,7 @@ export function telemetryLabelReadScopeSql(alias: string, scope: ReadScope): { s
 	};
 }
 
-function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo[], scope?: ReadScope) {
+async function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo[], scope?: ReadScope) {
 	if (!scope) return { sql: "", args: [] };
 	const names = new Set(columns.map((column) => column.name));
 	if (!names.has("agent_id") || !names.has("compartment_id")) return null;
@@ -1017,20 +1072,29 @@ function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo
 		table === "memory_search_telemetry" || table === "session_recall_events"
 			? telemetryLabelReadScopeSql("d", scope)
 			: { sql: "", args: [] };
-	return { sql: readable.sql + cited.sql + label.sql, args: [...readable.args, ...cited.args, ...label.args] };
+	const snapshot =
+		table === "memory_search_telemetry" ? await telemetrySnapshotReadScopeSql("d", scope) : { sql: "", args: [] };
+	return {
+		sql: readable.sql + cited.sql + label.sql + snapshot.sql,
+		args: [...readable.args, ...cited.args, ...label.args, ...snapshot.args],
+	};
 }
 
 async function diagnosticCount(
 	accessor: DiagnosticsAccessor | undefined,
 	table: string,
 	predicate: { sql: string; args: unknown[] } | null,
+	scope?: ReadScope,
 ): Promise<number | null> {
 	if (!predicate) return null;
-	const rows = await databaseDiagnosticRows(
-		accessor,
-		`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql}`,
-		predicate.args,
-	);
+	const rawStatement = {
+		sql: `SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql}`,
+		params: predicate.args,
+	};
+	const statement = scope
+		? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
+		: rawStatement;
+	const rows = await databaseDiagnosticRows(accessor, statement.sql, statement.params);
 	return typeof rows[0]?.count === "number" ? rows[0].count : null;
 }
 
@@ -1042,7 +1106,7 @@ export async function readDatabaseSchemaAsync(
 	const tables: DatabaseTableInfo[] = [];
 	for (const row of await diagnosticTables(accessor, scope)) {
 		const columns = await diagnosticColumns(accessor, row.name);
-		const predicate = diagnosticPredicate(row.name, columns, scope);
+		const predicate = await diagnosticPredicate(row.name, columns, scope);
 		const blocked = sampleBlockedReason(row) ?? (predicate ? undefined : "table has no content read scope");
 		const indexes: DatabaseIndexInfo[] = [];
 		for (const index of await databaseDiagnosticRows(accessor, `PRAGMA index_list(${quoteIdentifier(row.name)})`)) {
@@ -1078,7 +1142,7 @@ export async function readDatabaseSchemaAsync(
 			name: row.name,
 			group: groupForTable(row.name),
 			kind: row.type,
-			rowCount: scope && sampleBlockedReason(row) ? null : await diagnosticCount(accessor, row.name, predicate),
+			rowCount: scope && sampleBlockedReason(row) ? null : await diagnosticCount(accessor, row.name, predicate, scope),
 			sampleAllowed: !blocked,
 			...(blocked ? { sampleBlockedReason: blocked } : {}),
 			columns,
@@ -1103,14 +1167,26 @@ export async function readTableSampleAsync(
 	const match = (await diagnosticTables(accessor, scope)).find((row) => row.name === table);
 	if (!match) return { error: "unknown table", status: 404 };
 	const columns = await diagnosticColumns(accessor, table);
-	const predicate = diagnosticPredicate(table, columns, scope);
+	const predicate = await diagnosticPredicate(table, columns, scope);
 	const blocked = sampleBlockedReason(match) ?? (predicate ? undefined : "table has no content read scope");
 	if (blocked || !predicate) return { error: `sample unavailable: ${blocked}`, status: 400 };
 	const publicColumns = columns.filter(
 		(column) =>
 			isPublicReadField(column.name) &&
+			!column.name.endsWith("_json") &&
+			(column.name === "agent_id" || !/_(?:id|ids|key|path)$/.test(column.name)) &&
+			!["payload", "result", "proposal_evidence", "evidence", "evidence_meta"].includes(column.name) &&
 			!(column.name === "id" && /INT/i.test(column.type)) &&
-			!["idx", "sequence", "head_revision", "head_base_revision", "revision"].includes(column.name),
+			![
+				"idx",
+				"sequence",
+				"head_revision",
+				"head_base_revision",
+				"revision",
+				"focal_entity_names",
+				"surfaced_constraint_count",
+				"traversal_memory_count",
+			].includes(column.name),
 	);
 	if (publicColumns.length === 0) return { error: "sample unavailable: no public columns", status: 400 };
 	const identifier = /^[a-z_][a-z0-9_]*$/i.test(table) ? table : quoteIdentifier(table);
@@ -1128,7 +1204,7 @@ export async function readTableSampleAsync(
 		rows: rows.slice(0, limit).map(serializeRow),
 		limit,
 		offset,
-		rowCount: await diagnosticCount(accessor, table, predicate),
+		rowCount: await diagnosticCount(accessor, table, predicate, scope),
 		hasMore: rows.length > limit,
 	};
 }
@@ -1143,8 +1219,12 @@ export async function readScopedSearchTelemetry(
 	const readable = readScopeSql("t", scope, { visibility: null, memory: null, session: "session_key", source: null });
 	const copied = citedEvidenceReadScopeSql("t", scope, "telemetry");
 	const label = telemetryLabelReadScopeSql("t", scope);
-	let sql = `SELECT t.id,t.created_at,t.route,t.agent_id,t.session_key,t.project,t.query,t.keyword_query,t.filters_json,t.method,t.result_count,t.top_score,t.no_hits,t.duration_ms,t.timings_json,t.results_json,t.sources_json FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}${label.sql}`;
-	const args = [...readable.args, ...copied.args, ...label.args];
+	const snapshot = await telemetrySnapshotReadScopeSql("t", scope);
+	const { knowledgeTargetSql } = await import("./knowledge-graph-hygiene");
+	const session = knowledgeTargetSql("session_transcripts", "telemetry_session", scope);
+	const sessionSql = `CASE WHEN EXISTS(SELECT 1 FROM main.session_transcripts telemetry_session WHERE telemetry_session.session_key=t.session_key AND telemetry_session.agent_id=t.agent_id${session.sql}) THEN t.session_key ELSE NULL END`;
+	let sql = `SELECT t.id,t.created_at,t.route,t.agent_id,${sessionSql} AS session_key,t.project,t.query,t.keyword_query,t.filters_json,t.method,t.result_count,t.top_score,t.no_hits,t.duration_ms,t.timings_json,(SELECT json_group_array(json(json_remove(item.value,'$.source_id','$.session_id','$.source_path'))) FROM json_each(CASE WHEN json_valid(t.results_json) THEN t.results_json ELSE '[]' END) item) AS results_json,NULL AS sources_json FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}${label.sql}${snapshot.sql}`;
+	const args = [...session.args, ...readable.args, ...copied.args, ...label.args, ...snapshot.args];
 	for (const [column, value, operator] of [
 		["agent_id", query.agentId, "="],
 		["session_key", query.sessionKey, "="],
@@ -1154,7 +1234,8 @@ export async function readScopedSearchTelemetry(
 		["created_at", query.until, "<="],
 	] as const) {
 		if (value !== undefined) {
-			sql += ` AND t.${column} ${operator} ?`;
+			sql += column === "session_key" ? ` AND (${sessionSql}) ${operator} ?` : ` AND t.${column} ${operator} ?`;
+			if (column === "session_key") args.push(...session.args);
 			args.push(value);
 		}
 	}
@@ -1189,17 +1270,50 @@ export async function readScopedSearchTelemetry(
 		.parse(accessor.prepare(sql).all(...args));
 }
 
-export function scopedCheckpointStatement(
+export async function scopedCheckpointStatement(
 	scope: ReadScope,
 	query: { project?: string; sessionKey?: string; limit: number },
 ) {
+	const { knowledgeTargetSql } = await import("./knowledge-graph-hygiene");
 	const readable = readScopeSql("c", scope, { visibility: null, checkpoint: true, project: "project_normalized" });
-	const filter = query.project !== undefined ? " AND c.project_normalized=?" : " AND c.session_key=?";
+	const session = knowledgeTargetSql("session_transcripts", "checkpoint_session", scope);
+	const entity = knowledgeTargetSql("entities", "checkpoint_entity", scope);
+	const aspect = knowledgeTargetSql("entity_aspects", "checkpoint_aspect", scope);
+	const sessionSql = `CASE WHEN EXISTS(SELECT 1 FROM main.session_transcripts checkpoint_session WHERE checkpoint_session.session_key=c.session_key AND (c.agent_id IS NULL OR checkpoint_session.agent_id=c.agent_id)${session.sql}) THEN c.session_key ELSE NULL END`;
+	const arraySql = (column: string, table: string, alias: string, value: string, predicate: string) =>
+		`(SELECT json_group_array(${value}) FROM json_each(CASE WHEN json_valid(c.${column}) AND length(CAST(c.${column} AS BLOB))<=65536 THEN c.${column} ELSE '[]' END) reference JOIN main.${table} ${alias} ON ${alias}.id=reference.value WHERE reference.type='text'${predicate})`;
+	const projections = [
+		"c.id",
+		`${sessionSql} AS session_key`,
+		"c.harness",
+		"c.project",
+		"c.project_normalized",
+		"c.trigger",
+		"c.digest",
+		"c.prompt_count",
+		"c.memory_queries",
+		"c.recent_remembers",
+		`${arraySql("focal_entity_ids", "entities", "checkpoint_entity", "checkpoint_entity.id", entity.sql)} AS focal_entity_ids`,
+		`${arraySql("focal_entity_ids", "entities", "checkpoint_entity", "checkpoint_entity.name", entity.sql)} AS focal_entity_names`,
+		`${arraySql("active_aspect_ids", "entity_aspects", "checkpoint_aspect", "checkpoint_aspect.id", aspect.sql)} AS active_aspect_ids`,
+		"NULL AS surfaced_constraint_count",
+		"NULL AS traversal_memory_count",
+		"c.created_at",
+	];
+	const filter = query.project !== undefined ? "c.project_normalized=?" : "c.session_key=?";
 	return {
-		sql: `SELECT c.id,c.session_key,c.harness,c.project,c.project_normalized,c.trigger,c.digest,c.prompt_count,c.memory_queries,c.recent_remembers,c.focal_entity_ids,c.focal_entity_names,c.active_aspect_ids,c.surfaced_constraint_count,c.traversal_memory_count,c.created_at FROM session_checkpoints c WHERE 1=1${readable.sql}${filter} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
+		sql: `WITH public_checkpoints AS (SELECT ${projections.join(",")} FROM session_checkpoints c WHERE 1=1${readable.sql}) SELECT id,session_key,harness,project,project_normalized,trigger,digest,prompt_count,memory_queries,recent_remembers,focal_entity_ids,focal_entity_names,active_aspect_ids,surfaced_constraint_count,traversal_memory_count,created_at FROM public_checkpoints c WHERE ${filter} ORDER BY c.created_at DESC,c.id DESC LIMIT ?`,
 		params: z
 			.array(z.union([z.string(), z.number()]))
-			.parse([...readable.args, query.project ?? query.sessionKey, query.limit]),
+			.parse([
+				...session.args,
+				...entity.args,
+				...entity.args,
+				...aspect.args,
+				...readable.args,
+				query.project ?? query.sessionKey,
+				query.limit,
+			]),
 		result: "all",
 	} as const;
 }
@@ -1207,8 +1321,8 @@ export function scopedCheckpointStatement(
 export async function readScopedCheckpoints(
 	scope: ReadScope,
 	query: { project?: string; sessionKey?: string; limit: number },
-): Promise<readonly import("./session-checkpoints").CheckpointRow[]> {
-	return dbOwnerQuery(scopedCheckpointStatement(scope, query), {
+): Promise<readonly import("./session-checkpoints").CheckpointReadRow[]> {
+	return dbOwnerQuery(await scopedCheckpointStatement(scope, query), {
 		operation: "telemetry.checkpoints.read",
 		lane: "read",
 		deadlineMs: DB_OWNER_READ_DEADLINE_MS,

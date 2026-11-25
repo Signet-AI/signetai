@@ -111,6 +111,40 @@ test("embedding status and health expose only documented global counts to admini
 	await write("DELETE FROM memories WHERE id='hidden-diagnostic-only'");
 });
 
+test("diagnostic copies and checkpoint links cannot expose hidden targets", async () => {
+	await write(
+		"INSERT INTO session_transcripts(session_key,content,harness,agent_id,compartment_id,created_at,updated_at) VALUES('private-session','private session','test','default',1,'now','now')",
+	);
+	await write(
+		"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,compartment_id,created_at,updated_at) VALUES('private-pointer-entity','private entity','private entity','concept','default',1,'now','now')",
+	);
+	await write(
+		"INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('private-result','private result','default',1,'now','now')",
+	);
+	await write(
+		"INSERT INTO session_checkpoints(id,session_key,harness,project,project_normalized,trigger,digest,prompt_count,agent_id,compartment_id,focal_entity_ids,focal_entity_names,created_at) VALUES('pointer-checkpoint','private-session','test','pointer-project','pointer-project','manual','public checkpoint',1,'default',2,json_array('private-pointer-entity'),json_array('private entity'),'now')",
+	);
+	await write(
+		"INSERT INTO memory_search_telemetry(id,created_at,route,agent_id,query,filters_json,method,result_count,no_hits,duration_ms,timings_json,results_json,compartment_id) VALUES('pointer-search','now','test','default','public query','{}','hybrid',1,0,1,'{}',?,2)",
+		[JSON.stringify([{ id: "private-result", source: "memory", content: "private result", rank: 1 }])],
+	);
+	const outside = await body("/api/checkpoints?project=pointer-project");
+	expect(JSON.stringify(outside)).not.toContain("private-session");
+	expect(JSON.stringify(outside)).not.toContain("private-pointer-entity");
+	expect(await body("/api/checkpoints/private-session")).toMatchObject({ count: 0 });
+	expect(await body("/api/checkpoints/private-session", true)).toMatchObject({ count: 1 });
+	expect(await body("/api/telemetry/memory-search")).toMatchObject({ count: 0 });
+	expect(await body("/api/telemetry/memory-search", true)).toMatchObject({
+		count: 1,
+		items: [{ id: "pointer-search" }],
+	});
+	await write("DELETE FROM memory_search_telemetry WHERE id='pointer-search'");
+	await write("DELETE FROM session_checkpoints WHERE id='pointer-checkpoint'");
+	await write("DELETE FROM memories WHERE id='private-result'");
+	await write("DELETE FROM entities WHERE id='private-pointer-entity'");
+	await write("DELETE FROM session_transcripts WHERE session_key='private-session'");
+});
+
 test("unlabelled telemetry is absent unless the reader has all agent and compartment reach", async () => {
 	const paths = [
 		"/api/telemetry/memory-search?limit=1",
@@ -171,6 +205,9 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 		return res.headers.get("content-type")?.includes("ndjson") ? res.text() : res.json();
 	};
 	const before = await Promise.all(paths.map((path) => read(path)));
+	await write(
+		"INSERT INTO session_transcripts(session_key,content,harness,agent_id,compartment_id,created_at,updated_at) VALUES('thread','secret session','test','default',1,'9999','9999')",
+	);
 	await write(
 		"INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('hidden','secret','default',1,'9999','9999')",
 	);

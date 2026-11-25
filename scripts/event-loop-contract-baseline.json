@@ -4366,63 +4366,63 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 69,
+      "line": 73,
       "api": "withWriteTxAsync",
       "source": "await db.withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 139,
+      "line": 143,
       "api": "withWriteTx",
       "source": "db.withWriteTx((wdb: WriteDb) => {",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 247,
+      "line": 251,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 262,
+      "line": 266,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 276,
+      "line": 280,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 290,
+      "line": 294,
       "api": "withReadDbAsync",
       "source": "return await db.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 308,
+      "line": 312,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 323,
+      "line": 327,
       "api": "withWriteTx",
       "source": "return db.withWriteTx((wdb: WriteDb) => {",
       "category": "hot-path"
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 338,
+      "line": 342,
       "api": "withWriteTxAsync",
       "source": "return await db.withWriteTxAsync(",
       "category": "hot-path"

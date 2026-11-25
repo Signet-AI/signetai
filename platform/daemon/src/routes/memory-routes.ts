@@ -1,6 +1,4 @@
 import { dbOwnerEmbeddingDiagnosticsCounts } from "../db-owner-runtime";
-import { getDbOwner } from "../db-owner-runtime";
-import { resolveRouteReadScope } from "./read-scope";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -78,7 +76,6 @@ import {
 	getCachedProjection,
 	type ProjectionNode,
 } from "../umap-projection";
-import { PROJECTION_ERROR_TTL_MS, projectionErrors, projectionInFlight } from "./state";
 import {
 	AGENTS_DIR,
 	authBatchForgetLimiter,
@@ -87,6 +84,9 @@ import {
 	authModifyLimiter,
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
+	PROJECTION_ERROR_TTL_MS,
+	projectionErrors,
+	projectionInFlight,
 } from "./state";
 
 import {
