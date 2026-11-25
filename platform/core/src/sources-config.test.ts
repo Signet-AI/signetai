@@ -819,3 +819,52 @@ describe("sources-config", () => {
 		expect(removed.error).toContain("not found");
 	});
 });
+
+it("adopts an explicit identity when re-adding a legacy source", () => {
+	const agentsDir = tmp();
+	const root = join(agentsDir, "vault");
+	mkdirSync(root);
+	const first = addObsidianSource({ root }, agentsDir);
+	if (first.ok === false) throw new Error(first.error);
+	const writeIdentity = { agentId: "alice-agent", authorUserId: "alice", authorCredential: "session:alice" };
+	const adopted = addObsidianSource({ root, writeIdentity }, agentsDir);
+	if (adopted.ok === false) throw new Error(adopted.error);
+	expect(adopted.created).toBe(false);
+	expect(adopted.source.id).toBe(first.source.id);
+	expect(loadSourcesConfig(agentsDir).sources[0]?.writeIdentity).toEqual(writeIdentity);
+	const conflict = addObsidianSource({ root, writeIdentity: { ...writeIdentity, agentId: "bob-agent" } }, agentsDir);
+	expect(conflict.ok).toBe(false);
+	expect(loadSourcesConfig(agentsDir).sources[0]?.writeIdentity).toEqual(writeIdentity);
+});
+
+it.each(["skip", "replace", "replay"] as const)("adopts the admitted identity on legacy import %s", (mode) => {
+	const agentsDir = tmp();
+	const input = {
+		fileName: "legacy.md",
+		contentHash: "c".repeat(64),
+		format: "markdown",
+		agentId: "alice-agent",
+		...(mode === "replay" ? { importKey: "import-replay" } : {}),
+	};
+	const first = addImportedSource(input, agentsDir);
+	if (first.ok === false) throw new Error(first.error);
+	const writeIdentity = { agentId: "alice-agent", authorUserId: "alice", authorCredential: "session:alice" };
+	const adopted = addImportedSource(
+		{ ...input, writeIdentity, duplicateMode: mode === "replace" ? "replace" : "skip" },
+		agentsDir,
+	);
+	if (adopted.ok === false) throw new Error(adopted.error);
+	expect(adopted.source.id).toBe(first.source.id);
+	expect(loadSourcesConfig(agentsDir).sources[0]?.writeIdentity).toEqual(writeIdentity);
+});
+
+it("persists the admitted identity on a new imported source", () => {
+	const agentsDir = tmp();
+	const writeIdentity = { agentId: "alice-agent", authorUserId: "alice", authorCredential: "session:alice" };
+	const added = addImportedSource(
+		{ fileName: "note.md", contentHash: "a".repeat(64), format: "markdown", agentId: "alice-agent", writeIdentity },
+		agentsDir,
+	);
+	if (added.ok === false) throw new Error(added.error);
+	expect(loadSourcesConfig(agentsDir).sources[0]?.writeIdentity).toEqual(writeIdentity);
+});

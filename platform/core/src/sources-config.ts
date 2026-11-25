@@ -20,7 +20,7 @@ function sourceWriteIdentity(
 	input: SourceWriteIdentityInput,
 	existing: SignetSourceEntry | undefined,
 ): { readonly writeIdentity?: SourceWriteIdentity } {
-	if (input.writeIdentity && existing && existing.writeIdentity?.agentId !== input.writeIdentity.agentId)
+	if (input.writeIdentity && existing?.writeIdentity && existing.writeIdentity.agentId !== input.writeIdentity.agentId)
 		throw new Error("source_agent_conflict");
 	const identity = existing?.writeIdentity ?? input.writeIdentity;
 	if (identity && (!identity.agentId || !identity.authorCredential)) throw new Error("source_identity_required");
@@ -159,7 +159,7 @@ export interface AddNotionSourceInput extends SourceWriteIdentityInput {
 
 export type ImportedSourceDuplicateMode = "skip" | "replace" | "reimport";
 
-export interface AddImportedSourceInput {
+export interface AddImportedSourceInput extends SourceWriteIdentityInput {
 	readonly importKey?: string;
 	readonly fileName: string;
 	readonly contentHash: string;
@@ -325,6 +325,16 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		const now = input.now ?? new Date().toISOString();
 		const config = loadSourcesConfigForWrite(agentsDir);
 		const mode = input.duplicateMode ?? "skip";
+		const adopt = (existing: SignetSourceEntry): SignetSourceEntry => {
+			const identity = sourceWriteIdentity(input, existing);
+			if (existing.writeIdentity || !identity.writeIdentity) return existing;
+			const adopted = { ...existing, ...identity, updatedAt: now };
+			saveSourcesConfig(
+				{ ...config, sources: config.sources.map((entry) => (entry.id === existing.id ? adopted : entry)) },
+				agentsDir,
+			);
+			return adopted;
+		};
 		const replay =
 			input.importKey === undefined
 				? undefined
@@ -337,7 +347,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		if (replay) {
 			if (replay.providerSettings?.contentHash !== contentHash)
 				return { ok: false, error: "Import identity content mismatch" };
-			return { ok: true, source: replay, created: false, duplicate: true };
+			return { ok: true, source: adopt(replay), created: false, duplicate: true };
 		}
 		const duplicate = config.sources.find(
 			(source) =>
@@ -346,7 +356,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				(agentId === undefined || source.providerSettings?.agentId === agentId),
 		);
 		if (duplicate && mode === "skip") {
-			return { ok: true, source: duplicate, created: false, duplicate: true };
+			return { ok: true, source: adopt(duplicate), created: false, duplicate: true };
 		}
 
 		const sourceId =
@@ -357,6 +367,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 						? `import:${contentHash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
 						: deterministicImportedSourceId(contentHash, agentId));
 		const source: SignetSourceEntry = {
+			...sourceWriteIdentity(input, duplicate && mode === "replace" ? duplicate : undefined),
 			id: sourceId,
 			generation: newSourceGeneration(),
 			kind: "import",

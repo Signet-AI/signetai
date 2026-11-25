@@ -88,14 +88,22 @@ import { getActiveTelemetry } from "../telemetry";
 import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
 import { authConfig } from "./state.js";
 import { resolveScopedAgentId } from "./utils";
-import { LOCAL_AUTHOR } from "../auth/audit-owner";
+import { currentWritePrincipal, withWritePrincipal } from "@signet/core";
+import { admitWriteDestination } from "../auth/write-destination";
+
+function resolveSourceAgentId(c: Context) {
+	if (c.get("organization") && !c.get("principal")) return { agentId: "", error: "principal_required" };
+	return resolveScopedAgentId(c, undefined, resolveDaemonAgentId());
+}
 
 function resolveSourceWriteIdentity(c: import("hono").Context) {
-	const resolved = resolveScopedAgentId(c, undefined, resolveDaemonAgentId());
+	const resolved = resolveSourceAgentId(c);
 	if (resolved.error) return { ok: false as const, error: resolved.error };
-	const author = c.get("author") ?? LOCAL_AUTHOR;
+	const author = c.get("author");
+	if (!author) return { ok: false as const, error: "author_required" };
 	return {
 		ok: true as const,
+		author,
 		identity: { agentId: resolved.agentId, authorUserId: author.userId, authorCredential: author.credential },
 	};
 }
@@ -237,7 +245,9 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	);
 	app.get("/api/sources", async (c) => {
 		const config = loadSourcesConfig(agentsDir);
-		const agentId = resolveDaemonAgentId();
+		const resolved = resolveSourceAgentId(c);
+		if (resolved.error) return c.json({ error: resolved.error }, 403);
+		const agentId = resolved.agentId;
 		const tombstonedSourceGenerations = loadTombstonedSourceGenerations(agentsDir, agentId);
 		const sources = await Promise.all(
 			config.sources
@@ -249,7 +259,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				.map(async (source) => {
 					const stats = await sourceStats(source, agentId);
 					return {
-						...source,
+						...publicSource(source),
 						stats,
 						health: await sourceHealth(source, agentId, stats),
 						indexJob: getSourceIndexJob(source.id),
@@ -310,7 +320,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const excludeGlobs = Array.isArray(body.excludeGlobs)
 			? body.excludeGlobs.filter((entry) => typeof entry === "string")
 			: undefined;
-		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForObsidian(root));
+		const releaseSourceMutation = await beginSourceMutationLease(c, agentsDir, sourceIdForObsidian(root));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
 			const writeScope = resolveSourceWriteIdentity(c);
@@ -333,7 +343,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordIndexOperation,
 			});
 
-			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+			return c.json(
+				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				202,
+			);
 		} finally {
 			releaseSourceMutation();
 		}
@@ -371,7 +384,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			: Array.isArray(body.channels)
 				? body.channels.filter((entry): entry is string => typeof entry === "string")
 				: undefined;
-		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForDiscord(body, guildIds));
+		const releaseSourceMutation = await beginSourceMutationLease(c, agentsDir, sourceIdForDiscord(body, guildIds));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
 			const writeScope = resolveSourceWriteIdentity(c);
@@ -415,7 +428,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordIndexOperation,
 			});
 
-			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+			return c.json(
+				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				202,
+			);
 		} finally {
 			releaseSourceMutation();
 		}
@@ -423,13 +439,15 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 	app.get("/api/sources/:sourceId/snapshot", (c) => {
 		const sourceId = c.req.param("sourceId");
-		const source = findConfiguredSource(sourceId, agentsDir, resolveDaemonAgentId());
+		const resolved = resolveSourceAgentId(c);
+		if (resolved.error) return c.json({ error: resolved.error }, 403);
+		const source = findConfiguredSource(sourceId, agentsDir, resolved.agentId);
 		if (!source) return c.json({ error: "Source not found" }, 404);
 		const includeLocalDiscord = c.req.query("includeLocalDiscord") === "true";
 		return c.json(
 			exportSourceSnapshot({
 				source,
-				agentId: resolveDaemonAgentId(),
+				agentId: resolved.agentId,
 				includeLocalDiscord,
 			}),
 		);
@@ -437,11 +455,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 	app.get("/api/sources/:sourceId/health", async (c) => {
 		const sourceId = c.req.param("sourceId");
-		const source = findConfiguredSource(sourceId, agentsDir, resolveDaemonAgentId());
+		const resolved = resolveSourceAgentId(c);
+		if (resolved.error) return c.json({ error: resolved.error }, 403);
+		const source = findConfiguredSource(sourceId, agentsDir, resolved.agentId);
 		if (!source) return c.json({ error: "Source not found" }, 404);
-		const agentId = resolveDaemonAgentId();
+		const agentId = resolved.agentId;
 		const stats = await sourceStats(source, agentId);
-		return c.json({ source, stats, health: await sourceHealth(source, agentId, stats) });
+		return c.json({ source: publicSource(source), stats, health: await sourceHealth(source, agentId, stats) });
 	});
 
 	app.post("/api/sources/:sourceId/snapshot/import", async (c) => {
@@ -452,6 +472,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const source = findConfiguredSource(sourceId, agentsDir, writeScope.identity.agentId);
 		if (!source || (source.writeIdentity && source.writeIdentity.agentId !== writeScope.identity.agentId))
 			return c.json({ error: "Source not found" }, 404);
+		if (legacySourceMutationDenied(c, source)) return c.json({ error: "permission", required: "admin" }, 403);
 		if (isSourceImportBlocked(source.id)) {
 			return c.json({ error: "Source snapshot import cannot run while source indexing is queued or running" }, 409);
 		}
@@ -478,7 +499,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				return c.json({ error: "Invalid JSON body" }, 400);
 			}
 			const result = await importSnapshot({
-				author: c.get("author") ?? LOCAL_AUTHOR,
+				author: writeScope.author,
 				source,
 				agentId: writeScope.identity.agentId,
 				snapshot: body,
@@ -532,7 +553,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			: typeof body.repo === "string"
 				? [body.repo]
 				: [];
-		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForGitHub(repos));
+		const releaseSourceMutation = await beginSourceMutationLease(c, agentsDir, sourceIdForGitHub(repos));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
 			const writeScope = resolveSourceWriteIdentity(c);
@@ -570,7 +591,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordIndexOperation,
 			});
 
-			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+			return c.json(
+				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				202,
+			);
 		} finally {
 			releaseSourceMutation();
 		}
@@ -589,7 +613,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordSourceConnectionFailure("notion", "invalid configuration");
 			return c.json({ error: body.error }, 400);
 		}
-		const releaseSourceMutation = beginSourceMutationLease(c, notionSourceId(body.tokenRef));
+		const releaseSourceMutation = await beginSourceMutationLease(c, agentsDir, notionSourceId(body.tokenRef));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
 			const writeScope = resolveSourceWriteIdentity(c);
@@ -607,7 +631,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				purgeNativeSource,
 				recordIndexOperation,
 			});
-			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+			return c.json(
+				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				202,
+			);
 		} finally {
 			releaseSourceMutation();
 		}
@@ -622,7 +649,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordSourceConnectionFailure("web", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
-		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForWeb(body.url));
+		const releaseSourceMutation = await beginSourceMutationLease(c, agentsDir, sourceIdForWeb(body.url));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
 			const writeScope = resolveSourceWriteIdentity(c);
@@ -647,7 +674,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				purgeNativeSource,
 				recordIndexOperation,
 			});
-			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+			return c.json(
+				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				202,
+			);
 		} finally {
 			releaseSourceMutation();
 		}
@@ -660,6 +690,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const source = findConfiguredSource(sourceId, agentsDir, writeScope.identity.agentId, { includeTombstoned: true });
 		if (source === undefined || (source.writeIdentity && source.writeIdentity.agentId !== writeScope.identity.agentId))
 			return c.json({ error: "Source not found" }, 404);
+		if (legacySourceMutationDenied(c, source)) return c.json({ error: "permission", required: "admin" }, 403);
 		const sourceAgentId = writeScope.identity.agentId;
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
 			return c.json({ error: "Source not found" }, 404);
@@ -697,14 +728,14 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 					logger.warn("system", `Source deletion completed for ${source.id}; cleanup marker remains for retry`, {
 						error: error instanceof Error ? error.message : String(error),
 					});
-					return c.json({ source: result.source ?? source, purged, cleanupPending: true });
+					return c.json({ source: publicSource(result.source ?? source), purged, cleanupPending: true });
 				}
 			}
 			if (cleanupPending) {
 				deferRelease = true;
-				return c.json({ source: result.source ?? source, purged, cleanupPending: true });
+				return c.json({ source: publicSource(result.source ?? source), purged, cleanupPending: true });
 			}
-			return c.json({ source: result.source ?? source, purged });
+			return c.json({ source: publicSource(result.source ?? source), purged });
 		} finally {
 			if (deferRelease) releaseSourceDeletionAfterIndexRuns(source.id, releaseSourceDeletion);
 			else releaseSourceDeletion();
@@ -716,11 +747,66 @@ function sourceDeletionPending(c: Context, source: SignetSourceEntry, purged: nu
 	logger.warn("system", `Source deletion deferred for ${source.id}; retry remains available`, {
 		error: error instanceof Error ? error.message : String(error),
 	});
-	return c.json({ source, purged, pending: true }, 202);
+	return c.json({ source: publicSource(source), purged, pending: true }, 202);
 }
 
-function beginSourceMutationLease(c: Context, sourceId: string | undefined): (() => void) | Response {
+function legacySourceMutationDenied(c: Context, source: SignetSourceEntry): boolean {
+	return Boolean(c.get("organization")) && !source.writeIdentity && c.get("principal")?.role !== "admin";
+}
+
+function publicSource(source: SignetSourceEntry) {
+	return {
+		id: source.id,
+		kind: source.kind,
+		name: source.name,
+		root: source.root,
+		enabled: source.enabled,
+		mode: source.mode,
+		createdAt: source.createdAt,
+		updatedAt: source.updatedAt,
+		lastIndexedAt: source.lastIndexedAt,
+		excludeGlobs: source.excludeGlobs,
+		providerSettings: publicSourceSettings(source.providerSettings),
+	};
+}
+
+function publicSourceSettings(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(publicSourceSettings);
+	if (typeof value !== "object" || value === null) return value;
+	const internal = new Set([
+		"writeidentity",
+		"authorcredential",
+		"authoruserid",
+		"agentid",
+		"generation",
+		"contenthash",
+		"importkey",
+		"compartmentid",
+		"normalizedcontent",
+		"vectorclock",
+		"idempotencykey",
+		"rowid",
+	]);
+	return Object.fromEntries(
+		Object.entries(value)
+			.filter(([key]) => !internal.has(key.replaceAll("_", "").toLowerCase()))
+			.map(([key, entry]) => [key, publicSourceSettings(entry)]),
+	);
+}
+
+async function beginSourceMutationLease(
+	c: Context,
+	agentsDir: string,
+	sourceId: string | undefined,
+): Promise<(() => void) | Response> {
 	if (sourceId === undefined) return () => {};
+	const source = loadSourcesConfig(agentsDir).sources.find((entry) => entry.id === sourceId);
+	if (source && legacySourceMutationDenied(c, source)) return c.json({ error: "permission", required: "admin" }, 403);
+	if (currentWritePrincipal()) {
+		const writeScope = resolveSourceWriteIdentity(c);
+		if (writeScope.ok === false) return c.json({ error: writeScope.error }, 401);
+		await admitWriteDestination(writeScope.identity.agentId, { sourceId }, c.req.path, undefined);
+	}
 	const release = beginSourceMutation(sourceId);
 	if (release === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
 	return release;
@@ -859,7 +945,9 @@ function sourceGenerationKey(source: SignetSourceEntry): string | undefined {
 }
 
 function isSourceVisibleToAgent(source: SignetSourceEntry, agentId: string): boolean {
-	return source.kind !== "import" || source.providerSettings?.agentId === agentId;
+	return source.writeIdentity
+		? source.writeIdentity.agentId === agentId
+		: source.kind !== "import" || source.providerSettings?.agentId === agentId;
 }
 
 function isSourceImportBlocked(sourceId: string): boolean {
@@ -900,6 +988,10 @@ async function recordSourceIndexTelemetryBestEffort(
 }
 
 async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
+	return withWritePrincipal(undefined, () => executeSourceIndexJob(input, job));
+}
+
+async function executeSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
 	const startedAt = Date.now();
 	const agentId = input.source.writeIdentity?.agentId ?? resolveDaemonAgentId();
 	if (isSourceIndexInFlight(input.source.id)) {
