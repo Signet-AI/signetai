@@ -1,6 +1,7 @@
 import { buildBlackBoxSessionInDb, listBlackBoxSessionsInDb } from "./black-box";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { buildForgetCandidatesWhere } from "./memory-forget-read";
+import { classificationIdsForWrite } from "@signet/core";
 import { createHash } from "node:crypto";
 import { ftsShardTables, vecShardTables, activeVectorProjectionTable } from "@signet/core";
 import type { MigrationDb } from "@signet/core";
@@ -144,6 +145,12 @@ function scopedContentDb(
 }
 
 export function executeContentRead(db: MigrationDb & ReadDb, request: ContentReadRequest): unknown {
+	if (request.op === "dedupe_compartment") {
+		const key = classificationIdsForWrite(db, request.writeScope).join(",");
+		if (!key) return { exists: true, id: null, key };
+		const row = db.prepare("SELECT id FROM compartments WHERE key=?").get(key);
+		return { exists: Boolean(row), id: typeof row?.id === "number" ? row.id : null, key };
+	}
 	if (request.op === "forget_candidates") {
 		const req = request.request;
 		const limit = Math.max(1, Math.min(req.limit, 200));

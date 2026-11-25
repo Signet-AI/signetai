@@ -726,6 +726,7 @@ export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat"
 export {
 	compartmentFor,
 	compartmentForWrite,
+	classificationIdsForWrite,
 	type CompartmentWriteScope,
 	ensureCompartmentShards,
 	ftsShardTables,

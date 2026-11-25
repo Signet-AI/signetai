@@ -5,6 +5,7 @@ import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
 export type ContentReadRequest =
+	| { readonly op: "dedupe_compartment"; readonly writeScope: import("@signet/core").CompartmentWriteScope }
 	| {
 			readonly op: "forget_candidates";
 			readonly legacy: boolean;

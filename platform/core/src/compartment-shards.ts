@@ -143,7 +143,7 @@ export interface CompartmentWriteScope {
 	readonly memoryId?: string | null;
 	readonly parentCompartment?: number | null;
 }
-export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+export function classificationIdsForWrite(db: MigrationDb, input: CompartmentWriteScope): readonly string[] {
 	if (!input.agentId) throw new Error("agent_required");
 	const labels = new Set<string>();
 	const add = (rows: readonly Record<string, unknown>[]) => {
@@ -197,7 +197,11 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				assignments(parent.session_key, parent.source_id, null);
 			}
 		}
-	return compartmentFor(db, [...labels]);
+	return [...labels].sort();
+}
+
+export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+	return compartmentFor(db, classificationIdsForWrite(db, input));
 }
 
 interface ShardSchema {

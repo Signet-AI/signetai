@@ -243,6 +243,8 @@ interface RememberRowProvenance {
 }
 
 interface RememberDedupeScope {
+	readonly read: MemoryReadScope;
+	readonly compartment: { readonly exists: boolean; readonly id: number | null; readonly key: string };
 	readonly agentId: string;
 	readonly visibility: "global" | "private" | "archived";
 	readonly project: string | null;
@@ -312,6 +314,7 @@ function chunkGroupIdForIdempotencyKey(baseKey: string | undefined, input: Remem
 		.update(input.scope ?? "__NULL__")
 		.update("\0")
 		.update(baseKey)
+		.update(input.compartment.key ? `compartment:${input.compartment.key}` : "")
 		.digest("hex")
 		.slice(0, 32);
 	return `chunk-group:${hash}`;
@@ -330,7 +333,7 @@ function chunkIdempotencyIndex(baseKey: string, key: string): number | null {
 
 function scopedMemoryPredicate(input: RememberDedupeScope): {
 	readonly sql: string;
-	readonly params: readonly string[];
+	readonly params: readonly DbOwnerParameter[];
 } {
 	return {
 		sql: `
@@ -338,14 +341,23 @@ function scopedMemoryPredicate(input: RememberDedupeScope): {
 			AND COALESCE(project, '') = ?
 			AND COALESCE(visibility, 'global') = ?
 			AND COALESCE(scope, '__NULL__') = ?
+ AND compartment_id IS ? AND ?${input.read.sql.replaceAll("m.", "memories.")}
 		`,
-		params: [input.agentId || "default", input.project ?? "", input.visibility, input.scope ?? "__NULL__"],
+		params: [
+			input.agentId || "default",
+			input.project ?? "",
+			input.visibility,
+			input.scope ?? "__NULL__",
+			input.compartment.id,
+			input.compartment.exists ? 1 : 0,
+			...input.read.args,
+		],
 	};
 }
 
 function scopedContentHashPredicate(input: RememberDedupeScope): {
 	readonly sql: string;
-	readonly params: readonly string[];
+	readonly params: readonly DbOwnerParameter[];
 } {
 	return {
 		sql: `
@@ -353,8 +365,17 @@ function scopedContentHashPredicate(input: RememberDedupeScope): {
 			AND COALESCE(project, '') = ?
 			AND COALESCE(scope, '__NULL__') = ?
 			AND COALESCE(visibility, 'global') = ?
+ AND compartment_id IS ? AND ?${input.read.sql.replaceAll("m.", "memories.")}
 		`,
-		params: [input.agentId || "default", input.project ?? "", input.scope ?? "__NULL__", input.visibility],
+		params: [
+			input.agentId || "default",
+			input.project ?? "",
+			input.scope ?? "__NULL__",
+			input.visibility,
+			input.compartment.id,
+			input.compartment.exists ? 1 : 0,
+			...input.read.args,
+		],
 	};
 }
 
@@ -571,7 +592,7 @@ function isFtsQuerySyntaxError(error: unknown): boolean {
 
 async function resolveMemoryReadScope(
 	c: Context,
-	options: { readonly allowAllAgents?: boolean } = {},
+	options: { readonly allowAllAgents?: boolean; readonly agentId?: string } = {},
 ): Promise<MemoryReadScope | Response> {
 	const resolved = await resolveRouteReadScope(c, {
 		...options,
@@ -1467,7 +1488,27 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		await ensureAgentRegistered(agentId);
 		const visibility: RememberDedupeScope["visibility"] = body.visibility === "private" ? "private" : "global";
-		const dedupeScope: RememberDedupeScope = { agentId, visibility, project: body.project ?? null, scope };
+		const read = await resolveMemoryReadScope(c, { agentId });
+		if (read instanceof Response) return read;
+		const compartment = await contentRead<{ exists: boolean; id: number | null; key: string }>(
+			{
+				op: "dedupe_compartment",
+				writeScope: {
+					agentId,
+					sourceId: body.sourceId ?? null,
+					sessionKey: c.req.header("x-signet-session-key") ?? null,
+				},
+			},
+			c.req.raw.signal,
+		);
+		const dedupeScope: RememberDedupeScope = {
+			agentId,
+			visibility,
+			project: body.project ?? null,
+			scope,
+			read,
+			compartment,
+		};
 		const hasBodyTags = Object.hasOwn(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
@@ -3735,20 +3776,40 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const id = crypto.randomUUID();
 			const now = new Date().toISOString();
 
+			const resolved = await resolveRouteReadScope(c, { agentId: scopedAgent.agentId, project: scopedProject.project });
+			if (resolved instanceof Response) return resolved;
+			const documentAccess = readScopeSql("d", resolved.scope, {
+				visibility: null,
+				memory: null,
+				session: null,
+				source: "id",
+			});
+			const compartment = await contentRead<{ exists: boolean; id: number | null; key: string }>(
+				{
+					op: "dedupe_compartment",
+					writeScope: {
+						agentId: scopedAgent.agentId,
+						sessionKey: c.req.header("x-signet-session-key") ?? null,
+						sourceId: parseOptionalString(body.connector_id) ?? id,
+					},
+				},
+				c.req.raw.signal,
+			);
 			const result = await runWriteTxAsync(accessor, (db) => {
 				if (sourceUrl) {
 					const candidates = prepareTypedStatement<{ id: string; status: string } & DocumentScopeRow>(
 						db,
-						`SELECT id, status, agent_id, project FROM documents
-							 WHERE source_url = ?
-							   AND status NOT IN ('failed', 'deleted')`,
-					).all(sourceUrl);
-					const existing = candidates.find((candidate) =>
-						documentScopeMatches(candidate, {
-							agentId: scopedAgent.agentId,
-							project: scopedProject.project ?? null,
-						}),
+						`SELECT id, status, agent_id, project FROM documents d
+ WHERE source_url = ? AND status NOT IN ('failed', 'deleted') AND d.agent_id=? AND d.project IS ? AND d.compartment_id IS ? AND ?${documentAccess.sql} ORDER BY d.id LIMIT 1`,
+					).all(
+						sourceUrl,
+						scopedAgent.agentId,
+						scopedProject.project ?? null,
+						compartment.id,
+						compartment.exists ? 1 : 0,
+						...documentAccess.args,
 					);
+					const existing = candidates[0];
 					if (existing) {
 						return { deduplicated: true as const, existing };
 					}

@@ -1,3 +1,4 @@
+import { contentRead } from "../content-read";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -68,6 +69,7 @@ beforeAll(async () => {
 			],
 		});
 		c.set("principal", principal);
+		c.set("author", { userId: principal.userId, credential: "local" });
 		c.set("organization", org);
 		await next();
 	});
@@ -352,6 +354,45 @@ describe("organization transcript import reads", () => {
 		expect((await request(paths[4], "carol")).body).toBe(publicLine + privateLine);
 		expect((await request("/api/sources/imports/hidden-job", "carol")).status).toBe(200);
 	});
+});
+
+test("A14d prospective dedupe labels come from assignments without creating compartments", async () => {
+	expect(await contentRead({ op: "dedupe_compartment", writeScope: { agentId: "beta" } })).toEqual({
+		exists: true,
+		id: null,
+		key: "",
+	});
+	expect(
+		await contentRead({ op: "dedupe_compartment", writeScope: { agentId: "beta", sourceId: "hr-import" } }),
+	).toEqual({ exists: true, id: compartment, key: "cls_hr" });
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_new','New',?,?)").run(at, at);
+		db.prepare(
+			"INSERT INTO classification_assignments VALUES ('source','future-source','beta','cls_new','carol',?)",
+		).run(at);
+	});
+	expect(
+		await contentRead({ op: "dedupe_compartment", writeScope: { agentId: "beta", sourceId: "future-source" } }),
+	).toEqual({ exists: false, id: null, key: "cls_new" });
+});
+
+test("A14d document URL dedupe cannot reveal a hidden duplicate", async () => {
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO documents(id,source_url,source_type,status,created_at,updated_at,agent_id,author_user_id,compartment_id) VALUES ('hidden-url-document','https://example.test/a14-private','url','queued',?,?,'beta','bob',?)",
+			)
+			.run(at, at, compartment),
+	);
+	const response = await app.request("http://localhost/api/documents", {
+		method: "POST",
+		headers: { "content-type": "application/json", "x-test-user": "bob" },
+		body: JSON.stringify({ source_type: "url", url: "https://example.test/a14-private", agentId: "beta" }),
+	});
+	expect(response.status).toBe(201);
+	const body = await response.json();
+	expect(body.id).not.toBe("hidden-url-document");
+	expect(body.deduplicated).not.toBe(true);
 });
 
 describe("organization memory read routes", () => {
