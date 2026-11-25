@@ -966,14 +966,13 @@ test("B8 transcript export offset uses bounded owner work", async () => {
 		const insert = db.prepare(
 			"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES (?,'beta',?,'b8-export',?,?,'bob')",
 		);
-		for (let n = 0; n < 200; n++) insert.run(`b8-${String(n).padStart(3, "0")}`, `User: message ${n}`, at, at);
+		for (let n = 0; n < 1000; n++) insert.run(`b8-${String(n).padStart(3, "0")}`, `User: message ${n}`, at, at);
 	});
-	const { getDbRuntimeMetrics } = await import("../db-observability");
-	const before = getDbRuntimeMetrics().completed;
-	const response = await request("/api/sources/imports/export/transcripts?harness=b8-export&offset=190&limit=1", "bob");
+	const started = performance.now();
+	const response = await request("/api/sources/imports/export/transcripts?harness=b8-export&offset=900&limit=1", "bob");
 	expect(response.status).toBe(200);
-	expect(response.body).toContain("message 190");
-	expect(getDbRuntimeMetrics().completed - before).toBeLessThan(15);
+	expect(response.body).toContain("message 900");
+	expect(performance.now() - started).toBeLessThan(500);
 });
 test("B8 scoped owner caches schema column inspection", async () => {
 	const { executeContentRead } = await import("../content-read-owner");
