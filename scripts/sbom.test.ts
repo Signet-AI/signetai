@@ -148,9 +148,47 @@ describe("shipped package records", () => {
 		const root = scratch();
 		writePackage(join(root, "platform/core"), "@signet/core", "1.0.2");
 		expect(() => packagesFromMetafile({ inputs: { "platform/core/dist/index.js": {} } }, root)).toThrow(
-			"prebuilt workspace bundle with no recorded inputs",
+			"prebuilt bundle with no recorded inputs",
 		);
 		expect(packagesFromMetafile({ inputs: { "platform/core/src/index.ts": {} } }, root)).toEqual([]);
+	});
+
+	test("refuses an embedded bundle without a record and an output recorded twice", () => {
+		const root = scratch();
+		const connector = join(root, "integrations/pi/connector");
+		writePackage(connector, "@signet/connector-pi", "1.0.2");
+		expect(() =>
+			packagesFromMetafile({ inputs: { "integrations/pi/connector/src/extension-bundle.ts": {} } }, root),
+		).toThrow("prebuilt bundle with no recorded inputs");
+		expect(() => recordEmbeddedBundle(connector, join(connector, "src/extension.ts"), [])).toThrow("must end in");
+
+		writePackage(join(root, "platform/core"), "@signet/core", "1.0.2");
+		mkdirSync(join(root, "platform/core/.bundle-inputs"), { recursive: true });
+		for (const name of ["bundle.json", "old.json"]) {
+			writeFileSync(
+				join(root, "platform/core/.bundle-inputs", name),
+				JSON.stringify({ outputs: { "./index.js": { inputs: {} } } }),
+			);
+		}
+		expect(() => packagesFromMetafile({ inputs: { "platform/core/dist/index.js": {} } }, root)).toThrow(
+			"is recorded by both",
+		);
+	});
+
+	test("a nameless nested package.json does not hide the workspace bundle", () => {
+		const root = scratch();
+		writePackage(join(root, "node_modules/fast-uri"), "fast-uri", "3.1.9");
+		writePackage(join(root, "platform/core"), "@signet/core", "1.0.2");
+		mkdirSync(join(root, "platform/core/dist"), { recursive: true });
+		writeFileSync(join(root, "platform/core/dist/package.json"), JSON.stringify({ type: "module" }));
+		mkdirSync(join(root, "platform/core/.bundle-inputs"), { recursive: true });
+		writeFileSync(
+			join(root, "platform/core/.bundle-inputs/bundle.json"),
+			JSON.stringify({ outputs: { "./index.js": { inputs: { "../../node_modules/fast-uri/index.js": {} } } } }),
+		);
+		expect(packagesFromMetafile({ inputs: { "platform/core/dist/index.js": {} } }, root)).toEqual([
+			{ name: "fast-uri", version: "3.1.9" },
+		]);
 	});
 
 	test("walks vendored node_modules including scoped and nested packages", () => {

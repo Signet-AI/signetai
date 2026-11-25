@@ -14,6 +14,7 @@ export const shippedPackagesDir = fileURLToPath(new URL("../dist/shipped-package
 
 const marker = "/node_modules/";
 export const workspaceBundleInputsDir = ".bundle-inputs";
+const embeddedBundleSuffix = "-bundle.ts";
 
 export function packageRoot(file: string): string | null {
 	const path = file.replaceAll("\\", "/");
@@ -44,13 +45,18 @@ function objectField(value: unknown, key: string): object | null {
 
 function workspaceOf(file: string): string | null {
 	for (let dir = dirname(file); ; dir = dirname(dir)) {
-		if (existsSync(join(dir, "package.json"))) return dir;
+		const manifest = join(dir, "package.json");
+		if (existsSync(manifest)) {
+			const parsed: unknown = JSON.parse(readFileSync(manifest, "utf8"));
+			if (typeof parsed === "object" && parsed !== null && "name" in parsed) return dir;
+		}
 		if (dirname(dir) === dir) return null;
 	}
 }
 
 function workspaceBundles(workspace: string): Map<string, readonly string[]> {
 	const bundles = new Map<string, readonly string[]>();
+	const recordedBy = new Map<string, string>();
 	const dir = join(workspace, workspaceBundleInputsDir);
 	if (!existsSync(dir)) return bundles;
 	for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".json"))) {
@@ -59,8 +65,12 @@ function workspaceBundles(workspace: string): Map<string, readonly string[]> {
 		if (outputs === null) throw new Error(`${path} has no outputs`);
 		for (const [output, info] of Object.entries(outputs)) {
 			const inputs = Object.keys(objectField(info, "inputs") ?? {});
+			const file = resolve(workspace, "dist", output);
+			const previous = recordedBy.get(file);
+			if (previous !== undefined) throw new Error(`${file} is recorded by both ${previous} and ${path}`);
+			recordedBy.set(file, path);
 			bundles.set(
-				resolve(workspace, "dist", output),
+				file,
 				inputs.map((input) => resolve(workspace, input)),
 			);
 		}
@@ -90,9 +100,9 @@ export function packagesFromFiles(files: Iterable<string>, cwd: string): Shipped
 			return;
 		}
 		const inDist = relative(join(workspace, "dist"), file);
-		if (!inDist.startsWith("..") && !isAbsolute(inDist)) {
+		if ((!inDist.startsWith("..") && !isAbsolute(inDist)) || file.endsWith(embeddedBundleSuffix)) {
 			throw new Error(
-				`${file} is a prebuilt workspace bundle with no recorded inputs; build it with --metafile=${workspaceBundleInputsDir}/<name>.json`,
+				`${file} is a prebuilt bundle with no recorded inputs; build it with --metafile=${workspaceBundleInputsDir}/<name>.json or write it with recordEmbeddedBundle`,
 			);
 		}
 	};
@@ -104,6 +114,8 @@ export function packagesFromFiles(files: Iterable<string>, cwd: string): Shipped
 }
 
 export function recordEmbeddedBundle(workspace: string, generated: string, embedded: readonly string[]): void {
+	if (!generated.endsWith(embeddedBundleSuffix))
+		throw new Error(`Embedded bundle ${generated} must end in ${embeddedBundleSuffix}`);
 	const dir = join(workspace, workspaceBundleInputsDir);
 	mkdirSync(dir, { recursive: true });
 	const inputs = Object.fromEntries(embedded.map((file) => [relative(workspace, file), {}]));
