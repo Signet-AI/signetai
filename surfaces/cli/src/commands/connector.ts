@@ -154,9 +154,9 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 	try {
 		const path = options.path ?? deps.agentsDir;
 		result =
-			installer instanceof HermesAgentConnector && identity.mode === "local"
+			installer instanceof HermesAgentConnector
 				? await installer.install(path, {
-						agentId: options.agent ?? options.profile,
+						agentId,
 						memoryPolicy: options.memory,
 						policyGroup: options.group,
 					})

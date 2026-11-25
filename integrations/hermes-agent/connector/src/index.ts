@@ -18,14 +18,10 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
-	resolveSignetApiKey,
-	resolveInstallApiKey,
-} from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult, resolveInstallApiKey } from "@signet/connector-base";
 import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
+import { NodeTransport, resolveTarget } from "@signet/sdk/node";
+import { SignetApiError } from "@signet/sdk";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 function getPluginSourceDir(): string {
@@ -1459,9 +1455,9 @@ function probeHermesProvider(hermesRepo: string): HermesProbeResult {
 async function checkDaemon(daemonUrl: string): Promise<{ ok: boolean; detail: string }> {
 	const baseUrl = trimTrailingSlashes(daemonUrl);
 	try {
-		const resp = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1_000) });
-		if (resp.ok) return { ok: true, detail: `${baseUrl}/health returned HTTP ${resp.status}` };
-		return { ok: false, detail: `${baseUrl}/health returned HTTP ${resp.status}` };
+		const transport = new NodeTransport(await resolveTarget({ flagUrl: baseUrl }));
+		await transport.get("/health", undefined, { timeoutMs: 1000 });
+		return { ok: true, detail: `${baseUrl}/health returned HTTP 200` };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		return { ok: false, detail: `${baseUrl}/health unreachable: ${msg}` };
@@ -1470,10 +1466,6 @@ async function checkDaemon(daemonUrl: string): Promise<{ ok: boolean; detail: st
 
 function sanitizedEnv(name: string): string {
 	return (process.env[name]?.trim() || "").replace(/[\r\n]+/g, "");
-}
-
-function sanitizedAuthTokenEnv(): string {
-	return resolveSignetApiKey() ?? "";
 }
 
 function trustedOriginForDaemonUrl(daemonUrl: string): string | null {
@@ -1497,17 +1489,8 @@ function configuredAgentReadPolicy(warnings: string[], options: HermesConnectorO
 async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
 	try {
 		const baseUrl = trimTrailingSlashes(daemonUrl);
-		const token = sanitizedAuthTokenEnv();
-		const headers: Record<string, string> = {};
-		if (token) {
-			headers.Authorization = `Bearer ${token}`;
-		}
-		const resp = await fetch(`${baseUrl}/api/status`, {
-			headers,
-			signal: AbortSignal.timeout(1_000),
-		});
-		if (!resp.ok) return null;
-		const body = (await resp.json()) as { agentId?: unknown };
+		const transport = new NodeTransport(await resolveTarget({ flagUrl: baseUrl }));
+		const body = await transport.get<{ agentId?: unknown }>("/api/status", undefined, { timeoutMs: 1000 });
 		const agentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
 		return agentId || null;
 	} catch {
@@ -1525,25 +1508,16 @@ async function ensureNamedAgentRegistered(
 	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return null;
 
 	const baseUrl = trimTrailingSlashes(daemonUrl);
-	const token = sanitizedAuthTokenEnv();
-	const headers: Record<string, string> = {};
-	if (token) {
-		headers.Authorization = `Bearer ${token}`;
-	}
+	const transport = new NodeTransport(await resolveTarget({ flagUrl: baseUrl }));
 	try {
-		const getResp = await fetch(`${baseUrl}/api/agents/${encodeURIComponent(agentId)}`, {
-			headers,
-			signal: AbortSignal.timeout(1_000),
-		});
-		if (getResp.ok) return null;
-		if (getResp.status !== 404) {
-			const body = await getResp.text();
-			warnings.push(
-				`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`,
-			);
+		await transport.get(`/api/agents/${encodeURIComponent(agentId)}`, undefined, { timeoutMs: 1000 });
+		return null;
+	} catch (error) {
+		if (!(error instanceof SignetApiError) || error.status !== 404) {
+			warnings.push(`Could not check Signet agent '${agentId}' before registration; no agent was created`);
 			return null;
 		}
-	} catch {}
+	}
 
 	const readPolicy = configuredAgentReadPolicy(warnings, options);
 	const policyGroup =
@@ -1558,20 +1532,12 @@ async function ensureNamedAgentRegistered(
 			: `Run: signet agent create ${agentId} --memory ${effectiveReadPolicy}.`;
 
 	try {
-		const resp = await fetch(`${baseUrl}/api/agents`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json", ...headers },
-			body: JSON.stringify({
-				name: agentId,
-				read_policy: effectiveReadPolicy,
-				policy_group: policyGroup,
-			}),
-			signal: AbortSignal.timeout(1_000),
-		});
-		if (!resp.ok) {
-			const body = await resp.text();
-			return `Could not register Signet agent '${agentId}' with ${effectiveReadPolicy} memory policy: ${body.slice(0, 200)}. ${policyHint}`;
-		}
+		await transport.post(
+			"/api/agents",
+			{ name: agentId, read_policy: effectiveReadPolicy, policy_group: policyGroup },
+			{ timeoutMs: 1000 },
+		);
+		await transport.get(`/api/agents/${encodeURIComponent(agentId)}`, undefined, { timeoutMs: 1000 });
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		return `Could not register Signet agent '${agentId}' because the daemon was unreachable. ${policyHint} (${msg})`;

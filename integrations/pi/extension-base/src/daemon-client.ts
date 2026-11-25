@@ -48,6 +48,10 @@ async function daemonFetchResult<T>(
 		return { ok: true, data };
 	} catch (error) {
 		if (error instanceof SignetUnauthorizedError) console.warn("Signet session expired, run `signet login`");
+		else if (error instanceof SignetTimeoutError && config.logFailures !== false)
+			console.warn(
+				`[${config.logPrefix}] ${options.method ?? "POST"} ${path} timed out after ${options.timeout ?? config.defaultTimeout}ms`,
+			);
 		if (error instanceof SignetApiError) {
 			const detail =
 				typeof error.body === "object" &&

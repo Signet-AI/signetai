@@ -454,7 +454,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 						} catch {}
 					}
 
-					client
+					await client
 						.post(
 							"/api/hooks/session-end",
 							{
@@ -468,7 +468,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 							WRITE_TIMEOUT,
 						)
 						.catch((e) => {
-							console.warn("[signet] session-end fire-and-forget failed:", e);
+							console.warn("[signet] session-end delivery failed:", e);
 						});
 					if (sid) {
 						startedSessions.delete(sid);

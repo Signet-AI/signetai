@@ -420,6 +420,31 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		process.exit(process.exitCode ?? 0);
 	});
 
+	for (const event of ["remember", "recall"] as const) {
+		hookCmd
+			.command(event)
+			.description("Translate legacy harness memory commands")
+			.requiredOption("-H, --harness <harness>", "Harness name")
+			.option("--json", "Output as JSON")
+			.action(async (options) => {
+				const input = await readJson(deps.stdin);
+				if (!input) throw new Error("A JSON hook payload is required");
+				const response = await deps.fetchDaemonResult<unknown>(`/api/hooks/${event}`, {
+					method: "POST",
+					body: JSON.stringify({ ...input, harness: options.harness, runtimePath: "legacy" }),
+					timeout: 15_000,
+				});
+				if (!response.ok) {
+					process.exitCode = 1;
+					console.error(
+						JSON.stringify({ error: "Signet hook request failed", reason: response.reason, status: response.status }),
+					);
+					return;
+				}
+				console.log(JSON.stringify(response.data));
+			});
+	}
+
 	hookCmd
 		.command("session-start")
 		.description("Get context/memories for a new session")
