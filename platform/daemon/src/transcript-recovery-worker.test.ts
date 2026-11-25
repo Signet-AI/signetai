@@ -20,6 +20,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { DbOwnerDiedError } from "./db-owner-client";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
 import { logger } from "./logger";
+import { registerNativeAssets } from "./native-runtime-assets";
 import { markSessionTranscriptCompleted, upsertSessionTranscript } from "./session-transcripts";
 import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "./transcript-capture-worker";
 import { normalizeSessionTranscript } from "./transcript-normalization";
@@ -962,6 +963,74 @@ describe("transcript recovery worker", () => {
 			logger.warn = originalWarn;
 		}
 	}, 15_000);
+
+	it.skipIf(process.platform === "win32")(
+		"completes a scan when the daemon is the compiled binary",
+		async () => {
+			writeSettled(
+				join(claudeRoot, "-repo", "compiled-child.jsonl"),
+				JSON.stringify({ sessionId: "compiled-child", message: { role: "user", content: "compiled child" } }),
+			);
+			const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+			const compiledBinary = join(dir, "compiled-signet.mjs");
+			writeFileSync(
+				compiledBinary,
+				[
+					`#!${process.execPath}`,
+					"const role = process.env.SIGNET_TRANSCRIPT_RECOVERY_PROCESS;",
+					'if (role === "supervisor") {',
+					'\tObject.defineProperty(process, "execPath", { value: process.argv[1] });',
+					`\tawait import(${JSON.stringify(join(sourceDirectory, "transcript-recovery-supervisor.ts"))});`,
+					'} else if (role === "child") {',
+					`\tawait import(${JSON.stringify(join(sourceDirectory, "transcript-recovery-child.ts"))});`,
+					"} else {",
+					'\tprocess.stderr.write("error: unknown command " + process.argv[2] + "\\n");',
+					"\tprocess.exit(1);",
+					"}",
+				].join("\n"),
+				{ mode: 0o755 },
+			);
+			const infoMessages: string[] = [];
+			const warnMessages: string[] = [];
+			const originalInfo = logger.info;
+			const originalWarn = logger.warn;
+			const originalExecPath = process.execPath;
+			logger.info = ((category, message) => {
+				infoMessages.push(`${category}:${message}`);
+			}) as typeof logger.info;
+			logger.warn = ((category, message, data) => {
+				warnMessages.push(`${category}:${message}:${JSON.stringify(data)}`);
+			}) as typeof logger.warn;
+			registerNativeAssets({});
+			Object.defineProperty(process, "execPath", { value: compiledBinary, configurable: true, writable: true });
+			const handle = startTranscriptRecoveryWorker(getDbAccessor(), dir, "agent-a", {
+				roots: { claudeCode: claudeRoot, codex: codexRoot },
+				intervalMs: 60_000,
+			});
+			try {
+				const deadline = Date.now() + 10_000;
+				while (
+					!infoMessages.includes("transcripts:Transcript recovery scan complete") &&
+					warnMessages.length === 0 &&
+					Date.now() < deadline
+				) {
+					await Bun.sleep(25);
+				}
+				expect(warnMessages).toEqual([]);
+				expect(infoMessages).toContain("transcripts:Transcript recovery scan complete");
+				expect(
+					getDbAccessor().withReadDb((db) => db.prepare("SELECT session_key FROM transcript_capture_jobs").all()),
+				).toEqual([{ session_key: "compiled-child" }]);
+			} finally {
+				await handle.stop();
+				Object.defineProperty(process, "execPath", { value: originalExecPath, configurable: true, writable: true });
+				globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__ = undefined;
+				logger.info = originalInfo;
+				logger.warn = originalWarn;
+			}
+		},
+		15_000,
+	);
 
 	it("closes the recovery database when its daemon parent is killed", async () => {
 		const databasePath = join(dir, "recovery-lock.db");

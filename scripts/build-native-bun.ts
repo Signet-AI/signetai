@@ -657,6 +657,10 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 } else if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
 	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/database-integrity-worker");
 	runDatabaseIntegrityWorker();
+} else if (process.env.SIGNET_TRANSCRIPT_RECOVERY_PROCESS === "supervisor") {
+	await import("../platform/daemon/src/transcript-recovery-supervisor");
+} else if (process.env.SIGNET_TRANSCRIPT_RECOVERY_PROCESS === "child") {
+	await import("../platform/daemon/src/transcript-recovery-child");
 } else {
 	await import("../surfaces/cli/src/cli.ts");
 }

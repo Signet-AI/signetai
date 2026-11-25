@@ -501,6 +501,8 @@ export async function getDbOwnerForAccessor(accessor: DbAccessor): Promise<DbOwn
 	return inlineOwner(accessor);
 }
 
+export const DB_OWNER_READ_DEADLINE_MS = 15_000;
+
 export interface DbOwnerSqlOptions {
 	readonly embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest;
 	readonly operation: string;

@@ -2933,3 +2933,74 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		expect(count).toBe(0);
 	});
 });
+
+describe("records containing U+2028 / U+2029", () => {
+	const content = "before\u2028middle\u2029after";
+
+	async function expectOneReadableLine(root: string): Promise<void> {
+		const raw = readFileSync(canonicalTranscriptPath(root, "codex"), "utf8");
+		expect(raw.trimEnd().split("\n")).toHaveLength(1);
+		expect(raw).not.toMatch(/[\u2028\u2029]/);
+		expect(JSON.parse(raw).content).toContain(content);
+		const keys = await readCanonicalTranscriptSessionKeys({ basePath: root, harness: "codex", agentId: "default" });
+		expect(keys.liveOnlyKeys.size + keys.canonicalKeys.size).toBe(1);
+	}
+
+	test("appended turns stay one readable line", async () => {
+		const root = makeRoot("line-separators-append");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "separators",
+			sourceFormat: "live",
+			turns: [{ role: "user", content }],
+		});
+		await expectOneReadableLine(root);
+	});
+
+	test("snapshots stay one readable line", async () => {
+		const root = makeRoot("line-separators-snapshot");
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "separators",
+			sourceFormat: "markdown",
+			transcript: `User: ${content}`,
+		});
+		await expectOneReadableLine(root);
+	});
+
+	test("indexed snapshot appends stay one readable line", async () => {
+		const root = makeRoot("line-separators-indexed");
+		await appendCanonicalTranscriptSnapshotIfMissing({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "separators",
+			sourceFormat: "markdown",
+			transcript: `User: ${content}`,
+		});
+		await expectOneReadableLine(root);
+	});
+
+	test("rewritten live-only sessions stay one readable line", async () => {
+		const root = makeRoot("line-separators-rewrite");
+		const identity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "separators",
+			sourceFormat: "db" as const,
+		};
+		await appendCanonicalTranscriptTurns({
+			...identity,
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live" }],
+		});
+		const replacements = new Map([[sessionSeqCacheKey(identity), { identity, transcript: `User: ${content}` }]]);
+		await rewriteReplacingLiveOnlySessions(canonicalTranscriptPath(root, "codex"), replacements);
+		await expectOneReadableLine(root);
+	});
+});

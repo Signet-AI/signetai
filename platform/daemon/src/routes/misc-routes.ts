@@ -12,7 +12,8 @@ import { invalidateAgentScopeCache } from "../agent-id.js";
 import type { AgentRemovalResult } from "../agent-removal.js";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
-import { dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
+import { DB_OWNER_READ_DEADLINE_MS, dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
+
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
 import { jsonBody } from "../request-body";
@@ -208,7 +209,7 @@ export function registerMiscRoutes(app: Hono): void {
 					sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name",
 					result: "all",
 				},
-				{ operation: "agents.list", lane: "read", deadlineMs: 2_000 },
+				{ operation: "agents.list", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 			);
 			return c.json({ agents });
 		} catch (error) {
@@ -226,7 +227,7 @@ export function registerMiscRoutes(app: Hono): void {
 					params: [name],
 					result: "get",
 				},
-				{ operation: "agents.get", lane: "read", deadlineMs: 2_000 },
+				{ operation: "agents.get", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 			);
 		} catch (error) {
 			return c.json({ error: error instanceof Error ? error.message : "Database unavailable" }, 503);
@@ -302,7 +303,7 @@ export function registerMiscRoutes(app: Hono): void {
 				params: [name],
 				result: "get",
 			},
-			{ operation: "agents.get_created", lane: "read", deadlineMs: 2_000 },
+			{ operation: "agents.get_created", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 		);
 		return c.json(created, 201);
 	});
@@ -320,7 +321,7 @@ export function registerMiscRoutes(app: Hono): void {
 				params: [name],
 				result: "get",
 			},
-			{ operation: "agents.get_for_update", lane: "read", deadlineMs: 2_000 },
+			{ operation: "agents.get_for_update", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 		);
 		if (!existing) return c.json({ error: "Agent not found" }, 404);
 		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
@@ -358,7 +359,7 @@ export function registerMiscRoutes(app: Hono): void {
 				params: [existing.id],
 				result: "get",
 			},
-			{ operation: "agents.get_updated", lane: "read", deadlineMs: 2_000 },
+			{ operation: "agents.get_updated", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 		);
 		return c.json({ ...updated, effective_scope: resolved.effectiveScope });
 	});
@@ -371,7 +372,7 @@ export function registerMiscRoutes(app: Hono): void {
 		const purge = c.req.query("purge") === "true";
 		const agent = await dbOwnerQuery<{ id: string } | undefined>(
 			{ sql: "SELECT id FROM agents WHERE name = ?", params: [name], result: "get" },
-			{ operation: "agents.get_for_delete", lane: "read", deadlineMs: 2_000 },
+			{ operation: "agents.get_for_delete", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 		);
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
 		let result: AgentRemovalResult;

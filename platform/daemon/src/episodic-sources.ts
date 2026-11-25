@@ -842,9 +842,10 @@ interface EpisodicSourceSearchParams {
 	readonly before?: string;
 	readonly kind?: "memory" | "artifact" | "transcript" | "summary";
 	readonly excludeDelivered?: boolean;
+	readonly excludeStalledFrom?: number;
 	readonly excludeSourceRefs?: readonly string[];
 	readonly limit?: number | null;
-	readonly order?: "newest" | "none";
+	readonly order?: "newest" | "none" | "newest-arrival" | "oldest-arrival";
 	readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
 }
 
@@ -874,6 +875,7 @@ function selectEpisodicSourceRefs(
 		params.excludeDelivered === true &&
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
 			null;
+	const stalledFilter = params.excludeStalledFrom !== undefined;
 	const reviewedFilterEnabled =
 		params.excludeDelivered === true &&
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_reviews'").get() != null;
@@ -890,10 +892,12 @@ function selectEpisodicSourceRefs(
 				 WHERE dec.agent_id = ? AND dec.source_kind = '${kind}' AND dec.source_id = ${id}
 				   AND dec.source_captured_at = ${capturedAt} AND dec.source_entry_id = ${sourceEntryId}
 				   AND dec.source_revision = ${sourceRevision}
-				   AND dec.delivered_offset >= dec.source_length
+				   AND (dec.delivered_offset >= dec.source_length${stalledFilter ? " OR dec.stalled_passes >= ?" : ""})
 			)`
 			: "";
-	const deliveredArgs = deliveredFilterEnabled ? [params.agentId] : [];
+	const deliveredArgs = deliveredFilterEnabled
+		? [params.agentId, ...(stalledFilter ? [params.excludeStalledFrom] : [])]
+		: [];
 	const reviewedPredicate = (
 		kind: EpisodicSourceKind,
 		id: string,
@@ -956,7 +960,8 @@ function selectEpisodicSourceRefs(
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (wants("memory")) {
 		branches.push({
-			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at, ${matchScore("content")} AS match_score
+			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at, created_at AS arrived_at,
+			             ${matchScore("content")} AS match_score
 			      FROM memories
 			      WHERE agent_id = ? AND memory_kind = 'episodic'
 			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
@@ -972,7 +977,8 @@ function selectEpisodicSourceRefs(
 	}
 	if (wants("artifact")) {
 		branches.push({
-			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at, ${matchScore("ma.content")} AS match_score
+			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at, ma.updated_at AS arrived_at,
+			             ${matchScore("ma.content")} AS match_score
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			        AND length(ma.content) > 0
@@ -998,6 +1004,7 @@ function selectEpisodicSourceRefs(
 	if (wants("transcript")) {
 		branches.push({
 			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at,
+			             ${transcriptSearchTime} AS arrived_at,
 			             ${matchScore("session_transcripts.content")} AS match_score
 			      FROM session_transcripts
 			      WHERE agent_id = ? AND ${transcriptCompleted}
@@ -1012,7 +1019,8 @@ function selectEpisodicSourceRefs(
 	}
 	if (wants("summary")) {
 		branches.push({
-			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at, ${matchScore("content")} AS match_score
+			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at, created_at AS arrived_at,
+			             ${matchScore("content")} AS match_score
 			      FROM session_summaries
 			      WHERE agent_id = ? AND depth = 0
 			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
@@ -1028,8 +1036,12 @@ function selectEpisodicSourceRefs(
 
 	if (branches.length === 0) return [];
 	const union = branches.map((branch) => branch.sql).join("\nUNION ALL\n");
-	const orderBy =
-		params.order === "none" ? "" : "ORDER BY match_score DESC, julianday(captured_at) DESC, kind ASC, id ASC";
+	const orderBy = {
+		none: "",
+		newest: "ORDER BY match_score DESC, julianday(captured_at) DESC, kind ASC, id ASC",
+		"newest-arrival": "ORDER BY julianday(arrived_at) DESC, kind ASC, id ASC",
+		"oldest-arrival": "ORDER BY julianday(arrived_at) ASC, kind ASC, id ASC",
+	}[params.order ?? "newest"];
 	const rows = db
 		.prepare(
 			`SELECT kind, id

@@ -81,7 +81,12 @@ registry defines the operations available to the agent, including:
 
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
   without a query it pages through the delivery queue and reports `hasMore`
-  until the queue is empty. A page holds one excerpt per source, and a partly
+  until the queue is empty. The queue is ordered by when Signet received each
+  source revision, not by the source's own date, so a newly connected vault of
+  old notes counts as new. Every fourth slot, starting with the first, goes to
+  the longest-waiting source that has not stalled, so new evidence arriving
+  faster than Dreaming reads cannot starve older sources. A page holds one
+  excerpt per source, and a partly
   reviewed source continues on a later page by itself. Within a pass a source
   resumes where the pass last read it; a source reviewed partway in an earlier
   pass resumes 200 characters before its reviewed end, snapped back to a

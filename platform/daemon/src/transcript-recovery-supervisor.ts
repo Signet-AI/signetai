@@ -2,13 +2,21 @@ import { spawnHidden as spawn } from "@signet/core";
 
 const TRANSCRIPT_RECOVERY_CHILD_GRACE_MS = 4_000;
 
-async function main(): Promise<void> {
+function childLaunch(): { readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv } {
+	if (process.env.SIGNET_TRANSCRIPT_RECOVERY_PROCESS === "supervisor") {
+		return { args: [], env: { ...process.env, SIGNET_TRANSCRIPT_RECOVERY_PROCESS: "child" } };
+	}
 	const childPath = process.env.SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH;
 	if (childPath === undefined) throw new Error("Transcript recovery supervisor child path is missing");
+	return { args: [childPath], env: process.env };
+}
+
+async function main(): Promise<void> {
+	const launch = childLaunch();
 	const parentPid = process.ppid;
 
-	const child = spawn(process.execPath, [childPath], {
-		env: process.env,
+	const child = spawn(process.execPath, launch.args, {
+		env: launch.env,
 		stdio: ["ignore", "pipe", "pipe"],
 		detached: process.platform !== "win32",
 	});

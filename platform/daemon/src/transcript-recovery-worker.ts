@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
+import { hasNativeRuntimeAssets } from "./native-runtime-assets";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
 import { enqueueTranscriptCaptureJob } from "./transcript-capture-worker";
 
@@ -91,6 +92,25 @@ type TranscriptRecoveryWorkerOptions = TranscriptRecoveryScanOptions & {
 	readonly childPath?: string;
 	readonly supervisorPath?: string;
 };
+
+function supervisorLaunch(options: TranscriptRecoveryWorkerOptions): {
+	readonly args: readonly string[];
+	readonly env: NodeJS.ProcessEnv;
+} {
+	if (options.supervisorPath === undefined && hasNativeRuntimeAssets()) {
+		return { args: [], env: { SIGNET_TRANSCRIPT_RECOVERY_PROCESS: "supervisor" } };
+	}
+	const modulePath = fileURLToPath(import.meta.url);
+	const extension = modulePath.endsWith(".ts") ? "ts" : "js";
+	const directory = dirname(modulePath);
+	return {
+		args: [options.supervisorPath ?? join(directory, `transcript-recovery-supervisor.${extension}`)],
+		env: {
+			SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH:
+				options.childPath ?? join(directory, `transcript-recovery-child.${extension}`),
+		},
+	};
+}
 
 function defaultRoots(): TranscriptRecoveryRoots {
 	const home = homedir();
@@ -559,14 +579,6 @@ export function startTranscriptRecoveryWorker(
 	};
 
 	const runChild = async (): Promise<TranscriptRecoveryScanResult> => {
-		const childName = fileURLToPath(import.meta.url).endsWith(".ts")
-			? "transcript-recovery-child.ts"
-			: "transcript-recovery-child.js";
-		const supervisorName = fileURLToPath(import.meta.url).endsWith(".ts")
-			? "transcript-recovery-supervisor.ts"
-			: "transcript-recovery-supervisor.js";
-		const childPath = options.childPath ?? join(dirname(fileURLToPath(import.meta.url)), childName);
-		const supervisorPath = options.supervisorPath ?? join(dirname(fileURLToPath(import.meta.url)), supervisorName);
 		const {
 			intervalMs: _intervalMs,
 			signal: _signal,
@@ -575,10 +587,11 @@ export function startTranscriptRecoveryWorker(
 			supervisorPath: _supervisorPath,
 			...scanOptions
 		} = options;
-		const child = spawn(process.execPath, [supervisorPath], {
+		const launch = supervisorLaunch(options);
+		const child = spawn(process.execPath, launch.args, {
 			env: {
 				...process.env,
-				SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH: childPath,
+				...launch.env,
 				SIGNET_TRANSCRIPT_RECOVERY_INPUT: JSON.stringify({ basePath, agentId, options: scanOptions }),
 			},
 			stdio: ["pipe", "pipe", "pipe"],
