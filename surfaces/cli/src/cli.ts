@@ -47,6 +47,7 @@ import { registerAccelerateCommands } from "./commands/accelerate.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
+import { registerAuthCommands } from "./commands/auth.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -54,6 +55,7 @@ import { registerDesktopCommands } from "./commands/desktop.js";
 import { registerDreamCommands } from "./commands/dream.js";
 import { registerGitCommands } from "./commands/git.js";
 import { registerGraphiqCommands } from "./commands/graphiq.js";
+import { createHookFetch } from "./lib/hook-transport.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMemoryCommands } from "./commands/memory.js";
@@ -88,7 +90,7 @@ import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/s
 import { flushCliTelemetry, recordCommandInvoked } from "./features/telemetry.js";
 import { signetBanner } from "./lib/banner.js";
 import { registerCliPreAction } from "./lib/cli-pre-action.js";
-import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
+import { createDaemonClient, ensureDaemonRunning, readDaemonUrlConfig, saveDaemonLoginUrl } from "./lib/daemon.js";
 import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./lib/secrets.js";
 import {
 	checkForUpdates,
@@ -989,7 +991,12 @@ registerDaemonCommands(program, {
 	showStatus: (options) => showStatus(options, healthDeps),
 });
 
+registerAuthCommands(program, {
+	configUrl: readDaemonUrlConfig(AGENTS_DIR),
+	saveUrl: (url) => saveDaemonLoginUrl(AGENTS_DIR, url),
+});
 registerConnectorCommands(program, {
+	configUrl: readDaemonUrlConfig(AGENTS_DIR),
 	agentsDir: AGENTS_DIR,
 	configureHarnessHooks,
 });
@@ -1086,6 +1093,7 @@ registerWorkspaceCommands(program, {
 });
 
 registerHookCommands(program, {
+	createHookFetch,
 	AGENTS_DIR,
 	fetchDaemonResult,
 	readStaticIdentity,
@@ -1179,5 +1187,5 @@ registerDefaultAction(program, {
 if (isDaemonEntrypoint) {
 	await import("../../../platform/daemon/src/daemon.js");
 } else {
-	program.parse();
+	await program.parseAsync();
 }

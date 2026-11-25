@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { formatYaml } from "@signet/core";
 import { join } from "node:path";
 import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
@@ -228,7 +230,21 @@ export function createDaemonClient(
 		secretApiCall,
 	};
 }
-function readDaemonUrlConfig(agentsDir: string): string | undefined {
+export async function saveDaemonLoginUrl(agentsDir: string, url: string): Promise<void> {
+	const normalized = resolveSignetDaemonUrl({ env: {}, configUrl: url });
+	const file = join(agentsDir, "agent.yaml");
+	const value: unknown = existsSync(file) ? parseSimpleYaml(readFileSync(file, "utf8")) : {};
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Invalid agent configuration");
+	const daemon = "daemon" in value ? value.daemon : {};
+	if (typeof daemon !== "object" || daemon === null || Array.isArray(daemon))
+		throw new Error("Invalid daemon configuration");
+	await mkdir(agentsDir, { recursive: true });
+	const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+	await writeFile(temporary, formatYaml({ ...value, daemon: { ...daemon, url: normalized } }), { mode: 0o600 });
+	await rename(temporary, file);
+}
+export function readDaemonUrlConfig(agentsDir: string): string | undefined {
 	const file = join(agentsDir, "agent.yaml");
 	if (!existsSync(file)) return undefined;
 	try {

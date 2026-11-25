@@ -10,8 +10,11 @@ import {
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult } from "../lib/daemon.js";
+import { reportAuthError } from "./auth.js";
+import { apiError } from "../../../../libs/sdk/src/errors.js";
 
 interface HookDeps {
+	readonly createHookFetch?: (harness: string) => Promise<HookDeps["fetchDaemonResult"]>;
 	readonly AGENTS_DIR: string;
 	readonly fetchDaemonResult: <T>(
 		path: string,
@@ -386,13 +389,30 @@ async function fetchHookData<T>(
 export function registerHookCommands(program: Command, deps: HookDeps): void {
 	const hookCmd = program.command("hook").description("Lifecycle hooks for harness integration");
 
-	hookCmd.hook("preAction", () => {
+	hookCmd.hook("preAction", async (_command, action) => {
 		if (process.env.SIGNET_NO_HOOKS === "1" || process.env.SIGNET_BYPASS === "1") {
 			process.exit(0);
 		}
+		if (deps.createHookFetch) {
+			const options = action.opts();
+			const harness = typeof options.harness === "string" ? options.harness : "cli";
+			const fetch = await deps.createHookFetch(harness);
+			deps = {
+				...deps,
+				fetchDaemonResult: async <T>(path: string, request?: RequestInit & { timeout?: number }) => {
+					const result = await fetch<T>(path, request);
+					if (!result.ok && (result.status === 401 || result.status === 403)) {
+						reportAuthError(apiError(result.status, result.body), options.json === true);
+						process.exit(process.exitCode);
+					}
+					return result;
+				},
+				readStaticIdentity: () => null,
+			};
+		}
 	});
 	hookCmd.hook("postAction", () => {
-		process.exit(0);
+		process.exit(process.exitCode ?? 0);
 	});
 
 	hookCmd
