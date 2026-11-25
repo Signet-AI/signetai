@@ -1816,10 +1816,10 @@ describe("migration framework", () => {
 
 	test("migration 003 deduplicates existing content hashes", () => {
 		db = createFreshDb();
-		runMigrations(db);
-		db.prepare("DELETE FROM schema_migrations WHERE version >= 3").run();
-		db.run("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
-		db.run("CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)");
+		for (const migration of MIGRATIONS) {
+			if (migration.version > 2) break;
+			migration.up(db);
+		}
 
 		const now = new Date().toISOString();
 		const older = "2020-01-01T00:00:00.000Z";
@@ -2510,6 +2510,29 @@ describe("migration framework", () => {
 		).toThrow();
 	});
 
+	test("phantom FTS migration repair preserves classified transcript isolation", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_repair','Repair')");
+		const c = compartmentFor(db, ["cls_repair"]);
+		db.prepare(
+			"INSERT INTO session_transcripts(session_key,content,agent_id,created_at,compartment_id) VALUES('hidden','classifiedquartz','default','now',?)",
+		).run(c);
+		db.exec("DROP TABLE session_transcripts_fts");
+		runMigrations(db);
+		expect(
+			db
+				.query("SELECT count(*) n FROM session_transcripts_fts WHERE session_transcripts_fts MATCH 'classifiedquartz'")
+				.get(),
+		).toEqual({ n: 0 });
+		expect(
+			db
+				.query(
+					`SELECT count(*) n FROM session_transcripts_fts__c${c} WHERE session_transcripts_fts__c${c} MATCH 'classifiedquartz'`,
+				)
+				.get(),
+		).toEqual({ n: 1 });
+	});
 	test("migration 063/177 updates FTS on content edits and compartment moves only", () => {
 		db = createFreshDb();
 		runMigrations(db);

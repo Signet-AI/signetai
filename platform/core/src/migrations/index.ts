@@ -1,3 +1,5 @@
+import { rebuildBaseCompartmentFts, rebuildCompartmentFtsShards } from "../compartment-shards";
+import { createMemoriesFts } from "../fts-schema";
 import { up as sessionTranscriptDeletions } from "./174-session-transcript-deletions";
 import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
@@ -1827,6 +1829,12 @@ export function runMigrations(db: MigrationDb): void {
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
 			migration.up(db);
+			if (applied.has(177) && migration.version < 177) {
+				rebuildBaseCompartmentFts(db);
+				rebuildCompartmentFtsShards(db);
+				createMemoriesFts(db);
+			}
+
 			verifyArtifacts(db, migration);
 
 			db.prepare(
