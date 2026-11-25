@@ -586,11 +586,9 @@ export class DurableOutbox {
 			signal,
 		);
 	}
-	private async remove(meta: Metadata, entry: OutboxEntry, disposition: "delivered" | number): Promise<void> {
-		if (typeof disposition === "number") {
-			meta.dropped++;
-			meta.lastDrop = { id: entry.id, status: disposition, at: new Date().toISOString() };
-		}
+	private async remove(meta: Metadata, entry: OutboxEntry, disposition: number): Promise<void> {
+		meta.dropped++;
+		meta.lastDrop = { id: entry.id, status: disposition, at: new Date().toISOString() };
 		meta.removing = [entry.id];
 		await this.saveMetadata(meta);
 		await this.recover(meta);

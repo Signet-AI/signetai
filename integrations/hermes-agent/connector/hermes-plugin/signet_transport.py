@@ -1233,6 +1233,9 @@ class DurableOutbox:
         if meta["removing"]:
             for entry_id in meta["removing"]:
                 _remove_private(self._file(entry_id))
+                for path in self._names(self.directory/".claims"):
+                    if path.name.startswith(entry_id+"."):
+                        _remove_private(path,durable=not path.name.endswith(".owner"))
             meta["removing"] = []
             self._save_meta(meta)
         if not meta["admitting"]:
@@ -1363,27 +1366,28 @@ class DurableOutbox:
             if text is None or _lock_record(text).get("token") != owner["token"]:
                 return
             _check_control(end,cancel)
-            _rename_private(path,self._file(entry["id"]))
-            _remove_private(Path(str(path)+".owner"))
-            _check_control(end,cancel)
-            meta = self._meta()
+            marker = Path(str(path)+".owner")
             if error is None:
-                self._remove(meta,entry,"delivered")
+                _remove_private(path)
+                _remove_private(marker,durable=False)
                 return
             status,reason = getattr(error,"status",None),getattr(error,"reason",None)
             if status == 403 and reason in ("agent_not_permitted","agent_binding_conflict","actor_conflict","project_not_permitted","permission"):
-                self._quarantine(self._file(entry["id"]),"scope_"+reason)
+                self._quarantine(path,"scope_"+reason)
+                _remove_private(marker,durable=False)
             elif entry["attempts"] >= 20:
-                self._quarantine(self._file(entry["id"]),"poison_attempts")
+                self._quarantine(path,"poison_attempts")
+                _remove_private(marker,durable=False)
             elif isinstance(status,int) and 400 <= status < 500 and status not in (401,408,429):
-                self._remove(meta,entry,status)
+                self._remove(self._meta(),entry,status)
             else:
+                _rename_private(path,self._file(entry["id"]))
+                _remove_private(marker,durable=False)
                 _atomic_write(self._file(entry["id"]),_json_dump({**entry,"lastError":"http_%s" % status if status else getattr(error,"reason",None) or type(error).__name__},ensure_ascii=False))
 
     def _remove(self, meta, entry, disposition):
-        if isinstance(disposition, int):
-            meta["dropped"] += 1
-            meta["lastDrop"] = {"id": entry["id"], "status": disposition, "at": _iso(time.time())}
+        meta["dropped"] += 1
+        meta["lastDrop"] = {"id": entry["id"], "status": disposition, "at": _iso(time.time())}
         meta["removing"] = [entry["id"]]
         self._save_meta(meta)
         self._recover(meta)

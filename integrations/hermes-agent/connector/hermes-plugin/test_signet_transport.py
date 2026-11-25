@@ -15,6 +15,34 @@ import signet_transport as transport
 
 
 class TransportTests(unittest.TestCase):
+    def test_scope_disposition_survives_exit_after_first_settlement_move(self):
+        module_dir = str(Path(transport.__file__).parent)
+        code = '''import os,sys
+from pathlib import Path
+import signet_transport as t
+box=t.DurableOutbox("https://remote.example",env={"HOME":sys.argv[1]},harness="hermes")
+box.enqueue("POST","/api/hooks/session-end",{"evidence":"retained"})
+original=t._rename_private
+def rename(source,target,*args,**kwargs):
+ result=original(source,target,*args,**kwargs)
+ if Path(source).parent==box.directory/".claims" and Path(source).suffix==".json":os._exit(77)
+ return result
+t._rename_private=rename
+def denied(*args):raise t.SignetForbiddenError("permission")
+box.flush(denied,force=True)
+sys.exit(78)
+'''
+        result = subprocess.run([sys.executable,"-c",code,self.home],cwd=module_dir,capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,77,result.stderr)
+        box = transport.DurableOutbox("https://remote.example",env=self.env,harness="hermes")
+        sent = []
+        box.flush(lambda entry,end:sent.append(entry),force=True)
+        self.assertEqual(sent,[])
+        status=box.status()
+        self.assertEqual(status["pending"],0)
+        self.assertEqual(status["quarantined"],1)
+        self.assertEqual(status["dropped"],0)
+
     def test_newer_expired_login_after_rotation_never_dispatches_without_bearer(self):
         old = {"accessToken":"old","refreshToken":"old-refresh","accessExpiresAt":transport._iso(time.time()-60),"refreshExpiresAt":transport._iso(time.time()+120)}
         rotated = {**old,"accessToken":"rotated","refreshToken":"rotated-refresh","accessExpiresAt":transport._iso(time.time()+60)}
