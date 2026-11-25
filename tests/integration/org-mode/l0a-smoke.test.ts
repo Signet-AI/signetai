@@ -1,0 +1,210 @@
+import { Database } from "bun:sqlite";
+import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve, join } from "node:path";
+import { createServer } from "node:net";
+import { runMigrations } from "../../../platform/core/src/migrations";
+import { z } from "zod";
+
+const sessionSchema = z.object({ accessToken: z.string(), user: z.object({ id: z.string() }) });
+async function freePort(): Promise<number> {
+	const server = createServer();
+	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("No TCP port assigned");
+	const port = address.port;
+	await new Promise<void>((done, fail) => server.close((error) => (error ? fail(error) : done())));
+	return port;
+}
+test("real team daemon claims, provisions a connector, writes attributed evidence, and revokes on the next request", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-org-l0a-smoke-"));
+	const home = join(root, "home"),
+		workspace = join(root, "workspace");
+	await mkdir(home);
+	await mkdir(join(workspace, "data"), { recursive: true });
+	await writeFile(join(workspace, "workspace-layout.json"), JSON.stringify({ version: 2 }));
+	await writeFile(
+		join(workspace, "agent.yaml"),
+		"configVersion: 9\nauth:\n  mode: team\nmemory:\n  embedding:\n    provider: none\n  pipelineV2:\n    enabled: false\n    shadowMode: false\n    dreaming:\n      enabled: false\n",
+	);
+	const db = new Database(join(workspace, "data", "signet.db"));
+	runMigrations(db);
+	db.close();
+	const port = await freePort();
+	const base = `http://127.0.0.1:${port}`;
+	const cwd = resolve(import.meta.dir, "../../../platform/daemon");
+	const env = {
+		...process.env,
+		HOME: home,
+		SIGNET_PATH: workspace,
+		SIGNET_WORKSPACE: workspace,
+		SIGNET_PORT: String(port),
+		SIGNET_HOST: "127.0.0.1",
+		SIGNET_BIND: "127.0.0.1",
+		SIGNET_TELEMETRY_OPTOUT: "1",
+		HERMES_HOME: join(home, ".hermes"),
+		CODEX_HOME: join(home, ".codex"),
+	};
+	const child = Bun.spawn(["setsid", process.execPath, "src/daemon.ts"], { cwd, env, stdout: "pipe", stderr: "pipe" });
+	let output = "";
+	let errors = "";
+	const consume = async (stream: ReadableStream<Uint8Array>, append: (text: string) => void) => {
+		for await (const chunk of stream) append(new TextDecoder().decode(chunk));
+	};
+	const stdout = consume(child.stdout, (text) => {
+		output = (output + text).slice(-200_000);
+	});
+	const stderr = consume(child.stderr, (text) => {
+		errors = (errors + text).slice(-200_000);
+	});
+	let admin = "";
+	async function request(path: string, method = "GET", body?: unknown, token = admin): Promise<Response> {
+		return fetch(`${base}${path}`, {
+			method,
+			headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+			...(body ? { body: JSON.stringify(body) } : {}),
+			signal: AbortSignal.timeout(30_000),
+		});
+	}
+	try {
+		let ready = false;
+		const deadline = Date.now() + 60_000;
+		while (Date.now() < deadline) {
+			if (child.exitCode !== null) throw new Error(`Daemon exited ${child.exitCode}: ${errors}`);
+			try {
+				const response = await request("/health");
+				if (response.ok) {
+					const health = z.object({ pid: z.number(), agentsDir: z.string() }).parse(await response.json());
+					expect(health.pid).toBe(child.pid);
+					expect(health.agentsDir).toBe(workspace);
+					ready = true;
+					break;
+				}
+			} catch (error) {
+				if (error instanceof z.ZodError) throw error;
+			}
+			await Bun.sleep(100);
+		}
+		if (!ready) throw new Error(`Daemon not ready: ${errors}`);
+		while (!output.includes("Setup token:") && Date.now() < deadline) await Bun.sleep(100);
+		const setup = output.match(/Setup token: ([A-Za-z0-9_-]+)/)?.[1];
+		if (!setup) throw new Error("Setup token was not printed");
+		const claim = await request(
+			"/api/org/claim",
+			"POST",
+			{
+				setupToken: setup,
+				organizationName: "Smoke Org",
+				admin: { username: "admin", displayName: "Admin", password: "disposable test password" },
+			},
+			"",
+		);
+		if (claim.status !== 200) throw new Error(`Claim returned ${claim.status}: ${await claim.text()}`);
+		admin = sessionSchema.parse(await claim.json()).accessToken;
+		const invitation = await request("/api/org/invites", "POST", {
+			email: "alice@example.test",
+			role: "member",
+			groupIds: [],
+		});
+		expect(invitation.status).toBe(201);
+		const invite = z.object({ inviteUrl: z.string() }).parse(await invitation.json());
+		const accepted = await request(
+			"/api/auth/invites/accept",
+			"POST",
+			{
+				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
+				username: "alice",
+				displayName: "Alice",
+				password: "disposable test password",
+			},
+			"",
+		);
+		expect(accepted.status).toBe(200);
+		const alice = sessionSchema.parse(await accepted.json());
+		const started = await request(
+			"/api/auth/device/start",
+			"POST",
+			{ client: "cli", deviceName: "Smoke laptop", platform: "linux" },
+			"",
+		);
+		expect(started.status).toBe(200);
+		const flow = z.object({ deviceCode: z.string(), userCode: z.string() }).parse(await started.json());
+		expect(
+			(
+				await request(
+					"/api/auth/device/approve",
+					"POST",
+					{ userCode: flow.userCode, decision: "approve" },
+					alice.accessToken,
+				)
+			).status,
+		).toBe(200);
+		const polled = await request("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "");
+		expect(polled.status).toBe(200);
+		const cli = z.object({ accessToken: z.string(), deviceId: z.string() }).parse(await polled.json());
+		const issued = await request(
+			"/api/auth/connector-keys",
+			"POST",
+			{ harness: "hermes-agent", deviceId: cli.deviceId },
+			cli.accessToken,
+		);
+		expect(issued.status).toBe(201);
+		const key = z.object({ secret: z.string(), key: z.object({ agentId: z.string() }) }).parse(await issued.json());
+		const saved = await request(
+			"/api/memory/remember",
+			"POST",
+			{ content: "The smoke project uses a deterministic fixture.", agentId: key.key.agentId },
+			key.secret,
+		);
+		if (saved.status !== 200) throw new Error(`Memory write returned ${saved.status}: ${await saved.text()}`);
+		const memory = z.object({ id: z.string() }).parse(await saved.json());
+		const deactivated = await request(`/api/org/users/${alice.user.id}/deactivate`, "POST", {
+			mode: "keep",
+			dryRun: false,
+		});
+		expect(deactivated.status).toBe(202);
+		const next = await request("/api/auth/connector-keys", "GET", undefined, key.secret);
+		expect(next.status).toBe(401);
+		console.log(
+			JSON.stringify({
+				probe: "l0a",
+				claim: claim.status,
+				invite: invitation.status,
+				device: polled.status,
+				connector: issued.status,
+				memory: saved.status,
+				deactivate: deactivated.status,
+				nextRequest: next.status,
+			}),
+		);
+		process.kill(-child.pid, "SIGTERM");
+		await Promise.race([
+			child.exited,
+			Bun.sleep(15_000).then(() => {
+				throw new Error("Daemon did not shut down");
+			}),
+		]);
+		await Promise.all([stdout, stderr]);
+		const snapshot = new Database(join(workspace, "data", "signet.db"), { readonly: true });
+		try {
+			expect(snapshot.query("SELECT author_user_id,agent_id FROM memories WHERE id = ?").get(memory.id)).toEqual({
+				author_user_id: alice.user.id,
+				agent_id: key.key.agentId,
+			});
+		} finally {
+			snapshot.close();
+		}
+	} finally {
+		if (child.exitCode === null) {
+			process.kill(-child.pid, "SIGTERM");
+			await Promise.race([child.exited, Bun.sleep(5000)]);
+			if (child.exitCode === null) {
+				process.kill(-child.pid, "SIGKILL");
+				await child.exited;
+			}
+		}
+		await Promise.all([stdout, stderr]);
+		await rm(root, { recursive: true, force: true });
+	}
+}, 120_000);

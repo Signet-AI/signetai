@@ -516,6 +516,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	return path;
 }
 export interface MemoryArtifactUpsertFields {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;
@@ -552,8 +553,8 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		started_at, ended_at, manifest_path, source_node_id,
 		memory_sentence, memory_sentence_quality, content, updated_at,
 		source_mtime_ms, source_id, source_root, source_external_id,
-		source_parent_path, source_meta_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_parent_path, source_meta_json, author_user_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(agent_id, source_path) DO UPDATE SET
 		source_sha256 = excluded.source_sha256,
 		source_kind = excluded.source_kind,
@@ -577,6 +578,7 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		source_external_id = excluded.source_external_id,
 		source_parent_path = excluded.source_parent_path,
 		source_meta_json = excluded.source_meta_json,
+		author_user_id = COALESCE(memory_artifacts.author_user_id, excluded.author_user_id),
 		is_deleted = 0,
 		deleted_at = NULL`;
 export function upsertMemoryArtifactInTx(
@@ -617,6 +619,7 @@ export function upsertMemoryArtifactInTx(
 		fields.sourceExternalId,
 		fields.sourceParentPath,
 		fields.sourceMetaJson,
+		fields.author?.userId ?? null,
 	);
 	return true;
 }

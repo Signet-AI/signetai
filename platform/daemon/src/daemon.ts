@@ -292,6 +292,7 @@ import {
 } from "./hooks";
 import { mountMcpRoute } from "./mcp";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
+import { startOrganizationRuntime, stopOrganizationRuntime } from "./auth/organization-runtime";
 import { mountChangelogRoutes } from "./routes/changelog.js";
 import { stopHarnessHealth } from "./harness-health";
 import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
@@ -2225,6 +2226,7 @@ async function cleanup() {
 		transcriptRecoveryWorkerHandle = null;
 	}
 	await stopPipelineRuntime();
+	if (authConfig.mode === "team") await stopOrganizationRuntime();
 
 	const maintenanceHandle = dbOwnerMaintenanceHandle;
 	const ownerClient = dbOwnerClient;
@@ -2609,6 +2611,8 @@ async function main() {
 	startFdPollMonitor();
 
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
+	if (authConfig.mode === "team" && !migrationIntegrityWritesBlocked)
+		await startOrganizationRuntime(`http://127.0.0.1:${PORT}`);
 	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
 
 	const { extensionPath } = getVectorRuntimeStatus();

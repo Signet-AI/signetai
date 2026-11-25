@@ -14,6 +14,7 @@ const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 		"connectors",
 		"diagnostics",
 		"analytics",
+		"audit",
 	],
 	operator: [
 		"remember",
@@ -26,6 +27,7 @@ const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 		"diagnostics",
 		"analytics",
 	],
+	member: ["remember", "recall", "modify", "forget", "recover", "documents"],
 	agent: ["remember", "recall", "modify", "forget", "recover", "documents"],
 	readonly: ["recall"],
 };

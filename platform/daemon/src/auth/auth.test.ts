@@ -512,7 +512,27 @@ describe("middleware - createAuthMiddleware", () => {
 			new Request("http://localhost/test", { headers: { Authorization: "Bearer sig_sk_abc123_secret" } }),
 		);
 		expect(res.status).toBe(401);
-		expect(await res.json()).toEqual({ error: "invalid api key" });
+		expect(await res.json()).toEqual({ error: "invalid api key", reason: "invalid_credential" });
+	});
+
+	test("hybrid mode: forwarded loopback requests never inherit local trust", async () => {
+		const app = makeTestApp(createAuthMiddleware(hybridConfig, secret));
+		const env = { incoming: { socket: { remoteAddress: "127.0.0.1" } } };
+		expect((await app.request("/test", undefined, env)).status).toBe(200);
+		for (const header of ["Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP"]) {
+			const res = await app.request("/test", { headers: { [header]: "127.0.0.1" } }, env);
+			expect(res.status).toBe(401);
+			expect(await res.json()).toMatchObject({ reason: "missing_credential" });
+		}
+	});
+
+	test("member permissions match legacy agent permissions without classification authority", async () => {
+		const { rolePermissions } = await import("./principal");
+		expect([...rolePermissions("member")]).toEqual([...rolePermissions("agent")]);
+		expect(rolePermissions("admin").has("classify")).toBe(false);
+		expect(rolePermissions("admin").has("audit")).toBe(true);
+		expect(rolePermissions("readonly", true).has("classify")).toBe(true);
+		expect(rolePermissions("readonly", true).has("audit")).toBe(true);
 	});
 
 	test("hybrid mode: Host header alone does not bypass auth (fail closed)", async () => {

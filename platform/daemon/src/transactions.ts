@@ -1,10 +1,12 @@
 import type { WriteDb } from "./db-accessor";
+import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
 
 export interface IngestEnvelope {
+	author?: WriteAuthor;
 	id: string;
 	content: string;
 	normalizedContent?: string | null;
@@ -245,8 +247,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
 		  source_type, source_id, source_path, runtime_path, idempotency_key, scope, agent_id, visibility,
-		  memory_kind, evidence_meta, review_after)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  memory_kind, evidence_meta, review_after, author_user_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -277,7 +279,9 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.memoryKind ?? null,
 		mem.evidenceMeta ?? null,
 		mem.reviewAfter ?? null,
+		mem.author?.userId ?? null,
 	);
+	auditAuthoredWriteInTx(db, mem.author, "memory.created", "memory", mem.id, mem.agentId ?? "default");
 	return mem.id;
 }
 export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {

@@ -5,15 +5,31 @@ description: "Configure daemon authentication for local, hybrid, and team deploy
 
 Authentication is optional for a single local machine. Use `team` mode for a daemon shared over a network or by multiple people. Do not expose a daemon that remains in `local` mode.
 
-Setting up a daemon for several people? [Teams](/teams/) walks through it end to end, from team mode to dashboard sign-in and handing out keys.
+Setting up a daemon for several people? Start with [Organizations](/organization/) for individual accounts, device sign-in, and revocable connector credentials. An existing unclaimed team workspace keeps its legacy authentication until an administrator claims it.
 
 ## Modes
 
 - **`local`**: no bearer credential is required. This is the default and should remain localhost-only.
-- **`team`**: every protected request requires a valid bearer credential. Use this for a shared server or CI-facing daemon.
-- **`hybrid`**: localhost requests can proceed without a credential; remote requests require one. Do not rely on hybrid mode behind an untrusted same-host reverse proxy, because the daemon uses the TCP peer address to identify localhost traffic.
+- **`team`**: every protected request requires a valid credential. Claimed organizations accept user sessions and owned API keys; browsers use session cookies with CSRF protection.
+- **`hybrid`**: direct localhost requests can proceed without a credential; remote requests require one. A request carrying `Forwarded`, any supported `X-Forwarded-*` header, or `X-Real-IP` never receives loopback trust. The daemon warns and exposes `hybridProxyDetected` through identity and status responses. Use team mode behind a reverse proxy.
 
-## Configure a team daemon
+## Organization sign-in
+
+An unclaimed team daemon prints a one-time setup token. Claim it through `POST /api/org/claim`; the setup token is then consumed. Password sign-in creates a server-side browser session, not a stateless signed token. OIDC is available when configured through organization settings.
+
+Browser sessions use `signet_session` (HttpOnly, SameSite=Lax) and `signet_csrf`. Cookie-authenticated writes require `x-signet-csrf` containing the CSRF secret. Cookies are Secure over HTTPS or when the configured public URL is HTTPS. Bearer-authenticated clients do not need CSRF headers.
+
+CLI and desktop sessions use the device-code flow and rotating refresh tokens. Reusing a consumed refresh token revokes its session. Session, device, and key revocations and user deactivation are checked against server records on every request. Logout leaves connector keys intact; revoke the key or device to stop a connector.
+
+The `member` role has core memory and document permissions. Admin adds administration and audit, not classification authority. A compliance flag adds `classify` and `audit`. Connector permissions are bounded by their user and their enforced agent, harness, device, and project bindings. Actor headers cannot change the authenticated user.
+
+Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. `whoami.effectiveAccess` is `open`, `authenticated`, or `none`.
+
+## Legacy team configuration
+
+The following configuration and signed-token commands apply before an organization is claimed, and to hybrid deployments. Claimed organizations use the setup, invitation, and device provisioning flows described above. Non-admin legacy signed credentials with no agent, user, or project scope are rejected with `empty_scope`. Pre-upgrade API keys retain their explicit migration grace period.
+
+### Configure a team daemon
 
 Set the mode explicitly in the workspace `agent.yaml` used by the daemon:
 
@@ -108,7 +124,7 @@ Pinned memories are retained in either mode. See the
 
 Password login is enabled when one of these is available: `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, or `auth.login.password.passwordHash` in `agent.yaml`. The default username is `admin`; set `SIGNET_ADMIN_USERNAME` or `auth.login.password.username` to change it. Persist a `pbkdf2-sha256$...` hash rather than a plaintext password.
 
-SSO and SAML endpoints are reserved but are not configured login providers today.
+OIDC SSO is available in claimed organizations. SAML remains reserved. OIDC client secrets are resolved by name from Signet Secrets; organization settings never hold secret values.
 
 ## Rotate and recover
 

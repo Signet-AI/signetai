@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { principalAccess, resolveReadAgent, resolveWriteAgent, checkPrincipalProject } from "../auth/agent-access";
 import type { Context } from "hono";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
@@ -279,6 +280,17 @@ export function resolveScopedAgentId(
 	requestedAgentId: string | undefined,
 	fallbackAgentId = "default",
 ): { agentId: string; error?: string } {
+	const principal = c.get("principal");
+	if (c.get("organization") && principal) {
+		const access = principalAccess(principal);
+		if (!access) return { agentId: "", error: "org_policy" };
+		const requested = c.get("requestedOrganizationAgent");
+		const resolved = ["GET", "HEAD"].includes(c.req.method)
+			? resolveReadAgent(principal, requested)
+			: resolveWriteAgent(principal, requested, access);
+		if (!resolved.ok) return { agentId: "", error: resolved.error.reason };
+		return { agentId: resolved.value };
+	}
 	return resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, requestedAgentId, fallbackAgentId);
 }
 
@@ -286,6 +298,11 @@ export function resolveScopedProject(
 	c: Context,
 	requestedProject: string | undefined,
 ): { project: string | undefined; error?: string } {
+	const principal = c.get("principal");
+	if (c.get("organization") && principal) {
+		const result = checkPrincipalProject(principal, requestedProject);
+		if (!result.ok) return { project: requestedProject, error: result.error.reason };
+	}
 	return resolveScopedProjectForClaims(c.get("auth")?.claims ?? null, authConfig.mode, requestedProject);
 }
 
@@ -369,6 +386,15 @@ export interface MutationActor {
 const ACTOR_TYPES = new Set(["operator", "pipeline", "harness", "sdk", "daemon"]);
 
 export function resolveMutationActor(c: Context, fallback?: string): MutationActor {
+	const principal = c.get("principal");
+	if (c.get("organization") && principal)
+		return {
+			changedBy:
+				principal.credential.kind === "api_key" ? `key:${principal.credential.id}` : `user:${principal.userId}`,
+			actorType: principal.role,
+			sessionId: principal.sessionId ?? undefined,
+			requestId: parseOptionalString(c.req.header("x-signet-request-id")),
+		};
 	const auth = c.get("auth");
 	if (auth?.claims) {
 		return {

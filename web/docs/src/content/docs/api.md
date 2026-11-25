@@ -51,12 +51,80 @@ reserved `/api/auth/sso/*` and `/api/auth/saml/*` provider paths are reachable
 without an existing bearer token so users can sign in. Other daemon API routes
 remain protected in `team` mode. See [Core configuration](/api/core-configuration/#auth).
 
+### Organization identity API
+
+After a team workspace is claimed, credentials resolve a server-side principal. User deactivation, session revocation, device revocation, and key revocation take effect on the next request. Legacy signed tokens are rejected with `401 legacy_token`. Existing API keys keep their migration grace period; new credentials must have an owned identity or explicit scope.
+
+Browser login and claim responses set `signet_session` and `signet_csrf`. Cookie-authenticated POST, PUT, PATCH, and DELETE requests require `x-signet-csrf`. Device sessions use `sig_ses_` access and `sig_ref_` rotating refresh tokens. Bearer requests do not require CSRF. `whoami` returns organization, user, groups, credential, effective permissions, default read/write agents, providers, and `hybridProxyDetected`; `effectiveAccess` is `open`, `authenticated`, or `none`.
+
+All organization API bodies are JSON. Error responses include `error` and `reason`; missing permissions may also name `required`. `401` responses include `WWW-Authenticate: Bearer`. Invitation, device-start, device-token, refresh, claim, login, methods, and OIDC entry points are open. Other operations require authentication and the authority noted below.
+
+| Method | Path | Body or behavior |
+|---|---|---|
+| GET | `/api/auth/methods` | Mode, organization claim state, and available password/OIDC providers. |
+| GET | `/api/auth/whoami` | Resolved identity and effective access; safe without a credential. |
+| POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited. |
+| GET | `/api/auth/sso/start` | OIDC authorization redirect; optional invite token. |
+| GET | `/api/auth/sso/callback` | PKCE code exchange with one-use state and nonce validation. |
+| POST | `/api/auth/logout` | `{ all?: boolean }`; revoke this session or all of your sessions, not connector keys. |
+| GET | `/api/auth/sessions` | Your sessions, without token hashes. |
+| DELETE | `/api/auth/sessions/:id` | Revoke an owned session; admin may revoke another user's. |
+| POST | `/api/auth/device/start` | `{ client: "cli" | "desktop", deviceName, platform? }`; returns device/user codes, verification URLs, 2-second poll interval, 600-second expiry. |
+| GET | `/api/auth/device/:userCode` | Signed-in user previews the device requesting approval. |
+| POST | `/api/auth/device/approve` | `{ userCode, decision: "approve" | "deny" }`. |
+| POST | `/api/auth/device/token` | `{ deviceCode }`; `428 authorization_pending`, `429 slow_down`, `403 denied`, `410 expired`, or access/refresh tokens. |
+| POST | `/api/auth/refresh` | `{ refreshToken }`; rotate both tokens. Consumed-refresh reuse revokes the session. |
+| GET | `/api/auth/devices` | Your devices and connector keys. |
+| PATCH | `/api/auth/devices/:id` | `{ name }`; owned device only. |
+| DELETE | `/api/auth/devices/:id` | Revoke the owned device, its sessions, and its keys. |
+| POST | `/api/auth/connector-keys` | User session required. `{ harness, deviceId, agentId? }`; `201 { key, secret }`, secret shown once. |
+| GET | `/api/auth/connector-keys` | Your connector keys. |
+| DELETE | `/api/auth/connector-keys/:id` | Revoke your key. |
+| POST | `/api/auth/api-keys` | `{ name, agentId?, permissions, expiresAt, kind?: "personal" | "shared" }`; shared requires an agent and admin or group ownership. |
+| GET | `/api/auth/api-keys` | Your keys; `?all=1` requires admin. |
+| DELETE | `/api/auth/api-keys/:id` | Revoke an owned key; admin may revoke any key. |
+| POST | `/api/org/claim` | `{ setupToken, organizationName, admin: { username, displayName, email?, password } }`; consumes setup token and creates the first admin/browser session. |
+| GET | `/api/auth/invites/:token` | Organization, role, and optional invite email; never exposes password or hash. |
+| POST | `/api/auth/invites/accept` | `{ token, username, displayName, password? }`; browser session or `ssoStartPath`. |
+| GET | `/api/org/users` | Admin; optional `status`, `role`, `group`, `q`. |
+| PATCH | `/api/org/users/:id` | Admin; `{ role?, compliance?, displayName? }`. |
+| POST | `/api/org/users/:id/deactivate` | Admin; `{ mode: "keep" | "transfer" | "purge", transferTo?, dryRun?: true }`; plan, or `202 { jobId }` when `dryRun: false`. |
+| POST | `/api/org/users/:id/reactivate` | Admin; does not restore revoked credentials. |
+| POST | `/api/org/invites` | Admin; `{ email?, role, groupIds }`; one-use `inviteUrl` and expiry. |
+| GET | `/api/org/invites` | Admin; invitation metadata, never token hashes. |
+| DELETE | `/api/org/invites/:id` | Admin; revoke invitation. |
+| GET | `/api/org/groups` | Group directory. |
+| POST | `/api/org/groups` | Admin; `{ name, description? }`. |
+| GET | `/api/org/groups/:id` | Group and membership. |
+| PATCH | `/api/org/groups/:id` | Admin; `{ name?, description? }`. |
+| DELETE | `/api/org/groups/:id` | Admin; remove group membership. |
+| PUT | `/api/org/groups/:id/members/:userId` | Admin or group owner; `{ role: "owner" | "member" }`. |
+| DELETE | `/api/org/groups/:id/members/:userId` | Admin or group owner. Provider-managed groups reject manual edits with `409 managed_by_idp`. |
+| GET | `/api/agents` | Adds kind, owner user/group, archive state, and `canActAs`. |
+| POST | `/api/agents` | `{ name, kind: "personal" | "team", ownerGroupId? }`; self-service personal policy or team ownership/admin required. |
+| PATCH | `/api/agents/:id` | Admin; `{ name?, ownerUserId?, ownerGroupId?, archived? }`. |
+| GET | `/api/org/agents/legacy` | Admin; legacy agents awaiting mapping. |
+| POST | `/api/org/agents/:id/map` | Admin; `{ kind, ownerUserId?, ownerGroupId? }`. |
+| GET | `/api/org/access/:userId` | Admin or compliance; effective roles, groups, act-as agents, and readable classifications. |
+| GET | `/api/org/settings` | Admin; organization policy and OIDC configuration, never client-secret values. |
+| PATCH | `/api/org/settings` | Admin; name, agent model, self-service, login policy, TTLs, legacy deadline, retention, public URL, OIDC. |
+| GET | `/api/org/keys` | Admin; filter by `userId`, `deviceId`, `harness`, `agentId`, `legacy`. |
+| POST | `/api/org/keys/revoke` | Admin; `{ ids: [] }`; `202 { jobId }`. |
+| PATCH | `/api/org/keys/:id` | Admin; `{ userId }` assigns a legacy key to an active user. |
+| GET | `/api/org/audit` | Audit permission; actor/action/target/time filters, cursor, limit; `{ events, nextCursor }`. |
+| GET | `/api/org/audit/export` | Audit permission; NDJSON; narrow the time range for large exports. |
+| GET | `/api/org/jobs` | Admin; optional `kind`. |
+| GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. |
+
+`POST /api/auth/token` and legacy stateless session/handoff exchanges are disabled after claim (`403 org_policy`). OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
+
 Roles and their permissions:
 
 | Role       | Permissions                                                          |
 |------------|----------------------------------------------------------------------|
-| `admin`    | all permissions                                                      |
+| `admin`    | all permissions except classify                                                      |
 | `operator` | remember, recall, modify, forget, recover, documents, connectors, diagnostics, analytics |
+| `member`   | remember, recall, modify, forget, recover, documents |
 | `agent`    | remember, recall, modify, forget, recover, documents                 |
 | `readonly` | recall only                                                          |
 

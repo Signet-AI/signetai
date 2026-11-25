@@ -24,7 +24,18 @@ export function isAuthOpenPath(path: string): boolean {
 	if (path === "/health" || path === "/health/live" || path === "/health/ready") return true;
 	if (path === "/api/mode") return true;
 	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
-	if (path === "/api/auth/handoff/redeem") return true;
+	if (
+		[
+			"/api/auth/handoff/redeem",
+			"/api/auth/device/start",
+			"/api/auth/device/token",
+			"/api/auth/refresh",
+			"/api/org/claim",
+			"/api/auth/invites/accept",
+		].includes(path)
+	)
+		return true;
+	if (path.startsWith("/api/auth/invites/")) return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
 	return false;
 }
@@ -47,7 +58,14 @@ export function getPeerAddress(c: Context): string | null {
 	}
 }
 
+export let hybridProxyDetected = false;
+const FORWARDED_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
 function isLocalhost(c: Context): boolean {
+	if (FORWARDED_HEADERS.some((header) => c.req.header(header) !== undefined)) {
+		if (!hybridProxyDetected) console.warn("[auth] Hybrid proxy detected; forwarded requests require credentials");
+		hybridProxyDetected = true;
+		return false;
+	}
 	const remote = getPeerAddress(c);
 	return remote ? LOOPBACK.has(remote) : false;
 }
@@ -96,7 +114,7 @@ export function createAuthMiddleware(
 		if (!token) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");
-			return c.json({ error: "authentication required" });
+			return c.json({ error: "authentication required", reason: "missing_credential" });
 		}
 
 		if (!secret && !(isSignetApiKey(token) && verifyApiKey)) {
@@ -108,7 +126,14 @@ export function createAuthMiddleware(
 		if (!result.authenticated) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");
-			return c.json({ error: result.error ?? "invalid token" });
+			return c.json({
+				error: result.error ?? "invalid token",
+				reason: result.error?.includes("expired")
+					? "expired"
+					: result.error?.includes("revoked")
+						? "revoked"
+						: "invalid_credential",
+			});
 		}
 
 		c.set("auth", result);
@@ -124,10 +149,13 @@ export function requirePermission(permission: Permission, config: AuthConfig): M
 			return;
 		}
 
-		const decision = checkPermission(auth?.claims ?? null, permission, config.mode);
+		const principal = c.get("principal");
+		const decision = principal
+			? { allowed: principal.permissions.has(permission), reason: `credential lacks '${permission}' permission` }
+			: checkPermission(auth?.claims ?? null, permission, config.mode);
 		if (!decision.allowed) {
 			c.status(403);
-			return c.json({ error: decision.reason ?? "forbidden" });
+			return c.json({ error: decision.reason ?? "forbidden", reason: "permission", required: permission });
 		}
 
 		await next();

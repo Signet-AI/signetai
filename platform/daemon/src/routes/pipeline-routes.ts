@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
+import { hybridProxyDetected } from "../auth/middleware";
+import { auditDroppedCount } from "../auth/organization-runtime";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
@@ -400,6 +402,8 @@ export function registerPipelineRoutes(app: Hono): void {
 
 		return c.json({
 			status: "running",
+			auth: { hybridProxyDetected },
+			audit: { dropped: auditDroppedCount() },
 			runtime: DAEMON_RUNTIME,
 			version: CURRENT_VERSION,
 			pid: process.pid,
@@ -585,7 +589,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:588",
+				"routes/pipeline-routes.ts:592",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -936,7 +940,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:939",
+						"routes/pipeline-routes.ts:943",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
