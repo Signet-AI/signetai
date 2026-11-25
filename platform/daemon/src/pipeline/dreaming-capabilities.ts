@@ -360,6 +360,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	const scanned = interleaveWaiting(
 		searchEpisodicSources(db, {
 			...queue,
+			excludeStalledFrom: DREAMING_EVIDENCE_STALL_PASSES,
 			limit: Math.ceil(DELIVERY_QUEUE_SCAN_LIMIT / WAITING_QUEUE_STRIDE),
 			order: "oldest-arrival",
 		}),
