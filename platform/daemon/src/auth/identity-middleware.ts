@@ -18,7 +18,13 @@ import {
 	type OrganizationRow,
 } from "./organization-store";
 import { PERMISSIONS } from "./types";
-import { reconcileAgentSources, checkPrincipalProject, principalAccess, resolveWriteAgent } from "./agent-access";
+import {
+	reconcileAgentSources,
+	checkPrincipalProject,
+	principalAccess,
+	resolveWriteAgent,
+	organizationReadRequest,
+} from "./agent-access";
 
 declare module "hono" {
 	interface ContextVariableMap {
@@ -174,10 +180,16 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				if (p.harness && typeof body.harness === "string" && body.harness !== p.harness)
 					throw new IdentityError(403, "org_policy", "Credential is bound to another harness");
 				const headerSession = c.req.header("x-signet-session-key");
-				const sessionKey = typeof body.sessionKey === "string" ? body.sessionKey : headerSession;
+				const sessionKey =
+					typeof body.sessionKey === "string"
+						? body.sessionKey
+						: typeof body.fromSessionKey === "string"
+							? body.fromSessionKey
+							: headerSession;
 				const sessionAgent = sessionKey?.startsWith("agent:") ? sessionKey.split(":")[1] : undefined;
 				const headerSessionAgent = headerSession?.startsWith("agent:") ? headerSession.split(":")[1] : undefined;
 				const requested = reconcileAgentSources([
+					typeof body.fromAgentId === "string" ? body.fromAgentId : undefined,
 					typeof body.agentId === "string" ? body.agentId : undefined,
 					typeof body.agent_id === "string" ? body.agent_id : undefined,
 					...(c.req.queries("agentId") ?? []),
@@ -199,7 +211,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					!c.req.path.startsWith("/api/auth/") &&
 					!c.req.path.startsWith("/api/org/") &&
 					!c.req.path.startsWith("/api/agents") &&
-					["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)
+					["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+					!organizationReadRequest(c.req.method, c.req.path)
 				) {
 					const access = principalAccess(p);
 					if (!access) throw new IdentityError(403, "org_policy");

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual, pbkdf2, scrypt } from "node:crypto";
 import { z } from "zod";
+import { appendRefreshRetry, replayRefreshRetry, RefreshRetryCapacityError } from "./refresh-retry";
 import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import type { Principal } from "./principal";
@@ -75,6 +76,7 @@ export interface SessionRow {
 	token_hash: string;
 	access_expires_at: string;
 	refresh_hash: string | null;
+	refresh_retry_json: string;
 	refresh_expires_at: string | null;
 	csrf_hash: string | null;
 	created_at: string;
@@ -416,7 +418,13 @@ async function rotateSession(
 		statement("SELECT * FROM auth_sessions WHERE id = ?", [parsed.sessionId], "get"),
 	);
 	if (!row || row.kind === "browser" || !row.refresh_hash) throw new IdentityError(401, "invalid_credential");
+	if (row.revoked_at) throw new IdentityError(401, "revoked");
+	if (!row.refresh_expires_at || row.refresh_expires_at <= new Date().toISOString())
+		throw new IdentityError(401, "expired");
+	const user = await activeUser(row.user_id, row.device_id);
 	if (!matchesHash(parsed.secret, row.refresh_hash)) {
+		const replay = replayRefreshRetry(row.refresh_retry_json, token, row.id, row.token_hash, row.refresh_hash);
+		if (replay) return { ...replay, sessionId: row.id, deviceId: row.device_id, user: userView(user) };
 		const consumed = await organizationQuery(
 			statement(
 				"SELECT 1 FROM audit_events WHERE action = 'session.refreshed' AND target_id = ? AND json_extract(detail_json,'$.previousRefreshHash') = ? LIMIT 1",
@@ -432,28 +440,37 @@ async function rotateSession(
 			]),
 			auditStatement(null, "session.refresh_reuse", "session", row.id),
 		]);
-		throw new IdentityError(401, "revoked");
+		throw new IdentityError(401, "refresh_reuse");
 	}
-	if (row.revoked_at) throw new IdentityError(401, "revoked");
-	if (!row.refresh_expires_at || row.refresh_expires_at <= new Date().toISOString())
-		throw new IdentityError(401, "expired");
-	const user = await activeUser(row.user_id, row.device_id);
 	const org = await readOrganization();
 	const access = secret();
 	const refresh = secret();
 	const accessExpiresAt = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
 	const refreshExpiresAt = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
+	let retryState: string;
+	try {
+		retryState = appendRefreshRetry(row.refresh_retry_json, token, row.id, row.refresh_hash, {
+			accessToken: `sig_ses_${row.id}_${access}`,
+			refreshToken: `sig_ref_${row.id}_${refresh}`,
+			accessExpiresAt,
+			refreshExpiresAt,
+		});
+	} catch (error) {
+		if (error instanceof RefreshRetryCapacityError) throw new IdentityError(429, "rate_limit");
+		throw error;
+	}
 	try {
 		await organizationWrite([
 			{
 				...statement(
-					"UPDATE auth_sessions SET token_hash = ?,refresh_hash = ?,access_expires_at = ?,refresh_expires_at = ?,last_used_at = ? WHERE id = ? AND refresh_hash = ? AND revoked_at IS NULL",
+					"UPDATE auth_sessions SET token_hash = ?,refresh_hash = ?,access_expires_at = ?,refresh_expires_at = ?,last_used_at = ?,refresh_retry_json = ? WHERE id = ? AND refresh_hash = ? AND revoked_at IS NULL",
 					[
 						digest(access),
 						digest(refresh),
 						accessExpiresAt,
 						refreshExpiresAt,
 						new Date().toISOString(),
+						retryState,
 						row.id,
 						row.refresh_hash,
 					],

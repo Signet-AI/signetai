@@ -64,6 +64,21 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("A10 refresh retries within sixty seconds return the same current pair across multiple rotations", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		const session = await issueSession(root.user.id, "cli");
+		const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
+		const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+		expect(retry.status).toBe(200);
+		const same = await retry.json();
+		expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
+		const { closeDbOwner } = await import("../db-owner-runtime");
+		await closeDbOwner();
+		const second = await (await call("/api/auth/refresh", "POST", { refreshToken: first.refreshToken }, "")).json();
+		const oldRetry = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
+		expect(oldRetry.accessToken === second.accessToken && oldRetry.refreshToken === second.refreshToken).toBe(true);
+	});
 	test("offboarding transfer changes agent ownership without rewriting evidence authorship", async () => {
 		const root = await claim();
 		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
@@ -111,7 +126,7 @@ describe("organization HTTP flows", () => {
 			),
 		).toEqual({ owner_user_id: root.user.id });
 	});
-	test("simultaneous use of one refresh secret revokes the session instead of returning a server error", async () => {
+	test("simultaneous refresh retries return the same pair without revoking the session", async () => {
 		const root = await claim();
 		const { issueSession } = await import("./organization-store");
 		const cli = await issueSession(root.user.id, "cli");
@@ -119,11 +134,13 @@ describe("organization HTTP flows", () => {
 			call("/api/auth/refresh", "POST", { refreshToken: cli.refreshToken }, ""),
 			call("/api/auth/refresh", "POST", { refreshToken: cli.refreshToken }, ""),
 		]);
-		expect(results.map((r) => r.status).sort()).toEqual([200, 401]);
+		expect(results.map((r) => r.status).sort()).toEqual([200, 200]);
+		const pairs = await Promise.all(results.map((response) => response.json()));
+		expect(pairs[0].accessToken === pairs[1].accessToken && pairs[0].refreshToken === pairs[1].refreshToken).toBe(true);
 		const record = await organizationQuery(
 			statement("SELECT revoked_reason FROM auth_sessions WHERE id = ?", [cli.sessionId], "get"),
 		);
-		expect(record).toEqual({ revoked_reason: "refresh_reuse" });
+		expect(record).toEqual({ revoked_reason: null });
 	});
 	test("purge offboarding deletes only authored evidence through the deletion owners", async () => {
 		const root = await claim();
@@ -356,7 +373,17 @@ describe("organization HTTP flows", () => {
 		const refreshed = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
 		expect(refreshed.status).toBe(200);
 		const current = await refreshed.json();
-		expect((await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).status).toBe(401);
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = '[]' WHERE id = ?", [session.sessionId]),
+			statement("UPDATE audit_events SET at = ? WHERE action = 'session.refreshed' AND target_id = ?", [
+				new Date(Date.now() - 61_000).toISOString(),
+				session.sessionId,
+			]),
+		]);
+		const reused = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+		expect(reused.status).toBe(401);
+		expect(await reused.json()).toMatchObject({ reason: "refresh_reuse" });
 		expect((await call("/api/auth/sessions", "GET", undefined, current.accessToken)).status).toBe(401);
 	});
 	test("connector request aliases and actor spoofing fail before a write", async () => {
@@ -371,6 +398,7 @@ describe("organization HTTP flows", () => {
 			await call("/api/auth/connector-keys", "POST", { harness: "codex", deviceId: "dev_a" }, session.accessToken)
 		).json();
 		expect((await call("/write", "POST", { agentId: "other" }, key.secret)).status).toBe(403);
+		expect((await call("/write", "POST", { fromAgentId: "other" }, key.secret)).status).toBe(403);
 		expect(
 			(
 				await app.request("/write?agentId=other", {

@@ -19,7 +19,7 @@ An unclaimed team daemon prints a one-time setup token. Claim it through `POST /
 
 Browser sessions use `signet_session` (HttpOnly, SameSite=Lax) and `signet_csrf`. Cookie-authenticated writes require `x-signet-csrf` containing the CSRF secret. Cookies are Secure over HTTPS or when the configured public URL is HTTPS. Bearer-authenticated clients do not need CSRF headers.
 
-CLI and desktop sessions use the device-code flow and rotating refresh tokens. Reusing a consumed refresh token revokes its session. Session, device, and key revocations and user deactivation are checked against server records on every request. Logout leaves connector keys intact; revoke the key or device to stop a connector.
+CLI and desktop sessions use the device-code flow and rotating refresh tokens. Retrying a refresh token rotated away less than 60 seconds ago returns the same current access/refresh pair, including after a daemon restart. Older reuse revokes the session with `refresh_reuse`. Session, device, and key revocations and user deactivation are checked against server records on every request. Logout leaves connector keys intact; revoke the key or device to stop a connector.
 
 The `member` role has core memory and document permissions. Admin adds administration and audit, not classification authority. A compliance flag adds `classify` and `audit`. Connector permissions are bounded by their user and their enforced agent, harness, device, and project bindings. Actor headers cannot change the authenticated user.
 

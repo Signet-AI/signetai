@@ -73,7 +73,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/device/:userCode` | Signed-in user previews the device requesting approval. |
 | POST | `/api/auth/device/approve` | `{ userCode, decision: "approve" | "deny" }`. |
 | POST | `/api/auth/device/token` | `{ deviceCode }`; `428 authorization_pending`, `429 slow_down`, `403 denied`, `410 expired`, or access/refresh tokens. |
-| POST | `/api/auth/refresh` | `{ refreshToken }`; rotate both tokens. Consumed-refresh reuse revokes the session. |
+| POST | `/api/auth/refresh` | `{ refreshToken }`; rotate both tokens. A consumed token retried within 60 seconds returns the same current pair; older reuse revokes the session with `refresh_reuse`. |
 | GET | `/api/auth/devices` | Your devices and connector keys. |
 | PATCH | `/api/auth/devices/:id` | `{ name }`; owned device only. |
 | DELETE | `/api/auth/devices/:id` | Revoke the owned device, its sessions, and its keys. |

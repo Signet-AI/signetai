@@ -14,6 +14,7 @@ const addedColumns = {
 		kind: "TEXT NOT NULL DEFAULT 'legacy' CHECK (kind IN ('legacy','connector','personal','shared'))",
 		legacy: "INTEGER NOT NULL DEFAULT 0",
 	},
+	auth_sessions: { refresh_retry_json: "TEXT NOT NULL DEFAULT '[]'" },
 	memories: { author_user_id: "TEXT" },
 	session_transcripts: { speaker_user_id: "TEXT" },
 	memory_artifacts: { author_user_id: "TEXT" },

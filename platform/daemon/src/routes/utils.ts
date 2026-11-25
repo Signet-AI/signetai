@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { principalAccess, resolveReadAgent, resolveWriteAgent, checkPrincipalProject } from "../auth/agent-access";
+import {
+	principalAccess,
+	resolveReadAgent,
+	resolveWriteAgent,
+	organizationReadRequest,
+	checkPrincipalProject,
+} from "../auth/agent-access";
 import type { Context } from "hono";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
@@ -285,7 +291,7 @@ export function resolveScopedAgentId(
 		const access = principalAccess(principal);
 		if (!access) return { agentId: "", error: "org_policy" };
 		const requested = c.get("requestedOrganizationAgent");
-		const resolved = ["GET", "HEAD"].includes(c.req.method)
+		const resolved = organizationReadRequest(c.req.method, c.req.path)
 			? resolveReadAgent(principal, requested)
 			: resolveWriteAgent(principal, requested, access);
 		if (!resolved.ok) return { agentId: "", error: resolved.error.reason };

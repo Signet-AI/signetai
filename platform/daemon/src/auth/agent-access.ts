@@ -1,5 +1,11 @@
 import type { Principal } from "./principal";
 
+export function organizationReadRequest(method: string, path: string): boolean {
+	return (
+		["GET", "HEAD"].includes(method) ||
+		(method === "POST" && ["/api/memory/recall", "/api/hooks/recall", "/api/recall"].includes(path))
+	);
+}
 export interface AgentRecord {
 	readonly id: string;
 	readonly kind: "legacy" | "personal" | "team" | "organization";
