@@ -356,6 +356,7 @@ function seedArtifact(
 	revision: string,
 	capturedAt: string,
 	agentId = AGENT,
+	arrivedAt = capturedAt,
 ): void {
 	db.prepare(
 		`INSERT INTO memory_artifacts
@@ -371,7 +372,7 @@ function seedArtifact(
 		`token-${path}`,
 		capturedAt,
 		content,
-		capturedAt,
+		arrivedAt,
 	);
 }
 
@@ -1594,6 +1595,86 @@ describe("Dreaming", () => {
 			sourcesScanned: 0,
 		});
 		expect(await hasDreamingEpisodicBacklog(accessor, AGENT)).toBe(false);
+	});
+
+	it("queues evidence by when Signet received it, not when the file was last edited", () => {
+		seedArtifact(db, "Daily/waiting.md", "A note waiting since the first sync.", "waiting", "2026-07-01T00:00:00.000Z");
+		for (let index = 0; index < 3; index += 1) {
+			seedArtifact(
+				db,
+				`Daily/2026-08-0${index + 1}.md`,
+				`Daily note ${index} synced before the clippings.`,
+				`daily-${index}`,
+				`2026-08-0${index + 1}T00:00:00.000Z`,
+				AGENT,
+				"2026-08-10T00:00:00.000Z",
+			);
+			seedArtifact(
+				db,
+				`Clippings/clipping-${index}.md`,
+				`Clipping ${index} saved in May and connected today.`,
+				`clipping-${index}`,
+				`2026-05-0${index + 1}T00:00:00.000Z`,
+				AGENT,
+				"2026-08-20T00:00:00.000Z",
+			);
+		}
+
+		const page = searchDreamingEvidenceInDb(db as unknown as ReadDb, { agentId: AGENT, limit: 4 });
+
+		expect(page.items?.map((item) => Reflect.get(item, "sourceRef")).sort()).toEqual([
+			"artifact:Clippings/clipping-0.md",
+			"artifact:Clippings/clipping-1.md",
+			"artifact:Clippings/clipping-2.md",
+			"artifact:Daily/waiting.md",
+		]);
+	});
+
+	it("delivers a newly connected old note while newer evidence keeps arriving", async () => {
+		seedArtifact(
+			db,
+			"Clippings/old-clipping.md",
+			"A clipping saved months ago and connected today.",
+			"old-clipping",
+			"2026-05-01T00:00:00.000Z",
+			AGENT,
+			"2026-08-02T00:00:00.000Z",
+		);
+		for (let pass = 0; pass < 4; pass += 1) {
+			for (let index = 0; index < 3; index += 1) {
+				const arrivedAt = new Date(Date.parse("2026-08-02T01:00:00.000Z") + (pass * 3 + index) * 60_000).toISOString();
+				seedArtifact(
+					db,
+					`Daily/fresh-${pass}-${index}.md`,
+					`Fresh note ${pass}-${index} arrived after the clipping.`,
+					`fresh-${pass}-${index}`,
+					arrivedAt,
+				);
+			}
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						await readAndReviewEvidence(input, { agentId: AGENT, limit: 3 });
+						return { summary: "Read one page" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+		}
+
+		expect(
+			db
+				.prepare(
+					`SELECT COUNT(*) AS n FROM dreaming_evidence_consumption
+					 WHERE source_id = 'Clippings/old-clipping.md' AND delivered_offset >= source_length`,
+				)
+				.get(),
+		).toEqual({ n: 1 });
 	});
 
 	it("treats exactly 50 sources as a complete bounded page", async () => {
