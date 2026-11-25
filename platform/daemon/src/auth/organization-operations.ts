@@ -1,32 +1,33 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { DbOwnerStatement } from "../db-owner-protocol";
-import type { Principal } from "./principal";
 import { principalAccess, resolveWriteAgent } from "./agent-access";
-import { PERMISSIONS, type Permission } from "./types";
 import {
 	activeUser,
 	auditStatement,
+	bindRequestedReadAgent,
 	createOrganizationKey,
 	digest,
-	id,
 	IdentityError,
+	id,
 	issueSession,
+	type OrganizationRow,
 	organizationQuery,
 	organizationWrite,
 	passwordHash,
 	personalAgentStatements,
 	readOrganization,
 	readUser,
+	type SessionRow,
 	secret,
 	sessionMaterial,
 	statement,
+	type UserRow,
 	userView,
 	verifyUserPassword,
-	type OrganizationRow,
-	type UserRow,
-	type SessionRow,
 } from "./organization-store";
+import type { Principal } from "./principal";
+import { PERMISSIONS, type Permission } from "./types";
 
 export const roleSchema = z.enum(["admin", "operator", "member", "readonly"]);
 const text = z.string().trim().min(1).max(128);
@@ -50,8 +51,8 @@ export async function passwordLogin(input: unknown) {
 	const user = await organizationQuery<UserRow | null>(
 		statement("SELECT * FROM users WHERE username = ?", [data.username], "get"),
 	);
-	if (!user || !(await verifyUserPassword(data.password, user.password_hash)))
-		throw new IdentityError(401, "invalid_credential");
+	const valid = await verifyUserPassword(data.password, user?.password_hash ?? null);
+	if (!user || !valid) throw new IdentityError(401, "invalid_credential");
 	await activeUser(user.id, null);
 	return issueSession(user.id, "browser");
 }
@@ -111,7 +112,7 @@ export async function logout(p: Principal, input: unknown) {
 	const data = z.object({ all: z.boolean().optional() }).parse(input);
 	await organizationWrite([
 		statement(
-			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
+			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout',refresh_retry_json = '[]' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
 			[new Date().toISOString(), data.all ? p.userId : p.sessionId],
 		),
 		auditStatement(p, "session.logout", "user", p.userId),
@@ -136,10 +137,10 @@ export async function revokeSession(p: Principal, sessionId: string) {
 	if (!row) throw new IdentityError(404, "not_found");
 	if (row.user_id !== p.userId) requireAdmin(p);
 	await organizationWrite([
-		statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'revoked' WHERE id = ?", [
-			new Date().toISOString(),
-			row.id,
-		]),
+		statement(
+			"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'revoked',refresh_retry_json = '[]' WHERE id = ?",
+			[new Date().toISOString(), row.id],
+		),
 		auditStatement(p, "session.revoked", "session", row.id),
 	]);
 	return { ok: true };
@@ -170,22 +171,29 @@ export async function deviceStart(input: unknown, origin: string) {
 	const base = org.public_url ?? origin;
 	const verificationUri = `${base}/auth/device`;
 	const now = new Date().toISOString();
-	await organizationWrite([
-		statement(
-			"INSERT INTO device_authorizations (id,device_code_hash,user_code,client,device_name,platform,status,created_at,expires_at) VALUES (?,?,?,?,?,?,'pending',?,?)",
-			[
-				id("dev"),
-				digest(deviceCode),
-				userCode,
-				data.client,
-				data.deviceName,
-				data.platform ?? null,
-				now,
-				new Date(Date.now() + 600_000).toISOString(),
-			],
-		),
-		auditStatement(null, "device.authorization_started"),
-	]);
+	await organizationWrite(
+		[
+			{
+				...statement(
+					"INSERT INTO device_authorizations (id,device_code_hash,user_code,client,device_name,platform,status,created_at,expires_at) SELECT ?,?,?,?,?,?,'pending',?,? WHERE (SELECT COUNT(*) FROM (SELECT 1 FROM device_authorizations WHERE status IN ('pending','approved') AND expires_at > ? LIMIT 1000)) < 1000",
+					[
+						id("dev"),
+						digest(deviceCode),
+						userCode,
+						data.client,
+						data.deviceName,
+						data.platform ?? null,
+						now,
+						new Date(Date.now() + 600_000).toISOString(),
+						now,
+					],
+				),
+				requireChanges: true,
+			},
+			auditStatement(null, "device.authorization_started"),
+		],
+		429,
+	);
 	return {
 		deviceCode,
 		userCode,
@@ -266,20 +274,23 @@ export async function deviceToken(input: unknown) {
 	const user = await activeUser(row.user_id, session.device_id);
 	const org = await readOrganization();
 	const material = sessionMaterial(user.id, row.client, session.device_id, org);
-	await organizationWrite([
-		{
-			...statement("UPDATE device_authorizations SET status = 'consumed' WHERE id = ? AND status = 'approved'", [
-				row.id,
-			]),
-			requireChanges: true,
-		},
-		statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_exchange' WHERE id = ?", [
-			new Date().toISOString(),
-			session.id,
-		]),
-		...material.statements,
-		auditStatement(null, "device.token_issued", "device", session.device_id),
-	]);
+	await organizationWrite(
+		[
+			{
+				...statement("UPDATE device_authorizations SET status = 'consumed' WHERE id = ? AND status = 'approved'", [
+					row.id,
+				]),
+				requireChanges: true,
+			},
+			statement(
+				"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_exchange',refresh_retry_json = '[]' WHERE id = ?",
+				[new Date().toISOString(), session.id],
+			),
+			...material.statements,
+			auditStatement(null, "device.token_issued", "device", session.device_id),
+		],
+		401,
+	);
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
 }
@@ -305,10 +316,10 @@ export async function changeDevice(p: Principal, deviceId: string, input: unknow
 		input === null
 			? [
 					statement("UPDATE devices SET revoked_at = ? WHERE id = ?", [now, deviceId]),
-					statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_revoked' WHERE device_id = ?", [
-						now,
-						deviceId,
-					]),
+					statement(
+						"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_revoked',refresh_retry_json = '[]' WHERE device_id = ?",
+						[now, deviceId],
+					),
 					statement("UPDATE api_keys SET revoked_at = ? WHERE device_id = ?", [now, deviceId]),
 				]
 			: [statement("UPDATE devices SET name = ? WHERE id = ?", [z.object({ name: text }).parse(input).name, deviceId])];
@@ -359,7 +370,8 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 	}
 	if (data.kind === "shared") {
 		if (!data.agentId) throw new IdentityError(400, "agent_required");
-		const agent = access.agents.find((a) => a.id === data.agentId);
+		await bindRequestedReadAgent(p, data.agentId);
+		const agent = principalAccess(p)?.agents.find((a) => a.id === data.agentId);
 		if (!agent || agent.archived_at) throw new IdentityError(403, "agent_not_permitted");
 		if (p.role !== "admin" && (!agent?.owner_group_id || !(await groupOwner(p, agent.owner_group_id))))
 			throw new IdentityError(403, "not_owner");
@@ -451,7 +463,7 @@ export async function acceptInvite(input: unknown) {
 	if (org.require_sso || !data.password)
 		return { ssoStartPath: `/api/auth/sso/start?invite=${encodeURIComponent(data.token)}` };
 	const userId = id("usr"),
-		agentId = `personal-${userId}`,
+		agentId = `personal-${userId.slice(4)}`,
 		now = new Date().toISOString();
 	const groups = z.array(z.string()).parse(JSON.parse(invite.group_ids_json));
 	const session = sessionMaterial(userId, "browser", null, org);
@@ -541,12 +553,33 @@ export async function updateUser(p: Principal, userId: string, input: unknown) {
 }
 export async function reactivate(p: Principal, userId: string) {
 	requireAdmin(p);
-	await organizationWrite([
-		statement("UPDATE users SET status = 'active',deactivated_at = NULL,updated_at = ? WHERE id = ?", [
+	const user = await readUser(userId);
+	if (!user) throw new IdentityError(404, "not_found");
+	const org = await readOrganization();
+	const existing = user.personal_agent_id
+		? await organizationQuery<{ owner_user_id: string; archived_at: string | null } | null>(
+				statement("SELECT owner_user_id,archived_at FROM agents WHERE id=?", [user.personal_agent_id], "get"),
+			)
+		: null;
+	const writes: DbOwnerStatement[] = [];
+	if (org.agent_model === "personal" && (!existing || existing.owner_user_id !== userId || existing.archived_at)) {
+		const agentId = `personal-${crypto.randomUUID().replaceAll("-", "")}`;
+		writes.push(
+			...personalAgentStatements(userId, agentId, user.display_name),
+			statement(
+				"UPDATE users SET default_read_agent_id=CASE WHEN default_read_agent_id=? THEN ? ELSE default_read_agent_id END WHERE id=?",
+				[user.personal_agent_id, agentId, userId],
+			),
+			auditStatement(p, "agent.personal_created", "agent", agentId),
+		);
+	}
+	writes.push(
+		statement("UPDATE users SET status='active',deactivated_at=NULL,updated_at=? WHERE id=?", [
 			new Date().toISOString(),
 			userId,
 		]),
 		auditStatement(p, "user.reactivated", "user", userId),
-	]);
+	);
+	await organizationWrite(writes);
 	return { ok: true };
 }

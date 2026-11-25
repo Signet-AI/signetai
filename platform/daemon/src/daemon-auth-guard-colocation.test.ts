@@ -319,6 +319,7 @@ inference:
 			if (!secret) throw new Error("expected auth secret for team-mode aggregate recall test");
 			const aggregateRecallWithPartialHybrid: typeof aggregateRecall = async (params, cfg, deps) =>
 				aggregateRecall(params, cfg, {
+					author: { userId: null, credential: "system" },
 					...deps,
 					router: null,
 					hybridRecall: async (recallParams) => ({

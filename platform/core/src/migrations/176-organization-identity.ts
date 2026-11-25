@@ -19,10 +19,15 @@ const addedColumns = {
 	session_transcripts: { speaker_user_id: "TEXT" },
 	memory_artifacts: { author_user_id: "TEXT" },
 	documents: { author_user_id: "TEXT" },
+	source_import_jobs: { author_user_id: "TEXT", author_credential: "TEXT NOT NULL DEFAULT 'system'" },
+	board_posts: { author_user_id: "TEXT", author_credential: "TEXT NOT NULL DEFAULT 'system'" },
+	session_summaries: { author_user_id: "TEXT" },
 	ontology_proposals: { author_user_id: "TEXT" },
 	entities: { person_user_id: "TEXT" },
 };
 
+const authorScopes = ["memories", "documents", "memory_artifacts", "session_summaries", "session_transcripts"] as const;
+const authorColumn = (table: string) => (table === "session_transcripts" ? "speaker_user_id" : "author_user_id");
 export const artifacts: MigrationArtifacts = {
 	tables: [
 		"organization",
@@ -39,7 +44,17 @@ export const artifacts: MigrationArtifacts = {
 	columns: Object.entries(addedColumns).flatMap(([table, columns]) =>
 		Object.keys(columns).map((column) => ({ table, column })),
 	),
-	indexes: ["idx_entities_person_user", "idx_audit_at", "idx_audit_actor", "idx_audit_action", "idx_audit_target"],
+	indexes: [
+		...authorScopes.map((table) => `idx_${table}_${authorColumn(table)}`),
+		"idx_agents_kind_user",
+		"idx_agents_kind_group",
+		"idx_device_authorizations_status_expiry",
+		"idx_entities_person_user",
+		"idx_audit_at",
+		"idx_audit_actor",
+		"idx_audit_action",
+		"idx_audit_target",
+	],
 };
 
 export function up(db: MigrationDb): void {
@@ -96,7 +111,7 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events (action, at);
 		CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_events (target_kind,target_id);
 		CREATE TABLE IF NOT EXISTS org_jobs (
-			id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending','running','complete','failed','cancelled')),
+			id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending','running','complete','incomplete','failed','cancelled')),
 			params_json TEXT, progress_json TEXT, error TEXT, created_by TEXT, created_at TEXT, started_at TEXT, finished_at TEXT
 		);
 	`);
@@ -113,6 +128,13 @@ export function up(db: MigrationDb): void {
 			if (table === "api_keys" && column === "legacy") db.exec("UPDATE api_keys SET legacy = 1");
 		}
 	}
+	for (const table of authorScopes)
+		db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_${authorColumn(table)} ON ${table}(${authorColumn(table)})`);
+	db.exec("CREATE INDEX IF NOT EXISTS idx_agents_kind_user ON agents(kind,owner_user_id)");
+	db.exec("CREATE INDEX IF NOT EXISTS idx_agents_kind_group ON agents(kind,owner_group_id)");
+	db.exec(
+		"CREATE INDEX IF NOT EXISTS idx_device_authorizations_status_expiry ON device_authorizations(status,expires_at)",
+	);
 	db.exec(
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_person_user ON entities (agent_id, person_user_id) WHERE person_user_id IS NOT NULL",
 	);

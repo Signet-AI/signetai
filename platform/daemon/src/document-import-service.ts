@@ -1,5 +1,6 @@
 import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
+import type { WriteAuthor } from "./auth/audit-owner";
 import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, normalizeImportedFile } from "./import-normalizer";
 import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
@@ -34,6 +35,7 @@ export type DocumentImportStatus =
 	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
 
 export interface DocumentImportInput {
+	readonly author?: WriteAuthor;
 	readonly fileName: string;
 	readonly bytes: Uint8Array;
 	readonly contentType?: string;
@@ -127,6 +129,7 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 		const sourceKind = `source_import_${normalized.value.format}`;
 		const now = new Date().toISOString();
 		await indexExternalMemoryArtifact({
+			author: input.author,
 			agentId,
 			sourcePath,
 			sourceKind: normalized.value.format === "json" ? "source_import_json_projection" : sourceKind,
@@ -141,6 +144,7 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 		});
 		if (normalized.value.format === "json")
 			await indexExternalMemoryArtifact({
+				author: input.author,
 				agentId,
 				sourcePath: `${sourcePath}#canonical`,
 				sourceKind: "source_import_json_canonical",
@@ -175,6 +179,7 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 			const rowStart = typeof chunk.sourceMeta.rowStart === "number" ? chunk.sourceMeta.rowStart : 0;
 			const rowEnd = typeof chunk.sourceMeta.rowEnd === "number" ? chunk.sourceMeta.rowEnd : rowStart;
 			await indexExternalMemoryArtifact({
+				author: input.author,
 				agentId,
 				sourcePath: `${sourcePath}#rows-${rowStart}-${rowEnd}`,
 				sourceKind: "source_import_csv_chunk",

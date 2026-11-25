@@ -12,17 +12,18 @@ import type { Context, Hono, MiddlewareHandler } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
+import { auditAuthoredWriteInTx } from "../auth/audit-owner";
 import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
+import { normalizeAndHashContent } from "../content-normalization";
+import { getDatabaseIntegrityStatus } from "../database-integrity";
+import { getDbAccessor, prepareTypedStatement, type ReadDb, runWriteTxAsync, type WriteDb } from "../db-accessor";
+import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
-import { dbOwnerQuery } from "../db-owner-runtime";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
-import { normalizeAndHashContent } from "../content-normalization";
-import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { dbOwnerQuery } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
-import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { stagingCoverage } from "../embedding-index-migration";
 import {
 	isActiveEmbeddingConfig,
@@ -32,30 +33,32 @@ import {
 import type { EmbeddingRole } from "../embedding-profile";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
-import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { type EmbeddingConfig, loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
 import {
-	type RecallParams,
-	type RecallResponse,
 	buildAgentScopeClause,
 	currentMemorySql,
 	hybridRecall,
+	type RecallParams,
+	type RecallResponse,
 } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
-import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
+import { normalizePipelineCause, type PipelineCauseFamily, recordPipelineOperation } from "../pipeline-operation";
 import {
 	effectiveRecallLimit,
 	normalizeRecallSurface,
 	recordRecallAttempt,
 	recordRecallOutcome,
 } from "../recall-telemetry";
+import { jsonBody } from "../request-body";
+import { reportReadResult } from "../request-read";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { writeSessionTranscriptRow } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
-import { txInsertMemoryTemporalEdges, type MemoryTemporalEdgeInput } from "../temporal-edges";
+import { type MemoryTemporalEdgeInput, txInsertMemoryTemporalEdges } from "../temporal-edges";
 import { normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import {
 	type SupersedeMemoryTxStatus,
@@ -66,33 +69,33 @@ import {
 	txSupersedeMemory,
 } from "../transactions";
 import {
-	type ProjectionNode,
 	cacheProjection,
 	computeProjection,
 	computeProjectionForQuery,
 	getCachedProjection,
+	type ProjectionNode,
 } from "../umap-projection";
 import {
 	AGENTS_DIR,
-	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
 	authForgetLimiter,
 	authModifyLimiter,
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
+	PROJECTION_ERROR_TTL_MS,
 	projectionErrors,
 	projectionInFlight,
 } from "./state";
 
 import {
-	type FilterParams,
-	type ForgetCandidatesRequest,
 	blobToVector,
 	buildForgetConfirmToken,
 	buildWhere,
 	checkEmbeddingProvider,
 	chunkBySentence,
+	type FilterParams,
+	type ForgetCandidatesRequest,
 	inferType,
 	loadForgetCandidates,
 	loadForgetCandidatesByIds,
@@ -122,7 +125,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:124",
+			siteToken: "routes/memory-routes.ts:127",
 		}),
 	};
 }
@@ -1316,7 +1319,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 	});
 	app.post("/api/memory/codex-native-note", async (c) => {
-		const body = await c.req.json().catch(() => ({}));
+		const principal = c.get("principal");
+		if (c.get("organization") && (!principal || principal.role !== "admin" || !principal.permissions.has("admin")))
+			return c.json({ error: "Requires the admin role", reason: "permission", required: "admin" }, 403);
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const content = typeof body.content === "string" ? body.content.trim() : "";
 		if (!content) return c.json({ error: "content is required" }, 400);
 		if (content.length > 8000) return c.json({ error: "content must be at most 8000 characters" }, 400);
@@ -1399,7 +1405,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		};
 
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -2529,7 +2535,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return c.json({ error: "Unknown mutation result" }, 500);
 	});
 	app.patch("/api/memory/:id", async (c) => {
-		const payload = toRecord(await c.req.json().catch(() => null));
+		const payload = toRecord(await jsonBody(c)().catch(() => null));
 		if (!payload) {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -2813,7 +2819,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Tombstone failed" }, 409);
 	});
 	app.post("/api/memories/:id/supersede", async (c) => {
-		const payload = toRecord(await c.req.json().catch(() => null));
+		const payload = toRecord(await jsonBody(c)().catch(() => null));
 		if (!payload) return c.json({ error: "Invalid JSON body" }, 400);
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
@@ -2864,7 +2870,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Supersede failed" }, 409);
 	});
 	app.post("/api/memory/feedback", async (c) => {
-		const payload = toRecord(await c.req.json().catch(() => null));
+		const payload = toRecord(await jsonBody(c)().catch(() => null));
 		if (!payload) {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -2914,7 +2920,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 	});
 	app.post("/api/memory/forget", async (c) => {
-		const payload = toRecord(await c.req.json().catch(() => null));
+		const payload = toRecord(await jsonBody(c)().catch(() => null));
 		if (!payload) {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -3078,7 +3084,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		});
 	});
 	app.post("/api/memory/modify", async (c) => {
-		const payload = toRecord(await c.req.json().catch(() => null));
+		const payload = toRecord(await jsonBody(c)().catch(() => null));
 		if (!payload) {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -3222,7 +3228,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.post("/api/memory/recall", async (c) => {
 		let body: RecallParams;
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -3306,6 +3312,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const result =
 				body.aggregate === true
 					? await aggregateRecallFn(params, cfg, {
+							author: c.get("author"),
 							router: getInferenceRouterOrNullFn(),
 							embedFn: recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
 						})
@@ -3319,6 +3326,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				result,
 				typeof requestedMinScore === "number" ? requestedMinScore : undefined,
 			) as typeof result;
+			reportReadResult(c, agentId, returnedResult.results.length);
 			recordRecallQaTelemetry({
 				route: "POST /api/memory/recall",
 				agentId,
@@ -3757,7 +3765,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.post("/api/documents", async (c) => {
 		let body: Record<string, unknown>;
 		try {
-			body = (await c.req.json()) as Record<string, unknown>;
+			body = (await jsonBody(c)()) as Record<string, unknown>;
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -3799,6 +3807,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
 		await ensureAgentRegistered(scopedAgent.agentId);
 		const metadataJson = documentMetadataJson(body.metadata);
+		const author = c.get("author");
 
 		const accessor = getDbAccessor();
 
@@ -3844,9 +3853,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					scopedProject.project ?? null,
 					now,
 					now,
-					c.get("author")?.userId ?? null,
+					author?.userId ?? null,
 				);
 
+				auditAuthoredWriteInTx(db, author, "document.created", "document", id, scopedAgent.agentId);
 				return { deduplicated: false as const };
 			});
 

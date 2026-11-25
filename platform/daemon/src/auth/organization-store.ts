@@ -1,19 +1,31 @@
-import { createHash, randomBytes, timingSafeEqual, pbkdf2, scrypt } from "node:crypto";
+import { createHash, pbkdf2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { appendRefreshRetry, replayRefreshRetry, RefreshRetryCapacityError } from "./refresh-retry";
-import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
+import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "../db-owner-runtime";
+import { type AgentRecord, bindPrincipalAccess, principalAccess } from "./agent-access";
 import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
-import { bindPrincipalAccess, type AgentRecord } from "./agent-access";
+import { appendRefreshRetry, replayRefreshRetry } from "./refresh-retry";
 import type { Permission, TokenRole } from "./types";
 
 export const statement = ownerStatement;
 export function organizationQuery<T>(s: DbOwnerStatement): Promise<T> {
 	return dbOwnerQuery<T>(s, { operation: "organization.read", lane: "read" });
 }
-export function organizationWrite(statements: readonly DbOwnerStatement[]): Promise<readonly unknown[]> {
-	return dbOwnerTransaction(statements, { operation: "organization.write", lane: "write", deadlineMs: 30_000 });
+export async function organizationWrite(
+	statements: readonly DbOwnerStatement[],
+	conflict?: 401 | 409 | 429,
+): Promise<readonly unknown[]> {
+	try {
+		return await dbOwnerTransaction(statements, { operation: "organization.write", lane: "write", deadlineMs: 30_000 });
+	} catch (error) {
+		if (conflict && error instanceof Error && error.message === "DB owner transaction precondition changed zero rows")
+			throw new IdentityError(
+				conflict,
+				conflict === 401 ? "invalid_credential" : conflict === 429 ? "rate_limit" : "org_policy",
+			);
+		throw error;
+	}
 }
 export function id(prefix: string): string {
 	return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -109,7 +121,7 @@ export function auditStatement(
 	outcome: "ok" | "denied" | "failed" = "ok",
 ): DbOwnerStatement {
 	return statement(
-		"INSERT INTO audit_events (id,at,actor_user_id,actor_credential,action,target_kind,target_id,outcome,detail_json) VALUES (?,?,?,?,?,?,?,?,?)",
+		"INSERT OR IGNORE INTO audit_events (id,at,actor_user_id,actor_credential,action,target_kind,target_id,outcome,detail_json) VALUES (?,?,?,?,?,?,?,?,?)",
 		[
 			id("aud"),
 			new Date().toISOString(),
@@ -141,11 +153,15 @@ function passwordDigest(password: string, salt: Buffer, iterations: number): Pro
 }
 export async function passwordHash(password: string): Promise<string> {
 	const salt = randomBytes(16);
-	const key = await passwordDigest(password, salt, 210_000);
-	return `pbkdf2-sha256$210000$${salt.toString("base64url")}$${key.toString("base64url")}`;
+	const key = await passwordDigest(password, salt, 600_000);
+	return `pbkdf2-sha256$600000$${salt.toString("base64url")}$${key.toString("base64url")}`;
 }
 export async function verifyUserPassword(password: string, hash: string | null): Promise<boolean> {
-	const [algorithm, count, saltText, keyText] = (hash ?? "").split("$");
+	if (!hash) {
+		await passwordDigest(password, Buffer.alloc(16), 600_000);
+		return false;
+	}
+	const [algorithm, count, saltText, keyText] = hash.split("$");
 	const iterations = Number(count);
 	if (
 		algorithm !== "pbkdf2-sha256" ||
@@ -173,7 +189,7 @@ export function personalAgentStatements(userId: string, agentId: string, name: s
 }
 export async function bindAccess(p: Principal, u: UserRow | null, org: OrganizationRow): Promise<void> {
 	if (u && !u.personal_agent_id && org.agent_model === "personal" && org.personal_agents_self_service) {
-		const agentId = `personal-${u.id}`;
+		const agentId = `personal-${u.id.slice(4)}`;
 		const now = new Date().toISOString();
 		await organizationWrite([
 			statement(
@@ -186,7 +202,11 @@ export async function bindAccess(p: Principal, u: UserRow | null, org: Organizat
 		u = await readUser(u.id);
 	}
 	const agents = await organizationQuery<AgentRecord[]>(
-		statement("SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents", [], "all"),
+		statement(
+			"SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE archived_at IS NULL AND (kind = 'organization' OR (kind = 'personal' AND owner_user_id = ?) OR (kind = 'team' AND owner_group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)) OR id = ? OR id = ? OR (? = 'admin' AND kind = 'legacy'))",
+			[p.userId, p.userId, p.boundAgentId, u?.default_read_agent_id ?? null, p.role],
+			"all",
+		),
 	);
 	bindPrincipalAccess(p, {
 		agentModel: org.agent_model,
@@ -196,6 +216,14 @@ export async function bindAccess(p: Principal, u: UserRow | null, org: Organizat
 		defaultReadAgentId: u?.default_read_agent_id ?? null,
 		agents,
 	});
+}
+export async function bindRequestedReadAgent(p: Principal, id: string | undefined): Promise<void> {
+	const access = principalAccess(p);
+	if (!id || !access || access.agents.some((a) => a.id === id)) return;
+	const agent = await organizationQuery<AgentRecord | null>(
+		statement("SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE id=?", [id], "get"),
+	);
+	if (agent) bindPrincipalAccess(p, { ...access, agents: [...access.agents, agent] });
 }
 export async function activeUser(userId: string, deviceId: string | null): Promise<UserRow> {
 	const u = await readUser(userId);
@@ -310,44 +338,47 @@ export const claimSchema = z.object({
 });
 export async function claimOrganization(input: z.infer<typeof claimSchema>) {
 	const org = await readOrganization();
-	if (org.claimed_at || !matchesHash(input.setupToken, org.setup_token_hash))
-		throw new IdentityError(401, "invalid_credential");
+	if (org.claimed_at) throw new IdentityError(409, "org_policy");
+	if (!matchesHash(input.setupToken, org.setup_token_hash)) throw new IdentityError(401, "invalid_credential");
 	const userId = id("usr");
-	const agentId = `personal-${userId}`;
+	const agentId = `personal-${userId.slice(4)}`;
 	const now = new Date().toISOString();
 	const material = sessionMaterial(userId, "browser", null, org);
-	await organizationWrite([
-		{
-			...statement(
-				"UPDATE organization SET name = ?,claimed_at = ?,claimed_by = ?,setup_token_hash = NULL,legacy_key_deadline = ?,updated_at = ? WHERE id = 1 AND claimed_at IS NULL AND setup_token_hash = ?",
+	await organizationWrite(
+		[
+			{
+				...statement(
+					"UPDATE organization SET name = ?,claimed_at = ?,claimed_by = ?,setup_token_hash = NULL,legacy_key_deadline = ?,updated_at = ? WHERE id = 1 AND claimed_at IS NULL AND setup_token_hash = ?",
+					[
+						input.organizationName,
+						now,
+						userId,
+						new Date(Date.now() + 14 * 86400_000).toISOString(),
+						now,
+						org.setup_token_hash,
+					],
+				),
+				requireChanges: true,
+			},
+			statement(
+				"INSERT INTO users (id,username,email,display_name,role,password_hash,created_at,updated_at) VALUES (?,?,?,?,'admin',?,?,?)",
 				[
-					input.organizationName,
-					now,
 					userId,
-					new Date(Date.now() + 14 * 86400_000).toISOString(),
+					input.admin.username,
+					input.admin.email ?? null,
+					input.admin.displayName,
+					await passwordHash(input.admin.password),
 					now,
-					org.setup_token_hash,
+					now,
 				],
 			),
-			requireChanges: true,
-		},
-		statement(
-			"INSERT INTO users (id,username,email,display_name,role,password_hash,created_at,updated_at) VALUES (?,?,?,?,'admin',?,?,?)",
-			[
-				userId,
-				input.admin.username,
-				input.admin.email ?? null,
-				input.admin.displayName,
-				await passwordHash(input.admin.password),
-				now,
-				now,
-			],
-		),
-		statement("UPDATE agents SET kind = 'organization' WHERE id = 'default'"),
-		...personalAgentStatements(userId, agentId, input.admin.displayName),
-		...material.statements,
-		auditStatement(null, "organization.claimed", "organization", "1", { userId }),
-	]);
+			statement("UPDATE agents SET kind = 'organization' WHERE id = 'default'"),
+			...personalAgentStatements(userId, agentId, input.admin.displayName),
+			...material.statements,
+			auditStatement(null, "organization.claimed", "organization", "1", { userId }),
+		],
+		409,
+	);
 	const user = await readUser(userId);
 	if (!user) throw new Error("Claim did not persist its user");
 	const { statements: _statements, ...result } = material;
@@ -373,6 +404,13 @@ export async function verifySession(
 	if (session.access_expires_at <= new Date().toISOString()) throw new IdentityError(401, "expired");
 	const user = await activeUser(session.user_id, session.device_id);
 	if (requireCsrf && (!csrf || !matchesHash(csrf, session.csrf_hash))) throw new IdentityError(403, "csrf");
+	if (session.refresh_retry_json !== "[]")
+		await organizationWrite([
+			statement(
+				"UPDATE auth_sessions SET refresh_retry_json = '[]' WHERE id = ? AND token_hash = ? AND revoked_at IS NULL",
+				[session.id, session.token_hash],
+			),
+		]);
 	const now = Date.now();
 	let currentSession = session;
 	if (!session.last_used_at || Date.parse(session.last_used_at) <= now - 60_000) {
@@ -424,7 +462,10 @@ async function rotateSession(
 	const user = await activeUser(row.user_id, row.device_id);
 	if (!matchesHash(parsed.secret, row.refresh_hash)) {
 		const replay = replayRefreshRetry(row.refresh_retry_json, token, row.id, row.token_hash, row.refresh_hash);
-		if (replay) return { ...replay, sessionId: row.id, deviceId: row.device_id, user: userView(user) };
+		if (replay) {
+			await organizationWrite([auditStatement(null, "session.refresh_replayed", "session", row.id)]);
+			return { ...replay, sessionId: row.id, deviceId: row.device_id, user: userView(user) };
+		}
 		const consumed = await organizationQuery(
 			statement(
 				"SELECT 1 FROM audit_events WHERE action = 'session.refreshed' AND target_id = ? AND json_extract(detail_json,'$.previousRefreshHash') = ? LIMIT 1",
@@ -434,10 +475,10 @@ async function rotateSession(
 		);
 		if (!consumed) throw new IdentityError(401, "invalid_credential");
 		await organizationWrite([
-			statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'refresh_reuse' WHERE id = ?", [
-				new Date().toISOString(),
-				row.id,
-			]),
+			statement(
+				"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'refresh_reuse',refresh_retry_json = '[]' WHERE id = ?",
+				[new Date().toISOString(), row.id],
+			),
 			auditStatement(null, "session.refresh_reuse", "session", row.id),
 		]);
 		throw new IdentityError(401, "refresh_reuse");
@@ -447,18 +488,12 @@ async function rotateSession(
 	const refresh = secret();
 	const accessExpiresAt = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
 	const refreshExpiresAt = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
-	let retryState: string;
-	try {
-		retryState = appendRefreshRetry(row.refresh_retry_json, token, row.id, row.refresh_hash, {
-			accessToken: `sig_ses_${row.id}_${access}`,
-			refreshToken: `sig_ref_${row.id}_${refresh}`,
-			accessExpiresAt,
-			refreshExpiresAt,
-		});
-	} catch (error) {
-		if (error instanceof RefreshRetryCapacityError) throw new IdentityError(429, "rate_limit");
-		throw error;
-	}
+	const retryState = appendRefreshRetry(token, row.id, row.refresh_hash, {
+		accessToken: `sig_ses_${row.id}_${access}`,
+		refreshToken: `sig_ref_${row.id}_${refresh}`,
+		accessExpiresAt,
+		refreshExpiresAt,
+	});
 	try {
 		await organizationWrite([
 			{

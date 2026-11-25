@@ -1,47 +1,28 @@
-import { dirname, resolve } from "node:path";
-import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Database as BunDatabase } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import {
-	resolveWorkspaceLayout,
 	activeVectorProjectionTable,
 	findSqliteVecExtension,
+	resolveWorkspaceLayout,
 	vectorSearchWithMetadata,
 } from "@signet/core";
-import {
-	applyObsidianSourceStructureInTx,
-	applyObsidianSourceStructurePurgeInTx,
-	isObsidianSourceFileIndexedInTx,
-	purgeObsidianSourceFileStructureInTx,
-} from "./obsidian-source-graph";
-import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
-import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { removeAgentInTx } from "./agent-removal";
-import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
-import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
-import { applySourceSnapshotImportInTx } from "./source-snapshots";
-import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
-import type { writeSessionTranscriptRow } from "./session-transcripts";
-import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
-import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
-import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
-import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
+import type { ReadDb, WriteDb } from "./db-accessor";
+import { vectorToBlob } from "./db-helpers";
 import type {
 	DbOwnerCommand,
 	DbOwnerEvent,
 	DbOwnerJob,
 	DbOwnerJobMetrics,
+	DbOwnerNativeMemoryIndex,
 	DbOwnerParameter,
 	DbOwnerRecallPayload,
 	DbOwnerStatement,
-	DbOwnerNativeMemoryIndex,
 	DbOwnerVectorSearchPayload,
 } from "./db-owner-protocol";
-import { applyVectorRepairBatch, VectorRepairAbortError } from "./vector-repair-owner";
-import type { EmbeddingConfig } from "./memory-config";
-import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
-import { vectorToBlob } from "./db-helpers";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
 	DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS,
@@ -51,6 +32,27 @@ import {
 	DB_OWNER_MAX_WORK_UNITS,
 	serializeError,
 } from "./db-owner-protocol";
+import type { PragmaDb } from "./db-vacuum";
+import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
+import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
+import type { EmbeddingConfig } from "./memory-config";
+import { type MemoryArtifactUpsertFields, upsertMemoryArtifactInTx } from "./memory-lineage";
+import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
+import {
+	applyObsidianSourceStructureInTx,
+	applyObsidianSourceStructurePurgeInTx,
+	isObsidianSourceFileIndexedInTx,
+	purgeObsidianSourceFileStructureInTx,
+} from "./obsidian-source-graph";
+import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
+import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
+import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
+import type { writeSessionTranscriptRow } from "./session-transcripts";
+import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
+import { applySourceSnapshotImportInTx } from "./source-snapshots";
+import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
+import { applyVectorRepairBatch, VectorRepairAbortError } from "./vector-repair-owner";
 
 interface SqliteRunResult {
 	readonly changes: number;
@@ -364,10 +366,10 @@ export function runDbOwnerWorker(): void {
 			throw new Error(`DB owner transaction must contain 1 to ${DB_OWNER_MAX_TRANSACTION_STATEMENTS} statements`);
 		}
 		return withBusyRetry(() => {
-			const results = statements.map((statement) => executeStatement({ ...statement, transactional: false }, context));
-			for (let i = 0; i < results.length; i++) {
-				const statement = statements[i];
-				const result = results[i];
+			const results: unknown[] = [];
+			for (const statement of statements) {
+				const result = executeStatement({ ...statement, transactional: false }, context);
+				results.push(result);
 				if (
 					statement?.requireChanges === true &&
 					typeof result === "object" &&
@@ -708,7 +710,7 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "source_evidence_eligibility" }>,
 	): boolean {
 		return sourceHasEligibleUnconsumedEvidence(
-			db as unknown as import("./db-accessor").ReadDb,
+			db as unknown as ReadDb,
 			request.input.agentId,
 			request.input.sourceEntryId,
 			request.input.legacyObsidianRoot,
@@ -719,7 +721,7 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_coverage" }>,
 	): Promise<unknown> {
 		const { scanDreamingEvidenceCoverageStep } = await import("./pipeline/dreaming-evidence-coverage");
-		return scanDreamingEvidenceCoverageStep(db as unknown as import("./db-accessor").ReadDb, request.input);
+		return scanDreamingEvidenceCoverageStep(db as unknown as ReadDb, request.input);
 	}
 
 	function executeSourceGraph(
@@ -733,11 +735,11 @@ export function runDbOwnerWorker(): void {
 		try {
 			let result: unknown;
 			if (request.kind === "source_graph_index") {
-				result = applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+				result = applyObsidianSourceStructureInTx(db as unknown as WriteDb, request.input);
 			} else if (request.kind === "source_graph_file_purge") {
-				result = purgeObsidianSourceFileStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+				result = purgeObsidianSourceFileStructureInTx(db as unknown as WriteDb, request.input);
 			} else {
-				result = applyObsidianSourceStructurePurgeInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+				result = applyObsidianSourceStructurePurgeInTx(db as unknown as WriteDb, request.input);
 			}
 			commit(context);
 			return result;
@@ -930,7 +932,7 @@ export function runDbOwnerWorker(): void {
 		const graphCurrent =
 			input.graph !== undefined &&
 			!artifactChanged &&
-			isObsidianSourceFileIndexedInTx(db as unknown as import("./db-accessor").WriteDb, {
+			isObsidianSourceFileIndexedInTx(db as unknown as WriteDb, {
 				agentId: input.agentId,
 				sourceId: input.graph.sourceId,
 				filePath: sourcePath,
@@ -948,7 +950,7 @@ export function runDbOwnerWorker(): void {
 				).run(input.agentId, checkpoint.sourceKey, sourcePath);
 			}
 			if (graphIndexed && input.graph !== undefined) {
-				applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, {
+				applyObsidianSourceStructureInTx(db as unknown as WriteDb, {
 					agentId: input.agentId,
 					sourceId: input.graph.sourceId,
 					sourceName: input.graph.sourceName,
@@ -997,7 +999,7 @@ export function runDbOwnerWorker(): void {
 	): unknown {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const result = indexSourceArtifactStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+			const result = indexSourceArtifactStructureInTx(db as unknown as WriteDb, request.input);
 			commit(context);
 			return result;
 		} catch (error) {
@@ -1014,7 +1016,7 @@ export function runDbOwnerWorker(): void {
 	): unknown {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const result = purgeSourceArtifactStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+			const result = purgeSourceArtifactStructureInTx(db as unknown as WriteDb, request.input);
 			commit(context);
 			return result;
 		} catch (error) {
@@ -1266,6 +1268,11 @@ export function runDbOwnerWorker(): void {
 				throw error;
 			}
 		}
+		if (job.request.kind === "reflection_answer") {
+			const { txAnswerReflection } = await import("./reflection-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => txAnswerReflection(db, input), context);
+		}
 		if (job.request.kind === "organization_memory_purge") {
 			const { purgeAuthoredMemoryBatchInTx } = await import("./auth/organization-purge");
 			const userId = job.request.userId;
@@ -1315,7 +1322,7 @@ export function runDbOwnerWorker(): void {
 			const { convertToIncrementalVacuum } = await import("./db-vacuum");
 			const pauseMs = Number.parseInt(process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS ?? "0", 10);
 			const activeFile = process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE;
-			const converted = convertToIncrementalVacuum(db as unknown as import("./db-vacuum").PragmaDb, {
+			const converted = convertToIncrementalVacuum(db as unknown as PragmaDb, {
 				dbPath: ownerDbPath,
 				log: () => {},
 				beforeVacuum: () => {

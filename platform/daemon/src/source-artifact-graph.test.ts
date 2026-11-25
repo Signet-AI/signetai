@@ -15,6 +15,7 @@ import type { DreamingConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { runDreamingAgentPass } from "./pipeline/dreaming";
 import { applyDreamingOperations } from "./pipeline/dreaming-operations";
+import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 import {
 	indexSourceArtifactStructure,
 	indexSourceArtifactStructureAsync,
@@ -22,7 +23,6 @@ import {
 } from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
 import { txIngestEnvelope } from "./transactions";
-import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
 it("routes transcript source purge through the DB owner boundary", () => {
 	const source = readFileSync(new URL("./source-purge.ts", import.meta.url), "utf8");
@@ -407,6 +407,7 @@ describe("source artifact graph structure", () => {
 				)
 				.run();
 			txIngestEnvelope(write, {
+				author: { userId: null, credential: "system" },
 				id: "derived-claim",
 				content: "dreaming-derived claim",
 				normalizedContent: "dreaming-derived claim",

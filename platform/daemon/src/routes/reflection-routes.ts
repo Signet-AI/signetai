@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getDbAccessor } from "../db-accessor";
+import { resolveReadAgent } from "../auth/agent-access";
+import { getDbAccessor, type ReadDb } from "../db-accessor";
+import { dbOwnerQuery, dbOwnerReflectionAnswer } from "../db-owner-runtime";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { generateDailyBriefInsights, todayDateInTimeZone } from "../pipeline/reflection-worker";
-import { txIngestEnvelope } from "../transactions";
+import { jsonBody } from "../request-body";
 import { authConfig } from "./state";
+import { resolveScopedAgentId } from "./utils";
 
 const DEFAULT_REFLECTION_LIMIT = 30;
 const MAX_REFLECTION_LIMIT = 100;
@@ -86,18 +88,20 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 	});
 
 	app.get("/api/reflections/today", (c) => {
-		const agentId = c.req.query("agentId") ?? "default";
+		const scoped = resolveScopedAgentId(c, c.req.query("agentId"));
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
 		const date = todayDateInTimeZone(pipelineCfg.reflections.timezone);
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+			const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
 				return db
 					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
 					.all(agentId, date, limit) as ReflectionRow[];
-			}, "routes/reflection-routes.ts:96");
+			}, "routes/reflection-routes.ts:100");
 
 			const reflections = rows.map(formatReflection);
 			return c.json({ reflection: reflections[0] ?? null, reflections });
@@ -108,12 +112,14 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 	});
 
 	app.get("/api/reflections", (c) => {
-		const agentId = c.req.query("agentId") ?? "default";
+		const scoped = resolveScopedAgentId(c, c.req.query("agentId"));
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+			const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
 				return db
 					.prepare(
 						`SELECT id, date, summary, patterns, question, answer,
@@ -124,7 +130,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
                  LIMIT ?`,
 					)
 					.all(agentId, limit) as ReflectionRow[];
-			}, "routes/reflection-routes.ts:116");
+			}, "routes/reflection-routes.ts:122");
 
 			return c.json({ reflections: rows.map(formatReflection) });
 		} catch (e) {
@@ -134,7 +140,9 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 	});
 
 	app.post("/api/reflections/generate", async (c) => {
-		const agentId = c.req.query("agentId") ?? "default";
+		const scoped = resolveScopedAgentId(c, c.req.query("agentId"));
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const date = new Date().toISOString().slice(0, 10);
 
 		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
@@ -165,13 +173,13 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		}
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+		const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
 			return db
 				.prepare(
 					`SELECT * FROM daily_reflections WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`,
 				)
 				.all(...ids) as ReflectionRow[];
-		}, "routes/reflection-routes.ts:168");
+		}, "routes/reflection-routes.ts:176");
 
 		logger.info("reflections", "Generated daily brief questions", { agentId, date, count: rows.length });
 		const reflections = rows.map(formatReflection);
@@ -180,11 +188,13 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 	app.post("/api/reflections/:id/answer", async (c) => {
 		const id = c.req.param("id");
-		const agentId = c.req.query("agentId") ?? "default";
+		const scoped = resolveScopedAgentId(c, c.req.query("agentId"));
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 
 		let body: { answer?: string };
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -199,12 +209,19 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		}
 
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const existing = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-				return db.prepare("SELECT * FROM daily_reflections WHERE id = ? AND agent_id = ?").get(id, agentId) as
-					| ReflectionRow
-					| undefined;
-			}, "routes/reflection-routes.ts:203");
+			const readTarget = c.get("organization")
+				? resolveReadAgent(c.get("principal"), c.get("requestedOrganizationAgent"))
+				: { ok: true as const, value: agentId };
+			if (!readTarget.ok) return c.json({ error: readTarget.error.reason }, 403);
+			const sourceAgentId = readTarget.value;
+			const existing = await dbOwnerQuery<ReflectionRow | null>(
+				{
+					sql: "SELECT * FROM daily_reflections WHERE id=? AND agent_id IN (?,?)",
+					params: [id, sourceAgentId, agentId],
+					result: "get",
+				},
+				{ operation: "reflection.get-for-answer", lane: "read", deadlineMs: 3000 },
+			);
 
 			if (!existing) {
 				return c.json({ error: "Reflection not found" }, 404);
@@ -216,38 +233,10 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 			const now = new Date().toISOString();
 			const memoryId = randomUUID();
 
-			let claimed = false;
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			resolveDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
-				const result = db
-					.prepare(
-						`UPDATE daily_reflections
-						 SET answer = ?, answer_memory_id = ?, answered_at = ?
-						 WHERE id = ? AND agent_id = ? AND answer IS NULL`,
-					)
-					.run(answer, memoryId, now, id, agentId);
-
-				if (result.changes === 0) return;
-				claimed = true;
-
-				txIngestEnvelope(db, {
-					id: memoryId,
-					content: answer,
-					contentHash: `reflection-a-${id}`,
-					who: agentId,
-					why: "daily-reflection-answer",
-					project: null,
-					importance: 0.6,
-					type: "reflection",
-					tags: "reflection,answered",
-					pinned: 0,
-					memoryKind: "episodic",
-					sourceType: "reflection-answer",
-					sourceId: id,
-					agentId,
-					createdAt: now,
-				});
-			}, "routes/reflection-routes.ts:221");
+			const claimed = await dbOwnerReflectionAnswer(
+				{ id, sourceAgentId: existing.agent_id, agentId, memoryId, answer, now, author: c.get("author") },
+				resolveDbAccessor(),
+			);
 
 			if (!claimed) {
 				return c.json({ error: "Already answered" }, 409);

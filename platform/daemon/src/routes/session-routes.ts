@@ -3,7 +3,10 @@ import { resolveAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { buildBlackBoxSession, listBlackBoxSessions } from "../black-box.js";
 import { getAgentPresenceForSessionAgent, listAgentPresence, touchAgentPresence } from "../cross-agent.js";
+import type { ReadDb } from "../db-accessor";
 import { getDbAccessor } from "../db-accessor.js";
+import { jsonBody } from "../request-body";
+import { reportReadResult } from "../request-read";
 import {
 	bypassSession,
 	getActiveSessions,
@@ -17,7 +20,7 @@ import { getSessionTranscriptContent, getStoredSessionTranscriptInfo } from "../
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { clampGitSyncIntervalSeconds } from "./git-config.js";
-import { authConfig, authForgetLimiter, authAdminLimiter } from "./state.js";
+import { authAdminLimiter, authConfig, authForgetLimiter } from "./state.js";
 import {
 	parseOptionalString,
 	readOptionalJsonObject,
@@ -180,7 +183,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const hits = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				searchSessionTranscripts({
 					db,
 					query,
@@ -190,8 +193,9 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:182",
+			"routes/session-routes.ts:185",
 		);
+		reportReadResult(c, scopedAgent.agentId, hits.length);
 		return c.json({ query, hits, count: hits.length });
 	});
 
@@ -423,16 +427,16 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const tableExists = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:425",
+			"routes/session-routes.ts:429",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
 		}
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+		return accessor.withReadDb((db: ReadDb) => {
 			let where = "WHERE agent_id = ?";
 			const params: unknown[] = [agentId];
 
@@ -476,11 +480,11 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:435");
+		}, "routes/session-routes.ts:439");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {
-		const body = await c.req.json().catch(() => ({}));
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const id = typeof body.id === "string" ? body.id.trim() : "";
 		if (!id) {
 			return c.json({ error: "id is required" }, 400);
@@ -576,7 +580,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	});
 
 	app.post("/api/git/config", async (c) => {
-		const body = (await c.req.json()) as Partial<GitConfig>;
+		const body = (await jsonBody(c)()) as Partial<GitConfig>;
 
 		applyGitConfigPatch(gc, body);
 

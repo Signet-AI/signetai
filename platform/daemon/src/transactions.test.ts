@@ -23,6 +23,7 @@ function insertMemory(
 ): void {
 	const now = new Date().toISOString();
 	txIngestEnvelope(asWriteDb(db), {
+		author: { userId: null, credential: "system" },
 		id: input.id,
 		content: input.content,
 		normalizedContent: input.content.toLowerCase(),

@@ -1,16 +1,16 @@
-import { writeAttributionStatements, readWriteAttribution } from "./auth/write-attribution";
-import type { WriteAuthor } from "./auth/audit-owner";
 import { randomUUID } from "node:crypto";
 import type { AgentRosterReadPolicy } from "@signet/core";
 import { getAgentScope } from "./agent-id";
+import type { WriteAuthor } from "./auth/audit-owner";
+import { authoredAuditStatements, requireWriteAuthor } from "./auth/audit-owner";
 import {
 	type AgentMessage,
 	type CrossAgentMessageRow,
 	isMessageVisibleToAgent,
 	rowToAgentMessage,
 } from "./cross-agent";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import type { DbOwnerParameter, DbOwnerStatement } from "./db-owner-protocol";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import type { BoardActivityNotice } from "./notifications/cross-agent-notifications";
@@ -50,7 +50,7 @@ export type BoardViewer =
 	  };
 
 export interface BoardAuthor {
-	readonly principalAuthor?: WriteAuthor;
+	readonly principalAuthor: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionKey?: string;
 	readonly harness?: string;
@@ -352,6 +352,8 @@ interface ThreadRow {
 }
 
 interface PostRow {
+	readonly author_user_id: string | null;
+	readonly author_credential: string | null;
 	readonly id: string;
 	readonly thread_id: string;
 	readonly author_agent_id: string;
@@ -460,9 +462,13 @@ async function readVisibleThread(threadId: string, viewer: BoardViewer): Promise
 	return threadFromRow(row, viewer);
 }
 
-async function readPost(postId: string): Promise<BoardPost | null> {
+async function readPostRow(postId: string): Promise<PostRow | null> {
 	const rows = await readAll<PostRow>("SELECT * FROM board_posts WHERE id = ?", [postId], "board.post.read");
-	return rows[0] ? postFromRow(rows[0]) : null;
+	return rows[0] ?? null;
+}
+async function readPost(postId: string): Promise<BoardPost | null> {
+	const row = await readPostRow(postId);
+	return row ? postFromRow(row) : null;
 }
 
 export async function listBoardTopics(viewer: BoardViewer): Promise<readonly BoardTopic[]> {
@@ -727,8 +733,13 @@ export async function createBoardThread(input: {
 		BOARD_LIMITS.threadTitle,
 	);
 	const postAuthor: BoardAuthor =
-		promoted && !input.author.principalAuthor
-			? { agentId: promoted.fromAgentId, sessionKey: promoted.fromSessionKey, harness: undefined }
+		promoted && input.author.principalAuthor.userId === null
+			? {
+					principalAuthor: input.author.principalAuthor,
+					agentId: promoted.fromAgentId,
+					sessionKey: promoted.fromSessionKey,
+					harness: undefined,
+				}
 			: input.author;
 	const now = new Date(input.nowMs ?? Date.now()).toISOString();
 	const threadId = randomUUID();
@@ -763,15 +774,27 @@ export async function createBoardThread(input: {
 			),
 			ownerStatement(
 				`INSERT INTO board_posts (
-					id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
-				) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, NULL, ?)`,
-				[postId, threadId, postAuthor.agentId, postAuthor.sessionKey ?? null, postAuthor.harness ?? null, body, now],
+					id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at,author_user_id,author_credential
+				) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, NULL, ?,?,?)`,
+				[
+					postId,
+					threadId,
+					postAuthor.agentId,
+					postAuthor.sessionKey ?? null,
+					postAuthor.harness ?? null,
+					body,
+					now,
+					requireWriteAuthor(input.author.principalAuthor).userId,
+					requireWriteAuthor(input.author.principalAuthor).credential,
+				],
 			),
-			...writeAttributionStatements(input.author.principalAuthor, {
-				kind: "board_post",
-				id: postId,
-				agentId: postAuthor.agentId,
-			}),
+			...authoredAuditStatements(
+				input.author.principalAuthor,
+				"board.post.created",
+				"board_post",
+				postId,
+				postAuthor.agentId,
+			),
 		],
 		"board.thread.create",
 	);
@@ -828,8 +851,8 @@ export async function replyToBoardThread(input: {
 				},
 				ownerStatement(
 					`INSERT INTO board_posts (
-						id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
-					) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, ?, ?)`,
+						id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at,author_user_id,author_credential
+					) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, ?, ?,?,?)`,
 					[
 						postId,
 						thread.id,
@@ -839,15 +862,19 @@ export async function replyToBoardThread(input: {
 						body,
 						replyToPostId,
 						now,
+						requireWriteAuthor(input.author.principalAuthor).userId,
+						requireWriteAuthor(input.author.principalAuthor).credential,
 					],
 				),
-				...writeAttributionStatements(input.author.principalAuthor, {
-					kind: "board_post",
-					id: postId,
-					agentId: input.author.agentId,
-				}),
+				...authoredAuditStatements(
+					input.author.principalAuthor,
+					"board.post.created",
+					"board_post",
+					postId,
+					input.author.agentId,
+				),
 			],
-			"board.post.create",
+			"board.post.reply",
 		);
 	} catch (error) {
 		if (error instanceof Error && /changed zero rows/.test(error.message)) {
@@ -1077,10 +1104,12 @@ function renderPostArtifact(thread: BoardThread, post: BoardPost): string {
 }
 
 export async function projectBoardPost(postId: string): Promise<boolean> {
-	const post = await readPost(postId);
-	if (!post) return false;
+	const row = await readPostRow(postId);
+	if (!row) return false;
+	const post = postFromRow(row);
 	const thread = await readVisibleThread(post.threadId, { kind: "operator" });
-	const author = await readWriteAttribution({ kind: "board_post", id: post.id, agentId: post.authorAgentId });
+	const author: WriteAuthor = { userId: row.author_user_id, credential: row.author_credential ?? "system" };
+
 	const participants = await readAll<{ readonly author_agent_id: string }>(
 		`SELECT DISTINCT author_agent_id FROM board_posts
 		 WHERE thread_id = ? AND created_at <= ?`,

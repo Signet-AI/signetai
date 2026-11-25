@@ -1,16 +1,16 @@
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
-import type { Context } from "hono";
-import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { commitCompactionSummary } from "../session-transcripts";
-import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
-
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
+import {
+	boardAuthorAudience,
+	claimBoardActivityNotices,
+	createBoardEventVisibility,
+	resolveBoardViewer,
+} from "../board";
 import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import {
 	type AcpDeliveryAttempt,
@@ -34,28 +34,30 @@ import {
 	touchAgentPresence,
 	upsertAgentPresence,
 } from "../cross-agent";
-import { boardAuthorAudience, createBoardEventVisibility, resolveBoardViewer } from "../board";
-import { contextFromProject, parsePresenceContext, type AgentPresenceContextPatch } from "../cross-agent-context";
+import { type AgentPresenceContextPatch, contextFromProject, parsePresenceContext } from "../cross-agent-context";
 import {
+	canViewSessionOf,
 	INSPECT_DEFAULT_MESSAGES,
 	INSPECT_MAX_MESSAGES,
-	canViewSessionOf,
-	resolvePresenceAudience,
 	readTranscriptTail,
+	resolvePresenceAudience,
 } from "../cross-agent-inspect";
-import { getDbAccessor } from "../db-accessor";
+import {
+	consumeSessionEndWake,
+	MAX_WAKE_RELEASE_IDS,
+	MAX_WAKE_WAIT_MS,
+	releaseDirectMessageWakes,
+	releaseWakeClaimsWithRetry,
+	waitForDirectMessageWake,
+	wasWokenSince,
+} from "../cross-agent-wake";
+import { getDbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
+import { DbOwnerAdmissionError, DbOwnerDiedError, DbOwnerError } from "../db-owner-client";
+import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import type { EmbeddingRole } from "../embedding-profile";
 import {
 	type CheckpointExtractRequest,
-	type PreCompactionRequest,
-	type RecallRequest,
-	type RememberRequest,
-	type SessionEndRequest,
-	type SessionStartRequest,
-	type StopResponse,
-	type SynthesisRequest,
-	type UserPromptSubmitRequest,
 	handleCheckpointExtract,
 	handlePreCompaction,
 	handleSessionEnd,
@@ -63,31 +65,38 @@ import {
 	handleStop,
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
+	type PreCompactionRequest,
+	type RecallRequest,
+	type RememberRequest,
 	resetSessionStartDedupe,
+	type SessionEndRequest,
+	type SessionStartRequest,
+	type StopResponse,
+	type SynthesisRequest,
+	type UserPromptSubmitRequest,
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
-import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { hybridRecall, type RecallParams } from "../memory-search";
 import {
-	type BoardActivityNotice,
-	type HookNotificationsBlock,
 	appendNotificationInject,
+	type BoardActivityNotice,
 	collectCrossAgentNotifications,
+	type HookNotificationsBlock,
 	isNotificationCompatibleHook,
 } from "../notifications/cross-agent-notifications";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
-import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
-import { openBoundedSse } from "../sse-stream.js";
+import { normalizePipelineCause, type PipelineCauseFamily, recordPipelineOperation } from "../pipeline-operation";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
+import { jsonBody } from "../request-body";
+import { reportReadResult } from "../request-read";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
 import { recallSessionKey } from "../session-start-state";
 import {
-	type RuntimePath,
 	claimSession,
 	clearEndedSession,
 	getActiveSessions,
@@ -97,28 +106,21 @@ import {
 	isSessionBypassed,
 	markSessionEnded,
 	normalizeSessionKey,
+	type RuntimePath,
 	releaseSession,
 	renewSession,
 } from "../session-tracker.js";
+import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
+import { commitCompactionSummary } from "../session-transcripts";
 import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
+import { openBoundedSse } from "../sse-stream.js";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
-import { claimBoardActivityNotices } from "../board";
-import {
-	MAX_WAKE_RELEASE_IDS,
-	MAX_WAKE_WAIT_MS,
-	consumeSessionEndWake,
-	releaseDirectMessageWakes,
-	releaseWakeClaimsWithRetry,
-	waitForDirectMessageWake,
-	wasWokenSince,
-} from "../cross-agent-wake";
+import { isRetryableWritePressure, WRITE_PRESSURE_RETRY_AFTER_SECONDS } from "../write-pressure";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
-	INTERNAL_SELF_HOST,
-	PORT,
 	authConfig,
 	authCrossAgentMessageLimiter,
 	authRecallLlmLimiter,
@@ -137,7 +139,6 @@ import {
 	validateSessionAgentBinding,
 	validateSessionControl,
 } from "./utils";
-import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 async function checkTranscriptLifecycle(input: Parameters<typeof updateTranscriptLifecycle>[0]): Promise<void> {
 	try {
@@ -462,7 +463,7 @@ function registerSessionStart(app: Hono): void {
 		let recallAttempted = false;
 		let recallOutcomeRecorded = false;
 		try {
-			const body = (await c.req.json()) as SessionStartRequest;
+			const body = (await jsonBody(c)()) as SessionStartRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -582,7 +583,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			return c.json({ inject: "", dynamicContext: "", memoryCount: 0 });
 		}
 		try {
-			const body = (await c.req.json()) as UserPromptSubmitRequest;
+			const body = (await jsonBody(c)()) as UserPromptSubmitRequest;
 
 			const hasUserMessage = typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
 			const hasUserPrompt = typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
@@ -885,7 +886,13 @@ function registerStop(app: Hono): void {
 				release();
 			}
 		},
-		bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+		(c, next) =>
+			c.get("jsonBodyParsed")
+				? next()
+				: bodyLimit({ maxSize: 2 * 1_048_576, onError: (ctx) => ctx.json({ error: "payload too large" }, 413) })(
+						c,
+						next,
+					),
 		async (c) => {
 			if (isInternalCall(c)) return c.json({ recorded: false });
 			try {
@@ -982,7 +989,7 @@ function registerSessionEnd(app: Hono): void {
 		}
 		const requestStartedAt = performance.now();
 		try {
-			const body = (await c.req.json()) as SessionEndRequest;
+			const body = (await jsonBody(c)()) as SessionEndRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -1091,7 +1098,7 @@ function registerSkillInvocation(app: Hono): void {
 			return c.json({ recorded: false });
 		}
 		try {
-			const body = toRecord(await c.req.json()) ?? {};
+			const body = toRecord(await jsonBody(c)()) ?? {};
 			const harness = parseOptionalString(body.harness);
 			const skillName = parseOptionalString(body.skillName ?? body.skill);
 			if (!harness) return c.json({ error: "harness is required" }, 400);
@@ -1156,7 +1163,7 @@ function registerCheckpointExtract(app: Hono): void {
 			return c.json({ skipped: true });
 		}
 		try {
-			const body = (await c.req.json()) as CheckpointExtractRequest;
+			const body = (await jsonBody(c)()) as CheckpointExtractRequest;
 
 			if (!body.harness || !body.sessionKey) {
 				return c.json({ error: "harness and sessionKey are required" }, 400);
@@ -1209,7 +1216,7 @@ function registerRemember(app: Hono): void {
 			return c.json({ success: true, memories: [] });
 		}
 		try {
-			const body = (await c.req.json()) as RememberRequest;
+			const body = (await jsonBody(c)()) as RememberRequest;
 
 			if (!body.harness || !body.content) {
 				return c.json({ error: "harness and content are required" }, 400);
@@ -1230,16 +1237,19 @@ function registerRemember(app: Hono): void {
 				return c.json({ success: true, memories: [], bypassed: true });
 			}
 
-			const headers: Record<string, string> = { "Content-Type": "application/json" };
-			const auth = c.req.header("authorization");
-			if (auth) headers.Authorization = auth;
+			const headers = new Headers(c.req.raw.headers);
+			headers.set("content-type", "application/json");
+			const payload = JSON.stringify(body);
+			headers.set("content-length", String(new TextEncoder().encode(payload).byteLength));
 			const sessionKey = c.req.header("x-signet-session-key") ?? body.sessionKey;
-			if (sessionKey) headers["x-signet-session-key"] = sessionKey;
-			return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-			});
+			if (sessionKey) headers.set("x-signet-session-key", sessionKey);
+			const target = new URL(c.req.url);
+			target.pathname = "/api/memory/remember";
+			return app.request(
+				target.toString(),
+				{ method: "POST", headers, body: payload, signal: c.req.raw.signal },
+				c.env,
+			);
 		} catch (e) {
 			logger.error("hooks", "Remember hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
@@ -1255,7 +1265,7 @@ function registerRecall(app: Hono): void {
 		const recallSurface = "tool_call" as const;
 		return recordHookRecallOperation(async () => {
 			try {
-				const body = (await c.req.json()) as RecallRequest;
+				const body = (await jsonBody(c)()) as RecallRequest;
 
 				if (!body.harness || !body.query) {
 					return c.json({ error: "harness and query are required" }, 400);
@@ -1291,10 +1301,12 @@ function registerRecall(app: Hono): void {
 					if (denied) return denied;
 				}
 
-				const agentId = resolveAgentId({
-					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-					sessionKey: body.sessionKey,
-				});
+				const scopedRecall = resolveScopedAgentId(
+					c,
+					resolveAgentId({ agentId: body.agentId ?? c.req.header("x-signet-agent-id"), sessionKey: body.sessionKey }),
+				);
+				if (scopedRecall.error) return c.json({ error: scopedRecall.error }, 403);
+				const agentId = scopedRecall.agentId;
 				if (aggregateSaveRequested) {
 					const aggAuth = c.get("auth");
 					if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
@@ -1370,10 +1382,12 @@ function registerRecall(app: Hono): void {
 				const result =
 					body.aggregate === true
 						? await aggregateRecall(params, cfg, {
+								author: c.get("author"),
 								router: getInferenceRouterOrNull(),
 								embedFn,
 							})
 						: await hybridRecall(params, cfg, embedFn);
+				reportReadResult(c, agentId, result.results.length);
 				if (result.meta.partial === true || result.aggregate?.partial === true || embeddingDegraded) {
 					c.header("x-signet-operation-degraded", "1");
 					if (result.meta.partial === true) {
@@ -1406,7 +1420,7 @@ function registerRecall(app: Hono): void {
 function registerPreCompaction(app: Hono): void {
 	app.post("/api/hooks/pre-compaction", async (c) => {
 		try {
-			const rawBody = toRecord(await c.req.json()) ?? {};
+			const rawBody = toRecord(await jsonBody(c)()) ?? {};
 			const transcriptPath =
 				parseOptionalString(rawBody.transcriptPath) ?? parseOptionalString(rawBody.transcript_path);
 			const body = rawBody as unknown as PreCompactionRequest;
@@ -1469,7 +1483,7 @@ function registerPreCompaction(app: Hono): void {
 function registerCompactionComplete(app: Hono): void {
 	app.post("/api/hooks/compaction-complete", async (c) => {
 		try {
-			const body = (await c.req.json()) as {
+			const body = (await jsonBody(c)()) as {
 				harness: string;
 				summary: string;
 				sessionKey?: string;
@@ -1527,7 +1541,7 @@ function registerCompactionComplete(app: Hono): void {
 			const transcriptRow = body.sessionKey
 				? // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 					getDbAccessor().withReadDb(
-						(db: import("../db-accessor").ReadDb) =>
+						(db: ReadDb) =>
 							db
 								.prepare(
 									`SELECT project
@@ -1556,6 +1570,7 @@ function registerCompactionComplete(app: Hono): void {
 			const summaryId = noise ? null : crypto.randomUUID();
 			if (summaryId) {
 				const admitted = await commitCompactionSummary(getDbAccessor(), {
+					author: c.get("author"),
 					agentId,
 					sessionKey: body.sessionKey ?? null,
 					harness: body.harness,
@@ -1569,6 +1584,7 @@ function registerCompactionComplete(app: Hono): void {
 
 				try {
 					await writeCompactionArtifact({
+						author: c.get("author"),
 						agentId,
 						sessionId,
 						sessionKey: body.sessionKey ?? null,
@@ -1609,7 +1625,7 @@ function registerCompactionComplete(app: Hono): void {
 			if (body.sessionKey) {
 				try {
 					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+					getDbAccessor().withWriteTx((db: WriteDb) => {
 						const hasTx = db
 							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
 							.get();
@@ -2241,7 +2257,7 @@ function registerSynthesis(app: Hono): void {
 	});
 	app.post("/api/hooks/synthesis", async (c) => {
 		try {
-			const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
+			const body = (await jsonBody(c)()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
 			const scopedAgent = resolveScopedAgentId(
 				c,
 				resolveAgentId({

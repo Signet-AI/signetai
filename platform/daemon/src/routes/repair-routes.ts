@@ -1,30 +1,29 @@
-import type { Context, Hono } from "hono";
 import { spawnHidden } from "@signet/core";
+import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type AuthConfig, requirePermission } from "../auth";
+import type { ReadDb, WriteDb } from "../db-accessor";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { fetchEmbedding } from "../embedding-fetch.js";
 import { linkMemoryToEntities, previewMemoryEntityLinks } from "../inline-entity-linker.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
 import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
-import { resolveScopedAgent } from "../request-scope";
-import { openBoundedSse } from "../sse-stream.js";
 import {
-	type RepairContext,
-	type RepairResult,
 	checkFtsConsistency,
 	cleanOrphanedEmbeddings,
 	deduplicateMemories,
 	findDeadMemories,
 	forgetDeadMemories,
+	type GenericEntityCursor,
 	getDedupStats,
 	getEmbeddingGapStats,
 	integrityCheck,
 	pruneChunkGroupEntities,
 	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
-	type GenericEntityCursor,
+	type RepairContext,
+	type RepairResult,
 	rebuildDerivedIndexes,
 	reembedMissingMemories,
 	reembedModelMigration,
@@ -32,13 +31,16 @@ import {
 	requeueDeadJobs,
 	resyncVectorIndex,
 } from "../repair-actions.js";
+import { jsonBody } from "../request-body";
+import { resolveScopedAgent } from "../request-scope";
+import { openBoundedSse } from "../sse-stream.js";
 import { which } from "../which.js";
 import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
+import { resolveOperationalActor } from "./utils";
 
 function resolveRepairContext(c: Context): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "manual repair";
-	const actor = c.req.header("x-signet-actor") ?? "operator";
-	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as "operator" | "agent" | "daemon";
+	const { actor, actorType } = resolveOperationalActor(c);
 	const requestId = c.req.header("x-signet-request-id") ?? crypto.randomUUID();
 	return { reason, actor, actorType, requestId };
 }
@@ -143,7 +145,7 @@ export function registerRepairRoutes(
 		const ctx = resolveRepairContext(c);
 		let repair = false;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			repair = body?.repair === true;
 		} catch {}
 		const result = await checkFtsConsistency(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, repair);
@@ -193,7 +195,7 @@ export function registerRepairRoutes(
 
 		let body: Record<string, unknown> = {};
 		try {
-			body = asRecord(await c.req.json());
+			body = asRecord(await jsonBody(c)());
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 			operationId = readString(body, "operationId") ?? readString(body, "operation_id");
@@ -240,7 +242,7 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/re-embed-migration", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const body = asRecord(await c.req.json().catch(() => ({})));
+		const body = asRecord(await jsonBody(c)().catch((): Record<string, unknown> => ({})));
 		const scoped = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			effectiveAuthConfig.mode,
@@ -269,7 +271,7 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/resync-vec", async (c) => {
 		const cfg = resolveMemoryConfig(AGENTS_DIR);
-		const body = asRecord(await c.req.json().catch(() => ({})));
+		const body = asRecord(await jsonBody(c)().catch((): Record<string, unknown> => ({})));
 		const ctx = resolveRepairContext(c);
 		const globalRejection = rejectGlobalVectorRepair(body);
 		if (globalRejection !== null) return globalRejection;
@@ -297,7 +299,7 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/clean-orphans", async (c) => {
 		const cfg = resolveMemoryConfig(AGENTS_DIR);
-		const body = asRecord(await c.req.json().catch(() => ({})));
+		const body = asRecord(await jsonBody(c)().catch((): Record<string, unknown> => ({})));
 		const ctx = resolveRepairContext(c);
 		const globalRejection = rejectGlobalVectorRepair(body);
 		if (globalRejection !== null) return globalRejection;
@@ -346,7 +348,7 @@ export function registerRepairRoutes(
 			semanticEnabled?: boolean;
 		} = {};
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") options.batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") options.dryRun = body.dryRun;
 			if (typeof body?.semanticThreshold === "number") options.semanticThreshold = body.semanticThreshold;
@@ -372,7 +374,7 @@ export function registerRepairRoutes(
 		let batchSize = 500;
 		let dryRun = false;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
 		} catch {}
@@ -390,7 +392,7 @@ export function registerRepairRoutes(
 		let dryRun = false;
 		let maxMentions = 1;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body?.maxMentions === "number") maxMentions = body.maxMentions;
@@ -413,7 +415,7 @@ export function registerRepairRoutes(
 		let dryRun = true;
 		let body: Record<string, unknown> = {};
 		try {
-			body = asRecord(await c.req.json());
+			body = asRecord(await jsonBody(c)());
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.candidateLimit === "number") candidateLimit = body.candidateLimit;
 			if (typeof body?.inspectionLimit === "number") inspectionLimit = body.inspectionLimit;
@@ -448,7 +450,7 @@ export function registerRepairRoutes(
 		const accessor = getDbAccessor();
 		return c.json(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+			accessor.withReadDb((db: ReadDb) => {
 				const tableExists = db
 					.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`)
 					.get();
@@ -499,7 +501,7 @@ export function registerRepairRoutes(
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		const result = getDbAccessor().withWriteTx(
-			(db: import("../db-accessor").WriteDb) => clusterEntities(db, scoped.agentId),
+			(db: WriteDb) => clusterEntities(db, scoped.agentId),
 			"db:repair.cluster-entities.write",
 		);
 		return c.json(result);
@@ -510,7 +512,7 @@ export function registerRepairRoutes(
 		let dryRun = false;
 		let body: Record<string, unknown> = {};
 		try {
-			body = asRecord(await c.req.json());
+			body = asRecord(await jsonBody(c)());
 			if (typeof body.batchSize === "number" && Number.isFinite(body.batchSize) && body.batchSize > 0) {
 				batchSize = Math.min(Math.floor(body.batchSize), 500);
 			}
@@ -531,7 +533,7 @@ export function registerRepairRoutes(
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const unlinked = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				db
 					.prepare(
 						`SELECT id, content FROM memories
@@ -561,7 +563,7 @@ export function registerRepairRoutes(
 
 		if (dryRun) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const preview = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+			const preview = accessor.withReadDb((db: ReadDb) => {
 				let linked = 0;
 				let entities = 0;
 				let aspects = 0;
@@ -613,7 +615,7 @@ export function registerRepairRoutes(
 		for (const mem of unlinked) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			const result = accessor.withWriteTx(
-				(db: import("../db-accessor").WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, scoped.agentId),
+				(db: WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, scoped.agentId),
 				"db:repair.relink-entities.write",
 			);
 			linked += result.linked;
@@ -624,7 +626,7 @@ export function registerRepairRoutes(
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				(
 					db
 						.prepare(
@@ -659,14 +661,14 @@ export function registerRepairRoutes(
 
 		let batchSize = 50;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") batchSize = Math.min(body.batchSize, 200);
 		} catch {}
 
 		const accessor = getDbAccessor();
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const unhinted = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				db
 					.prepare(
 						`SELECT m.id, m.content FROM memories m
@@ -691,7 +693,7 @@ export function registerRepairRoutes(
 		const { enqueueHintsJob: enqueue } = await import("../pipeline/prospective-index.js");
 		let enqueued = 0;
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+		accessor.withWriteTx((db: WriteDb) => {
 			for (const mem of unhinted) {
 				enqueue(db, mem.id, mem.content);
 				enqueued++;
@@ -700,7 +702,7 @@ export function registerRepairRoutes(
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				(
 					db
 						.prepare(
@@ -741,7 +743,7 @@ export function registerRepairRoutes(
 		}
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const dead = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
+			(db: ReadDb) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
 			"db:repair.dead-memories.read",
 		);
 		return c.json({ count: dead.length, memories: dead });
@@ -750,7 +752,7 @@ export function registerRepairRoutes(
 	app.post("/api/repair/dead-memories/forget", async (c) => {
 		let ids: unknown;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			ids = body?.ids;
 		} catch {
 			return c.json({ error: "Request body must be JSON with an ids array" }, 400);
@@ -813,7 +815,7 @@ export function registerRepairRoutes(
 	});
 
 	app.post("/api/troubleshoot/exec", async (c) => {
-		const body = await c.req.json().catch(() => null);
+		const body = await jsonBody(c)().catch(() => null);
 		const key = typeof body === "object" && body !== null && "key" in body ? String(body.key) : "";
 
 		const cmd = TROUBLESHOOT_COMMANDS[key];

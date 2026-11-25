@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { extractOntologyProposals } from "./ontology-extraction";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	supersedeEpistemicAssertion,
 } from "./ontology-assertions";
+import { extractOntologyProposals } from "./ontology-extraction";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
 
 describe("epistemic assertions", () => {
@@ -226,11 +226,13 @@ describe("epistemic assertions", () => {
 		});
 
 		const extractedAnt = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "shared-conversation-ant",
 			writeAssertions: true,
 		});
 		const extractedDot = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "dot",
 			from: "shared-conversation-dot",
 			writeAssertions: true,

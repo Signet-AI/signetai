@@ -1,4 +1,5 @@
 import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
+import type { WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { validateDerivedMemorySourceInTx } from "./derived-memory-provenance";
 import { resolveEntityRecordByName } from "./knowledge-graph";
@@ -31,7 +32,7 @@ export interface CreateEpistemicAssertionInput {
 	readonly claimAttributeId?: string | null;
 	readonly supersedesAssertionId?: string | null;
 	readonly createdBy?: string | null;
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 }
 
 export interface ListEpistemicAssertionsParams {
@@ -303,7 +304,7 @@ export function createEpistemicAssertion(
 	input: CreateEpistemicAssertionInput,
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), "ontology-assertions.ts:306");
+	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), "ontology-assertions.ts:307");
 }
 
 export function createEpistemicAssertionsInTx(
@@ -380,7 +381,7 @@ export function listEpistemicAssertions(
 			)
 			.get(...args) as { count: number } | undefined;
 		return { items: rows.map(rowToAssertion), count: count?.count ?? rows.length };
-	}, "ontology-assertions.ts:325");
+	}, "ontology-assertions.ts:326");
 }
 
 export function getEpistemicAssertion(
@@ -399,7 +400,7 @@ export function getEpistemicAssertion(
 			)
 			.get(params.id, observerId) as Record<string, unknown> | undefined;
 		return row ? rowToAssertion(row) : null;
-	}, "ontology-assertions.ts:391");
+	}, "ontology-assertions.ts:392");
 }
 
 export function linkEpistemicAssertionClaim(
@@ -427,7 +428,7 @@ export function linkEpistemicAssertionClaim(
 			)
 			.get(params.id, params.agentId) as Record<string, unknown>;
 		return rowToAssertion(row);
-	}, "ontology-assertions.ts:410");
+	}, "ontology-assertions.ts:411");
 }
 
 export function archiveEpistemicAssertion(
@@ -436,7 +437,7 @@ export function archiveEpistemicAssertion(
 		readonly agentId: string;
 		readonly id: string;
 		readonly actor: string;
-		readonly author?: import("./auth/audit-owner").WriteAuthor;
+		readonly author?: WriteAuthor;
 		readonly reason?: string | null;
 	},
 ): EpistemicAssertion {
@@ -461,7 +462,7 @@ export function archiveEpistemicAssertion(
 			)
 			.get(params.id, params.agentId) as Record<string, unknown>;
 		return rowToAssertion(row);
-	}, "ontology-assertions.ts:444");
+	}, "ontology-assertions.ts:445");
 }
 
 export function supersedeEpistemicAssertion(
@@ -502,5 +503,5 @@ export function supersedeEpistemicAssertion(
 			 WHERE id = ? AND agent_id = ?`,
 		).run(new Date().toISOString(), input.oldAssertionId, input.agentId);
 		return next;
-	}, "ontology-assertions.ts:472");
+	}, "ontology-assertions.ts:473");
 }

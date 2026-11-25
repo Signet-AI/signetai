@@ -1,12 +1,12 @@
-import { spawnHidden as spawn } from "@signet/core";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
 	CONNECTOR_PROVIDERS,
+	type ConnectorConfig,
 	findLaunchdExecutable,
 	loadConfiguredHarnesses,
-	type ConnectorConfig,
 	type SyncCursor,
+	spawnHidden as spawn,
 } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
@@ -19,12 +19,14 @@ import {
 	updateConnectorStatus,
 	updateCursor,
 } from "../connectors/registry.js";
+import type { ReadDb, WriteDb } from "../db-accessor";
 import { getDbAccessor } from "../db-accessor.js";
 import { enumerateHarnessConnectors, inspectHarnessConnector } from "../harness-health.js";
 import { resolveHarnessPythonCommand } from "../harness-python.js";
 import { logger } from "../logger.js";
+import { jsonBody } from "../request-body";
 import { which } from "../which.js";
-import { AGENTS_DIR, SCRIPTS_DIR, authConfig, harnessLastSeen } from "./state.js";
+import { AGENTS_DIR, authConfig, harnessLastSeen, SCRIPTS_DIR } from "./state.js";
 
 type ConnectorSyncStartOutcome =
 	| { status: "syncing" }
@@ -141,7 +143,7 @@ export function registerConnectorRoutes(app: Hono): void {
 	app.post("/api/connectors", async (c) => {
 		let body: Record<string, unknown>;
 		try {
-			body = (await c.req.json()) as Record<string, unknown>;
+			body = (await jsonBody(c)()) as Record<string, unknown>;
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -279,7 +281,7 @@ export function registerConnectorRoutes(app: Hono): void {
 				const rootPath = config.settings?.rootPath;
 				if (rootPath) {
 					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-					const docs = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+					const docs = accessor.withReadDb((db: ReadDb) => {
 						return db
 							.prepare(
 								`SELECT id FROM documents
@@ -290,7 +292,7 @@ export function registerConnectorRoutes(app: Hono): void {
 					const now = new Date().toISOString();
 					for (const doc of docs) {
 						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-						accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+						accessor.withWriteTx((db: WriteDb) => {
 							db.prepare(
 								`UPDATE documents
 								 SET status = 'deleted',
@@ -321,7 +323,7 @@ export function registerConnectorRoutes(app: Hono): void {
 			}
 
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const docCount = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+			const docCount = accessor.withReadDb((db: ReadDb) => {
 				const config = JSON.parse(connectorRow.config_json) as {
 					settings?: { rootPath?: string };
 				};

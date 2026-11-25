@@ -1,25 +1,27 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { getDbAccessor } from "../db-accessor.js";
 import {
 	DEFAULT_QUEUE_THRESHOLDS,
-	type QueueCounts,
-	type QueueThresholds,
 	type getOldestDeadJob,
 	getQueueDiagnosticsSnapshot,
 	invalidateQueueDiagnosticsCache,
+	type QueueCounts,
+	type QueueThresholds,
 } from "../diagnostics-queue.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import {
-	type RepairContext,
-	type RepairResult,
 	cancelObsoleteJobs,
 	createRateLimiter,
 	pruneTerminalJobs,
+	type RepairContext,
+	type RepairResult,
 	requeueDeadJobs,
 } from "../repair-actions.js";
+import { jsonBody } from "../request-body";
 import { authConfig as daemonAuthConfig, repairLimiter } from "./state.js";
+import { resolveOperationalActor } from "./utils";
 
 function resolveAgentsDir(): string {
 	return process.env.SIGNET_AGENTS_DIR ?? process.env.AGENTS_DIR ?? `${process.env.HOME ?? "/tmp"}/.agents`;
@@ -114,10 +116,9 @@ function parseRepairBody(body: unknown): {
 	return { action: actionRaw, dryRun, options };
 }
 
-function resolveRepairContext(c: { req: { header(name: string): string | undefined } }): RepairContext {
+function resolveRepairContext(c: Context): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "queue repair";
-	const actor = c.req.header("x-signet-actor") ?? "operator";
-	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as "operator" | "agent" | "daemon";
+	const { actor, actorType } = resolveOperationalActor(c);
 	const requestId = c.req.header("x-signet-request-id") ?? crypto.randomUUID();
 	return { reason, actor, actorType, requestId };
 }
@@ -154,8 +155,8 @@ export function registerQueueDiagnosticsRoutes(
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const response = resolveAccessor().withReadDb(
-				(db: import("../db-accessor").ReadDb) => buildQueueDiagnosticsResponse(db),
-				"routes/queue-diagnostics.ts:156",
+				(db: ReadDb) => buildQueueDiagnosticsResponse(db),
+				"routes/queue-diagnostics.ts:157",
 			);
 			return c.json(response);
 		} catch (err) {
@@ -166,7 +167,7 @@ export function registerQueueDiagnosticsRoutes(
 	app.post("/api/diagnostics/queue/repair", adminGuard, async (c) => {
 		let rawBody: unknown;
 		try {
-			rawBody = await c.req.json();
+			rawBody = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "invalid json body" }, 400);
 		}

@@ -1,19 +1,17 @@
-import { execFileHidden as execFile } from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
-	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-	SOURCE_CHUNK_SOURCE_TYPE,
-	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
 	addNotionSource,
 	addObsidianSource,
 	addWebSource,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
+	execFileHidden as execFile,
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	loadSourcesConfig,
 	markSourceIndexed,
 	normalizePublicWebUrl,
@@ -23,13 +21,15 @@ import {
 	removeSourceIfGeneration,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
+	type SignetSourceEntry,
+	SOURCE_CHUNK_SOURCE_TYPE,
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type Permission, requirePermission } from "../auth";
 import { getPeerAddress } from "../auth/middleware";
-import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
 import type { DbOwnerParameter } from "../db-owner-protocol";
+import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import { type ImportExtractionOutcome, readImportedSourceOutcome } from "../imported-source-outcome";
 import { logger } from "../logger";
@@ -41,12 +41,15 @@ import {
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
-
-import { getActiveTelemetry } from "../telemetry";
-import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
-import { authConfig } from "./state.js";
+import { jsonBody } from "../request-body";
 import {
-	type SourceIndexJob,
+	beginSourceDeletion,
+	beginSourceMutation,
+	isSourceDeletionInFlight,
+	SOURCE_DELETION_IN_PROGRESS_ERROR,
+	SOURCE_OPERATION_IN_PROGRESS_ERROR,
+} from "../source-deletion-lock";
+import {
 	beginSourceIndexJob,
 	cancelSourceIndexJob,
 	clearSourceIndexInFlight,
@@ -61,6 +64,7 @@ import {
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	pauseSourceIndexJob,
+	type SourceIndexJob,
 	trackSourceIndexRun,
 	updateSourceIndexJobProgress,
 	waitForSourceIndexRuns,
@@ -78,15 +82,11 @@ import {
 	trackSourceLifecycleWrite,
 } from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
-import {
-	beginSourceDeletion,
-	beginSourceMutation,
-	isSourceDeletionInFlight,
-	SOURCE_DELETION_IN_PROGRESS_ERROR,
-	SOURCE_OPERATION_IN_PROGRESS_ERROR,
-} from "../source-deletion-lock";
-import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
 import { purgeSourceOwnedRows } from "../source-purge";
+import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
+import { getActiveTelemetry } from "../telemetry";
+import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
+import { authConfig } from "./state.js";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -253,7 +253,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/pick-directory", async (c) => {
 		let body: PickDirectoryBody = {};
 		try {
-			body = (await c.req.json().catch(() => ({}))) as PickDirectoryBody;
+			body = (await jsonBody(c)().catch((): Record<string, unknown> => ({}))) as PickDirectoryBody;
 		} catch {
 			body = {};
 		}
@@ -267,7 +267,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		if (!isLoopbackRequest(c)) return c.json({ error: "Native file picking is local-only" }, 400);
 		let body: PickDirectoryBody = {};
 		try {
-			body = (await c.req.json().catch(() => ({}))) as PickDirectoryBody;
+			body = (await jsonBody(c)().catch((): Record<string, unknown> => ({}))) as PickDirectoryBody;
 		} catch {
 			body = {};
 		}
@@ -280,7 +280,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/obsidian", async (c) => {
 		let body: AddObsidianSourceBody = {};
 		try {
-			body = (await c.req.json()) as AddObsidianSourceBody;
+			body = (await jsonBody(c)()) as AddObsidianSourceBody;
 		} catch {
 			recordSourceConnectionFailure("obsidian", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -325,7 +325,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/discord", async (c) => {
 		let body: AddDiscordSourceBody = {};
 		try {
-			body = (await c.req.json()) as AddDiscordSourceBody;
+			body = (await jsonBody(c)()) as AddDiscordSourceBody;
 		} catch {
 			recordSourceConnectionFailure("discord", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -438,7 +438,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		try {
 			let body: unknown;
 			try {
-				body = await c.req.json();
+				body = await jsonBody(c)();
 			} catch {
 				await recordSourceIndexOperation({
 					source,
@@ -497,7 +497,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/github", async (c) => {
 		let body: AddGitHubSourceBody = {};
 		try {
-			body = (await c.req.json()) as AddGitHubSourceBody;
+			body = (await jsonBody(c)()) as AddGitHubSourceBody;
 		} catch {
 			recordSourceConnectionFailure("github", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -552,7 +552,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/notion", async (c) => {
 		let parsed: unknown;
 		try {
-			parsed = await c.req.json();
+			parsed = await jsonBody(c)();
 		} catch {
 			recordSourceConnectionFailure("notion", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -587,7 +587,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/web", async (c) => {
 		let body: AddWebSourceBody = {};
 		try {
-			const parsed = (await c.req.json()) as unknown;
+			const parsed = (await jsonBody(c)()) as unknown;
 			body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as AddWebSourceBody) : {};
 		} catch {
 			recordSourceConnectionFailure("web", "invalid configuration");

@@ -3,18 +3,18 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
-	statSync,
+	readFileSync,
 	statfsSync,
+	statSync,
 	truncateSync,
 	unlinkSync,
 } from "node:fs";
 import {
 	open as openAsync,
-	rm as rmAsync,
 	readFile as readFileAsync,
 	rename as renameAsync,
+	rm as rmAsync,
 	unlink as unlinkAsync,
 	writeFile as writeFileAsync,
 } from "node:fs/promises";
@@ -22,6 +22,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
+	activeVectorProjectionTable,
 	createMemoriesFts,
 	findSqliteVecExtension,
 	hasPendingMigrations,
@@ -31,32 +32,31 @@ import {
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIntegrity,
 	readMemoriesFtsSql,
-	refreshMemoriesFtsState,
 	recreateMemoriesFts,
 	recreateMemoriesFtsSchema,
+	refreshMemoriesFtsState,
 	resolveSqliteJournalConfig,
-	runMigrations,
 	resolveWorkspacePath,
 	activeVectorProjectionTable,
 	syncEmbeddingCompartment,
 	missingCompartmentVectorSql,
+	runMigrations,
 } from "@signet/core";
-import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
-import type { DbSpaceMetrics } from "./db-vacuum";
-
-import { ensureEmbeddingIndexState } from "./embedding-index-state";
-import { loadMemoryConfig } from "./memory-config";
+import { closeDbAccessorParticipants } from "./db-accessor-lifecycle";
 import {
+	type DbOperationOutcome,
+	type DbRuntimeMetrics,
 	getDbRuntimeMetrics,
 	recordDbOperation,
 	resetDbObservability,
 	setDbQueueTelemetry,
-	type DbOperationOutcome,
-	type DbRuntimeMetrics,
 } from "./db-observability";
-import { closeDbAccessorParticipants } from "./db-accessor-lifecycle";
-import { observeDbLatency } from "./runtime-pressure";
+import type { DbSpaceMetrics } from "./db-vacuum";
+import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
+import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { resetFtsIndexState, setFtsIndexIncomplete } from "./fts-index-state";
+import { loadMemoryConfig } from "./memory-config";
+import { observeDbLatency } from "./runtime-pressure";
 import {
 	beginSyncDbCall,
 	captureSyncDbCallSiteToken,
@@ -77,6 +77,8 @@ export interface SqliteRunResult {
 }
 
 export type SqliteStatement = {
+	readonly isFinalized?: boolean;
+	finalize?(): void;
 	run(...params: unknown[]): SqliteRunResult;
 	get(...params: unknown[]): Record<string, unknown> | undefined;
 	all<Row = unknown>(...params: unknown[]): Row[];
@@ -101,9 +103,44 @@ export function prepareTypedStatement<Row extends object>(
 	return db.prepare(sql) as unknown as TypedSqliteStatement<Row>;
 }
 
+const connectionStatementOwners = new WeakMap<SqliteDatabase, () => void>();
+function releaseConnectionStatements(connection: SqliteDatabase): void {
+	const release = connectionStatementOwners.get(connection);
+	if (!release) throw new Error("SQLite statement owner is missing");
+	release();
+}
+function ownSqliteStatements(connection: SqliteDatabase): SqliteDatabase {
+	const prepare = connection.prepare.bind(connection);
+	const close = connection.close.bind(connection);
+	const statements = new Set<SqliteStatement>();
+	const release = () => {
+		connection.clearQueryCache?.();
+		for (const statement of statements) if (!statement.isFinalized) statement.finalize?.();
+		statements.clear();
+	};
+	connectionStatementOwners.set(connection, release);
+	connection.prepare = (sql) => {
+		const statement = prepare(sql);
+		const finalize = statement.finalize?.bind(statement);
+		if (finalize) {
+			statements.add(statement);
+			statement.finalize = () => {
+				statements.delete(statement);
+				finalize();
+			};
+		}
+		return statement;
+	};
+	connection.close = (strict) => {
+		release();
+		close(strict);
+	};
+	return connection;
+}
 type SqliteDatabase = {
 	prepare(sql: string): SqliteStatement;
 	exec(sql: string): void;
+	clearQueryCache?(): void;
 	close(throwOnError?: boolean): void;
 	loadExtension?(path: string): void;
 };
@@ -1582,7 +1619,7 @@ function openDbAccessorConnection(path: string, opts?: { readonly agentsDir?: st
 
 	configureCustomSqlite(opts?.agentsDir);
 
-	const writeConn = new (getDatabaseConstructor())(path);
+	const writeConn = ownSqliteStatements(new (getDatabaseConstructor())(path));
 	configurePragmas(writeConn, path);
 	loadVecExtension(writeConn);
 	return writeConn;
@@ -1678,7 +1715,7 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
 	dbPath = dbPathParam;
 	vecExtPath = vecExtensionPath;
 
-	const writeConn = new (getDatabaseConstructor())(dbPathParam);
+	const writeConn = ownSqliteStatements(new (getDatabaseConstructor())(dbPathParam));
 	configurePragmas(writeConn, dbPathParam);
 
 	if (vecExtensionPath) {
@@ -1708,7 +1745,7 @@ export function initDbAccessorReadOnly(
 	dbPath = dbPathParam;
 	vecExtPath = vecExtensionPath;
 	configureCustomSqlite(opts?.agentsDir);
-	const readConn = new (getDatabaseConstructor())(dbPathParam, { readonly: true });
+	const readConn = ownSqliteStatements(new (getDatabaseConstructor())(dbPathParam, { readonly: true }));
 	loadVecExtension(readConn);
 	accessor = createAccessor(readConn);
 }
@@ -2093,7 +2130,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 
 	function openReadConnection(): SqliteDatabase {
 		if (dbPath === null) throw new Error("DbAccessor not initialised");
-		const conn = new (getDatabaseConstructor())(dbPath, { readonly: true });
+		const conn = ownSqliteStatements(new (getDatabaseConstructor())(dbPath, { readonly: true }));
 		conn.exec("PRAGMA busy_timeout = 5000");
 		loadVecExtension(conn);
 		readInUse.add(conn);
@@ -2217,6 +2254,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 	}
 
 	function releaseRead(conn: SqliteDatabase): void {
+		releaseConnectionStatements(conn);
 		readInUse.delete(conn);
 		const waiter = readWaiters.shift();
 		if (waiter) {
@@ -2252,6 +2290,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			outcome = "failed";
 			throw error;
 		} finally {
+			releaseConnectionStatements(writeConn);
 			lastWriteDurationMs = performance.now() - startedAt;
 			lastWriteQueueWaitMs = meta.queuedAt === undefined ? 0 : Math.max(0, startedAt - meta.queuedAt);
 			observeDbLatency(lastWriteDurationMs);

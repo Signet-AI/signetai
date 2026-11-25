@@ -1,7 +1,5 @@
-import { persistAgentMessage, persistAgentMessageInTx } from "./cross-agent-message-owner";
-import { getDbOwnerMaintenance } from "./db-owner-maintenance";
 import { randomUUID } from "node:crypto";
-import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import type { WriteAuthor } from "./auth/audit-owner";
 import {
 	type AgentPresenceContext,
 	type AgentPresenceContextPatch,
@@ -9,9 +7,12 @@ import {
 	cloneContext,
 	mergePresenceContext,
 } from "./cross-agent-context";
+import { persistAgentMessage } from "./cross-agent-message-owner";
+import { type DbAccessor, getDbAccessor, hasDbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import { ownerRun } from "./db-owner-sql";
-export { relayMessageViaAcp, type AcpRelayRequest, type AcpRelayResult } from "./cross-agent-acp";
+
+export { type AcpRelayRequest, type AcpRelayResult, relayMessageViaAcp } from "./cross-agent-acp";
 
 export type AgentMessageType = "assist_request" | "decision_update" | "info" | "question";
 
@@ -122,7 +123,7 @@ export interface CrossAgentMessageRow {
 }
 
 export interface CreateAgentMessageInput {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 	readonly fromAgentId?: string;
 	readonly fromSessionKey?: string;
 	readonly toAgentId?: string;
@@ -667,7 +668,7 @@ function unreadCount(db: ReadDb, options: ListAgentMessageOptions, now: string):
 	return query ? countRows(db, query) : 0;
 }
 
-function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessageRow {
+export function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessageRow {
 	prunePresence();
 	const content = normalizeText(input.content);
 	if (!content) throw new Error("content is required");
@@ -725,21 +726,12 @@ function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessage
 
 	return row;
 }
-function publishAgentMessage(row: CrossAgentMessageRow): AgentMessage {
+export function publishAgentMessage(row: CrossAgentMessageRow): AgentMessage {
 	const out = rowToAgentMessage(row);
 	emit({ type: "message", message: out, timestamp: row.created_at });
 	return out;
 }
-export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage {
-	if (getDbOwnerMaintenance()) throw new Error("Live message creation requires createAgentMessageAsync");
-	const row = buildAgentMessageRow(input);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx(
-		(db: WriteDb) => persistAgentMessageInTx(db, row, input.author),
-		"db:cross-agent.message.create",
-	);
-	return publishAgentMessage(row);
-}
+export const createAgentMessage = createAgentMessageAsync;
 export async function createAgentMessageAsync(input: CreateAgentMessageInput): Promise<AgentMessage> {
 	const row = buildAgentMessageRow(input);
 	await persistAgentMessage(row, input.author);
@@ -818,7 +810,7 @@ export function claimAcpMessageDelivery(input: {
 	let attempt: AcpDeliveryAttempt | null = null;
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		const result = db
 			.prepare(
 				`UPDATE cross_agent_messages
@@ -863,7 +855,7 @@ export function completeAcpMessageDelivery(
 	const now = new Date().toISOString();
 	let updated: AgentMessage | null = null;
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		const result = db
 			.prepare(
 				`UPDATE cross_agent_messages
@@ -906,7 +898,7 @@ export function updateAgentMessageDelivery(
 		input.status === "delivered" ? "delivered" : input.status === "failed" ? "failed" : "pending";
 	const now = new Date().toISOString();
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		db.prepare(
 			`UPDATE cross_agent_messages
 			 SET delivery_status = ?, delivery_state = ?, delivery_error = ?,
@@ -972,7 +964,7 @@ export function listAgentMessagePage(options: ListAgentMessageOptions = {}): Age
 	}
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+	return getDbAccessor().withReadDb((db: ReadDb) => {
 		const total = countRows(db, query);
 		const unread = options.unreadOnly === true ? total : unreadCount(db, options, now);
 		const order = options.order === "asc" ? "ASC" : "DESC";
@@ -1011,7 +1003,7 @@ export function acknowledgeAgentMessage(input: AcknowledgeAgentMessageInput): Ac
 	const now = new Date().toISOString();
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return getDbAccessor().withWriteTx((db: WriteDb) => {
 		pruneExpiredMessages(db, now);
 		const query = buildMessageQuery(
 			{
@@ -1084,7 +1076,7 @@ export function resetCrossAgentStateForTest(): void {
 	subscribers.clear();
 	if (!hasDbAccessor()) return;
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		db.prepare("DELETE FROM cross_agent_message_wakes").run();
 		db.prepare("DELETE FROM cross_agent_message_receipts").run();
 		db.prepare("DELETE FROM cross_agent_messages").run();

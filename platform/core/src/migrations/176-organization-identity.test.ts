@@ -3,6 +3,22 @@ import { describe, expect, test } from "bun:test";
 import { MIGRATIONS, runMigrations } from "./index";
 
 describe("organization identity migration", () => {
+	test("authored purge batches seek identity indexes rather than scanning the corpus", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			for (const table of ["memories", "documents", "memory_artifacts", "session_summaries", "session_transcripts"]) {
+				const column = table === "session_transcripts" ? "speaker_user_id" : "author_user_id";
+				const plan = db
+					.prepare(`EXPLAIN QUERY PLAN SELECT * FROM ${table} WHERE ${column}=? LIMIT 50`)
+					.all("usr_fixture");
+				expect(JSON.stringify(plan)).toContain(`idx_${table}_${column}`);
+			}
+		} finally {
+			db.close();
+		}
+	});
+
 	test("fresh schema declares identity and author artifacts and is idempotent", () => {
 		const db = new Database(":memory:");
 		try {

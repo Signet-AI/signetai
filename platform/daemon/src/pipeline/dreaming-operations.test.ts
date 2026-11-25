@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { closeDbAccessor, type DbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { applyOntologyProposal, getOntologyProposal, rejectOntologyProposal } from "../ontology-proposals";
-import { type DreamingOperationRequest, applyDreamingOperations } from "./dreaming-operations";
+import { applyDreamingOperations, type DreamingOperationRequest } from "./dreaming-operations";
 
 describe("dreaming operations", () => {
 	let dir = "";
@@ -418,6 +418,7 @@ describe("dreaming operations", () => {
 			),
 		).toEqual({ c: 0 });
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "agent-a",
 			id: proposalId,
 			actor: "dashboard",

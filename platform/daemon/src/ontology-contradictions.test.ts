@@ -11,8 +11,8 @@ import { getOntologyContradiction, listOntologyContradictions } from "./ontology
 import { applyOntologyOperation } from "./ontology-proposals";
 import { createDreamingCapabilities } from "./pipeline/dreaming-capabilities";
 import { uninstallSkillNode } from "./pipeline/skill-graph";
-import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { createRateLimiter, pruneGenericEntities } from "./repair-actions";
+import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { purgeSourceOwnedRows } from "./source-purge";
 
 describe("persisted ontology contradictions", () => {
@@ -38,6 +38,7 @@ describe("persisted ontology contradictions", () => {
 
 	async function addClaim(agentId: string, value: string, sourceId: string, sourceKind = "fixture") {
 		return applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId,
 			actor: "contradiction-test",
 			operation: "add_claim_value",
@@ -58,6 +59,7 @@ describe("persisted ontology contradictions", () => {
 
 	async function setClaim(agentId: string, value: string, sourceId: string) {
 		return applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId,
 			actor: "contradiction-test",
 			operation: "set_claim_value",
@@ -78,6 +80,7 @@ describe("persisted ontology contradictions", () => {
 
 	async function supersedeClaim(agentId: string, oldValue: string, newValue: string, sourceId: string) {
 		return applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId,
 			actor: "contradiction-test",
 			operation: "supersede_claim_value",
@@ -355,6 +358,7 @@ describe("persisted ontology contradictions", () => {
 
 	it("keeps current-claim governance separate from contradiction state", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "owner",
 			actor: "contradiction-test",
 			operation: "set_claim_value",
@@ -374,6 +378,7 @@ describe("persisted ontology contradictions", () => {
 		const activeBeforeSet = await listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
 		expect(activeBeforeSet.items).toHaveLength(1);
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "owner",
 			actor: "contradiction-test",
 			operation: "set_claim_value",

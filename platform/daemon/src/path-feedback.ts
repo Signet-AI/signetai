@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DependencyType } from "@signet/core";
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { applyOntologyOperationBatchInTx } from "./ontology-proposals";
 import { recordAgentFeedbackInner } from "./session-memories";
@@ -302,6 +303,7 @@ function updateDependencies(
 				? clamp(Math.max(row.confidence + cfg.confidenceDelta * mag, base), cfg.minConfidence, 1)
 				: clamp(Math.min(row.confidence - cfg.confidenceDelta * mag, base), cfg.minConfidence, 1);
 		applyOntologyOperationBatchInTx(db, {
+			author: SYSTEM_AUTHOR,
 			agentId,
 			actor: "path-feedback",
 			operations: [
@@ -521,6 +523,7 @@ function maybePromoteDirected(
 	if (!existing) {
 		if (countAutoEdges(db, agentId, edgeSource) >= cfg.autoEdgeCap) return false;
 		applyOntologyOperationBatchInTx(db, {
+			author: SYSTEM_AUTHOR,
 			agentId,
 			actor: "path-feedback",
 			operations: [
@@ -544,6 +547,7 @@ function maybePromoteDirected(
 		return true;
 	}
 	applyOntologyOperationBatchInTx(db, {
+		author: SYSTEM_AUTHOR,
 		agentId,
 		actor: "path-feedback",
 		operations: [
@@ -606,7 +610,7 @@ export function recordPathFeedback(
 	};
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db: WriteDb) => {
 		recordAgentFeedbackInner(db, input.sessionKey, input.ratings, input.agentId);
 		const ts = new Date().toISOString();
 		const ids = Object.keys(input.ratings);
@@ -703,5 +707,5 @@ export function recordPathFeedback(
 		}
 
 		return { accepted, propagated, cooccurrenceUpdated, dependenciesUpdated };
-	}, "path-feedback.ts:609");
+	}, "path-feedback.ts:613");
 }

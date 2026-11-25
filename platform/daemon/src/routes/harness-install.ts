@@ -1,14 +1,15 @@
-import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getHarnessLoader, type HarnessAction } from "../harness-registry";
-import type { HarnessInstallWorkerEvent, HarnessInstallWorkerRequest } from "../harness-install-worker";
-import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import { inspectHarnessConnector } from "../harness-health";
+import type { HarnessInstallWorkerEvent, HarnessInstallWorkerRequest } from "../harness-install-worker";
+import { getHarnessLoader, type HarnessAction } from "../harness-registry";
+import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
+import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
 
 let installing = false;
@@ -163,7 +164,7 @@ export function registerHarnessInstallRoutes(app: Hono): void {
 			if (action === "reinitialize" && capabilities.reinitializeRequiresConfirmation) {
 				let body: unknown = null;
 				try {
-					body = await c.req.json();
+					body = await jsonBody(c)();
 				} catch {}
 				if (typeof body !== "object" || body === null || Array.isArray(body) || Reflect.get(body, "confirm") !== true) {
 					return c.json(

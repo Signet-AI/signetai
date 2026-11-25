@@ -1,5 +1,7 @@
-import { writeAttributionStatements } from "./auth/write-attribution";
+import { parseWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
+import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
 import { dbOwnerQuery, dbOwnerTransaction, dbOwnerTranscriptBulkCommit } from "./db-owner-runtime";
+import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 
 export type ImportJobState =
 	| "staging"
@@ -139,9 +141,10 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 				)) as Result;
 			}
 			if (operation.operation === "commit") {
-				const commits = p.commits as import("./transcript-import-commit").CompletedTranscriptCommit[];
+				const commits = p.commits as CompletedTranscriptCommit[];
 				const results = await dbOwnerTranscriptBulkCommit(
 					{
+						author: parseWriteAuthor(p.author),
 						agentId: operation.agentId,
 						jobId: operation.jobId,
 						generation: p.generation as number,
@@ -151,7 +154,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 						commits,
 						...(p.inventory === undefined
 							? {}
-							: { inventory: p.inventory as import("./db-owner-protocol").DbOwnerTranscriptBulkCommit["inventory"] }),
+							: { inventory: p.inventory as DbOwnerTranscriptBulkCommit["inventory"] }),
 					},
 					{ operation: "sources.import.store.commit", lane: "write" },
 				);
@@ -231,7 +234,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 	};
 }
 export function createJob(input: {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly jobId: string;
 	readonly agentId: string;
 	readonly schemaId?: string;
@@ -242,15 +245,18 @@ export function createJob(input: {
 	return dbOwnerTransaction(
 		[
 			{
-				sql: "INSERT INTO source_import_jobs (id,kind,agent_id,schema_id,adapter_version,state,generation,duplicate_mode) VALUES (?, 'import', ?, ?, 1, 'staging', 0, ?)",
-				params: [input.jobId, input.agentId, input.schemaId ?? "signet-export", input.duplicateMode ?? "skip"],
+				sql: "INSERT INTO source_import_jobs (id,kind,agent_id,schema_id,adapter_version,state,generation,duplicate_mode,author_user_id,author_credential) VALUES (?, 'import', ?, ?, 1, 'staging', 0, ?,?,?)",
+				params: [
+					input.jobId,
+					input.agentId,
+					input.schemaId ?? "signet-export",
+					input.duplicateMode ?? "skip",
+					input.author.userId,
+					input.author.credential,
+				],
 				result: "run",
 			},
-			...writeAttributionStatements(input.author, {
-				kind: "transcript_import",
-				id: input.jobId,
-				agentId: input.agentId,
-			}),
+
 			...(input.files ?? []).map((file, ordinal) => ({
 				sql: "INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state,storage_state) VALUES (?,?,?,?,?,?,?,'staging','uploading')",
 				params: [file.id, input.jobId, `reserved:${input.jobId}:${file.id}`, input.agentId, ordinal, file.name, ""],

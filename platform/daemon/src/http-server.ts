@@ -1,6 +1,6 @@
-import { createAdaptorServer } from "@hono/node-server";
-import type { Server } from "node:net";
 import type { ServerResponse } from "node:http";
+import type { Server } from "node:net";
+import { createAdaptorServer } from "@hono/node-server";
 
 type AdaptorServerOptions = Parameters<typeof createAdaptorServer>[0];
 export type SignetHttpServerOptions = AdaptorServerOptions;

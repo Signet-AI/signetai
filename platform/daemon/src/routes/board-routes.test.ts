@@ -3,11 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { closeCrossAgentFixture, createAgentMessage } from "../__tests__/cross-agent-fixture";
 import type { TokenClaims } from "../auth";
+import { LOCAL_AUTHOR } from "../auth/audit-owner";
 import { resetBoardStateForTest } from "../board";
-import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
+import { resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
 import { consumeSessionEndWake, resetDirectMessageWakeStateForTest } from "../cross-agent-wake";
-import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { initDbAccessor } from "../db-accessor";
 import { getEndedSession, markSessionEnded } from "../session-tracker";
 
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -24,6 +26,10 @@ beforeEach(() => {
 	dir = mkdtempSync(join(suiteDir, "case-"));
 	initDbAccessor(join(dir, "memory.db"), { agentsDir: dir });
 	app = new Hono();
+	app.use("*", async (c, next) => {
+		c.set("author", LOCAL_AUTHOR);
+		await next();
+	});
 	registerHooksRoutes(app);
 	registerBoardRoutes(app);
 });
@@ -32,7 +38,7 @@ afterEach(async () => {
 	resetDirectMessageWakeStateForTest();
 	resetBoardStateForTest();
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(dir, { recursive: true, force: true });
 });
 

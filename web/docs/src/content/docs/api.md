@@ -113,7 +113,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/device/:userCode` | Signed-in user previews the device requesting approval. |
 | POST | `/api/auth/device/approve` | `{ userCode, decision: "approve" | "deny" }`. |
 | POST | `/api/auth/device/token` | `{ deviceCode }`; `428 authorization_pending`, `429 slow_down`, `403 denied`, `410 expired`, or access/refresh tokens. |
-| POST | `/api/auth/refresh` | `{ refreshToken }`; rotate both tokens. A consumed token retried within 60 seconds returns the same current pair; older reuse revokes the session with `refresh_reuse`. |
+| POST | `/api/auth/refresh` | `{ refreshToken }`; rotate both tokens. A rotated-away token returns the same current pair until the new access token or refresh token is first used, bounded by 24 hours. Later reuse revokes the session with `refresh_reuse`. |
 | GET | `/api/auth/devices` | Your devices and connector keys. |
 | PATCH | `/api/auth/devices/:id` | `{ name }`; owned device only. |
 | DELETE | `/api/auth/devices/:id` | Revoke the owned device, its sessions, and its keys. |
@@ -124,7 +124,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/api-keys` | Your keys; `?all=1` requires admin. |
 | DELETE | `/api/auth/api-keys/:id` | Revoke an owned key; admin may revoke any key. |
 | POST | `/api/org/claim` | `{ setupToken, organizationName, admin: { username, displayName, email?, password } }`; consumes setup token and creates the first admin/browser session. |
-| GET | `/api/auth/invites/:token` | Organization, role, and optional invite email; never exposes password or hash. |
+| POST | `/api/auth/invites/lookup` | JSON `{ token }`; returns organization, role, and optional invite email. Tokens never appear in API paths. |
 | POST | `/api/auth/invites/accept` | `{ token, username, displayName, password? }`; browser session or `ssoStartPath`. |
 | GET | `/api/org/users` | Admin; optional `status`, `role`, `group`, `q`. |
 | PATCH | `/api/org/users/:id` | Admin; `{ role?, compliance?, displayName? }`. |

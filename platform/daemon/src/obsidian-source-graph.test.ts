@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	buildObsidianMarkdownPathIndex,
-	isObsidianSourceFileIndexedInTx,
 	indexObsidianSourceStructure,
+	isObsidianSourceFileIndexedInTx,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
 } from "./obsidian-source-graph";
@@ -317,6 +317,7 @@ describe("Obsidian source graph structure", () => {
 			).run();
 			const aspect = { aspect_id: "removed-aspect" };
 			txIngestEnvelope(db, {
+				author: { userId: null, credential: "system" },
 				id: "removed-dreaming-claim",
 				content: "The removed note contains this semantic claim.",
 				normalizedContent: "the removed note contains this semantic claim.",

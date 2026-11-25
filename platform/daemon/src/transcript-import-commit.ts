@@ -1,18 +1,17 @@
 import { createHash } from "node:crypto";
-import { readWriteAttributionInTx } from "./auth/write-attribution";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
-import { admitSessionTranscriptInDb } from "./session-transcripts";
-import { filterTranscriptMessagesInDb } from "./session-transcripts";
-import { type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
+import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
+import { admitSessionTranscriptInDb, filterTranscriptMessagesInDb } from "./session-transcripts";
 import {
-	TRANSCRIPT_IMPORT_LIMITS,
 	canonicalTranscriptIdentity,
 	externalIdentityFingerprint,
 	type SignetExportRecord,
+	TRANSCRIPT_IMPORT_LIMITS,
 } from "./transcript-import-adapter";
 
 export interface CompletedTranscriptEvidence {
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly recordId: string;
 	readonly sourceId: string;
 	readonly sourceRecordId: string;
@@ -49,7 +48,7 @@ export interface TranscriptCommitResult {
 }
 export function commitTranscriptImportBatchInTx(
 	db: WriteDb,
-	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	input: DbOwnerTranscriptBulkCommit,
 ): TranscriptCommitResult[] {
 	if (
 		input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch ||
@@ -67,11 +66,13 @@ export function commitTranscriptImportBatchInTx(
 		throw new Error("transcript commit provenance does not match owner request");
 	const lease = db
 		.prepare(
-			"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
+			"SELECT author_user_id,author_credential FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
 		)
 		.get(input.jobId, input.agentId, input.generation, input.leaseToken);
 	if (lease == null) throw new Error("stale import lease");
-	const author = readWriteAttributionInTx(db, { kind: "transcript_import", id: input.jobId, agentId: input.agentId });
+	const author = input.author;
+	if (lease.author_user_id !== author.userId || lease.author_credential !== author.credential)
+		throw new Error("Transcript import author does not match its durable input");
 	if (author?.userId) {
 		const user = prepareTypedStatement<{ status: string }>(db, "SELECT status FROM users WHERE id = ?").get(
 			author.userId,
@@ -265,6 +266,7 @@ const fixed = (fields: readonly string[]) => fields.map((field) => `${field.leng
 export function buildCompletedTranscriptCommit(
 	record: SignetExportRecord,
 	input: {
+		readonly author: WriteAuthor;
 		readonly agentId: string;
 		readonly sourceId: string;
 		readonly sourceRecordId: string;
@@ -278,6 +280,7 @@ export function buildCompletedTranscriptCommit(
 		.update(fixed([input.agentId, input.sourceId, input.sourceRecordId, record.harness, identity.contentHash]))
 		.digest("hex");
 	return {
+		author: input.author,
 		recordId,
 		sourceId: input.sourceId,
 		sourceRecordId: input.sourceRecordId,

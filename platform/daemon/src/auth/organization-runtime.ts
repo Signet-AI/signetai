@@ -1,8 +1,8 @@
-import type { Principal } from "./principal";
-import { auditStatement, ensureSetupToken, organizationWrite, readOrganization, statement } from "./organization-store";
-import { logger } from "../logger";
-import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
+import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
+import { logger } from "../logger";
+import { auditStatement, ensureSetupToken, organizationWrite, readOrganization, statement } from "./organization-store";
+import type { Principal } from "./principal";
 
 const queue: DbOwnerStatement[] = [];
 const controllers = new Set<AbortController>();
@@ -101,6 +101,10 @@ export async function pruneAudit(): Promise<void> {
 					"DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events WHERE at < ? AND (action != 'session.refreshed' OR NOT EXISTS (SELECT 1 FROM auth_sessions s WHERE s.id = audit_events.target_id AND s.revoked_at IS NULL AND s.refresh_expires_at > CURRENT_TIMESTAMP)) ORDER BY at LIMIT 1000)",
 					[cutoff],
 				),
+				statement(
+					"DELETE FROM device_authorizations WHERE id IN (SELECT id FROM device_authorizations WHERE expires_at<=? LIMIT 1000)",
+					[new Date().toISOString()],
+				),
 			],
 			{
 				operation: "organization.audit.prune",
@@ -124,7 +128,7 @@ export async function startOrganizationRuntime(baseUrl: string): Promise<void> {
 	}
 	await organizationWrite([
 		statement(
-			"UPDATE org_jobs SET status = 'failed',error = 'Daemon restarted before job completion',finished_at = ? WHERE status IN ('pending','running')",
+			"UPDATE org_jobs SET status = 'failed',error = 'Daemon restarted before job completion',finished_at = ? WHERE status IN ('pending','running') AND kind IN ('offboard','bulk_revoke')",
 			[new Date().toISOString()],
 		),
 	]);

@@ -1,9 +1,7 @@
+import { authoredAuditStatements, type WriteAuthor } from "./auth/audit-owner";
 import type { CrossAgentMessageRow } from "./cross-agent";
-import type { WriteDb } from "./db-accessor";
 import type { DbOwnerStatement } from "./db-owner-protocol";
 import { dbOwnerTransaction } from "./db-owner-runtime";
-import { authoredAuditStatements, type WriteAuthor } from "./auth/audit-owner";
-import { writeAttributionStatements } from "./auth/write-attribution";
 export class AgentMessageCapacityError extends Error {
 	constructor() {
 		super("Cross-agent message capacity reached; wait for retention cleanup before retrying");
@@ -38,7 +36,10 @@ const columns = [
 	"created_at",
 	"expires_at",
 ] as const;
-function statements(row: CrossAgentMessageRow, author: WriteAuthor | undefined): readonly DbOwnerStatement[] {
+export function agentMessageWriteStatements(
+	row: CrossAgentMessageRow,
+	author: WriteAuthor | undefined,
+): readonly DbOwnerStatement[] {
 	return [
 		{
 			sql: "DELETE FROM cross_agent_message_wakes WHERE message_id IN (SELECT id FROM cross_agent_messages WHERE expires_at <= ?)",
@@ -52,19 +53,13 @@ function statements(row: CrossAgentMessageRow, author: WriteAuthor | undefined):
 			result: "run",
 			requireChanges: true,
 		},
-		...writeAttributionStatements(author, { kind: "cross_agent_message", id: row.id, agentId: row.from_agent_id }),
+
 		...authoredAuditStatements(author, "message.created", "message", row.id, row.from_agent_id),
 	];
 }
-export function persistAgentMessageInTx(db: WriteDb, row: CrossAgentMessageRow, author: WriteAuthor | undefined): void {
-	for (const statement of statements(row, author)) {
-		const result = db.prepare(statement.sql).run(...(statement.params ?? []));
-		if (statement.requireChanges && result.changes === 0) throw new AgentMessageCapacityError();
-	}
-}
 export async function persistAgentMessage(row: CrossAgentMessageRow, author: WriteAuthor | undefined): Promise<void> {
 	try {
-		await dbOwnerTransaction(statements(row, author), {
+		await dbOwnerTransaction(agentMessageWriteStatements(row, author), {
 			operation: "cross-agent.message.create",
 			lane: "write",
 			deadlineMs: 5000,

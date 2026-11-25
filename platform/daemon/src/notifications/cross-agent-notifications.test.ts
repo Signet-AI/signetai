@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acknowledgeAgentMessage, createAgentMessage, resetCrossAgentStateForTest } from "../cross-agent";
-import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { closeCrossAgentFixture, createAgentMessage } from "../__tests__/cross-agent-fixture";
+import { acknowledgeAgentMessage, resetCrossAgentStateForTest } from "../cross-agent";
+import { initDbAccessor } from "../db-accessor";
 import {
 	appendNotificationInject,
 	collectCrossAgentNotifications,
@@ -19,7 +20,7 @@ beforeEach(() => {
 
 afterEach(async () => {
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 

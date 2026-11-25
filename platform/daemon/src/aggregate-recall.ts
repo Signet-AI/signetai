@@ -6,8 +6,9 @@ import {
 	redactCredentials,
 	summarizeAccountingProvenance,
 } from "@signet/core";
+import type { WriteAuthor } from "./auth/audit-owner";
 import { normalizeAndHashContent } from "./content-normalization";
-import { type WriteDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
@@ -17,11 +18,11 @@ import {
 	type AggregateRecallUsage,
 	type AggregateRecallUsageStage,
 	type EmbedFn,
+	hybridRecall,
 	type RecallParams,
 	type RecallResponse,
 	type RecallResult,
 	type RecallTimings,
-	hybridRecall,
 } from "./memory-search";
 import { type IngestEnvelope, insertHistoryEvent, txIngestEnvelope } from "./transactions";
 
@@ -55,6 +56,7 @@ export interface AggregateInferenceRouter {
 }
 
 interface AggregateRecallDeps {
+	readonly author: WriteAuthor;
 	readonly hybridRecall?: typeof hybridRecall;
 	readonly router: AggregateInferenceRouter | null;
 	readonly embedFn: EmbedFn;
@@ -716,7 +718,7 @@ async function embedAggregateMemory(
 	embedFn: EmbedFn,
 ): Promise<boolean> {
 	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-		siteToken: "aggregate-recall.ts:718",
+		siteToken: "aggregate-recall.ts:720",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
@@ -736,7 +738,7 @@ async function embedAggregateMemory(
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
-		{ siteToken: "aggregate-recall.ts:724" },
+		{ siteToken: "aggregate-recall.ts:726" },
 	);
 	return written;
 }
@@ -1004,6 +1006,7 @@ export async function aggregateRecall(
 						}
 						const id = deps.idFactory?.() ?? randomUUID();
 						const envelope: IngestEnvelope = {
+							author: deps.author,
 							id,
 							content: normalized.storageContent,
 							normalizedContent: normalized.normalizedContent || normalized.hashBasis,
@@ -1059,7 +1062,7 @@ export async function aggregateRecall(
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:985" },
+					{ siteToken: "aggregate-recall.ts:987" },
 				),
 		);
 		if (row && !deduped) {

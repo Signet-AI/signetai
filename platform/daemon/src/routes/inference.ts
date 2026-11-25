@@ -1,30 +1,27 @@
-import { retrievalEvent } from "../assistant-retrieval";
-import * as Type from "typebox";
-import { z } from "zod";
-import { type AssistantChatEvent, buildRecallRequestBody, redactCredentialsDeep } from "@signet/core";
-import { resolveScopedAgent } from "../request-scope";
-import { resolveDaemonAgentId } from "../agent-id";
-import { getDbAccessor } from "../db-accessor";
-import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
-import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
-import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
-
-import { MODEL_DEFAULTS } from "@signet/core";
 import {
 	getBuiltinModels as getModels,
 	getBuiltinProviders as getProviders,
 } from "@earendil-works/pi-ai/providers/all";
 import {
+	type AssistantChatEvent,
+	buildRecallRequestBody,
+	MODEL_DEFAULTS,
+	parseRoutingTargetRef,
 	ROUTING_COST_TIERS,
 	ROUTING_OPERATION_KINDS,
 	ROUTING_PRIVACY_TIERS,
 	type RouteRequest,
-	parseRoutingTargetRef,
+	redactCredentialsDeep,
 } from "@signet/core";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import * as Type from "typebox";
+import { z } from "zod";
+import { resolveDaemonAgentId } from "../agent-id";
+import { retrievalEvent } from "../assistant-retrieval";
 import type { AuthMode, TokenClaims } from "../auth/index.js";
 import { checkScope } from "../auth/index.js";
+import { getDbAccessor } from "../db-accessor";
 import {
 	completeOAuthInteraction,
 	disconnectOAuthProvider,
@@ -33,8 +30,13 @@ import {
 	startOAuthLogin,
 } from "../inference-oauth.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
-import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
+import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
+import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
+import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
+import { jsonBody } from "../request-body";
+import { resolveScopedAgent } from "../request-scope";
 import { openBoundedSse } from "../sse-stream.js";
+import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
 
 const MAX_EXPLAIN_BYTES = 128 * 1024;
 const MAX_EXECUTE_BYTES = 512 * 1024;
@@ -216,10 +218,7 @@ function parseExplicitTargets(value: unknown): ValidationResult<readonly string[
 	return valid(refs.length > 0 ? refs : undefined);
 }
 
-async function readJsonObject(
-	c: { req: { header: (name: string) => string | undefined; text: () => Promise<string> } },
-	maxBytes: number,
-): Promise<ValidationResult<Record<string, unknown>>> {
+async function readJsonObject(c: Context, maxBytes: number): Promise<ValidationResult<Record<string, unknown>>> {
 	const contentLength = parseTrimmedString(c.req.header("content-length"));
 	if (contentLength) {
 		const bytes = Number(contentLength);
@@ -237,7 +236,7 @@ async function readJsonObject(
 
 	let value: unknown;
 	try {
-		value = JSON.parse(raw);
+		value = await jsonBody(c)();
 	} catch {
 		return invalid("request body must be valid JSON");
 	}

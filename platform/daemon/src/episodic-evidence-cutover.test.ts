@@ -35,6 +35,7 @@ function insertEpisodicMemory(
 ): void {
 	const now = input.createdAt ?? new Date().toISOString();
 	txIngestEnvelope(asWriteDb(db), {
+		author: { userId: null, credential: "system" },
 		id: input.id,
 		content: input.content,
 		normalizedContent: input.content.toLowerCase(),
@@ -394,6 +395,7 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 		});
 
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "epi-struct",
 			content: "User prefers vim",
 			normalizedContent: "user prefers vim",
@@ -494,6 +496,7 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 		});
 
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "epi-no-graph",
 			content: "Project uses React",
 			normalizedContent: "project uses react",
@@ -562,6 +565,7 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 
 	it("reflection-answer writer stamps memoryKind='episodic' (matches migration 094)", () => {
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "refl-1",
 			content: "Ship the scoping fix.",
 			contentHash: "reflection-a-refl-1",
@@ -594,6 +598,7 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 
 	it("document-ingest writer stamps memoryKind='episodic' (matches migration 094)", () => {
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "doc-chunk-1",
 			content: "document source chunk",
 			normalizedContent: "document source chunk",
@@ -633,6 +638,7 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 
 	it("daemon-derived writers omit memoryKind so fresh rows stay non-episodic (NULL)", () => {
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "agg-1",
 			content: "aggregate recall answer",
 			normalizedContent: "aggregate recall answer",

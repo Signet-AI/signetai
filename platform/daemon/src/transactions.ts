@@ -1,12 +1,12 @@
-import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
 
 export interface IngestEnvelope {
-	author?: WriteAuthor;
+	author: WriteAuthor;
 	id: string;
 	content: string;
 	normalizedContent?: string | null;
@@ -283,7 +283,7 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.memoryKind ?? null,
 		mem.evidenceMeta ?? null,
 		mem.reviewAfter ?? null,
-		mem.author?.userId ?? null,
+		mem.author.userId,
 	);
 	auditAuthoredWriteInTx(db, mem.author, "memory.created", "memory", mem.id, mem.agentId ?? "default");
 	return mem.id;

@@ -29,6 +29,7 @@ function seedMemory(args: {
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
 		txIngestEnvelope(db, {
+			author: { userId: null, credential: "system" },
 			id: args.id,
 			content: args.content,
 			normalizedContent: args.content.toLowerCase(),
@@ -1246,6 +1247,7 @@ memory:
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			txIngestEnvelope(db, {
+				author: { userId: null, credential: "system" },
 				id: "mem-episodic",
 				content: "Original episodic evidence",
 				normalizedContent: "original episodic evidence",
@@ -1294,6 +1296,7 @@ memory:
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			txIngestEnvelope(db, {
+				author: { userId: null, credential: "system" },
 				id: "semantic-claim-api",
 				content: "Signet is a memory system.",
 				normalizedContent: "signet is a memory system.",

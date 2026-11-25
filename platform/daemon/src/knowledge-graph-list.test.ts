@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, MAX_READ_CONNECTIONS } from "./db-accessor";
+import { searchEpisodicSources } from "./episodic-sources";
 import {
 	getDependenciesFrom,
 	getDependenciesTo,
@@ -14,9 +15,8 @@ import {
 } from "./knowledge-graph";
 import { applyOntologyOperation } from "./ontology-proposals";
 import { getDreamingEpisodicTokenBacklog } from "./pipeline/dreaming";
-import { countTokens } from "./pipeline/tokenizer";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
-import { searchEpisodicSources } from "./episodic-sources";
+import { countTokens } from "./pipeline/tokenizer";
 
 function makeDbPath(): string {
 	const dir = join(tmpdir(), `signet-kg-list-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -339,6 +339,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedEntity("e-signet", "Signet");
 		seedEntity("e-other", "Other");
 		const created = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "create_entity_alias",
@@ -349,6 +350,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "test",
 				operation: "archive_entity_alias",
@@ -358,6 +360,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(await listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(1);
 
 		const archived = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "archive_entity_alias",

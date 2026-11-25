@@ -5,34 +5,33 @@ import { listEntityAliases } from "../knowledge-graph";
 import { getInferenceProviderOrNull } from "../llm";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	parseEpistemicAssertionPredicate,
 	parseEpistemicAssertionStatus,
 	supersedeEpistemicAssertion,
 	validateEpistemicObserverScope,
 } from "../ontology-assertions";
 import {
-	OntologyClaimEvidenceError,
 	getOntologyClaimEvidence,
+	OntologyClaimEvidenceError,
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
-import { OntologyClaimTraceError, explainOntologyClaim } from "../ontology-claim-trace";
-import { OntologyConsolidationError, consolidateOntologyProposals } from "../ontology-consolidation";
+import { explainOntologyClaim, OntologyClaimTraceError } from "../ontology-claim-trace";
+import { consolidateOntologyProposals, OntologyConsolidationError } from "../ontology-consolidation";
 import {
 	getOntologyContradiction,
 	listOntologyContradictions,
 	parseOntologyContradictionStatus,
 } from "../ontology-contradictions";
-import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
-import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
+import { extractOntologyProposals, OntologyExtractionError } from "../ontology-extraction";
+import { getOntologyLinkEvidence, OntologyLinkEvidenceError } from "../ontology-link-evidence";
 import {
-	OntologyProposalError,
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
@@ -45,12 +44,14 @@ import {
 	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
+	OntologyProposalError,
 	parseOntologyProposalStatus,
 	proposeDuplicateEntityMerges,
 	rejectOntologyProposal,
 } from "../ontology-proposals";
+import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
-import { parseBoundedInt, resolveScopedAgentId, validateSessionAgentBinding, resolveMutationActor } from "./utils";
+import { parseBoundedInt, resolveMutationActor, resolveScopedAgentId, validateSessionAgentBinding } from "./utils";
 
 function asRecord(value: unknown): Record<string, unknown> {
 	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
@@ -95,7 +96,7 @@ function readStringArray(record: Record<string, unknown>, key: string): readonly
 
 async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
 	try {
-		return asRecord(await c.req.json());
+		return asRecord(await jsonBody(c)());
 	} catch {
 		return {};
 	}
@@ -758,6 +759,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await applyOntologyOperationBatch(getDbAccessor(), {
+					author: c.get("author"),
 					agentId: scoped.agentId,
 					actor,
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
@@ -847,6 +849,7 @@ export function registerOntologyRoutes(app: Hono): void {
 						const operation = readString(proposal, "operation") ?? "";
 						const payload = asRecord(proposal.payload);
 						return {
+							author: c.get("author"),
 							agentId: scoped.agentId,
 							operation,
 							payload,
@@ -858,7 +861,9 @@ export function registerOntologyRoutes(app: Hono): void {
 							sourceId: readString(proposal, "source_id") ?? sourceId,
 							sourcePath: readString(proposal, "source_path") ?? sourcePath,
 							sourceRoot: readString(proposal, "source_root") ?? sourceRoot,
-							createdBy: readString(proposal, "created_by") ?? createdBy,
+							createdBy: c.get("organization")
+								? resolveMutationActor(c).changedBy
+								: (readString(proposal, "created_by") ?? createdBy),
 						};
 					}),
 				),

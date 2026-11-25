@@ -1,14 +1,15 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { initDbAccessor, closeDbAccessor } from "../db-accessor";
-import { ensureSetupToken, organizationQuery, statement } from "./organization-store";
-import { createIdentityMiddleware } from "./identity-middleware";
+import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { registerOrganizationRoutes } from "../routes/organization-routes";
 import { parseAuthConfig } from "./config";
+import { createIdentityMiddleware } from "./identity-middleware";
+import { ensureSetupToken, organizationQuery, statement } from "./organization-store";
 import { generateSecret } from "./tokens";
+
 let dir = "";
 let app: Hono;
 let setup = "";
@@ -54,32 +55,513 @@ beforeEach(async () => {
 	app.use("*", createIdentityMiddleware(config, generateSecret()));
 	registerOrganizationRoutes(app, config, dir);
 	app.post("/write", (c) => c.json({ written: true }));
+	app.delete("/api/test-empty", (c) => c.json({ written: true }));
 });
 afterEach(async () => {
 	await (await import("../db-owner-runtime")).closeDbOwner();
-	Bun.gc(true);
 	await closeDbAccessor();
 	rmSync(dir, { recursive: true, force: true });
 	if (initialSignetPath === undefined) delete process.env.SIGNET_PATH;
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
-	test("A10 refresh retries within sixty seconds return the same current pair across multiple rotations", async () => {
+	test("R6 POST recalls audit the published resolved agent and result count", async () => {
+		await claim();
+		const { registerGlobalMiddleware } = await import("../middleware");
+		const { reloadAuthState } = await import("../routes/state");
+		const { flushReadAudit } = await import("./organization-runtime");
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		reloadAuthState(dir);
+		const probe = new Hono();
+		registerGlobalMiddleware(probe);
+		probe.post("/api/memory/recall", (c) => {
+			c.set("readAuditAgent", "default");
+			c.set("readAuditCount", 2);
+			return c.json({ results: [{ id: "one" }, { id: "two" }] });
+		});
+		try {
+			expect(
+				(
+					await probe.request("/api/memory/recall", {
+						method: "POST",
+						headers: { authorization: `Bearer ${admin}`, "content-type": "application/json" },
+						body: JSON.stringify({ query: "test" }),
+					})
+				).status,
+			).toBe(200);
+			await flushReadAudit();
+			const row = await organizationQuery<{ detail_json: string }>(
+				statement(
+					"SELECT detail_json FROM audit_events WHERE action='content.read' AND target_id='/api/memory/recall' ORDER BY at DESC LIMIT 1",
+					[],
+					"get",
+				),
+			);
+			expect(row && JSON.parse(row.detail_json)).toEqual({ agentId: "default", count: 2 });
+		} finally {
+			reloadAuthState(join(dir, "local-restore"));
+		}
+	});
+
+	test("R5 restart recovery leaves classification jobs with their owner", async () => {
+		await claim();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO org_jobs(id,kind,status) VALUES ('class-job','classification_apply','running'),('off-job','offboard','pending'),('keys-job','bulk_revoke','running')",
+			),
+		]);
+		const { startOrganizationRuntime, stopOrganizationRuntime } = await import("./organization-runtime");
+		try {
+			await startOrganizationRuntime("http://127.0.0.1");
+			expect(await organizationQuery(statement("SELECT id,status FROM org_jobs ORDER BY id", [], "all"))).toEqual([
+				{ id: "class-job", status: "running" },
+				{ id: "keys-job", status: "failed" },
+				{ id: "off-job", status: "failed" },
+			]);
+		} finally {
+			await stopOrganizationRuntime();
+		}
+	});
+	test("R5 read audit retries cannot duplicate or poison their batch", async () => {
+		await claim();
+		const { auditStatement, organizationWrite } = await import("./organization-store");
+		const event = auditStatement(null, "content.read", "route", "/api/memory/recall");
+		await organizationWrite([event]);
+		await organizationWrite([event]);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM audit_events WHERE id=?", [event.params?.[0] ?? null], "get"),
+			),
+		).toEqual({ n: 1 });
+	});
+	test("R7 retention prunes expired device authorizations", async () => {
+		await claim();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO device_authorizations(id,status,expires_at) VALUES ('expired-flow','pending','2000-01-01T00:00:00.000Z')",
+			),
+		]);
+		await (await import("./organization-runtime")).pruneAudit();
+		expect(
+			await organizationQuery(statement("SELECT id FROM device_authorizations WHERE id='expired-flow'", [], "get")),
+		).toBeNull();
+	});
+
+	test("R8 invite lookup uses a JSON token rather than a URL secret", async () => {
+		await claim();
+		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+		const token = new URL(invite.inviteUrl).pathname.split("/").pop();
+		expect((await call("/api/auth/invites/lookup", "POST", { token }, "")).status).toBe(200);
+		expect((await call(`/api/auth/invites/${token}`, "GET", undefined, "")).status).not.toBe(200);
+	});
+	test("R8 request logs use the device route template not its code", async () => {
+		const { logger } = await import("../logger");
+		const { registerGlobalMiddleware } = await import("../middleware");
+		const probe = new Hono();
+		registerGlobalMiddleware(probe);
+		probe.get("/api/auth/device/:userCode", (c) => c.json({ ok: true }));
+		const calls = spyOn(logger.api, "request");
+		try {
+			expect((await probe.request("/api/auth/device/TEST-CODE")).status).toBe(200);
+			expect(calls.mock.calls.at(-1)?.[1]).toBe("/api/auth/device/:userCode");
+		} finally {
+			calls.mockRestore();
+		}
+	});
+
+	test("R7 pending device flow admission is capped", async () => {
+		await claim();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000) INSERT INTO device_authorizations(id,status,expires_at) SELECT 'pending-'||x,'pending','2099-01-01T00:00:00.000Z' FROM n",
+			),
+		]);
+		const response = await call(
+			"/api/auth/device/start",
+			"POST",
+			{ client: "cli", deviceName: "Laptop", platform: "linux" },
+			"",
+		);
+		expect(response.status).toBe(429);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM device_authorizations WHERE status='pending'", [], "get"),
+			),
+		).toEqual({ n: 1000 });
+	});
+
+	test("R7 refresh requests are limited per peer before credential work", async () => {
+		await claim();
+		let response: Response | undefined;
+		for (let n = 0; n < 21; n++) response = await call("/api/auth/refresh", "POST", { refreshToken: "invalid" }, "");
+		expect(response?.status).toBe(429);
+		expect(response?.headers.get("Retry-After")).toBeTruthy();
+	});
+	test("R7 limiter capacity is bounded and expired peers are evicted", async () => {
+		const { AuthRateLimiter } = await import("./rate-limiter");
+		const limiter = new AuthRateLimiter(1, 1);
+		const now = Date.now;
+		try {
+			Date.now = () => 1000;
+			for (let n = 0; n < 10000; n++) limiter.record(`peer-${n}`);
+			expect(limiter.check("new-peer").allowed).toBe(true);
+			limiter.record("new-peer");
+			expect(limiter.check("peer-0").allowed).toBe(true);
+			Date.now = () => 2000;
+			expect(limiter.check("new-peer").allowed).toBe(true);
+		} finally {
+			Date.now = now;
+		}
+	});
+
+	test("R15 principal binding does not load unrelated personal agents", async () => {
+		const root = await claim();
+		const { organizationWrite, issueSession, verifySession, readOrganization } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO agents(id,name,kind,owner_user_id,created_at,updated_at) VALUES ('foreign-personal','Foreign','personal','usr_foreign',datetime('now'),datetime('now'))",
+			),
+		]);
+		const session = await issueSession(root.user.id, "cli");
+		const verified = await verifySession(session.accessToken, undefined, false, await readOrganization());
+		const { principalAccess } = await import("./agent-access");
+		expect(principalAccess(verified.principal)?.agents.some((agent) => agent.id === "foreign-personal")).toBe(false);
+	});
+
+	test("R14 deactivation preserves prior revocation timestamps and reasons", async () => {
+		await claim();
+		const { organizationWrite, issueSession, id } = await import("./organization-store");
+		const userId = id("usr");
+		await organizationWrite([
+			statement("INSERT INTO users(id,username,display_name,role) VALUES (?,'departing','Departing','member')", [
+				userId,
+			]),
+		]);
+		const session = await issueSession(userId, "cli");
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET revoked_at='2001-01-01T00:00:00.000Z',revoked_reason='manual' WHERE id=?", [
+				session.sessionId,
+			]),
+		]);
+		expect((await call(`/api/org/users/${userId}/deactivate`, "POST", { mode: "keep", dryRun: false })).status).toBe(
+			202,
+		);
+		expect(
+			await organizationQuery(
+				statement("SELECT revoked_at,revoked_reason FROM auth_sessions WHERE id=?", [session.sessionId], "get"),
+			),
+		).toEqual({ revoked_at: "2001-01-01T00:00:00.000Z", revoked_reason: "manual" });
+	});
+
+	test("session revocation and logout clear retry state", async () => {
+		const root = await claim();
+		const { issueSession, organizationWrite } = await import("./organization-store");
+		for (const action of ["revoke", "logout-all"]) {
+			const session = await issueSession(root.user.id, "cli");
+			await organizationWrite([
+				statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", session.sessionId]),
+			]);
+			const response =
+				action === "revoke"
+					? await call(`/api/auth/sessions/${session.sessionId}`, "DELETE")
+					: await call("/api/auth/logout", "POST", { all: true });
+			expect(response.status).toBe(200);
+			expect(
+				await organizationQuery(
+					statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [session.sessionId], "get"),
+				),
+			).toEqual({ refresh_retry_json: "[]" });
+		}
+	});
+	test("single-session logout clears retry state", async () => {
+		const root = await claim();
+		const { issueSession, organizationWrite, readOrganization, verifySession } = await import("./organization-store");
+		const { logout } = await import("./organization-operations");
+		const session = await issueSession(root.user.id, "cli");
+		const { principal } = await verifySession(session.accessToken, undefined, false, await readOrganization());
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", session.sessionId]),
+		]);
+		await logout(principal, {});
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [session.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+	});
+	test("device exchange and revocation clear retry state", async () => {
+		await claim();
+		const { organizationWrite } = await import("./organization-store");
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Laptop" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+		).toBe(200);
+		const pending = await organizationQuery<{ session_id: string }>(
+			statement("SELECT session_id FROM device_authorizations WHERE user_code = ?", [flow.userCode], "get"),
+		);
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", pending.session_id]),
+		]);
+		const response = await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "");
+		expect(response.status).toBe(200);
+		const cli = await response.json();
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [pending.session_id], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", cli.sessionId]),
+		]);
+		expect((await call(`/api/auth/devices/${cli.deviceId}`, "DELETE")).status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [cli.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+	});
+	test("R10 concurrent claims have a conflict loser rather than a server error", async () => {
+		const payload = {
+			setupToken: setup,
+			organizationName: "Acme",
+			admin: { username: "admin", displayName: "Admin", password: "test" },
+		};
+		const responses = await Promise.all([
+			call("/api/org/claim", "POST", payload, ""),
+			call("/api/org/claim", "POST", payload, ""),
+		]);
+		expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM users", [], "get"))).toEqual({ n: 1 });
+	});
+	test("R10 concurrent device exchanges have an unauthorized loser", async () => {
+		await claim();
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Laptop", platform: "linux" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+		).toBe(200);
+		const responses = await Promise.all([
+			call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, ""),
+			call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, ""),
+		]);
+		expect(responses.map((r) => r.status).sort()).toEqual([200, 401]);
+	});
+
+	test("R11 a remote hybrid open request has no local principal", async () => {
+		const hybrid = new Hono();
+		hybrid.use("*", createIdentityMiddleware(parseAuthConfig({ mode: "hybrid" }, dir), generateSecret()));
+		hybrid.get("/api/auth/methods", (c) => c.json({ principal: c.get("principal")?.kind ?? null }));
+		const response = await hybrid.request(
+			"/api/auth/methods",
+			{},
+			{ incoming: { socket: { remoteAddress: "203.0.113.12" } } },
+		);
+		expect(await response.json()).toEqual({ principal: null });
+		const local = await hybrid.request(
+			"/api/auth/methods",
+			{},
+			{ incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+		);
+		expect(await local.json()).toEqual({ principal: "local" });
+	});
+
+	test("R13 secure sessions use Host prefixed root cookies", async () => {
+		const response = await app.request("https://org.test/api/org/claim", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				setupToken: setup,
+				organizationName: "Acme",
+				admin: { username: "admin", displayName: "Admin", password: "test" },
+			}),
+		});
+		expect(response.status).toBe(200);
+		const cookies = response.headers.getSetCookie();
+		expect(
+			cookies.some(
+				(value) => value.startsWith("__Host-signet_session=") && value.includes("Secure") && value.includes("Path=/"),
+			),
+		).toBe(true);
+		expect(cookies.some((value) => value.startsWith("__Host-signet_csrf="))).toBe(true);
+	});
+
+	test("R12 non HTTP public URLs are rejected", async () => {
+		await claim();
+		expect((await call("/api/org/settings", "PATCH", { publicUrl: "javascript:alert(1)" })).status).toBe(400);
+	});
+	test("R12 password login cannot be disabled without OIDC", async () => {
+		await claim();
+		const response = await call("/api/org/settings", "PATCH", { passwordLogin: false });
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({ reason: "org_policy" });
+	});
+
+	test("R9 new password hashes use six hundred thousand iterations", async () => {
+		const { passwordHash } = await import("./organization-store");
+		expect((await passwordHash("test password")).split("$")[1]).toBe("600000");
+	});
+	test("R9 an unknown username still performs asynchronous password verification", async () => {
+		const { verifyUserPassword } = await import("./organization-store");
+		let finished = false;
+		const pending = verifyUserPassword("test password", null).then((value) => {
+			finished = true;
+			return value;
+		});
+		await Promise.resolve();
+		expect(finished).toBe(false);
+		expect(await pending).toBe(false);
+	});
+
+	test("R4 a personal agent can commit its curated memory head", async () => {
+		const root = await claim();
+		const record = await organizationQuery<{ personal_agent_id: string }>(
+			statement("SELECT personal_agent_id FROM users WHERE id=?", [root.user.id], "get"),
+		);
+		const { commitCuratedMemoryHead, readCuratedMemoryHead } = await import("../memory-head");
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement("INSERT INTO dreaming_passes(id,agent_id,mode,status) VALUES (?,?, 'incremental-content','running')", [
+				"personal-head-test",
+				record.personal_agent_id,
+			]),
+			statement(
+				"INSERT INTO memories(id,content,agent_id,memory_kind,type,visibility,created_at,updated_at,author_user_id) VALUES ('head-evidence','Personal head evidence',?,'episodic','fact','private',datetime('now'),datetime('now'),?)",
+				[record.personal_agent_id, root.user.id],
+			),
+		]);
+		await readCuratedMemoryHead(record.personal_agent_id);
+		const result = await commitCuratedMemoryHead({
+			agentId: record.personal_agent_id,
+			passId: "personal-head-test",
+			entries: [
+				{
+					entryId: "personal-entry",
+					text: "Personal head evidence",
+					support: [{ source_ref: "memory:head-evidence", quote: "Personal head evidence" }],
+				},
+			],
+		});
+		expect(result).toMatchObject({ ok: true });
+		expect(record.personal_agent_id).toMatch(/^personal-[a-f0-9]{32}$/);
+	});
+
+	test("R1 text plain claim cannot bypass the JSON boundary", async () => {
+		const response = await app.request("/api/org/claim", {
+			method: "POST",
+			headers: { "content-type": "text/plain" },
+			body: JSON.stringify({
+				setupToken: setup,
+				organizationName: "Acme",
+				admin: { username: "admin", displayName: "Admin", password: "test password" },
+			}),
+		});
+		expect(response.status).toBe(415);
+		expect(await response.json()).toMatchObject({ reason: "unsupported_media_type" });
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM users", [], "get"))).toEqual({ n: 0 });
+	});
+	test("R1 foreign Origin cannot claim an organization", async () => {
+		const response = await app.request("/api/org/claim", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin: "https://attacker.invalid" },
+			body: JSON.stringify({
+				setupToken: setup,
+				organizationName: "Acme",
+				admin: { username: "admin", displayName: "Admin", password: "test password" },
+			}),
+		});
+		expect(response.status).toBe(403);
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM users", [], "get"))).toEqual({ n: 0 });
+	});
+	test("R1 an empty JSON mutation body is accepted", async () => {
+		await claim();
+		expect((await call("/api/test-empty", "DELETE")).status).toBe(200);
+	});
+
+	test("A10 a lost rotation survives sixty seconds and restart until the new access token is used", async () => {
 		const root = await claim();
 		const { issueSession } = await import("./organization-store");
 		const session = await issueSession(root.user.id, "cli");
 		const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
-		const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
-		expect(retry.status).toBe(200);
-		const same = await retry.json();
-		expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
-		const { closeDbOwner } = await import("../db-owner-runtime");
-		await closeDbOwner();
-		const second = await (await call("/api/auth/refresh", "POST", { refreshToken: first.refreshToken }, "")).json();
-		const oldRetry = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
-		expect(oldRetry.accessToken === second.accessToken && oldRetry.refreshToken === second.refreshToken).toBe(true);
+		const clock = Date.now;
+		const later = clock() + 61_000;
+		try {
+			Date.now = () => later;
+			await (await import("../db-owner-runtime")).closeDbOwner();
+			const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(retry.status).toBe(200);
+			const same = await retry.json();
+			expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
+			const replayAudit = await organizationQuery(
+				statement(
+					"SELECT outcome,target_kind,target_id,detail_json FROM audit_events WHERE action = 'session.refresh_replayed' AND target_id = ?",
+					[session.sessionId],
+					"get",
+				),
+			);
+			expect(replayAudit).toEqual({
+				outcome: "ok",
+				target_kind: "session",
+				target_id: session.sessionId,
+				detail_json: "null",
+			});
+			expect((await call("/api/auth/sessions", "GET", undefined, first.accessToken)).status).toBe(200);
+			const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(reuse.status).toBe(401);
+			expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+			expect((await call("/api/auth/sessions", "GET", undefined, first.accessToken)).status).toBe(401);
+			expect(
+				await organizationQuery(
+					statement("SELECT revoked_reason FROM auth_sessions WHERE id=?", [session.sessionId], "get"),
+				),
+			).toEqual({ revoked_reason: "refresh_reuse" });
+		} finally {
+			Date.now = clock;
+		}
 	});
-	test("offboarding transfer changes agent ownership without rewriting evidence authorship", async () => {
+	test("A10 use of the new refresh token ends the preceding retry grace", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		const session = await issueSession(root.user.id, "cli");
+		const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
+		expect((await call("/api/auth/refresh", "POST", { refreshToken: first.refreshToken }, "")).status).toBe(200);
+		const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+		expect(reuse.status).toBe(401);
+		expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [session.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+	});
+	test("A10 an unused rotation has a twenty-four-hour retry bound", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		const session = await issueSession(root.user.id, "cli");
+		const clock = Date.now;
+		const start = clock();
+		try {
+			Date.now = () => start;
+			const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
+			Date.now = () => start + 86400_000 - 1;
+			const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(retry.status).toBe(200);
+			const same = await retry.json();
+			expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
+			Date.now = () => start + 86400_000;
+			const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(reuse.status).toBe(401);
+			expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+		} finally {
+			Date.now = clock;
+		}
+	});
+	test("R14 transfer preserves authorship and reactivation restores writing", async () => {
 		const root = await claim();
 		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
 		const accepted = await call(
@@ -98,7 +580,7 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([
 			statement(
 				"INSERT INTO session_transcripts (agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'User: original evidence','test',?,?)",
-				[`personal-${departing.user.id}`, "original-session", new Date().toISOString(), departing.user.id],
+				[`personal-${departing.user.id.slice(4)}`, "original-session", new Date().toISOString(), departing.user.id],
 			),
 		]);
 		const preview = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
@@ -122,9 +604,17 @@ describe("organization HTTP flows", () => {
 		).toEqual({ speaker_user_id: departing.user.id });
 		expect(
 			await organizationQuery(
-				statement("SELECT owner_user_id FROM agents WHERE id = ?", [`personal-${departing.user.id}`], "get"),
+				statement("SELECT owner_user_id FROM agents WHERE id = ?", [`personal-${departing.user.id.slice(4)}`], "get"),
 			),
 		).toEqual({ owner_user_id: root.user.id });
+		expect((await call(`/api/org/users/${departing.user.id}/reactivate`, "POST", {})).status).toBe(200);
+		const { issueSession } = await import("./organization-store");
+		const restored = await issueSession(departing.user.id, "cli");
+		expect((await call("/write", "POST", {}, restored.accessToken)).status).toBe(200);
+		const current = await organizationQuery<{ personal_agent_id: string }>(
+			statement("SELECT personal_agent_id FROM users WHERE id=?", [departing.user.id], "get"),
+		);
+		expect(current.personal_agent_id).not.toBe(`personal-${departing.user.id.slice(4)}`);
 	});
 	test("simultaneous refresh retries return the same pair without revoking the session", async () => {
 		const root = await claim();
@@ -164,6 +654,7 @@ describe("organization HTTP flows", () => {
 			for (const [memoryId, owner] of [
 				["purge-target", departing.user.id],
 				["keep-other", root.user.id],
+				["purge-derived", root.user.id],
 			])
 				txIngestEnvelope(db, {
 					id: memoryId,
@@ -178,7 +669,7 @@ describe("organization HTTP flows", () => {
 					pinned: 0,
 					sourceType: "manual",
 					sourceId: null,
-					agentId: `personal-${owner}`,
+					agentId: `personal-${owner.slice(4)}`,
 					createdAt: new Date().toISOString(),
 					author: { userId: owner, credential: "session:fixture" },
 				});
@@ -186,7 +677,68 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([
 			statement(
 				"INSERT INTO session_transcripts (agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'User: disposable test','test',?,?)",
-				[`personal-${departing.user.id}`, "departing-session", new Date().toISOString(), departing.user.id],
+				[`personal-${departing.user.id.slice(4)}`, "departing-session", new Date().toISOString(), departing.user.id],
+			),
+		]);
+		await organizationWrite([
+			statement(
+				"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-derived','memory','purge-target',?)",
+				[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
+			),
+			statement(
+				"INSERT INTO documents (id,source_type,raw_content,created_at,updated_at,author_user_id) VALUES ('purge-doc','text','private',?,?,?)",
+				[new Date().toISOString(), new Date().toISOString(), departing.user.id],
+			),
+			statement(
+				"INSERT INTO memory_artifacts (agent_id,source_path,source_sha256,source_kind,session_id,session_token,captured_at,updated_at,author_user_id) VALUES (?,'purge-artifact','hash','summary','unbound','unbound',?,?,?)",
+				[
+					`personal-${departing.user.id.slice(4)}`,
+					new Date().toISOString(),
+					new Date().toISOString(),
+					departing.user.id,
+				],
+			),
+			statement(
+				"INSERT INTO session_claims (agent_id,session_key,claimed_at,expires_at) VALUES (?,'departing-session',?,?)",
+				[
+					`personal-${departing.user.id.slice(4)}`,
+					new Date().toISOString(),
+					new Date(Date.now() + 60000).toISOString(),
+				],
+			),
+		]);
+		await organizationWrite([
+			statement(
+				"INSERT INTO session_summaries (id,kind,content,earliest_at,latest_at,created_at,agent_id) VALUES ('purge-dag','session','private',?,?,?,?),('purge-parent','arc','private',?,?,?,?)",
+				[
+					new Date().toISOString(),
+					new Date().toISOString(),
+					new Date().toISOString(),
+					`personal-${departing.user.id.slice(4)}`,
+					new Date().toISOString(),
+					new Date().toISOString(),
+					new Date().toISOString(),
+					`personal-${departing.user.id.slice(4)}`,
+				],
+			),
+			statement(
+				"INSERT INTO session_summary_memories (summary_id,memory_id) VALUES ('purge-dag','purge-target'),('purge-dag','keep-other')",
+				[],
+			),
+			statement(
+				"INSERT INTO session_summary_children (parent_id,child_id,ordinal) VALUES ('purge-parent','purge-dag',0)",
+				[],
+			),
+		]);
+		await organizationWrite([
+			statement(
+				"INSERT INTO session_summaries(id,kind,content,earliest_at,latest_at,created_at,agent_id,session_key) VALUES ('transcript-owned-summary','session','private',?,?,?,?,'departing-session')",
+				[
+					new Date().toISOString(),
+					new Date().toISOString(),
+					new Date().toISOString(),
+					`personal-${departing.user.id.slice(4)}`,
+				],
 			),
 		]);
 		const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
@@ -204,6 +756,22 @@ describe("organization HTTP flows", () => {
 		expect(status.error).toBeNull();
 		expect(status.status).toBe("complete");
 		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM session_summaries WHERE id IN ('purge-dag','purge-parent')", [], "get"),
+			),
+		).toEqual({ n: 0 });
+		expect(await organizationQuery(statement("SELECT id FROM documents WHERE id='purge-doc'", [], "get"))).toBeNull();
+		expect(
+			await organizationQuery(
+				statement("SELECT source_path FROM memory_artifacts WHERE source_path='purge-artifact'", [], "get"),
+			),
+		).toBeNull();
+		const progress = JSON.parse(status.progress_json);
+		expect(progress.removed.session_summaries).toBe(3);
+		expect(progress.residual).toBeDefined();
+		expect(Object.values(progress.residual).every((n) => n === 0)).toBe(true);
+
+		expect(
 			await organizationQuery(statement("SELECT id FROM memories WHERE id = 'purge-target'", [], "get")),
 		).toBeNull();
 		expect(await organizationQuery(statement("SELECT id FROM memories WHERE id = 'keep-other'", [], "get"))).toEqual({
@@ -218,8 +786,102 @@ describe("organization HTTP flows", () => {
 			await organizationQuery(
 				statement("SELECT target_id FROM audit_events WHERE action = 'memory.purged'", [], "all"),
 			),
-		).toEqual([{ target_id: "purge-target" }]);
+		).toEqual(expect.arrayContaining([{ target_id: "purge-target" }, { target_id: "purge-derived" }]));
 	});
+	test.each([true, false])(
+		"R3 pinned evidence reports incomplete and residual instead of success (authored=%s)",
+		async (owned: boolean) => {
+			const root = await claim();
+			const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+			const accepted = await call(
+				"/api/auth/invites/accept",
+				"POST",
+				{
+					token: new URL(invite.inviteUrl).pathname.split("/").pop(),
+					username: "departing",
+					displayName: "Departing",
+					password: "test",
+				},
+				"",
+			);
+			const departing = await accepted.json();
+			const { getDbAccessor, runWriteTxAsync } = await import("../db-accessor");
+			const { txIngestEnvelope } = await import("../transactions");
+			const { organizationWrite } = await import("./organization-store");
+			await runWriteTxAsync(getDbAccessor(), (db) => {
+				for (const [memoryId, owner] of [
+					["purge-target", departing.user.id],
+					["keep-other", root.user.id],
+					["purge-derived", root.user.id],
+				])
+					txIngestEnvelope(db, {
+						id: memoryId,
+						content: memoryId,
+						contentHash: memoryId,
+						who: "fixture",
+						why: null,
+						project: null,
+						importance: 0.5,
+						type: "fact",
+						tags: null,
+						pinned: memoryId === "purge-target" ? 1 : 0,
+						sourceType: !owned && memoryId === "purge-target" ? "session" : "manual",
+						sourceId: !owned && memoryId === "purge-target" ? "departing-session" : null,
+						agentId: `personal-${owner.slice(4)}`,
+						createdAt: new Date().toISOString(),
+						author: { userId: !owned && memoryId === "purge-target" ? null : owner, credential: "system" },
+					});
+			});
+			await organizationWrite([
+				statement(
+					"INSERT INTO session_transcripts (agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'User: disposable test','test',?,?)",
+					[`personal-${departing.user.id.slice(4)}`, "departing-session", new Date().toISOString(), departing.user.id],
+				),
+			]);
+			await organizationWrite([
+				statement(
+					"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-derived','memory','purge-target',?)",
+					[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
+				),
+				statement(
+					"INSERT INTO documents (id,source_type,raw_content,created_at,updated_at,author_user_id) VALUES ('purge-doc','text','private',?,?,?)",
+					[new Date().toISOString(), new Date().toISOString(), departing.user.id],
+				),
+				statement(
+					"INSERT INTO memory_artifacts (agent_id,source_path,source_sha256,source_kind,session_id,session_token,captured_at,updated_at,author_user_id) VALUES (?,'purge-artifact','hash','summary','unbound','unbound',?,?,?)",
+					[
+						`personal-${departing.user.id.slice(4)}`,
+						new Date().toISOString(),
+						new Date().toISOString(),
+						departing.user.id,
+					],
+				),
+				statement(
+					"INSERT INTO session_claims (agent_id,session_key,claimed_at,expires_at) VALUES (?,'departing-session',?,?)",
+					[
+						`personal-${departing.user.id.slice(4)}`,
+						new Date().toISOString(),
+						new Date(Date.now() + 60000).toISOString(),
+					],
+				),
+			]);
+			const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
+				mode: "purge",
+				dryRun: false,
+			});
+			expect(started.status).toBe(202);
+			const job = await started.json();
+			let status = await (await call(`/api/org/jobs/${job.jobId}`)).json();
+			const deadline = Date.now() + 10_000;
+			while (status.status === "running" && Date.now() < deadline) {
+				await Bun.sleep(50);
+				status = await (await call(`/api/org/jobs/${job.jobId}`)).json();
+			}
+			expect(status.status).toBe("incomplete");
+			expect(JSON.parse(status.progress_json).residual.memories).toBe(1);
+			expect(JSON.parse(status.progress_json).removed.retainedPinned).toBeUndefined();
+		},
+	);
 	test("browser login exposes CSRF and expiry but keeps the access secret in HttpOnly cookies", async () => {
 		await claim();
 		const response = await call("/api/auth/login", "POST", { username: "admin", password: "test password" }, "");
@@ -356,10 +1018,20 @@ describe("organization HTTP flows", () => {
 		expect(
 			await organizationQuery(statement("SELECT expires_at FROM api_keys WHERE id = ?", [key.key.id], "get")),
 		).toEqual({ expires_at: nearingExpiry });
+		const { issueSession } = await import("./organization-store");
+		const pendingSession = await issueSession(alice.user.id, "cli");
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", pendingSession.sessionId]),
+		]);
 		const plan = await call(`/api/org/users/${alice.user.id}/deactivate`, "POST", { mode: "keep" });
 		expect(plan.status).toBe(200);
 		const job = await call(`/api/org/users/${alice.user.id}/deactivate`, "POST", { mode: "keep", dryRun: false });
 		expect(job.status).toBe(202);
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [pendingSession.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
 		const revoked = await call("/api/auth/connector-keys", "GET", undefined, key.secret);
 		expect(revoked.status).toBe(401);
 		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM audit_events", [], "get"))).toMatchObject({
@@ -399,6 +1071,17 @@ describe("organization HTTP flows", () => {
 		).json();
 		expect((await call("/write", "POST", { agentId: "other" }, key.secret)).status).toBe(403);
 		expect((await call("/write", "POST", { fromAgentId: "other" }, key.secret)).status).toBe(403);
+		expect(
+			(
+				await call(
+					"/write",
+					"POST",
+					{ sessionKey: `agent:personal-${root.user.id}:main`, fromSessionKey: "agent:other:main" },
+					key.secret,
+				)
+			).status,
+		).toBe(400);
+		expect((await call("/write?scope=all", "POST", {}, key.secret)).status).toBe(403);
 		expect(
 			(
 				await app.request("/write?agentId=other", {

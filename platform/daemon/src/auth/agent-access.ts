@@ -3,7 +3,16 @@ import type { Principal } from "./principal";
 export function organizationReadRequest(method: string, path: string): boolean {
 	return (
 		["GET", "HEAD"].includes(method) ||
-		(method === "POST" && ["/api/memory/recall", "/api/hooks/recall", "/api/recall"].includes(path))
+		(method === "POST" &&
+			[
+				"/api/memory/recall",
+				"/api/hooks/recall",
+				"/api/hook/recall",
+				"/api/recall",
+				"/api/memory/search",
+				"/api/search",
+				"/api/sessions/search",
+			].includes(path))
 	);
 }
 export interface AgentRecord {

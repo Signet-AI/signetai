@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import { OntologyProposalError, applyOntologyOperation, listOntologyProposals } from "../ontology-proposals";
+import { applyOntologyOperation, listOntologyProposals, OntologyProposalError } from "../ontology-proposals";
 import { registerKnowledgeRoutes } from "./knowledge-routes";
 import { registerOntologyRoutes } from "./ontology-routes";
 
@@ -50,6 +50,7 @@ describe("interactive semantic mutation cutover", () => {
 			expect(before).toHaveLength(0);
 
 			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "pin_entity",
@@ -74,6 +75,7 @@ describe("interactive semantic mutation cutover", () => {
 
 		it("unpin_entity clears pinned state and writes an applied proposal", async () => {
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "pin_entity",
@@ -81,6 +83,7 @@ describe("interactive semantic mutation cutover", () => {
 			});
 
 			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "unpin_entity",
@@ -104,6 +107,7 @@ describe("interactive semantic mutation cutover", () => {
 		it("pin_entity on a missing entity throws 404 and writes no applied proposal", async () => {
 			await expect(
 				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
 					agentId: "ant",
 					actor: "operator",
 					operation: "pin_entity",
@@ -118,6 +122,7 @@ describe("interactive semantic mutation cutover", () => {
 	describe("entity aliases via audited operation", () => {
 		it("create_entity_alias writes the alias and an applied proposal", async () => {
 			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "create_entity_alias",
@@ -146,6 +151,7 @@ describe("interactive semantic mutation cutover", () => {
 		it("create_entity_alias on a missing entity throws 404", async () => {
 			await expect(
 				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
 					agentId: "ant",
 					actor: "operator",
 					operation: "create_entity_alias",
@@ -156,6 +162,7 @@ describe("interactive semantic mutation cutover", () => {
 
 		it("archive_entity_alias archives the alias and writes an applied proposal", async () => {
 			const created = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "create_entity_alias",
@@ -164,6 +171,7 @@ describe("interactive semantic mutation cutover", () => {
 			const aliasId = created.result?.aliasId as string;
 
 			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "archive_entity_alias",
@@ -191,6 +199,7 @@ describe("interactive semantic mutation cutover", () => {
 				).run(now, now);
 			});
 			const created = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "create_entity_alias",
@@ -200,6 +209,7 @@ describe("interactive semantic mutation cutover", () => {
 
 			await expect(
 				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
 					agentId: "ant",
 					actor: "operator",
 					operation: "archive_entity_alias",

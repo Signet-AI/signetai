@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { checkPermission, createAuthMiddleware, verifyToken } from "../auth";
 import type { AuthResult, TokenClaims } from "../auth";
+import { checkPermission, createAuthMiddleware, verifyToken } from "../auth";
 
 const KEY = "sig_sk_narrow_secretvalue";
 const KEY_EXP = Math.floor(Date.now() / 1000) + 120;

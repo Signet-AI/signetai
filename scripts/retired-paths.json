@@ -33,5 +33,10 @@
 		"path": "surfaces/browser-extension",
 		"reason": "Delete the unpublished, unmaintained browser extension.",
 		"retiredIn": "2026-11-20"
+	},
+	{
+		"path": "platform/daemon/src/auth/write-attribution.ts",
+		"reason": "Record authors at native write boundaries, never in organization job side records.",
+		"retiredIn": "2026-11-25"
 	}
 ]

@@ -1,14 +1,14 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import type { Context } from "hono";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getPeerAddress } from "../auth/middleware";
 import { type DocumentImportStatus, importDocument } from "../document-import-service";
-import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_FILE_BYTES } from "../import-normalizer";
-import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
+import { type DurableImportAdmission, ImportAdmissionConflictError } from "../import-inbox";
+import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILES } from "../import-normalizer";
 import { isWorkspacePrivatePath } from "../workspace-private-paths";
 import { AGENTS_DIR, authConfig, getCurrentAgentsDir } from "./state.js";
+import { resolveScopedAgentId } from "./utils";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;
@@ -22,6 +22,8 @@ export interface ImportRouteDeps {
 export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 	app.use("/api/sources/import", async (c, next) => requirePermission("documents", authConfig)(c, next));
 	app.post("/api/sources/import", async (c) => {
+		const resolved = resolveScopedAgentId(c, undefined);
+		if (resolved.error) return c.json({ error: resolved.error }, 403);
 		const contentLength = Number.parseInt(c.req.header("content-length") ?? "", 10);
 		if (Number.isFinite(contentLength) && contentLength > IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD) {
 			return c.json({ error: `Import batch exceeds the ${IMPORT_MAX_BATCH_BYTES} byte limit` }, 413);
@@ -129,6 +131,8 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 				}
 				await deps.durableImportAdmission.begin(admission.key);
 				const result = await importDocument({
+					agentId: resolved.agentId,
+					author: c.get("author"),
 					fileName: file.name,
 					bytes: fileBytes,
 					contentType: file.type,

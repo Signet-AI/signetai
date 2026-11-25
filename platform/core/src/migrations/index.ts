@@ -1,12 +1,3 @@
-import { up as sessionTranscriptDeletions } from "./174-session-transcript-deletions";
-import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
-import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
-import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
-import { up as sourceSyncFailures } from "./155-source-sync-failures";
-import { up as retireObsoleteInvocationLedger } from "./159-retire-obsolete-invocation-ledger";
-
-import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
-
 import { up as baseline } from "./001-baseline";
 import { up as pipelineV2 } from "./002-pipeline-v2";
 import { up as uniqueContentHash } from "./003-unique-content-hash";
@@ -157,10 +148,15 @@ import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-fi
 import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
 import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
+import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
+import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 import { up as vectorRepairCheckpoints } from "./153-vector-repair-checkpoints";
+import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
+import { up as sourceSyncFailures } from "./155-source-sync-failures";
 import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpoints";
 import { up as embeddingRepairProgress } from "./157-embedding-repair-progress";
 import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-index";
+import { up as retireObsoleteInvocationLedger } from "./159-retire-obsolete-invocation-ledger";
 import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-prune-scan-generation";
@@ -175,9 +171,11 @@ import { up as dependencyHistoryCompactionState } from "./170-dependency-history
 import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-board";
 import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
+import { up as sessionTranscriptDeletions } from "./174-session-transcript-deletions";
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
 import { up as organizationIdentity, artifacts as organizationIdentityArtifacts } from "./176-organization-identity";
 import { up as classifications } from "./177-classifications";
+import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
