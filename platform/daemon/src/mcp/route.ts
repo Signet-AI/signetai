@@ -1,5 +1,8 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
+import { z } from "zod";
+import { requirePermission } from "../auth";
+import { authConfig } from "../routes/state";
 import type { Hono } from "hono";
 import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission.js";
 import { createMcpServer } from "./tools.js";
@@ -84,6 +87,17 @@ export function mountMcpRoute(app: Hono): void {
 			await mcpRequestGateForTests?.();
 			const parsedBody = await parseMcpJsonBody(c);
 			if (parsedBody instanceof Response) return parsedBody;
+			const call = z
+				.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) })
+				.safeParse(parsedBody);
+			if (call.success && /^(?:signet_)?code_/.test(call.data.params.name)) {
+				const permission = /clear|index/.test(call.data.params.name) ? "admin" : "recall";
+				if (!c.get("principal"))
+					return c.json({ reason: "permission", required: permission, error: "A principal is required" }, 403);
+				const denied = await requirePermission(permission, authConfig)(c, () => Promise.resolve());
+				if (denied) return denied;
+			}
+
 			transport = new WebStandardStreamableHTTPServerTransport({
 				sessionIdGenerator: undefined,
 				enableJsonResponse: true,

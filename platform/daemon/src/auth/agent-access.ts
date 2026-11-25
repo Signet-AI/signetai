@@ -5,7 +5,6 @@ export function organizationReadRequest(method: string, path: string): boolean {
 		["GET", "HEAD"].includes(method) ||
 		(method === "POST" &&
 			[
-				"/mcp",
 				"/api/assistant/chat",
 				"/api/knowledge/expand",
 				"/api/knowledge/expand/session",

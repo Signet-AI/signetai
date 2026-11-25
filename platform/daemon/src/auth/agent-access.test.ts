@@ -42,7 +42,6 @@ const org = {
 describe("organization act-as boundary", () => {
 	test("read-only POST transports resolve read reach without requiring peer write ownership", () => {
 		for (const path of [
-			"/mcp",
 			"/api/assistant/chat",
 			"/api/knowledge/expand",
 			"/api/knowledge/expand/session",

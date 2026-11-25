@@ -937,3 +937,5 @@ Phase 2 tool candidates (not yet implemented):
 - `diagnostics` — health score summary
 - `config_read` — read agent config
 - `document_ingest` — ingest a document
+
+The `/mcp` transport does not grant read access as a whole. HTTP-backed tools re-enter their HTTP permission and scope checks. Non-HTTP GraphIQ tools require `recall` for reads and `admin` for clearing or indexing, including compatibility aliases. A missing principal or permission cannot execute a plugin command.
