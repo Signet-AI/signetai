@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ReadScope } from "../read-scope";
-import { searchEntitiesInDb, entityDetailInDb, aspectClaimsInDb, validateProposalInDb } from "../classification-owner";
+import { searchEntitiesInDb, entityDetailInDb, aspectClaimsInDb, validateProposalInDb } from "./dreaming-capabilities";
 
 const databases: Database[] = [];
 afterEach(() => {

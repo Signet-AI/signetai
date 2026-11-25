@@ -381,6 +381,10 @@ describe("MemoryBench Dreaming gate", () => {
 				),
 			);
 		db.prepare("UPDATE organization SET claimed_at='2026-01-01', agent_model='single'").run();
+		db.prepare("INSERT INTO groups(id,name) VALUES('dreaming-gate-speakers','Dreaming gate speakers')").run();
+		db.prepare(
+			"INSERT INTO agents(id,name,kind,owner_group_id,created_at,updated_at) VALUES(?,?,'team','dreaming-gate-speakers','2026-01-01','2026-01-01')",
+		).run(corpus.agentId, "Shared speaker fixture");
 		for (const user of corpus.users) {
 			expect(user.quote).not.toContain(user.displayName);
 			expect(user.quote).not.toContain(user.username);
@@ -389,6 +393,21 @@ describe("MemoryBench Dreaming gate", () => {
 				user.username,
 				user.displayName,
 			);
+			db.prepare("INSERT INTO group_members(group_id,user_id,role) VALUES('dreaming-gate-speakers',?,'member')").run(
+				user.id,
+			);
+			expect(
+				db
+					.query(
+						"SELECT name,compartment_id,proposal_evidence,dreaming_pass_id FROM entities WHERE agent_id=? AND person_user_id=?",
+					)
+					.get(corpus.agentId, user.id),
+			).toEqual({
+				name: `${user.displayName} (${user.username})`,
+				compartment_id: null,
+				proposal_evidence: "[]",
+				dreaming_pass_id: null,
+			});
 			expect(
 				writeSessionTranscriptRow(db, {
 					agentId: corpus.agentId,

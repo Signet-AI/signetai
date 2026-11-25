@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	addObsidianSource,
@@ -62,7 +62,25 @@ export function seedDerived(input: DerivedSeed) {
 		},
 		input.workspace,
 	);
+	const sourcePath = join(sourceRoot, "read-fixture.md");
+	writeFileSync(sourcePath, content);
 	db.transaction(() => {
+		db.query(
+			`INSERT INTO memory_artifacts(source_path,source_sha256,source_kind,source_id,content,agent_id,compartment_id,captured_at,updated_at,author_user_id)
+			 VALUES(?,?,'file',?,?,?,?,?,?,?)
+			 ON CONFLICT(agent_id,source_path) DO UPDATE SET source_sha256=excluded.source_sha256,source_id=excluded.source_id,
+			 content=excluded.content,compartment_id=excluded.compartment_id,updated_at=excluded.updated_at,author_user_id=excluded.author_user_id`,
+		).run(
+			sourcePath,
+			createHash("sha256").update(content).digest("hex"),
+			source.source.id,
+			content,
+			input.agentId,
+			compartment,
+			now,
+			now,
+			input.userId,
+		);
 		db.query(
 			"INSERT OR REPLACE INTO entity_communities (id,agent_id,name,member_count,compartment_id) VALUES (?,?,?,1,?)",
 		).run("org-hr-community", input.agentId, content, compartment);

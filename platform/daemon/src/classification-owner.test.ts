@@ -1,11 +1,18 @@
 import { compartmentFor } from "@signet/core";
 import { executeClassificationJob, resumeClassificationJobs } from "./classifications";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { classificationFixture as legacyClassificationFixture } from "./test-support/classification-fixture.test";
 import { expect, test } from "bun:test";
+import { purgeMemoryInTx } from "./source-purge-tx";
 import { executeClassification } from "./classification-owner";
 import { up as dreamingPartitionMigration } from "../../core/src/migrations/179-dreaming-evidence-leases";
 import type { ClassificationActor } from "./classifications";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
+
+function classificationFixture() {
+	const db = legacyClassificationFixture();
+	dreamingPartitionMigration(db);
+	return db;
+}
 
 const compliance: ClassificationActor = {
 	userId: "carol",
@@ -26,6 +33,42 @@ const alice: ClassificationActor = {
 	credential: "session:alice",
 };
 const bob: ClassificationActor = { ...alice, userId: "bob" };
+test("classification and rebuild never relabel structural person identities", () => {
+	const db = classificationFixture();
+	try {
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'; UPDATE organization SET agent_model='single'");
+		dreamingPartitionMigration(db);
+		const before = db.prepare("SELECT * FROM entities WHERE person_user_id IS NOT NULL ORDER BY id").all();
+		expect(before).toHaveLength(3);
+		const created = executeClassification(db, {
+			op: "create",
+			actor: compliance,
+			name: "Private",
+			color: null,
+			description: null,
+			audience: [{ kind: "user", id: "alice" }],
+			appliers: [],
+		});
+		if (typeof created !== "object" || created === null || !("id" in created) || typeof created.id !== "string")
+			throw new Error("Classification fixture failed");
+		const queued = executeClassification(db, {
+			op: "enqueue",
+			actor: compliance,
+			id: created.id,
+			target: { kind: "agent", id: "default", agentId: "default" },
+			remove: false,
+		});
+		if (typeof queued !== "object" || queued === null || !("jobId" in queued) || typeof queued.jobId !== "string")
+			throw new Error("Job fixture failed");
+		executeClassification(db, { op: "execute", jobId: queued.jobId });
+		executeClassification(db, { op: "rebuild", agentId: "default" });
+		expect(db.prepare("SELECT * FROM entities WHERE person_user_id IS NOT NULL ORDER BY id").all()).toEqual(before);
+		expect(db.prepare("SELECT compartment_id FROM memories WHERE id='m'").get()?.compartment_id).toBeNumber();
+	} finally {
+		db.close();
+	}
+});
+
 const target = { kind: "memory", id: "m", agentId: "default" } as const;
 test("rebuild preserves the pass label when an entity cites only public evidence", () => {
 	const db = classificationFixture();
@@ -361,4 +404,63 @@ test("preview requires acting authority on the target agent even when its conten
 		}),
 	).toThrow("not_found");
 	db.close();
+});
+
+test("child relabel closure retains independent pass provenance through classify, remove and rebuild", () => {
+	const db = classificationFixture();
+	try {
+		db.exec(`INSERT INTO classifications(id,name) VALUES('cls_child','Child');
+			INSERT INTO compartments(id,key) VALUES(44,'cls_child');
+			INSERT INTO compartment_members VALUES(44,'cls_child');
+			INSERT INTO dreaming_passes(id,agent_id,status,compartment_id) VALUES('child-pass','default','completed',44);
+			INSERT INTO memory_entity_mentions(memory_id,entity_id,agent_id,compartment_id,dreaming_pass_id) VALUES('m','e','default',44,'child-pass');
+			INSERT INTO memory_history(id,memory_id,event,changed_by,created_at,agent_id,compartment_id,dreaming_pass_id) VALUES('child-event','m','updated','test','now','default',44,'child-pass');
+			INSERT INTO derived_memory_sources(derived_memory_id,source_kind,source_id,agent_id,created_at,compartment_id,dreaming_pass_id) VALUES('m','memory','m','default','now',44,'child-pass');
+			INSERT INTO relations(id,source_entity_id,target_entity_id,relation_type,created_at,agent_id,compartment_id,dreaming_pass_id) VALUES('child-edge','e','e','uses','now','default',44,'child-pass');`);
+		const tables = ["memory_entity_mentions", "memory_history", "derived_memory_sources", "relations"];
+		executeClassification(db, { op: "rebuild", agentId: "default" });
+		for (const table of tables)
+			expect(db.prepare(`SELECT compartment_id FROM ${table}`).all()).toEqual([{ compartment_id: 44 }]);
+		const classification = field(
+			executeClassification(db, {
+				op: "create",
+				actor: compliance,
+				name: "Root",
+				color: null,
+				description: null,
+				audience: [{ kind: "user", id: "alice" }],
+				appliers: [],
+			}),
+			"id",
+		);
+		const apply = field(
+			executeClassification(db, { op: "enqueue", actor: compliance, id: classification, target, remove: false }),
+			"jobId",
+		);
+		executeClassification(db, { op: "execute", jobId: apply });
+		for (const table of tables)
+			expect(
+				db
+					.prepare(
+						`SELECT cm.classification_id FROM ${table} child JOIN compartment_members cm ON cm.compartment_id=child.compartment_id ORDER BY cm.classification_id`,
+					)
+					.all()
+					.map((row) => row.classification_id)
+					.sort(),
+			).toEqual(["cls_child", classification].sort());
+		const remove = field(
+			executeClassification(db, { op: "enqueue", actor: compliance, id: classification, target, remove: true }),
+			"jobId",
+		);
+		executeClassification(db, { op: "execute", jobId: remove });
+		executeClassification(db, { op: "rebuild", agentId: "default" });
+		for (const table of tables)
+			expect(db.prepare(`SELECT compartment_id FROM ${table}`).all()).toEqual([{ compartment_id: 44 }]);
+		purgeMemoryInTx(db, "m");
+		for (const table of tables.filter((table) => table !== "relations"))
+			expect(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+		expect(db.prepare("SELECT id FROM relations").all()).toEqual([{ id: "child-edge" }]);
+	} finally {
+		db.close();
+	}
 });
