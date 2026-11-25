@@ -31,6 +31,17 @@ const memoryKeys = new Set([
 const sessionKeys = new Set(["sessionId", "session_id", "sessionKey", "session_key"]);
 function reference(key: string, value: unknown, record: Record<string, unknown>): Reference | null {
 	if (typeof value !== "string" || !value) return null;
+	if ((key === "source_id" || key === "sourceId") && ("source_path" in record || "sourcePath" in record)) return null;
+	if (
+		sessionKeys.has(key) &&
+		("agent_id" in record || "agentId" in record) &&
+		("digest" in record ||
+			"depth" in record ||
+			"memories_recalled" in record ||
+			"speakerUserId" in record ||
+			record.id === value)
+	)
+		return null;
 	if (memoryKeys.has(key)) return { kind: "memory", id: value };
 	if (key === "source_node_id" || key === "sourceNodeId") return { kind: "summary", id: value };
 	if (sessionKeys.has(key)) return { kind: "session", id: value };

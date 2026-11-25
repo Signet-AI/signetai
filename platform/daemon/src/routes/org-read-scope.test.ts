@@ -45,6 +45,12 @@ beforeAll(async () => {
 	const org = await readOrganization();
 	app = new Hono();
 	app.use("*", async (c, next) => {
+		if (c.req.header("x-test-local") === "1") {
+			c.set("principal", localPrincipal());
+			c.set("author", { userId: null, credential: "local" });
+			await next();
+			return;
+		}
 		const role =
 			c.req.path === "/api/embeddings/projection" || c.req.header("x-test-admin") === "1"
 				? ("admin" as const)
@@ -833,4 +839,58 @@ test("A15 transcript export redacts content and terminates failed streams explic
 			db.exec("ALTER TABLE a15_unavailable_transcripts RENAME TO session_transcripts"),
 		);
 	}
+});
+
+test("B2 own identities and foreign session links survive without transcripts in local and org mode", async () => {
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			"INSERT INTO session_checkpoints(id,session_key,harness,project,project_normalized,trigger,digest,prompt_count,created_at,agent_id) VALUES ('b2-cp','b2-nox','test','atlas','atlas','test','d',1,?,'beta')",
+		).run(at);
+		db.prepare(
+			"INSERT INTO session_claims(session_key,agent_id,runtime_path,harness,claimed_at,expires_at,state) VALUES ('b2-claim','beta','plugin','test',?,?,'active')",
+		).run(at, at);
+		db.prepare(
+			"INSERT INTO session_scores(id,session_key,project,harness,score,created_at) VALUES ('b2-score','b2-claim','atlas','test',0.4,?)",
+		).run(at);
+		db.prepare(
+			"INSERT INTO session_summaries(id,agent_id,project,depth,kind,content,session_key,earliest_at,latest_at,created_at) VALUES ('b2-summary','beta','atlas',0,'session','summary','b2-nox',?,?,?)",
+		).run(at, at, at);
+	});
+	for (const local of [false, true]) {
+		const headers = { "x-test-user": "bob", "x-test-local": local ? "1" : "0" };
+		for (const [path, identity] of [
+			["/api/checkpoints?agent_id=beta&project=atlas", "b2-nox"],
+			["/api/analytics/continuity?agent_id=beta", "b2-claim"],
+			["/api/sessions/summaries?agent_id=beta&limit=50", "b2-nox"],
+		]) {
+			const response = await app.request(`http://localhost${path}`, { headers });
+			expect(response.status).toBe(200);
+			expect(await response.text()).toContain(`"session_key":"${identity}"`);
+		}
+	}
+	const { redactReadPointers } = await import("../read-pointers");
+	const { resolveReadScope } = await import("../read-scope");
+	const scope = await resolveReadScope(
+		{ reach: { kind: "all" }, projects: null },
+		{ local: false, userId: "bob", groupIds: [] },
+	);
+	expect(
+		await redactReadPointers({ sessionId: "b2-claim", source_type: "session", source_id: "b2-nox" }, scope),
+	).toEqual({ sessionId: "b2-claim", source_type: "session", source_id: "b2-nox" });
+	expect(
+		await redactReadPointers(
+			{ agent_id: "beta", source_path: "artifact", source_id: "not-a-memory", source_type: "memory" },
+			scope,
+		),
+	).toMatchObject({ source_id: "not-a-memory" });
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("UPDATE session_checkpoints SET compartment_id=? WHERE id='b2-cp'").run(compartment);
+		db.prepare("UPDATE session_summaries SET compartment_id=? WHERE id='b2-summary'").run(compartment);
+		db.prepare(
+			"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES ('session','b2-claim','beta','cls_hr','carol',?)",
+		).run(at);
+	});
+	expect(
+		await redactReadPointers({ sessionId: "b2-claim", source_type: "session", source_id: "b2-nox" }, scope),
+	).toEqual({ sessionId: null, source_type: "session", source_id: null });
 });

@@ -9,7 +9,7 @@ import type { MigrationDb } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { gatherProjectionRows } from "./umap-projection";
 import type { ContentReadRequest } from "./content-read";
-import { readScopeSql } from "./read-scope";
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { exportSourceSnapshotInDb } from "./source-snapshots";
 import { expandTemporalNodeInDb } from "./temporal-expand";
 import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
@@ -134,24 +134,30 @@ export function executeContentRead(
 	if (request.op === "readable_pointers") {
 		if (request.references.length > 2000) throw new Error("Pointer admission limit exceeded");
 		return request.references.flatMap((ref) => {
-			const table =
-				ref.kind === "memory"
-					? "memories"
-					: ref.kind === "session"
-						? "session_transcripts"
-						: ref.kind === "summary"
-							? "session_summaries"
-							: ref.kind === "artifact"
-								? "memory_artifacts"
-								: "documents";
-			const key = ref.kind === "session" ? "session_key" : ref.kind === "artifact" ? "source_path" : "id";
+			if (ref.kind === "session") {
+				const { cte, args } = sessionReadOwners(request.scope);
+				const id = ref.id.replace(/^session:/, "");
+				return db
+					.prepare(`${cte} SELECT 1 FROM readable_sessions WHERE session_key IN (?,?) LIMIT 1`)
+					.get(...args, id, ref.id)
+					? [`session:${ref.id}`]
+					: [];
+			}
+
+			const table = {
+				memory: "memories",
+				summary: "session_summaries",
+				artifact: "memory_artifacts",
+				document: "documents",
+			}[ref.kind];
+			const key = ref.kind === "artifact" ? "source_path" : "id";
 			const scope = readScopeSql("target", request.scope, {
 				visibility: ref.kind === "memory" ? "visibility" : null,
 				memory: ref.kind === "memory" ? "id" : null,
 				session: ref.kind === "memory" ? "source_id" : ref.kind === "document" ? null : "session_key",
 				source: ref.kind === "summary" ? null : ref.kind === "document" ? "id" : "source_id",
 			});
-			const id = ref.kind === "session" ? ref.id.replace(/^session:/, "") : ref.id;
+			const id = ref.id;
 			const row = db
 				.prepare(
 					`SELECT 1 FROM ${table} target WHERE target.${key} IN (?,?)${scope.sql}${ref.kind === "memory" ? " AND COALESCE(target.is_deleted,0)=0" : ""} LIMIT 1`,
@@ -161,30 +167,15 @@ export function executeContentRead(
 		});
 	}
 	if (request.op === "continuity") {
-		const access = readScopeSql("t", request.scope, {
-			visibility: null,
-			memory: null,
-			session: "session_key",
-			source: "source_id",
-		});
-		const subject = request.scope.inFlightUserId;
-		const claimAudience =
-			request.scope.compartments === "all"
-				? ""
-				: ` AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=c.agent_id AND (ca.target_kind='agent' OR (ca.target_kind='session' AND ca.target_id=c.session_key)) AND NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=ca.classification_id AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN(SELECT group_id FROM group_members WHERE user_id=?)))))`;
-		const cte = `WITH owners AS (SELECT session_key,agent_id,compartment_id,project,source_id FROM session_transcripts UNION ALL SELECT c.session_key,c.agent_id,NULL,NULL,NULL FROM session_claims c WHERE NOT EXISTS(SELECT 1 FROM session_transcripts transcript WHERE transcript.session_key=c.session_key)${claimAudience}),readable AS (SELECT t.session_key,t.agent_id FROM owners t WHERE 1=1${access.sql}),filtered AS (SELECT s.id,s.session_key,s.project,s.harness,s.score,s.memories_recalled,s.memories_used,s.novel_context_count,s.reasoning,s.created_at FROM session_scores s WHERE EXISTS(SELECT 1 FROM readable t WHERE t.session_key=s.session_key) AND NOT EXISTS(SELECT 1 FROM owners owner WHERE owner.session_key=s.session_key AND NOT EXISTS(SELECT 1 FROM readable r WHERE r.session_key=owner.session_key AND r.agent_id=owner.agent_id))${request.project ? " AND s.project=?" : ""})`;
-		const args = [
-			...(claimAudience ? [subject ?? null, subject ?? null] : []),
-			...access.args,
-			...(request.project ? [request.project] : []),
-		];
+		const { cte, args } = sessionReadOwners(request.scope);
+		const filtered = `${cte},filtered AS (SELECT s.id,s.session_key,s.project,s.harness,s.score,s.memories_recalled,s.memories_used,s.novel_context_count,s.reasoning,s.created_at FROM session_scores s JOIN readable_sessions r ON r.session_key=s.session_key${request.project ? " WHERE s.project=?" : ""})`;
 		return db
 			.prepare(
 				request.latest
-					? `${cte} SELECT project,score,created_at FROM (SELECT project,score,created_at,ROW_NUMBER() OVER(PARTITION BY project ORDER BY created_at DESC,id) AS rank FROM filtered WHERE project IS NOT NULL) WHERE rank=1 ORDER BY created_at DESC LIMIT ?`
-					: `${cte} SELECT id,session_key,project,harness,score,memories_recalled,memories_used,novel_context_count,reasoning,created_at FROM filtered ORDER BY created_at DESC,id LIMIT ?`,
+					? `${filtered} SELECT project,score,created_at FROM (SELECT project,score,created_at,ROW_NUMBER() OVER(PARTITION BY project ORDER BY created_at DESC,id) AS rank FROM filtered WHERE project IS NOT NULL) WHERE rank=1 ORDER BY created_at DESC LIMIT ?`
+					: `${filtered} SELECT id,session_key,project,harness,score,memories_recalled,memories_used,novel_context_count,reasoning,created_at FROM filtered ORDER BY created_at DESC,id LIMIT ?`,
 			)
-			.all(...args, Math.max(1, Math.min(request.limit, 500)));
+			.all(...args, ...(request.project ? [request.project] : []), Math.max(1, Math.min(request.limit, 500)));
 	}
 	if (request.op === "dedupe_compartment") {
 		const key = classificationIdsForWrite(db, request.writeScope).join(",");
@@ -852,4 +843,22 @@ function namedReadStatement(request: NamedContentReadRequest): {
 				result: "all",
 			};
 	}
+}
+
+function sessionReadOwners(scope: ReadScope): { cte: string; args: readonly unknown[] } {
+	const access = readScopeSql("t", scope, {
+		visibility: null,
+		memory: null,
+		session: "session_key",
+		source: "source_id",
+	});
+	const blocked =
+		scope.compartments === "all"
+			? ""
+			: ` AND (t.is_claim=0 OR NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=t.agent_id AND (ca.target_kind='agent' OR (ca.target_kind='session' AND ca.target_id=t.session_key)) AND NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=ca.classification_id AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN(SELECT group_id FROM group_members WHERE user_id=?))))))`;
+	const cte = `WITH known_owners AS (SELECT session_key,agent_id FROM session_transcripts UNION SELECT session_key,agent_id FROM session_claims UNION SELECT session_key,agent_id FROM session_summaries), owners AS (SELECT session_key,agent_id,compartment_id,project,source_id,0 AS is_claim FROM session_transcripts UNION ALL SELECT session_key,agent_id,NULL,NULL,NULL,1 FROM session_claims UNION ALL SELECT session_key,agent_id,compartment_id,project,NULL,0 FROM session_summaries UNION ALL SELECT c.session_key,COALESCE(c.agent_id,k.agent_id),c.compartment_id,c.project,NULL,0 FROM session_checkpoints c LEFT JOIN known_owners k ON c.agent_id IS NULL AND k.session_key=c.session_key),readable AS (SELECT t.session_key,t.agent_id,t.compartment_id,t.project,t.source_id,t.is_claim FROM owners t WHERE 1=1${access.sql}${blocked}),readable_sessions AS (SELECT DISTINCT t.session_key FROM readable t WHERE NOT EXISTS(SELECT 1 FROM owners o WHERE o.session_key=t.session_key AND NOT EXISTS(SELECT 1 FROM readable r WHERE r.session_key=o.session_key AND r.agent_id IS o.agent_id AND r.compartment_id IS o.compartment_id AND r.project IS o.project AND r.source_id IS o.source_id AND r.is_claim=o.is_claim)))`;
+	return {
+		cte,
+		args: [...access.args, ...(blocked ? [scope.inFlightUserId ?? null, scope.inFlightUserId ?? null] : [])],
+	};
 }
