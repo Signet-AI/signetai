@@ -1,12 +1,21 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { createServer } from "node:net";
 import { runMigrations } from "../../../platform/core/src/migrations";
 import { z } from "zod";
 
+function cookieToken(response: Response): string {
+	return (
+		response.headers
+			.getSetCookie()
+			.find((cookie) => cookie.startsWith("signet_session="))
+			?.split(";")[0]
+			?.slice("signet_session=".length) ?? ""
+	);
+}
 const sessionSchema = z.object({ accessToken: z.string(), user: z.object({ id: z.string() }) });
 async function freePort(): Promise<number> {
 	const server = createServer();
@@ -101,7 +110,8 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			"",
 		);
 		if (claim.status !== 200) throw new Error(`Claim returned ${claim.status}: ${await claim.text()}`);
-		admin = sessionSchema.parse(await claim.json()).accessToken;
+		admin = cookieToken(claim);
+		expect(admin.length).toBeGreaterThan(0);
 		const invitation = await request("/api/org/invites", "POST", {
 			email: "alice@example.test",
 			role: "member",
@@ -121,7 +131,7 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			"",
 		);
 		expect(accepted.status).toBe(200);
-		const alice = sessionSchema.parse(await accepted.json());
+		const alice = sessionSchema.parse({ ...(await accepted.json()), accessToken: cookieToken(accepted) });
 		const started = await request(
 			"/api/auth/device/start",
 			"POST",
@@ -151,6 +161,26 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		);
 		expect(issued.status).toBe(201);
 		const key = z.object({ secret: z.string(), key: z.object({ agentId: z.string() }) }).parse(await issued.json());
+		const rejectedBinding = await request(
+			"/api/memory/remember",
+			"POST",
+			{ content: "forbidden smoke binding", agentId: "default" },
+			key.secret,
+		);
+		expect(rejectedBinding.status).toBe(403);
+		await rejectedBinding.text();
+		const rejectedActor = await fetch(`${base}/api/memory/remember`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${key.secret}`,
+				"x-signet-actor": "forged-user",
+			},
+			body: JSON.stringify({ content: "forbidden smoke actor", agentId: key.key.agentId }),
+			signal: AbortSignal.timeout(30_000),
+		});
+		expect(rejectedActor.status).toBe(403);
+		await rejectedActor.text();
 		const saved = await request(
 			"/api/memory/remember",
 			"POST",
@@ -178,16 +208,65 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 				nextRequest: next.status,
 			}),
 		);
-		process.kill(-child.pid, "SIGTERM");
+		const auditedRead = await request("/api/auth/sessions");
+		expect(auditedRead.status).toBe(200);
+		await auditedRead.text();
+		const children = (await readFile(`/proc/${child.pid}/task/${child.pid}/children`, "utf8"))
+			.trim()
+			.split(/\s+/)
+			.filter(Boolean)
+			.map(Number);
+		const ownerPids: number[] = [];
+		for (const pid of children) {
+			if ((await readFile(`/proc/${pid}/cmdline`, "utf8")).includes("db-owner-worker")) ownerPids.push(pid);
+		}
+		expect(ownerPids.length).toBeGreaterThan(0);
+		const shutdownAt = Date.now();
+		process.kill(child.pid, "SIGTERM");
 		await Promise.race([
 			child.exited,
-			Bun.sleep(15_000).then(() => {
-				throw new Error("Daemon did not shut down");
+			Bun.sleep(25_000).then(() => {
+				throw new Error(
+					`Daemon did not shut down: ${errors.slice(-5000)} ${output
+						.split("\n")
+						.filter((line) => /shut|stopp|exit|clos|flush|error|warn/i.test(line) && !/token|setup/i.test(line))
+						.slice(-20)
+						.join("\n")}`,
+				);
 			}),
 		]);
 		await Promise.all([stdout, stderr]);
+		expect(output.includes("Shutdown cleanup timed out")).toBe(false);
+		expect(output.includes("HTTP server drain timed out")).toBe(false);
+		expect(output.includes("Audit maintenance failed")).toBe(false);
+		if (output.includes("Shutdown cleanup failed"))
+			console.error(
+				output
+					.split("\n")
+					.filter((line) => /error|failed|locked|retryable/i.test(line) && !/token|setup/i.test(line))
+					.slice(-15)
+					.join("\n"),
+			);
+		expect(output.includes("Shutdown cleanup failed")).toBe(false);
+		expect(child.exitCode).toBe(0);
+		for (const pid of [child.pid, ...ownerPids]) {
+			expect(() => process.kill(pid, 0)).toThrow();
+		}
+		console.log(
+			JSON.stringify({ shutdownMs: Date.now() - shutdownAt, daemonGone: true, ownersGone: ownerPids.length }),
+		);
 		const snapshot = new Database(join(workspace, "data", "signet.db"), { readonly: true });
 		try {
+			expect(
+				snapshot
+					.query(
+						"SELECT COUNT(*) AS n FROM audit_events WHERE action = 'content.read' AND target_id = '/api/auth/sessions'",
+					)
+					.get(),
+			).toEqual({ n: 1 });
+			expect(snapshot.query("SELECT COUNT(*) AS n FROM memories WHERE content LIKE 'forbidden smoke%'").get()).toEqual({
+				n: 0,
+			});
 			expect(snapshot.query("SELECT author_user_id,agent_id FROM memories WHERE id = ?").get(memory.id)).toEqual({
 				author_user_id: alice.user.id,
 				agent_id: key.key.agentId,

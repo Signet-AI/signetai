@@ -1,4 +1,4 @@
-import type { WriteDb } from "./db-accessor";
+import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
@@ -53,6 +53,7 @@ export interface ModifyMemoryPatch {
 }
 
 export interface MutationContext {
+	author?: WriteAuthor;
 	actorType?: string;
 	sessionId?: string;
 	requestId?: string;
@@ -191,6 +192,8 @@ export function insertHistoryEvent(
 	db: WriteDb,
 	args: {
 		readonly memoryId: string;
+		readonly author?: WriteAuthor;
+		readonly agentId?: string | null;
 		readonly event: string;
 		readonly oldContent: string | null;
 		readonly newContent: string | null;
@@ -223,6 +226,7 @@ export function insertHistoryEvent(
 		args.sessionId ?? null,
 		args.requestId ?? null,
 	);
+	auditAuthoredWriteInTx(db, args.author, `memory.${args.event}`, "memory", args.memoryId, args.agentId ?? null);
 }
 
 function invalidateDerivedMemoriesForMemoryInTx(
@@ -497,6 +501,8 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			contentChanged,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -602,6 +608,8 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 			ifVersion: input.ifVersion ?? null,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -730,6 +738,8 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 			previousSupersededBy: existing.superseded_by ?? null,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -745,21 +755,14 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 	};
 }
 export function txRecoverMemory(db: WriteDb, input: RecoverMemoryTxInput): RecoverMemoryTxResult {
-	const existing = db
-		.prepare(
-			`SELECT id, content, version, is_deleted, deleted_at
-			 FROM memories
-			 WHERE id = ?`,
-		)
-		.get(input.memoryId) as
-		| {
-				id: string;
-				content: string;
-				version: number;
-				is_deleted: number;
-				deleted_at: string | null;
-		  }
-		| undefined;
+	const existing = prepareTypedStatement<{
+		id: string;
+		content: string;
+		version: number;
+		is_deleted: number;
+		deleted_at: string | null;
+		agent_id: string | null;
+	}>(db, "SELECT id,content,version,is_deleted,deleted_at,agent_id FROM memories WHERE id = ?").get(input.memoryId);
 
 	if (!existing) {
 		return { status: "not_found", memoryId: input.memoryId };
@@ -822,6 +825,8 @@ export function txRecoverMemory(db: WriteDb, input: RecoverMemoryTxInput): Recov
 			retentionWindowMs: input.retentionWindowMs,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,

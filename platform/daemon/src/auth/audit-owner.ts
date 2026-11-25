@@ -9,7 +9,7 @@ export function auditAuthoredWriteInTx(
 	action: string,
 	targetKind: string,
 	targetId: string,
-	agentId: string,
+	agentId: string | null,
 ): void {
 	if (!author) return;
 	db.prepare(

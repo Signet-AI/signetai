@@ -1,5 +1,5 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { getCookie } from "hono/cookie";
+import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import type { AuthConfig } from "./config";
 import { createAuthMiddleware, isAuthOpenPath } from "./middleware";
@@ -79,6 +79,17 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					org,
 				);
 				p = result.principal;
+				if (cookie && result.slid) {
+					const options = {
+						sameSite: "Lax" as const,
+						path: "/",
+						secure: new URL(c.req.url).protocol === "https:" || org.public_url?.startsWith("https:") === true,
+						maxAge: org.session_ttl_seconds,
+					};
+					setCookie(c, "signet_session", token, { ...options, httpOnly: true });
+					const csrfCookie = getCookie(c, "signet_csrf");
+					if (csrfCookie) setCookie(c, "signet_csrf", csrfCookie, { ...options, httpOnly: false });
+				}
 				c.set("auth", {
 					authenticated: true,
 					claims: {
@@ -156,7 +167,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
 					c.req.header("content-type")?.includes("application/json")
 				) {
-					const parsed: unknown = await c.req.json();
+					const parsed = await c.req.json<unknown>();
 					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))
 						body = z.record(z.string(), z.unknown()).parse(parsed);
 				}

@@ -18,6 +18,9 @@ import * as admin from "../auth/organization-admin";
 import { oidcStart, oidcCallback } from "../auth/oidc";
 
 const limiter = new AuthRateLimiter(60_000, 20);
+function browserResult(result: Awaited<ReturnType<typeof operations.passwordLogin>>) {
+	return { user: result.user, expiresAt: result.accessExpiresAt, csrf: result.csrf };
+}
 function origin(c: Context): string {
 	return new URL(c.req.url).origin;
 }
@@ -63,7 +66,11 @@ function user(c: Context) {
 	operations.requireUser(p);
 	return p;
 }
-export function registerOrganizationRoutes(app: Hono, config: AuthConfig | (() => AuthConfig)): void {
+export function registerOrganizationRoutes(
+	app: Hono,
+	config: AuthConfig | (() => AuthConfig),
+	workspaceRoot: string,
+): void {
 	const getConfig = typeof config === "function" ? config : () => config;
 	app.use("/api/*", async (c, next) => {
 		const isOrg = c.get("organization");
@@ -90,7 +97,7 @@ export function registerOrganizationRoutes(app: Hono, config: AuthConfig | (() =
 			limiter.record(key);
 			const result = await claimOrganization(claimSchema.parse(await body(c)));
 			sessionCookies(c, result, await readOrganization());
-			return c.json(result);
+			return c.json(browserResult(result));
 		}),
 	);
 	app.get(
@@ -121,7 +128,7 @@ export function registerOrganizationRoutes(app: Hono, config: AuthConfig | (() =
 			limiter.record(key);
 			const result = await operations.passwordLogin(await body(c));
 			sessionCookies(c, result, c.get("organization"));
-			return c.json(result);
+			return c.json(browserResult(result));
 		}),
 	);
 	app.get(
@@ -262,7 +269,10 @@ export function registerOrganizationRoutes(app: Hono, config: AuthConfig | (() =
 		"/api/auth/invites/accept",
 		active(async (c) => {
 			const result = await operations.acceptInvite(await body(c));
-			if ("accessToken" in result) sessionCookies(c, result, c.get("organization"));
+			if ("accessToken" in result) {
+				sessionCookies(c, result, c.get("organization"));
+				return c.json(browserResult(result));
+			}
 			return c.json(result);
 		}),
 	);
@@ -289,7 +299,7 @@ export function registerOrganizationRoutes(app: Hono, config: AuthConfig | (() =
 	app.post(
 		"/api/org/users/:id/deactivate",
 		active(async (c) => {
-			const result = await admin.deactivate(user(c), c.req.param("id") ?? "", await body(c));
+			const result = await admin.deactivate(user(c), c.req.param("id") ?? "", await body(c), workspaceRoot);
 			return c.json(result, "jobId" in result ? 202 : 200);
 		}),
 	);

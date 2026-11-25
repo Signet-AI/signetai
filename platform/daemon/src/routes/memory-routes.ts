@@ -1862,7 +1862,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						reason: body.reason ?? null,
 						changedBy: actor.changedBy,
 						changedAt: now,
-						ctx: { actorType: actor.actorType, sessionId: actor.sessionId, requestId: actor.requestId },
+						ctx: {
+							author: actor.author,
+							actorType: actor.actorType,
+							sessionId: actor.sessionId,
+							requestId: actor.requestId,
+						},
 					});
 					if (result.status !== "superseded" && result.status !== "already_superseded") {
 						const statusLabel =
@@ -1907,7 +1912,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1904" },
+					{ siteToken: "routes/memory-routes.ts:1909" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -3394,7 +3399,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3396",
+							siteToken: "routes/memory-routes.ts:3401",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3522,7 +3527,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3485" },
+				{ siteToken: "routes/memory-routes.ts:3490" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3570,7 +3575,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3566" },
+			{ siteToken: "routes/memory-routes.ts:3571" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3579,7 +3584,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3580" },
+			{ siteToken: "routes/memory-routes.ts:3585" },
 		);
 		return c.json(report);
 	});
@@ -3658,7 +3663,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3641" },
+					{ siteToken: "routes/memory-routes.ts:3646" },
 				);
 
 				return c.json({
@@ -3688,7 +3693,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3681" },
+			{ siteToken: "routes/memory-routes.ts:3686" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3720,7 +3725,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3722",
+						siteToken: "routes/memory-routes.ts:3727",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3729,7 +3734,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3725" },
+						{ siteToken: "routes/memory-routes.ts:3730" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {

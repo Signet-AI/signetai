@@ -285,7 +285,13 @@ export async function issueSession(userId: string, kind: SessionRow["kind"], dev
 	const material = sessionMaterial(userId, kind, deviceId, org);
 	await organizationWrite([
 		...material.statements,
-		auditStatement(null, "session.created", "session", material.sessionId, { userId }),
+		auditStatement(
+			await userPrincipal(user, { kind: "session", id: material.sessionId }, material.sessionId, deviceId),
+			"session.created",
+			"session",
+			material.sessionId,
+			{ userId },
+		),
 	]);
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
@@ -366,24 +372,44 @@ export async function verifySession(
 	const user = await activeUser(session.user_id, session.device_id);
 	if (requireCsrf && (!csrf || !matchesHash(csrf, session.csrf_hash))) throw new IdentityError(403, "csrf");
 	const now = Date.now();
+	let currentSession = session;
 	if (!session.last_used_at || Date.parse(session.last_used_at) <= now - 60_000) {
 		const expires =
 			session.kind === "browser" && Date.parse(session.access_expires_at) - now < org.session_ttl_seconds * 500
 				? new Date(now + org.session_ttl_seconds * 1000).toISOString()
 				: session.access_expires_at;
 		await organizationWrite([
-			statement("UPDATE auth_sessions SET last_used_at = ?,access_expires_at = ? WHERE id = ? AND revoked_at IS NULL", [
-				new Date(now).toISOString(),
-				expires,
-				session.id,
-			]),
+			statement(
+				"UPDATE auth_sessions SET last_used_at = ?,access_expires_at = ? WHERE id = ? AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at <= ?)",
+				[new Date(now).toISOString(), expires, session.id, new Date(now - 60_000).toISOString()],
+			),
 		]);
+		currentSession = { ...session, access_expires_at: expires, last_used_at: new Date(now).toISOString() };
 	}
 	const principal = await userPrincipal(user, { kind: "session", id: session.id }, session.id, session.device_id);
 	await bindAccess(principal, user, org);
-	return { principal, user, session };
+	return {
+		principal,
+		user,
+		session: currentSession,
+		slid: currentSession.access_expires_at !== session.access_expires_at,
+	};
 }
-export async function refreshSession(token: string) {
+export function refreshSession(token: string) {
+	return rotateSession(token, true);
+}
+async function rotateSession(
+	token: string,
+	retryOnConflict: boolean,
+): Promise<{
+	accessToken: string;
+	refreshToken: string;
+	accessExpiresAt: string;
+	refreshExpiresAt: string;
+	sessionId: string;
+	deviceId: string | null;
+	user: ReturnType<typeof userView>;
+}> {
 	const parsed = parseSessionToken(token, "ref");
 	if (!parsed) throw new IdentityError(401, "invalid_credential");
 	const row = await organizationQuery<SessionRow | null>(
@@ -417,24 +443,41 @@ export async function refreshSession(token: string) {
 	const refresh = secret();
 	const accessExpiresAt = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
 	const refreshExpiresAt = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
-	await organizationWrite([
-		{
-			...statement(
-				"UPDATE auth_sessions SET token_hash = ?,refresh_hash = ?,access_expires_at = ?,refresh_expires_at = ?,last_used_at = ? WHERE id = ? AND refresh_hash = ? AND revoked_at IS NULL",
-				[
-					digest(access),
-					digest(refresh),
-					accessExpiresAt,
-					refreshExpiresAt,
-					new Date().toISOString(),
-					row.id,
-					row.refresh_hash,
-				],
+	try {
+		await organizationWrite([
+			{
+				...statement(
+					"UPDATE auth_sessions SET token_hash = ?,refresh_hash = ?,access_expires_at = ?,refresh_expires_at = ?,last_used_at = ? WHERE id = ? AND refresh_hash = ? AND revoked_at IS NULL",
+					[
+						digest(access),
+						digest(refresh),
+						accessExpiresAt,
+						refreshExpiresAt,
+						new Date().toISOString(),
+						row.id,
+						row.refresh_hash,
+					],
+				),
+				requireChanges: true,
+			},
+			auditStatement(
+				await userPrincipal(user, { kind: "session", id: row.id }, row.id, row.device_id),
+				"session.refreshed",
+				"session",
+				row.id,
+				{ previousRefreshHash: row.refresh_hash },
 			),
-			requireChanges: true,
-		},
-		auditStatement(null, "session.refreshed", "session", row.id, { previousRefreshHash: row.refresh_hash }),
-	]);
+		]);
+	} catch (error) {
+		if (
+			retryOnConflict &&
+			error instanceof Error &&
+			error.message === "DB owner transaction precondition changed zero rows"
+		)
+			return rotateSession(token, false);
+		throw error;
+	}
+
 	return {
 		accessToken: `sig_ses_${row.id}_${access}`,
 		refreshToken: `sig_ref_${row.id}_${refresh}`,
@@ -478,8 +521,13 @@ export async function renewConnectorKey(key: BoundKeyRow, org: OrganizationRow):
 		return;
 	await organizationWrite([
 		statement(
-			"UPDATE api_keys SET expires_at = ? WHERE id = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.id = api_keys.session_id AND s.revoked_at IS NULL AND s.refresh_expires_at > ? AND u.status = 'active')",
-			[new Date(Date.now() + org.connector_key_ttl_seconds * 1000).toISOString(), key.id, new Date().toISOString()],
+			"UPDATE api_keys SET expires_at = ? WHERE id = ? AND expires_at = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.id = api_keys.session_id AND s.revoked_at IS NULL AND s.refresh_expires_at > ? AND u.status = 'active')",
+			[
+				new Date(Date.now() + org.connector_key_ttl_seconds * 1000).toISOString(),
+				key.id,
+				key.expires_at,
+				new Date().toISOString(),
+			],
 		),
 	]);
 }

@@ -594,6 +594,19 @@ export function upsertMemoryArtifactInTx(
 	const sql = options.conflictGuardSourceId
 		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n		WHERE memory_artifacts.source_id = excluded.source_id`
 		: MEMORY_ARTIFACT_UPSERT_SQL;
+	const speaker =
+		!fields.author && fields.sourceId === null && fields.sessionKey
+			? db
+					.query<{ speaker_user_id: string | null }, [string, string]>(
+						"SELECT speaker_user_id FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
+					)
+					.get(fields.agentId, fields.sessionKey)
+			: null;
+	const author =
+		fields.author ??
+		(speaker?.speaker_user_id
+			? { userId: speaker.speaker_user_id, credential: "system:transcript-projection" }
+			: undefined);
 	db.prepare(sql).run(
 		fields.agentId,
 		fields.sourcePath,
@@ -619,7 +632,7 @@ export function upsertMemoryArtifactInTx(
 		fields.sourceExternalId,
 		fields.sourceParentPath,
 		fields.sourceMetaJson,
-		fields.author?.userId ?? null,
+		author?.userId ?? null,
 	);
 	return true;
 }

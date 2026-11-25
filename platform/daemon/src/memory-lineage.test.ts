@@ -3,6 +3,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, uti
 import { dirname, join, relative } from "node:path";
 import { get_encoding } from "tiktoken/init";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+async function closeTestDatabase(): Promise<void> {
+	await (await import("./db-owner-runtime")).closeDbOwner();
+	Bun.gc(true);
+	await closeDbAccessor();
+}
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
 	ensureCanonicalManifest,
@@ -27,7 +32,7 @@ let dir = "";
 let prev: string | undefined;
 
 async function resetWorkspace(): Promise<void> {
-	await closeDbAccessor();
+	await closeTestDatabase();
 	resetProjectionPurgeState();
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
@@ -74,7 +79,7 @@ describe("memory-lineage", () => {
 	});
 
 	afterAll(async () => {
-		await closeDbAccessor();
+		await closeTestDatabase();
 		cleanupTestTempDir(dir);
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -1082,8 +1087,8 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		await resetWorkspace();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeTestDatabase();
 	});
 
 	it("threshold-crossing items are cached — second reindex is a no-op", async () => {

@@ -513,7 +513,7 @@ export async function auditExport(p: Principal, filters: Record<string, string |
 	} while (cursor);
 	return `${lines.join("\n")}\n`;
 }
-export async function deactivate(p: Principal, userId: string, input: unknown) {
+export async function deactivate(p: Principal, userId: string, input: unknown, basePath: string) {
 	requireAdmin(p);
 	if (userId === p.userId) throw new IdentityError(403, "org_policy", "Cannot deactivate yourself");
 	const data = z
@@ -560,16 +560,6 @@ export async function deactivate(p: Principal, userId: string, input: unknown) {
 		writes.push(
 			statement("UPDATE agents SET owner_user_id = ? WHERE owner_user_id = ?", [data.transferTo ?? null, userId]),
 		);
-		for (const [table, column] of [
-			["memories", "author_user_id"],
-			["session_transcripts", "speaker_user_id"],
-			["memory_artifacts", "author_user_id"],
-			["documents", "author_user_id"],
-			["ontology_proposals", "author_user_id"],
-		])
-			writes.push(
-				statement(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`, [data.transferTo ?? null, userId]),
-			);
 	}
 	if (data.mode !== "purge")
 		writes.push(
@@ -582,7 +572,7 @@ export async function deactivate(p: Principal, userId: string, input: unknown) {
 	await organizationWrite(writes);
 	if (data.mode === "purge") {
 		const { runOffboardPurge } = await import("./organization-purge");
-		void runOffboardPurge(p, jobId, userId).catch(async (error: unknown) => {
+		void runOffboardPurge(p, jobId, userId, basePath).catch(async (error: unknown) => {
 			await organizationWrite([
 				statement("UPDATE org_jobs SET status = 'failed',error = ?,finished_at = ? WHERE id = ?", [
 					error instanceof Error ? error.message : String(error),

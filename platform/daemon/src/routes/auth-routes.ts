@@ -20,7 +20,7 @@ import {
 } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { readEnvTrimmed } from "./state.js";
-import { authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./state.js";
+import { AGENTS_DIR, authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./state.js";
 
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 1024;
@@ -113,7 +113,7 @@ function authProviderResponse() {
 }
 
 export function registerAuthRoutes(app: Hono): void {
-	registerOrganizationRoutes(app, () => authConfig);
+	registerOrganizationRoutes(app, () => authConfig, AGENTS_DIR);
 	app.get("/api/auth/whoami", (c) => {
 		const auth = c.get("auth");
 		const effectiveAccess = authConfig.mode === "local" || auth?.authenticated === true || auth?.trustedLocal === true;

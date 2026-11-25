@@ -114,7 +114,7 @@ import {
 	forceExitDuringShutdownFlush,
 	runShutdownCleanup,
 } from "./daemon-shutdown";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { closeDbOwner, dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
@@ -128,7 +128,7 @@ import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
-import { createSignetHttpServer } from "./http-server";
+import { createSignetHttpServer, closeSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
 import {
 	type InferenceStatusSummary,
@@ -292,7 +292,11 @@ import {
 } from "./hooks";
 import { mountMcpRoute } from "./mcp";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
-import { startOrganizationRuntime, stopOrganizationRuntime } from "./auth/organization-runtime";
+import {
+	startOrganizationRuntime,
+	pauseOrganizationRuntime,
+	stopOrganizationRuntime,
+} from "./auth/organization-runtime";
 import { mountChangelogRoutes } from "./routes/changelog.js";
 import { stopHarnessHealth } from "./harness-health";
 import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
@@ -2132,35 +2136,31 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
 
 async function cleanup() {
+	let organizationShutdownError: Error | null = null;
 	const vacuumConversionWorker = vacuumConversionHandle;
 	vacuumConversionHandle = null;
 	const vacuumConversionStop = vacuumConversionWorker?.stop() ?? Promise.resolve();
 	setShuttingDown(true);
-	daemonMigrationControl.beginDrain();
-	const writerDrain = await daemonMigrationControl.close();
-	if (!writerDrain.closed) logger.warn("daemon", "Workspace writer drain timed out", writerDrain);
+	if (authConfig.mode === "team") pauseOrganizationRuntime();
 	bindAbort.abort();
 	await stopHarnessInstall();
 	await stopHarnessHealth();
 	logger.info("daemon", "Shutting down");
 
 	if (httpServer) {
-		const srv = httpServer;
-		await new Promise<void>((resolve) => {
-			const timeout = setTimeout(() => {
-				logger.warn("daemon", "HTTP server drain timed out, forcing close");
-				if ("closeAllConnections" in srv && typeof srv.closeAllConnections === "function") {
-					srv.closeAllConnections();
-				}
-				resolve();
-			}, 15_000);
-			srv.close(() => {
-				clearTimeout(timeout);
-				resolve();
-			});
-		});
+		if (await closeSignetHttpServer(httpServer)) logger.warn("daemon", "HTTP server drain timed out, forcing close");
 		httpServer = null;
 	}
+	if (authConfig.mode === "team") {
+		try {
+			await stopOrganizationRuntime();
+		} catch (error) {
+			organizationShutdownError = error instanceof Error ? error : new Error(String(error));
+		}
+	}
+	daemonMigrationControl.beginDrain();
+	const writerDrain = await daemonMigrationControl.close();
+	if (!writerDrain.closed) logger.warn("daemon", "Workspace writer drain timed out", writerDrain);
 
 	if (syncTimer) {
 		clearTimeout(syncTimer);
@@ -2226,7 +2226,6 @@ async function cleanup() {
 		transcriptRecoveryWorkerHandle = null;
 	}
 	await stopPipelineRuntime();
-	if (authConfig.mode === "team") await stopOrganizationRuntime();
 
 	const maintenanceHandle = dbOwnerMaintenanceHandle;
 	const ownerClient = dbOwnerClient;
@@ -2278,7 +2277,9 @@ async function cleanup() {
 
 	await recallDbOwner?.close();
 	recallDbOwner = null;
-	closeDbAccessor();
+	await closeDbOwner();
+	if (typeof Bun !== "undefined") Bun.gc(true);
+	await closeDbAccessor();
 
 	if (watcher) {
 		logFdSnapshot("pre-cleanup-watcher");
@@ -2291,6 +2292,7 @@ async function cleanup() {
 			unlinkSync(PID_FILE);
 		} catch {}
 	}
+	if (organizationShutdownError) throw organizationShutdownError;
 }
 
 let lifecycleStartedAt = "";

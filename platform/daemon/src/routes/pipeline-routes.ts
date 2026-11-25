@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { hybridProxyDetected } from "../auth/middleware";
-import { auditDroppedCount } from "../auth/organization-runtime";
+import { auditRuntimeStatus } from "../auth/organization-runtime";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
@@ -403,7 +403,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		return c.json({
 			status: "running",
 			auth: { hybridProxyDetected },
-			audit: { dropped: auditDroppedCount() },
+			audit: auditRuntimeStatus(),
 			runtime: DAEMON_RUNTIME,
 			version: CURRENT_VERSION,
 			pid: process.pid,

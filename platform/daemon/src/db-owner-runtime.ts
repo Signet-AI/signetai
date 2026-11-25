@@ -235,7 +235,7 @@ async function executeInlineOwnerRequest(
 	if (request.kind === "organization_memory_purge")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			if (!("exec" in db)) throw new Error("Purge requires writer");
-			return purgeAuthoredMemoryBatchInTx(db, request.userId);
+			return purgeAuthoredMemoryBatchInTx(db, request.userId, request.author);
 		});
 	if (request.kind === "agent_remove")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
@@ -685,10 +685,13 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
-export async function dbOwnerOrganizationPurge(userId: string): Promise<{ removed: number; remaining: number }> {
+export async function dbOwnerOrganizationPurge(
+	userId: string,
+	author: import("./auth/audit-owner").WriteAuthor,
+): Promise<{ removed: number; remaining: number }> {
 	return submitWithAdmission(
 		await getDbOwner(),
-		{ kind: "organization_memory_purge", userId },
+		{ kind: "organization_memory_purge", userId, author },
 		{ operation: "organization.purge-memory", lane: "write", deadlineMs: 60_000 },
 	);
 }

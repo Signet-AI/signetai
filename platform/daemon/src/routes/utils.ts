@@ -377,6 +377,7 @@ export function parseTagsMutation(value: unknown): string | null | undefined {
 }
 
 export interface MutationActor {
+	author?: import("../auth/audit-owner").WriteAuthor;
 	changedBy: string;
 	actorType: string;
 	sessionId: string | undefined;
@@ -389,6 +390,7 @@ export function resolveMutationActor(c: Context, fallback?: string): MutationAct
 	const principal = c.get("principal");
 	if (c.get("organization") && principal)
 		return {
+			author: c.get("author"),
 			changedBy:
 				principal.credential.kind === "api_key" ? `key:${principal.credential.id}` : `user:${principal.userId}`,
 			actorType: principal.role,

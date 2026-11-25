@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import type { Principal } from "./principal";
-import { canActAs, principalAccess, resolveWriteAgent, type AgentRecord } from "./agent-access";
+import { principalAccess, resolveWriteAgent } from "./agent-access";
 import { PERMISSIONS, type Permission } from "./types";
 import {
 	activeUser,
@@ -344,10 +344,15 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 	if (connector && (p.credential.kind !== "session" || !data.deviceId || !data.harness))
 		throw new IdentityError(403, "org_policy", "A user session, harness, and device are required");
 	const org = await readOrganization();
-	let agentId = data.agentId ?? null;
+	let agentId = data.agentId ?? p.boundAgentId;
+	if (p.deviceId && data.deviceId && p.deviceId !== data.deviceId) throw new IdentityError(403, "org_policy");
+	if (p.harness && data.harness && p.harness !== data.harness) throw new IdentityError(403, "org_policy");
+	if (p.allowedProjects && data.allowedProjects?.some((project) => !p.allowedProjects?.includes(project)))
+		throw new IdentityError(403, "project_not_permitted");
+	const allowedProjects = data.allowedProjects ?? p.allowedProjects ?? undefined;
 	const access = principalAccess(p);
 	if (!access) throw new IdentityError(403, "org_policy");
-	if (connector || agentId) {
+	if (connector || (agentId && data.kind !== "shared")) {
 		const resolved = resolveWriteAgent(p, data.agentId, access);
 		if (!resolved.ok) throw new IdentityError(resolved.error.status, resolved.error.reason);
 		agentId = resolved.value;
@@ -355,6 +360,7 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 	if (data.kind === "shared") {
 		if (!data.agentId) throw new IdentityError(400, "agent_required");
 		const agent = access.agents.find((a) => a.id === data.agentId);
+		if (!agent || agent.archived_at) throw new IdentityError(403, "agent_not_permitted");
 		if (p.role !== "admin" && (!agent?.owner_group_id || !(await groupOwner(p, agent.owner_group_id))))
 			throw new IdentityError(403, "not_owner");
 	}
@@ -370,12 +376,12 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 	return createOrganizationKey(p, {
 		name: data.name ?? `${data.harness} connector`,
 		kind: connector ? "connector" : (data.kind ?? "personal"),
-		deviceId: data.deviceId ?? null,
-		harness: data.harness ?? null,
+		deviceId: data.deviceId ?? p.deviceId,
+		harness: data.harness ?? p.harness,
 		agentId,
 		permissions,
 		expiresAt,
-		allowedProjects: data.allowedProjects,
+		allowedProjects,
 	});
 }
 export async function revokeKey(p: Principal, keyId: string) {

@@ -364,7 +364,11 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
-	| { readonly kind: "organization_memory_purge"; readonly userId: string }
+	| {
+			readonly kind: "organization_memory_purge";
+			readonly userId: string;
+			readonly author: import("./auth/audit-owner").WriteAuthor;
+	  }
 	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
 	| { readonly kind: "source_native_memory_index"; readonly input: DbOwnerNativeMemoryIndex }
 	| { readonly kind: "source_artifact_purge"; readonly input: DbOwnerSourceArtifactPurge }

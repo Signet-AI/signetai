@@ -84,7 +84,7 @@ Keep password login enabled until SSO is working. `requireSso` prevents password
 
 ## Offboarding and audit
 
-Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer assigns it to another active person, and purge invokes the evidence deletion owners. Pinned evidence can make a purge fail; inspect the job rather than assuming it completed.
+Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Pinned evidence can make a purge fail; inspect the job rather than assuming it completed.
 
 Deactivation revokes credentials before returning. The next request from a deactivated user fails, including a previously valid connector request. Reactivation does not restore revoked sessions or keys.
 
