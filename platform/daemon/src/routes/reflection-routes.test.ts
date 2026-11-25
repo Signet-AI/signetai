@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
+import { bindPrincipalAccess } from "../auth/agent-access";
+import { readOrganization } from "../auth/organization-store";
+import { localPrincipal } from "../auth/principal";
 import { closeDbAccessor, type DbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "../llm";
 import { txIngestEnvelope } from "../transactions";
@@ -67,10 +70,23 @@ function seedReflection(
 	});
 }
 
-function app(): Hono {
+function app(userId?: string): Hono {
 	const next = new Hono();
 	next.use("*", async (c, next) => {
 		c.set("author", { userId: null, credential: "local" });
+		if (userId) {
+			const principal = { ...localPrincipal(), kind: "user" as const, userId };
+			bindPrincipalAccess(principal, {
+				agentModel: "single",
+				personalAgentsSelfService: false,
+				organizationAgentId: "default",
+				personalAgentId: null,
+				defaultReadAgentId: null,
+				agents: [{ id: "default", kind: "organization", owner_user_id: null, owner_group_id: null, archived_at: null }],
+			});
+			c.set("principal", principal);
+			c.set("organization", await readOrganization());
+		}
 		await next();
 	});
 	registerReflectionRoutes(next, {
@@ -120,6 +136,54 @@ afterEach(async () => {
 });
 
 describe("reflection routes", () => {
+	it("reflection reads do not observe hidden inserts, edits, or reclassification", async () => {
+		const date = new Date().toISOString().slice(0, 10);
+		seedReflection("public", "default", date, "Public reflection", `${date}T08:00:00.000Z`);
+		dbAccessor.withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_audience VALUES('cls_hr','user','carol'); INSERT INTO compartments(id,key) VALUES(1,'cls_hr'); INSERT INTO compartment_members VALUES(1,'cls_hr')",
+			);
+		});
+		const paths = ["/api/reflections?limit=1", "/api/reflections/today?limit=1"];
+		const reader = app("alice");
+		const snapshot = async () =>
+			Promise.all(
+				paths.map(async (path) => {
+					const response = await reader.request(path);
+					expect(response.status).toBe(200);
+					return response.text();
+				}),
+			);
+		const before = await snapshot();
+		dbAccessor.withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO daily_reflections(id,agent_id,date,summary,patterns,memory_ids,summary_ids,created_at,compartment_id) VALUES('hidden','default',?,'Hidden reflection','[]','[]','[]',?,1)",
+			).run(date, `${date}T10:00:00.000Z`);
+		});
+		expect(await snapshot()).toEqual(before);
+		dbAccessor.withWriteTx((db) =>
+			db.exec("UPDATE daily_reflections SET summary='Hidden edited',question='Restricted question' WHERE id='hidden'"),
+		);
+		expect(await snapshot()).toEqual(before);
+		const audience = await app("carol").request(paths[0]);
+		expect((await audience.json()).reflections[0].summary).toBe("Hidden edited");
+		seedReflection("reclassified", "default", date, "Now hidden", `${date}T09:00:00.000Z`);
+		dbAccessor.withWriteTx((db) => db.exec("UPDATE daily_reflections SET compartment_id=1 WHERE id='reclassified'"));
+		expect(await snapshot()).toEqual(before);
+		const absent = await reader.request("/api/reflections/missing/answer", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: "answer" }),
+		});
+		const hidden = await reader.request("/api/reflections/hidden/answer", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: "answer" }),
+		});
+		expect(hidden.status).toBe(absent.status);
+		expect(await hidden.text()).toBe(await absent.text());
+	});
+
 	it("loads pipeline config from SIGNET_PATH and persists manual generation", async () => {
 		const memoryId = seedMemory("agent-a");
 
