@@ -66,7 +66,6 @@ import {
 	resetSessionStartDedupe,
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
-import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
@@ -117,8 +116,6 @@ import {
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
-	INTERNAL_SELF_HOST,
-	PORT,
 	authConfig,
 	authCrossAgentMessageLimiter,
 	authRecallLlmLimiter,
@@ -1218,16 +1215,19 @@ function registerRemember(app: Hono): void {
 				return c.json({ success: true, memories: [], bypassed: true });
 			}
 
-			const headers: Record<string, string> = { "Content-Type": "application/json" };
-			const auth = c.req.header("authorization");
-			if (auth) headers.Authorization = auth;
+			const headers = new Headers(c.req.raw.headers);
+			headers.set("content-type", "application/json");
+			const payload = JSON.stringify(body);
+			headers.set("content-length", String(new TextEncoder().encode(payload).byteLength));
 			const sessionKey = c.req.header("x-signet-session-key") ?? body.sessionKey;
-			if (sessionKey) headers["x-signet-session-key"] = sessionKey;
-			return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-			});
+			if (sessionKey) headers.set("x-signet-session-key", sessionKey);
+			const target = new URL(c.req.url);
+			target.pathname = "/api/memory/remember";
+			return app.request(
+				target.toString(),
+				{ method: "POST", headers, body: payload, signal: c.req.raw.signal },
+				c.env,
+			);
 		} catch (e) {
 			logger.error("hooks", "Remember hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);

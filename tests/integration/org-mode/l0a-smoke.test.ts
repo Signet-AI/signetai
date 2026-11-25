@@ -189,6 +189,30 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		);
 		if (saved.status !== 200) throw new Error(`Memory write returned ${saved.status}: ${await saved.text()}`);
 		const memory = z.object({ id: z.string() }).parse(await saved.json());
+		const csrf = accepted.headers
+			.getSetCookie()
+			.find((value) => value.startsWith("signet_csrf="))
+			?.split(";")[0]
+			?.slice("signet_csrf=".length);
+		if (!csrf) throw new Error("Invite acceptance omitted CSRF cookie");
+		const cookieHook = await fetch(`${base}/api/hooks/remember`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				cookie: accepted.headers
+					.getSetCookie()
+					.map((value) => value.split(";")[0])
+					.join("; "),
+				"x-signet-csrf": csrf,
+			},
+			body: JSON.stringify({ harness: "hermes-agent", content: "The cookie hook preserves principal attribution." }),
+			signal: AbortSignal.timeout(30_000),
+		});
+		if (cookieHook.status !== 200)
+			throw new Error(`Hook remember returned ${cookieHook.status}: ${await cookieHook.text()}`);
+		expect(cookieHook.status).toBe(200);
+		const hookMemory = z.object({ id: z.string() }).parse(await cookieHook.json());
+
 		const deactivated = await request(`/api/org/users/${alice.user.id}/deactivate`, "POST", {
 			mode: "keep",
 			dryRun: false,
@@ -204,6 +228,7 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 				device: polled.status,
 				connector: issued.status,
 				memory: saved.status,
+				hookRemember: cookieHook.status,
 				deactivate: deactivated.status,
 				nextRequest: next.status,
 			}),
@@ -266,6 +291,10 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			).toEqual({ n: 1 });
 			expect(snapshot.query("SELECT COUNT(*) AS n FROM memories WHERE content LIKE 'forbidden smoke%'").get()).toEqual({
 				n: 0,
+			});
+			expect(snapshot.query("SELECT author_user_id,agent_id FROM memories WHERE id = ?").get(hookMemory.id)).toEqual({
+				author_user_id: alice.user.id,
+				agent_id: key.key.agentId,
 			});
 			expect(snapshot.query("SELECT author_user_id,agent_id FROM memories WHERE id = ?").get(memory.id)).toEqual({
 				author_user_id: alice.user.id,
