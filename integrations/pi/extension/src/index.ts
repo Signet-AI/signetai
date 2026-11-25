@@ -251,12 +251,16 @@ function updateStatus(ctx: PiExtensionContext): void {
 	ctx.ui.setStatus("signet", ctx.ui.theme.fg("accent", status));
 }
 
-function startWake(wake: WakeWaiter | undefined, ctx: PiExtensionContext, peers?: PeerContextController): void {
+async function startWake(
+	wake: WakeWaiter | undefined,
+	ctx: PiExtensionContext,
+	peers?: PeerContextController,
+): Promise<void> {
 	if (!wake) return;
 	if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
 	const session = currentSessionRef(ctx);
 	if (!session.sessionId) return;
-	void peers?.publish(ctx, true).catch(() => false);
+	await peers?.publish(ctx, true).catch(() => false);
 	wake.start({ sessionKey: session.sessionId, project: session.project });
 }
 
@@ -278,7 +282,7 @@ function registerSessionLifecycleHandlers(
 		}
 
 		await refreshSessionStart(deps, ctx);
-		startWake(wake, ctx, peers);
+		await startWake(wake, ctx, peers);
 	});
 	pi.on("session_before_switch", async () => {
 		wake?.stop();
@@ -291,11 +295,11 @@ function registerSessionLifecycleHandlers(
 
 	pi.on("session_switch", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
-		startWake(wake, ctx, peers);
+		await startWake(wake, ctx, peers);
 	});
 	pi.on("session_fork", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
-		startWake(wake, ctx, peers);
+		await startWake(wake, ctx, peers);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
