@@ -172,10 +172,30 @@ describe("dreaming history", () => {
 		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("(no earlier passes)");
 	});
 
+	it("keeps history publication independent of another agent's classification", async () => {
+		insertPass("independent", 1);
+		getDbAccessor().withWriteTx((db) => db.exec("INSERT INTO classifications(id,name) VALUES('other-class','Other')"));
+		const completer = recordingCompleter(() => {
+			getDbAccessor().withWriteTx((db) =>
+				db.exec(`INSERT INTO classification_assignments
+				(target_kind,target_id,agent_id,classification_id) VALUES('agent','other-agent','other-agent','other-class')`),
+			);
+			return "independent history";
+		});
+		expect(await compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)).toBe(1);
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("0+1|independent history");
+	});
+
 	it("rejects a history result when classification changes during inference", async () => {
 		insertPass("race", 1);
 		const completer = recordingCompleter(() => {
-			getDbAccessor().withWriteTx((db) => db.exec("UPDATE dreaming_classification_epoch SET epoch=epoch+1 WHERE id=1"));
+			getDbAccessor().withWriteTx((db) =>
+				db
+					.prepare(
+						"INSERT INTO dreaming_classification_epoch(agent_id,epoch) VALUES(?,1) ON CONFLICT(agent_id) DO UPDATE SET epoch=epoch+1",
+					)
+					.run(AGENT),
+			);
 			return "stale line";
 		});
 		await expect(compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)).rejects.toThrow(

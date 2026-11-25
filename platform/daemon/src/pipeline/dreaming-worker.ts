@@ -384,6 +384,7 @@ export function startDreamingWorker(
 	const evidenceLeaseMs = 2 * cfg.timeout;
 	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
 	let nextScheduledFocus: DreamingPassFocus | null = null;
+	let nextClassifiedFocus: DreamingPassFocus | null = null;
 	const evidenceRetry: DreamingEvidenceRetryPolicy = options.evidenceRetry ?? {
 		cooldownMs: 60_000,
 		hourlyBudget: 50,
@@ -484,7 +485,10 @@ export function startDreamingWorker(
 		});
 	}
 
-	const usedSlots = (): number => [...runningPasses].reduce((sum, pass) => sum + pass.slots, 0);
+	const usedSlots = (compartmentId: number | null = null): number =>
+		[...runningPasses]
+			.filter((pass) => (pass.compartmentId === null) === (compartmentId === null))
+			.reduce((sum, pass) => sum + pass.slots, 0);
 	const leasedScopes = (compartmentId: number | null = null): ReadonlySet<string> =>
 		new Set([...runningPasses].filter((pass) => pass.compartmentId === compartmentId).flatMap((pass) => pass.scopes));
 	const scopePassCounts = (compartmentId: number | null = null): ReadonlyMap<string, number> => {
@@ -506,16 +510,19 @@ export function startDreamingWorker(
 		for (const [scope, count] of counts) if (count >= passesPerScope) closed.add(scope);
 		return closed;
 	};
-	const exclusiveRunning = (): boolean => [...runningPasses].some((pass) => pass.exclusive);
-	const listScopes = async (): Promise<readonly string[]> => {
-		return await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
-	};
+	const exclusiveRunning = (compartmentId: number | null = null): boolean =>
+		[...runningPasses].some((pass) => pass.exclusive && (pass.compartmentId === null) === (compartmentId === null));
 	const knownScopesLeased = (): boolean => {
 		if (runningPasses.size === 0) return false;
-		if (exclusiveRunning() || usedSlots() >= maxPasses()) return true;
+		if (knownPartitions.length === 0) return false;
 		return (
 			knownPartitions.length > 0 &&
-			knownPartitions.every((partition) => closedScopes(partition.compartmentId).has(partition.agentId))
+			knownPartitions.every(
+				(partition) =>
+					exclusiveRunning(partition.compartmentId) ||
+					usedSlots(partition.compartmentId) >= maxPasses() ||
+					closedScopes(partition.compartmentId).has(partition.agentId),
+			)
 		);
 	};
 
@@ -619,7 +626,8 @@ export function startDreamingWorker(
 				passLive,
 				options.ownerMaintenance,
 			).catch((error: unknown) => {
-				recordDreamingFailureOrLog(runAgentId, compartmentId);
+				if (!(error instanceof Error && error.message === "compartment_mismatch"))
+					recordDreamingFailureOrLog(runAgentId, compartmentId);
 				logger.error("dreaming-worker", "Dreaming pass failed", undefined, {
 					agentId: runAgentId,
 					passId: id,
@@ -733,7 +741,7 @@ export function startDreamingWorker(
 		scopes: readonly string[],
 		compartmentId: number | null = null,
 	): Promise<StartedDreamingPass> {
-		const slots = maxPasses() - usedSlots();
+		const slots = maxPasses() - usedSlots(compartmentId);
 		if (scopes.length === 0 || slots <= 0) throw new AlreadyRunningError();
 		const measured =
 			scopes.length === 1 && !sharesScopes
@@ -786,10 +794,12 @@ export function startDreamingWorker(
 	async function startAvailablePartitions(runAgentId: string): Promise<StartedDreamingPass> {
 		const partitions = await getDreamingWorkerPartitions(accessor, defaultAgentId, options.ownerMaintenance);
 		knownPartitions = partitions;
-		const labels = [...new Set(partitions.map((partition) => partition.compartmentId))];
+		const labels = [...new Set(partitions.map((partition) => partition.compartmentId))].sort(
+			(a, b) => Number(a !== null) - Number(b !== null),
+		);
 		let first: StartedDreamingPass | null = null;
 		for (const compartmentId of labels) {
-			if (usedSlots() >= maxPasses()) break;
+			if (exclusiveRunning(compartmentId) || usedSlots(compartmentId) >= maxPasses()) continue;
 			const closed = closedScopes(compartmentId);
 			const scopes = partitions
 				.filter((partition) => partition.compartmentId === compartmentId && !closed.has(partition.agentId))
@@ -833,11 +843,16 @@ export function startDreamingWorker(
 	}
 
 	async function check(): Promise<void> {
+		await checkLane(null);
+		await checkLane(1);
+	}
+
+	async function checkLane(lane: number | null): Promise<void> {
 		if (
 			stopped ||
 			admission !== null ||
-			exclusiveRunning() ||
-			usedSlots() >= maxPasses() ||
+			exclusiveRunning(lane) ||
+			usedSlots(lane) >= maxPasses() ||
 			!(options.enabled ? options.enabled() : cfg.enabled)
 		)
 			return;
@@ -854,7 +869,9 @@ export function startDreamingWorker(
 		}
 		scheduler = { status: "idle", reason: null, checkedAt };
 		const partitions = (await getDreamingWorkerPartitions(accessor, defaultAgentId, options.ownerMaintenance)).filter(
-			(partition) => !closedScopes(partition.compartmentId).has(partition.agentId),
+			(partition) =>
+				(partition.compartmentId === null) === (lane === null) &&
+				!closedScopes(partition.compartmentId).has(partition.agentId),
 		);
 		if (partitions.length === 0) return;
 		const autoRequeued = await autoRequeueRepairedDreamingEvidence(accessor, evidenceRetry);
@@ -926,11 +943,11 @@ export function startDreamingWorker(
 		const mode = await selectDreamingCheckMode(
 			accessor,
 			scopes,
-			nextScheduledFocus,
+			compartmentId === null ? nextScheduledFocus : nextClassifiedFocus,
 			options.ownerMaintenance,
 			compartmentId,
 		);
-		if (mode !== "incremental" && runningPasses.size > 0) return;
+		if (mode !== "incremental" && usedSlots(compartmentId) > 0) return;
 		const sweepScopes =
 			mode === "incremental-content" ? await contentSweepScopes(scopes, triggeredScope, compartmentId) : scopes;
 		if (sweepScopes.length === 0) {
@@ -939,11 +956,16 @@ export function startDreamingWorker(
 			});
 			return;
 		}
-		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
+		if (compartmentId === null) nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
+		else nextClassifiedFocus = dreamingFocusOfMode(mode) ?? nextClassifiedFocus;
 		try {
 			const started = await admit(async () =>
 				mode === "incremental"
-					? await startAvailablePartitions(defaultAgentId)
+					? await startIncrementalPasses(
+							scopes.includes(defaultAgentId) ? defaultAgentId : triggeredScope,
+							scopes,
+							compartmentId,
+						)
 					: startPass(scopes.includes(defaultAgentId) ? defaultAgentId : triggeredScope, mode, sweepScopes, true, {
 							compartmentId,
 						}),
@@ -1014,11 +1036,16 @@ export function startDreamingWorker(
 
 		async trigger(mode: DreamingMode, agentId?: string, compartmentId: number | null = null) {
 			const started = await admit(async () => {
-				if (runningPasses.size > 0) throw new AlreadyRunningError();
-				const scopes = await listScopes();
+				const scopes = await getDreamingWorkerAgentIds(
+					accessor,
+					normalizeAgentId(agentId, defaultAgentId),
+					options.ownerMaintenance,
+				);
 				const requested = normalizeAgentId(agentId, defaultAgentId);
+				if (agentId !== undefined && !scopes.includes(requested)) throw new Error("org_policy");
 				const owner = scopes.includes(requested) ? requested : scopes[0];
 				if (owner === undefined) throw new Error("org_policy");
+				if (usedSlots(compartmentId) > 0) throw new AlreadyRunningError();
 				return startPass(owner, mode, scopes, true, { compartmentId });
 			});
 			return await started.result;
@@ -1031,19 +1058,25 @@ export function startDreamingWorker(
 			author?: WriteAuthor,
 			compartmentId?: number | null,
 		): Promise<string> {
-			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
-			if (!author && !userRequest && compartmentId === undefined && knownScopesLeased())
+			if (!author && !userRequest && agentId === undefined && compartmentId === undefined && knownScopesLeased())
 				throw new AlreadyRunningError();
 			const started = await admit(async () => {
-				if (exclusiveRunning()) throw new AlreadyRunningError();
+				const requested = normalizeAgentId(agentId, defaultAgentId);
+				const scopes = await getDreamingWorkerAgentIds(accessor, requested, options.ownerMaintenance);
+				if (agentId !== undefined && !scopes.includes(requested)) throw new Error("org_policy");
+				const runAgentId = scopes.includes(requested) ? requested : scopes[0];
+				if (runAgentId === undefined) throw new Error("org_policy");
+				if (
+					exclusiveRunning(compartmentId ?? null) &&
+					(mode !== "incremental" || author || userRequest || compartmentId !== undefined || agentId !== undefined)
+				)
+					throw new AlreadyRunningError();
 				if (author || compartmentId !== undefined || agentId !== undefined) {
-					if (!(await getDreamingWorkerAgentIds(accessor, runAgentId, options.ownerMaintenance)).includes(runAgentId))
-						throw new Error("org_policy");
 					if (
 						(author || userRequest ? leasedScopes(compartmentId ?? null) : closedScopes(compartmentId ?? null)).has(
 							runAgentId,
 						) ||
-						usedSlots() >= maxPasses()
+						usedSlots(compartmentId ?? null) >= maxPasses()
 					)
 						throw new AlreadyRunningError();
 					return startPass(
@@ -1056,16 +1089,15 @@ export function startDreamingWorker(
 					);
 				}
 				if (userRequest) {
-					if (leasedScopes(compartmentId ?? null).has(runAgentId) || usedSlots() >= maxPasses())
+					if (leasedScopes(compartmentId ?? null).has(runAgentId) || usedSlots(compartmentId ?? null) >= maxPasses())
 						throw new AlreadyRunningError();
 					return startPass(runAgentId, mode, [runAgentId], mode !== "incremental", {
 						userRequest,
 						compartmentId: compartmentId ?? null,
 					});
 				}
-				const scopes = await listScopes();
 				if (mode !== "incremental") {
-					if (runningPasses.size > 0) throw new AlreadyRunningError();
+					if (usedSlots(compartmentId ?? null) > 0) throw new AlreadyRunningError();
 					return startPass(runAgentId, mode, scopes, true);
 				}
 				return await startAvailablePartitions(runAgentId);

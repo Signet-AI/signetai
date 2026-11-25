@@ -98,7 +98,7 @@ function historyReadLabel(compartmentId: number | null, agentParameter = "?1"): 
 		LEFT JOIN dreaming_passes p ON p.id = legacy.pass_id
 		WHERE legacy.pass_id IS NOT NULL AND legacy.agent_id = ${agentParameter} AND legacy.${historyLabel(compartmentId)}
 		AND (p.id IS NULL OR p.agent_id != legacy.agent_id OR p.compartment_id IS NOT legacy.compartment_id
-			OR p.classification_epoch != (SELECT epoch FROM dreaming_classification_epoch WHERE id = 1)
+			OR NOT EXISTS(SELECT 1 FROM dreaming_pass_fences f WHERE f.pass_id=p.id AND f.valid=1)
 			OR EXISTS (SELECT 1 FROM dreaming_tool_calls call WHERE call.pass_id = p.id
 				AND (call.agent_id != p.agent_id OR call.compartment_id IS NOT p.compartment_id)))
 	)`;
@@ -535,7 +535,7 @@ async function nextLeafPass(
 		"dreaming.history.next-leaf",
 		`SELECT p.id, p.status FROM dreaming_passes p
 		 WHERE p.${historyLabel(compartmentId)} AND p.agent_id = ? AND p.scope_key = ?
-		   AND p.classification_epoch = (SELECT epoch FROM dreaming_classification_epoch WHERE id = 1)
+		   AND EXISTS(SELECT 1 FROM dreaming_pass_fences f WHERE f.pass_id=p.id AND f.valid=1)
 		   AND NOT EXISTS (SELECT 1 FROM dreaming_tool_calls call WHERE call.pass_id=p.id
 		       AND (call.agent_id != p.agent_id OR call.compartment_id IS NOT p.compartment_id))
 		   AND NOT EXISTS (SELECT 1 FROM dreaming_history_nodes n WHERE n.pass_id = p.id)
@@ -647,8 +647,8 @@ export async function compactDreamingHistory(
 			const epoch = await ownerQueryOne<{ epoch: number }>(
 				owner,
 				"dreaming.history.epoch",
-				"SELECT epoch FROM dreaming_classification_epoch WHERE id=1",
-				[],
+				"SELECT COALESCE((SELECT epoch FROM dreaming_classification_epoch WHERE agent_id=?),0) AS epoch",
+				[agentId],
 				{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 			);
 			if (!epoch) throw new Error("compartment_mismatch");
@@ -667,10 +667,10 @@ export async function compactDreamingHistory(
 						                        WHERE ${historyReadLabel(compartmentId)} AND agent_id = ?1 AND scope_key = ?2 AND level = ?3
 						                        ORDER BY idx DESC LIMIT 1) + 1, 0) AS next)
 						 WHERE (?9 IS NULL OR next = ?9)
-						   AND ?11 = (SELECT epoch FROM dreaming_classification_epoch WHERE id = 1)
+						   AND ?11 = COALESCE((SELECT epoch FROM dreaming_classification_epoch WHERE agent_id=?1),0)
 						   AND (?4 IS NULL OR EXISTS (SELECT 1 FROM dreaming_passes p
 						        WHERE p.id=?4 AND p.agent_id=?1 AND p.scope_key=?2
-						        AND p.compartment_id IS ?10 AND p.classification_epoch=?11))
+						        AND p.compartment_id IS ?10 AND EXISTS(SELECT 1 FROM dreaming_pass_fences f WHERE f.pass_id=p.id AND f.valid=1)))
 						   AND (?3=0 OR (SELECT COUNT(*) FROM dreaming_history_nodes child
 						        WHERE child.agent_id=?1 AND child.scope_key=?2 AND child.compartment_id IS ?10
 						        AND child.level=?3-1 AND child.idx IN (?9*2,?9*2+1))=2)

@@ -367,9 +367,8 @@ export function enqueueDreamingAttentionInTx(
 		`INSERT INTO dreaming_attention
 		 (id, agent_id, kind, subject_ref, details_json, priority, compartment_id, dreaming_pass_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
+		 ON CONFLICT(agent_id, kind, subject_ref, COALESCE(compartment_id,0)) DO UPDATE SET
 		   details_json = excluded.details_json,
-		   compartment_id = excluded.compartment_id,
 		   dreaming_pass_id = COALESCE(excluded.dreaming_pass_id, dreaming_attention.dreaming_pass_id),
 		   priority = MAX(dreaming_attention.priority, excluded.priority),
 		   generation = CASE WHEN ? = 1 OR dreaming_attention.details_json <> excluded.details_json THEN dreaming_attention.generation + 1 ELSE dreaming_attention.generation END,
@@ -390,8 +389,8 @@ export function enqueueDreamingAttentionInTx(
 	);
 	const stored = prepareTypedStatement<{ id: string }>(
 		db,
-		"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = ? AND subject_ref = ?",
-	).get(input.agentId, input.kind, subjectRef);
+		"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = ? AND subject_ref = ? AND compartment_id IS ?",
+	).get(input.agentId, input.kind, subjectRef, compartmentId);
 	const id = stored?.id ?? attentionId;
 	if (source)
 		db.prepare(

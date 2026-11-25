@@ -1,3 +1,4 @@
+import { up as upgradeDreamingPartitions } from "../../../core/src/migrations/179-dreaming-evidence-leases";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ReadScope } from "../read-scope";
 import {
+	enqueueDreamingAttentionInTx,
 	getDreamingAttentionInDb,
 	hasDreamingAttentionKindInDb,
 	getDreamingAttentionScoped,
@@ -68,4 +70,54 @@ describe("Dreaming attention client reads", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+});
+
+describe("Dreaming attention partition writes", () => {
+	for (const labels of [
+		[1, null],
+		[null, 1],
+	]) {
+		it(`keeps equal subjects independent in label order ${JSON.stringify(labels)}`, async () => {
+			const dir = mkdtempSync(join(tmpdir(), "attention-write-"));
+			try {
+				initDbAccessor(join(dir, "memory.db"));
+				getDbAccessor().withWriteTx((db) => {
+					upgradeDreamingPartitions(db);
+					db.exec(
+						"INSERT INTO entities(id,agent_id,name,entity_type,created_at,updated_at) VALUES('person','default','Alice','person','now','now')",
+					);
+					const parent = db.prepare("SELECT * FROM entities WHERE id='person'").get();
+					const ids = labels.map((compartmentId) =>
+						enqueueDreamingAttentionInTx(db, {
+							agentId: "default",
+							kind: "hygiene",
+							subjectRef: "entity:person",
+							compartmentId,
+							details: { reason: compartmentId === null ? "public" : "secret" },
+							priority: 10,
+						}),
+					);
+					expect(ids[0]).not.toBe(ids[1]);
+					for (const [index, compartmentId] of labels.entries()) {
+						const before = db.prepare("SELECT * FROM dreaming_attention WHERE id=?").get(ids[1 - index]);
+						expect(
+							enqueueDreamingAttentionInTx(db, {
+								agentId: "default",
+								kind: "hygiene",
+								subjectRef: "entity:person",
+								compartmentId,
+								details: { reason: "updated" },
+								priority: 30,
+							}),
+						).toBe(ids[index]);
+						expect(db.prepare("SELECT * FROM dreaming_attention WHERE id=?").get(ids[1 - index])).toEqual(before);
+					}
+					expect(db.prepare("SELECT * FROM entities WHERE id='person'").get()).toEqual(parent);
+				});
+			} finally {
+				await closeDbAccessor();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+	}
 });

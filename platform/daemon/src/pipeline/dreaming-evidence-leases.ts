@@ -4,9 +4,9 @@ import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { dreamingPassPartitionInDb } from "../classification-owner";
 
 const LIVE_LEASE = `julianday(l.expires_at) > julianday('now')
-	AND EXISTS (SELECT 1 FROM dreaming_passes p JOIN dreaming_classification_epoch e ON e.id = 1
+	AND EXISTS (SELECT 1 FROM dreaming_passes p JOIN dreaming_pass_fences f ON f.pass_id = p.id
 	WHERE p.id = l.pass_id AND p.status = 'running' AND p.compartment_id IS l.compartment_id
-	AND p.classification_epoch = e.epoch)`;
+	AND f.valid = 1)`;
 const LEASE_SQL = `INSERT INTO dreaming_evidence_leases AS l
 	(agent_id, compartment_id, source_kind, source_id, pass_id, leased_at, expires_at)
 	VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now', ?))
@@ -67,8 +67,8 @@ export function evidenceLeasedByOtherPassesInScopes(
 
 export function releaseDreamingEvidenceLeasesInTx(db: WriteDb, passId: string): void {
 	db.prepare(`DELETE FROM dreaming_evidence_leases WHERE pass_id = ? OR NOT EXISTS (
-		SELECT 1 FROM dreaming_passes p JOIN dreaming_classification_epoch e ON e.id = 1
-		WHERE p.id = dreaming_evidence_leases.pass_id AND p.status = 'running' AND p.classification_epoch = e.epoch
+		SELECT 1 FROM dreaming_passes p JOIN dreaming_pass_fences f ON f.pass_id = p.id
+		WHERE p.id = dreaming_evidence_leases.pass_id AND p.status = 'running' AND f.valid = 1
 	) OR julianday(expires_at) <= julianday('now')`).run(passId);
 }
 

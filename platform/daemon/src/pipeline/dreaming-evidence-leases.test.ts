@@ -5,7 +5,7 @@ import { DEFAULT_DREAMING } from "../memory-config";
 import { runDreamingAgentPass, type DreamingAgentExecutor } from "./dreaming";
 import type { PiAgentTool } from "./pi-agent-protocol";
 import { runMigrations } from "../../../core/src/migrations";
-import { searchDreamingEvidenceInDb } from "./dreaming-capabilities";
+import { prepareDreamingEvidenceInDb, searchDreamingEvidenceInDb } from "./dreaming-capabilities";
 import {
 	evidenceLeasedByOtherPasses,
 	leaseDreamingEvidence,
@@ -183,9 +183,46 @@ describe("Dreaming evidence lease ownership", () => {
 		db.exec(
 			"INSERT INTO classification_assignments (target_kind,target_id,agent_id,classification_id) VALUES ('agent','bob','bob','cls_secret')",
 		);
+		expect([...lease("stale", [ref])]).toEqual([ref]);
+		expect(evidenceLeasedByOtherPasses(db, "alice", undefined)).toEqual([ref]);
+		db.exec(
+			"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES ('agent','alice','alice','cls_secret')",
+		);
 		expect(() => lease("stale", [ref])).toThrow("compartment_mismatch");
 		pass("fresh");
 		expect([...lease("fresh", [ref])]).toEqual([ref]);
+	});
+
+	it("fences pending classification jobs only for their scoped agents", () => {
+		const ref = source("public");
+		pass("alice");
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('job','classify','pending',?,'now')",
+		).run(JSON.stringify({ target: { kind: "agent", id: "bob", agentId: "bob" } }));
+		expect([...lease("alice", [ref])]).toEqual([ref]);
+		db.prepare("UPDATE org_jobs SET params_json=? WHERE id='job'").run(
+			JSON.stringify({ target: { kind: "agent", id: "alice", agentId: "alice" } }),
+		);
+		expect(() => lease("alice", [ref])).toThrow("compartment_mismatch");
+		db.exec("UPDATE org_jobs SET status='complete'");
+		expect([...lease("alice", [ref])]).toEqual([ref]);
+	});
+
+	it("fences every supplied scope while retaining unrelated live leases", () => {
+		const alice = source("alice-source");
+		const bob = source("bob-source", null, "bob");
+		pass("shared");
+		db.exec("UPDATE dreaming_passes SET scope_key='alice,bob' WHERE id='shared'");
+		expect([...lease("shared", [alice])]).toEqual([alice]);
+		expect([...lease("shared", [bob], null, "bob")]).toEqual([bob]);
+		db.exec(
+			"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent','carol','carol','cls_secret')",
+		);
+		expect([...lease("shared", [alice])]).toEqual([alice]);
+		db.exec(
+			"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent','bob','bob','cls_secret')",
+		);
+		expect(() => lease("shared", [alice])).toThrow("compartment_mismatch");
 	});
 
 	it("rolls back a batch whose later source has a different label", () => {
@@ -197,10 +234,10 @@ describe("Dreaming evidence lease ownership", () => {
 	});
 
 	it("denies organization personal aggregation and permits organization single storage", () => {
-		db.exec("UPDATE organization SET claimed_at='now', agent_model='personal' WHERE id=1");
-		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
 		const ref = source("org", null, "default");
 		pass("org", null, "default");
+		db.exec("UPDATE organization SET claimed_at='now', agent_model='personal' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
 		expect(() => lease("org", [ref], null, "default")).toThrow("org_policy");
 		db.exec("UPDATE organization SET agent_model='single' WHERE id=1");
 		expect([...lease("org", [ref], null, "default")]).toEqual([ref]);
@@ -258,9 +295,18 @@ describe("Dreaming evidence lease ownership", () => {
 });
 
 function queue(passId: string, limit: number): Record<string, unknown> {
-	return db.transaction(() =>
-		searchDreamingEvidenceInDb(db, { agentId: "alice", passId, limit, evidenceLeaseMs: 60_000 }),
+	const output = searchDreamingEvidenceInDb(db, { agentId: "alice", passId, limit, evidenceLeaseMs: 60_000 });
+	const prepared = db.transaction(() =>
+		prepareDreamingEvidenceInDb(db, {
+			agentId: "alice",
+			passId,
+			action: "lease",
+			sourceRefs: refs(output),
+			ttlMs: 60_000,
+		}),
 	)();
+	expect(refs(prepared)).toEqual(refs(output));
+	return output;
 }
 
 function refs(output: Record<string, unknown>): string[] {
@@ -283,6 +329,13 @@ describe("Dreaming leased queue delivery", () => {
 		const all = Array.from({ length: 6 }, (_, index) => source(`session-${index}`));
 		pass("a");
 		pass("b");
+		db.exec("PRAGMA query_only=ON");
+		try {
+			expect(refs(searchDreamingEvidenceInDb(db, { agentId: "alice", passId: "a", limit: 3 }))).toHaveLength(3);
+		} finally {
+			db.exec("PRAGMA query_only=OFF");
+		}
+		expect(db.query("SELECT COUNT(*) AS count FROM dreaming_evidence_leases").get()).toEqual({ count: 0 });
 		const first = refs(queue("a", 3));
 		const second = refs(queue("b", 3));
 		expect(first).toHaveLength(3);
