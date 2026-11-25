@@ -863,7 +863,7 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 			selected = page.rows.filter((r) => covers(db, request.target, r, context));
 		const updated = cursor.data.updated + recompute(db, selected);
 		const progress = { ...page.cursor, updated };
-		db.prepare("UPDATE org_jobs SET status=?,progress_json=?,finished_at=? WHERE id=?").run(
+		db.prepare("UPDATE org_jobs SET status=?,progress_json=?,finished_at=?,error=NULL WHERE id=?").run(
 			page.done ? "complete" : "running",
 			JSON.stringify(progress),
 			page.done ? new Date().toISOString() : null,
@@ -874,10 +874,10 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 }
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
 	if (request.op === "readable") return request.subject.local ? "all" : readable(db, request.subject);
-	if (request.op === "fail") {
+	if (request.op === "record-error") {
 		db.prepare(
-			"UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=? AND kind IN ('classify','unclassify') AND status IN ('pending','running')",
-		).run(request.error.slice(0, 1000), new Date().toISOString(), request.jobId);
+			"UPDATE org_jobs SET error=? WHERE id=? AND kind IN ('classify','unclassify') AND status IN ('pending','running')",
+		).run(request.error.slice(0, 1000), request.jobId);
 		return { ok: true };
 	}
 	if (request.op === "recover") {

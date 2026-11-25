@@ -466,63 +466,63 @@
     },
     {
       "path": "daemon.ts",
-      "line": 2618,
+      "line": 2620,
       "api": "existsSync",
       "source": "const workerPath = existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2690,
+      "line": 2692,
       "api": "writeFileSync",
       "source": "writeFileSync(PID_FILE, process.pid.toString());",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2917,
+      "line": 2919,
       "api": "existsSync",
       "source": "isEnabled: async () => existsSync(enabledMarker),",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2919,
+      "line": 2921,
       "api": "mkdirSync",
       "source": "mkdirSync(layout.imports, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2921,
+      "line": 2923,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, \"enabled\\n\", { mode: 0o600 });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2922,
+      "line": 2924,
       "api": "renameSync",
       "source": "renameSync(tmp, enabledMarker);",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3400,
+      "line": 3402,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3401,
+      "line": 3403,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3404,
+      "line": 3406,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
@@ -798,7 +798,7 @@
     },
     {
       "path": "db-accessor.ts",
-      "line": 2719,
+      "line": 2712,
       "api": "withWriteTxAsync",
       "source": "return await accessor.withWriteTxAsync(fn, siteToken === undefined ? options : { ...options, siteToken });",
       "category": "hot-path"
@@ -854,70 +854,70 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 137,
+      "line": 141,
       "api": "readFileSync",
       "source": "return readFileSync(cancellationRegistryPath, \"utf8\").includes(`${jobId}\\n`);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 176,
+      "line": 180,
       "api": "writeFileSync",
       "source": "writeFileSync(startupStarted, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 178,
+      "line": 182,
       "api": "existsSync",
       "source": "while (!existsSync(startupRelease)) Atomics.wait(signal, 0, 0, 5);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 183,
+      "line": 187,
       "api": "existsSync",
       "source": "if (sqlitePath !== undefined && existsSync(sqlitePath) && typeof Database.setCustomSQLite === \"function\") {",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 221,
+      "line": 225,
       "api": "writeFileSync",
       "source": "if (commitMarker !== undefined) writeFileSync(commitMarker, commitPauseMs > 0 ? \"waiting\\n\" : \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 229,
+      "line": 233,
       "api": "writeFileSync",
       "source": "writeFileSync(commitMarker, \"completed\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 236,
+      "line": 240,
       "api": "existsSync",
       "source": "existsSync(commitResultGate)",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 238,
+      "line": 242,
       "api": "rmSync",
       "source": "rmSync(commitResultGate, { force: true });",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 240,
+      "line": 244,
       "api": "writeFileSync",
       "source": "if (commitMarker !== undefined) writeFileSync(commitMarker, \"result-wait\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1068,
+      "line": 1100,
       "api": "withReadDbAsync",
       "source": "const embedding = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -925,7 +925,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1101,
+      "line": 1133,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -933,21 +933,21 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1111,
+      "line": 1143,
       "api": "writeFileSync",
       "source": "writeFileSync(startedMarker, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1112,
+      "line": 1144,
       "api": "existsSync",
       "source": "while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1302,
+      "line": 1349,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -1095,7 +1095,7 @@
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 272,
+      "line": 278,
       "api": "withReadDbAsync",
       "source": "return accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1103,7 +1103,7 @@
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 407,
+      "line": 413,
       "api": "withReadDbAsync",
       "source": "const rows = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1111,7 +1111,7 @@
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 883,
+      "line": 901,
       "api": "withReadDbAsync",
       "source": "const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), {",
       "category": "hot-path",
@@ -1119,7 +1119,7 @@
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 891,
+      "line": 909,
       "api": "withReadDbAsync",
       "source": "const rows = await input.accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1127,7 +1127,7 @@
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 970,
+      "line": 995,
       "api": "withReadDbAsync",
       "source": "const coverage = await input.accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1135,7 +1135,7 @@
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 1195,
+      "line": 1250,
       "api": "incrementalVacuumAsync",
       "source": "await accessor.incrementalVacuumAsync({ siteToken: \"db:embedding.index.promote-incremental-vacuum\" });",
       "category": "hot-path",
@@ -1753,105 +1753,105 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 431,
+      "line": 432,
       "api": "mkdirSync",
       "source": "mkdirSync(getMemoryDir(), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 433,
+      "line": 434,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, content, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 434,
+      "line": 435,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 438,
+      "line": 439,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return null;",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 439,
+      "line": 440,
       "api": "readFileSync",
       "source": "const parsed = parseFrontmatterDocument(readFileSync(path, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 491,
+      "line": 492,
       "api": "existsSync",
       "source": "if (existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 492,
+      "line": 493,
       "api": "readFileSync",
       "source": "const existing = parseFrontmatterDocument(readFileSync(path, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 628,
+      "line": 646,
       "api": "statSync",
       "source": "sourceMtimeMs = statSync(path).mtimeMs,",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 682,
+      "line": 700,
       "api": "statSync",
       "source": "sourceMtimeMs = statSync(path).mtimeMs,",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 704,
+      "line": 722,
       "api": "statSync",
       "source": "sourceMtimeMs = statSync(path).mtimeMs,",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 720,
+      "line": 738,
       "api": "statSync",
       "source": "sourceMtimeMs = statSync(path).mtimeMs,",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 828,
+      "line": 846,
       "api": "existsSync",
       "source": "existsSync(path) ? statSync(path).mtimeMs : Date.now(),",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 828,
+      "line": 846,
       "api": "statSync",
       "source": "existsSync(path) ? statSync(path).mtimeMs : Date.now(),",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 835,
+      "line": 853,
       "api": "existsSync",
       "source": "if (!existsSync(dir)) return [];",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1012,
+      "line": 1030,
       "api": "withReadDbAsync",
       "source": "const ready = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1859,7 +1859,7 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1032,
+      "line": 1050,
       "api": "withReadDbAsync",
       "source": "const dbPaths = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1867,7 +1867,7 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1325,
+      "line": 1343,
       "api": "withReadDbAsync",
       "source": "const row = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1875,28 +1875,28 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1599,
+      "line": 1617,
       "api": "readFileSync",
       "source": "const parsed = parseFrontmatterDocument(readFileSync(fullPath, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1661,
+      "line": 1679,
       "api": "readFileSync",
       "source": "const parsed = parseFrontmatterDocument(readFileSync(fullPath, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1710,
+      "line": 1728,
       "api": "readFileSync",
       "source": "const parsed = parseFrontmatterDocument(readFileSync(fullPath, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1761,
+      "line": 1779,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1904,7 +1904,7 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1809,
+      "line": 1827,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1912,7 +1912,7 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1849,
+      "line": 1867,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1920,7 +1920,7 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 1929,
+      "line": 1947,
       "api": "withReadDbAsync",
       "source": "rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1928,7 +1928,7 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 2178,
+      "line": 2196,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1936,14 +1936,14 @@
     },
     {
       "path": "memory-lineage.ts",
-      "line": 2203,
+      "line": 2221,
       "api": "rmSync",
       "source": "rmSync(join(getAgentsDir(), storedArtifactRelativePath(path)), { force: true });",
       "category": "hot-path"
     },
     {
       "path": "memory-lineage.ts",
-      "line": 2234,
+      "line": 2252,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -2264,45 +2264,51 @@
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 416,
+      "line": 412,
       "api": "withReadDb",
       "source": "const embeddingConfig = getDbAccessor().withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:obsidian-source.initial-profile"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 457,
+      "line": 453,
       "api": "withReadDb",
       "source": "const writeConfig = getDbAccessor().withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:obsidian-source.write-profile"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 488,
+      "line": 484,
       "api": "withWriteTx",
       "source": "const stored = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:obsidian-source.persist-chunk"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 541,
+      "line": 538,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:obsidian-source.prune-chunks"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 587,
+      "line": 584,
       "api": "withReadDb",
       "source": "const row = getDbAccessor().withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:obsidian-source.existing-chunk"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 610,
+      "line": 607,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:obsidian-source.purge-prefix"
     },
     {
       "path": "obsidian-source-graph.ts",
@@ -3008,14 +3014,14 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 208,
+      "line": 209,
       "api": "withWriteTxAsync",
       "source": "return accessor.withWriteTxAsync(fn, { siteToken: operationId, operation: operationId, signal });",
       "category": "hot-path"
     },
     {
       "path": "repair-actions.ts",
-      "line": 392,
+      "line": 393,
       "api": "withReadDbAsync",
       "source": "const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3023,7 +3029,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 646,
+      "line": 647,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3031,7 +3037,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 685,
+      "line": 686,
       "api": "withReadDbAsync",
       "source": "const migration = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3039,7 +3045,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 689,
+      "line": 690,
       "api": "withReadDbAsync",
       "source": "const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {",
       "category": "hot-path",
@@ -3047,7 +3053,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 796,
+      "line": 797,
       "api": "withReadDbAsync",
       "source": "const unembedded = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3055,7 +3061,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1118,
+      "line": 1119,
       "api": "withReadDbAsync",
       "source": "const resolvedEmbeddingCfg = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3063,7 +3069,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1445,
+      "line": 1446,
       "api": "withReadDbAsync",
       "source": "const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3071,7 +3077,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1768,
+      "line": 1769,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3079,7 +3085,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1940,
+      "line": 1941,
       "api": "withReadDbAsync",
       "source": "const hashClusters = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3087,7 +3093,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2074,
+      "line": 2075,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3095,7 +3101,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2094,
+      "line": 2095,
       "api": "withReadDbAsync",
       "source": "const neighbors = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3103,7 +3109,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2152,
+      "line": 2153,
       "api": "withReadDbAsync",
       "source": "const total = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3111,7 +3117,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2202,
+      "line": 2203,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3119,7 +3125,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2481,
+      "line": 2482,
       "api": "withReadDbAsync",
       "source": "page = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3127,7 +3133,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2842,
+      "line": 2843,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -4737,7 +4743,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1046,
+      "line": 1053,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -4745,7 +4751,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1058,
+      "line": 1065,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4753,28 +4759,28 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1100,
+      "line": 1107,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDir)) return 0;",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1106,
+      "line": 1113,
       "api": "readdirSync",
       "source": "const files = readdirSync(memoryDir).filter((name) => name.endsWith(\"--transcript.md\"));",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1110,
+      "line": 1117,
       "api": "readFileSync",
       "source": "const parsed = parseArtifactFrontmatter(readFileSync(path, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1206,
+      "line": 1213,
       "api": "withReadDb",
       "source": "const rows = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4782,35 +4788,35 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1310,
+      "line": 1317,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as { readonly agent_id?: unknown };",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1372,
+      "line": 1379,
       "api": "existsSync",
       "source": "if (existsSync(markerPath) && markerMatches(markerPath, agentId)) return null;",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1383,
+      "line": 1390,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(markerPath), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1384,
+      "line": 1391,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1401,
+      "line": 1408,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4818,7 +4824,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1455,
+      "line": 1462,
       "api": "withWriteTx",
       "source": "return (accessor ?? getDbAccessor()).withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -4826,7 +4832,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1645,
+      "line": 1661,
       "api": "withWriteTx",
       "source": "return (accessor ?? getDbAccessor()).withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -4834,7 +4840,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1677,
+      "line": 1693,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4842,7 +4848,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1774,
+      "line": 1790,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -4850,7 +4856,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1797,
+      "line": 1813,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4858,7 +4864,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1830,
+      "line": 1846,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4866,7 +4872,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1885,
+      "line": 1901,
       "api": "withReadDb",
       "source": "const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4874,7 +4880,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1930,
+      "line": 1946,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4882,7 +4888,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1994,
+      "line": 2010,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4963,24 +4969,27 @@
     },
     {
       "path": "startup-recovery.ts",
-      "line": 71,
+      "line": 72,
       "api": "withWriteTxAsync",
-      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"startup-recovery.ts:71\" });",
-      "category": "hot-path"
+      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"db:startup.recovery.write-batch\" });",
+      "category": "hot-path",
+      "siteToken": "db:startup.recovery.write-batch"
     },
     {
       "path": "startup-recovery.ts",
-      "line": 84,
+      "line": 85,
       "api": "withReadDbAsync",
       "source": "const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:startup.recovery.fetch-batch"
     },
     {
       "path": "startup-recovery.ts",
-      "line": 489,
+      "line": 494,
       "api": "withReadDbAsync",
       "source": "const migrationInProgress = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:startup.recovery.embedding-state"
     },
     {
       "path": "telemetry.ts",

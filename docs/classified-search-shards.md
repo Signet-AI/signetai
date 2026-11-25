@@ -14,6 +14,6 @@ The base indexes therefore contain only unclassified rows. Each nonempty set of
 classifications has its own FTS and vector shards. A read searches the base plus
 only the compartments the reader can access and merges scores as-is. Never
 replace this with a shared index and a final authorization filter. FTS moves use
-conditional old/new triggers; vector moves, labels, assignments and audit records
-share the classification transaction. Repair and embedding-profile rotation must
+conditional old/new triggers; each classification batch commits vector moves,
+row labels, and derived copies together. Repair and embedding-profile rotation must
 preserve the same partition rather than rebuilding every row into the base.

@@ -237,11 +237,14 @@ test("an execution admission failure preserves a pending job for startup resumpt
 	).rejects.toThrow("owner_admission_failed");
 	expect(db.prepare("SELECT status,error FROM org_jobs WHERE id=?").get(jobId)).toEqual({
 		status: "pending",
-		error: null,
+		error: "owner_admission_failed",
 	});
 	expect(db.prepare("SELECT count(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
 	await resumeClassificationJobs(async (request) => executeClassification(db, request));
-	expect(db.prepare("SELECT status FROM org_jobs WHERE id=?").get(jobId)).toEqual({ status: "complete" });
+	expect(db.prepare("SELECT status,error FROM org_jobs WHERE id=?").get(jobId)).toEqual({
+		status: "complete",
+		error: null,
+	});
 	db.close();
 });
 

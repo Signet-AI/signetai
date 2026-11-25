@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { createDbOwnerClient } from "./db-owner-client";
-import * as drivers from "./classifications";
+import { runStartupRecoveryAsync } from "./startup-recovery";
+import type { DbAccessor } from "./db-accessor";
 import type { ClassificationRequest } from "./classifications";
 
 test("a fresh DB owner resumes the durable cursor while foreground reads interleave", async () => {
@@ -73,7 +74,16 @@ test("a fresh DB owner resumes the durable cursor while foreground reads interle
 			}
 		})();
 		try {
-			await drivers.resumeClassificationJobs(request(second));
+			const unavailable = () => {
+				throw new Error("startup recovery must use its supplied DB owner");
+			};
+			const accessor: DbAccessor = {
+				withReadDbAsync: unavailable,
+				withWriteTxAsync: unavailable,
+				withWriteDbAsync: unavailable,
+				close: unavailable,
+			};
+			await runStartupRecoveryAsync(accessor, { owner: second });
 		} finally {
 			active = false;
 			await foreground;

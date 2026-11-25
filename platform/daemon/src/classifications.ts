@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { DbOwnerError } from "./db-owner-client";
+import { logger } from "./logger";
+import { DbOwnerError, type DbOwnerClient } from "./db-owner-client";
 import type { AudienceSubject, ReadScope } from "./read-scope";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
@@ -20,7 +21,7 @@ export interface ClassificationPrincipal {
 	readonly id: string;
 }
 export type ClassificationRequest =
-	| { readonly op: "fail"; readonly jobId: string; readonly error: string }
+	| { readonly op: "record-error"; readonly jobId: string; readonly error: string }
 	| { readonly op: "readable"; readonly subject: AudienceSubject }
 	| { readonly op: "list" | "get"; readonly actor: ClassificationActor; readonly id?: string }
 	| {
@@ -75,8 +76,11 @@ export type ClassificationRequest =
 			readonly cursor?: { table: number; rowid: number; updated: number };
 	  }
 	| { readonly op: "recover"; readonly cursor?: string };
-export async function classificationRequest<Result>(request: ClassificationRequest): Promise<Result> {
-	const owner = await getDbOwnerForAccessor(getDbAccessor());
+export async function classificationRequest<Result>(
+	request: ClassificationRequest,
+	suppliedOwner?: DbOwnerClient,
+): Promise<Result> {
+	const owner = suppliedOwner ?? (await getDbOwnerForAccessor(getDbAccessor()));
 	return owner.submit<Result>(
 		{ kind: "classification", request },
 		{
@@ -147,6 +151,13 @@ export async function executeClassificationJob(
 				retries++;
 				continue;
 			}
+			const failure = error instanceof Error ? error : new Error(String(error));
+			logger.error(
+				"startup-recovery",
+				`Classification job ${jobId} stopped; its durable cursor remains resumable`,
+				failure,
+			);
+			await request({ op: "record-error", jobId, error: failure.message });
 			throw error;
 		}
 		const result = jobResult.parse(value);

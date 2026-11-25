@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { projectEmbeddingRows } from "./embedding-projection";
 import {
 	compartmentForWrite,
@@ -1019,12 +1020,16 @@ async function promoteStagingIndexThroughOwner(
 	const rebuildVectorIndex =
 		(await ownerIsVecVirtualTable(owner, activeVectorTable)) &&
 		(await ownerIsVecVirtualTable(owner, stagingVectorTable));
-	const shards = await ownerReadAll<{ readonly name: string }>(
-		owner,
-		"SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*__c[0-9]*'",
-		[],
-		ownerMaintenanceOptions("embedding-index.shards"),
-	);
+	const shards = z
+		.array(z.object({ name: z.string() }))
+		.parse(
+			await ownerReadAll(
+				owner,
+				"SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*__c[0-9]*'",
+				[],
+				ownerMaintenanceOptions("embedding-index.shards"),
+			),
+		);
 	const statements: Array<{
 		readonly sql: string;
 		readonly params?: readonly unknown[];
