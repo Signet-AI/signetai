@@ -21,7 +21,7 @@ export async function resolveRouteReadScope(c: Context, requestedAgent?: string)
 		const access = principalAccess(principal);
 		if (!access) denied(c, 403, "org_policy");
 		c.set("readAuditAgent", resolved.value);
-		return resolveReadScope(
+		const scope = await resolveReadScope(
 			{
 				reach:
 					resolved.value === access.organizationAgentId ? { kind: "all" } : { kind: "own", agentId: resolved.value },
@@ -29,12 +29,14 @@ export async function resolveRouteReadScope(c: Context, requestedAgent?: string)
 			},
 			audienceSubjectFromPrincipal(principal),
 		);
+		return { ...scope, organizationMode: true };
 	}
 	const resolved = resolveScopedAgentId(c, requestedAgent);
 	if (resolved.error) denied(c, 403, resolved.error);
 	const policy = await getAgentScope(resolved.agentId);
 	const project = c.get("auth")?.claims?.scope.project;
 	return {
+		organizationMode: false,
 		reach:
 			policy.readPolicy === "shared"
 				? { kind: "shared", agentId: resolved.agentId }

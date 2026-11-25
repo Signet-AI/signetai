@@ -2141,7 +2141,11 @@ async function getConstellationDreamingSummary(
 	backlogProbe?: DreamingEpisodicBacklogProbe,
 	readScope?: ReadScope,
 ): Promise<ConstellationDreamingSummary> {
-	if (readScope && (readScope.reach.kind !== "all" || readScope.compartments !== "all"))
+	if (
+		readScope &&
+		readScope.organizationMode !== false &&
+		(readScope.reach.kind !== "all" || readScope.compartments !== "all")
+	)
 		return {
 			episodicTokensPending: null,
 			episodicBacklogProbe: null,

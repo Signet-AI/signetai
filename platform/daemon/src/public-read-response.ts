@@ -19,21 +19,24 @@ export function isPublicReadField(key: string): boolean {
 	return !internalFields.has(key);
 }
 
-export function publicReadValue(value: unknown): PublicReadJson {
+export function publicReadValue(value: unknown, organizationMode = true): PublicReadJson {
 	if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean")
 		return value;
-	if (Array.isArray(value)) return value.map(publicReadValue);
+	if (Array.isArray(value)) return value.map((item) => publicReadValue(item, organizationMode));
 	if (typeof value !== "object") return null;
 	return Object.fromEntries(
 		Object.entries(value)
-			.filter(([key, item]) => isPublicReadField(key) && !(key === "id" && typeof item === "number"))
-			.map(([key, item]) => [key, publicReadValue(item)]),
+			.filter(
+				([key, item]) => !organizationMode || (isPublicReadField(key) && !(key === "id" && typeof item === "number")),
+			)
+			.map(([key, item]) => [key, publicReadValue(item, organizationMode)]),
 	);
 }
 
 export function registerPublicReadResponse(app: Hono, path: string): void {
 	app.use(path, async (c, next) => {
 		await next();
+		if (!c.get("organization")) return;
 		const response = c.res;
 		if (
 			!response.headers.get("content-type")?.includes("application/json") ||

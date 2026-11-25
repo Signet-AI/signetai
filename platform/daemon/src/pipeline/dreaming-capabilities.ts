@@ -252,6 +252,7 @@ export interface DreamingCapabilityManifestEntry {
 }
 
 function capability<T extends z.ZodType>(
+	organizationMode: boolean,
 	id: DreamingCapabilityId,
 	title: string,
 	description: string,
@@ -278,7 +279,7 @@ function capability<T extends z.ZodType>(
 			}
 			try {
 				const output = await run(parsed.data);
-				const safe = publicReadValue(redactCredentialsDeep(output));
+				const safe = publicReadValue(redactCredentialsDeep(output), organizationMode);
 				if (safe === null || typeof safe !== "object" || Array.isArray(safe))
 					throw new Error("invalid_capability_output");
 				return { ...safe, tool: id, ok: output.ok, ...(output.error ? { error: output.error } : {}) };
@@ -592,6 +593,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 	};
 	return [
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"memory_head_read",
 			"Read curated memory head",
 			`Read the scoped Dreaming-curated MEMORY.md head. tokens is the current head's size and maxTokens its budget (${MEMORY_HEAD_MAX_TOKENS}). During a content pass, committedEntries lists the last published entries whose support still holds, with that support, even when the head is stale, and committedTokens is their size.`,
@@ -610,6 +612,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					: { ok: false, error: "Head scope must match the active agent" },
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"memory_head_commit",
 			"Commit curated memory head",
 			`Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Start from the committedEntries memory_head_read returns (the last published entries whose support still holds) and give exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. The rendered head, one "- text" line per entry, must be at most ${MEMORY_HEAD_MAX_TOKENS} tokens; an over-budget set is rejected with its token count. A rejected commit is not staged; fix it and commit again. Every content pass needs exactly one accepted commit, even when nothing changed: resubmit the committedEntries, or an empty entry set when there are none; an empty set clears the head only when no committed entry still has valid support. A second commit after one is accepted is rejected. Record deferrals and no-change reasons with runbook_write.`,
@@ -634,6 +637,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"search_entities",
 			"Search entities",
 			"Search the knowledge graph for one agent scope by entity name fragment and optional type. Pass the agentId of the scope you are addressing.",
@@ -671,6 +675,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"get_entity",
 			"Get entity detail",
 			"Fetch one entity in one agent scope with attribute/constraint counts and pinned status, optionally hydrated with bounded aspect summaries and/or dependency links. Use limit and offset to page hydrated items; the response reports when a hydration list is truncated.",
@@ -731,6 +736,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"list_aspect_claims",
 			"List aspect claims",
 			"List active claim attributes for one entity aspect in one agent scope by stable ids, each with its evidence quote and source_ref. include contradictions to add the aspect's active contradiction observations: advisory state alongside competing claim evidence, not a truth choice.",
@@ -775,6 +781,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"search_evidence",
 			"Search episodic evidence",
 			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Copy each sourceRef character for character. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit source revisions not yet fully reviewed, regardless of time watermark. A page holds one excerpt per source. Each resumes where review_evidence acknowledgements ended, after fragments already served earlier in this pass; a source reviewed in an earlier pass resumes slightly before that point, and reviewedChars counts the leading characters already reviewed, which you need not file again. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes and acknowledge it with review_evidence before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
@@ -846,6 +853,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"review_evidence",
 			"Acknowledge reviewed evidence",
 			"Record which evidence excerpts this pass has reviewed. A source's evidence cursor moves forward only through text acknowledged here or cited by a successful apply_ontology_ops operation; delivered text that is never acknowledged stays queued and is delivered again to a later pass. For each item, copy sourceRef and contentOffset from a search_evidence result delivered in this pass and scope. Omit through when you reviewed the whole excerpt; otherwise set through to an exact quote from the excerpt, and review ends where its first occurrence ends. A call with any invalid item is rejected as a whole with a code (EXCERPT_NOT_DELIVERED, SCOPE_MISMATCH, QUOTE_NOT_IN_EXCERPT, SOURCE_CHANGED); correct it and call again.",
@@ -886,6 +894,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"validate_proposal",
 			"Validate proposal",
 			"Run the daemon's deterministic pre-write guards in one pass for one agent scope: entity-label gate, duplicate-entity check, and/or contradiction check against active aspect values.",
@@ -930,6 +939,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"zoom_history",
 			"Zoom pass history",
 			"Open line id+n of the pass history into the two lines of n/2 passes it was made from; n = 1 returns that pass's full record (runbook note, operation counts and failures, evidence window, quarantines).",
@@ -957,6 +967,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"runbook_write",
 			"Write Dreaming runbook",
 			"Before finishing a Dreaming pass, store one short structured note for future passes to review. Deferred evidence in another scope must include its agentId. Reviewed exclusions must include the agentId of the scope that owns the sourceRef. Use reviewedExcludedEvidence only after inspecting an entire source revision and deciding it contains no durable fact; temporary blockers belong in deferredEvidence.",
@@ -997,6 +1008,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"attention_list",
 			"List attention",
 			"List attention records by kind and resolution status. Use kind hygiene for structural queue work, kind surprisal for bounded exploration hints, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope. Each record carries its owning agentId.",
@@ -1020,6 +1032,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 		),
 		capability(
+			params.readScope !== undefined && params.readScope.organizationMode !== false,
 			"apply_ontology_ops",
 			"Apply ontology operations",
 			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. Do not replay returned items, and replace any earlier `attention:$<index>` references with `attention:<uuid>` built from the flag result `result.attentionId` before retrying. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',

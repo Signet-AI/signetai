@@ -441,7 +441,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const agentId = scopedAgent?.agentId ?? resolveDaemonAgentId();
 		const accessor = getDbAccessor();
 		const backlogProbe =
-			readScope.reach.kind === "all" && readScope.compartments === "all"
+			!c.get("organization") || (readScope.reach.kind === "all" && readScope.compartments === "all")
 				? await probeDreamingEpisodicBacklog(accessor, agentId, loadMemoryConfig(AGENTS_DIR).dreaming.tokenThreshold)
 				: undefined;
 		return c.body(
@@ -466,6 +466,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 						},
 						readScope,
 					),
+					Boolean(c.get("organization")),
 				),
 			),
 			200,

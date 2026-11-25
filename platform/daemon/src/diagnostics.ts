@@ -854,7 +854,9 @@ async function diagnosticTables(
 	 AND name NOT LIKE '%_fts_docsize' AND name NOT LIKE '%_fts_config' ORDER BY name`,
 	);
 	return rows.flatMap((row) =>
-		typeof row.name === "string" && typeof row.type === "string" && (!scope || !/__c\d+(?:_|$)/.test(row.name))
+		typeof row.name === "string" &&
+		typeof row.type === "string" &&
+		(!scope || scope.organizationMode === false || !/__c\d+(?:_|$)/.test(row.name))
 			? [{ name: row.name, type: row.type, sql: typeof row.sql === "string" ? row.sql : null }]
 			: [],
 	);
@@ -1040,7 +1042,7 @@ export function telemetryLabelReadScopeSql(alias: string, scope: ReadScope): { s
 }
 
 async function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo[], scope?: ReadScope) {
-	if (!scope) return { sql: "", args: [] };
+	if (!scope || scope.organizationMode === false) return { sql: "", args: [] };
 	const names = new Set(columns.map((column) => column.name));
 	if (!names.has("agent_id") || !names.has("compartment_id")) return null;
 	const kind = DIAGNOSTIC_DERIVED_KINDS[table];
@@ -1091,9 +1093,10 @@ async function diagnosticCount(
 		sql: `SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql}`,
 		params: predicate.args,
 	};
-	const statement = scope
-		? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
-		: rawStatement;
+	const statement =
+		scope && scope.organizationMode !== false
+			? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
+			: rawStatement;
 	const rows = await databaseDiagnosticRows(accessor, statement.sql, statement.params);
 	return typeof rows[0]?.count === "number" ? rows[0].count : null;
 }
@@ -1170,33 +1173,37 @@ export async function readTableSampleAsync(
 	const predicate = await diagnosticPredicate(table, columns, scope);
 	const blocked = sampleBlockedReason(match) ?? (predicate ? undefined : "table has no content read scope");
 	if (blocked || !predicate) return { error: `sample unavailable: ${blocked}`, status: 400 };
-	const publicColumns = columns.filter(
-		(column) =>
-			isPublicReadField(column.name) &&
-			!column.name.endsWith("_json") &&
-			(column.name === "agent_id" || !/_(?:id|ids|key|path)$/.test(column.name)) &&
-			!["payload", "result", "proposal_evidence", "evidence", "evidence_meta"].includes(column.name) &&
-			!(column.name === "id" && /INT/i.test(column.type)) &&
-			![
-				"idx",
-				"sequence",
-				"head_revision",
-				"head_base_revision",
-				"revision",
-				"focal_entity_names",
-				"surfaced_constraint_count",
-				"traversal_memory_count",
-			].includes(column.name),
-	);
+	const publicColumns =
+		scope?.organizationMode === false
+			? columns
+			: columns.filter(
+					(column) =>
+						isPublicReadField(column.name) &&
+						!column.name.endsWith("_json") &&
+						(column.name === "agent_id" || !/_(?:id|ids|key|path)$/.test(column.name)) &&
+						!["payload", "result", "proposal_evidence", "evidence", "evidence_meta"].includes(column.name) &&
+						!(column.name === "id" && /INT/i.test(column.type)) &&
+						![
+							"idx",
+							"sequence",
+							"head_revision",
+							"head_base_revision",
+							"revision",
+							"focal_entity_names",
+							"surfaced_constraint_count",
+							"traversal_memory_count",
+						].includes(column.name),
+				);
 	if (publicColumns.length === 0) return { error: "sample unavailable: no public columns", status: 400 };
 	const identifier = /^[a-z_][a-z0-9_]*$/i.test(table) ? table : quoteIdentifier(table);
 	const rawStatement = {
 		sql: `SELECT ${publicColumns.map((column) => `CASE WHEN typeof(d.${quoteIdentifier(column.name)})='blob' THEN '[blob '||length(d.${quoteIdentifier(column.name)})||' bytes]' ELSE d.${quoteIdentifier(column.name)} END AS ${quoteIdentifier(column.name)}`).join(",")} FROM ${identifier} d WHERE 1=1${predicate.sql} ORDER BY ${[...publicColumns.filter((column) => column.primaryKey), ...publicColumns.filter((column) => !column.primaryKey)].map((column) => `d.${quoteIdentifier(column.name)}`).join(",")} LIMIT ? OFFSET ?`,
 		params: [...predicate.args, limit + 1, offset],
 	};
-	const statement = scope
-		? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
-		: rawStatement;
+	const statement =
+		scope && scope.organizationMode !== false
+			? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
+			: rawStatement;
 	const rows = await databaseDiagnosticRows(accessor, statement.sql, statement.params);
 	return {
 		table,

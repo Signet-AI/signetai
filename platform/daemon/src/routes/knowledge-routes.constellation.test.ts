@@ -80,7 +80,7 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 		dir = "";
 	});
 
-	test("omits an unscoped capped backlog probe from a public scoped graph", async () => {
+	test("marks a backlog probe capped after 50 sources instead of returning a partial exact count", async () => {
 		await seedEpisodicSources(51);
 		const app = new Hono();
 		registerKnowledgeRoutes(app);
@@ -92,14 +92,16 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 			metadata: {
 				dreaming: {
 					episodicTokensPending: null,
-					episodicBacklogProbe: null,
+					episodicBacklogProbe: {
+						kind: "indeterminate",
+					},
 				},
 			},
 		});
-		expect(body.metadata.dreaming.episodicBacklogProbe).toBeNull();
+		expect(body).not.toHaveProperty("metadata.dreaming.episodicBacklogProbe.tokenLowerBound");
 	});
 
-	test("omits an unscoped exact pending-token count from a public scoped graph", async () => {
+	test("keeps an exact pending-token count when the backlog fits within the probe limit", async () => {
 		await seedEpisodicSources(1);
 		const app = new Hono();
 		registerKnowledgeRoutes(app);
@@ -109,8 +111,10 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 		expect(await response.json()).toMatchObject({
 			metadata: {
 				dreaming: {
-					episodicTokensPending: null,
-					episodicBacklogProbe: null,
+					episodicTokensPending: expect.any(Number),
+					episodicBacklogProbe: {
+						kind: "exact",
+					},
 				},
 			},
 		});
