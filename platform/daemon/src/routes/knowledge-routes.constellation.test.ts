@@ -307,6 +307,16 @@ async function seedRankedFacts(): Promise<void> {
 				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 				 VALUES (?, ?, ?, 'project', 'default', ?, ?, ?)`,
 			).run(entity, entity, entity, mentions, now, now);
+			for (let index = 0; index < mentions; index++) {
+				const memoryId = `${entity}-mention-${index}`;
+				db.prepare("INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES(?,?,'default',?,?)").run(
+					memoryId,
+					entity,
+					now,
+					now,
+				);
+				db.prepare("INSERT INTO memory_entity_mentions(memory_id,entity_id) VALUES(?,?)").run(memoryId, entity);
+			}
 		}
 		const aspect = db.prepare(
 			`INSERT INTO entity_aspects
