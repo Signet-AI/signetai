@@ -282,8 +282,8 @@ export function vectorSearchWithMetadata(
 						.prepare(`WITH hits AS MATERIALIZED (
 						SELECT id,distance FROM ${table} WHERE embedding MATCH ? AND k=?
 					) SELECT e.source_id,hits.distance FROM hits
-					JOIN ${searchTables.embeddings} e ON e.id=hits.id
-					JOIN memories m ON m.id=e.source_id
+					CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id
+					CROSS JOIN memories m ON m.id=e.source_id
 					WHERE 1=1${filter}${scope.sql}${embeddingScope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
 						.all(...params);
 					const selectiveAtBackendLimit = rows.length < limit && requested === maxKnnWindow && requested < size;
