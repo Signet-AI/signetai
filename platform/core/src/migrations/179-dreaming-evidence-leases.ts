@@ -33,6 +33,64 @@ function partitionDreamingHistory(db: MigrationDb): void {
 	`);
 }
 
+function installPersonIdentityOwner(db: MigrationDb): void {
+	db.exec(`CREATE VIEW IF NOT EXISTS person_identity_grants AS
+		SELECT a.id AS agent_id,u.id AS user_id,u.display_name || ' (' || u.username || ')' AS name
+		FROM agents a JOIN users u ON u.status='active'
+		WHERE a.archived_at IS NULL AND (
+			a.kind='organization' OR (a.kind='personal' AND a.owner_user_id=u.id)
+			OR (a.kind='team' AND EXISTS(SELECT 1 FROM group_members m JOIN groups g ON g.id=m.group_id
+				WHERE m.user_id=u.id AND m.group_id=a.owner_group_id))
+			OR (a.kind='legacy' AND (u.role='admin' OR EXISTS(SELECT 1 FROM api_keys k
+				WHERE k.user_id=u.id AND k.agent_id=a.id AND k.revoked_at IS NULL
+				AND (k.expires_at IS NULL OR k.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')))))
+		)`);
+	const project = (scope: string): string => `
+		INSERT INTO entities(id,agent_id,person_user_id,name,canonical_name,entity_type,compartment_id,status,created_at,updated_at)
+		SELECT 'person_' || hex(randomblob(16)),agent_id,user_id,name,'person:' || user_id,'person',NULL,'active',datetime('now'),datetime('now')
+		FROM person_identity_grants WHERE ${scope}
+		ON CONFLICT(agent_id,person_user_id) WHERE person_user_id IS NOT NULL DO UPDATE SET
+		name=excluded.name,canonical_name=excluded.canonical_name,entity_type='person',compartment_id=NULL,status='active',
+		archived_at=NULL,archived_by=NULL,archive_reason=NULL,proposal_id=NULL,proposal_evidence='[]',dreaming_pass_id=NULL,
+		updated_at=datetime('now') WHERE entities.name != excluded.name OR entities.canonical_name IS NOT excluded.canonical_name
+		OR entities.entity_type != 'person' OR entities.compartment_id IS NOT NULL OR entities.status != 'active'
+		OR entities.proposal_id IS NOT NULL OR entities.proposal_evidence != '[]' OR entities.dreaming_pass_id IS NOT NULL;
+		UPDATE entities SET status='archived',archived_at=datetime('now'),archived_by='identity-owner',archive_reason='act_as_revoked',updated_at=datetime('now')
+		WHERE person_user_id IS NOT NULL AND status != 'archived'
+		AND EXISTS(SELECT 1 FROM (SELECT agent_id,person_user_id AS user_id) WHERE ${scope})
+		AND NOT EXISTS(SELECT 1 FROM person_identity_grants p WHERE p.agent_id=entities.agent_id AND p.user_id=entities.person_user_id);
+	`;
+	if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='identity_person_users_insert'").get()) {
+		db.exec(`DELETE FROM evidence_citations WHERE derived_kind='entity' AND derived_id IN (SELECT id FROM entities WHERE person_user_id IS NOT NULL);
+			UPDATE entities SET compartment_id=NULL,proposal_id=NULL,proposal_evidence='[]',dreaming_pass_id=NULL,
+			name=COALESCE((SELECT display_name || ' (' || username || ')' FROM users WHERE id=person_user_id),'Unknown user (' || person_user_id || ')'),
+			canonical_name='person:' || person_user_id,entity_type='person',description=NULL,embedding=NULL,mentions=0,
+			pinned=0,pinned_at=NULL,last_synthesized_at=NULL,community_id=NULL,source_id=NULL,source_kind=NULL,source_path=NULL,source_root=NULL
+			WHERE person_user_id IS NOT NULL;`);
+		db.exec(project("1"));
+	}
+	for (const [table, key, predicate] of [
+		["users", "id", "user_id"],
+		["agents", "id", "agent_id"],
+		["group_members", "user_id", "user_id"],
+		["api_keys", "user_id", "user_id"],
+		["groups", "id", "agent_id IN (SELECT id FROM agents WHERE owner_group_id"],
+	] as const) {
+		for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+			const refs =
+				operation === "INSERT"
+					? [`NEW.${key}`]
+					: operation === "DELETE"
+						? [`OLD.${key}`]
+						: [`NEW.${key}`, `OLD.${key}`];
+			const scope = table === "groups" ? `${predicate} IN (${refs.join(",")}))` : `${predicate} IN (${refs.join(",")})`;
+			db.exec(
+				`CREATE TRIGGER IF NOT EXISTS identity_person_${table}_${operation.toLowerCase()} AFTER ${operation} ON ${table} BEGIN ${project(scope)} END;`,
+			);
+		}
+	}
+}
+
 export function up(db: MigrationDb): void {
 	for (const [table, column, declaration] of [
 		["ontology_proposals", "dreaming_pass_id", "TEXT"],
@@ -85,6 +143,7 @@ export function up(db: MigrationDb): void {
 	);
 	partitionDreamingState(db);
 	extendDreamingCitations(db);
+	installPersonIdentityOwner(db);
 	for (const operation of ["INSERT", "UPDATE"]) {
 		db.exec(`CREATE TRIGGER IF NOT EXISTS dreaming_evidence_lease_${operation.toLowerCase()}
 		BEFORE ${operation} ON dreaming_evidence_leases BEGIN
