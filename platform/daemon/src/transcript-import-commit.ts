@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { getDbOwner } from "./db-owner-runtime";
-import { ownerReadOne } from "./db-owner-sql";
+import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { z } from "zod";
 import { compartmentForWrite } from "@signet/core";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
@@ -656,15 +657,21 @@ function updateSessionTranscriptSource(
 	);
 }
 export async function nextTranscriptImportAgent(after: string): Promise<string | undefined> {
-	const owner = await getDbOwner();
-	const options = { operation: "sources.import.next-agent", deadlineMs: 5000, estimatedWorkUnits: 1 };
-	const read = (cursor: string) =>
-		ownerReadOne<{ agent_id: string }>(
-			owner,
-			"SELECT agent_id FROM source_import_jobs WHERE agent_id>? AND (state IN ('queued','running','inventorying','cancelling') OR cleanup_state='pending' OR retry_requested=1) ORDER BY agent_id LIMIT 1",
-			[cursor],
-			options,
-		);
+	const read = async (cursor: string) =>
+		z
+			.object({ agent_id: z.string() })
+			.nullable()
+			.optional()
+			.parse(
+				await dbOwnerQuery(
+					ownerStatement(
+						"SELECT agent_id FROM source_import_jobs WHERE agent_id>? AND (state IN ('queued','running','inventorying','cancelling') OR cleanup_state='pending' OR retry_requested=1) ORDER BY agent_id LIMIT 1",
+						[cursor],
+						"get",
+					),
+					{ operation: "sources.import.next-agent", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+				),
+			);
 	const next = (await read(after)) ?? (await read(""));
 	return next?.agent_id;
 }

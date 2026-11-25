@@ -137,7 +137,8 @@ export type CitationDerivedKind =
 	| "entity"
 	| "dependency"
 	| "aspect"
-	| "telemetry";
+	| "telemetry"
+	| "community";
 const EVIDENCE_ROWS = {
 	memory: { table: "memories", key: "id", session: "NULL", source: "source_id" },
 	transcript: { table: "session_transcripts", key: "session_key", session: "session_key", source: "source_id" },
@@ -217,4 +218,143 @@ export function memoryWriteDedupeSql(
 		sql: `${scope.sql} AND COALESCE((SELECT key FROM compartments WHERE id=${alias}.compartment_id),'')=? AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=${alias}.compartment_id AND NOT EXISTS(SELECT 1 FROM classification_audience ca WHERE ca.classification_id=cm.classification_id AND ((ca.principal_kind='user' AND ca.principal_id=?) OR (ca.principal_kind='group' AND ca.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))))`,
 		params: [...scope.args, key, input.author.userId, input.author.userId, input.author.userId],
 	};
+}
+
+export function completeDerivedMemoryCitationsInTx(db: WriteDb, derivedMemoryId: string, agentId: string): void {
+	const parent = prepareTypedStatement<{ compartment_id: number | null }>(
+		db,
+		"SELECT compartment_id FROM memories WHERE id=? AND agent_id=?",
+	).get(derivedMemoryId, agentId);
+	if (!parent) throw new Error("derived_memory_not_in_agent");
+	const sources = prepareTypedStatement<{ source_kind: string; source_id: string }>(
+		db,
+		"SELECT source_kind,source_id FROM derived_memory_sources WHERE derived_memory_id=? AND agent_id=?",
+	).all(derivedMemoryId, agentId);
+	const evidence = sources.map(
+		(source): CitationEvidence => ({
+			kind: citationKind(source.source_kind),
+			id: source.source_id,
+		}),
+	);
+	const compartment = evidenceCompartmentInTx(db, agentId, evidence, parent.compartment_id);
+	recordEvidenceCitationsInTx(db, { agentId, derivedKind: "memory", derivedId: derivedMemoryId, evidence });
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id=? AND agent_id=?").run(
+		compartment,
+		derivedMemoryId,
+		agentId,
+	);
+	db.prepare("UPDATE memory_hints SET compartment_id=? WHERE memory_id=? AND agent_id=?").run(
+		compartment,
+		derivedMemoryId,
+		agentId,
+	);
+	for (const store of ["embeddings", "embeddings_staging"] as const) {
+		const embeddings = prepareTypedStatement<{ id: string }>(
+			db,
+			`SELECT id FROM ${store} WHERE source_type='memory' AND source_id=?`,
+		).all(derivedMemoryId);
+		for (const embedding of embeddings) syncEmbeddingCompartment(db, store, embedding.id);
+	}
+}
+export function citationKind(kind: string): CitationEvidence["kind"] {
+	if (kind === "ontology_claim") return "attribute";
+	if (kind === "memory" || kind === "artifact" || kind === "transcript" || kind === "summary") return kind;
+	throw new Error(`Unsupported evidence kind: ${kind}`);
+}
+
+export function recallResultEvidenceInTx(
+	db: WriteDb,
+	agentId: string,
+	item: { readonly id: string; readonly source?: string; readonly source_path?: string; readonly session_id?: string },
+): readonly CitationEvidence[] {
+	if (item.id.startsWith("ontology-claim:"))
+		return [{ kind: "attribute", id: item.id.slice("ontology-claim:".length) }];
+	if (item.id.startsWith("transcript:")) {
+		const id = item.session_id ?? item.id.slice("transcript:".length);
+		const rows = prepareTypedStatement<{ session_key: string }>(
+			db,
+			"SELECT session_key FROM session_transcripts WHERE agent_id=? AND (session_key=? OR session_id=? OR source_path=?)",
+		).all(agentId, id, id, item.source_path ?? id);
+		if (!rows.length) throw new Error("recall_evidence_not_in_agent");
+		return rows.map((row) => ({ kind: "transcript", id: row.session_key }));
+	}
+	if (item.id.startsWith("source-chunk:") || item.id.startsWith("native-artifact:")) {
+		const embeddingId = item.id.slice("source-chunk:".length);
+		const rowid = item.id.slice("native-artifact:".length);
+		const rows = prepareTypedStatement<{ source_path: string }>(
+			db,
+			"SELECT source_path FROM memory_artifacts WHERE agent_id=? AND (source_path=? OR rowid=? OR source_path IN (SELECT source_id FROM embeddings WHERE id=? AND agent_id=?))",
+		).all(
+			agentId,
+			item.source_path ?? null,
+			item.id.startsWith("native-artifact:") ? rowid : null,
+			embeddingId,
+			agentId,
+		);
+		const transcripts = item.id.startsWith("source-chunk:")
+			? prepareTypedStatement<{ session_key: string }>(
+					db,
+					"SELECT session_key FROM session_transcripts WHERE agent_id=? AND source_path IN (SELECT source_id FROM embeddings WHERE id=? AND agent_id=?)",
+				).all(agentId, embeddingId, agentId)
+			: [];
+		if (!rows.length && !transcripts.length) throw new Error("recall_evidence_not_in_agent");
+		return [
+			...rows.map((row): CitationEvidence => ({ kind: "artifact", id: row.source_path })),
+			...transcripts.map((row): CitationEvidence => ({ kind: "transcript", id: row.session_key })),
+		];
+	}
+	if (item.id.startsWith("constructed:") || item.source === "llm_summary" || item.id.startsWith("summary:"))
+		throw new Error("recall_result_evidence_required");
+	return [{ kind: "memory", id: item.id }];
+}
+
+export function pruneTelemetryCitationsInTx(db: WriteDb, cutoff: string): void {
+	db.prepare(
+		"DELETE FROM evidence_citations WHERE derived_kind='telemetry' AND derived_id IN (SELECT id FROM memory_search_telemetry WHERE created_at < ?)",
+	).run(cutoff);
+}
+
+export function resetCommunityProjectionInTx(db: WriteDb, agentId: string): void {
+	db.prepare("DELETE FROM evidence_citations WHERE derived_kind='community' AND agent_id=?").run(agentId);
+	db.prepare("DELETE FROM entity_communities WHERE agent_id=?").run(agentId);
+	db.prepare("UPDATE entities SET community_id=NULL WHERE agent_id=?").run(agentId);
+}
+export function writeCommunityProjectionInTx(
+	db: WriteDb,
+	input: {
+		readonly id: string;
+		readonly agentId: string;
+		readonly name: string | null;
+		readonly cohesion: number;
+		readonly memberIds: readonly string[];
+	},
+): void {
+	const labels = new Set<string>();
+	const evidence: CitationEvidence[] = [];
+	for (const id of input.memberIds) {
+		const entity = prepareTypedStatement<{ compartment_id: number | null; source_id: string | null }>(
+			db,
+			"SELECT compartment_id,source_id FROM entities WHERE id=? AND agent_id=?",
+		).get(id, input.agentId);
+		if (!entity) throw new Error("community_entity_not_in_agent");
+		for (const label of classificationsForWrite(db, {
+			agentId: input.agentId,
+			sourceId: entity.source_id,
+			parentCompartment: entity.compartment_id,
+		}))
+			labels.add(label);
+		evidence.push(
+			...prepareTypedStatement<{ evidence_kind: CitationEvidence["kind"]; evidence_id: string }>(
+				db,
+				"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE agent_id=? AND derived_kind='entity' AND derived_id=?",
+			)
+				.all(input.agentId, id)
+				.map((row) => ({ kind: row.evidence_kind, id: row.evidence_id })),
+		);
+	}
+	const compartment = evidenceCompartmentInTx(db, input.agentId, evidence, compartmentFor(db, [...labels]));
+	db.prepare(
+		"INSERT INTO entity_communities(id,agent_id,name,cohesion,member_count,created_at,updated_at,compartment_id) VALUES(?,?,?,?,?,datetime('now'),datetime('now'),?)",
+	).run(input.id, input.agentId, input.name, input.cohesion, input.memberIds.length, compartment);
+	recordEvidenceCitationsInTx(db, { agentId: input.agentId, derivedKind: "community", derivedId: input.id, evidence });
 }

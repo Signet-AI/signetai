@@ -35,6 +35,7 @@ const DERIVED: Readonly<Record<string, string>> = {
 	head_revision: "memory_head_revision_entries",
 	proposal: "ontology_proposals",
 	telemetry: "memory_search_telemetry",
+	community: "entity_communities",
 };
 function id(prefix: string): string {
 	return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -490,7 +491,7 @@ function authorize(
 	)
 		throw new Error("permission");
 }
-const COPY_KINDS = new Set(["contradiction", "head_revision", "proposal", "telemetry"]);
+const COPY_KINDS = new Set(["contradiction", "head_revision", "proposal", "telemetry", "community"]);
 function referencedRows(db: MigrationDb, kind: unknown, key: unknown, agent: unknown): ContentRow[] {
 	if (typeof kind !== "string" || typeof key !== "string" || typeof agent !== "string") return [];
 	const tables =

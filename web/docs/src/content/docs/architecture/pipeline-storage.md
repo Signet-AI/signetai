@@ -264,7 +264,11 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `177-classifications.ts`.
+`schema_migrations_audit`. The latest migration is `178-write-inheritance.ts`.
+
+New evidence inherits its agent, session, and source classifications before
+indexing. Write deduplication only reuses readable evidence in the same
+compartment; identical hidden evidence does not prevent a fresh write.
 
 ### Evidence and semantic state
 

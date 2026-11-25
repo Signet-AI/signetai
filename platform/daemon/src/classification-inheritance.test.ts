@@ -14,6 +14,22 @@ function assigned() {
 	);
 	return db;
 }
+test("A14 memory hash and idempotency keys stay unique within a compartment", () => {
+	const db = classificationFixture();
+	writeMigration(db);
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_unique','Unique')");
+	const compartment = shards.compartmentFor(db, ["cls_unique"]);
+	db.prepare(
+		"UPDATE memories SET content_hash='same-content-key',idempotency_key='same-write-key',compartment_id=? WHERE id='m'",
+	).run(compartment);
+	const insert = db.prepare(
+		"INSERT INTO memories(id,content,content_hash,idempotency_key,agent_id,created_at,updated_at) VALUES(?,'identical','same-content-key','same-write-key','default','now','now')",
+	);
+	insert.run("public-key");
+	expect(() => insert.run("same-compartment-retry")).toThrow("UNIQUE");
+	db.close();
+});
+
 test("A14 embedding hashes coexist for separate classified evidence parents", () => {
 	const db = classificationFixture();
 	writeMigration(db);

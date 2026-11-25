@@ -641,6 +641,55 @@ memory:
 		expect(result.aggregate?.message).toContain("synthesis");
 	});
 
+	it("A14 aggregate writes ignore hidden key and hash matches in another compartment", async () => {
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('aggregate-user','aggregate-user','Aggregate User','member');INSERT INTO classifications(id,name) VALUES('cls_aggregate_hidden','Hidden aggregate')",
+			),
+		);
+		for (const sameCompartment of [false]) {
+			const key = sameCompartment ? "same" : "different";
+			const params: RecallParams = {
+				query: `aggregate hidden ${key}`,
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+				sessionKey: `aggregate-${key}`,
+			};
+			const deps = {
+				author: { userId: "aggregate-user", credential: "session:aggregate-user" },
+				router: new StaticRouter(`Durable aggregate evidence for ${key} compartment.`),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				idFactory: () => `hidden-aggregate-${key}`,
+				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+			};
+			await aggregateRecall(params, loadMemoryConfig(dir), deps);
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("INSERT OR IGNORE INTO compartments(key) VALUES('cls_aggregate_hidden')").run();
+				db.prepare(
+					"INSERT OR IGNORE INTO compartment_members SELECT id,'cls_aggregate_hidden' FROM compartments WHERE key='cls_aggregate_hidden'",
+				).run();
+				db.prepare(
+					"UPDATE memories SET compartment_id=(SELECT id FROM compartments WHERE key='cls_aggregate_hidden') WHERE id=?",
+				).run(`hidden-aggregate-${key}`);
+				if (sameCompartment)
+					db.prepare(
+						"INSERT INTO classification_assignments VALUES('session',?,'agent-a','cls_aggregate_hidden','aggregate-user','now')",
+					).run(params.sessionKey);
+			});
+			const fresh = await aggregateRecall(params, loadMemoryConfig(dir), {
+				...deps,
+				router: new StaticRouter(`Durable aggregate evidence for ${key} compartment.`),
+				idFactory: () => `fresh-aggregate-${key}`,
+			});
+			expect(fresh.aggregate).toMatchObject({ saved: true, deduped: false, savedMemoryId: `fresh-aggregate-${key}` });
+			expect(fresh.results[0]?.id).toBe(`fresh-aggregate-${key}`);
+		}
+	});
+
+	it.todo("A14 unreadable matches in the destination compartment need a unique-key policy");
+
 	it("dedupes repeated aggregate runs for the same evidence set", async () => {
 		const params: RecallParams = {
 			query: "what happened",

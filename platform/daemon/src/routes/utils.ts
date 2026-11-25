@@ -1,3 +1,4 @@
+import { resolveDaemonAgentId } from "../agent-id";
 import { createHash } from "node:crypto";
 import type { Context } from "hono";
 import {
@@ -285,7 +286,7 @@ export function shouldEnforceAuthScope(c: Context): boolean {
 export function resolveScopedAgentId(
 	c: Context,
 	requestedAgentId: string | undefined,
-	fallbackAgentId = "default",
+	fallbackAgentId = resolveDaemonAgentId(),
 ): { agentId: string; error?: string } {
 	const principal = c.get("principal");
 	if (c.get("organization") && principal) {

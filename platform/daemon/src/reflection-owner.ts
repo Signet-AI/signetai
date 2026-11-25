@@ -1,5 +1,6 @@
 import { compartmentFor } from "@signet/core";
-import { getDbOwner } from "./db-owner-runtime";
+import { getDbOwner, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { z } from "zod";
 import { ownerReadAll } from "./db-owner-sql";
 import type { ReflectionSourceContext } from "./pipeline/reflection-worker";
 import type { WriteAuthor } from "./auth/audit-owner";
@@ -173,26 +174,49 @@ export async function createDailyReflections(input: CreateDailyReflectionsInput)
 }
 
 export async function readReflectionSourceContext(agentId: string): Promise<ReflectionSourceContext> {
-	const owner = await getDbOwner();
-	const options = { operation: "reflection.context", deadlineMs: 5000, estimatedWorkUnits: 74 };
-	const memories = await ownerReadAll<{
-		id: string;
-		content: string;
-		type: string;
-		tags: string | null;
-		created_at: string;
-	}>(
-		owner,
-		"SELECT id,content,type,tags,created_at FROM memories WHERE agent_id=? AND is_deleted=0 ORDER BY created_at DESC LIMIT 50",
-		[agentId],
-		options,
-	);
-	const existing = await ownerReadAll<{ id: string; question: string | null; summary: string; created_at: string }>(
-		owner,
-		"SELECT id,question,summary,created_at FROM daily_reflections WHERE agent_id=? ORDER BY created_at DESC LIMIT 24",
-		[agentId],
-		options,
-	);
+	const options = { operation: "reflection.context", lane: "read" as const, deadlineMs: 5000, estimatedWorkUnits: 74 };
+	const memories = z
+		.array(
+			z.object({
+				id: z.string(),
+				content: z.string(),
+				type: z.string(),
+				tags: z.string().nullable(),
+				created_at: z.string(),
+			}),
+		)
+		.parse(
+			await dbOwnerQuery(
+				ownerStatement(
+					"SELECT id,content,type,tags,created_at FROM memories WHERE agent_id=? AND is_deleted=0 ORDER BY created_at DESC LIMIT 50",
+					[agentId],
+					"all",
+				),
+				options,
+			),
+		);
+	const existing = z
+		.array(
+			z.object({
+				id: z.string(),
+				question: z.string().nullable(),
+				summary: z
+					.string()
+					.nullable()
+					.transform((value) => value ?? ""),
+				created_at: z.string(),
+			}),
+		)
+		.parse(
+			await dbOwnerQuery(
+				ownerStatement(
+					"SELECT id,question,summary,created_at FROM daily_reflections WHERE agent_id=? ORDER BY created_at DESC LIMIT 24",
+					[agentId],
+					"all",
+				),
+				options,
+			),
+		);
 	return {
 		memories: memories.map((row) => ({
 			id: row.id,

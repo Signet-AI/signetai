@@ -46,6 +46,21 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("local write scope resolves the configured agent instead of literal default", async () => {
+		const { resolveScopedAgentId } = await import("../routes/utils");
+		const previous = process.env.SIGNET_AGENT_ID;
+		process.env.SIGNET_AGENT_ID = "import-health-agent";
+		try {
+			const local = new Hono();
+			local.post("/write-agent", (c) => c.json(resolveScopedAgentId(c, undefined)));
+			expect(await (await local.request("/write-agent", { method: "POST" })).json()).toEqual({
+				agentId: "import-health-agent",
+			});
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_AGENT_ID;
+			else process.env.SIGNET_AGENT_ID = previous;
+		}
+	});
 	test("A14 hidden hash and idempotency duplicates produce ordinary fresh writes", async () => {
 		const { registerMemoryRoutes } = await import("../routes/memory-routes");
 		registerMemoryRoutes(app, { fetchEmbedding: async () => null });

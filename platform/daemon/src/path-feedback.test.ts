@@ -15,19 +15,16 @@ function ensureDir(path: string): void {
 	mkdirSync(path, { recursive: true });
 }
 
-function setupDb(): Database {
-	const dbPath = join(TEST_DIR, "memory", "memories.db");
-	ensureDir(join(TEST_DIR, "memory"));
-	for (const file of readdirSync(join(TEST_DIR, "memory"))) {
-		if (file.startsWith("memories.db")) rmSync(join(join(TEST_DIR, "memory"), file), { force: true });
-	}
-
-	const db = new Database(dbPath);
-	db.exec("PRAGMA busy_timeout = 5000");
-	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
-	closeDbAccessor();
+async function setupDb(): Promise<Database> {
+	await closeDbAccessor();
+	const dbPath = join(TEST_DIR, "data.db");
 	initDbAccessor(dbPath);
-	return db;
+	const { dbOwnerQuery, ownerStatement } = await import("./db-owner-runtime");
+	await dbOwnerQuery(ownerStatement("SELECT 1 AS ready", [], "get"), {
+		operation: "test.feedback.ready",
+		lane: "read",
+	});
+	return new Database(dbPath);
 }
 
 function seedGraph(db: Database): void {
@@ -96,10 +93,10 @@ function seedSessionMemory(
 
 let db: Database;
 
-beforeEach(() => {
+beforeEach(async () => {
 	if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
 	ensureDir(TEST_DIR);
-	db = setupDb();
+	db = await setupDb();
 	seedGraph(db);
 });
 
@@ -111,7 +108,11 @@ afterEach(async () => {
 
 describe("recordPathFeedback", () => {
 	it("writes event/stats and propagates aspect + dependency updates", () => {
+		db.exec(
+			"INSERT INTO users(id,username,display_name,role) VALUES('feedback-user','feedback-user','Feedback User','member')",
+		);
 		const result = recordPathFeedback(getDbAccessor(), {
+			author: { userId: "feedback-user", credential: "session:feedback-user" },
 			sessionKey: "sess-a",
 			agentId: "default",
 			ratings: { "mem-a": 1 },
@@ -161,6 +162,9 @@ describe("recordPathFeedback", () => {
 			.prepare("SELECT operation, status, created_by, evidence FROM ontology_proposals WHERE id = ?")
 			.get(dep?.proposal_id) as { operation: string; status: string; created_by: string; evidence: string } | undefined;
 		expect(proposal).toMatchObject({ operation: "update_link", status: "applied", created_by: "path-feedback" });
+		expect(db.prepare("SELECT author_user_id FROM ontology_proposals WHERE id=?").get(dep?.proposal_id)).toEqual({
+			author_user_id: "feedback-user",
+		});
 		expect(proposal?.evidence).toContain('"memory_id":"mem-a"');
 
 		const hist = db
@@ -180,6 +184,7 @@ describe("recordPathFeedback", () => {
 
 	it("skips IDs that do not belong to the rated session", () => {
 		const result = recordPathFeedback(getDbAccessor(), {
+			author: { userId: null, credential: "local" },
 			sessionKey: "sess-a",
 			agentId: "default",
 			ratings: { ghost: 1 },
@@ -205,6 +210,7 @@ describe("recordPathFeedback", () => {
 		seedSessionMemory(db, "sess-shared", "mem-a", null, "agent-b");
 
 		const result = recordPathFeedback(getDbAccessor(), {
+			author: { userId: null, credential: "local" },
 			sessionKey: "sess-shared",
 			agentId: "agent-a",
 			ratings: { "mem-a": 1 },
@@ -230,6 +236,7 @@ describe("recordPathFeedback", () => {
 		).run(ts, ts);
 
 		const result = recordPathFeedback(getDbAccessor(), {
+			author: { userId: null, credential: "local" },
 			sessionKey: "sess-a",
 			agentId: "default",
 			ratings: { "mem-a": 1 },
@@ -255,6 +262,7 @@ describe("recordPathFeedback", () => {
 		for (const key of ["sess-co-1", "sess-co-2", "sess-co-3"]) {
 			seedSessionMemory(db, key, "mem-a");
 			recordPathFeedback(getDbAccessor(), {
+				author: { userId: null, credential: "local" },
 				sessionKey: key,
 				agentId: "default",
 				ratings: { "mem-a": 1 },

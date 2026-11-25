@@ -23,7 +23,7 @@ export interface ImportRouteDeps {
 export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 	app.use("/api/sources/import", async (c, next) => requirePermission("documents", authConfig)(c, next));
 	app.post("/api/sources/import", async (c) => {
-		const resolved = resolveScopedAgentId(c, undefined, resolveDaemonAgentId());
+		const resolved = resolveScopedAgentId(c, undefined);
 		if (resolved.error) return c.json({ error: resolved.error }, 403);
 		const contentLength = Number.parseInt(c.req.header("content-length") ?? "", 10);
 		if (Number.isFinite(contentLength) && contentLength > IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD) {

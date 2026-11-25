@@ -2921,6 +2921,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
 		try {
 			const result = recordPathFeedback(getDbAccessor(), {
+				author: c.get("author") ?? LOCAL_AUTHOR,
 				sessionKey,
 				agentId,
 				ratings: parsed,

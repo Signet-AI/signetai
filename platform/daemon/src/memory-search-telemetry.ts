@@ -2,6 +2,7 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { type DbAccessor, type WriteDb, prepareTypedStatement } from "./db-accessor";
 import { compartmentForWrite } from "@signet/core";
 import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
+import { recallResultEvidenceInTx, pruneTelemetryCitationsInTx } from "./db-helpers";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
 
@@ -228,51 +229,7 @@ function rowToItem(row: MemorySearchTelemetryRow): MemorySearchTelemetryItem {
 	};
 }
 
-export function recallResultEvidenceInTx(
-	db: WriteDb,
-	agentId: string,
-	item: { readonly id: string; readonly source?: string; readonly source_path?: string; readonly session_id?: string },
-): readonly CitationEvidence[] {
-	if (item.id.startsWith("ontology-claim:"))
-		return [{ kind: "attribute", id: item.id.slice("ontology-claim:".length) }];
-	if (item.id.startsWith("transcript:")) {
-		const id = item.session_id ?? item.id.slice("transcript:".length);
-		const rows = prepareTypedStatement<{ session_key: string }>(
-			db,
-			"SELECT session_key FROM session_transcripts WHERE agent_id=? AND (session_key=? OR session_id=? OR source_path=?)",
-		).all(agentId, id, id, item.source_path ?? id);
-		if (!rows.length) throw new Error("recall_evidence_not_in_agent");
-		return rows.map((row) => ({ kind: "transcript", id: row.session_key }));
-	}
-	if (item.id.startsWith("source-chunk:") || item.id.startsWith("native-artifact:")) {
-		const embeddingId = item.id.slice("source-chunk:".length);
-		const rowid = item.id.slice("native-artifact:".length);
-		const rows = prepareTypedStatement<{ source_path: string }>(
-			db,
-			"SELECT source_path FROM memory_artifacts WHERE agent_id=? AND (source_path=? OR rowid=? OR source_path IN (SELECT source_id FROM embeddings WHERE id=? AND agent_id=?))",
-		).all(
-			agentId,
-			item.source_path ?? null,
-			item.id.startsWith("native-artifact:") ? rowid : null,
-			embeddingId,
-			agentId,
-		);
-		const transcripts = item.id.startsWith("source-chunk:")
-			? prepareTypedStatement<{ session_key: string }>(
-					db,
-					"SELECT session_key FROM session_transcripts WHERE agent_id=? AND source_path IN (SELECT source_id FROM embeddings WHERE id=? AND agent_id=?)",
-				).all(agentId, embeddingId, agentId)
-			: [];
-		if (!rows.length && !transcripts.length) throw new Error("recall_evidence_not_in_agent");
-		return [
-			...rows.map((row): CitationEvidence => ({ kind: "artifact", id: row.source_path })),
-			...transcripts.map((row): CitationEvidence => ({ kind: "transcript", id: row.session_key })),
-		];
-	}
-	if (item.id.startsWith("constructed:") || item.source === "llm_summary" || item.id.startsWith("summary:"))
-		throw new Error("recall_result_evidence_required");
-	return [{ kind: "memory", id: item.id }];
-}
+export { recallResultEvidenceInTx } from "./db-helpers";
 
 export async function recordMemorySearchTelemetry(
 	db: DbAccessor,
@@ -326,9 +283,7 @@ export async function recordMemorySearchTelemetry(
 				compartment,
 			);
 			recordEvidenceCitationsInTx(w, { agentId: input.agentId, derivedKind: "telemetry", derivedId: id, evidence });
-			w.prepare(
-				"DELETE FROM evidence_citations WHERE derived_kind='telemetry' AND derived_id IN (SELECT id FROM memory_search_telemetry WHERE created_at < ?)",
-			).run(cutoff);
+			pruneTelemetryCitationsInTx(w, cutoff);
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});
 	} catch (err) {

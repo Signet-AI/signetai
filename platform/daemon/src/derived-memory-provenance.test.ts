@@ -199,3 +199,30 @@ test("reflection creation unions every evidence label and rolls back foreign evi
 	expect(db.prepare("SELECT count(*) n FROM daily_reflections WHERE id='denied'").get()).toEqual({ n: 0 });
 	db.close();
 });
+
+test("community repair copies inherit cited evidence and retain citation edges", async () => {
+	const { classificationFixture } = await import("./test-support/classification-fixture.test");
+	const { up } = await import("../../core/src/migrations/178-write-inheritance");
+	const { persistCommunities } = await import("./pipeline/community-detection");
+	const { UndirectedGraph } = await import("graphology");
+	const { compartmentFor } = await import("../../core/src/compartment-shards");
+	const db = classificationFixture();
+	up(db);
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_cluster','Cluster')");
+	const compartment = compartmentFor(db, ["cls_cluster"]);
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(compartment);
+	const graph = new UndirectedGraph();
+	graph.addNode("e", { name: "Private entity", mentions: 1 });
+	const groups = db.transaction(() => persistCommunities(db, "default", new Map([["e", 0]]), graph))();
+	expect(db.prepare("SELECT compartment_id FROM entity_communities WHERE id=?").get(groups[0]?.id)).toEqual({
+		compartment_id: compartment,
+	});
+	expect(
+		db
+			.prepare(
+				"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='community' AND derived_id=?",
+			)
+			.all(groups[0]?.id),
+	).toEqual([{ evidence_kind: "memory", evidence_id: "m" }]);
+	db.close();
+});
