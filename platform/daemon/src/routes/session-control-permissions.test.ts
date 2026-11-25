@@ -1307,6 +1307,37 @@ describe("session control permissions in team mode", () => {
 		expect(row).toEqual({ project: "proj-b", content: "User: other project" });
 	});
 
+	it("rejects a project-scoped session end when the stored transcript cannot be read", async () => {
+		await seed("sess-a", "User: scoped evidence");
+		const failedRead = spyOn(transcripts, "getStoredSessionTranscriptInfoStrictAsync").mockRejectedValueOnce(
+			new Error("transcript read failed"),
+		);
+		try {
+			const res = await hook(
+				teamApp(),
+				"session-end",
+				{
+					harness: "codex",
+					sessionKey: "sess-a",
+					agentId: "agent-a",
+					runtimePath: "plugin",
+					lastAssistantMessage: "unchecked reply",
+				},
+				bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } }),
+			);
+			expect(res.status).toBe(500);
+			expect(failedRead).toHaveBeenCalledTimes(1);
+		} finally {
+			failedRead.mockRestore();
+		}
+		const row = await readOne(
+			"SELECT project, content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			"sess-a",
+			"agent-a",
+		);
+		expect(row).toEqual({ project: "proj-a", content: "User: scoped evidence" });
+	});
+
 	it("requires a recorded project before a project-limited credential controls a claim-only session", async () => {
 		const projectB = bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } });
 		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });

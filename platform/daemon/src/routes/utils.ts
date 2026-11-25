@@ -14,7 +14,7 @@ import {
 } from "../embedding-fetch";
 import { logger } from "../logger";
 import { getActiveSessions, hasSession, normalizeSessionKey } from "../session-tracker";
-import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
+import { getStoredSessionTranscriptInfoStrictAsync } from "../session-transcripts";
 import type { EmbeddingConfig } from "../memory-config";
 import type { NativeEmbeddingRuntimeOptions } from "../native-embedding";
 import {
@@ -330,7 +330,7 @@ export async function validateSessionControl(
 	if (bindingError) return bindingError;
 	const key = parseOptionalString(sessionKey);
 	if (!key || !shouldEnforceAuthScope(c) || !c.get("auth")?.claims?.scope.project) return undefined;
-	const stored = await getStoredSessionTranscriptInfoAsync(key, agentId);
+	const stored = await getStoredSessionTranscriptInfoStrictAsync(key, agentId);
 	if (stored) return stored.project ? resolveScopedProject(c, stored.project).error : undefined;
 	if (getAgentPresenceForSession(key) || !hasSession(key, agentId)) return undefined;
 	return `${options.context} project cannot be verified`;
