@@ -97,9 +97,31 @@ describe("session-checkpoints", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	it("writes classified session checkpoints without losing agent or author", async () => {
+		await dbAcc.withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO classifications(id,name) VALUES('cls_session','Session')").run();
+			db.prepare(
+				"INSERT INTO classification_assignments VALUES('session','test-session','default','cls_session','carol','now')",
+			).run();
+		});
+		const params = {
+			...makeParams(),
+			sessionKey: "test-session",
+			agentId: "default",
+			author: { userId: "alice", credential: "session:alice" },
+		};
+		await writeCheckpointAsync(dbAcc, params, 50);
+		const row = await dbAcc.withReadDbAsync((db) =>
+			db.prepare("SELECT agent_id,compartment_id,author_user_id FROM session_checkpoints").get(),
+		);
+		expect(row).toEqual({ agent_id: "default", compartment_id: expect.any(Number), author_user_id: "alice" });
+	});
+
 	function makeParams(overrides?: Partial<WriteCheckpointParams>): WriteCheckpointParams {
 		return {
 			sessionKey: "sess-1",
+			agentId: "default",
+			author: { userId: null, credential: "system" },
 			harness: "claude-code",
 			project: "/tmp/project",
 			projectNormalized: "/tmp/project",
@@ -484,6 +506,8 @@ describe("debounce merge", () => {
 
 	test("queuing two writes for same session merges data", async () => {
 		const base: WriteCheckpointParams = {
+			agentId: "default",
+			author: { userId: null, credential: "system" },
 			sessionKey: "merge-test",
 			harness: "test",
 			project: "/tmp/p",

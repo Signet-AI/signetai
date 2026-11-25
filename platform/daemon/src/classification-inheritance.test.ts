@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
 import { classificationFixture } from "./test-support/classification-fixture.test";
-import { txIngestEnvelope } from "./transactions";
+import { txIngestEnvelope, txModifyMemory } from "./transactions";
 import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
 import { upsertMemoryArtifactInTx } from "./memory-lineage";
 import { writeSessionTranscriptRow, commitCompactionSummaryInTx } from "./session-transcripts";
@@ -13,6 +13,64 @@ function assigned() {
 	);
 	return db;
 }
+test("canonical memory ingestion inherits a session assignment before publication", () => {
+	const db = classificationFixture();
+	db.exec(
+		"INSERT INTO classifications(id,name) VALUES('cls_session','Session'); INSERT INTO classification_assignments VALUES('session','s','default','cls_session','carol','now')",
+	);
+	db.transaction(() =>
+		txIngestEnvelope(db, {
+			author: { userId: "alice", credential: "session:alice" },
+			id: "session-memory",
+			content: "sessionsecret",
+			contentHash: "sessionhash",
+			who: "alice",
+			why: null,
+			project: null,
+			importance: 0.5,
+			type: "fact",
+			tags: null,
+			pinned: 0,
+			sourceType: "user",
+			sourceId: null,
+			sessionKey: "s",
+			agentId: "default",
+			createdAt: "now",
+		}),
+	)();
+	expect(db.prepare("SELECT compartment_id,author_user_id FROM memories WHERE id='session-memory'").get()).toEqual({
+		compartment_id: expect.any(Number),
+		author_user_id: "alice",
+	});
+	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'sessionsecret'").get()).toEqual({
+		n: 0,
+	});
+	db.close();
+});
+
+test("modifying a classified memory labels the replacement embedding before its guard", () => {
+	const db = assigned();
+	const compartment = shards.compartmentForWrite(db, { agentId: "default", memoryId: "m" });
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(compartment);
+	expect(
+		db.transaction(() =>
+			txModifyMemory(db, {
+				memoryId: "m",
+				patch: { content: "updated secret", contentHash: "updated-hash" },
+				reason: "edit",
+				changedBy: "alice",
+				changedAt: "now",
+				embeddingVector: [1, 0, 0],
+			}),
+		)(),
+	).toMatchObject({ status: "updated" });
+	expect(db.prepare("SELECT agent_id,compartment_id FROM embeddings WHERE source_id='m'").get()).toEqual({
+		agent_id: "default",
+		compartment_id: compartment,
+	});
+	db.close();
+});
+
 test("pending assignment guards reject evidence and child writes that forget compartments", () => {
 	const db = assigned();
 	expect(() =>
@@ -82,6 +140,13 @@ test("compaction summaries inherit their session classification on insert and re
 	});
 	expect(
 		db.prepare("SELECT count(*) n FROM memories WHERE id LIKE 'summary-%' AND compartment_id IS NOT NULL").get(),
+	).toEqual({ n: 2 });
+	expect(
+		db
+			.prepare(
+				"SELECT count(*) n FROM evidence_citations WHERE derived_kind='memory' AND derived_id LIKE 'summary-%' AND evidence_kind='summary'",
+			)
+			.get(),
 	).toEqual({ n: 2 });
 	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'summary'").get()).toEqual({ n: 0 });
 	db.close();

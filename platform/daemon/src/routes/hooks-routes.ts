@@ -675,7 +675,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			}
 			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
 			try {
-				result = await handleUserPromptSubmit(body, undefined, {
+				result = await handleUserPromptSubmit({ ...body, author: c.get("author") }, undefined, {
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
 				});
 			} finally {
@@ -1012,7 +1012,7 @@ function registerSessionEnd(app: Hono): void {
 			}
 
 			try {
-				const result = await handleSessionEnd(body);
+				const result = await handleSessionEnd({ ...body, author: c.get("author") });
 				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken = (): boolean =>
 					sessionKey !== undefined &&
@@ -1181,7 +1181,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			renewSession(body.sessionKey, agentId);
 
-			const result = await handleCheckpointExtract(body);
+			const result = await handleCheckpointExtract({ ...body, author: c.get("author") });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Checkpoint extract hook failed", e as Error);
@@ -1440,7 +1440,7 @@ function registerPreCompaction(app: Hono): void {
 				return c.json({ instructions: "", bypassed: true });
 			}
 
-			const result = handlePreCompaction(body);
+			const result = handlePreCompaction({ ...body, author: c.get("author") });
 			if (transcriptPath) {
 				setImmediate(() =>
 					recordSkillsFromTranscript({

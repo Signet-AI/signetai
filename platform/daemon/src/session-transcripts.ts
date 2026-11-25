@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { compartmentForWrite } from "@signet/core";
 import { dirname, join } from "node:path";
-import { attempt, resolveWorkspaceLayout } from "@signet/core";
+import { attempt, resolveWorkspaceLayout, redactCredentials } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
+import { evidenceCompartmentInTx, recordEvidenceCitationsInTx, type CitationEvidence } from "./db-helpers";
+import type { WriteCheckpointParams } from "./session-checkpoints";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { type DbAccessor, getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
 import {
@@ -150,6 +152,38 @@ export interface CompactionSummaryInput {
 	readonly capturedAt?: string;
 }
 
+export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointParams, maxPerSession: number): void {
+	const compartment = compartmentForWrite(db, { agentId: params.agentId, sessionKey: params.sessionKey });
+	const now = new Date().toISOString();
+	const json = (values: readonly string[] | undefined) => (values?.length ? JSON.stringify(values) : null);
+	db.prepare(`INSERT INTO session_checkpoints
+		(id,session_key,harness,project,project_normalized,trigger,digest,prompt_count,memory_queries,recent_remembers,focal_entity_ids,focal_entity_names,active_aspect_ids,surfaced_constraint_count,traversal_memory_count,created_at,agent_id,compartment_id,author_user_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+		crypto.randomUUID(),
+		params.sessionKey,
+		params.harness,
+		params.project ?? null,
+		params.projectNormalized ?? null,
+		params.trigger,
+		redactCredentials(params.digest),
+		params.promptCount,
+		json(params.memoryQueries),
+		json(params.recentRemembers.map((text) => redactCredentials(text))),
+		json(params.focalEntityIds),
+		json(params.focalEntityNames),
+		json(params.activeAspectIds),
+		params.surfacedConstraintCount ?? null,
+		params.traversalMemoryCount ?? null,
+		now,
+		params.agentId,
+		compartment,
+		params.author.userId,
+	);
+	db.prepare(`DELETE FROM session_checkpoints WHERE id IN (
+		SELECT id FROM session_checkpoints WHERE session_key=? AND agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET ?
+	)`).run(params.sessionKey, params.agentId, maxPerSession);
+}
+
 export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummaryInput): boolean {
 	if (
 		!admitSessionTranscriptInDb(db, {
@@ -159,10 +193,19 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		})
 	)
 		return false;
+	const evidence: CitationEvidence[] =
+		input.sessionKey &&
+		prepareTypedStatement<{ session_key: string }>(
+			db,
+			"SELECT session_key FROM session_transcripts WHERE agent_id=? AND session_key=?",
+		).get(input.agentId, input.sessionKey)
+			? [{ kind: "transcript", id: input.sessionKey }]
+			: [];
 	const compartmentId = compartmentForWrite(db, {
 		agentId: input.agentId,
 		sessionKey: input.sessionKey,
 		memoryId: input.summaryId,
+		parentCompartment: evidenceCompartmentInTx(db, input.agentId, evidence),
 	});
 	db.prepare(
 		`INSERT INTO memories (
@@ -218,6 +261,12 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		compartmentId,
 		input.author.userId,
 	);
+	recordEvidenceCitationsInTx(db, {
+		agentId: input.agentId,
+		derivedKind: "memory",
+		derivedId: input.summaryId,
+		evidence: [...evidence, { kind: "summary", id: nodeId }],
+	});
 	upsertThreadHead(db, {
 		agentId: input.agentId,
 		nodeId,

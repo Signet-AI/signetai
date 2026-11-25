@@ -337,8 +337,12 @@ export function runDbOwnerWorker(): void {
 		return value;
 	}
 
-	function executeStatement(statement: DbOwnerStatement, context?: JobExecutionContext): unknown {
-		const params = (statement.params ?? []).map((value) => bindParameter(value));
+	function executeStatement(
+		statement: DbOwnerStatement,
+		context?: JobExecutionContext,
+		writeTransaction = false,
+	): unknown {
+		const params = (statement.params ?? []).map((value) => bindParameter(value, writeTransaction));
 		const prepared = db.prepare(statement.sql);
 		if (statement.result === "all" && statement.readonly !== false)
 			return enforceResultLimit(statement, prepared.all(...params));
@@ -388,7 +392,7 @@ export function runDbOwnerWorker(): void {
 		return withBusyRetry(() => {
 			const results: unknown[] = [];
 			for (const statement of statements) {
-				const result = executeStatement({ ...statement, transactional: false }, context);
+				const result = executeStatement({ ...statement, transactional: false }, context, true);
 				results.push(result);
 				if (
 					statement?.requireChanges === true &&

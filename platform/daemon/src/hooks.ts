@@ -242,6 +242,8 @@ function identityBudgetFor(path: string): number {
 	return IDENTITY_BUDGET_BY_FILE[filename] ?? 4_000;
 }
 
+import { LOCAL_AUTHOR } from "./auth/audit-owner";
+
 export type { HooksConfig };
 
 export interface SessionStartRequest {
@@ -288,6 +290,7 @@ export interface SessionStartResponse {
 }
 
 export interface PreCompactionRequest {
+	author?: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	sessionContext?: string;
 	messageCount?: number;
@@ -302,6 +305,7 @@ export interface PreCompactionResponse {
 }
 
 export interface UserPromptSubmitRequest {
+	author?: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	project?: string;
 	agentId?: string;
@@ -362,6 +366,7 @@ export function formatPromptClockContext(date: Date, requestedTimeZone?: string)
 }
 
 export interface SessionEndRequest {
+	author?: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	transcriptPath?: string;
 	transcript?: string;
@@ -400,6 +405,7 @@ export interface StopResponse {
 }
 
 export interface CheckpointExtractRequest {
+	author?: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	sessionKey: string;
 	agentId?: string;
@@ -1356,6 +1362,8 @@ ${guidelines}
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
+					agentId: resolveAgentId(req),
+					author: req.author ?? LOCAL_AUTHOR,
 					harness: snap.harness,
 					project: snap.project,
 					projectNormalized: snap.projectNormalized,
@@ -1578,6 +1586,8 @@ export async function handleUserPromptSubmit(
 				deps.queueCheckpointWrite(
 					{
 						sessionKey: snap.sessionKey,
+						agentId: resolveAgentId(req),
+						author: req.author ?? LOCAL_AUTHOR,
 						harness: snap.harness,
 						project: snap.project,
 						projectNormalized: snap.projectNormalized,
@@ -2090,6 +2100,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
+					agentId: resolveAgentId(req),
+					author: req.author ?? LOCAL_AUTHOR,
 					harness: snap.harness,
 					project: snap.project,
 					projectNormalized: snap.projectNormalized,
@@ -2349,6 +2361,8 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
+					agentId: resolveAgentId(req),
+					author: req.author ?? LOCAL_AUTHOR,
 					harness: snap.harness,
 					project: snap.project,
 					projectNormalized: snap.projectNormalized,

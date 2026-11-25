@@ -116,6 +116,33 @@ describe("organization credential boundary", () => {
 			await organizationQuery(statement("SELECT author_user_id FROM memories WHERE id='review-summary'", [], "get")),
 		).toEqual({ author_user_id: userId });
 	});
+	test("classified hook speaker binding inherits before the empty transcript insert", async () => {
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')"),
+			statement("INSERT INTO classification_assignments VALUES('agent',?,?,'cls_hr',?,'now')", [
+				agentId,
+				agentId,
+				userId,
+			]),
+		]);
+		app.post("/api/hooks/session-start", (c) => c.json({ ok: true }));
+		const response = await app.request("/api/hooks/session-start", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ sessionKey: "classified-bound", harness: "test" }),
+		});
+		expect(response.status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT speaker_user_id,compartment_id FROM session_transcripts WHERE session_key='classified-bound'",
+					[],
+					"get",
+				),
+			),
+		).toEqual({ speaker_user_id: userId, compartment_id: expect.any(Number) });
+	});
 	test("R2 compaction binds the session speaker before the handler", async () => {
 		app.post("/api/hooks/compaction-complete", (c) => c.json({ ok: true }));
 		const response = await app.request("/api/hooks/compaction-complete", {

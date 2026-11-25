@@ -663,8 +663,16 @@ export async function bindHookSpeaker(
 	await organizationWrite([
 		{
 			...statement(
-				"INSERT INTO session_transcripts (agent_id,session_key,content,harness,project,created_at,speaker_user_id) VALUES (?,?,'',?,?,?,?) ON CONFLICT(agent_id,session_key) DO UPDATE SET speaker_user_id = excluded.speaker_user_id WHERE session_transcripts.speaker_user_id IS NULL OR session_transcripts.speaker_user_id = excluded.speaker_user_id",
-				[agentId, sessionKey, harness, project, new Date().toISOString(), p.userId],
+				"INSERT INTO session_transcripts (agent_id,session_key,content,harness,project,created_at,speaker_user_id,compartment_id) VALUES (?,?,'',?,?,?,?,?) ON CONFLICT(agent_id,session_key) DO UPDATE SET speaker_user_id = excluded.speaker_user_id,compartment_id=excluded.compartment_id WHERE session_transcripts.speaker_user_id IS NULL OR session_transcripts.speaker_user_id = excluded.speaker_user_id",
+				[
+					agentId,
+					sessionKey,
+					harness,
+					project,
+					new Date().toISOString(),
+					p.userId,
+					{ type: "compartment", scope: { agentId, sessionKey } },
+				],
 			),
 			requireChanges: true,
 		},
