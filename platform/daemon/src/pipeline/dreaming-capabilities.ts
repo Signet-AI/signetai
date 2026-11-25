@@ -315,6 +315,25 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 }
 
 const DELIVERY_QUEUE_SCAN_LIMIT = 51;
+const WAITING_QUEUE_STRIDE = 3;
+
+function interleaveWaiting(
+	waiting: readonly EpisodicSourceRecord[],
+	newest: readonly EpisodicSourceRecord[],
+): EpisodicSourceRecord[] {
+	const order = new Map<string, EpisodicSourceRecord>();
+	const add = (source: EpisodicSourceRecord | undefined): void => {
+		if (source === undefined) return;
+		const ref = `${source.kind}:${source.id}`;
+		if (!order.has(ref)) order.set(ref, source);
+	};
+	newest.forEach((source, index) => {
+		if (index % WAITING_QUEUE_STRIDE === 0) add(waiting[index / WAITING_QUEUE_STRIDE]);
+		add(source);
+	});
+	waiting.forEach(add);
+	return [...order.values()];
+}
 
 function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
@@ -331,14 +350,21 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	};
 	const stalled = (source: EpisodicSourceRecord): boolean =>
 		cursorFor(source).stalledPasses >= DREAMING_EVIDENCE_STALL_PASSES;
-	const scanned = searchEpisodicSources(db, {
+	const queue = {
 		agentId: scopeId,
 		query: "",
 		kind: input.kind,
 		excludeDelivered: true,
 		excludeSourceRefs: input.passId ? passFullyServedSourceRefs(db, input.passId, scopeId) : [],
-		limit: DELIVERY_QUEUE_SCAN_LIMIT,
-	});
+	};
+	const scanned = interleaveWaiting(
+		searchEpisodicSources(db, {
+			...queue,
+			limit: Math.ceil(DELIVERY_QUEUE_SCAN_LIMIT / WAITING_QUEUE_STRIDE),
+			order: "oldest-arrival",
+		}),
+		searchEpisodicSources(db, { ...queue, limit: DELIVERY_QUEUE_SCAN_LIMIT, order: "newest-arrival" }),
+	);
 	const fresh = [...scanned.filter((source) => !stalled(source)), ...scanned.filter(stalled)];
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
 		const items: Record<string, unknown>[] = [];

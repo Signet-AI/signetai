@@ -363,17 +363,7 @@ function seedArtifact(
 		 (agent_id, source_path, source_sha256, source_kind, session_id, session_key, session_token,
 		  captured_at, content, updated_at, is_deleted)
 		 VALUES (?, ?, ?, 'source_obsidian_markdown', ?, ?, ?, ?, ?, ?, 0)`,
-	).run(
-		agentId,
-		path,
-		revision,
-		`session-${path}`,
-		`session-${path}`,
-		`token-${path}`,
-		capturedAt,
-		content,
-		arrivedAt,
-	);
+	).run(agentId, path, revision, `session-${path}`, `session-${path}`, `token-${path}`, capturedAt, content, arrivedAt);
 }
 
 function seedSummary(db: Database, id: string, content: string, tokens: number, agentId = AGENT): void {
@@ -1621,8 +1611,9 @@ describe("Dreaming", () => {
 		}
 
 		const page = searchDreamingEvidenceInDb(db as unknown as ReadDb, { agentId: AGENT, limit: 4 });
+		const refs = (page.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef);
 
-		expect(page.items?.map((item) => Reflect.get(item, "sourceRef")).sort()).toEqual([
+		expect(refs.sort()).toEqual([
 			"artifact:Clippings/clipping-0.md",
 			"artifact:Clippings/clipping-1.md",
 			"artifact:Clippings/clipping-2.md",
