@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stopProjectionWorkers } from "./projection-worker-client";
 import type { Server } from "node:net";
 import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { startClassificationRecovery } from "./classifications";
@@ -2191,6 +2192,7 @@ async function cleanup() {
 		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
+	await stopProjectionWorkers();
 	await stopPiAgentWorkers(true);
 	stopResourceMonitors();
 	logFdSnapshot("cleanup-start");

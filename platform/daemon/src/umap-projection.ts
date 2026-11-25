@@ -1,3 +1,4 @@
+import { runProjectionWorker } from "./projection-worker-client";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
@@ -575,7 +576,7 @@ export function gatherProjectionRows(db: ReadDb, query: ProjectionQuery): Omit<P
 	}));
 	return { ...loaded, rows };
 }
-const scopedProjectionCache = new Map<string, { readonly expiresAt: number; readonly value: ProjectionQueryResult }>();
+const scopedProjectionCache = new Map<string, { readonly expiresAt: number; readonly value: ProjectionResult }>();
 export async function projectVisibleMemories(
 	scope: ReadScope,
 	nComponents: 2 | 3,
@@ -626,37 +627,22 @@ export async function projectVisibleMemories(
 	if (cached && cached.expiresAt > Date.now()) {
 		scopedProjectionCache.delete(key);
 		scopedProjectionCache.set(key, cached);
-		return cached.value;
+		return { result: cached.value, total, count: rows.length, limit, offset, hasMore: offset + rows.length < total };
 	}
-	const decoded = rows.map(({ vectorHex, ...row }) => ({ ...row, vector: Buffer.from(vectorHex, "hex") }));
-	let result: ProjectionResult;
-	if (decoded.length < 3) result = computeProjectionFromRows(decoded, nComponents);
-	else {
-		let seed = 42;
-		const random = () => {
-			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-			return seed / 4294967296;
-		};
-		const umap = new UMAP({
-			nComponents,
-			nNeighbors: Math.min(15, Math.max(2, decoded.length - 1)),
-			minDist: 0.1,
-			spread: 1,
-			random,
-		});
-		const coordinates = await umap.fitAsync(
-			decoded.map((row) => blobToVector(row.vector, row.dimensions)),
-			() => !signal?.aborted,
-		);
-		signal?.throwIfAborted();
-		result = finishProjection(decoded, coordinates, nComponents);
-	}
+	const result = await runProjectionWorker(rows, nComponents, signal);
 	const value = { result, total, count: rows.length, limit, offset, hasMore: offset + rows.length < total };
-	scopedProjectionCache.set(key, { expiresAt: Date.now() + 30000, value });
+	scopedProjectionCache.set(key, { expiresAt: Date.now() + 30000, value: result });
 	while (scopedProjectionCache.size > 16) {
 		const oldest = scopedProjectionCache.keys().next().value;
 		if (oldest === undefined) break;
 		scopedProjectionCache.delete(oldest);
 	}
 	return value;
+}
+
+export function computeProjectionInput(rows: readonly ProjectionInputRow[], dimensions: 2 | 3): ProjectionResult {
+	return computeProjectionFromRows(
+		rows.map(({ vectorHex, ...row }) => ({ ...row, vector: Buffer.from(vectorHex, "hex") })),
+		dimensions,
+	);
 }
