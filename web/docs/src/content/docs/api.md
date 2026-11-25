@@ -59,7 +59,11 @@ A `202` without waiting reports acceptance, not completion. Large transitions
 commit bounded batches and yield between them, moving each evidence row and
 its directly derived copies atomically. A failed batch rolls back its moves and
 cursor, not earlier batches. Pending and running jobs resume after restart;
-only one classification job runs per agent at a time. Preview requires acting
+only one classification job runs per agent at a time. Five consecutive batch
+failures fail the job with a recorded error and audit event; queued jobs can
+then proceed. Applying hides matching content immediately, although search
+ranking statistics remain transitional until the batches finish. An applied
+restriction survives a failed job until retry or removal. Preview requires acting
 authority for the target agent, even when the caller may read its content.
 
 Audience members receive only assignments whose content is readable under their

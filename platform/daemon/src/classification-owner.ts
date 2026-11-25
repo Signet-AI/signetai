@@ -13,7 +13,7 @@ import type {
 	ClassificationPrincipal,
 } from "./classifications";
 import { z } from "zod";
-import { readScopeSql, type AudienceSubject, type ReadScope } from "./read-scope";
+import { inFlightClassificationSql, readScopeSql, type AudienceSubject, type ReadScope } from "./read-scope";
 
 type Row = Record<string, unknown>;
 interface ContentRow {
@@ -110,9 +110,10 @@ function audit(
 	target: ClassificationTarget | null,
 	classification: string,
 	detail: unknown,
+	outcome: "ok" | "failed" = "ok",
 ): void {
 	db.prepare(
-		`INSERT INTO audit_events(id,at,actor_user_id,actor_credential,action,target_kind,target_id,agent_id,outcome,detail_json) VALUES (?,?,?,?,?,?,?,?, 'ok',?)`,
+		`INSERT INTO audit_events(id,at,actor_user_id,actor_credential,action,target_kind,target_id,agent_id,outcome,detail_json) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 	).run(
 		id("aud"),
 		new Date().toISOString(),
@@ -122,6 +123,7 @@ function audit(
 		target?.kind ?? "classification",
 		target?.id ?? classification,
 		target?.agentId ?? null,
+		outcome,
 		JSON.stringify(detail),
 	);
 }
@@ -440,12 +442,13 @@ function authorize(
 	if (!actor.compliance && !actor.local && target.kind !== "agent") {
 		const scope: ReadScope = {
 			reach: { kind: "all" },
-			compartments: readable(db, actor),
+			...visibility(db, actor),
 			projects: actor.allowedProjects,
 		};
 		if (
 			!relations.some(([table, key]) => {
 				const clause = readScopeSql("r", scope, {
+					...scopeColumns(db, table),
 					visibility: tableInfo(db, table)?.columns.has("visibility") ? "visibility" : null,
 				});
 				return (
@@ -739,12 +742,34 @@ function batch(
 	}
 	return { rows, cursor: { ...cursor, table, rowid }, done: table >= COMPARTMENT_TABLES.length };
 }
+function scopeColumns(db: MigrationDb, table: string) {
+	const columns = tableInfo(db, table)?.columns;
+	return {
+		memory:
+			table === "memories"
+				? "id"
+				: columns?.has("memory_id")
+					? "memory_id"
+					: table.startsWith("embeddings")
+						? "source_id"
+						: null,
+		session: columns?.has("session_key")
+			? "session_key"
+			: columns?.has("session_id")
+				? "session_id"
+				: table === "memories"
+					? "source_id"
+					: null,
+		source: columns?.has("source_id") ? "source_id" : null,
+	};
+}
 function visibleCount(db: MigrationDb, rows: readonly ContentRow[], scope: ReadScope): number {
 	let count = 0;
 	for (const table of new Set(rows.map((r) => r.table))) {
 		const info = tableInfo(db, table);
 		if (!info?.columns.has("agent_id") || (scope.projects !== null && !info.columns.has("project"))) continue;
 		const clause = readScopeSql("r", scope, {
+			...scopeColumns(db, table),
 			visibility: info.columns.has("visibility") ? "visibility" : null,
 			checkpoint: table === "session_checkpoints",
 		});
@@ -872,14 +897,56 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 		return { status: page.done ? "complete" : "running", updated };
 	});
 }
+function visibility(db: MigrationDb, subject: AudienceSubject) {
+	if (subject.local) return { compartments: "all" as const };
+	if (!subject.userId) throw new Error("unauthorized");
+	const pending = db
+		.prepare(`SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} LIMIT 1`)
+		.get(subject.userId, subject.userId);
+	return { compartments: readable(db, subject), ...(pending ? { inFlightUserId: subject.userId } : {}) };
+}
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
+	if (request.op === "visibility") return visibility(db, request.subject);
 	if (request.op === "readable") return request.subject.local ? "all" : readable(db, request.subject);
-	if (request.op === "record-error") {
-		db.prepare(
-			"UPDATE org_jobs SET error=? WHERE id=? AND kind IN ('classify','unclassify') AND status IN ('pending','running')",
-		).run(request.error.slice(0, 1000), request.jobId);
-		return { ok: true };
-	}
+	if (request.op === "record-error")
+		return transaction(db, () => {
+			const job = db
+				.prepare(
+					"SELECT status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify')",
+				)
+				.get(request.jobId);
+			if (!job) throw new Error("not_found");
+			if (job.status !== "running") {
+				if (job.status === "pending")
+					db.prepare("UPDATE org_jobs SET error=? WHERE id=?").run(request.error.slice(0, 1000), request.jobId);
+				return { status: job.status, failures: 0 };
+			}
+			const progress = cursorSchema
+				.extend({ failures: z.number().int().nonnegative().default(0) })
+				.parse(JSON.parse(String(job.progress_json)));
+			progress.failures++;
+			const failed = progress.failures >= 5;
+			db.prepare("UPDATE org_jobs SET status=?,progress_json=?,error=?,finished_at=? WHERE id=?").run(
+				failed ? "failed" : "running",
+				JSON.stringify(progress),
+				request.error.slice(0, 1000),
+				failed ? new Date().toISOString() : null,
+				request.jobId,
+			);
+			if (failed) {
+				const params = enqueuedSchema.parse(JSON.parse(String(job.params_json)));
+				audit(
+					db,
+					params.actor,
+					"classification.failed",
+					params.target,
+					params.id,
+					{ jobId: request.jobId, error: request.error.slice(0, 1000), failures: progress.failures },
+					"failed",
+				);
+			}
+			return { status: failed ? "failed" : "running", failures: progress.failures };
+		});
 	if (request.op === "recover") {
 		const jobs = db
 			.prepare(
@@ -967,9 +1034,11 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 				["session", "session_transcripts", "session_key"],
 				["source", "memory_artifacts", "source_id"],
 				["agent", "memories", "agent_id"],
-			]) {
-				if (!kind || !table || !key) continue;
-				const clause = readScopeSql("r", itemScope, { visibility: table === "memories" ? "visibility" : null });
+			] as const) {
+				const clause = readScopeSql("r", itemScope, {
+					...scopeColumns(db, table),
+					visibility: table === "memories" ? "visibility" : null,
+				});
 				checks.push(
 					`(a.target_kind='${kind}' AND EXISTS(SELECT 1 FROM ${table} r WHERE r.${key}=a.target_id AND r.agent_id=a.agent_id ${clause.sql}))`,
 				);

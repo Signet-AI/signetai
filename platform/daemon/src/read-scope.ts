@@ -1,3 +1,10 @@
+import { z } from "zod";
+export const readVisibilitySchema = z.object({
+	compartments: z.union([z.literal("all"), z.array(z.number().int().positive())]),
+	inFlightUserId: z.string().min(1).optional(),
+});
+export type ReadVisibility = z.infer<typeof readVisibilitySchema>;
+
 export interface AudienceSubject {
 	readonly userId: string | null;
 	readonly groupIds: readonly string[];
@@ -10,6 +17,7 @@ export type AgentReach =
 	| { readonly kind: "group"; readonly agentId: string; readonly group: string };
 export interface ReadScope {
 	readonly reach: AgentReach;
+	readonly inFlightUserId?: string;
 	readonly compartments: "all" | readonly number[];
 	readonly projects: readonly string[] | null;
 }
@@ -17,10 +25,27 @@ function identifier(value: string): string {
 	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) throw new Error("Invalid SQL identifier");
 	return value;
 }
+function jobValue(alias: string, key: string): string {
+	return `json_extract(CASE WHEN json_valid(${alias}.params_json) THEN ${alias}.params_json ELSE '{}' END,'$.${key}')`;
+}
+export function inFlightClassificationSql(alias: string): string {
+	const j = identifier(alias),
+		classification = jobValue(j, "id");
+	return `${j}.kind='classify' AND ${j}.status IN ('pending','running','failed') AND (${j}.status!='failed' OR EXISTS(SELECT 1 FROM classification_assignments a WHERE a.agent_id=${jobValue(j, "target.agentId")} AND a.target_kind=${jobValue(j, "target.kind")} AND a.target_id=${jobValue(j, "target.id")} AND a.classification_id=${classification})) AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=${classification} AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))`;
+}
 export function readScopeSql(
 	alias: string,
 	scope: ReadScope,
-	cols?: { agent?: string; compartment?: string; project?: string; visibility?: string | null; checkpoint?: boolean },
+	cols?: {
+		agent?: string;
+		compartment?: string;
+		project?: string;
+		visibility?: string | null;
+		checkpoint?: boolean;
+		memory?: string | null;
+		session?: string | null;
+		source?: string | null;
+	},
 ): { sql: string; args: unknown[] } {
 	const prefix = alias ? `${identifier(alias)}.` : "";
 	const col = (name: string) => `${prefix}${identifier(name)}`;
@@ -67,6 +92,23 @@ export function readScopeSql(
 		clauses.push(scope.projects.length ? `${project} IN (${scope.projects.map(() => "?").join(",")})` : "0");
 		args.push(...scope.projects);
 	}
+	if (scope.inFlightUserId) {
+		const j = alias === "_signet_classification_job" ? "__signet_classification_job" : "_signet_classification_job";
+		const target = jobValue(j, "target.id"),
+			kind = jobValue(j, "target.kind"),
+			jobAgent = jobValue(j, "target.agentId");
+		const own = (column: string | null) => (column === null ? "NULL" : col(column));
+		const memory = own(cols?.memory === undefined ? (cols?.checkpoint ? null : "id") : cols.memory);
+		const session = own(cols?.session === undefined ? (cols?.checkpoint ? "session_key" : "source_id") : cols.session);
+		const source = own(cols?.source === undefined ? (cols?.checkpoint ? null : "source_id") : cols.source);
+		const matchesAgent = cols?.checkpoint
+			? `(${jobAgent}=${agent} OR (${agent} IS NULL AND ${jobAgent} IN (SELECT agent_id FROM session_transcripts WHERE session_key=${col("session_key")} UNION SELECT agent_id FROM session_claims WHERE session_key=${col("session_key")})))`
+			: `${jobAgent}=${agent}`;
+		clauses.push(
+			`NOT EXISTS(SELECT 1 FROM org_jobs ${j} WHERE ${inFlightClassificationSql(j)} AND ${matchesAgent} AND (${kind}='agent' OR (${kind}='memory' AND ${target}=${memory}) OR (${kind}='session' AND (${target}=${session} OR 'session:'||${target}=${session} OR ${target}='session:'||${session})) OR (${kind}='source' AND (${target}=${source} OR substr(${source},1,length(${target})+1)=${target}||':'))))`,
+		);
+		args.push(scope.inFlightUserId, scope.inFlightUserId);
+	}
 	return { sql: clauses.map((c) => ` AND ${c}`).join(""), args };
 }
 export async function readableCompartments(subject: AudienceSubject): Promise<"all" | readonly number[]> {
@@ -77,8 +119,12 @@ export async function readableCompartments(subject: AudienceSubject): Promise<"a
 export async function resolveReadScope(
 	input: { readonly reach: AgentReach; readonly projects: readonly string[] | null },
 	subject: AudienceSubject,
-	resolveCompartments: (subject: AudienceSubject) => Promise<"all" | readonly number[]> = readableCompartments,
+	resolveVisibility: (subject: AudienceSubject) => Promise<ReadVisibility> = async (subject) => {
+		if (subject.local) return { compartments: "all" };
+		const { classificationRequest } = await import("./classifications");
+		return readVisibilitySchema.parse(await classificationRequest({ op: "visibility", subject }));
+	},
 ): Promise<ReadScope> {
 	if (!subject.local && !subject.userId) throw new Error("unauthorized");
-	return { reach: input.reach, projects: input.projects, compartments: await resolveCompartments(subject) };
+	return { reach: input.reach, projects: input.projects, ...(await resolveVisibility(subject)) };
 }

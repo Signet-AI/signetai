@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { startClassificationRecovery } from "./classifications";
 import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
@@ -260,7 +261,7 @@ import {
 	sourceFailureClass,
 	trackSourceLifecycleWrite,
 } from "./source-lifecycle-telemetry";
-import { getStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
+import { observeStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
 import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
 import {
 	type TelemetryCollector,
@@ -2613,6 +2614,7 @@ async function main() {
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	if (!migrationIntegrityWritesBlocked) {
 		runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+		void startClassificationRecovery(dbOwnerClient);
 	}
 
 	const { extensionPath } = getVectorRuntimeStatus();
@@ -2715,7 +2717,7 @@ async function main() {
 			platform: process.platform,
 			uptimeMs: 0,
 		});
-		void getStartupRecoveryCompletion().then((recovery) => {
+		void observeStartupRecoveryCompletion((recovery) => {
 			if (recovery.recoveryPhase !== "complete") return;
 			for (let index = 0; index < Math.min(recovery.orphanedPassesSwept, 100); index++) {
 				recordDreamingPassTelemetry({

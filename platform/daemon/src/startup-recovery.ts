@@ -1,4 +1,4 @@
-import { classificationRequest, resumeClassificationJobs } from "./classifications";
+import { attemptAsync } from "@signet/core";
 import type { DatabaseIntegrityStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -406,10 +406,23 @@ export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
 	return Promise.resolve(lastCompletedRecovery ?? pendingReport());
 }
 
+export async function observeStartupRecoveryCompletion(
+	observer: (report: StartupRecoveryReport) => void,
+): Promise<void> {
+	await attemptAsync(async () => {
+		try {
+			observer(await getStartupRecoveryCompletion());
+		} catch (error) {
+			logger.warn("startup-recovery", "Startup recovery observer failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
+	});
+}
 async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerClient): Promise<StartupRecoveryReport> {
 	if (owner !== undefined) {
 		const report = await runOwnerStartupRecovery(owner);
-		await resumeClassificationJobs((request) => classificationRequest(request, owner));
 		return report;
 	}
 	const startedAt = Date.now();

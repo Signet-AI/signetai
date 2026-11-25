@@ -21,7 +21,7 @@ test("pending assignment guards reject evidence and child writes that forget com
 			)
 			.run(),
 	).toThrow("compartment_required");
-	expect(() => db.prepare("UPDATE memories SET content='forgot label' WHERE id='m'").run()).toThrow(
+	expect(() => db.prepare("UPDATE memories SET source_id='forgot label' WHERE id='m'").run()).toThrow(
 		"compartment_required",
 	);
 	expect(() =>
@@ -128,6 +128,28 @@ test("live transcripts inherit classified agents before their FTS triggers execu
 	expect(
 		db.prepare("SELECT count(*) n FROM session_transcripts_fts WHERE session_transcripts_fts MATCH 'secret'").get(),
 	).toEqual({ n: 0 });
+	db.close();
+});
+test("scope guards seek complete assignment keys instead of scanning an agent", () => {
+	const db = classificationFixture();
+	const plan = db.prepare("EXPLAIN UPDATE memories SET source_id='other' WHERE id='m'").all();
+	expect(plan.some((row) => row.opcode === "SeekGE" && row.p4 === "3")).toBe(true);
+	db.close();
+});
+test("NULL-agent embeddings cannot bypass their parent memory compartment", () => {
+	const db = assigned();
+	const c = shards.compartmentForWrite(db, { agentId: "default", memoryId: "m" });
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(c);
+	const insert = db.prepare(
+		"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id,compartment_id) VALUES('legacy','legacy',X'0000803f0000000000000000',3,'memory','m','secret','now',NULL,?)",
+	);
+	expect(() => insert.run(null)).toThrow("compartment_required");
+	insert.run(c);
+	shards.inheritEmbeddingCompartment(db, "embeddings", "legacy");
+	expect(db.prepare("SELECT agent_id,compartment_id FROM embeddings WHERE id='legacy'").get()).toEqual({
+		agent_id: "default",
+		compartment_id: c,
+	});
 	db.close();
 });
 test("source artifact upserts inherit classified agents before their FTS triggers execute", () => {

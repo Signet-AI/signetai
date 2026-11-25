@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { attemptAsync } from "@signet/core";
 import { logger } from "./logger";
 import { DbOwnerError, type DbOwnerClient } from "./db-owner-client";
 import type { AudienceSubject, ReadScope } from "./read-scope";
@@ -22,7 +23,7 @@ export interface ClassificationPrincipal {
 }
 export type ClassificationRequest =
 	| { readonly op: "record-error"; readonly jobId: string; readonly error: string }
-	| { readonly op: "readable"; readonly subject: AudienceSubject }
+	| { readonly op: "readable" | "visibility"; readonly subject: AudienceSubject }
 	| { readonly op: "list" | "get"; readonly actor: ClassificationActor; readonly id?: string }
 	| {
 			readonly op: "create";
@@ -85,10 +86,10 @@ export async function classificationRequest<Result>(
 		{ kind: "classification", request },
 		{
 			operation: `classification.${request.op}`,
-			lane: request.op === "readable" ? "read" : "maintenance",
-			workloadClass: request.op === "readable" ? "foreground" : "maintenance",
-			deadlineMs: request.op === "readable" ? 5000 : 15 * 60_000,
-			estimatedWorkUnits: request.op === "readable" ? 1 : 10000,
+			lane: request.op === "readable" || request.op === "visibility" ? "read" : "maintenance",
+			workloadClass: request.op === "readable" || request.op === "visibility" ? "foreground" : "maintenance",
+			deadlineMs: request.op === "readable" || request.op === "visibility" ? 5000 : 15 * 60_000,
+			estimatedWorkUnits: request.op === "readable" || request.op === "visibility" ? 1 : 10000,
 		},
 	).result;
 }
@@ -134,6 +135,7 @@ export async function executeClassificationJob(
 	request: (request: ClassificationRequest) => Promise<unknown> = classificationRequest,
 ): Promise<void> {
 	let retries = 0;
+	let pendingPolls = 0;
 	for (;;) {
 		let value: unknown;
 		try {
@@ -152,19 +154,37 @@ export async function executeClassificationJob(
 				continue;
 			}
 			const failure = error instanceof Error ? error : new Error(String(error));
-			logger.error(
-				"startup-recovery",
-				`Classification job ${jobId} stopped; its durable cursor remains resumable`,
-				failure,
-			);
-			await request({ op: "record-error", jobId, error: failure.message });
+			const recorded = errorResult.parse(await request({ op: "record-error", jobId, error: failure.message }));
+			if (recorded.status === "running" && recorded.failures < 5) {
+				logger.warn("startup-recovery", "Classification batch failed; retrying its durable cursor", {
+					jobId,
+					failures: recorded.failures,
+					error: failure.message,
+				});
+				await new Promise<void>((resolve) => setTimeout(resolve, 100 * 2 ** Math.min(recorded.failures - 1, 4)));
+				continue;
+			}
+			logger.error("startup-recovery", `Classification job ${jobId} execution failed (${recorded.status})`, failure);
 			throw error;
 		}
 		const result = jobResult.parse(value);
 		if (result.status === "complete") return;
-		await new Promise<void>((resolve) => setTimeout(resolve, result.status === "pending" ? 50 : 0));
+		if (result.status === "pending") {
+			pendingPolls++;
+			if (pendingPolls >= 60) {
+				await request({ op: "record-error", jobId, error: "classification_pending_timeout" });
+				throw new Error("classification_pending_timeout");
+			}
+		} else pendingPolls = 0;
+		await new Promise<void>((resolve) =>
+			setTimeout(resolve, result.status === "pending" ? Math.min(100 * 2 ** Math.min(pendingPolls - 1, 6), 5000) : 0),
+		);
 	}
 }
+const errorResult = z.object({
+	status: z.enum(["pending", "running", "complete", "failed"]),
+	failures: z.number().int().nonnegative(),
+});
 const jobResult = z.object({ status: z.enum(["pending", "running", "complete"]) });
 const recoveryResult = z.object({ jobs: z.array(z.string()), nextCursor: z.string().nullable() });
 export async function resumeClassificationJobs(
@@ -173,9 +193,34 @@ export async function resumeClassificationJobs(
 	let cursor: string | undefined;
 	for (;;) {
 		const result = recoveryResult.parse(await request({ op: "recover", ...(cursor === undefined ? {} : { cursor }) }));
-		for (let start = 0; start < result.jobs.length; start += 4)
-			await Promise.all(result.jobs.slice(start, start + 4).map((id) => executeClassificationJob(id, request)));
+		for (let start = 0; start < result.jobs.length; start += 4) {
+			const settled = await Promise.allSettled(
+				result.jobs.slice(start, start + 4).map((id) => executeClassificationJob(id, request)),
+			);
+			for (const outcome of settled)
+				if (outcome.status === "rejected")
+					logger.error(
+						"startup-recovery",
+						"Classification recovery job failed; continuing the recovery page",
+						outcome.reason instanceof Error ? outcome.reason : new Error(String(outcome.reason)),
+					);
+		}
 		if (result.nextCursor === null) return;
 		cursor = result.nextCursor;
 	}
+}
+
+export async function startClassificationRecovery(owner: DbOwnerClient): Promise<void> {
+	await attemptAsync(async () => {
+		try {
+			await resumeClassificationJobs((request) => classificationRequest(request, owner));
+		} catch (error) {
+			logger.error(
+				"startup-recovery",
+				"Classification recovery stopped",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			throw error;
+		}
+	});
 }

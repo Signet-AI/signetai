@@ -147,12 +147,16 @@ function installWriteGuards(db: MigrationDb): void {
 			db
 				.prepare(`PRAGMA table_info(${table})`)
 				.all()
-				.map((r) => r.name),
+				.map((row) => row.name),
 		);
 		if (!columns.has("agent_id")) continue;
-		const sessions = ["session_key", "session_id"].filter((c) => columns.has(c)).map((c) => `new.${c}`);
-		const sources = ["source_id", "source_ref"].filter((c) => columns.has(c)).map((c) => `new.${c}`);
-		if (table === "memories") sessions.push("new.source_id");
+		const sessions = ["session_key", "session_id"]
+			.filter((column) => columns.has(column))
+			.map((column) => `new.${column}`);
+		const sources = ["source_id", "source_ref"]
+			.filter((column) => columns.has(column))
+			.map((column) => `new.${column}`);
+		if (table === "memories" && columns.has("source_id")) sessions.push("new.source_id");
 		const memory =
 			table === "memories"
 				? "new.id"
@@ -161,33 +165,60 @@ function installWriteGuards(db: MigrationDb): void {
 					: table.startsWith("embeddings")
 						? "CASE WHEN new.source_type='memory' THEN new.source_id END"
 						: "NULL";
-		const match = [
-			"a.target_kind='agent'",
-			`(a.target_kind='memory' AND a.target_id=${memory})`,
-			...sessions.map(
-				(s) =>
-					`(a.target_kind='session' AND (a.target_id=${s} OR a.target_id='session:'||${s} OR 'session:'||a.target_id=${s}))`,
-			),
-			...sources.map(
-				(s) =>
-					`(a.target_kind='source' AND (a.target_id=${s} OR substr(${s},1,length(a.target_id)+1)=a.target_id||':'))`,
-			),
-		];
+		const agent = table.startsWith("embeddings")
+			? `COALESCE(new.agent_id,(SELECT agent_id FROM memories WHERE id=${memory}))`
+			: "new.agent_id";
+		const lookup = (kind: string, targets: string, owner = agent) =>
+			`SELECT a.classification_id FROM classification_assignments a WHERE a.agent_id=${owner} AND a.target_kind='${kind}' AND a.target_id IN (${targets})`;
+		const sessionTargets = (session: string) =>
+			`${session},'session:'||${session},CASE WHEN substr(${session},1,8)='session:' THEN substr(${session},9) END`;
+		const sourceTargets = (source: string) =>
+			`WITH RECURSIVE positions(pos) AS (SELECT instr(${source},':') UNION ALL SELECT pos+instr(substr(${source},pos+1),':') FROM positions WHERE pos>0 AND instr(substr(${source},pos+1),':')>0) SELECT ${source} UNION SELECT substr(${source},1,pos-1) FROM positions WHERE pos>0`;
 		const required = [
-			`SELECT a.classification_id FROM classification_assignments a WHERE a.agent_id=new.agent_id AND (${match.join(" OR ")})`,
+			lookup("agent", agent),
+			lookup("memory", memory),
+			...sessions.map((session) => lookup("session", sessionTargets(session))),
+			...sources.map((source) => lookup("source", sourceTargets(source))),
 		];
-		if (table === "session_checkpoints")
+		if (table === "session_checkpoints") {
+			const owners =
+				"SELECT agent_id FROM session_transcripts WHERE session_key=new.session_key UNION SELECT agent_id FROM session_claims WHERE session_key=new.session_key";
+			for (const [kind, targets] of [
+				["agent", "o.agent_id"],
+				["session", sessionTargets("new.session_key")],
+			] as const)
+				required.push(
+					`SELECT a.classification_id FROM (${owners}) o JOIN classification_assignments a ON a.agent_id=o.agent_id AND a.target_kind='${kind}' AND a.target_id IN (${targets}) WHERE new.agent_id IS NULL`,
+				);
 			required.push(
-				`SELECT a.classification_id FROM classification_assignments a WHERE new.agent_id IS NULL AND a.agent_id IN (SELECT agent_id FROM session_transcripts WHERE session_key=new.session_key UNION SELECT agent_id FROM session_claims WHERE session_key=new.session_key) AND (a.target_kind='agent' OR (a.target_kind='session' AND a.target_id=new.session_key) OR (a.target_kind='source' AND a.target_id IN (SELECT source_id FROM session_transcripts WHERE session_key=new.session_key AND agent_id=a.agent_id)))`,
+				"SELECT a.classification_id FROM session_transcripts t JOIN classification_assignments a ON a.agent_id=t.agent_id AND a.target_kind='source' AND a.target_id=t.source_id WHERE new.agent_id IS NULL AND t.session_key=new.session_key",
 			);
+		}
 		if (table === "memory_hints" || table.startsWith("embeddings"))
 			required.push(
-				`SELECT cm.classification_id FROM memories p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.agent_id=new.agent_id AND p.id=${memory}`,
+				`SELECT cm.classification_id FROM memories p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.id=${memory} AND (new.agent_id IS NULL OR p.agent_id=new.agent_id)`,
 			);
-		for (const event of ["INSERT", "UPDATE"])
+		const scopeColumns = [
+			"compartment_id",
+			"agent_id",
+			"session_key",
+			"session_id",
+			"source_id",
+			"source_ref",
+			"source_type",
+			"memory_id",
+			"id",
+		].filter((column) => columns.has(column));
+		for (const event of ["INSERT", "UPDATE"]) {
+			const update = event === "UPDATE" ? ` OF ${scopeColumns.join(",")}` : "";
+			const changed =
+				event === "UPDATE"
+					? ` WHEN ${scopeColumns.map((column) => `old.${column} IS NOT new.${column}`).join(" OR ")}`
+					: "";
 			db.exec(
-				`DROP TRIGGER IF EXISTS ${table}_compartment_${event.toLowerCase()};CREATE TRIGGER ${table}_compartment_${event.toLowerCase()} BEFORE ${event} ON ${table} BEGIN ${table === "session_checkpoints" && event === "INSERT" ? "SELECT RAISE(ABORT,'agent_required') WHERE new.agent_id IS NULL;" : ""} SELECT RAISE(ABORT,'compartment_required') WHERE EXISTS(SELECT 1 FROM (${required.join(" UNION ")}) required WHERE NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=new.compartment_id AND cm.classification_id=required.classification_id));END`,
+				`DROP TRIGGER IF EXISTS ${table}_compartment_${event.toLowerCase()};CREATE TRIGGER ${table}_compartment_${event.toLowerCase()} BEFORE ${event}${update} ON ${table}${changed} BEGIN ${table === "session_checkpoints" && event === "INSERT" ? "SELECT RAISE(ABORT,'agent_required') WHERE new.agent_id IS NULL;" : ""} SELECT RAISE(ABORT,'compartment_required') WHERE EXISTS(SELECT 1 FROM (${required.join(" UNION ")}) required WHERE NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=new.compartment_id AND cm.classification_id=required.classification_id));END`,
 			);
+		}
 	}
 }
 export function up(db: MigrationDb): void {
@@ -281,11 +312,15 @@ export function up(db: MigrationDb): void {
 	for (const [table, kind, key] of [
 		["memories", "memory", "id"],
 		["session_transcripts", "session", "session_key"],
-	])
-		if (table && kind && key && exists(db, table))
+	] as const)
+		if (exists(db, table))
 			db.exec(
 				`CREATE TRIGGER IF NOT EXISTS ${table}_classification_cascade AFTER DELETE ON ${table} BEGIN DELETE FROM classification_assignments WHERE target_kind='${kind}' AND target_id=old.${key} AND agent_id=old.agent_id;END`,
 			);
+	if (exists(db, "org_jobs"))
+		db.exec(
+			"CREATE INDEX IF NOT EXISTS idx_classification_visibility ON org_jobs(kind,status) WHERE kind='classify' AND status IN ('pending','running','failed')",
+		);
 	installWriteGuards(db);
 	backfillEvidenceCitations(db);
 	rebuildBaseCompartmentFts(db);

@@ -35,6 +35,14 @@ each evidence row and its directly derived copies moving together. Other reads
 can run between batches. A failed batch rolls back its moves and cursor without
 undoing earlier committed batches. Pending and running jobs resume from their
 durable cursor after a daemon restart; jobs for the same agent never run concurrently.
+After five consecutive batch failures, a job fails with a recorded error and audit
+event, allowing queued jobs to proceed. Its applied restriction remains in place;
+retry the classification or have a compliance officer remove it.
+
+Matching content hides as soon as apply is accepted, before the batches finish.
+Search rankings and result counts can still be affected by those newly hidden
+rows until they move into separate indexes. That ranking-statistics window
+closes when the job completes.
 
 ## Multiple classifications
 

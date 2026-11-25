@@ -6,6 +6,7 @@ import { classificationFixture } from "./test-support/classification-fixture.tes
 import { createDbOwnerClient } from "./db-owner-client";
 import { runStartupRecoveryAsync } from "./startup-recovery";
 import type { DbAccessor } from "./db-accessor";
+import { startClassificationRecovery } from "./classifications";
 import type { ClassificationRequest } from "./classifications";
 
 test("a fresh DB owner resumes the durable cursor while foreground reads interleave", async () => {
@@ -65,6 +66,18 @@ test("a fresh DB owner resumes the durable cursor while foreground reads interle
 		expect(await query(first)).toMatchObject({ status: "running" });
 		await first.close();
 		await second.start();
+		await second.submit(
+			{
+				kind: "batch",
+				statements: [
+					{
+						result: "run",
+						sql: "CREATE TRIGGER pause_recovery BEFORE UPDATE OF compartment_id ON memories BEGIN SELECT RAISE(ABORT,'paused recovery');END",
+					},
+				],
+			},
+			{ operation: "test.pause-recovery", lane: "write", workloadClass: "foreground", deadlineMs: 5000 },
+		).result;
 		const observations: unknown[] = [];
 		let active = true;
 		const foreground = (async () => {
@@ -83,7 +96,15 @@ test("a fresh DB owner resumes the durable cursor while foreground reads interle
 				withWriteDbAsync: unavailable,
 				close: unavailable,
 			};
-			await runStartupRecoveryAsync(accessor, { owner: second });
+			const classified = startClassificationRecovery(second);
+			const report = await runStartupRecoveryAsync(accessor, { owner: second });
+			expect(report.recoveryPhase).toBe("complete");
+			expect(await query(second)).toMatchObject({ status: "running" });
+			await second.submit(
+				{ kind: "batch", statements: [{ result: "run", sql: "DROP TRIGGER pause_recovery" }] },
+				{ operation: "test.release-recovery", lane: "write", workloadClass: "foreground", deadlineMs: 5000 },
+			).result;
+			await classified;
 		} finally {
 			active = false;
 			await foreground;
