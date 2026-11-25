@@ -65,6 +65,30 @@ describe("scoped search noninterference", () => {
 		}
 	});
 
+	it("falls back to scoped embeddings when the installed projection is empty", () => {
+		const extension = findSqliteVecExtension();
+		if (!extension) throw new Error("sqlite-vec required");
+		const db = fixture();
+		try {
+			db.loadExtension(extension);
+			db.exec(
+				"CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+			);
+			db.prepare("INSERT INTO embeddings VALUES (?,?,?,NULL,NULL,'memory',3,?)").run(
+				"ev",
+				"visible",
+				"alice",
+				new Float32Array([1, 0, 0]),
+			);
+			expect(vectorSearchWithMetadata(db, new Float32Array([1, 0, 0]), { readScope: scope, limit: 1 })).toEqual({
+				results: [{ id: "visible", score: 1 }],
+				completeness: "complete",
+			});
+		} finally {
+			db.close();
+		}
+	});
+
 	it("prefilters indexed KNN and merges readable vector shards", () => {
 		const extension = findSqliteVecExtension();
 		expect(extension).toBeTruthy();

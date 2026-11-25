@@ -60,7 +60,7 @@ interface SQLiteDatabase {
 	exec?(sql: string): void;
 	prepare(sql: string): {
 		run(...args: unknown[]): void;
-		get(...args: unknown[]): Record<string, unknown> | undefined;
+		get(...args: unknown[]): Record<string, unknown> | null | undefined;
 		all(...args: unknown[]): Record<string, unknown>[];
 	};
 }
@@ -253,6 +253,7 @@ export function vectorSearchWithMetadata(
 	const limit = options.limit ?? 20;
 	if (limit <= 0) return { results: [], completeness: "complete" };
 	const results: Array<{ id: string; score: number }> = [];
+	const maxKnnWindow = 4096;
 	try {
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
@@ -261,10 +262,13 @@ export function vectorSearchWithMetadata(
 			const names = options.shardNames ?? searchShardNames(db, options.readScope);
 			const shards = selectedSearchTables(searchTables.projection, options.readScope, names);
 			if (shards.length === 0) throw new Error("Vector projection unavailable");
+			let projectionRows = 0;
 			for (const table of shards) {
 				const size = db.prepare(`SELECT COUNT(*) AS count FROM ${table}_rowids`).get()?.count;
 				if (typeof size !== "number") throw new Error("Vector shard size unavailable");
-				let requested = Math.min(size, limit * 4);
+				projectionRows += size;
+				if (limit > maxKnnWindow) throw new Error("Requested vector window exceeds KNN admission");
+				let requested = Math.min(size, limit * 4, maxKnnWindow);
 				while (requested > 0) {
 					const params: unknown[] = [new Float32Array(queryVector), requested];
 					let filter = "";
@@ -274,7 +278,7 @@ export function vectorSearchWithMetadata(
 					}
 					if (options.excludeAggregateRecall) filter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
 					params.push(...scope.args, ...embeddingScope.args, limit);
-					const rows = db
+					let rows = db
 						.prepare(`WITH hits AS MATERIALIZED (
 						SELECT id,distance FROM ${table} WHERE embedding MATCH ? AND k=?
 					) SELECT e.source_id,hits.distance FROM hits
@@ -282,15 +286,29 @@ export function vectorSearchWithMetadata(
 					JOIN memories m ON m.id=e.source_id
 					WHERE 1=1${filter}${scope.sql}${embeddingScope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
 						.all(...params);
-					if (rows.length >= limit || requested >= size) {
+					const selectiveAtBackendLimit = rows.length < limit && requested === maxKnnWindow && requested < size;
+					if (selectiveAtBackendLimit) {
+						params[1] = limit;
+						rows = db
+							.prepare(`SELECT e.source_id,v.distance FROM ${table} v
+							JOIN ${searchTables.embeddings} e ON e.id=v.id
+							WHERE v.embedding MATCH ? AND k=? AND v.id IN (
+								SELECT eligible.id FROM ${table} eligible
+								JOIN ${searchTables.embeddings} e ON e.id=eligible.id JOIN memories m ON m.id=e.source_id
+								WHERE 1=1${filter}${scope.sql}${embeddingScope.sql}
+							) ORDER BY v.distance,e.source_id LIMIT ?`)
+							.all(...params);
+					}
+					if (selectiveAtBackendLimit || rows.length >= limit || requested >= size) {
 						for (const row of rows)
 							if (typeof row.source_id === "string" && typeof row.distance === "number")
 								results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
 						break;
 					}
-					requested = Math.min(size, requested * 2);
+					requested = Math.min(size, requested * 2, maxKnnWindow);
 				}
 			}
+			if (projectionRows === 0) throw new Error("Vector projection is empty");
 			results.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 			results.splice(limit);
 		});
