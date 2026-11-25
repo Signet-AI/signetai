@@ -84,6 +84,7 @@ export interface DaemonStatusClient extends DaemonClient {
 }
 
 export interface DaemonRequestClient {
+	getStatus(path: string, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<void>>;
 	getResult<T>(path: string, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
 	patchResult<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
 }
@@ -110,6 +111,19 @@ export function createDaemonClient(
 		return pending;
 	};
 	return {
+		async getStatus(
+			path: string,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<DaemonFetchResult<void>> {
+			const result = await daemonFetchResult<unknown>(transport, path, config, {
+				method: "GET",
+				timeout,
+				signal,
+				parseJson: false,
+			});
+			return result.ok ? { ok: true, data: undefined } : result;
+		},
 		getResult<T>(path: string, timeout = config.defaultTimeout, signal?: AbortSignal): Promise<DaemonFetchResult<T>> {
 			return daemonFetchResult<T>(transport, path, config, { method: "GET", timeout, signal });
 		},

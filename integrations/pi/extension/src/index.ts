@@ -91,7 +91,7 @@ const state: SignetState = {
 };
 
 async function checkDaemonHealth(daemonUrl: string): Promise<boolean> {
-	return (await createDaemonClient(daemonUrl).getResult("/health", READ_TIMEOUT)).ok;
+	return (await createDaemonClient(daemonUrl).getStatus("/health", READ_TIMEOUT)).ok;
 }
 
 function daemonFailure(
