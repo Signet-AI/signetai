@@ -30,6 +30,56 @@ describe("episodic source selection", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("prefers the exact pass label then public evidence before direct and historical limits", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_prefer','Prefer'); INSERT INTO compartments(id,key) VALUES(18,'cls_prefer'); INSERT INTO compartment_members VALUES(18,'cls_prefer')",
+			);
+			for (const [path, label, time] of [
+				["public.md", null, "2026-02-01"],
+				["exact.md", 18, "2026-01-01"],
+			] as const) {
+				db.prepare(
+					`INSERT INTO memory_artifacts(source_path,source_sha256,source_kind,source_node_id,session_id,session_token,content,agent_id,compartment_id,captured_at,updated_at) VALUES(?,'','file','shared','session','token','preference evidence','ant',?,?,?)`,
+				).run(path, label, time, time);
+			}
+			const readScope = { reach: { kind: "own", agentId: "ant" }, compartments: [18], projects: null } as const;
+			expect(
+				readEpisodicSource(db, { agentId: "ant", from: "artifact:shared", readScope, preferredCompartment: 18 })?.id,
+			).toBe("exact.md");
+			expect(
+				searchEpisodicSources(db, {
+					agentId: "ant",
+					query: "preference",
+					kind: "artifact",
+					limit: 1,
+					readScope,
+					preferredCompartment: 18,
+				}).map((row) => row.id),
+			).toEqual(["exact.md"]);
+			expect(
+				searchEpisodicSources(db, {
+					agentId: "ant",
+					query: "preference",
+					kind: "artifact",
+					limit: 1,
+					exactCompartment: null,
+				}).map((row) => row.id),
+			).toEqual(["public.md"]);
+			expect(
+				readEpisodicSource(db, {
+					agentId: "ant",
+					from: "artifact:shared",
+					readScope: { ...readScope, compartments: [] },
+					preferredCompartment: 18,
+				})?.id,
+			).toBe("public.md");
+			expect(
+				readEpisodicSource(db, { agentId: "other", from: "artifact:shared", readScope, preferredCompartment: 18 }),
+			).toBeNull();
+		});
+	});
+
 	it("filters every evidence branch before ranking, limits, counts and reference resolution", () => {
 		getDbAccessor().withWriteTx((db) => {
 			for (const [id, compartment, project] of [

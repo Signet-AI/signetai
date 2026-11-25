@@ -434,11 +434,23 @@ export type DbOwnerRequest =
 	| { readonly kind: "dreaming_read_scope"; readonly input: { readonly agentId: string; readonly passId?: string } }
 	| { readonly kind: "dreaming_graph_read"; readonly input: DbOwnerDreamingGraphRead }
 	| { readonly kind: "dreaming_evidence_search"; readonly input: DbOwnerDreamingEvidenceSearch }
+	| { readonly kind: "dreaming_evidence_prepare"; readonly input: DbOwnerDreamingEvidencePreparation }
+	| { readonly kind: "dreaming_imported_source_attention"; readonly agentId: string; readonly sourceId: string }
 	| { readonly kind: "dreaming_evidence_source"; readonly input: DbOwnerDreamingEvidenceSource }
 	| { readonly kind: "dreaming_evidence_review"; readonly input: DbOwnerDreamingEvidenceReview }
 	| { readonly kind: "dreaming_pass_finalize"; readonly input: DbOwnerDreamingPassFinalize }
 	| { readonly kind: "dreaming_review_due"; readonly input: DbOwnerDreamingReviewDue }
 	| { readonly kind: "dreaming_evidence_classify"; readonly input: DbOwnerDreamingEvidenceClassify }
+	| {
+			readonly kind: "dreaming_evidence_manual_requeue";
+			readonly input: {
+				readonly agentId: string;
+				readonly sourceKind: "memory" | "artifact" | "transcript" | "summary";
+				readonly sourceId: string;
+				readonly readScope: import("./read-scope").ReadScope;
+				readonly reviewed: boolean;
+			};
+	  }
 	| { readonly kind: "dreaming_evidence_requeue"; readonly input: DbOwnerDreamingEvidenceRequeue }
 	| { readonly kind: "embedding_migration_progress"; readonly configuredBaseUrl?: string }
 	| { readonly kind: "health_ready" }
@@ -584,6 +596,12 @@ export interface DbOwnerDreamingEvidenceSearch {
 	readonly evidenceChars?: number;
 }
 
+export type DbOwnerDreamingEvidencePreparation = {
+	readonly agentId: string;
+	readonly passId: string;
+	readonly sourceRefs: readonly string[];
+} & ({ readonly action: "lease"; readonly ttlMs: number } | { readonly action: "speakers" });
+
 export interface DbOwnerDreamingEvidenceSource {
 	readonly agentId: string;
 	readonly passId?: string;
@@ -635,6 +653,7 @@ export interface DbOwnerDreamingEvidenceOperation {
 
 export interface DbOwnerDreamingEvidenceClassify {
 	readonly agentId: string;
+	readonly passId?: string;
 	readonly result: unknown;
 	readonly operations: readonly DbOwnerDreamingEvidenceOperation[];
 }

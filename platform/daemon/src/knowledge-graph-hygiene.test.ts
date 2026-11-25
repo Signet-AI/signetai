@@ -222,6 +222,21 @@ describe("knowledge graph hygiene report", () => {
 });
 
 describe("Dreaming hygiene exact compartments", () => {
+	test("preserves structural people while ordinary external people remain hygiene candidates", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			db.exec(
+				"INSERT INTO entities(id, agent_id, name, canonical_name, entity_type, person_user_id, mentions, created_at, updated_at) VALUES ('structural', 'default', 'Alice', 'alice', 'person', 'usr_alice', 0, datetime('now'), datetime('now')), ('external', 'default', 'External Author', 'external author', 'person', NULL, 0, datetime('now'), datetime('now'))",
+			);
+			const candidates = getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 100 });
+			expect(candidates.some((candidate) => candidate.subjectRef === "entity:structural")).toBe(false);
+			expect(candidates.some((candidate) => candidate.subjectRef === "entity:external")).toBe(true);
+		} finally {
+			db.close();
+		}
+	});
+
 	test("hidden rows cannot change candidates, caps, duplicate membership or bounded selection", () => {
 		const db = new Database(":memory:");
 		try {

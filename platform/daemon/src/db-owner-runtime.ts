@@ -279,12 +279,15 @@ async function executeInlineOwnerRequest(
 		case "dreaming_read_scope":
 		case "dreaming_graph_read":
 		case "dreaming_evidence_search":
+		case "dreaming_evidence_prepare":
+		case "dreaming_imported_source_attention":
 		case "dreaming_evidence_source":
 		case "dreaming_evidence_review":
 		case "memory_head":
 		case "dreaming_pass_finalize":
 		case "dreaming_review_due":
 		case "dreaming_evidence_classify":
+		case "dreaming_evidence_manual_requeue":
 		case "dreaming_evidence_requeue":
 		case "embedding_migration_progress":
 		case "health_ready":

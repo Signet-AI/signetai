@@ -108,7 +108,7 @@ const SEMANTIC_ENTITY_FRAGMENT = `COALESCE(e.pinned, 0) = 0
 export const ZERO_ACTIVE_ATTRIBUTE_ENTITIES_SQL = `
 	SELECT e.id, e.name
 	FROM entities e
-	WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
+	WHERE e.agent_id = ? AND e.person_user_id IS NULL AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 	  AND NOT EXISTS (
 	    SELECT 1
 	    FROM entity_aspects asp
@@ -220,7 +220,7 @@ export function getDreamingHygieneCandidatesInDb(
 				`${partitionSql}SELECT e.id, e.name, COUNT(asp.id) AS aspect_count
 				 FROM entities e
 				 LEFT JOIN entity_aspects asp ON asp.entity_id = e.id AND asp.agent_id = e.agent_id AND COALESCE(asp.status, 'active') = 'active'
-				 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
+				 WHERE e.agent_id = ? AND e.person_user_id IS NULL AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 				 GROUP BY e.id, e.name
 				 HAVING aspect_count > ?
 				 ORDER BY aspect_count DESC
@@ -257,7 +257,7 @@ export function getDreamingHygieneCandidatesInDb(
 		.prepare(
 			`${partitionSql}SELECT e.id, e.name, e.canonical_name, e.entity_type, e.mentions
 			 FROM entities e
-			 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
+			 WHERE e.agent_id = ? AND e.person_user_id IS NULL AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 			 ORDER BY e.updated_at ASC
 			 LIMIT ?`,
 		)
@@ -356,7 +356,7 @@ export function getDreamingHygieneCandidatesInDb(
 		.prepare(
 			`${partitionSql}SELECT e.canonical_name, COUNT(*) AS entity_count
 			 FROM entities e
-			 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
+			 WHERE e.agent_id = ? AND e.person_user_id IS NULL AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 			   AND e.canonical_name IS NOT NULL AND TRIM(e.canonical_name) != ''
 			 GROUP BY e.canonical_name HAVING COUNT(*) > 1
 			 ORDER BY COUNT(*) DESC, e.canonical_name ASC LIMIT ?`,
@@ -369,7 +369,7 @@ export function getDreamingHygieneCandidatesInDb(
 		const memberIds = db
 			.prepare(
 				`${partitionSql}SELECT e.id FROM entities e
-				 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
+				 WHERE e.agent_id = ? AND e.person_user_id IS NULL AND COALESCE(e.status, 'active') = 'active' AND ${SEMANTIC_ENTITY_FRAGMENT}
 				   AND e.canonical_name = ?
 				 ORDER BY e.id ASC`,
 			)

@@ -28,7 +28,7 @@ export interface TranscriptImportWorkerOptions {
 	readonly workspaceRoot?: string;
 	readonly pressure?: () => boolean;
 	readonly yield?: () => Promise<void>;
-	readonly onBatch?: (jobId: string, sourceId: string) => Promise<void>;
+	readonly onBatch?: (jobId: string, sourceId: string, agentId: string) => Promise<void>;
 	readonly pollMs?: number;
 }
 interface Job {
@@ -231,7 +231,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					await flush(scanned.checkpoint, scanned.complete);
 					complete = scanned.complete;
 				}
-				await options.onBatch?.(job.id, file.source_id);
+				await options.onBatch?.(job.id, file.source_id, options.agentId);
 			}
 			await guard();
 			await store(job.id, "finalize", { generation, leaseToken });

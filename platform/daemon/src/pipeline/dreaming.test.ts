@@ -398,6 +398,26 @@ describe("Dreaming", () => {
 		rmSync(memoryHeadRoot, { recursive: true, force: true });
 	});
 
+	it("rejects a personal-mode aggregator before direct passes and state exist", async () => {
+		db.exec("UPDATE organization SET claimed_at='now',agent_model='personal' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
+		let calls = 0;
+		const executor: DreamingAgentExecutor = {
+			async run() {
+				calls++;
+				return { text: "Done", inputTokens: 1, outputTokens: 1 };
+			},
+		};
+		for (const mode of ["incremental", "compact", "incremental-content", "incremental-hygiene"] as const) {
+			await expect(
+				runDreamingAgentPassImpl(accessor, executor, defaultCfg(), memoryHeadRoot, "default", ["default"], mode),
+			).rejects.toThrow();
+		}
+		expect(calls).toBe(0);
+		expect(db.query("SELECT id FROM dreaming_passes").all()).toEqual([]);
+		expect(db.query("SELECT agent_id FROM dreaming_state").all()).toEqual([]);
+	});
+
 	async function runDreamingAgentPass(...args: Parameters<typeof runDreamingAgentPassImpl>) {
 		if (args[6] !== "incremental-content") return await runDreamingAgentPassImpl(...args);
 		const [

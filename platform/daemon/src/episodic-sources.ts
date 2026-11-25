@@ -33,6 +33,15 @@ export type DreamingSpeaker =
 export interface EpisodicSourceScopeOptions {
 	readonly readScope?: ReadScope;
 	readonly exactCompartment?: number | null;
+	readonly preferredCompartment?: number | null;
+}
+
+function sourcePreferenceSql(alias: string, options: EpisodicSourceScopeOptions): string {
+	if (options.preferredCompartment === undefined) return "";
+	const label = options.preferredCompartment;
+	if (label !== null && (!Number.isSafeInteger(label) || label < 1)) throw new Error("Invalid compartment");
+	const column = `${alias ? `${alias}.` : ""}compartment_id`;
+	return `CASE WHEN ${column} IS ${label ?? "NULL"} THEN 0 WHEN ${column} IS NULL THEN 1 ELSE 2 END, `;
 }
 
 function sourceScopeSql(
@@ -56,6 +65,13 @@ function sourceScopeSql(
 				source: kind === "summary" ? "source_ref" : "source_id",
 			})
 		: { sql: "", args: [] };
+	if (options.preferredCompartment !== undefined) {
+		const label = options.preferredCompartment;
+		if (label !== null && (!Number.isSafeInteger(label) || label < 1)) throw new Error("Invalid compartment");
+		scope.sql += ` AND (${alias}.compartment_id IS NULL OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM compartment_members own WHERE own.compartment_id=${alias}.compartment_id) AND NOT EXISTS(SELECT 1 FROM compartment_members member WHERE member.compartment_id=${alias}.compartment_id AND NOT EXISTS(SELECT 1 FROM compartment_members allowed WHERE allowed.compartment_id=? AND allowed.classification_id=member.classification_id))))`;
+		scope.args.push(label, label);
+	}
+
 	if (options.exactCompartment !== undefined) {
 		if (
 			options.exactCompartment !== null &&
@@ -69,6 +85,7 @@ function sourceScopeSql(
 }
 
 export interface EpisodicSourceRecord {
+	readonly compartmentId?: number | null;
 	readonly speakerUserId?: string | null;
 	readonly speaker?: DreamingSpeaker;
 	readonly kind: EpisodicSourceKind;
@@ -285,7 +302,7 @@ export function readEpisodicMemory(
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT author_user_id, id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
+			`SELECT compartment_id, author_user_id, id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
 			 FROM memories
 			 WHERE agent_id = ? ${scope.sql}
 			   AND memory_kind = 'episodic'
@@ -293,6 +310,7 @@ export function readEpisodicMemory(
 			   AND visibility != 'archived'
 			   AND scope IS NULL
 			   AND id IN (${placeholders})
+			 ORDER BY ${sourcePreferenceSql("", options)} created_at DESC
 			 LIMIT 1`,
 		)
 		.get(agentId, ...scope.args, ...ids) as
@@ -306,6 +324,7 @@ export function readEpisodicMemory(
 				readonly project: string | null;
 				readonly who: string | null;
 				readonly author_user_id: string | null;
+				readonly compartment_id: number | null;
 				readonly created_at: string;
 				readonly evidence_meta: string | null;
 		  }
@@ -314,6 +333,7 @@ export function readEpisodicMemory(
 	return {
 		kind: "memory",
 		speakerUserId: row.author_user_id,
+		compartmentId: row.compartment_id,
 		id: row.id,
 		content: row.content,
 		sourceKind: row.source_type ?? "manual",
@@ -339,7 +359,7 @@ export function readEpisodicArtifact(
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT author_user_id, source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
+			`SELECT compartment_id, author_user_id, source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
 			        project, harness, content, captured_at, updated_at
 			 FROM memory_artifacts
 			 WHERE agent_id = ? ${scope.sql}
@@ -351,13 +371,14 @@ export function readEpisodicArtifact(
 			     OR session_key IN (${placeholders})
 			     OR session_token IN (${placeholders})
 			   )
-			 ORDER BY captured_at DESC
+			 ORDER BY ${sourcePreferenceSql("", options)} captured_at DESC
 			 LIMIT 1`,
 		)
 		.get(agentId, ...scope.args, id, ...ids, ...ids, ...ids, ...ids) as
 		| {
 				readonly source_path: string;
 				readonly author_user_id: string | null;
+				readonly compartment_id: number | null;
 				readonly source_sha256: string | null;
 				readonly source_kind: string;
 				readonly source_id: string | null;
@@ -376,6 +397,7 @@ export function readEpisodicArtifact(
 	return {
 		kind: "artifact",
 		speakerUserId: row.author_user_id,
+		compartmentId: row.compartment_id,
 		id: row.source_path,
 		content: row.content,
 		sourceKind: row.source_kind,
@@ -405,7 +427,7 @@ export function readEpisodicTranscript(
 	const updatedAt = hasUpdated ? "st.updated_at" : "NULL";
 	const completedAt = hasCompleted ? "st.completed_at" : "NULL";
 	const capturedAt = `COALESCE(${completedAt}, ${updatedAt}, st.created_at)`;
-	const orderBy = `${capturedAt} DESC, st.created_at DESC`;
+	const orderBy = `${sourcePreferenceSql("st", options)}${capturedAt} DESC, st.created_at DESC`;
 	const hasSourceId = tableHasColumn(db, "session_transcripts", "source_id");
 	const hasSourceRecordId = tableHasColumn(db, "session_transcripts", "source_record_id");
 	const hasSourceMeta = tableHasColumn(db, "session_transcripts", "source_meta_json");
@@ -417,7 +439,7 @@ export function readEpisodicTranscript(
 	const completed = hasCompleted ? "st.completed_at IS NOT NULL" : "0";
 	const row = db
 		.prepare(
-			`SELECT st.speaker_user_id, st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
+			`SELECT st.compartment_id, st.speaker_user_id, st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
 			        ${completedAt} AS completed_at, ${completed} AS completed, ${sourceId} AS source_id,
 			        ${sourceRecordId} AS source_record_id, ${sourceMeta} AS source_meta_json, ${contentHash} AS content_hash
 			 FROM session_transcripts AS st
@@ -428,6 +450,7 @@ export function readEpisodicTranscript(
 		.get(agentId, ...scope.args, ...ids) as
 		| {
 				readonly speaker_user_id: string | null;
+				readonly compartment_id: number | null;
 				readonly session_key: string;
 				readonly content: string;
 				readonly harness: string | null;
@@ -446,6 +469,7 @@ export function readEpisodicTranscript(
 	return {
 		kind: "transcript",
 		speakerUserId: row.speaker_user_id,
+		compartmentId: row.compartment_id,
 		id: row.session_key,
 		content: row.content,
 		sourceKind: "transcript",
@@ -474,13 +498,13 @@ export function readEpisodicSummary(
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT author_user_id, id, content, project, harness, session_key, source_type, source_ref, latest_at
+			`SELECT compartment_id, author_user_id, id, content, project, harness, session_key, source_type, source_ref, latest_at
 			 FROM session_summaries
 			 WHERE agent_id = ? ${scope.sql}
 			   AND depth = 0
 			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))
-			 ORDER BY latest_at DESC
+			 ORDER BY ${sourcePreferenceSql("", options)} latest_at DESC
 			 LIMIT 1`,
 		)
 		.get(agentId, ...scope.args, ...ids, ...ids) as
@@ -492,6 +516,7 @@ export function readEpisodicSummary(
 				readonly session_key: string | null;
 				readonly source_type: string | null;
 				readonly author_user_id: string | null;
+				readonly compartment_id: number | null;
 				readonly source_ref: string | null;
 				readonly latest_at: string;
 		  }
@@ -500,6 +525,7 @@ export function readEpisodicSummary(
 	return {
 		kind: "summary",
 		speakerUserId: row.author_user_id,
+		compartmentId: row.compartment_id,
 		id: row.id,
 		content: row.content,
 		sourceKind: row.source_type ?? "summary",
@@ -563,7 +589,7 @@ export function readRecentEpisodicSources(
 	const memories: EpisodicSourceRecord[] = wants("memory")
 		? db
 				.prepare(
-					`SELECT author_user_id, id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
+					`SELECT compartment_id, author_user_id, id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
 				 FROM memories
 				 WHERE agent_id = ? ${memoryScope.sql}
 				   AND memory_kind = 'episodic'
@@ -588,12 +614,14 @@ export function readRecentEpisodicSources(
 						readonly project: string | null;
 						readonly who: string | null;
 						readonly author_user_id: string | null;
+						readonly compartment_id: number | null;
 						readonly created_at: string;
 						readonly evidence_meta: string | null;
 					};
 					return {
 						kind: "memory",
 						speakerUserId: memory.author_user_id,
+						compartmentId: memory.compartment_id,
 						id: memory.id,
 						content: memory.content,
 						sourceKind: memory.source_type ?? "manual",
@@ -611,7 +639,7 @@ export function readRecentEpisodicSources(
 	const artifacts: EpisodicSourceRecord[] = wants("artifact")
 		? db
 				.prepare(
-					`SELECT author_user_id, source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
+					`SELECT compartment_id, author_user_id, source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
 			        project, harness, content, captured_at, updated_at
 			 FROM memory_artifacts AS ma
 			 WHERE ma.agent_id = ? ${artifactScope.sql} AND COALESCE(ma.is_deleted, 0) = 0
@@ -633,6 +661,7 @@ export function readRecentEpisodicSources(
 					const artifact = row as {
 						readonly source_path: string;
 						readonly author_user_id: string | null;
+						readonly compartment_id: number | null;
 						readonly source_sha256: string | null;
 						readonly source_kind: string;
 						readonly source_id: string | null;
@@ -649,6 +678,7 @@ export function readRecentEpisodicSources(
 					return {
 						kind: "artifact",
 						speakerUserId: artifact.author_user_id,
+						compartmentId: artifact.compartment_id,
 						id: artifact.source_path,
 						content: artifact.content,
 						sourceKind: artifact.source_kind,
@@ -667,7 +697,7 @@ export function readRecentEpisodicSources(
 	const transcripts: EpisodicSourceRecord[] = wants("transcript")
 		? db
 				.prepare(
-					`SELECT st.speaker_user_id, st.session_key, st.content, st.harness, st.project, st.created_at,
+					`SELECT st.compartment_id, st.speaker_user_id, st.session_key, st.content, st.harness, st.project, st.created_at,
 					        ${transcriptUpdatedAt} AS updated_at, ${transcriptCompletedAt} AS completed_at,
 					        ${transcriptTime} AS captured_at, ${transcriptCompleted} AS completed,
 					        ${transcriptSourceId} AS source_id, ${transcriptSourceRecordId} AS source_record_id,
@@ -684,6 +714,7 @@ export function readRecentEpisodicSources(
 				.map((row) => {
 					const transcript = row as {
 						readonly speaker_user_id: string | null;
+						readonly compartment_id: number | null;
 						readonly session_key: string;
 						readonly content: string;
 						readonly harness: string | null;
@@ -701,6 +732,7 @@ export function readRecentEpisodicSources(
 					return {
 						kind: "transcript",
 						speakerUserId: transcript.speaker_user_id,
+						compartmentId: transcript.compartment_id,
 						id: transcript.session_key,
 						content: transcript.content,
 						sourceKind: "transcript",
@@ -722,7 +754,7 @@ export function readRecentEpisodicSources(
 	const summaries: EpisodicSourceRecord[] = wants("summary")
 		? db
 				.prepare(
-					`SELECT author_user_id, id, content, project, harness, session_key, source_type, source_ref, latest_at
+					`SELECT compartment_id, author_user_id, id, content, project, harness, session_key, source_type, source_ref, latest_at
 			 FROM session_summaries
 			 WHERE agent_id = ? ${summaryScope.sql}
 			   AND depth = 0
@@ -741,12 +773,14 @@ export function readRecentEpisodicSources(
 						readonly session_key: string | null;
 						readonly source_type: string | null;
 						readonly author_user_id: string | null;
+						readonly compartment_id: number | null;
 						readonly source_ref: string | null;
 						readonly latest_at: string;
 					};
 					return {
 						kind: "summary",
 						speakerUserId: summary.author_user_id,
+						compartmentId: summary.compartment_id,
 						id: summary.id,
 						content: summary.content,
 						sourceKind: summary.source_type ?? "summary",
@@ -875,6 +909,7 @@ export function resolveStrictEpisodicSourceRef(
 		from: canonicalRef,
 		readScope: params.readScope,
 		exactCompartment: params.exactCompartment,
+		preferredCompartment: params.preferredCompartment,
 	});
 	if (source !== null) return { status: "resolved", source };
 	if (params.readScope || params.exactCompartment !== undefined)
@@ -1001,6 +1036,7 @@ export function searchEpisodicSources(db: ReadDb, params: EpisodicSourceSearchPa
 				from: `${row.kind}:${row.id}`,
 				readScope: params.readScope,
 				exactCompartment: params.exactCompartment,
+				preferredCompartment: params.preferredCompartment,
 			}),
 		)
 		.filter((source): source is EpisodicSourceRecord => source !== null);
@@ -1043,11 +1079,16 @@ function selectEpisodicSourceRefs(
 				 WHERE dec.agent_id = ? AND dec.source_kind = '${kind}' AND dec.source_id = ${id}
 				   AND dec.source_captured_at = ${capturedAt} AND dec.source_entry_id = ${sourceEntryId}
 				   AND dec.source_revision = ${sourceRevision}
+				   AND dec.compartment_id IS ?
 				   AND (dec.delivered_offset >= dec.source_length${stalledFilter ? " OR dec.stalled_passes >= ?" : ""})
 			)`
 			: "";
 	const deliveredArgs = deliveredFilterEnabled
-		? [params.agentId, ...(stalledFilter ? [params.excludeStalledFrom] : [])]
+		? [
+				params.agentId,
+				params.exactCompartment ?? params.preferredCompartment ?? null,
+				...(stalledFilter ? [params.excludeStalledFrom] : []),
+			]
 		: [];
 	const reviewedPredicate = (
 		kind: EpisodicSourceKind,
@@ -1062,9 +1103,12 @@ function selectEpisodicSourceRefs(
 				 WHERE der.agent_id = ? AND der.source_kind = '${kind}' AND der.source_id = ${id}
 				   AND der.source_captured_at = ${capturedAt} AND der.source_entry_id = ${sourceEntryId}
 				   AND der.source_revision = ${sourceRevision}
+				   AND der.compartment_id IS ?
 			)`
 			: "";
-	const reviewedArgs = reviewedFilterEnabled ? [params.agentId] : [];
+	const reviewedArgs = reviewedFilterEnabled
+		? [params.agentId, params.exactCompartment ?? params.preferredCompartment ?? null]
+		: [];
 	const transcriptHasUpdatedAt = tableHasColumn(db, "session_transcripts", "updated_at");
 	const transcriptHasCompletedAt = tableHasColumn(db, "session_transcripts", "completed_at");
 	const transcriptSearchTime = transcriptHasCompletedAt
@@ -1118,7 +1162,7 @@ function selectEpisodicSourceRefs(
 	if (wants("memory")) {
 		branches.push({
 			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at, created_at AS arrived_at,
-			             ${matchScore("content")} AS match_score
+			             ${matchScore("content")} AS match_score, ${sourcePreferenceSql("", params).replace(/, $/, "") || "0"} AS label_rank
 			      FROM memories
 			      WHERE agent_id = ? AND memory_kind = 'episodic'
 			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
@@ -1136,7 +1180,7 @@ function selectEpisodicSourceRefs(
 	if (wants("artifact")) {
 		branches.push({
 			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at, ma.updated_at AS arrived_at,
-			             ${matchScore("ma.content")} AS match_score
+			             ${matchScore("ma.content")} AS match_score, ${sourcePreferenceSql("ma", params).replace(/, $/, "") || "0"} AS label_rank
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			        AND length(ma.content) > 0
@@ -1177,7 +1221,7 @@ function selectEpisodicSourceRefs(
 		branches.push({
 			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at,
 			             ${transcriptSearchTime} AS arrived_at,
-			             ${matchScore("session_transcripts.content")} AS match_score
+			             ${matchScore("session_transcripts.content")} AS match_score, ${sourcePreferenceSql("session_transcripts", params).replace(/, $/, "") || "0"} AS label_rank
 			      FROM session_transcripts
 			      WHERE agent_id = ? AND ${transcriptCompleted}
 			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
@@ -1193,7 +1237,7 @@ function selectEpisodicSourceRefs(
 	if (wants("summary")) {
 		branches.push({
 			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at, created_at AS arrived_at,
-			             ${matchScore("content")} AS match_score
+			             ${matchScore("content")} AS match_score, ${sourcePreferenceSql("", params).replace(/, $/, "") || "0"} AS label_rank
 			      FROM session_summaries
 			      WHERE agent_id = ? AND depth = 0
 			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
@@ -1219,11 +1263,11 @@ function selectEpisodicSourceRefs(
 	const rows = db
 		.prepare(
 			`SELECT kind, id
-			 FROM (
+			 FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY kind,id ORDER BY label_rank ASC, julianday(captured_at) DESC) AS selection_rank FROM (
 			 ${union}
-			 )
-			 WHERE match_score > 0
-			 ${orderBy}
+			 ))
+			 WHERE match_score > 0 AND selection_rank = 1
+			 ${params.preferredCompartment === undefined ? orderBy : orderBy ? orderBy.replace("ORDER BY ", "ORDER BY label_rank ASC, ") : "ORDER BY label_rank ASC"}
 			 LIMIT ${limit === null ? -1 : "?"}`,
 		)
 		.all(...branches.flatMap((branch) => branch.args), ...(limit === null ? [] : [limit])) as Array<{

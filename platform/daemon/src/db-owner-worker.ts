@@ -627,10 +627,9 @@ export function runDbOwnerWorker(): void {
 
 	async function executeDreamingEvidenceSearch(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_search" }>,
-		context: JobExecutionContext,
 	): Promise<unknown> {
 		const { searchDreamingEvidenceInDb } = await import("./pipeline/dreaming-capabilities");
-		return withBusyRetry(() => searchDreamingEvidenceInDb(db as never, request.input), context);
+		return searchDreamingEvidenceInDb(db, request.input);
 	}
 
 	async function executeDreamingEvidenceSource(
@@ -660,8 +659,8 @@ export function runDbOwnerWorker(): void {
 			try {
 				const { executeMemoryHead } = await import("./memory-head-owner");
 				const publication = withBusyRetry(() =>
-					executeMemoryHead(db as never, dirname(dirname(ownerDbPath)), {
-						action: "read",
+					executeMemoryHead(db, dirname(dirname(ownerDbPath)), {
+						action: "publish",
 						agentId: request.input.agentId,
 					}),
 				);
@@ -695,6 +694,7 @@ export function runDbOwnerWorker(): void {
 			request.input.agentId,
 			request.input.result as never,
 			request.input.operations as never,
+			request.input.passId,
 		);
 	}
 
@@ -1215,7 +1215,10 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "memory_head") {
 			const { executeMemoryHead } = await import("./memory-head-owner");
 			const request = job.request.request;
-			return withBusyRetry(() => executeMemoryHead(db as never, dirname(dirname(ownerDbPath)), request), context);
+			if (request.action === "read" || request.action === "inspect")
+				return executeMemoryHead(db, dirname(dirname(ownerDbPath)), request);
+			if (job.lane !== "write") throw new Error("Memory head mutation requires the write lane");
+			return withBusyRetry(() => executeMemoryHead(db, dirname(dirname(ownerDbPath)), request), context);
 		}
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements, context);
 		if (job.request.kind === "batch")
@@ -1271,13 +1274,50 @@ export function runDbOwnerWorker(): void {
 			const { readDreamingGraphInDb } = await import("./pipeline/dreaming-capabilities");
 			return readDreamingGraphInDb(db, job.request.input);
 		}
-		if (job.request.kind === "dreaming_evidence_search")
-			return await executeDreamingEvidenceSearch(job.request, context);
+		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
+		if (job.request.kind === "dreaming_evidence_prepare") {
+			if (job.lane !== "write") throw new Error("Dreaming evidence preparation requires the write lane");
+			const { prepareDreamingEvidenceInDb } = await import("./pipeline/dreaming-capabilities");
+			const input = job.request.input;
+			return withBusyRetry(() => prepareDreamingEvidenceInDb(db, input), context);
+		}
+		if (job.request.kind === "dreaming_imported_source_attention") {
+			if (job.lane !== "write") throw new Error("Imported source attention requires the write lane");
+			const { importedSourceAttentionUpsert } = await import("./pipeline/dreaming-evidence-consumption");
+			const input = job.request;
+			return withBusyRetry(() => {
+				importedSourceAttentionUpsert(db, input.agentId, input.sourceId);
+				return { ok: true };
+			}, context);
+		}
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
 		if (job.request.kind === "dreaming_evidence_review") return await executeDreamingEvidenceReview(job.request);
 		if (job.request.kind === "dreaming_pass_finalize") return executeDreamingPassFinalize(job.request, context);
 		if (job.request.kind === "dreaming_review_due") return await executeDreamingReviewDue(job.request);
 		if (job.request.kind === "dreaming_evidence_classify") return await executeDreamingEvidenceClassify(job.request);
+		if (job.request.kind === "dreaming_evidence_manual_requeue") {
+			if (job.lane !== "write") throw new Error("Manual requeue requires the write lane");
+			const input = job.request.input;
+			const { requestDreamingEvidenceRequeueInDb } = await import("./pipeline/dreaming");
+			const { requestDreamingReviewedEvidenceRequeueInTx } = await import("./pipeline/dreaming-evidence-reviews");
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const changed = input.reviewed
+					? requestDreamingReviewedEvidenceRequeueInTx(
+							db,
+							input.agentId,
+							input.sourceKind,
+							input.sourceId,
+							input.readScope,
+						)
+					: requestDreamingEvidenceRequeueInDb(db, input.agentId, input.sourceKind, input.sourceId, input.readScope);
+				commit(context);
+				return changed;
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		}
 		if (job.request.kind === "dreaming_evidence_requeue")
 			return await executeDreamingEvidenceRequeue(job.request, context);
 		if (job.request.kind === "embedding_migration_progress") {
