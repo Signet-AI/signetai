@@ -192,6 +192,19 @@ describe("source chunk exact KNN oversampling", () => {
 		expect(outcome.diagnostics).toMatchObject({ indexedQueries: 0, workUnits: 0, termination: "exhausted" });
 	});
 
+	it("keeps projected sparse hits when eligible metadata contains an unprojected id", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			seed(db, [
+				{ id: "absent-first", degrees: 0, sourceType: "source_chunk", agentId: "default", chunkText: chunk("absent") },
+				...denseFixture(),
+			]);
+			db.prepare("DELETE FROM vec_embeddings WHERE id='absent-first'").run();
+		});
+		const outcome = await search(2);
+		expect(outcome.hits.map((hit) => hit.embeddingId)).toEqual(["eligible-00", "eligible-01"]);
+		expect(outcome.completeness).toBe("complete");
+	});
+
 	it("keeps sparse eligible chunks exact behind nearer ineligible rows", async () => {
 		await getDbAccessor().withWriteTxAsync((db) =>
 			seed(

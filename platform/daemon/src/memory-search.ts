@@ -5,7 +5,6 @@ import {
 	type AccountingProvenance,
 	type AccountingSummaryProvenance,
 	type AgentRosterReadPolicy,
-	activeVectorProjectionTable,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
 	type ReadScope,
@@ -1325,7 +1324,9 @@ export async function buildSourceChunkVectorHits(
 				? `SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance
 				 FROM ${shard} v CROSS JOIN embeddings e ON e.id = v.id
 				 WHERE v.embedding MATCH ? AND k = ?
-				 AND v.id IN (SELECT se.id FROM embeddings se WHERE ${prefilterPredicate.sql})
+				 AND v.id IN (SELECT se.id FROM embeddings se
+				 CROSS JOIN ${shard}_rowids projected ON projected.id = se.id
+				 WHERE ${prefilterPredicate.sql})
 				 ORDER BY v.distance, e.id`
 				: `WITH hits AS MATERIALIZED (
 				 SELECT id, distance FROM ${shard} WHERE embedding MATCH ? AND k = ?
