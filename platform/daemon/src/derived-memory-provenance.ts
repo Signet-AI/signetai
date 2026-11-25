@@ -1,3 +1,4 @@
+import { readScopeSql } from "./read-scope";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import {
 	assertDreamingMutationLabelInDb,
@@ -148,8 +149,8 @@ export function linkDerivedMemorySourcesInTx(
 	const seen = new Set<string>();
 	const insert = db.prepare(
 		`INSERT OR IGNORE INTO derived_memory_sources
-		 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at, compartment_id, dreaming_pass_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	for (const source of sources) {
 		const sourceKind = source.sourceKind;
@@ -158,7 +159,16 @@ export function linkDerivedMemorySourcesInTx(
 		if (seen.has(key)) continue;
 		seen.add(key);
 		validateDerivedMemorySourceInTx(db, { agentId, sourceKind, sourceId });
-		insert.run(derivedMemoryId, sourceKind, sourceId, source.sourcePath?.trim() || null, agentId, createdAt);
+		insert.run(
+			derivedMemoryId,
+			sourceKind,
+			sourceId,
+			source.sourcePath?.trim() || null,
+			agentId,
+			createdAt,
+			partition.compartmentId,
+			input.passId ?? null,
+		);
 	}
 	recordSemanticCitationsInTx(db, { kind: "memory", id: derivedMemoryId, partition, evidence: citations });
 }
@@ -180,6 +190,9 @@ export function markDerivedMemoriesStaleForSourceInTx(
 	const agentId = required(input.agentId, "agentId");
 	const staleAt = required(input.staleAt, "staleAt");
 	const partition = input.passId !== undefined ? dreamingPassPartitionInDb(db, input.passId, agentId) : input.partition;
+	const sourceScope = partition
+		? readScopeSql("dms", dreamingReadScopeInDb(db, agentId, partition.compartmentId), { visibility: null })
+		: { sql: "", args: [] };
 	const ids = prepareTypedStatement<{ id: string }>(
 		db,
 		`SELECT dms.derived_memory_id AS id
@@ -190,10 +203,17 @@ export function markDerivedMemoriesStaleForSourceInTx(
 			   AND dms.source_id = ?
 			   AND derived.agent_id = ?
 			   AND derived.is_deleted = 0
-			   AND derived.stale_at IS NULL
+			   AND derived.stale_at IS NULL ${sourceScope.sql}
 			   ${input.derivedMemoryId ? "AND derived.id = ?" : ""}
 			   ${input.preservePinned ? "AND derived.pinned = 0" : ""}`,
-	).all(agentId, sourceKind, sourceId, agentId, ...(input.derivedMemoryId ? [input.derivedMemoryId] : []));
+	).all(
+		agentId,
+		sourceKind,
+		sourceId,
+		agentId,
+		...sourceScope.args,
+		...(input.derivedMemoryId ? [input.derivedMemoryId] : []),
+	);
 	if (ids.length === 0) return [];
 	if (partition) for (const row of ids) assertDreamingMutationLabelInDb(db, "memories", row.id, partition);
 	db.prepare(

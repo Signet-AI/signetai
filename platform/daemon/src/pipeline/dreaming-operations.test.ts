@@ -163,7 +163,9 @@ describe("dreaming operations", () => {
 			db.prepare(
 				"INSERT INTO dreaming_passes (id, agent_id, scope_key) VALUES ('epoch-pass', 'agent-a', 'agent-a')",
 			).run();
-			db.prepare("UPDATE dreaming_classification_epoch SET epoch = epoch + 1 WHERE id = 1").run();
+			db.prepare(
+				"INSERT INTO dreaming_classification_epoch(agent_id, epoch) VALUES ('agent-a', 1) ON CONFLICT(agent_id) DO UPDATE SET epoch = epoch + 1",
+			).run();
 		});
 		const stale = await applyDreamingOperations({
 			accessor: getDbAccessor(),
@@ -319,6 +321,124 @@ describe("dreaming operations", () => {
 					.get(),
 			),
 		).toEqual({ flags: 0, proposals: 0 });
+	});
+
+	it("isolates dangling target citations to a retryable item while applying healthy siblings", async () => {
+		insertEpisodicMemory("rename-proof", "Correct entity names.");
+		insertEntity("broken-target", "Broken target", "broken target");
+		insertEntity("healthy-target", "Healthy target", "healthy target");
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO evidence_citations(derived_kind, derived_id, agent_id, evidence_kind, evidence_id) VALUES ('entity', 'broken-target', 'agent-a', 'memory', 'missing-evidence')",
+				)
+				.run(),
+		);
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "rename_entity",
+					payload: { entityId: "broken-target", newName: "Broken renamed" },
+					reason: "Correct name",
+					evidence: [{ source_ref: "memory:rename-proof", quote: "Correct entity names." }],
+				},
+				{
+					operation: "rename_entity",
+					payload: { entityId: "healthy-target", newName: "Healthy renamed" },
+					reason: "Correct name",
+					evidence: [{ source_ref: "memory:rename-proof", quote: "Correct entity names." }],
+				},
+			],
+		});
+		expect(result.items).toEqual([
+			expect.objectContaining({ index: 0, ok: false, error: "evidence_citation_missing", retryable: true }),
+			expect.objectContaining({ index: 1, ok: true }),
+		]);
+		expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT name FROM entities ORDER BY id").all())).toEqual([
+			{ name: "Broken target" },
+			{ name: "Healthy renamed" },
+		]);
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"DELETE FROM evidence_citations WHERE derived_kind = 'entity' AND derived_id = 'broken-target' AND evidence_id = 'missing-evidence'",
+				)
+				.run(),
+		);
+		const retry = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "rename_entity",
+					payload: { entityId: "broken-target", newName: "Broken renamed" },
+					evidence: [{ source_ref: "memory:rename-proof", quote: "Correct entity names." }],
+				},
+			],
+		});
+		expect(retry.items).toEqual([expect.objectContaining({ index: 0, ok: true })]);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM ontology_proposals").get()),
+		).toEqual({ count: 2 });
+	});
+
+	it("retries a missing structural person as an item without creating a substitute or blocking siblings", async () => {
+		insertEpisodicMemory("healthy-proof", "Healthy evidence.");
+		insertEpisodicMemory("person-proof", "Authenticated evidence.");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO users(id, username, display_name, role, created_at, updated_at) VALUES ('usr_missing', 'missing', 'Missing Person', 'member', datetime('now'), datetime('now'))",
+			).run();
+			db.prepare("UPDATE memories SET author_user_id = 'usr_missing' WHERE id = 'person-proof'").run();
+		});
+		const operations: DreamingOperationRequest[] = [
+			{
+				operation: "create_entity",
+				payload: { name: "Authenticated project", type: "project" },
+				evidence: [{ source_ref: "memory:person-proof", quote: "Authenticated evidence." }],
+			},
+			{
+				operation: "create_entity",
+				payload: { name: "Healthy project", type: "project" },
+				evidence: [{ source_ref: "memory:healthy-proof", quote: "Healthy evidence." }],
+			},
+		];
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations,
+		});
+		expect(result.items).toEqual([
+			expect.objectContaining({ index: 0, ok: false, error: "person_identity_missing", retryable: true }),
+			expect.objectContaining({ index: 1, ok: true }),
+		]);
+		expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT name FROM entities ORDER BY name").all())).toEqual([
+			{ name: "Healthy project" },
+		]);
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO entities(id, agent_id, name, canonical_name, entity_type, person_user_id, created_at, updated_at) VALUES ('repaired-person', 'agent-a', 'Missing Person', 'missing person', 'person', 'usr_missing', datetime('now'), datetime('now'))",
+				)
+				.run(),
+		);
+		const retry = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: operations.slice(0, 1),
+		});
+		expect(retry.items).toEqual([expect.objectContaining({ index: 0, ok: true })]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM entities WHERE name = 'Healthy project'").get(),
+			),
+		).toEqual({ count: 1 });
 	});
 
 	it("mints hygiene attention for a flag op and returns the id", async () => {

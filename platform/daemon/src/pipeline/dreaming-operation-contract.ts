@@ -79,6 +79,8 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		...reasonField,
 	}),
 	create_entity: payload({ name: entityName, type: entityType }),
+	create_entity_alias: payload({ entity_id: entityId, alias: text, ...reasonField }),
+	archive_entity_alias: payload({ entity_id: entityId, alias_id: text, ...reasonField }),
 	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter, ...claimTime }),
 	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter, ...claimTime }),
 	supersede_claim_value: payload({
@@ -130,6 +132,8 @@ export const DREAMING_ATTENTION_OPERATIONS: ReadonlySet<string> = new Set([
 
 export const DREAMING_OPERATION_IDS = [
 	...ONTOLOGY_PROPOSAL_OPERATIONS.filter((op) => op !== "restore_claim_version" && op !== "attach_interface"),
+	"create_entity_alias",
+	"archive_entity_alias",
 	"flag",
 	"decline_attention",
 ] as const;
@@ -159,6 +163,8 @@ function operation<T extends (typeof DREAMING_OPERATION_IDS)[number]>(id: T) {
 
 export const DREAMING_ONTOLOGY_OPERATION_SCHEMA = z.discriminatedUnion("operation", [
 	operation("create_entity"),
+	operation("create_entity_alias"),
+	operation("archive_entity_alias"),
 	operation("add_claim_value"),
 	operation("set_claim_value"),
 	operation("rename_entity"),

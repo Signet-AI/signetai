@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
-import { DREAMING_ONTOLOGY_OPERATION_SCHEMA, DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS } from "./dreaming-operation-contract";
+import {
+	DREAMING_OPERATION_IDS,
+	DREAMING_ONTOLOGY_OPERATION_SCHEMA,
+	DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS,
+} from "./dreaming-operation-contract";
 
 test("Dreaming create_link exposes and validates its dependency reason", () => {
 	const payload = {
@@ -66,4 +70,29 @@ test("decline_attention is part of the Dreaming vocabulary and requires an atten
 			payload: {},
 		}).success,
 	).toBe(false);
+});
+
+test("Dreaming contract admits canonical alias operations with evidence and reject incomplete payloads", () => {
+	for (const operation of ["create_entity_alias", "archive_entity_alias"] as const) {
+		expect(DREAMING_OPERATION_IDS).toContain(operation);
+		const payload =
+			operation === "create_entity_alias"
+				? { entity_id: "public-parent", alias: "Private name", reason: "Evidence supplies this name." }
+				: { entity_id: "public-parent", alias_id: "private-alias", reason: "Evidence retracts this name." };
+		const input = {
+			operation,
+			payload,
+			reason: "Evidence-backed alias lifecycle.",
+			evidence: [{ source_ref: "memory:secret", quote: "Private name" }],
+		};
+		expect(DREAMING_ONTOLOGY_OPERATION_SCHEMA.safeParse(input).success).toBe(true);
+		expect(
+			DREAMING_ONTOLOGY_OPERATION_SCHEMA.safeParse({ ...input, payload: { entity_id: "public-parent" } }).success,
+		).toBe(false);
+		expect(
+			DREAMING_ONTOLOGY_OPERATION_SCHEMA.safeParse({ ...input, payload: { ...payload, entity_id: 7 } }).success,
+		).toBe(false);
+		const json = z.toJSONSchema(DREAMING_ONTOLOGY_OPERATION_SCHEMA);
+		expect(JSON.stringify(json)).toContain(operation);
+	}
 });

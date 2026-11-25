@@ -21,6 +21,7 @@ import {
 	type SemanticCitationKind,
 	type SemanticEvidenceCitation,
 	recordSemanticCitationsInTx,
+	dreamingEvidenceRecordInDb,
 	evidenceCitationInDb,
 	assertDreamingMutationLabelInDb,
 	dreamingPassPartitionInDb,
@@ -42,7 +43,9 @@ import {
 	resolveOntologyEvidenceRef,
 	uniqueOntologyEvidenceRefs,
 } from "./ontology-evidence";
-import { readScopeSql } from "./read-scope";
+import { readScopeSql, type ReadScope } from "./read-scope";
+import { getDbOwner, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
+import { ownerReadAll } from "./db-owner-sql";
 import { type MemoryTemporalEdgeInput, txInsertMemoryTemporalEdges } from "./temporal-edges";
 import { insertHistoryEvent, txForgetMemory, txIngestEnvelope, txSupersedeMemory } from "./transactions";
 
@@ -630,7 +633,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 				| undefined;
 			return row ?? null;
 		},
-		{ siteToken: "ontology-proposals.ts:626" },
+		{ siteToken: "db:ontology.proposal-row.read" },
 	);
 }
 
@@ -804,24 +807,64 @@ function readPayloadSelector(payload: Readonly<Record<string, unknown>>, ...keys
 	return null;
 }
 
+interface OntologyResolvedRow {
+	readonly id: string;
+	readonly name: string;
+	readonly compartment_id: number | null;
+	readonly person_user_id: string | null;
+	readonly status: string | null;
+}
+
+function resolveOntologyRow(
+	db: ReadDb,
+	table: "entities" | "entity_aspects",
+	agentId: string,
+	selector: string,
+	passId?: string,
+	entityId?: string,
+	exact = false,
+	includeArchived = false,
+): OntologyResolvedRow | undefined {
+	const partition = ontologyPartitionInDb(db, agentId, passId);
+	const scope = readScopeSql("item", dreamingReadScopeInDb(db, agentId, partition.compartmentId), { visibility: null });
+	const key = canonical(selector);
+	const rows = prepareTypedStatement<OntologyResolvedRow>(
+		db,
+		`SELECT item.id,item.name,item.compartment_id,item.status,${table === "entities" ? "item.person_user_id" : "NULL AS person_user_id"}
+ FROM ${table} item WHERE item.agent_id=? AND (${includeArchived ? "1=1" : "COALESCE(item.status,'active')='active'"} ${table === "entities" ? "OR (item.id=? AND item.person_user_id IS NOT NULL)" : ""})
+ AND (item.id=? OR COALESCE(item.canonical_name,LOWER(item.name))=? OR LOWER(item.name)=?)
+ ${entityId === undefined ? "" : "AND item.entity_id=?"} ${exact ? "AND item.compartment_id IS ?" : ""} ${scope.sql}
+ ORDER BY item.compartment_id IS ? DESC,item.compartment_id IS NULL DESC,item.id=? DESC,item.updated_at DESC,item.id LIMIT 2`,
+	).all(
+		agentId,
+		...(table === "entities" ? [selector] : []),
+		selector,
+		key,
+		key,
+		...(entityId === undefined ? [] : [entityId]),
+		...(exact ? [partition.compartmentId] : []),
+		...scope.args,
+		partition.compartmentId,
+		selector,
+	);
+	const first = rows[0];
+	if (first && first.id !== selector && rows[1]?.compartment_id === first.compartment_id)
+		throw new OntologyProposalError(
+			`${table === "entities" ? "Entity" : "Aspect"} selector is ambiguous: ${selector}. Use an id.`,
+			409,
+		);
+	return first;
+}
+
 function resolveEntityStrict(
 	db: WriteDb,
 	agentId: string,
 	selector: string,
+	passId?: string,
 ): { readonly id: string; readonly name: string } {
-	const key = canonical(selector);
-	const rows = db
-		.prepare(
-			`SELECT id, name FROM entities
-			 WHERE agent_id = ?
-			   AND COALESCE(status, 'active') = 'active'
-			   AND (id = ? OR COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
-			 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC, name ASC`,
-		)
-		.all(agentId, selector, key, key, selector) as Array<{ id: string; name: string }>;
-	if (rows.length === 0) throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
-	if (rows.length > 1) throw new OntologyProposalError(`Entity selector is ambiguous: ${selector}. Use an id.`, 409);
-	return rows[0] as { id: string; name: string };
+	const row = resolveOntologyRow(db, "entities", agentId, selector, passId);
+	if (!row) throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
+	return { id: row.id, name: row.name };
 }
 
 function resolveAspectStrict(
@@ -829,37 +872,15 @@ function resolveAspectStrict(
 	agentId: string,
 	entityId: string,
 	selector: string,
+	passId?: string,
 ): { readonly id: string; readonly name: string } {
-	const key = canonical(selector);
-	const rows = db
-		.prepare(
-			`SELECT id, name FROM entity_aspects
-			 WHERE entity_id = ?
-			   AND agent_id = ?
-			   AND COALESCE(status, 'active') = 'active'
-			   AND (id = ? OR canonical_name = ? OR LOWER(name) = ?)
-			 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC, name ASC`,
-		)
-		.all(entityId, agentId, selector, key, key, selector) as Array<{ id: string; name: string }>;
-	if (rows.length === 0) throw new OntologyProposalError(`Aspect not found: ${selector}`, 404);
-	if (rows.length > 1) throw new OntologyProposalError(`Aspect selector is ambiguous: ${selector}. Use an id.`, 409);
-	return rows[0] as { id: string; name: string };
+	const row = resolveOntologyRow(db, "entity_aspects", agentId, selector, passId, entityId);
+	if (!row) throw new OntologyProposalError(`Aspect not found: ${selector}`, 404);
+	return { id: row.id, name: row.name };
 }
 
-function resolveEntity(db: WriteDb, agentId: string, name: string): string | null {
-	const key = canonical(name);
-	const row = db
-		.prepare(
-			`SELECT id FROM entities
-			 WHERE agent_id = ?
-			   AND COALESCE(status, 'active') = 'active'
-			   AND (COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
-			 ORDER BY updated_at DESC, name ASC
-			 LIMIT 2`,
-		)
-		.all(agentId, key, key) as Array<{ id: string }>;
-	if (row.length > 1) throw new OntologyProposalError(`Entity selector is ambiguous: ${name}. Use an id.`, 409);
-	return row[0]?.id ?? null;
+function resolveEntity(db: WriteDb, agentId: string, name: string, passId?: string, exact = false): string | null {
+	return resolveOntologyRow(db, "entities", agentId, name, passId, undefined, exact)?.id ?? null;
 }
 
 function resolveOrCreateEntity(
@@ -868,25 +889,23 @@ function resolveOrCreateEntity(
 	name: string,
 	type: EntityType,
 	proposal: ProposalRow,
+	exact = false,
 ): string {
-	const existing = resolveEntity(db, agentId, name);
-	if (existing !== null) {
-		assertDreamingMutationLabelInDb(
-			db,
-			"entities",
-			existing,
-			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
-		);
-		return existing;
-	}
+	const existing = resolveEntity(db, agentId, name, proposal.dreaming_pass_id ?? undefined, exact);
+	if (existing !== null) return existing;
 	const quality = classifyEntityQuality(name, type === "person" ? type : undefined);
 	if (!quality.ok) throw new OntologyProposalError(`Entity name rejected: ${quality.reason}`, 400);
+	const partition = ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined);
 	const id = crypto.randomUUID();
-	db.prepare(
-		`INSERT INTO entities
-		 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`,
-	).run(id, name.trim(), canonical(name), type, agentId);
+	db.prepare(`INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,compartment_id,mentions,created_at,updated_at)
+ VALUES(?,?,?,?,?,?,0,datetime('now'),datetime('now'))`).run(
+		id,
+		name.trim(),
+		canonical(name),
+		type,
+		agentId,
+		partition.compartmentId,
+	);
 	labelProposalRowInTx(db, "entities", "entity", id, proposal);
 	return id;
 }
@@ -897,53 +916,38 @@ function resolveOrCreateAspect(
 	agentId: string,
 	name: string,
 	proposal: ProposalRow,
+	exact = false,
 ): string {
-	const key = canonical(name);
-	const existing = db
-		.prepare(
-			`SELECT id, status FROM entity_aspects
-			 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ?
-			 LIMIT 1`,
-		)
-		.get(entityId, agentId, key) as { id: string; status: string | null } | undefined;
+	const passId = proposal.dreaming_pass_id ?? undefined;
+	const partition = ontologyPartitionInDb(db, agentId, passId);
+	const existing = resolveOntologyRow(db, "entity_aspects", agentId, name, passId, entityId, true, true);
 	if (existing) {
-		assertDreamingMutationLabelInDb(
-			db,
-			"entity_aspects",
-			existing.id,
-			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined),
-		);
-		if ((existing.status ?? "active") !== "active") {
+		if ((existing.status ?? "active") !== "active")
 			db.prepare(
-				`UPDATE entity_aspects
-				 SET status = 'active', archived_at = NULL, archived_by = NULL,
-				     archive_reason = NULL, updated_at = datetime('now')
-				 WHERE id = ? AND agent_id = ?`,
-			).run(existing.id, agentId);
-		}
+				"UPDATE entity_aspects SET status = 'active', archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE id = ? AND agent_id = ? AND compartment_id IS ?",
+			).run(existing.id, agentId, partition.compartmentId);
 		return existing.id;
 	}
-
+	if (!exact) {
+		const readable = resolveOntologyRow(db, "entity_aspects", agentId, name, passId, entityId);
+		if (readable) return readable.id;
+	}
 	const id = crypto.randomUUID();
-	db.prepare(
-		`INSERT INTO entity_aspects
-		 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
-	).run(id, entityId, agentId, name.trim(), key);
+	db.prepare(`INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name,compartment_id,weight,created_at,updated_at)
+ VALUES(?,?,?,?,?,?,0.5,datetime('now'),datetime('now'))`).run(
+		id,
+		entityId,
+		agentId,
+		name.trim(),
+		canonical(name),
+		partition.compartmentId,
+	);
 	labelProposalRowInTx(db, "entity_aspects", "aspect", id, proposal);
 	return id;
 }
 
-function resolveAspect(db: WriteDb, entityId: string, agentId: string, name: string): string | null {
-	const key = canonical(name);
-	const row = db
-		.prepare(
-			`SELECT id FROM entity_aspects
-			 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ?
-			 LIMIT 1`,
-		)
-		.get(entityId, agentId, key) as { id: string } | undefined;
-	return row?.id ?? null;
+function resolveAspect(db: WriteDb, entityId: string, agentId: string, name: string, passId?: string): string | null {
+	return resolveOntologyRow(db, "entity_aspects", agentId, name, passId, entityId)?.id ?? null;
 }
 
 function applyCreateEntity(
@@ -954,10 +958,10 @@ function applyCreateEntity(
 ): Readonly<Record<string, unknown>> {
 	const name = readString(payload, "name");
 	if (name === null) throw new OntologyProposalError("payload.name is required", 400);
-	const existingEntityId = resolveEntity(db, agentId, name);
+	const existingEntityId = resolveEntity(db, agentId, name, proposal.dreaming_pass_id ?? undefined, true);
 	const entityId =
 		existingEntityId ??
-		resolveOrCreateEntity(db, agentId, name, normalizeEntityType(readString(payload, "entity_type")), proposal);
+		resolveOrCreateEntity(db, agentId, name, normalizeEntityType(readString(payload, "entity_type")), proposal, true);
 	const proposalEvidence = JSON.stringify(proposalAuditEvidence(proposal));
 	if (existingEntityId !== null) {
 		db.prepare(
@@ -1123,15 +1127,24 @@ function materializeAttributeMemoryInTx(
 		input.attributeId,
 		input.agentId,
 	);
-	db.prepare("INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, ?)").run(
+	db.prepare(
+		"INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id, agent_id, compartment_id, dreaming_pass_id) VALUES (?, ?, ?, ?, ?)",
+	).run(
 		input.attributeId,
 		input.entityId,
+		input.agentId,
+		ontologyPartitionInDb(db, input.agentId, input.proposal.dreaming_pass_id ?? undefined).compartmentId,
+		input.proposal.dreaming_pass_id,
 	);
 	db.prepare(
 		`UPDATE entities
-		 SET mentions = (SELECT COUNT(*) FROM memory_entity_mentions WHERE entity_id = entities.id)
-		 WHERE id = ? AND agent_id = ?`,
-	).run(input.entityId, input.agentId);
+		 SET mentions = (SELECT COUNT(*) FROM memory_entity_mentions mention JOIN memories m ON m.id=mention.memory_id WHERE mention.entity_id=entities.id AND m.agent_id=entities.agent_id AND m.compartment_id IS entities.compartment_id AND mention.compartment_id IS entities.compartment_id)
+		 WHERE id = ? AND agent_id = ? AND person_user_id IS NULL AND compartment_id IS ?`,
+	).run(
+		input.entityId,
+		input.agentId,
+		ontologyPartitionInDb(db, input.agentId, input.proposal.dreaming_pass_id ?? undefined).compartmentId,
+	);
 	linkDerivedMemorySourcesInTx(db, {
 		derivedMemoryId: input.attributeId,
 		agentId: input.agentId,
@@ -1175,6 +1188,7 @@ function supersedeAttributeMemoryInTx(
 	const result = txSupersedeMemory(db, {
 		memoryId: input.memoryId,
 		supersededBy: input.replacementMemoryId,
+		ctx: { passId: input.proposal.dreaming_pass_id ?? undefined },
 		reason: input.proposal.rationale || null,
 		changedBy: input.actor,
 		changedAt: now(),
@@ -1202,6 +1216,7 @@ function archiveAttributeMemoryInTx(
 	const result = txForgetMemory(db, {
 		memoryId,
 		reason: proposal.rationale || "Semantic claim archived",
+		ctx: { passId: proposal.dreaming_pass_id ?? undefined },
 		changedBy: actor,
 		changedAt: now(),
 		force,
@@ -1237,6 +1252,8 @@ function restoreAttributeMemoryInTx(db: WriteDb, memoryId: string | null, propos
 	).run(changedAt, actor, memoryId);
 	insertHistoryEvent(db, {
 		memoryId,
+		agentId: proposal.agent_id,
+		passId: proposal.dreaming_pass_id ?? undefined,
 		event: "recovered",
 		oldContent: null,
 		newContent: memory.content,
@@ -1277,15 +1294,10 @@ function applyAddClaimValue(
 		| undefined;
 	if (addEntityRow !== undefined) enforceAspectCapForNewAspect(db, addEntityRow, agentId, aspect, proposal, writeCaps);
 	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect, proposal);
-	const scope = readScopeSql(
-		"",
-		dreamingReadScopeInDb(
-			db,
-			agentId,
-			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
-		),
-		{ visibility: null },
-	);
+	const scope = {
+		sql: " AND compartment_id IS ?",
+		args: [ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId],
+	};
 	const groupKey = readString(payload, "group_key") ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const normalized = canonical(value);
@@ -1429,15 +1441,10 @@ function applySetClaimValue(
 		proposal,
 	);
 	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect, proposal);
-	const scope = readScopeSql(
-		"",
-		dreamingReadScopeInDb(
-			db,
-			agentId,
-			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
-		),
-		{ visibility: null },
-	);
+	const scope = {
+		sql: " AND compartment_id IS ?",
+		args: [ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId],
+	};
 	const groupKey = canonicalKey(readString(payload, "group_key") ?? readString(payload, "group")) ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const slot = db
@@ -1615,8 +1622,8 @@ function applySetClaimValue(
 			   AND COALESCE(group_key, 'general') = ?
 			   AND claim_key = ?
 			   AND status = 'active'
-			   AND id != ?`,
-		).run(id, agentId, aspectId, kind, groupKey, claimKey, id);
+			   AND id != ? AND compartment_id IS ?`,
+		).run(id, agentId, aspectId, kind, groupKey, claimKey, id, ...scope.args);
 		for (const prior of active) {
 			supersedeAttributeMemoryInTx(db, {
 				author,
@@ -1657,9 +1664,9 @@ function applySupersedeClaimValue(
 	if (aspect === null) throw new OntologyProposalError("payload.aspect is required", 400);
 	if (claimKey === null) throw new OntologyProposalError("payload.claim_key is required", 400);
 
-	const entityId = resolveEntity(db, agentId, entity);
+	const entityId = resolveEntity(db, agentId, entity, proposal.dreaming_pass_id ?? undefined);
 	if (entityId === null) throw new OntologyProposalError("payload.entity was not found", 400);
-	const aspectId = resolveAspect(db, entityId, agentId, aspect);
+	const aspectId = resolveAspect(db, entityId, agentId, aspect, proposal.dreaming_pass_id ?? undefined);
 	if (aspectId === null) throw new OntologyProposalError("payload.aspect was not found", 400);
 
 	const groupKey = readString(payload, "group_key") ?? "general";
@@ -1681,6 +1688,8 @@ function applySupersedeClaimValue(
 	}
 	filters.push("COALESCE(group_key, 'general') = ?");
 	args.push(groupKey);
+	filters.push("compartment_id IS ?");
+	args.push(ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId);
 
 	const rows = db
 		.prepare(`SELECT id, memory_id FROM entity_attributes WHERE ${filters.join(" AND ")}`)
@@ -1771,7 +1780,7 @@ function applyRenameEntity(
 	const name = readString(payload, "new_name");
 	if (selector === null) throw new OntologyProposalError("payload.selector is required", 400);
 	if (name === null) throw new OntologyProposalError("payload.new_name is required", 400);
-	const entity = resolveEntityStrict(db, agentId, selector);
+	const entity = resolveEntityStrict(db, agentId, selector, proposal.dreaming_pass_id ?? undefined);
 	const key = canonical(name);
 	const collision = db
 		.prepare(
@@ -1779,10 +1788,16 @@ function applyRenameEntity(
 			 WHERE agent_id = ?
 			   AND id != ?
 			   AND COALESCE(status, 'active') = 'active'
-			   AND (COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
+			   AND (COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?) AND compartment_id IS ?
 			 LIMIT 1`,
 		)
-		.get(agentId, entity.id, key, key) as { id: string; name: string } | undefined;
+		.get(
+			agentId,
+			entity.id,
+			key,
+			key,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		) as { id: string; name: string } | undefined;
 	if (collision) {
 		throw new OntologyProposalError(
 			`Entity canonical name collides with "${collision.name}". Use merge_entities instead.`,
@@ -1806,7 +1821,7 @@ function applyArchiveEntity(
 ): Readonly<Record<string, unknown>> {
 	const selector = readPayloadSelector(payload, "selector", "entity", "entity_id", "name");
 	if (selector === null) throw new OntologyProposalError("payload.selector is required", 400);
-	const entity = resolveEntityStrict(db, agentId, selector);
+	const entity = resolveEntityStrict(db, agentId, selector, proposal.dreaming_pass_id ?? undefined);
 	const pinned = db.prepare("SELECT pinned FROM entities WHERE id = ? AND agent_id = ?").get(entity.id, agentId) as
 		| { pinned: number | null }
 		| undefined;
@@ -1896,11 +1911,11 @@ function applyCreateAspect(
 	const name = readString(payload, "name") ?? readString(payload, "aspect");
 	if (entitySelector === null) throw new OntologyProposalError("payload.entity is required", 400);
 	if (name === null) throw new OntologyProposalError("payload.name is required", 400);
-	const entity = resolveEntityStrict(db, agentId, entitySelector);
+	const entity = resolveEntityStrict(db, agentId, entitySelector, proposal.dreaming_pass_id ?? undefined);
 
 	enforceAspectCapForNewAspect(db, entity, agentId, name, proposal, writeCaps);
 
-	const aspectId = resolveOrCreateAspect(db, entity.id, agentId, name, proposal);
+	const aspectId = resolveOrCreateAspect(db, entity.id, agentId, name, proposal, true);
 	db.prepare(
 		`UPDATE entity_aspects
 		 SET proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
@@ -1921,18 +1936,25 @@ function applyRenameAspect(
 	if (entitySelector === null) throw new OntologyProposalError("payload.entity is required", 400);
 	if (aspectSelector === null) throw new OntologyProposalError("payload.selector is required", 400);
 	if (name === null) throw new OntologyProposalError("payload.new_name is required", 400);
-	const entity = resolveEntityStrict(db, agentId, entitySelector);
-	const aspect = resolveAspectStrict(db, agentId, entity.id, aspectSelector);
+	const entity = resolveEntityStrict(db, agentId, entitySelector, proposal.dreaming_pass_id ?? undefined);
+	const aspect = resolveAspectStrict(db, agentId, entity.id, aspectSelector, proposal.dreaming_pass_id ?? undefined);
 	const key = canonical(name);
 	const collision = db
 		.prepare(
 			`SELECT id, name FROM entity_aspects
 			 WHERE entity_id = ? AND agent_id = ? AND id != ?
 			   AND COALESCE(status, 'active') = 'active'
-			   AND (canonical_name = ? OR LOWER(name) = ?)
+			   AND (canonical_name = ? OR LOWER(name) = ?) AND compartment_id IS ?
 			 LIMIT 1`,
 		)
-		.get(entity.id, agentId, aspect.id, key, key) as { id: string; name: string } | undefined;
+		.get(
+			entity.id,
+			agentId,
+			aspect.id,
+			key,
+			key,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		) as { id: string; name: string } | undefined;
 	if (collision) throw new OntologyProposalError(`Aspect collides with "${collision.name}"`, 409);
 	db.prepare(
 		`UPDATE entity_aspects
@@ -1953,8 +1975,8 @@ function applyArchiveAspect(
 	const aspectSelector = readPayloadSelector(payload, "selector", "aspect", "aspect_id", "name");
 	if (entitySelector === null) throw new OntologyProposalError("payload.entity is required", 400);
 	if (aspectSelector === null) throw new OntologyProposalError("payload.selector is required", 400);
-	const entity = resolveEntityStrict(db, agentId, entitySelector);
-	const aspect = resolveAspectStrict(db, agentId, entity.id, aspectSelector);
+	const entity = resolveEntityStrict(db, agentId, entitySelector, proposal.dreaming_pass_id ?? undefined);
+	const aspect = resolveAspectStrict(db, agentId, entity.id, aspectSelector, proposal.dreaming_pass_id ?? undefined);
 	const constraint = db
 		.prepare(
 			`SELECT 1 FROM entity_attributes
@@ -2059,9 +2081,17 @@ function applyRestoreClaimVersion(
 			`SELECT memory_id FROM entity_attributes
 			 WHERE agent_id = ? AND aspect_id = ? AND kind = ?
 			   AND COALESCE(group_key, 'general') = COALESCE(?, 'general')
-			   AND claim_key = ? AND status = 'active' AND id != ?`,
+			   AND claim_key = ? AND status = 'active' AND id != ? AND compartment_id IS ?`,
 		)
-		.all(agentId, row.aspect_id, row.kind, row.group_key, row.claim_key, attributeId) as Array<{
+		.all(
+			agentId,
+			row.aspect_id,
+			row.kind,
+			row.group_key,
+			row.claim_key,
+			attributeId,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		) as Array<{
 		memory_id: string | null;
 	}>;
 	restoreAttributeMemoryInTx(db, row.memory_id, proposal, actor);
@@ -2079,8 +2109,17 @@ function applyRestoreClaimVersion(
 		 SET status = 'superseded', superseded_by = ?, updated_at = datetime('now')
 		 WHERE agent_id = ? AND aspect_id = ? AND kind = ?
 		   AND COALESCE(group_key, 'general') = COALESCE(?, 'general')
-		   AND claim_key = ? AND status = 'active' AND id != ?`,
-	).run(attributeId, agentId, row.aspect_id, row.kind, row.group_key, row.claim_key, attributeId);
+		   AND claim_key = ? AND status = 'active' AND id != ? AND compartment_id IS ?`,
+	).run(
+		attributeId,
+		agentId,
+		row.aspect_id,
+		row.kind,
+		row.group_key,
+		row.claim_key,
+		attributeId,
+		ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+	);
 	db.prepare(
 		`UPDATE entity_attributes
 		 SET status = 'active', superseded_by = NULL, archived_at = NULL, archived_by = NULL,
@@ -2155,10 +2194,15 @@ function mergeEntityAspects(
 		const target = db
 			.prepare(
 				`SELECT id FROM entity_aspects
-				 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ?
+				 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ? AND compartment_id IS ?
 				 LIMIT 1`,
 			)
-			.get(targetId, agentId, aspect.canonical_name) as { id: string } | undefined;
+			.get(
+				targetId,
+				agentId,
+				aspect.canonical_name,
+				ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+			) as { id: string } | undefined;
 		if (target) {
 			mergeSemanticEvidenceInTx(db, "entity_aspects", "aspect", aspect.id, target.id, proposal, true);
 			db.prepare("UPDATE entity_attributes SET aspect_id = ? WHERE aspect_id = ? AND agent_id = ?").run(
@@ -2185,25 +2229,46 @@ function mergeEntityEdges(
 	targetId: string,
 	proposal: ProposalRow,
 ): number {
+	const partition = ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined);
+	const scope = dreamingReadScopeInDb(db, agentId, partition.compartmentId);
+	for (const [table, where, args] of [
+		["relations", "child.source_entity_id = ? OR child.target_entity_id = ?", [sourceId, sourceId]],
+		["memory_entity_mentions", "child.entity_id = ?", [sourceId]],
+	] as const) {
+		const visible = readScopeSql("child", scope, { visibility: null });
+		const children = prepareTypedStatement<{ compartment_id: number | null }>(
+			db,
+			`SELECT child.compartment_id FROM ${table} child WHERE (${where}) ${visible.sql}`,
+		).all(...args, ...visible.args);
+		if (children.some((child) => child.compartment_id !== partition.compartmentId))
+			throw new OntologyProposalError("compartment_mismatch", 409);
+	}
 	let relationshipChanges = mergeEntityDependencies(db, agentId, sourceId, targetId, proposal);
-
 	relationshipChanges += db
 		.prepare(
-			`DELETE FROM relations
-			 WHERE (source_entity_id = ? AND target_entity_id IN (?, ?))
-			    OR (source_entity_id = ? AND target_entity_id = ?)`,
+			`DELETE FROM relations WHERE agent_id=? AND compartment_id IS ? AND
+		 ((source_entity_id = ? AND target_entity_id IN (?, ?)) OR (source_entity_id = ? AND target_entity_id = ?))`,
 		)
-		.run(sourceId, sourceId, targetId, targetId, sourceId).changes;
+		.run(agentId, partition.compartmentId, sourceId, sourceId, targetId, targetId, sourceId).changes;
 	relationshipChanges += db
-		.prepare("UPDATE relations SET source_entity_id = ? WHERE source_entity_id = ?")
-		.run(targetId, sourceId).changes;
+		.prepare(
+			"UPDATE relations SET source_entity_id = ? WHERE source_entity_id = ? AND agent_id=? AND compartment_id IS ?",
+		)
+		.run(targetId, sourceId, agentId, partition.compartmentId).changes;
 	relationshipChanges += db
-		.prepare("UPDATE relations SET target_entity_id = ? WHERE target_entity_id = ?")
-		.run(targetId, sourceId).changes;
+		.prepare(
+			"UPDATE relations SET target_entity_id = ? WHERE target_entity_id = ? AND agent_id=? AND compartment_id IS ?",
+		)
+		.run(targetId, sourceId, agentId, partition.compartmentId).changes;
 	db.prepare(
-		"INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id) SELECT memory_id, ? FROM memory_entity_mentions WHERE entity_id = ?",
-	).run(targetId, sourceId);
-	db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(sourceId);
+		`INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id, agent_id, compartment_id, dreaming_pass_id, mention_text, confidence, created_at)
+		 SELECT memory_id, ?, agent_id, compartment_id, dreaming_pass_id, mention_text, confidence, created_at FROM memory_entity_mentions WHERE entity_id = ? AND agent_id=? AND compartment_id IS ?`,
+	).run(targetId, sourceId, agentId, partition.compartmentId);
+	db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ? AND agent_id=? AND compartment_id IS ?").run(
+		sourceId,
+		agentId,
+		partition.compartmentId,
+	);
 	return relationshipChanges;
 }
 
@@ -2216,6 +2281,7 @@ function mergeEntityAliases(db: WriteDb, agentId: string, sourceId: string, targ
 			 WHERE kept.agent_id = entity_aliases.agent_id AND kept.entity_id = ?
 			   AND kept.canonical_alias = entity_aliases.canonical_alias
 			   AND kept.status = entity_aliases.status
+			   AND kept.compartment_id IS entity_aliases.compartment_id
 		   )`,
 	).run(agentId, sourceId, targetId);
 	db.prepare(
@@ -2270,10 +2336,17 @@ function mergeEntityDependencies(
 			.prepare(
 				`SELECT id FROM entity_dependencies
 				 WHERE agent_id = ? AND id != ?
-				   AND source_entity_id = ? AND target_entity_id = ? AND dependency_type = ?
+				   AND source_entity_id = ? AND target_entity_id = ? AND dependency_type = ? AND compartment_id IS ?
 				 LIMIT 1`,
 			)
-			.get(agentId, row.id, nextSource, nextTarget, row.dependency_type) as { id: string } | undefined;
+			.get(
+				agentId,
+				row.id,
+				nextSource,
+				nextTarget,
+				row.dependency_type,
+				ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+			) as { id: string } | undefined;
 		if (duplicate) {
 			mergeSemanticEvidenceInTx(db, "entity_dependencies", "dependency", row.id, duplicate.id, proposal, true);
 			changes += db
@@ -2305,21 +2378,36 @@ function applyMergeEntities(
 		"payload.target_entity",
 		readString(payload, "target_entity") ?? readString(payload, "target") ?? null,
 		readString(payload, "target_entity_id") ?? readString(payload, "target_id") ?? null,
+		proposal.dreaming_pass_id ?? undefined,
 	);
 	const alreadyMerged = sources.filter((source) => {
 		if (source.id !== null) {
 			return (
-				getEntityRefById(db, agentId, source.id) === null &&
-				wasEntityMergeApplied(db, agentId, source.id, target.id, source.selector)
+				getEntityRefById(db, agentId, source.id, proposal.dreaming_pass_id ?? undefined) === null &&
+				wasEntityMergeApplied(
+					db,
+					agentId,
+					source.id,
+					target.id,
+					source.selector,
+					proposal.dreaming_pass_id ?? undefined,
+				)
 			);
 		}
 		if (source.selector === null) return false;
 		try {
-			resolveEntityRefStrict(db, agentId, source.selector);
+			resolveEntityRefStrict(db, agentId, source.selector, proposal.dreaming_pass_id ?? undefined);
 			return false;
 		} catch (err) {
 			if (!(err instanceof OntologyProposalError) || err.status !== 404) throw err;
-			return wasEntityMergeApplied(db, agentId, null, target.id, source.selector);
+			return wasEntityMergeApplied(
+				db,
+				agentId,
+				null,
+				target.id,
+				source.selector,
+				proposal.dreaming_pass_id ?? undefined,
+			);
 		}
 	});
 	const pendingSources = sources.filter((source) => !alreadyMerged.includes(source));
@@ -2335,6 +2423,7 @@ function applyMergeEntities(
 	}
 	const plan = buildEntityMergePlan(db, {
 		agentId,
+		passId: proposal.dreaming_pass_id ?? undefined,
 		targetEntityId: target.id,
 		sourceEntities: pendingSources
 			.map((spec) => spec.selector)
@@ -2357,8 +2446,17 @@ function applyMergeEntities(
 			     updated_at = datetime('now')
 			 WHERE id = ? AND agent_id = ?`,
 		).run(source.id, plan.target.id, agentId);
-		mergeSemanticEvidenceInTx(db, "entities", "entity", source.id, plan.target.id, proposal, true);
-		db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(source.id, agentId);
+		mergeSemanticEvidenceInTx(db, "entities", "entity", source.id, plan.target.id, proposal, false);
+		db.prepare(
+			"UPDATE entities SET status='archived', archived_at=?, archived_by=?, archive_reason='merged', updated_at=? WHERE id=? AND agent_id=? AND compartment_id IS ?",
+		).run(
+			now(),
+			proposal.created_by,
+			now(),
+			source.id,
+			agentId,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		);
 		merged.push({ name: source.name, entityId: source.id, movedAspects });
 	}
 	if (merged.length === 0) throw new OntologyProposalError("No distinct source entities to merge", 400);
@@ -2384,8 +2482,8 @@ function applyMergeAspects(
 	if (targetSelector === null) throw new OntologyProposalError("payload.target is required", 400);
 	if (rawSources.length === 0) throw new OntologyProposalError("payload.sources is required", 400);
 
-	const entity = resolveEntityStrict(db, agentId, entitySelector);
-	const target = resolveAspectStrict(db, agentId, entity.id, targetSelector);
+	const entity = resolveEntityStrict(db, agentId, entitySelector, proposal.dreaming_pass_id ?? undefined);
+	const target = resolveAspectStrict(db, agentId, entity.id, targetSelector, proposal.dreaming_pass_id ?? undefined);
 	const newName = readString(payload, "new_name");
 	if (newName !== null) {
 		const key = canonical(newName);
@@ -2394,10 +2492,17 @@ function applyMergeAspects(
 				`SELECT id FROM entity_aspects
 				 WHERE entity_id = ? AND agent_id = ? AND id != ?
 				   AND COALESCE(status, 'active') = 'active'
-				   AND (canonical_name = ? OR LOWER(name) = ?)
+				   AND (canonical_name = ? OR LOWER(name) = ?) AND compartment_id IS ?
 				 LIMIT 1`,
 			)
-			.get(entity.id, agentId, target.id, key, key);
+			.get(
+				entity.id,
+				agentId,
+				target.id,
+				key,
+				key,
+				ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+			);
 		if (collision) throw new OntologyProposalError(`Aspect collides with "${newName}"`, 409);
 	}
 
@@ -2407,7 +2512,7 @@ function applyMergeAspects(
 	const seen = new Set<string>([target.id]);
 	for (const raw of rawSources) {
 		if (typeof raw !== "string") throw new OntologyProposalError("payload.sources must be aspect selectors", 400);
-		const source = resolveAspectStrict(db, agentId, entity.id, raw);
+		const source = resolveAspectStrict(db, agentId, entity.id, raw, proposal.dreaming_pass_id ?? undefined);
 		if (seen.has(source.id)) continue;
 		seen.add(source.id);
 		mergeSemanticEvidenceInTx(db, "entity_aspects", "aspect", source.id, target.id, proposal, false);
@@ -2471,10 +2576,10 @@ function applyCreateLink(
 
 	const dependencyType = normalizeDependencyType(readString(payload, "link_type"));
 	const sourceId = sourceIdSelector
-		? resolveEntityStrict(db, agentId, source).id
+		? resolveEntityStrict(db, agentId, source, proposal.dreaming_pass_id ?? undefined).id
 		: resolveOrCreateEntity(db, agentId, source, normalizeEntityType(readString(payload, "source_type")), proposal);
 	const targetId = targetIdSelector
-		? resolveEntityStrict(db, agentId, target).id
+		? resolveEntityStrict(db, agentId, target, proposal.dreaming_pass_id ?? undefined).id
 		: resolveOrCreateEntity(db, agentId, target, normalizeEntityType(readString(payload, "target_type")), proposal);
 	const reason = requireDependencyReason(dependencyType, readString(payload, "reason") ?? proposal.rationale);
 	const strength = clamp01(readNumber(payload, "strength") ?? 0.5);
@@ -2484,10 +2589,16 @@ function applyCreateLink(
 		.prepare(
 			`SELECT id, status FROM entity_dependencies
 			 WHERE source_entity_id = ? AND target_entity_id = ?
-			   AND dependency_type = ? AND agent_id = ?
+			   AND dependency_type = ? AND agent_id = ? AND compartment_id IS ?
 			 LIMIT 1`,
 		)
-		.get(sourceId, targetId, dependencyType, agentId) as { id: string; status: string | null } | undefined;
+		.get(
+			sourceId,
+			targetId,
+			dependencyType,
+			agentId,
+			ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
+		) as { id: string; status: string | null } | undefined;
 	if (existing) {
 		db.prepare(
 			`UPDATE entity_dependencies
@@ -2524,8 +2635,8 @@ function applyCreateLink(
 		`INSERT INTO entity_dependencies
 		 (id, source_entity_id, target_entity_id, agent_id, dependency_type,
 		  strength, confidence, reason, created_at, updated_at,
-		  source_id, source_kind, source_path, source_root, proposal_id, proposal_evidence)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
+		  source_id, source_kind, source_path, source_root, proposal_id, proposal_evidence, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		sourceId,
@@ -2541,6 +2652,7 @@ function applyCreateLink(
 		proposal.source_root,
 		proposal.id,
 		JSON.stringify(proposalAuditEvidence(proposal)),
+		ontologyPartitionInDb(db, agentId, proposal.dreaming_pass_id ?? undefined).compartmentId,
 	);
 	return { dependencyId: id, sourceId, targetId, updated: false };
 }
@@ -2633,7 +2745,7 @@ function applyPinEntity(
 ): Readonly<Record<string, unknown>> {
 	const selector = readPayloadSelector(payload, "selector", "entity", "entity_id", "id");
 	if (selector === null) throw new OntologyProposalError("payload.entity is required", 400);
-	const entity = resolveEntityStrict(db, agentId, selector);
+	const entity = resolveEntityStrict(db, agentId, selector, proposal.dreaming_pass_id ?? undefined);
 	const ts = now();
 	db.prepare(
 		`UPDATE entities
@@ -2651,7 +2763,7 @@ function applyUnpinEntity(
 ): Readonly<Record<string, unknown>> {
 	const selector = readPayloadSelector(payload, "selector", "entity", "entity_id", "id");
 	if (selector === null) throw new OntologyProposalError("payload.entity is required", 400);
-	const entity = resolveEntityStrict(db, agentId, selector);
+	const entity = resolveEntityStrict(db, agentId, selector, proposal.dreaming_pass_id ?? undefined);
 	db.prepare(
 		`UPDATE entities
 		 SET pinned = 0, pinned_at = NULL, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
@@ -2660,10 +2772,41 @@ function applyUnpinEntity(
 	return { entityId: entity.id, pinned: false };
 }
 
+export async function readOntologyEntityAliasRows(params: {
+	readonly agentId: string;
+	readonly entityId: string;
+	readonly status?: "active" | "archived" | "all";
+	readonly scope?: ReadScope;
+}): Promise<readonly Record<string, unknown>[]> {
+	const conditions = ["a.entity_id = ?", "a.agent_id = ?"];
+	const args: unknown[] = [params.entityId, params.agentId];
+	if (params.status && params.status !== "all") {
+		conditions.push("a.status = ?");
+		args.push(params.status);
+	} else if (!params.status) {
+		conditions.push("a.status = 'active'");
+	}
+	const scope = params.scope ?? {
+		reach: { kind: "own", agentId: params.agentId },
+		compartments: "all",
+		projects: null,
+	};
+	if (scope.projects !== null) return [];
+	const aliasScope = readScopeSql("a", scope, { visibility: null, memory: null, session: null, source: null });
+	const entityScope = readScopeSql("e", scope, { visibility: null, memory: null, session: null, source: null });
+	const rows = await ownerReadAll<Record<string, unknown>>(
+		await getDbOwner(),
+		`SELECT a.id,a.entity_id,a.agent_id,a.alias,a.canonical_alias,a.confidence,a.source,a.status,a.created_at,a.updated_at FROM entity_aliases a JOIN entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id WHERE ${conditions.join(" AND ")}${aliasScope.sql}${entityScope.sql} ORDER BY a.status ASC, a.alias ASC`,
+		[...args, ...aliasScope.args, ...entityScope.args],
+		{ operation: "db:knowledge.entity-aliases.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+	return rows;
+}
+
 function applyCreateEntityAlias(
 	db: WriteDb,
 	agentId: string,
-	_proposal: ProposalRow,
+	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
@@ -2672,36 +2815,47 @@ function applyCreateEntityAlias(
 	if (alias === null) throw new OntologyProposalError("payload.alias is required", 400);
 	const canonicalAlias = canonical(alias);
 	if (canonicalAlias.length === 0) throw new OntologyProposalError("payload.alias is required", 400);
-	const entity = resolveEntityStrict(db, agentId, entitySelector);
+	const entity = resolveEntityStrict(db, agentId, entitySelector, proposal.dreaming_pass_id ?? undefined);
 	const confidence = clamp01(readNumber(payload, "confidence") ?? 1);
 	const source = readString(payload, "source");
 	const id = crypto.randomUUID();
 	db.prepare(
 		`INSERT INTO entity_aliases
-		 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
-	).run(id, entity.id, agentId, alias.trim(), canonicalAlias, confidence, source ?? null);
+		 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at, compartment_id, dreaming_pass_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, ?)`,
+	).run(
+		id,
+		entity.id,
+		agentId,
+		alias.trim(),
+		canonicalAlias,
+		confidence,
+		source ?? null,
+		proposal.compartment_id,
+		proposal.dreaming_pass_id,
+	);
+	labelProposalRowInTx(db, "entity_aliases", "alias", id, proposal);
 	return { aliasId: id, entityId: entity.id, alias: alias.trim(), canonicalAlias };
 }
 
 function applyArchiveEntityAlias(
 	db: WriteDb,
 	agentId: string,
-	_proposal: ProposalRow,
+	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
 	const aliasId = readString(payload, "alias_id");
 	if (entitySelector === null) throw new OntologyProposalError("payload.entity is required", 400);
 	if (aliasId === null) throw new OntologyProposalError("payload.alias_id is required", 400);
-	const entity = resolveEntityStrict(db, agentId, entitySelector);
+	const entity = resolveEntityStrict(db, agentId, entitySelector, proposal.dreaming_pass_id ?? undefined);
 	const result = db
 		.prepare(
 			`UPDATE entity_aliases
 			 SET status = 'archived', updated_at = datetime('now')
-			 WHERE id = ? AND entity_id = ? AND agent_id = ? AND status = 'active'`,
+			 WHERE id = ? AND entity_id = ? AND agent_id = ? AND status = 'active' AND compartment_id IS ?`,
 		)
-		.run(aliasId, entity.id, agentId);
+		.run(aliasId, entity.id, agentId, proposal.compartment_id);
 	if (result.changes === 0) throw new OntologyProposalError("Alias not found", 404);
 	return { aliasId, entityId: entity.id, archived: true };
 }
@@ -2742,21 +2896,42 @@ function proposalTargetCitationsInDb(
 	const citations: SemanticEvidenceCitation[] = [];
 	const kinds: Readonly<Partial<Record<DreamingMutationTable, SemanticCitationKind>>> = {
 		entities: "entity",
+		entity_aliases: "alias",
+		entity_attributes: "attribute",
+		memories: "memory",
 		entity_aspects: "aspect",
 		entity_dependencies: "dependency",
 		epistemic_assertions: "assertion",
 	};
 	for (const target of targets) {
 		if (target.table === "entity_attributes") citations.push({ kind: "attribute", id: target.id });
-		else if (target.table === "memories") citations.push({ kind: "memory", id: target.id });
-		else {
+		if (target.table === "memories") citations.push({ kind: "memory", id: target.id });
+		{
 			const kind = kinds[target.table];
 			if (kind === undefined) continue;
 			for (const row of prepareTypedStatement<{ evidence_kind: SemanticEvidenceCitation["kind"]; evidence_id: string }>(
 				db,
 				"SELECT evidence_kind, evidence_id FROM evidence_citations WHERE derived_kind = ? AND derived_id = ? AND agent_id = ?",
-			).all(kind, target.id, partition.agentId))
-				citations.push({ kind: row.evidence_kind, id: row.evidence_id });
+			).all(kind, target.id, partition.agentId)) {
+				const citation = { kind: row.evidence_kind, id: row.evidence_id };
+				if (!dreamingEvidenceRecordInDb(db, partition.agentId, citation)) {
+					const table = {
+						memory: "memories",
+						transcript: "session_transcripts",
+						artifact: "memory_artifacts",
+						summary: "session_summaries",
+						attribute: "entity_attributes",
+					}[citation.kind];
+					const key =
+						citation.kind === "transcript" ? "session_key" : citation.kind === "artifact" ? "source_path" : "id";
+					const exists = prepareTypedStatement<{ found: number }>(
+						db,
+						`SELECT 1 AS found FROM ${table} WHERE ${key} = ? LIMIT 1`,
+					).get(citation.id);
+					if (!exists) throw new OntologyProposalError("evidence_citation_missing", 409);
+				}
+				citations.push(citation);
+			}
 		}
 	}
 	return citations;
@@ -2813,34 +2988,92 @@ export function assertOntologyOperationPartitionInTx(
 	},
 ): readonly OntologyMutationTarget[] {
 	const partition: DreamingPartition = ontologyPartitionInDb(db, input.agentId, input.passId);
-	for (const evidence of proposalCitationsInDb(db, input.agentId, input.evidence ?? [], partition))
-		evidenceCitationInDb(db, partition, evidence);
+	for (const evidence of proposalCitationsInDb(db, input.agentId, input.evidence ?? [], partition)) {
+		const author = evidenceCitationInDb(db, partition, evidence).authorUserId;
+		if (
+			author !== null &&
+			prepareTypedStatement<{ id: string }>(db, "SELECT id FROM users WHERE id = ?").get(author) &&
+			!prepareTypedStatement<{ id: string }>(
+				db,
+				"SELECT id FROM entities WHERE agent_id = ? AND person_user_id = ? AND compartment_id IS NULL",
+			).get(input.agentId, author)
+		)
+			throw new OntologyProposalError("person_identity_missing", 409);
+	}
 	const targets = new Map<string, OntologyMutationTarget>();
 	const add = (table: DreamingMutationTable, id: string): void => {
 		assertDreamingMutationLabelInDb(db, table, id, partition);
 		targets.set(`${table}:${id}`, { table, id });
 	};
 	const select = (table: DreamingMutationTable, where: string, args: readonly unknown[]): string[] => {
-		const ids = prepareTypedStatement<{ id: string }>(db, `SELECT id FROM ${table} WHERE ${where}`)
-			.all(...args)
+		const ids = prepareTypedStatement<{ id: string }>(
+			db,
+			`SELECT id FROM ${table} WHERE (${where}) AND agent_id=? AND compartment_id IS ?`,
+		)
+			.all(...args, partition.agentId, partition.compartmentId)
 			.map((row) => row.id);
 		for (const id of ids) add(table, id);
 		return ids;
 	};
-	const entity = (selector: string | null): string | null => {
+	const affected = (table: DreamingMutationTable, where: string, args: readonly unknown[]): string[] => {
+		const ids = prepareTypedStatement<{ id: string }>(db, `SELECT id FROM ${table} WHERE (${where}) AND agent_id = ?`)
+			.all(...args, partition.agentId)
+			.map((row) => row.id);
+		for (const id of ids) add(table, id);
+		return ids;
+	};
+	const entityMutations = new Set([
+		"create_entity",
+		"create_action_type",
+		"create_interface",
+		"rename_entity",
+		"archive_entity",
+		"merge_entities",
+		"pin_entity",
+		"unpin_entity",
+	]);
+	const aspectMutations = new Set(["rename_aspect", "archive_aspect", "merge_aspects"]);
+	const entity = (selector: string | null, allowMissing = false): string | null => {
 		if (selector === null) return null;
-		const direct = prepareTypedStatement<{ id: string }>(db, "SELECT id FROM entities WHERE id = ?").get(selector);
-		const id = direct?.id ?? resolveEntity(db, input.agentId, selector);
-		if (id !== null) add("entities", id);
-		return id;
+		const visible = resolveOntologyRow(db, "entities", input.agentId, selector, input.passId);
+		if (!visible) {
+			if (
+				entityMutations.has(input.operation) &&
+				!allowMissing &&
+				!["create_entity", "create_action_type", "create_interface"].includes(input.operation)
+			) {
+				const idFields = ["entity_id", "target_entity_id", "target_id", "id", "source_entity_id"];
+				const explicit =
+					idFields.some((key) => input.payload[key] === selector) ||
+					readStringArray(input.payload, "source_entity_ids").includes(selector);
+				if (explicit) throw new OntologyProposalError("compartment_mismatch", 409);
+				throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
+			}
+			return null;
+		}
+		if (entityMutations.has(input.operation)) {
+			if (visible.person_user_id !== null) throw new OntologyProposalError("person_identity_immutable", 409);
+			const target = ["create_entity", "create_action_type", "create_interface"].includes(input.operation)
+				? resolveOntologyRow(db, "entities", input.agentId, selector, input.passId, undefined, true)
+				: visible;
+			if (target) add("entities", target.id);
+			return target?.id ?? null;
+		}
+		return visible.id;
 	};
 	const aspect = (entityId: string | null, selector: string | null): string | null => {
 		if (entityId === null || selector === null) return null;
-		const row = prepareTypedStatement<{ id: string }>(
-			db,
-			"SELECT id FROM entity_aspects WHERE entity_id = ? AND agent_id = ? AND (id = ? OR canonical_name = ? OR LOWER(name) = ?) LIMIT 1",
-		).get(entityId, input.agentId, selector, canonical(selector), canonical(selector));
-		if (row) add("entity_aspects", row.id);
+		if (["create_aspect", "add_claim_value", "set_claim_value", "create_policy"].includes(input.operation)) {
+			const own = resolveOntologyRow(db, "entity_aspects", input.agentId, selector, input.passId, entityId, true, true);
+			if (own && (input.operation === "create_aspect" || (own.status ?? "active") !== "active")) {
+				add("entity_aspects", own.id);
+				return own.id;
+			}
+		}
+		const row = resolveOntologyRow(db, "entity_aspects", input.agentId, selector, input.passId, entityId);
+		if (row && aspectMutations.has(input.operation)) add("entity_aspects", row.id);
+		if (!row && aspectMutations.has(input.operation))
+			throw new OntologyProposalError(`Aspect not found: ${selector}`, 404);
 		return row?.id ?? null;
 	};
 	const p = input.payload;
@@ -2850,6 +3083,10 @@ export function assertOntologyOperationPartitionInTx(
 			? readPayloadSelector(p, "target_entity", "entity", "entity_id")
 			: readPayloadSelector(p, "entity", "entity_id"),
 	);
+	if (op === "archive_entity_alias") {
+		const id = readString(p, "alias_id");
+		if (id !== null) add("entity_aliases", id);
+	}
 	const a = aspect(e, readPayloadSelector(p, "aspect", "aspect_id"));
 	if (["create_entity", "create_action_type", "create_interface"].includes(op))
 		entity(readPayloadSelector(p, "name", "action_type", "interface"));
@@ -2885,26 +3122,23 @@ export function assertOntologyOperationPartitionInTx(
 	}
 	if (op === "update_link" || op === "archive_link") {
 		const id = readPayloadSelector(p, "id", "dependency_id", "link_id");
-		if (id !== null) select("entity_dependencies", "id = ?", [id]);
+		if (id !== null) add("entity_dependencies", id);
 	}
 	if (op === "merge_entities") {
 		const roots = new Set<string>();
 		const target = entity(readPayloadSelector(p, "target_entity_id", "target_id", "target_entity", "target"));
 		if (target) roots.add(target);
 		for (const spec of sourceMergeSpecs(p)) {
-			const id = entity(spec.id ?? spec.selector);
+			const alreadyMerged =
+				target !== null && wasEntityMergeApplied(db, input.agentId, spec.id, target, spec.selector, input.passId);
+			const id = entity(spec.id ?? spec.selector, alreadyMerged);
 			if (id) roots.add(id);
 		}
 		for (const id of roots) {
-			select("entity_aspects", "entity_id = ?", [id]);
-			select("entity_dependencies", "source_entity_id = ? OR target_entity_id = ?", [id, id]);
-			select("epistemic_assertions", "subject_entity_id = ?", [id]);
-			select("memories", "id IN (SELECT memory_id FROM memory_entity_mentions WHERE entity_id = ?)", [id]);
-			const neighbors = prepareTypedStatement<{ id: string }>(
-				db,
-				"SELECT source_entity_id AS id FROM relations WHERE target_entity_id = ? UNION SELECT target_entity_id AS id FROM relations WHERE source_entity_id = ?",
-			).all(id, id);
-			for (const neighbor of neighbors) add("entities", neighbor.id);
+			affected("entity_aliases", "entity_id = ?", [id]);
+			affected("entity_aspects", "entity_id = ?", [id]);
+			affected("entity_dependencies", "source_entity_id = ? OR target_entity_id = ?", [id, id]);
+			affected("epistemic_assertions", "subject_entity_id = ?", [id]);
 		}
 	}
 	if (op === "merge_aspects") {
@@ -2915,17 +3149,17 @@ export function assertOntologyOperationPartitionInTx(
 		op === "merge_entities" || op === "merge_aspects" || op === "archive_entity" || op === "archive_aspect";
 	if (op === "archive_entity") {
 		for (const target of [...targets.values()])
-			if (target.table === "entities") select("entity_aspects", "entity_id = ?", [target.id]);
+			if (target.table === "entities") affected("entity_aspects", "entity_id = ?", [target.id]);
 	}
 	if (cascade) {
 		for (const target of [...targets.values()])
 			if (target.table === "entity_aspects") {
-				select("entity_attributes", "aspect_id = ?", [target.id]);
-				if (op === "merge_entities") select("entity_dependencies", "aspect_id = ?", [target.id]);
+				affected("entity_attributes", "aspect_id = ?", [target.id]);
+				if (op === "merge_entities") affected("entity_dependencies", "aspect_id = ?", [target.id]);
 			}
 	}
 	const replacementId = readString(p, "superseded_by");
-	if (replacementId !== null) select("entity_attributes", "id = ?", [replacementId]);
+	if (replacementId !== null) add("entity_attributes", replacementId);
 	const attributeId = readString(p, "attribute_id");
 	if (attributeId !== null) {
 		const row = prepareTypedStatement<{ aspect_id: string; kind: string; group_key: string | null; claim_key: string }>(
@@ -2965,19 +3199,19 @@ export function assertOntologyOperationPartitionInTx(
 		).get(target.id);
 		if (row?.memory_id) {
 			add("memories", row.memory_id);
-			select(
+			affected(
 				"memories",
 				"id IN (SELECT derived_memory_id FROM derived_memory_sources WHERE source_kind IN ('ontology_claim', 'memory') AND source_id = ?)",
 				[row.memory_id],
 			);
-			select("temporal_edges", "subject_type = 'memory' AND subject_id = ?", [row.memory_id]);
+			affected("temporal_edges", "subject_type = 'memory' AND subject_id = ?", [row.memory_id]);
 		}
-		select("ontology_contradictions", "left_attribute_id = ? OR right_attribute_id = ?", [target.id, target.id]);
+		affected("ontology_contradictions", "left_attribute_id = ? OR right_attribute_id = ?", [target.id, target.id]);
 	}
 	if (op === "archive_entity" || op === "merge_entities")
 		for (const target of [...targets.values()])
 			if (target.table === "entities")
-				select("ontology_contradictions", "entity_id = ? AND status = 'active'", [target.id]);
+				affected("ontology_contradictions", "entity_id = ? AND status = 'active'", [target.id]);
 	const resolvedTargets = [...targets.values()];
 	for (const evidence of proposalTargetCitationsInDb(db, resolvedTargets, partition))
 		evidenceCitationInDb(db, partition, evidence);
@@ -3189,7 +3423,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:3190" },
+		{ siteToken: "db:ontology.proposal-evidence.read" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -3227,7 +3461,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:3207" },
+		{ siteToken: "db:ontology.proposal-list.read" },
 	);
 }
 
@@ -3285,7 +3519,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:3239" },
+		{ siteToken: "db:ontology.proposal-conflicts.read" },
 	);
 }
 
@@ -3380,7 +3614,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:3323" },
+		{ siteToken: "db:ontology.claim-versions.read" },
 	);
 }
 
@@ -3418,41 +3652,21 @@ function entityRowToRef(row: DuplicateEntityRow): DuplicateEntityRef {
 	return toDuplicateEntityRef(row, canonical(row.canonical_name ?? row.name));
 }
 
-function getEntityRefById(db: ReadDb, agentId: string, id: string): DuplicateEntityRef | null {
-	const row = db
-		.prepare(
-			`SELECT id, name, canonical_name, entity_type,
-			        COALESCE(mentions, 0) AS mentions,
-			        COALESCE(pinned, 0) AS pinned,
-			        updated_at
-			 FROM entities
-			 WHERE agent_id = ?
-			   AND COALESCE(status, 'active') = 'active'
-			   AND id = ?
-			 LIMIT 1`,
-		)
-		.get(agentId, id) as DuplicateEntityRow | undefined;
+function getEntityRefById(db: ReadDb, agentId: string, id: string, passId?: string): DuplicateEntityRef | null {
+	const partition = ontologyPartitionInDb(db, agentId, passId);
+	const scope = readScopeSql("", dreamingReadScopeInDb(db, agentId, partition.compartmentId), { visibility: null });
+	const row = prepareTypedStatement<DuplicateEntityRow>(
+		db,
+		`SELECT id, name, canonical_name, entity_type, COALESCE(mentions, 0) AS mentions, COALESCE(pinned, 0) AS pinned, updated_at FROM entities WHERE agent_id = ? AND id = ? AND COALESCE(status, 'active') = 'active' ${scope.sql} LIMIT 1`,
+	).get(agentId, id, ...scope.args);
 	return row ? entityRowToRef(row) : null;
 }
 
-function resolveEntityRefStrict(db: ReadDb, agentId: string, selector: string): DuplicateEntityRef {
-	const key = canonical(selector);
-	const rows = db
-		.prepare(
-			`SELECT id, name, canonical_name, entity_type,
-			        COALESCE(mentions, 0) AS mentions,
-			        COALESCE(pinned, 0) AS pinned,
-			        updated_at
-			 FROM entities
-			 WHERE agent_id = ?
-			   AND COALESCE(status, 'active') = 'active'
-			   AND (id = ? OR COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
-			 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC, name ASC`,
-		)
-		.all(agentId, selector, key, key, selector) as DuplicateEntityRow[];
-	if (rows.length === 0) throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
-	if (rows.length > 1) throw new OntologyProposalError(`Entity selector is ambiguous: ${selector}. Use an id.`, 409);
-	return entityRowToRef(rows[0] as DuplicateEntityRow);
+function resolveEntityRefStrict(db: ReadDb, agentId: string, selector: string, passId?: string): DuplicateEntityRef {
+	const resolved = resolveOntologyRow(db, "entities", agentId, selector, passId);
+	const row = resolved ? getEntityRefById(db, agentId, resolved.id, passId) : null;
+	if (!row) throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
+	return row;
 }
 
 function resolveMergeEntityRef(
@@ -3461,17 +3675,17 @@ function resolveMergeEntityRef(
 	field: string,
 	selector: string | null,
 	id: string | null,
+	passId?: string,
 ): DuplicateEntityRef {
 	if (id !== null) {
-		const byId = getEntityRefById(db, agentId, id);
+		const byId = getEntityRefById(db, agentId, id, passId);
 		if (byId === null) throw new OntologyProposalError(`${field}_id was not found: ${id}`, 404);
-		if (selector !== null && !selectorMatchesEntityRef(selector, byId)) {
+		if (selector !== null && !selectorMatchesEntityRef(selector, byId))
 			throw new OntologyProposalError(`${field}_id does not match ${field}`, 409);
-		}
 		return byId;
 	}
 	if (selector === null) throw new OntologyProposalError(`${field} is required`, 400);
-	return resolveEntityRefStrict(db, agentId, selector);
+	return resolveEntityRefStrict(db, agentId, selector, passId);
 }
 
 function selectorMatchesEntityRef(selector: string, entity: DuplicateEntityRef): boolean {
@@ -3485,6 +3699,7 @@ function wasEntityMergeApplied(
 	sourceId: string | null,
 	targetId: string,
 	sourceSelector: string | null,
+	passId?: string,
 ): boolean {
 	const needle = sourceId ?? sourceSelector;
 	if (needle === null) return false;
@@ -3492,9 +3707,11 @@ function wasEntityMergeApplied(
 		.prepare(
 			`SELECT result FROM ontology_proposals
 			 WHERE agent_id = ? AND operation = 'merge_entities' AND status = 'applied'
-			   AND result LIKE ?`,
+			   AND result LIKE ? AND compartment_id IS ?`,
 		)
-		.all(agentId, `%${needle}%`) as Array<{ result: string | null }>;
+		.all(agentId, `%${needle}%`, ontologyPartitionInDb(db, agentId, passId).compartmentId) as Array<{
+		result: string | null;
+	}>;
 	for (const row of rows) {
 		if (row.result === null) continue;
 		try {
@@ -3541,48 +3758,50 @@ function sourceMergeSpecs(payload: Readonly<Record<string, unknown>>): Array<{
 	return selectors.map((selector) => ({ selector, id: null }));
 }
 
-function entityMergeImpact(db: ReadDb, agentId: string, sources: readonly DuplicateEntityRef[]): EntityMergeImpact {
+function entityMergeImpact(
+	db: ReadDb,
+	agentId: string,
+	sources: readonly DuplicateEntityRef[],
+	passId?: string,
+): EntityMergeImpact {
 	const ids = sources.map((source) => source.id);
-	if (ids.length === 0) {
+	if (ids.length === 0)
 		return { sourceMentions: 0, memoryMentions: 0, aspects: 0, attributes: 0, dependencies: 0, relations: 0 };
-	}
 	const placeholders = ids.map(() => "?").join(", ");
-	const sourceMentions = sources.reduce((sum, source) => sum + source.mentions, 0);
-	const aspects = db
-		.prepare(`SELECT COUNT(*) AS count FROM entity_aspects WHERE agent_id = ? AND entity_id IN (${placeholders})`)
-		.get(agentId, ...ids) as { count: number };
-	const attributes = db
-		.prepare(
-			`SELECT COUNT(*) AS count
-			 FROM entity_attributes attr
-			 JOIN entity_aspects asp ON asp.id = attr.aspect_id
-			 WHERE attr.agent_id = ? AND asp.entity_id IN (${placeholders})`,
-		)
-		.get(agentId, ...ids) as { count: number };
-	const dependencies = db
-		.prepare(
-			`SELECT COUNT(*) AS count
-			 FROM entity_dependencies
-			 WHERE agent_id = ? AND (source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders}))`,
-		)
-		.get(agentId, ...ids, ...ids) as { count: number };
-	const relations = db
-		.prepare(
-			`SELECT COUNT(*) AS count
-			 FROM relations
-			 WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
-		)
-		.get(...ids, ...ids) as { count: number };
-	const memoryMentions = db
-		.prepare(`SELECT COUNT(*) AS count FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`)
-		.get(...ids) as { count: number };
+	const partition = ontologyPartitionInDb(db, agentId, passId);
+	const scope = dreamingReadScopeInDb(db, agentId, partition.compartmentId);
+	const aspectScope = readScopeSql("asp", scope, { visibility: null });
+	const attributeScope = readScopeSql("attr", scope, { visibility: null });
+	const dependencyScope = readScopeSql("dep", scope, { visibility: null });
+	const sourceScope = readScopeSql("source", scope, { visibility: null });
+	const targetScope = readScopeSql("target", scope, { visibility: null });
+	const memoryScope = readScopeSql("memory", scope);
+	const mentionScope = readScopeSql("mention", scope, { visibility: null });
+	const relationScope = readScopeSql("relation", scope, { visibility: null });
+	const count = (sql: string, args: readonly unknown[]): number =>
+		prepareTypedStatement<{ count: number }>(db, sql).get(...args)?.count ?? 0;
 	return {
-		sourceMentions,
-		memoryMentions: memoryMentions.count,
-		aspects: aspects.count,
-		attributes: attributes.count,
-		dependencies: dependencies.count,
-		relations: relations.count,
+		sourceMentions: sources.reduce((sum, source) => sum + source.mentions, 0),
+		aspects: count(
+			`SELECT COUNT(*) AS count FROM entity_aspects asp WHERE asp.agent_id = ? AND asp.entity_id IN (${placeholders}) ${aspectScope.sql}`,
+			[agentId, ...ids, ...aspectScope.args],
+		),
+		attributes: count(
+			`SELECT COUNT(*) AS count FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id WHERE attr.agent_id = ? AND asp.entity_id IN (${placeholders}) ${attributeScope.sql} ${aspectScope.sql}`,
+			[agentId, ...ids, ...attributeScope.args, ...aspectScope.args],
+		),
+		dependencies: count(
+			`SELECT COUNT(*) AS count FROM entity_dependencies dep WHERE dep.agent_id = ? AND (dep.source_entity_id IN (${placeholders}) OR dep.target_entity_id IN (${placeholders})) ${dependencyScope.sql}`,
+			[agentId, ...ids, ...ids, ...dependencyScope.args],
+		),
+		relations: count(
+			`SELECT COUNT(*) AS count FROM relations relation JOIN entities source ON source.id = relation.source_entity_id JOIN entities target ON target.id = relation.target_entity_id WHERE (relation.source_entity_id IN (${placeholders}) OR relation.target_entity_id IN (${placeholders})) ${sourceScope.sql} ${targetScope.sql} ${relationScope.sql}`,
+			[...ids, ...ids, ...sourceScope.args, ...targetScope.args, ...relationScope.args],
+		),
+		memoryMentions: count(
+			`SELECT COUNT(*) AS count FROM memory_entity_mentions mention JOIN memories memory ON memory.id = mention.memory_id WHERE mention.entity_id IN (${placeholders}) ${memoryScope.sql} ${mentionScope.sql}`,
+			[...ids, ...memoryScope.args, ...mentionScope.args],
+		),
 	};
 }
 
@@ -3625,13 +3844,13 @@ function mergePlanPayload(
 
 function buildEntityMergePlan(
 	db: ReadDb,
-	params: EntityMergePlanParams,
+	params: EntityMergePlanParams & { readonly passId?: string },
 	payloadKind = "manual_entity_merge",
 ): Omit<EntityMergePlanResult, "dryRun" | "proposal"> {
 	const agentId = requireText(params.agentId, "agentId");
 	const targetSelector = params.targetEntity?.trim() || null;
 	const targetId = params.targetEntityId?.trim() || null;
-	const target = resolveMergeEntityRef(db, agentId, "payload.target_entity", targetSelector, targetId);
+	const target = resolveMergeEntityRef(db, agentId, "payload.target_entity", targetSelector, targetId, params.passId);
 	const specs = params.sourceEntityIds?.length
 		? params.sourceEntityIds.map((id, index) => ({ id, selector: params.sourceEntities?.[index] ?? null }))
 		: (params.sourceEntities ?? []).map((selector) => ({ selector, id: null }));
@@ -3640,7 +3859,7 @@ function buildEntityMergePlan(
 	}
 	if (specs.length === 0) throw new OntologyProposalError("source entities are required", 400);
 	const resolved = specs.map((spec) =>
-		resolveMergeEntityRef(db, agentId, "payload.source_entity", spec.selector, spec.id),
+		resolveMergeEntityRef(db, agentId, "payload.source_entity", spec.selector, spec.id, params.passId),
 	);
 	const sourceMap = new Map(resolved.map((source) => [source.id, source]));
 	sourceMap.delete(target.id);
@@ -3664,7 +3883,7 @@ function buildEntityMergePlan(
 		target,
 		sources,
 		payload,
-		impact: entityMergeImpact(db, agentId, sources),
+		impact: entityMergeImpact(db, agentId, sources, params.passId),
 		warnings: safety.warnings,
 		blocked: safety.blocked,
 		confidence: safety.risk === "low" ? 0.86 : 0.72,
@@ -3697,7 +3916,7 @@ function pendingDuplicateRepairKeys(db: ReadDb, agentId: string): Set<string> {
 	const rows = db
 		.prepare(
 			`SELECT payload FROM ontology_proposals
-			 WHERE agent_id = ? AND status = 'pending' AND operation = 'merge_entities'
+			 WHERE agent_id = ? AND status = 'pending' AND operation = 'merge_entities' AND compartment_id IS NULL
 			 ORDER BY updated_at DESC
 			 LIMIT 1000`,
 		)
@@ -3732,7 +3951,7 @@ function duplicateMergeCandidates(
 			 FROM entities
 			 WHERE agent_id = ?
 			   AND COALESCE(status, 'active') = 'active'
-			   AND (? IS NULL OR canonical_name = ? OR canonical_name IS NULL)
+			   AND compartment_id IS NULL AND person_user_id IS NULL AND (? IS NULL OR canonical_name = ? OR canonical_name IS NULL)
 			 ORDER BY COALESCE(canonical_name, LOWER(name)), COALESCE(mentions, 0) DESC, updated_at DESC`,
 		)
 		.all(agentId, scopedCanonicalName, scopedCanonicalName) as DuplicateEntityRow[];
@@ -3801,7 +4020,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3803",
+		siteToken: "db:ontology.entity-duplicates.read",
 	});
 }
 
@@ -3812,7 +4031,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3814",
+		siteToken: "db:ontology.duplicate-proposals.read",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3864,7 +4083,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3865" },
+		{ siteToken: "db:ontology.entity-merge-plan.read" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {

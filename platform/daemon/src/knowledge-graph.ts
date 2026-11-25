@@ -21,6 +21,9 @@ import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "./pipeline/dreaming-token-cache";
 
+import type { ReadScope } from "./read-scope";
+import { readOntologyEntityAliasRows } from "./ontology-proposals";
+
 function toCanonicalName(raw: string): string {
 	return raw.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -737,24 +740,10 @@ export async function listEntityAliases(
 		readonly agentId: string;
 		readonly entityId: string;
 		readonly status?: "active" | "archived" | "all";
+		readonly scope?: ReadScope;
 	},
 ): Promise<readonly EntityAlias[]> {
-	const conditions = ["entity_id = ?", "agent_id = ?"];
-	const args: Array<string | number> = [params.entityId, params.agentId];
-	if (params.status && params.status !== "all") {
-		conditions.push("status = ?");
-		args.push(params.status);
-	} else if (!params.status) {
-		conditions.push("status = 'active'");
-	}
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
-		{
-			sql: `SELECT * FROM entity_aliases WHERE ${conditions.join(" AND ")} ORDER BY status ASC, alias ASC`,
-			params: args,
-			result: "all",
-		},
-		{ operation: "db:knowledge.entity-aliases.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
-	);
+	const rows = await readOntologyEntityAliasRows(params);
 	return rows.map(rowToEntityAlias);
 }
 

@@ -1,6 +1,6 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import { SYSTEM_AUTHOR } from "../auth/audit-owner";
-import { prepareTypedStatement, runWriteTxAsync, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
+import { runWriteTxAsync, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
 import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
 import { withContentPassWrites } from "../memory-head-owner";
 import {
@@ -45,6 +45,7 @@ export interface DreamingOperationItem {
 	readonly proposal?: unknown;
 	readonly result?: unknown;
 	readonly error?: string;
+	readonly retryable?: boolean;
 }
 
 export interface ApplyDreamingOperationsResult {
@@ -154,6 +155,7 @@ type ValidatedDreamingOperation = {
 	readonly attentionId: string | null;
 	readonly decline?: boolean;
 	readonly reviewOnly?: boolean;
+	readonly retryError?: string;
 };
 
 function semanticDuplicateIds(
@@ -518,12 +520,30 @@ function lookupString(db: ReadDb, sql: string, ...params: unknown[]): string | n
 	return row?.value ?? null;
 }
 
-function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: string): string | null {
+function lookupScopedString(
+	db: ReadDb,
+	agentId: string,
+	compartmentId: number | null,
+	sql: string,
+	...params: unknown[]
+): string | null {
+	const scope = readScopeSql("", dreamingReadScopeInDb(db, agentId, compartmentId), { visibility: null });
+	return lookupString(db, `${sql} ${scope.sql}`, ...params, ...scope.args);
+}
+
+function lookupEntityName(
+	accessor: DbAccessor,
+	agentId: string,
+	entityId: string,
+	compartmentId: number | null,
+): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: ReadDb) =>
-			lookupString(
+			lookupScopedString(
 				db,
+				agentId,
+				compartmentId,
 				"SELECT name AS value FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
 				entityId,
 				agentId,
@@ -532,12 +552,20 @@ function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: strin
 	);
 }
 
-function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: string, aspectId: string): string | null {
+function lookupAspectName(
+	accessor: DbAccessor,
+	agentId: string,
+	entityId: string,
+	aspectId: string,
+	compartmentId: number | null,
+): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: ReadDb) =>
-			lookupString(
+			lookupScopedString(
 				db,
+				agentId,
+				compartmentId,
 				"SELECT name AS value FROM entity_aspects WHERE id = ? AND entity_id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
 				aspectId,
 				entityId,
@@ -547,12 +575,19 @@ function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: strin
 	);
 }
 
-function lookupAspectEntityId(accessor: DbAccessor, agentId: string, aspectId: string): string | null {
+function lookupAspectEntityId(
+	accessor: DbAccessor,
+	agentId: string,
+	aspectId: string,
+	compartmentId: number | null,
+): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: ReadDb) =>
-			lookupString(
+			lookupScopedString(
 				db,
+				agentId,
+				compartmentId,
 				"SELECT entity_id AS value FROM entity_aspects WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
 				aspectId,
 				agentId,
@@ -566,16 +601,18 @@ function lookupActiveClaimAttributeId(
 	agentId: string,
 	aspectId: string,
 	claimKey: string,
+	compartmentId: number | null,
 ): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: ReadDb) =>
 			lookupString(
 				db,
-				"SELECT id AS value FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND claim_key = ? AND status = 'active' ORDER BY created_at DESC, id ASC LIMIT 1",
+				"SELECT id AS value FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND claim_key = ? AND status = 'active' AND compartment_id IS ? ORDER BY created_at DESC, id ASC LIMIT 1",
 				aspectId,
 				agentId,
 				claimKey,
+				compartmentId,
 			),
 		"db:dreaming.operations.active-claim.read",
 	);
@@ -640,6 +677,7 @@ function toApplicatorPayload(
 	agentId: string,
 	operation: string,
 	payload: Readonly<Record<string, unknown>>,
+	compartmentId: number | null = null,
 ): ApplicatorPayload {
 	const target = stringField(payload, "target");
 	const reason = stringField(payload, "reason") ?? undefined;
@@ -649,7 +687,7 @@ function toApplicatorPayload(
 			return target === null ? { error: "missing payload.target" } : { payload: { entity_id: target, reason } };
 		case "archive_aspect": {
 			if (target === null) return { error: "missing payload.target" };
-			const entityId = lookupAspectEntityId(accessor, agentId, target);
+			const entityId = lookupAspectEntityId(accessor, agentId, target, compartmentId);
 			return entityId === null
 				? notFound("aspect", target, inAgent)
 				: { payload: { entity_id: entityId, aspect_id: target, reason } };
@@ -672,12 +710,12 @@ function toApplicatorPayload(
 			if (entityId === null || mergeTarget === null || sources === null || sources.length === 0) {
 				return { error: "missing payload.entityId, payload.target, or payload.sources" };
 			}
-			const name = lookupEntityName(accessor, agentId, entityId);
+			const name = lookupEntityName(accessor, agentId, entityId, compartmentId);
 			return name === null
 				? notFound("entity", entityId, inAgent)
 				: {
 						payload: {
-							entity: name,
+							entity: entityId,
 							target: mergeTarget,
 							sources,
 							new_name: stringField(payload, "newName") ?? undefined,
@@ -698,22 +736,23 @@ function toApplicatorPayload(
 			const aspectId = stringField(payload, "aspectId") ?? "";
 			const claimKey = stringField(payload, "claimKey") ?? "";
 			const value = stringField(payload, "value") ?? "";
-			const name = lookupEntityName(accessor, agentId, entityId);
+			const name = lookupEntityName(accessor, agentId, entityId, compartmentId);
 			if (name === null) return notFound("entity", entityId, inAgent);
-			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
+			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId, compartmentId);
 			if (aspect === null) return notFound("aspect", aspectId, `on entity ${entityId}`);
 			const timing = claimTimingPayload(payload);
 			if (operation !== "supersede_claim_value") {
-				return { payload: { entity: name, aspect, claim_key: claimKey, value, ...timing } };
+				return { payload: { entity: entityId, aspect: aspectId, claim_key: claimKey, value, ...timing } };
 			}
 			const attributeId =
-				stringField(payload, "attributeId") ?? lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey);
+				stringField(payload, "attributeId") ??
+				lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey, compartmentId);
 			return attributeId === null
 				? { error: `no active claim ${claimKey} on aspect ${aspectId} to supersede` }
 				: {
 						payload: {
-							entity: name,
-							aspect,
+							entity: entityId,
+							aspect: aspectId,
 							claim_key: claimKey,
 							attribute_id: attributeId,
 							new_value: value,
@@ -806,7 +845,11 @@ function unresolvedTarget(index: number, operation: string, detail: string): str
 	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
 }
 
-function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams, readScope: ReadScope): string | null {
+function validateRequestBeforeWrites(
+	params: ApplyDreamingOperationsParams,
+	readScope: ReadScope,
+	compartmentId: number | null,
+): string | null {
 	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
 			if (stringField(operation.payload, "subjectRef") === null) return "flag requires payload.subjectRef";
@@ -830,7 +873,13 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams, read
 			continue;
 		}
 
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(
+			params.accessor,
+			params.agentId,
+			operation.operation,
+			operation.payload,
+			compartmentId,
+		);
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
 		if (isStructuralWithoutCitation(operation)) {
 			const structuralError = structuralProvenanceError(index, operation);
@@ -878,9 +927,10 @@ function operationPartitionInDb(db: ReadDb, agentId: string, passId?: string): D
 	return { agentId, compartmentId: null };
 }
 
-function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperationsParams): void {
+function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperationsParams): Map<number, string> {
+	const retries = new Map<number, string>();
 	const partition = operationPartitionInDb(db, params.agentId, params.passId);
-	for (const operation of params.operations) {
+	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
 			const subject = stringField(operation.payload, "subjectRef");
 			assertDreamingAttentionSubjectInDb(db, partition, subject);
@@ -894,16 +944,33 @@ function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperatio
 					: null;
 		if (attentionId) assertDreamingMutationLabelInDb(db, "dreaming_attention", attentionId, partition);
 		if (operation.operation === DECLINE_ATTENTION_OP) continue;
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(
+			params.accessor,
+			params.agentId,
+			operation.operation,
+			operation.payload,
+			partition.compartmentId,
+		);
 		if ("error" in applicator) throw new Error(applicator.error);
-		assertOntologyOperationPartitionInTx(db, {
-			agentId: params.agentId,
-			passId: params.passId,
-			operation: operation.operation,
-			payload: applicator.payload,
-			evidence: operation.evidence,
-		});
+		try {
+			assertOntologyOperationPartitionInTx(db, {
+				agentId: params.agentId,
+				passId: params.passId,
+				operation: operation.operation,
+				payload: applicator.payload,
+				evidence: operation.evidence,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!isRetryableOntologyItemError(message)) throw error;
+			retries.set(index, message);
+		}
 	}
+	return retries;
+}
+
+function isRetryableOntologyItemError(message: string): boolean {
+	return message === "person_identity_missing" || message === "evidence_citation_missing";
 }
 
 function existingReviewProposalId(
@@ -1074,6 +1141,8 @@ function applyValidatedOperationInTx(
 	entry: ValidatedDreamingOperation,
 	params: ApplyDreamingOperationsParams,
 ): DreamingOperationItem {
+	if (entry.retryError !== undefined)
+		return { index: entry.index, ok: false, error: entry.retryError, retryable: true };
 	const savepoint = `signet_dream_op_${entry.index}`;
 	db.exec(`SAVEPOINT ${savepoint}`);
 	try {
@@ -1090,6 +1159,9 @@ function applyValidatedOperationInTx(
 			index: entry.index,
 			ok: false,
 			error: error instanceof Error ? error.message : String(error),
+			...(isRetryableOntologyItemError(error instanceof Error ? error.message : String(error))
+				? { retryable: true }
+				: {}),
 		};
 	}
 }
@@ -1118,19 +1190,26 @@ export async function applyDreamingOperations(
 	}
 
 	let readScope: ReadScope;
+	let compartmentId: number | null;
 	try {
-		readScope = await runWriteTxAsync(params.accessor, (db) => {
+		const resolved = await runWriteTxAsync(params.accessor, (db) => {
 			const partition = operationPartitionInDb(db, params.agentId, params.passId);
-			return dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+			return {
+				scope: dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId),
+				compartmentId: partition.compartmentId,
+			};
 		});
+		readScope = resolved.scope;
+		compartmentId = resolved.compartmentId;
 	} catch (error) {
 		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };
 	}
-	const validationError = validateRequestBeforeWrites(params, readScope);
+	const validationError = validateRequestBeforeWrites(params, readScope, compartmentId);
 	if (validationError !== null) return { ok: false, items: [], error: validationError };
 
+	let retries: Map<number, string>;
 	try {
-		await runWriteTxAsync(params.accessor, (db) => preflightDreamingRequestInTx(db, params));
+		retries = await runWriteTxAsync(params.accessor, (db) => preflightDreamingRequestInTx(db, params));
 	} catch (error) {
 		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };
 	}
@@ -1138,6 +1217,11 @@ export async function applyDreamingOperations(
 
 	const validated: ValidatedDreamingOperation[] = [];
 	for (const [index, operation] of params.operations.entries()) {
+		const retryError = retries.get(index);
+		if (retryError !== undefined) {
+			validated.push({ index, input: null, attentionId: null, retryError });
+			continue;
+		}
 		if (operation.operation === FLAG_OP) {
 			const attentionId = minted.get(index) ?? null;
 			validated.push({ index, input: null, attentionId });
@@ -1189,7 +1273,13 @@ export async function applyDreamingOperations(
 				};
 			}
 		}
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(
+			params.accessor,
+			params.agentId,
+			operation.operation,
+			operation.payload,
+			compartmentId,
+		);
 		if ("error" in applicator) {
 			return { ok: false, items: [], error: unresolvedTarget(index, operation.operation, applicator.error) };
 		}

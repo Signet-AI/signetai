@@ -1,6 +1,8 @@
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
+import { audienceSubjectFromPrincipal, resolveReadScope } from "../read-scope";
+import type { Principal } from "../auth/principal";
 import { listEntityAliases } from "../knowledge-graph";
 import { getInferenceProviderOrNull } from "../llm";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config";
@@ -52,6 +54,15 @@ import {
 import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
 import { parseBoundedInt, resolveMutationActor, resolveScopedAgentId, validateSessionAgentBinding } from "./utils";
+
+async function aliasReadScope(c: Context, agentId: string) {
+	const principal: Principal | undefined = c.get("principal");
+	if (!principal) throw new Error("unauthorized");
+	return resolveReadScope(
+		{ reach: { kind: "own", agentId }, projects: principal.allowedProjects },
+		audienceSubjectFromPrincipal(principal),
+	);
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
 	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
@@ -201,6 +212,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (status && !parsedStatus) return c.json({ error: "status is invalid" }, 400);
 		return c.json({
 			items: await listEntityAliases(getDbAccessor(), {
+				scope: await aliasReadScope(c, scoped.agentId),
 				agentId: scoped.agentId,
 				entityId: c.req.param("id"),
 				status: parsedStatus,
@@ -228,6 +240,7 @@ export function registerOntologyRoutes(app: Hono): void {
 				},
 			});
 			const aliases = await listEntityAliases(getDbAccessor(), {
+				scope: await aliasReadScope(c, scoped.agentId),
 				agentId: scoped.agentId,
 				entityId: c.req.param("id"),
 				status: "all",
@@ -260,6 +273,7 @@ export function registerOntologyRoutes(app: Hono): void {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
 		const aliases = await listEntityAliases(getDbAccessor(), {
+			scope: await aliasReadScope(c, scoped.agentId),
 			agentId: scoped.agentId,
 			entityId: c.req.param("id"),
 			status: "all",

@@ -1,5 +1,6 @@
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
+import { dreamingPassPartitionInDb, assertDreamingMutationLabelInDb } from "./classification-owner";
 import { compartmentForWrite } from "@signet/core";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
@@ -54,6 +55,7 @@ export interface ModifyMemoryPatch {
 }
 
 export interface MutationContext {
+	passId?: string;
 	author?: WriteAuthor;
 	actorType?: string;
 	sessionId?: string;
@@ -193,6 +195,7 @@ export function insertHistoryEvent(
 	db: WriteDb,
 	args: {
 		readonly memoryId: string;
+		readonly passId?: string;
 		readonly author?: WriteAuthor;
 		readonly agentId?: string | null;
 		readonly event: string;
@@ -208,25 +211,41 @@ export function insertHistoryEvent(
 	},
 ): void {
 	const id = crypto.randomUUID();
-	db.prepare(
-		`INSERT INTO memory_history
+	if (args.passId !== undefined) {
+		if (!args.agentId) throw new Error("history_agent_required");
+		assertDreamingMutationLabelInDb(
+			db,
+			"memories",
+			args.memoryId,
+			dreamingPassPartitionInDb(db, args.passId, args.agentId),
+		);
+	}
+	const inserted = db
+		.prepare(
+			`INSERT INTO memory_history
 		 (id, memory_id, event, old_content, new_content, changed_by, reason,
-		  metadata, created_at, actor_type, session_id, request_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	).run(
-		id,
-		args.memoryId,
-		args.event,
-		args.oldContent,
-		args.newContent,
-		args.changedBy,
-		args.reason,
-		args.metadata,
-		args.createdAt,
-		args.actorType ?? null,
-		args.sessionId ?? null,
-		args.requestId ?? null,
-	);
+		  metadata, created_at, actor_type, session_id, request_id, agent_id, compartment_id, dreaming_pass_id)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, m.agent_id, m.compartment_id, ? FROM memories m WHERE m.id=? AND (? IS NULL OR m.agent_id=?)`,
+		)
+		.run(
+			id,
+			args.memoryId,
+			args.event,
+			args.oldContent,
+			args.newContent,
+			args.changedBy,
+			args.reason,
+			args.metadata,
+			args.createdAt,
+			args.actorType ?? null,
+			args.sessionId ?? null,
+			args.requestId ?? null,
+			args.passId ?? null,
+			args.memoryId,
+			args.agentId ?? null,
+			args.agentId ?? null,
+		);
+	if (inserted.changes !== 1) throw new Error("history_memory_scope_missing");
 	auditAuthoredWriteInTx(db, args.author, `memory.${args.event}`, "memory", args.memoryId, args.agentId ?? null);
 }
 
@@ -507,6 +526,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		createdAt: input.changedAt,
 		author: input.ctx?.author,
 		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -614,6 +634,7 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 		createdAt: input.changedAt,
 		author: input.ctx?.author,
 		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -744,6 +765,7 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 		createdAt: input.changedAt,
 		author: input.ctx?.author,
 		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -831,6 +853,7 @@ export function txRecoverMemory(db: WriteDb, input: RecoverMemoryTxInput): Recov
 		createdAt: input.changedAt,
 		author: input.ctx?.author,
 		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
