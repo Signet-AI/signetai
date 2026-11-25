@@ -1130,7 +1130,7 @@ class DurableOutbox:
                 info = path.lstat()
             except FileNotFoundError:
                 continue
-            if stat.S_ISREG(info.st_mode) and not _is_link(info):
+            if not stat.S_ISDIR(info.st_mode) or _is_link(info):
                 return True
         return False
 
@@ -1145,7 +1145,7 @@ class DurableOutbox:
                 info = path.lstat()
             except FileNotFoundError:
                 continue
-            if not stat.S_ISREG(info.st_mode) or _is_link(info):
+            if stat.S_ISDIR(info.st_mode) and not _is_link(info):
                 continue
             _directory(quarantine)
             reason = "legacy_metadata" if path.name == ".status.json" else "legacy_unattributed"

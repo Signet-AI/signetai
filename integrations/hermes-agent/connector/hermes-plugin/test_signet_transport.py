@@ -391,6 +391,30 @@ sys.exit(78)
         self.assertEqual(box.status()["quarantined"], 0)
         self.assertTrue((box.directory.parent/"other.json").is_dir())
 
+    def test_nonregular_legacy_records_are_visible_and_purgeable(self):
+        box = transport.DurableOutbox(self.url,env=self.env,harness="hermes")
+        transport._directory(box.directory.parent)
+        outside = Path(self.home)/"outside-evidence"
+        outside.write_text("must remain untouched")
+        before = outside.stat()
+        (box.directory.parent/"linked.json").symlink_to(outside)
+        count = 1
+        if hasattr(os,"mkfifo"):
+            os.mkfifo(box.directory.parent/"pipe.json",0o600)
+            count += 1
+        other = box.directory.parent/"other.json"
+        other.mkdir()
+        result = box.flush(lambda *_: self.fail("legacy corrupt record dispatched"))
+        self.assertEqual(result["state"],"deferred")
+        self.assertEqual(box.status()["quarantined"],count)
+        box.purge(include_legacy=True)
+        self.assertEqual(box.status()["quarantined"],0)
+        self.assertFalse((box.directory.parent/"linked.json").is_symlink())
+        self.assertFalse((box.directory.parent/"pipe.json").exists())
+        self.assertTrue(other.is_dir())
+        self.assertEqual(outside.read_text(),"must remain untouched")
+        self.assertEqual(outside.stat().st_mode,before.st_mode)
+
     def test_legacy_capacity_foreign_origin_and_failed_move_binding(self):
         box = transport.DurableOutbox(self.url, env=self.env, harness="hermes")
         old = self.seed_legacy(box)
