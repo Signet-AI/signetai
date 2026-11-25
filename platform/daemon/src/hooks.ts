@@ -1,3 +1,5 @@
+import type { Principal } from "./auth/principal";
+import { audienceSubjectFromPrincipal, resolveReadScope, type ReadScope } from "./read-scope";
 import { requestMemoryHead } from "./memory-head";
 import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { budgetIdentityContent } from "./identity-context";
@@ -1537,7 +1539,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 export async function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
 	overrides?: Partial<UserPromptSubmitDeps>,
-	scope: { readonly project?: string } = {},
+	scope: { readonly project?: string; readonly principal?: Principal } = {},
 ): Promise<UserPromptSubmitResponse> {
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = deps.now();
@@ -1700,6 +1702,7 @@ export async function handleUserPromptSubmit(
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
+			principal: scope.principal,
 			sessionKey: recallSessionKey(req),
 			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
@@ -1880,7 +1883,8 @@ export async function handleUserPromptSubmit(
 			clockContext,
 			inject: "",
 			memoryCount: 0,
-			warnings,
+			engine: "provider-error",
+			warnings: [...(warnings ?? []), "Prompt recall unavailable"],
 		};
 	}
 }
@@ -1905,9 +1909,21 @@ async function recallPromptEntityContext(
 		readonly minScore: number;
 		readonly cfg: ReturnType<typeof loadMemoryConfig>;
 		readonly signal: AbortSignal;
+		readonly principal: Principal | undefined;
 	},
 ): Promise<PromptEntityRecall> {
-	const entities = await deps.matchPromptEntities(getMemoryDbPath(), input.agentId, input.userMessage, input.signal);
+	if (!input.principal) throw new Error("Prompt recall requires an authenticated principal");
+	const readScope: ReadScope = await resolveReadScope(
+		{ reach: { kind: "own", agentId: input.agentId }, projects: input.principal.allowedProjects },
+		audienceSubjectFromPrincipal(input.principal),
+	);
+	const entities = await deps.matchPromptEntities(
+		getMemoryDbPath(),
+		input.agentId,
+		input.userMessage,
+		input.signal,
+		readScope,
+	);
 	if (entities.length === 0) return { entities, results: [], engine: "no-entity" };
 	const query = stripProvenanceBlocks(input.userMessage);
 	if (!query) return { entities, results: [], engine: "no-recall-hit" };

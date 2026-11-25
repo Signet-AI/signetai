@@ -1,3 +1,4 @@
+import { localPrincipal } from "./auth/principal";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, test } from "bun:test";
@@ -38,7 +39,7 @@ const {
 	handleSessionStart,
 	handlePreCompaction,
 	handleSynthesisRequest,
-	handleUserPromptSubmit,
+	handleUserPromptSubmit: submitUserPrompt,
 	handleSessionEnd,
 	handleStop,
 	handleCheckpointExtract,
@@ -55,6 +56,11 @@ const {
 	queryAnchorsMissingFromRecall,
 	selectWithTokenBudget,
 } = hooks;
+const handleUserPromptSubmit = (
+	req: Parameters<typeof submitUserPrompt>[0],
+	overrides?: Parameters<typeof submitUserPrompt>[1],
+) => submitUserPrompt(req, overrides, { principal: localPrincipal() });
+
 const {
 	deriveSessionToken,
 	ensureCanonicalManifest,

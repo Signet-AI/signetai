@@ -1,3 +1,4 @@
+import { localPrincipal } from "./auth/principal";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -117,7 +118,9 @@ const SIGNET_RECALL: readonly RecallRow[] = [
 ];
 
 async function submit(userMessage: string, sessionKey: string, deps = makeDeps()) {
-	return await handleUserPromptSubmit({ harness: "codex", userMessage, sessionKey }, deps);
+	return await handleUserPromptSubmit({ harness: "codex", userMessage, sessionKey }, deps, {
+		principal: localPrincipal(),
+	});
 }
 
 describe("handleUserPromptSubmit entity-gated recall", () => {
@@ -151,6 +154,36 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		} else {
 			process.env.SIGNET_PATH = originalSignetPath;
 		}
+	});
+
+	it("uses the trusted principal for alias lookup and reports missing identity", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`INSERT INTO classifications(id,name) VALUES ('hook-secret','Hook Secret');
+				INSERT INTO compartments(id,key) VALUES (9102,'hook-secret');
+				INSERT INTO compartment_members(compartment_id,classification_id) VALUES (9102,'hook-secret');
+				INSERT INTO classification_audience(classification_id,principal_kind,principal_id)
+				VALUES ('hook-secret','user','hook-audience');
+				UPDATE entity_aliases SET compartment_id=9102 WHERE id='alias-signetai'`);
+		});
+		const principal = (userId: string) => ({
+			...localPrincipal(),
+			kind: "user" as const,
+			userId,
+			credential: { kind: "api_key" as const, id: `credential-${userId}` },
+		});
+		const req = { harness: "codex", sessionKey: "principal-alias", userMessage: "Tell me about SignetAI architecture" };
+		const audience = await handleUserPromptSubmit(req, makeDeps(), { principal: principal("hook-audience") });
+		expect(audience.memoryCount).toBeGreaterThan(0);
+		expect(audience.inject).toContain("Relevant Memory: Signet");
+		const reader = await handleUserPromptSubmit(req, makeDeps(), { principal: principal("hook-reader") });
+		expect(reader).toMatchObject({ engine: "no-entity", inject: "", memoryCount: 0 });
+		const missing = await handleUserPromptSubmit(
+			{ ...req, context: { userId: "hook-audience", role: "admin" } },
+			makeDeps(),
+		);
+		expect(missing).toMatchObject({ engine: "provider-error", inject: "", memoryCount: 0 });
+		expect(missing.warnings).toContain("Prompt recall unavailable");
 	});
 
 	it("computes one clock per request without changing the memory context hash", async () => {

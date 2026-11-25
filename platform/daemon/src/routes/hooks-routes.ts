@@ -676,6 +676,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
 			try {
 				result = await handleUserPromptSubmit(body, undefined, {
+					principal: c.get("principal"),
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
 				});
 			} finally {
