@@ -239,6 +239,7 @@ async function executeInlineOwnerRequest(
 		);
 	}
 	switch (request.kind) {
+		case "fts_partition":
 		case "classification":
 		case "embedding_projection":
 		case "initialize":

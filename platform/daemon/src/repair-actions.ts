@@ -5,6 +5,7 @@ import {
 	recreateMemoriesFts,
 	activeVectorProjectionTable,
 } from "@signet/core";
+import { readMemoriesFtsCanonicalRowCount } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, SyncDbCallSiteToken, WriteDb } from "./db-accessor";
@@ -391,7 +392,7 @@ export async function checkFtsConsistency(
 
 	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(
 		async (db) => {
-			const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+			const memRow = { n: readMemoriesFtsCanonicalRowCount(toFtsSchemaQueryDb(db)) };
 			let ftsN: number | null = null;
 			try {
 				ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
@@ -515,7 +516,7 @@ export async function checkFtsConsistency(
 					await withRepairWriteTx(
 						accessor,
 						(db) => {
-							db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
+							recreateMemoriesFts(db);
 							writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`);
 						},
 						"db:repair.fts.rebuild",

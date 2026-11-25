@@ -1148,6 +1148,20 @@ export function runDbOwnerWorker(): void {
 			context.committed = true;
 			return result;
 		}
+		if (job.request.kind === "fts_partition") {
+			const { createMemoriesFts, recreateMemoriesFts } = await import("@signet/core");
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				if (job.request.action === "rebuild") recreateMemoriesFts(db);
+				else createMemoriesFts(db);
+				db.exec("COMMIT");
+				context.committed = true;
+				return { ok: true };
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		}
 		if (job.request.kind === "classification") {
 			const { executeClassification } = await import("./classification-owner");
 			const result = executeClassification(db, job.request.request);

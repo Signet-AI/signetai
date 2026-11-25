@@ -263,3 +263,32 @@ export function missingCompartmentVectorSql(db: MigrationDb, base: string, alias
 	);
 	return `(${conditions.join(" OR ")})`;
 }
+
+export function rebuildCompartmentFtsShards(db: MigrationDb): void {
+	for (const base of FTS_BASES) {
+		const { table, columns } = SOURCES[base];
+		if (
+			!db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(base) ||
+			!db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name='compartment_id'`).get()
+		)
+			continue;
+		const ids = new Set(
+			db
+				.prepare(`SELECT DISTINCT compartment_id id FROM ${table} WHERE compartment_id IS NOT NULL`)
+				.all()
+				.flatMap((r) => (typeof r.id === "number" ? [r.id] : [])),
+		);
+		for (const row of db
+			.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB ?")
+			.all(`${base}__c[0-9]*`))
+			if (typeof row.name === "string" && new RegExp(`^${base}__c[1-9][0-9]*$`).test(row.name))
+				ids.add(Number(row.name.split("__c")[1]));
+		for (const c of ids) {
+			installCompartmentFts(db, base, c);
+			const shard = `${base}__c${c}`;
+			db.exec(
+				`INSERT INTO ${shard}(${shard}) VALUES('delete-all');INSERT INTO ${shard}(rowid,${columns.join(",")}) SELECT rowid,${columns.join(",")} FROM ${table} WHERE compartment_id=${compartment(c)}`,
+			);
+		}
+	}
+}

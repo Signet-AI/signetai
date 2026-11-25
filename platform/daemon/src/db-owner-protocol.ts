@@ -340,6 +340,7 @@ export interface DbOwnerTranscriptBulkCommit {
 	};
 }
 export type DbOwnerRequest =
+	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";
 			readonly request: import("./embedding-projection").EmbeddingProjectionRequest;

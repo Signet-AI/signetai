@@ -1,3 +1,4 @@
+import { rebuildCompartmentFtsShards } from "./compartment-shards";
 export interface FtsSchemaExecDb {
 	exec(sql: string): void;
 	prepare?(sql: string): {
@@ -134,12 +135,13 @@ export function recreateMemoriesFtsSchema(db: FtsSchemaExecDb): void {
 function hasCompartments(db: Pick<FtsSchemaExecDb, "prepare">): boolean {
 	return db.prepare?.("SELECT 1 FROM pragma_table_info('memories') WHERE name='compartment_id'").get?.() != null;
 }
-export function recreateMemoriesFts(db: FtsSchemaExecDb): void {
+export function recreateMemoriesFts(db: FtsSchemaExecDb & import("./migrations/contract").MigrationDb): void {
 	recreateMemoriesFtsSchema(db);
 	db.exec(
 		`INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}`,
 	);
 	refreshMemoriesFtsState(db);
+	rebuildCompartmentFtsShards(db);
 }
 export function refreshMemoriesFtsState(db: FtsSchemaExecDb): void {
 	ensureMemoriesFtsState(db);
@@ -231,4 +233,11 @@ export function readMemoriesFtsIndexRowCount(db: FtsSchemaQueryDb): number | nul
 export function memoriesFtsNeedsTokenizerRepair(sql: string | null): boolean {
 	if (sql === null) return false;
 	return !normalizeSql(sql).includes(`tokenize='${MEMORIES_FTS_TOKENIZER}'`);
+}
+
+export function readMemoriesFtsCanonicalRowCount(db: FtsSchemaQueryDb): number {
+	const row = db
+		.prepare(`SELECT COUNT(*) n FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}`)
+		.get();
+	return typeof row === "object" && row !== null && "n" in row && typeof row.n === "number" ? row.n : 0;
 }
