@@ -4,9 +4,9 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 791 sites
+- Exact ledger inventory: 790 sites
 - Synchronous `withWriteTx()` sites: 52
-- Synchronous `withReadDb()` sites: 85
+- Synchronous `withReadDb()` sites: 84
 - Async-named DB sites: 159
 - Async-named ON-PARENT DB sites: 157
 - Async-named OFF-PARENT DB sites: 2
@@ -15,12 +15,12 @@ This report is generated from the deterministic migration ledger in `scripts/eve
   - `withWriteTx`: 52
   - `withReadDb`: 84
 
-The 791-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 52 synchronous writes, 85 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 136 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 790-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 52 synchronous writes, 84 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 136 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 296
-- ON-PARENT callback execution: 294
+- Database accessor sites classified: 295
+- ON-PARENT callback execution: 293
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -28,9 +28,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 
 ### ON-PARENT sites
 
-- `aggregate-recall.ts:720` (withReadDbAsync)
-- `aggregate-recall.ts:726` (withWriteTxAsync)
-- `aggregate-recall.ts:987` (withWriteTxAsync)
+- `aggregate-recall.ts:735` (withReadDbAsync)
+- `aggregate-recall.ts:741` (withWriteTxAsync)
+- `aggregate-recall.ts:1002` (withWriteTxAsync)
 - `auth/api-keys.ts:215` (withWriteTx)
 - `auth/api-keys.ts:259` (withReadDb)
 - `auth/api-keys.ts:278` (withWriteTx)
@@ -109,8 +109,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:memory.projection.ledger` (withReadDbAsync)
 - `db:memory.session.paths` (withReadDbAsync)
 - `db:memory.noise.sessions` (withReadDbAsync)
-- `memory-search-telemetry.ts:245` (withWriteTxAsync)
-- `memory-search-telemetry.ts:321` (withReadDbAsync)
+- `memory-search-telemetry.ts:252` (withWriteTxAsync)
+- `db:recall.telemetry.list` (withReadDbAsync)
 - `db:recall.temporal-topic.content` (withReadDbAsync)
 - `db:recall.facet-coverage.content` (withReadDbAsync)
 - `db:recall.reranker.content` (withReadDbAsync)
@@ -170,14 +170,13 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:dreaming.worker.agent-ids.read` (withReadDbAsync)
 - `db:dreaming.worker.check-mode.hygiene-attention.read` (withReadDbAsync)
 - `db:dreaming.worker.check-mode.content-attention.read` (withReadDbAsync)
-- `pipeline/graph-traversal.ts:69` (withReadDbAsync)
+- `pipeline/graph-traversal.ts:185` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:313` (withReadDbAsync)
 - `db:maintenance.dead-memory-count.read` (withReadDbAsync)
 - `pipeline/reflection-worker.ts:345` (withReadDb)
 - `pipeline/reflection-worker.ts:369` (withReadDb)
 - `pipeline/reflection-worker.ts:419` (withWriteTx)
-- `pipeline/reranker-embedding.ts:20` (withReadDb)
 - `pipeline/skill-graph.ts:55` (withReadDbAsync)
 - `pipeline/skill-graph.ts:145` (withWriteTxAsync)
 - `pipeline/skill-graph.ts:251` (withReadDbAsync)
@@ -216,7 +215,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/knowledge-routes.ts:542` (withReadDbAsync)
 - `routes/knowledge-routes.ts:559` (withReadDbAsync)
 - `routes/knowledge-routes.ts:661` (withReadDbAsync)
-- `routes/memory-routes.ts:127` (withReadDbAsync)
+- `db:recall.route.aliases` (withReadDbAsync)
 - `db:memory.timeline.read` (withReadDbAsync)
 - `db:memory.capture.base-idempotency.read` (withReadDbAsync)
 - `db:memory.capture.chunk-idempotency.read` (withReadDbAsync)
@@ -256,15 +255,15 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/telemetry-routes.ts:265` (withReadDb)
 - `db:forget.candidates.read` (withReadDb)
 - `db:forget.candidates-by-id.read` (withReadDb)
-- `session-checkpoints.ts:69` (withWriteTxAsync)
-- `session-checkpoints.ts:139` (withWriteTx)
-- `session-checkpoints.ts:247` (withReadDb)
-- `session-checkpoints.ts:262` (withReadDb)
-- `session-checkpoints.ts:276` (withReadDb)
-- `session-checkpoints.ts:290` (withReadDbAsync)
-- `session-checkpoints.ts:308` (withReadDb)
-- `session-checkpoints.ts:323` (withWriteTx)
-- `session-checkpoints.ts:338` (withWriteTxAsync)
+- `session-checkpoints.ts:70` (withWriteTxAsync)
+- `session-checkpoints.ts:140` (withWriteTx)
+- `session-checkpoints.ts:250` (withReadDb)
+- `session-checkpoints.ts:270` (withReadDb)
+- `session-checkpoints.ts:284` (withReadDb)
+- `session-checkpoints.ts:298` (withReadDbAsync)
+- `session-checkpoints.ts:316` (withReadDb)
+- `session-checkpoints.ts:331` (withWriteTx)
+- `session-checkpoints.ts:346` (withWriteTxAsync)
 - `session-claims.ts:74` (withWriteTx)
 - `session-claims.ts:92` (withWriteTx)
 - `session-claims.ts:115` (withWriteTx)
@@ -273,10 +272,10 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:session-end.recovery.clear` (withWriteTxAsync)
 - `session-memories.ts:108` (withWriteTx)
 - `session-memories.ts:192` (withWriteTx)
-- `session-recall-dedupe.ts:256` (withWriteTx)
-- `session-recall-dedupe.ts:282` (withWriteTxAsync)
-- `session-recall-dedupe.ts:326` (withWriteTxAsync)
-- `session-recall-dedupe.ts:374` (withWriteTx)
+- `db:recall.ledger.claim.sync` (withWriteTx)
+- `db:recall.ledger.claim.async` (withWriteTxAsync)
+- `db:recall.ledger.apply.async` (withWriteTxAsync)
+- `db:recall.ledger.apply.sync` (withWriteTx)
 - `db:transcript.table.exists` (withReadDb)
 - `db:transcript.column.exists` (withReadDb)
 - `db:transcript.backfill.page` (withReadDb)
@@ -305,7 +304,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `temporal-fallback.ts:36` (withReadDb)
 - `temporal-fallback.ts:153` (withReadDb)
 - `temporal-fallback.ts:202` (withReadDb)
-- `temporal-recall.ts:452` (withReadDb)
+- `temporal-recall.ts:468` (withReadDb)
 - `db:transcript.capture.current` (withReadDbAsync)
 - `db:transcript.capture.cleanup` (withReadDbAsync)
 - `db:transcript.capture.status` (withReadDbAsync)

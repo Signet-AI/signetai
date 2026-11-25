@@ -238,6 +238,18 @@ describe("memory search telemetry", () => {
 			});
 		});
 
+		it("inherits a pending classification before its evidence batch moves", async () => {
+			const { hr } = seed();
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.prepare(
+					"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES ('memory','mem-open','ant','cls_hr')",
+				).run();
+			});
+			await record(["mem-open"]);
+			expect(stored().compartment).toBe(hr);
+			expect(await listMemorySearchTelemetry(getDbAccessor(), { readScope: scope })).toEqual([]);
+		});
+
 		it("takes the union label of every returned result and cites each one", async () => {
 			const { both } = seed();
 			await record(["mem-hr", "mem-legal", "mem-open"]);

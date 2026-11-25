@@ -112,7 +112,7 @@ export function telemetryEvidenceInTx(
 				FROM memory_artifacts r WHERE r.agent_id = ? AND r.source_kind = 'transcript' AND r.session_id IN (SELECT value FROM json_each(?))
 				UNION ALL SELECT 'native-artifact:' || r.rowid, 'artifact', r.source_path, r.agent_id, r.compartment_id
 				FROM memory_artifacts r WHERE r.rowid IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'source-chunk:' || e.id, NULL, NULL, e.agent_id, e.compartment_id
+				UNION ALL SELECT 'source-chunk:' || e.id, NULL, e.source_id, e.agent_id, e.compartment_id
 				FROM embeddings e WHERE e.id IN (SELECT value FROM json_each(?))
 				UNION ALL SELECT 'source-chunk:' || e.id, 'artifact', r.source_path, r.agent_id, r.compartment_id
 				FROM embeddings e JOIN memory_artifacts r ON r.agent_id = e.agent_id AND r.source_path = e.source_id
@@ -157,9 +157,41 @@ export function telemetryEvidenceInTx(
 		}
 		const own = labels.get(resultId) ?? new Set<string>();
 		if (label !== null) own.add(label);
-		labels.set(resultId, own);
 		const kind = "kind" in row ? citationKind(row.kind) : null;
 		const evidenceId = "evidence_id" in row && typeof row.evidence_id === "string" ? row.evidence_id : null;
+		if ("agent_id" in row && typeof row.agent_id === "string") {
+			const attribute =
+				kind === "attribute" && evidenceId !== null
+					? db
+							.prepare("SELECT memory_id FROM entity_attributes WHERE id=? AND agent_id=?")
+							.get(evidenceId, row.agent_id)
+					: null;
+			const memoryId =
+				kind === "memory"
+					? evidenceId
+					: attribute && typeof attribute.memory_id === "string"
+						? attribute.memory_id
+						: null;
+			const inherited = compartmentForWrite(db, {
+				agentId: row.agent_id,
+				memoryId,
+				sessionKey: kind === "transcript" ? evidenceId : null,
+				sourceId:
+					kind === "artifact" || kind === "transcript" || resultId.startsWith("source-chunk:") ? evidenceId : null,
+			});
+			for (const member of db
+				.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
+				.all(inherited)) {
+				if (
+					typeof member === "object" &&
+					member !== null &&
+					"classification_id" in member &&
+					typeof member.classification_id === "string"
+				)
+					own.add(member.classification_id);
+			}
+		}
+		labels.set(resultId, own);
 		const sameAgent = "agent_id" in row && row.agent_id === input.agentId;
 		if (kind === null || evidenceId === null || !sameAgent) continue;
 		const cited = citations.get(resultId) ?? new Map<string, TelemetryCitation>();
@@ -443,7 +475,7 @@ export function applyRecallDedupe<T extends RecallDedupeItem>(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return getDbAccessor().withWriteTx(
 			(db: import("./db-accessor").WriteDb) => applyRecallDedupeInTx(db, opts, sessionKey, agentId),
-			"session-recall-dedupe.ts:405",
+			"db:recall.ledger.claim.sync",
 		);
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
@@ -476,7 +508,7 @@ export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 				return result;
 			},
 			{
-				siteToken: "session-recall-dedupe.ts:431",
+				siteToken: "db:recall.ledger.claim.async",
 				signal: opts.signal,
 				deadlineMs: deadlineAt === undefined ? undefined : deadlineAt - Date.now(),
 			},
@@ -535,7 +567,7 @@ export async function advanceRecallContextEpochAsync(input: {
 			(db) => {
 				return advanceEpochInTx(db, sessionKey, agentId, input);
 			},
-			{ siteToken: "session-recall-dedupe.ts:495" },
+			{ siteToken: "db:recall.ledger.apply.async" },
 		);
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
@@ -573,7 +605,7 @@ export function advanceRecallContextEpoch(input: {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			return advanceEpochInTx(db, sessionKey, agentId, input);
-		}, "session-recall-dedupe.ts:535");
+		}, "db:recall.ledger.apply.sync");
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
 			error: error instanceof Error ? error.message : String(error),

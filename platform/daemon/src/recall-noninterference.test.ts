@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classify } from "./classifications";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { getDbOwner } from "./db-owner-runtime";
 import { constructContextBlocksViaOwner } from "./pipeline/context-construction";

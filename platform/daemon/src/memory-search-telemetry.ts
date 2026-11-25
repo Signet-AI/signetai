@@ -366,6 +366,6 @@ export async function listMemorySearchTelemetry(
 				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
 			return rows.map(rowToItem);
 		},
-		{ siteToken: "memory-search-telemetry.ts:353" },
+		{ siteToken: "db:recall.telemetry.list" },
 	);
 }

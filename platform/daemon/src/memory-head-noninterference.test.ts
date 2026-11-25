@@ -4,7 +4,7 @@ import { compartmentFor } from "@signet/core";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { requestMemoryHead } from "./memory-head";
 import { resolveReadScope } from "./read-scope";
 

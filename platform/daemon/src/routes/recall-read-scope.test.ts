@@ -9,7 +9,7 @@ import { z } from "zod";
 import { bindPrincipalAccess } from "../auth/agent-access";
 import { readOrganization } from "../auth/organization-store";
 import type { Principal } from "../auth/principal";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { registerMemoryRoutes } from "./memory-routes";
 import { reloadAuthState } from "./state";
 

@@ -197,11 +197,14 @@ describe("graph-search read scope", () => {
 		expect(await both("kubernetes", "alice", { ...org, projects: ["atlas"] })).toEqual([[], []]);
 	});
 
-	it("keeps entity reach own for shared memory scopes", async () => {
+	it("keeps entity reach own for group and shared memory scopes", async () => {
 		entity("ent-k8s", "Kubernetes", "bob", null);
 		memory("mem-bob", "bob", null, "ent-k8s");
 		const shared: ReadScope = { reach: { kind: "shared", agentId: "alice" }, compartments: "all", projects: null };
 		expect(await both("kubernetes", "alice", shared)).toEqual([[], []]);
+		expect(
+			await both("kubernetes", "alice", { ...shared, reach: { kind: "group", agentId: "alice", group: "eng" } }),
+		).toEqual([[], []]);
 	});
 });
 

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compartmentFor, ensureCompartmentShards, type ReadScope } from "@signet/core";
+import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, type WriteDb } from "./db-accessor";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { setFtsIndexIncomplete } from "./fts-index-state";
@@ -285,6 +286,28 @@ describe("hybridRecall read scope", () => {
 			async () => queryVector,
 		);
 	}
+
+	it("never dedupes a readable artifact against a hidden content-hash mirror", async () => {
+		const content = "atlas deploy pipeline public native mirror";
+		await getDbAccessor().withWriteTxAsync((db) => {
+			nativeArtifact(db, "hermes/public.md", content);
+			db.prepare("UPDATE memory_artifacts SET harness='hermes-agent' WHERE source_path='hermes/public.md'").run();
+		});
+		const before = normalized(await recall(outsider(), false));
+		expect(JSON.stringify(before)).toContain(content);
+		await getDbAccessor().withWriteTxAsync((db) => {
+			const classified = compartment(db, "cls_mirror");
+			memory(db, { id: "hidden-mirror", content, compartment: classified });
+			db.prepare("UPDATE memories SET source_type='hermes-memory-write',content_hash=? WHERE id='hidden-mirror'").run(
+				normalizeAndHashContent(content).contentHash,
+			);
+			nativeArtifact(db, "hermes/hidden.md", content, classified);
+			db.prepare(
+				"UPDATE memory_artifacts SET harness='hermes-agent', source_sha256=(SELECT source_sha256 FROM memory_artifacts WHERE source_path='hermes/public.md') WHERE source_path='hermes/hidden.md'",
+			).run();
+		});
+		expect(normalized(await recall(outsider(), false))).toEqual(before);
+	});
 
 	it("returns identical recall to an outsider before and after hidden inserts, updates and reclassification", async () => {
 		await knownProfile();
