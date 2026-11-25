@@ -34,7 +34,9 @@ import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
 import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
 import { jsonBody } from "../request-body";
+import { resolveReadAgent } from "../auth/agent-access";
 import { resolveScopedAgent } from "../request-scope";
+import { resolveRouteReadScope } from "./read-scope";
 import { openBoundedSse } from "../sse-stream.js";
 import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
 
@@ -865,12 +867,21 @@ const recallRowSchema = z.object({
 
 export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}): void {
 	app.get("/api/assistant/models", async (c) => {
-		const scope = resolveScopedAgent(
+		let scope = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			getAuthMode(opts),
 			c.req.query("agentId"),
 			resolveDaemonAgentId(),
 		);
+		if (c.get("organization")) {
+			const resolved = resolveReadAgent(
+				c.get("principal"),
+				c.get("requestedOrganizationAgent") ?? c.req.query("agentId"),
+			);
+			if (!resolved.ok)
+				return c.json({ error: resolved.error.error, reason: resolved.error.reason }, resolved.error.status);
+			scope = { agentId: resolved.value };
+		}
 		if (scope.error) return c.json({ error: scope.error }, 403);
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: "Inference is unavailable" }, 503);
@@ -889,13 +900,20 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 				400,
 			);
 		const body = parsed.data;
-		const scope = resolveScopedAgent(
+		let scope = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			getAuthMode(opts),
 			body.agentId,
 			resolveDaemonAgentId(),
 		);
+		if (c.get("organization")) {
+			const resolved = resolveReadAgent(c.get("principal"), c.get("requestedOrganizationAgent") ?? body.agentId);
+			if (!resolved.ok)
+				return c.json({ error: resolved.error.error, reason: resolved.error.reason }, resolved.error.status);
+			scope = { agentId: resolved.value };
+		}
 		if (scope.error) return c.json({ error: scope.error }, 403);
+		const readScope = await resolveRouteReadScope(c, scope.agentId);
 		const slot = acquireConcurrencySlot("execute", opts);
 		if (!slot.ok) return c.json({ error: slot.message }, slot.status);
 		const controller = new AbortController();
@@ -964,6 +982,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								accessor: getDbAccessor(),
 								agentId: scope.agentId,
 								actor: "dashboard-chat",
+								readScope,
 								allowedAgentIds: [scope.agentId],
 								onToolCall(trace) {
 									const retrieval = retrievalEvent(trace.tool, trace.output);
@@ -1031,7 +1050,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									return row.success ? [row.data] : [];
 								});
 								const evidence = getDreamingCapability(
-									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat" },
+									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat", readScope },
 									"search_evidence",
 								);
 								const candidates = rows.filter((row) => !row.id.includes(":")).slice(0, 20);
@@ -1138,11 +1157,9 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								signal: controller.signal,
 								timeoutMs: 90_000,
 								modelSelection: body.modelSelection,
-								persistentSessionKey: JSON.stringify([
-									c.get("auth")?.claims?.sub ?? "local",
-									scope.agentId,
-									body.conversationId,
-								]),
+								persistentSessionKey: c.get("organization")
+									? undefined
+									: JSON.stringify([c.get("auth")?.claims?.sub ?? "local", scope.agentId, body.conversationId]),
 								continuationPrompt: JSON.stringify({
 									agentId: scope.agentId,
 									selectedEntityId: body.selectedEntityId,

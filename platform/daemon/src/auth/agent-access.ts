@@ -9,6 +9,7 @@ export function organizationReadRequest(method: string, path: string): boolean {
 				"/api/assistant/chat",
 				"/api/knowledge/expand",
 				"/api/knowledge/expand/session",
+				"/api/graph/impact",
 				"/api/sessions/summaries/expand",
 				...[
 					"memory_head_read",

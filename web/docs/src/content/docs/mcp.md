@@ -72,6 +72,14 @@ agent's memories. The stdio server (`signet mcp`) does not read
 `SIGNET_AGENT_ID` from its own environment. `memory_list` does not accept
 `all`; the all-agents view is for operator surfaces such as the dashboard.
 
+In a claimed organization, the credential identifies the person and bounds the
+agent and project reach. Knowledge expansion tools keep the same requested agent
+as memory tools. Reads use the caller's classification audiences, including when
+an MCP tool forwards to another HTTP endpoint. Cookie-authenticated HTTP MCP
+requests preserve the session cookie and CSRF header; they never substitute the
+daemon's environment credential. The daemon attributes operations to the
+verified caller, not an MCP-supplied actor header.
+
 ## Tool Reference
 
 All tools are defined in `platform/daemon/src/mcp/tools.ts`. Tool handlers
