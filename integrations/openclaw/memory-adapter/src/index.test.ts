@@ -20,6 +20,7 @@ const originalFetch = globalThis.fetch;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
 const originalSignetPath = process.env.SIGNET_PATH;
+const originalApiKey = process.env.SIGNET_API_KEY;
 
 let intervalCallbacks: Array<() => void | Promise<void>> = [];
 let nextIntervalId = 1;
@@ -44,6 +45,12 @@ let lastCheckpointBody: unknown = null;
 let lastHeartbeatBody: unknown = null;
 let warnMessages: string[] = [];
 let testDir = "";
+
+async function waitForRequest(predicate: () => boolean): Promise<void> {
+	const deadline = Date.now() + 2000;
+	while (!predicate() && Date.now() < deadline) await Bun.sleep(5);
+	expect(predicate()).toBe(true);
+}
 
 function hit(path: string): void {
 	pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
@@ -149,6 +156,9 @@ beforeEach(() => {
 	warnMessages = [];
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 	process.env.SIGNET_PATH = testDir;
+	process.env.SIGNET_API_KEY = "openclaw-test-credential";
+	writeFileSync(join(testDir, "typed-session.jsonl"), "session evidence");
+	writeFileSync(join(testDir, "legacy-session.jsonl"), "session evidence");
 	writeFileSync(join(testDir, "AGENTS.md"), "Temporary test instructions for static identity fallback coverage.");
 
 	const mockFetch = Object.assign(
@@ -285,6 +295,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	for (const service of registeredServices) await service.stop();
+	if (originalApiKey === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+	else process.env.SIGNET_API_KEY = originalApiKey;
 	globalThis.fetch = originalFetch;
 	globalThis.setInterval = originalSetInterval;
 	globalThis.clearInterval = originalClearInterval;
@@ -294,9 +307,6 @@ afterEach(async () => {
 		process.env.SIGNET_PATH = originalSignetPath;
 	}
 	rmSync(testDir, { recursive: true, force: true });
-	for (const service of registeredServices) {
-		await service.stop();
-	}
 	_resetRegistration();
 });
 
@@ -633,7 +643,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
 
-	it("uses a timeout-specific static fallback when session-start times out", async () => {
+	it("does not inject local identity when a remote session-start times out", async () => {
 		timeoutSessionStartCount = 1;
 		const result = await signet.onSessionStart("openclaw", {
 			daemonUrl: "http://daemon.test",
@@ -641,8 +651,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "session-timeout",
 		});
 
-		expect(result?.inject).toContain("session-start timed out");
-		expect(result?.inject).not.toContain("daemon offline");
+		expect(result).toBeNull();
 	});
 
 	it("fires pre-compaction hook and deduplicates identical calls", async () => {
@@ -760,6 +769,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(afterCompaction).toBeDefined();
 
 		const sessionFile = join(testDir, "session-after.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		writeFileSync(
 			sessionFile,
 			[
@@ -801,6 +811,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(afterCompaction).toBeDefined();
 
 		const sessionFile = join(testDir, "session-after-event.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		writeFileSync(
 			sessionFile,
 			[
@@ -855,6 +866,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(afterCompaction).toBeDefined();
 
 		const sessionFile = join(testDir, "session-lineage-header.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		writeFileSync(
 			sessionFile,
 			[
@@ -889,6 +901,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(afterCompaction).toBeDefined();
 
 		const sessionFile = join(testDir, "session-after-dedupe.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		writeFileSync(
 			sessionFile,
 			[
@@ -1030,6 +1043,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(agentEnd).toBeDefined();
 
 		const sessionFile = join(testDir, "session-end.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		await agentEnd?.(
 			{
 				cwd: "/tmp/session-end-project",
@@ -1051,7 +1065,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			runtimePath: "plugin",
 			sessionId: "session-end-id",
 			sessionKey: "session-end-key",
-			transcriptPath: sessionFile,
+			transcript: "session evidence",
 		});
 	});
 
@@ -1310,6 +1324,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(agentEnd).toBeDefined();
 
 		const sessionFile = join(testDir, "resolve-ctx-prefer.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		await agentEnd?.(
 			{
 				cwd: "/tmp/resolve-ctx",
@@ -1339,6 +1354,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(agentEnd).toBeDefined();
 
 		const sessionFile = join(testDir, "resolve-ctx-fallback.jsonl");
+		writeFileSync(sessionFile, "session evidence");
 		await agentEnd?.(
 			{
 				cwd: "/tmp/resolve-ctx-fallback",
@@ -1419,7 +1435,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				sessionKey: "typed-ctx-key",
 				sessionId: "typed-ctx-id",
 				workspaceDir: "/tmp/typed-project",
-				sessionFile: "/tmp/typed-session.jsonl",
+				sessionFile: join(testDir, "typed-session.jsonl"),
 			},
 		);
 
@@ -1428,7 +1444,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "typed-ctx-key",
 			sessionId: "typed-ctx-id",
 			cwd: "/tmp/typed-project",
-			transcriptPath: "/tmp/typed-session.jsonl",
+			transcript: "session evidence",
 		});
 	});
 
@@ -1445,7 +1461,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				cwd: "/tmp/legacy-project",
 				sessionKey: "legacy-key",
 				sessionId: "legacy-id",
-				sessionFile: "/tmp/legacy-session.jsonl",
+				sessionFile: join(testDir, "legacy-session.jsonl"),
 				agentId: "agent-legacy",
 			},
 			{},
@@ -1456,7 +1472,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "legacy-key",
 			sessionId: "legacy-id",
 			cwd: "/tmp/legacy-project",
-			transcriptPath: "/tmp/legacy-session.jsonl",
+			transcript: "session evidence",
 		});
 	});
 
@@ -1520,7 +1536,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
@@ -1532,7 +1548,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			);
 		}
 
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 2);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(2);
 	});
 
@@ -1623,7 +1639,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			);
 		}
 
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
@@ -1645,7 +1661,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			);
 		}
 
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
@@ -1664,7 +1680,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			await beforeAgentStart?.({ prompt: `Turn ${i + 1}` }, ctx);
 		}
 
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
@@ -1685,7 +1701,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			await beforePromptBuild?.({ prompt: `Turn ${i + 1}`, messages: lastMsgs }, ctx);
 		}
 
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 		const body = lastCheckpointBody as Record<string, unknown>;
 		expect(body.transcriptPath).toBeUndefined();
@@ -1713,7 +1729,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 		checkpointResponse = { queued: true, jobId: "retry-1" };
 		await beforePromptBuild?.(
@@ -1723,7 +1739,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			},
 			ctx,
 		);
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 2);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(2);
 	});
 
@@ -1745,7 +1761,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 		for (let i = 0; i < 19; i++) {
 			await beforePromptBuild?.(
@@ -1756,7 +1772,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
-		await Bun.sleep(0);
+		await waitForRequest(() => getHits("/api/hooks/session-checkpoint-extract") >= 1);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 });
@@ -1841,7 +1857,7 @@ describe("registration guard (#422)", () => {
 	it("publishes an OpenClaw diagnostics heartbeat after startup health succeeds", async () => {
 		const { api } = createMockApi({ registrationMode: "full", version: "test-plugin" });
 		signetPlugin.register(api);
-		await Bun.sleep(0);
+		await waitForRequest(() => lastHeartbeatBody !== null);
 
 		expect(lastHeartbeatBody).toMatchObject({
 			pluginVersion: "test-plugin",
@@ -2283,7 +2299,7 @@ describe("installSdkSanitizer", () => {
 });
 
 describe("daemonFetchResult body-read resilience", () => {
-	it("returns timeout fallback when body read is aborted mid-stream", async () => {
+	it("does not inject local identity after a remote body-read timeout", async () => {
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -2311,10 +2327,10 @@ describe("daemonFetchResult body-read resilience", () => {
 			sessionKey: "session-body-timeout",
 		});
 
-		expect(result?.inject).toContain("session-start timed out");
+		expect(result).toBeNull();
 	});
 
-	it("does not use timeout fallback when body read fails for a non-timeout reason", async () => {
+	it("does not inject local identity after a remote body-read failure", async () => {
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -2339,11 +2355,10 @@ describe("daemonFetchResult body-read resilience", () => {
 			sessionKey: "session-body-read-failure",
 		});
 
-		expect(result?.inject).toBeDefined();
-		expect(result?.inject).not.toContain("session-start timed out");
+		expect(result).toBeNull();
 	});
 
-	it("returns offline fallback when daemon sends empty body on session-start", async () => {
+	it("does not inject local identity after an empty remote response", async () => {
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -2362,8 +2377,7 @@ describe("daemonFetchResult body-read resilience", () => {
 			sessionKey: "session-empty-body",
 		});
 
-		expect(result?.inject).toBeDefined();
-		expect(result?.inject).not.toContain("session-start timed out");
+		expect(result).toBeNull();
 	});
 
 	it("logs diagnostic info with body length for empty body responses", async () => {

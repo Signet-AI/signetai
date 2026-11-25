@@ -276,7 +276,7 @@ async function daemonFetch<T>(
 async function daemonFetchResult<T>(
 	daemonUrl: string,
 	path: string,
-	options: { method?: string; body?: unknown; timeout?: number } = {},
+	options: { method?: string; body?: unknown; timeout?: number; signal?: AbortSignal } = {},
 ): Promise<DaemonFetchResult<T>> {
 	try {
 		const target = await resolveTarget({ harness: "openclaw", configUrl: daemonUrl });
@@ -289,7 +289,9 @@ async function daemonFetchResult<T>(
 		const data = await transport.request<T>(options.method ?? "GET", path, {
 			body,
 			timeoutMs: options.timeout ?? READ_TIMEOUT,
+			signal: options.signal,
 		});
+		if (data === undefined) console.warn(`signet-memory: ${path} empty body (0 chars)`);
 		if (data === undefined || typeof data === "string") return { ok: false, reason: "invalid-json", status: 200 };
 		return { ok: true, data };
 	} catch (error) {
@@ -310,8 +312,8 @@ async function daemonFetchResult<T>(
 export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<boolean> {
 	return (await daemonFetchResult(daemonUrl, "/health", { timeout: 1000 })).ok;
 }
-async function getDaemonPid(daemonUrl: string): Promise<number | null> {
-	const result = await daemonFetchResult<{ pid?: number }>(daemonUrl, "/health", { timeout: 1000 });
+async function getDaemonPid(daemonUrl: string, signal?: AbortSignal): Promise<number | null> {
+	const result = await daemonFetchResult<{ pid?: number }>(daemonUrl, "/health", { timeout: 1000, signal });
 	return result.ok && typeof result.data.pid === "number" ? result.data.pid : null;
 }
 function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
@@ -1188,10 +1190,12 @@ const signetPlugin = {
 			];
 			let healthError: string | null = null;
 			let heartbeatInFlight = false;
+			const healthController = new AbortController();
+			let healthTask: Promise<void> | undefined;
 
 			const pluginVersion = typeof api.version === "string" && api.version.trim() ? api.version : "unknown";
 			const sendHeartbeat = async (): Promise<void> => {
-				if (heartbeatInFlight) return;
+				if (heartbeatInFlight || healthController.signal.aborted) return;
 				heartbeatInFlight = true;
 				try {
 					await daemonFetchResult<{ ok: boolean }>(daemonUrl, "/api/diagnostics/openclaw/heartbeat", {
@@ -1206,6 +1210,7 @@ const signetPlugin = {
 							hooksFailed: healthError ? 1 : 0,
 						},
 						timeout: HEARTBEAT_TIMEOUT,
+						signal: healthController.signal,
 					});
 				} finally {
 					heartbeatInFlight = false;
@@ -1215,21 +1220,23 @@ const signetPlugin = {
 			if (mode === "full") {
 				api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
 			}
-			if (mode === "full") {
-				getDaemonPid(daemonUrl).then((pid) => {
-					daemonReachable = pid !== null;
-					knownPid = pid;
-					if (!daemonReachable) {
-						healthError = `daemon unreachable at ${daemonUrl}; memory hooks are disabled until Signet is healthy`;
-						api.logger.warn(
-							`signet-memory: daemon unreachable at ${daemonUrl}. Memory hooks are disabled until daemon health recovers; run \`signet status\` or \`signet doctor\` for diagnostics.`,
-						);
-					} else {
-						healthError = null;
-						void sendHeartbeat();
-					}
-				});
-			}
+			const startupHealth =
+				mode === "full"
+					? getDaemonPid(daemonUrl, healthController.signal).then(async (pid) => {
+							if (healthController.signal.aborted) return;
+							daemonReachable = pid !== null;
+							knownPid = pid;
+							if (!daemonReachable) {
+								healthError = `daemon unreachable at ${daemonUrl}; memory hooks are disabled until Signet is healthy`;
+								api.logger.warn(
+									`signet-memory: daemon unreachable at ${daemonUrl}. Memory hooks are disabled until daemon health recovers; run \`signet status\` or \`signet doctor\` for diagnostics.`,
+								);
+							} else {
+								healthError = null;
+								await sendHeartbeat();
+							}
+						})
+					: Promise.resolve();
 
 			api.registerTool(
 				(toolCtx) => ({
@@ -1967,14 +1974,14 @@ const signetPlugin = {
 				if (!cfg.enabled) return undefined;
 
 				const resolved = resolveCtx(event, ctx);
-				await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
-				const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
 				const msgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
 				const msgCount = msgs?.length;
 				const basKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 				const latestBpb = basKey ? (bpbGen.get(basKey) ?? 0) : 0;
 				const lastConsumed = basKey ? (basGen.get(basKey) ?? 0) : 0;
 				const coveredByBpb = latestBpb > lastConsumed;
+				if (!coveredByBpb) await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
+				const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
 				if (basKey && coveredByBpb) basGen.set(basKey, latestBpb);
 				if (!coveredByBpb || msgCount !== undefined) {
 					maybeFireCheckpoint(
@@ -2062,38 +2069,48 @@ const signetPlugin = {
 				id: "signet-memory-openclaw",
 				start() {
 					api.logger.info(`signet-memory: service started (daemon: ${daemonUrl})`);
-					healthTimer = setInterval(async () => {
-						const pid = await getDaemonPid(daemonUrl);
-						const ok = pid !== null;
-						if (ok !== daemonReachable) {
-							daemonReachable = ok;
-							if (ok) {
-								healthError = null;
-								api.logger.info("signet-memory: daemon reconnected");
-								void sendHeartbeat();
-							} else {
-								healthError = `daemon became unreachable at ${daemonUrl}; memory hooks are disabled`;
-								api.logger.warn(
-									"signet-memory: daemon became unreachable; memory hooks are disabled until health recovers",
-								);
+					healthTimer = setInterval(() => {
+						if (healthTask || healthController.signal.aborted) return;
+						healthTask = (async () => {
+							const pid = await getDaemonPid(daemonUrl, healthController.signal);
+							if (healthController.signal.aborted) return;
+							const ok = pid !== null;
+							if (ok !== daemonReachable) {
+								daemonReachable = ok;
+								if (ok) {
+									healthError = null;
+									api.logger.info("signet-memory: daemon reconnected");
+									await sendHeartbeat();
+								} else {
+									healthError = `daemon became unreachable at ${daemonUrl}; memory hooks are disabled`;
+									api.logger.warn(
+										"signet-memory: daemon became unreachable; memory hooks are disabled until health recovers",
+									);
+								}
+							} else if (ok) {
+								await sendHeartbeat();
 							}
-						} else if (ok) {
-							void sendHeartbeat();
-						}
-						if (ok && knownPid !== null && pid !== knownPid) {
-							api.logger.info(`signet-memory: daemon restarted (pid ${knownPid} -> ${pid}), re-initializing sessions`);
-							claimedSessions.clear();
-							sessionStartContexts.clear();
-							sessionlessSessionStartContexts.clear();
-							injectedTurns.clear();
-							inFlightTurns.clear();
-							pendingNotifications.clear();
-							sessionlessSessionStarts.clear();
-						}
-						knownPid = pid;
+							if (ok && knownPid !== null && pid !== knownPid) {
+								api.logger.info(
+									`signet-memory: daemon restarted (pid ${knownPid} -> ${pid}), re-initializing sessions`,
+								);
+								claimedSessions.clear();
+								sessionStartContexts.clear();
+								sessionlessSessionStartContexts.clear();
+								injectedTurns.clear();
+								inFlightTurns.clear();
+								pendingNotifications.clear();
+								sessionlessSessionStarts.clear();
+							}
+							knownPid = pid;
+						})().finally(() => {
+							healthTask = undefined;
+						});
+						return healthTask;
 					}, HEARTBEAT_INTERVAL_MS);
 				},
-				stop() {
+				async stop() {
+					healthController.abort();
 					api.logger.info("signet-memory: service stopped");
 					try {
 						removeFetchSanitizer();
@@ -2102,6 +2119,7 @@ const signetPlugin = {
 							clearInterval(healthTimer);
 							healthTimer = null;
 						}
+						await Promise.all([startupHealth, healthTask]);
 					} finally {
 						writeRegistered(false);
 					}
