@@ -1,5 +1,5 @@
 import type { ReadScope } from "../read-scope";
-import { dreamingReadPredicate } from "./dreaming-read-scope";
+import { readDreamingHistoryLinePage } from "./dreaming";
 import type { LlmUsage } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
@@ -165,32 +165,16 @@ async function readLines(
 	nodes: readonly HistoryNode[],
 	readScope?: ReadScope,
 ): Promise<HistoryLine[]> {
-	const predicate = dreamingReadPredicate("", readScope);
-	const parent = dreamingReadPredicate("history_pass", readScope);
 	const lines: HistoryLine[] = [];
 	for (let start = 0; start < nodes.length; start += PAGE_ROWS) {
 		const page = nodes.slice(start, start + PAGE_ROWS);
-		const rows = await ownerQueryAll<{
-			level: number;
-			idx: number;
-			hex: string;
-			bytes: number;
-			passId: string | null;
-		}>(
+		const rows = await readDreamingHistoryLinePage(
 			owner,
-			"dreaming.history.lines",
-			`SELECT level, idx, hex(substr(CAST(text AS BLOB), 1, ?)) AS hex, length(CAST(text AS BLOB)) AS bytes,
-			        pass_id AS passId
-			 FROM ${readScope ? `(SELECT level,ROW_NUMBER() OVER(PARTITION BY level ORDER BY idx)-1 AS idx,text,pass_id FROM dreaming_history_nodes WHERE agent_id=? AND scope_key=? ${predicate.sql} AND (pass_id IS NULL OR EXISTS(SELECT 1 FROM dreaming_passes history_pass WHERE history_pass.id=dreaming_history_nodes.pass_id AND history_pass.agent_id=dreaming_history_nodes.agent_id${parent.sql}))) readable_history` : `dreaming_history_nodes WHERE agent_id=? AND scope_key=? ${predicate.sql}`} ${readScope ? "WHERE" : "AND"} (level, idx) IN (VALUES ${page.map(() => "(?, ?)").join(", ")})`,
-			[
-				DREAMING_HISTORY_LINE_BYTES,
-				agentId,
-				scopeKey,
-				...predicate.args,
-				...(readScope ? parent.args : []),
-				...page.flatMap((node) => [node.level, node.idx]),
-			],
-			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+			agentId,
+			scopeKey,
+			page,
+			DREAMING_HISTORY_LINE_BYTES,
+			readScope,
 		);
 		const byKey = new Map(rows.map((row) => [`${row.level}:${row.idx}`, row]));
 		for (const node of page) {

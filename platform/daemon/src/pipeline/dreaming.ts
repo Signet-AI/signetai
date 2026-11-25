@@ -232,6 +232,43 @@ export async function readDreamingPassRecord(
 
 import type { ReadScope } from "../read-scope";
 import { dreamingReadPredicate } from "./dreaming-read-scope";
+import type { DbOwnerClient } from "../db-owner-client";
+export async function readDreamingHistoryLinePage(
+	owner: DbOwnerClient,
+	agentId: string,
+	scopeKey: string,
+	page: readonly { readonly level: number; readonly idx: number }[],
+	lineBytes: number,
+	readScope?: ReadScope,
+): Promise<readonly { level: number; idx: number; hex: string; bytes: number; passId: string | null }[]> {
+	if (page.length === 0 || page.length > 256 || lineBytes < 1 || lineBytes > 4096)
+		throw new Error("invalid_history_line_page");
+	const predicate = dreamingReadPredicate("", readScope);
+	const parent = dreamingReadPredicate("history_pass", readScope);
+	return await ownerQueryAll<{
+		level: number;
+		idx: number;
+		hex: string;
+		bytes: number;
+		passId: string | null;
+	}>(
+		owner,
+		"dreaming.history.lines",
+		`SELECT level, idx, hex(substr(CAST(text AS BLOB), 1, ?)) AS hex, length(CAST(text AS BLOB)) AS bytes,
+			        pass_id AS passId
+			 FROM ${readScope ? `(SELECT level,ROW_NUMBER() OVER(PARTITION BY level ORDER BY idx)-1 AS idx,text,pass_id FROM dreaming_history_nodes WHERE agent_id=? AND scope_key=? ${predicate.sql} AND (pass_id IS NULL OR EXISTS(SELECT 1 FROM dreaming_passes history_pass WHERE history_pass.id=dreaming_history_nodes.pass_id AND history_pass.agent_id=dreaming_history_nodes.agent_id${parent.sql}))) readable_history` : `dreaming_history_nodes WHERE agent_id=? AND scope_key=? ${predicate.sql}`} ${readScope ? "WHERE" : "AND"} (level, idx) IN (VALUES ${page.map(() => "(?, ?)").join(", ")})`,
+		[
+			lineBytes,
+			agentId,
+			scopeKey,
+			...predicate.args,
+			...(readScope ? parent.args : []),
+			...page.flatMap((node) => [node.level, node.idx]),
+		],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+}
+
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import type {

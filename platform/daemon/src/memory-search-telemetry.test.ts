@@ -77,6 +77,11 @@ describe("memory search telemetry", () => {
 	}
 
 	it("stores query text, filters, timings, and result snapshots for QA", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO agents(id,name,created_at,updated_at) VALUES('ant','Ant','now','now'); INSERT INTO memories(id,agent_id,content,created_at,updated_at) VALUES('mem-1','ant','Recall QA should preserve enough context for manual review.','now','now')",
+			),
+		);
 		await recordMemorySearchTelemetry(getDbAccessor(), {
 			route: "POST /api/memory/recall",
 			agentId: "ant",
