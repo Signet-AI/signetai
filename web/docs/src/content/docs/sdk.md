@@ -3,11 +3,12 @@ title: "SDK"
 description: "Typed TypeScript client for the Signet daemon."
 ---
 
-`@signet/sdk` is the typed HTTP client for the Signet daemon. It has no SQLite dependency and exports four public entry points:
+`@signet/sdk` is the typed HTTP client for the Signet daemon. Its core entry is browser-safe and does not import Node or the core barrel. The Node entry adds target resolution, credential storage, refresh, and durable delivery:
 
 | Import | Surface |
 |---|---|
 | `@signet/sdk` | `SignetClient`, errors, and public types |
+| `@signet/sdk/node` | `resolveTarget`, `NodeTransport`, `createNodeClient`, registry, login store, and outbox |
 | `@signet/sdk/react` | React provider and memory hooks |
 | `@signet/sdk/ai-sdk` | Vercel AI SDK adapters |
 | `@signet/sdk/openai` | OpenAI function-tool adapters |

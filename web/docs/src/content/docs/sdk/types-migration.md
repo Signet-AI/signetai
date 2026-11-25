@@ -8,14 +8,16 @@ description: "Use public helpers, types, error contracts, and current SDK versio
 `SignetClient` includes helpers such as `waitForJob`, `recallOrThrow`, `getMemoryOrThrow`, `getDocumentOrThrow`, `createAndIngestDocument`, and `batchModifyWithProgress`.
 
 ```typescript
-import { SignetApiError, SignetClient, SignetNetworkError } from "@signet/sdk";
+import { SignetApiError, SignetClient, SignetNetworkError, SignetUnauthorizedError, SignetForbiddenError } from "@signet/sdk";
 
-const client = new SignetClient();
+const client = new SignetClient({ daemonUrl: "http://127.0.0.1:3850" });
 try {
   const result = await client.recallOrThrow("deployment preferences", { limit: 5, minScore: 0.5 });
   console.log(result.results);
 } catch (error) {
-  if (error instanceof SignetApiError) console.error(error.status, error.body);
+  if (error instanceof SignetUnauthorizedError) console.error("Signet session expired, run `signet login`", error.reason);
+  else if (error instanceof SignetForbiddenError) console.error(error.reason, error.required);
+  else if (error instanceof SignetApiError) console.error(error.status, error.body);
   else if (error instanceof SignetNetworkError) console.error("Daemon unavailable");
   else throw error;
 }
@@ -25,7 +27,7 @@ Import public response and record types directly from `@signet/sdk` when a funct
 
 ## Version guidance
 
-The published SDK is currently on the 0.x release line. There is no released 1.0 SDK and no blanket 0.x-to-1.0 compatibility promise. Pin and upgrade against a version that exists in the registry, then use TypeScript to identify signature changes:
+Pin the SDK version you use and read its shipped declarations when upgrading. This transport requires an explicit URL or the node resolver, replaces the raw `token` option with `credentialProvider`, removes actor options, and limits retries to two. Existing client methods remain available with an optional final request-control argument:
 
 ```bash
 bun add @signet/sdk@latest

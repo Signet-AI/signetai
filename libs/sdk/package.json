@@ -11,6 +11,10 @@
 			"import": "./dist/index.js",
 			"types": "./dist/index.d.ts"
 		},
+		"./node": {
+			"import": "./dist/node.js",
+			"types": "./dist/node.d.ts"
+		},
 		"./react": {
 			"import": "./dist/react.js",
 			"types": "./dist/react.d.ts"
@@ -28,12 +32,16 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "bun build ./src/index.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --external react --external zod --external better-sqlite3",
+		"build": "bun build ./src/index.ts ./src/node.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --splitting --external react --external zod --external '@signet/core/*' && bun run build:types",
+		"build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"dev": "bun --watch src/index.ts",
 		"test": "bun test"
 	},
+	"dependencies": {
+		"@signet/core": "workspace:*"
+	},
 	"devDependencies": {
-		"@signet/core": "workspace:*",
 		"@types/react": "^19.0.0",
 		"react": "^19.0.0"
 	},

@@ -71,6 +71,17 @@ afterEach(() => {
 });
 
 describe("SignetClientHelpers", () => {
+	test("polling deadline interrupts the interval and cancellation does not wait for the next poll", async () => {
+		const { client } = mockDaemon(() => ({ id: "job", status: "pending" }));
+		const start = Date.now();
+		await expect(client.waitForJob("job", { interval: 1000 }, { deadline: Date.now() + 20 })).rejects.toThrow();
+		expect(Date.now() - start).toBeLessThan(300);
+		const controller = new AbortController();
+		const promise = client.waitForJob("job", { interval: 1000 }, { signal: controller.signal });
+		setTimeout(() => controller.abort(), 20);
+		await expect(promise).rejects.toThrow();
+		expect(Date.now() - start).toBeLessThan(500);
+	});
 	test("waitForJob() polls until job completes", async () => {
 		let callCount = 0;
 		const { client } = mockDaemon((req) => {

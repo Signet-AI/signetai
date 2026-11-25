@@ -36,7 +36,7 @@ import { SignetClient } from "@signet/sdk";
 import { memoryTools } from "@signet/sdk/ai-sdk";
 import { generateText } from "ai";
 
-const client = new SignetClient();
+const client = new SignetClient({ daemonUrl: "http://127.0.0.1:3850" });
 const result = await generateText({ model, tools: await memoryTools(client), prompt: "Find relevant preferences." });
 ```
 
@@ -49,7 +49,7 @@ The SDK uses camelCase request fields. The daemon may accept compatibility wire 
 ```typescript
 import { SignetClient } from "@signet/sdk";
 
-const client = new SignetClient();
+const client = new SignetClient({ daemonUrl: "http://127.0.0.1:3850" });
 await client.sessionStart({ sessionKey: "session-123", harness: "my-harness", project: "/workspace/app" });
 const context = await client.userPromptSubmit({ sessionKey: "session-123", prompt: "Review the migration", project: "/workspace/app" });
 await client.sessionEnd({ sessionKey: "session-123", harness: "my-harness", transcript: "…", project: "/workspace/app" });
