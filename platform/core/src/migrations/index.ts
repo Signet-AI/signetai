@@ -1654,28 +1654,64 @@ export const MIGRATIONS: readonly Migration[] = [
 	{
 		version: 179,
 		name: "dreaming-evidence-leases",
+		foreignKeysOff: true,
 		up: dreamingEvidenceLeases,
 		artifacts: {
-			tables: ["dreaming_evidence_leases", "dreaming_classification_epoch"],
+			tables: ["dreaming_evidence_leases", "dreaming_classification_epoch", "dreaming_pass_classification_epochs"],
 			indexes: [
 				"idx_dreaming_evidence_lease_partition",
+				"idx_dreaming_evidence_consumption_partition",
+				"idx_dreaming_evidence_consumption_label",
+				"idx_dreaming_evidence_reviews_partition",
+				"idx_dreaming_evidence_reviews_label",
+				"idx_dreaming_evidence_exclusions_partition",
+				"idx_dreaming_evidence_exclusions_label",
+
+				"idx_entities_partition_name",
+				"idx_entity_aspects_partition_name",
+				"idx_memory_head_entries_partition",
+				"idx_dreaming_attention_partition",
+				"idx_head_revision_identity_citation",
 				"idx_dreaming_evidence_leases_pass",
 				"idx_dreaming_history_nodes_partition",
 				"idx_dreaming_history_nodes_pass",
 				"idx_dreaming_state_partition",
 				"idx_memory_artifacts_dreaming_partition_path",
+				"idx_memory_entity_mentions_compartment",
+				"idx_derived_memory_sources_compartment",
+				"idx_memory_history_compartment",
+				"idx_relations_compartment",
+				"idx_entity_aliases_compartment",
 				"idx_memory_head_revisions_partition",
 				"idx_memory_head_revision_entries_partition",
 				"idx_memory_head_publications_partition",
 			],
 			columns: [
-				{ table: "dreaming_passes", column: "classification_epoch" },
+				{ table: "memory_entity_mentions", column: "agent_id" },
+				{ table: "memory_entity_mentions", column: "compartment_id" },
+				{ table: "memory_entity_mentions", column: "dreaming_pass_id" },
+				{ table: "derived_memory_sources", column: "agent_id" },
+				{ table: "derived_memory_sources", column: "compartment_id" },
+				{ table: "derived_memory_sources", column: "dreaming_pass_id" },
+				{ table: "memory_history", column: "agent_id" },
+				{ table: "memory_history", column: "compartment_id" },
+				{ table: "memory_history", column: "dreaming_pass_id" },
+				{ table: "relations", column: "agent_id" },
+				{ table: "relations", column: "compartment_id" },
+				{ table: "relations", column: "dreaming_pass_id" },
+				{ table: "entity_aliases", column: "compartment_id" },
+				{ table: "entity_aliases", column: "dreaming_pass_id" },
 				{ table: "ontology_proposals", column: "dreaming_pass_id" },
+				{ table: "dreaming_evidence_consumption", column: "compartment_id" },
+				{ table: "dreaming_evidence_reviews", column: "compartment_id" },
+				{ table: "dreaming_evidence_exclusions", column: "compartment_id" },
+
 				{ table: "entities", column: "dreaming_pass_id" },
 				{ table: "dreaming_attention", column: "dreaming_pass_id" },
 				{ table: "dreaming_state", column: "compartment_id" },
 				{ table: "memory_head_revisions", column: "is_current" },
 				{ table: "memory_head_entries", column: "pass_id" },
+				{ table: "memory_head_entries", column: "id" },
 				{ table: "memory_head_revision_entries", column: "pass_id" },
 				{ table: "memory_head_revision_entries", column: "revision_id" },
 				{ table: "memory_head_revisions", column: "compartment_id" },
@@ -1861,6 +1897,12 @@ export function runMigrations(db: MigrationDb): void {
 
 		const start = Date.now();
 		const cs = checksum(migration);
+		const foreignKeys = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+		if (migration.foreignKeysOff) {
+			db.exec("PRAGMA foreign_keys=OFF");
+			if (db.prepare("PRAGMA foreign_keys").get()?.foreign_keys === 1)
+				throw new Error(`Migration ${migration.version} requires an outermost migration transaction`);
+		}
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
 			migration.up(db);
@@ -1892,6 +1934,8 @@ export function runMigrations(db: MigrationDb): void {
 			throw new Error(
 				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\nYour data is safe — the failed migration was rolled back.\nPlease report this at https://github.com/Signet-AI/signetai/issues\nwith the error message above and your signetai version.`,
 			);
+		} finally {
+			if (migration.foreignKeysOff && foreignKeys === 1) db.exec("PRAGMA foreign_keys=ON");
 		}
 	}
 }

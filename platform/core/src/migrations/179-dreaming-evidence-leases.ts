@@ -1,4 +1,5 @@
 import type { MigrationDb } from "./contract";
+import { compartmentFor } from "../compartment-shards";
 
 function partitionDreamingHistory(db: MigrationDb): void {
 	if (
@@ -15,15 +16,8 @@ function partitionDreamingHistory(db: MigrationDb): void {
 		);
 		INSERT INTO dreaming_history_nodes_v179
 			(agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,compartment_id)
-		SELECT h.agent_id,h.scope_key,0,
-			ROW_NUMBER() OVER (PARTITION BY h.agent_id,h.scope_key,h.compartment_id ORDER BY h.idx) - 1,
-			h.pass_id,h.text,h.tokens_input,h.tokens_output,h.tokens_cache_read,h.created_at,h.compartment_id
-		FROM dreaming_history_nodes h JOIN dreaming_passes p ON p.id = h.pass_id
-		WHERE h.level = 0 AND p.agent_id = h.agent_id AND p.compartment_id IS h.compartment_id
-		AND COALESCE(NULLIF(p.scope_key, ''), p.agent_id) = h.scope_key AND p.status != 'running'
-		AND p.classification_epoch = (SELECT epoch FROM dreaming_classification_epoch WHERE id = 1)
-		AND NOT EXISTS (SELECT 1 FROM dreaming_tool_calls call WHERE call.pass_id = p.id
-			AND (call.agent_id != p.agent_id OR call.compartment_id IS NOT p.compartment_id));
+		SELECT agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,NULL
+		FROM dreaming_history_nodes;
 		DROP TABLE dreaming_history_nodes;
 		ALTER TABLE dreaming_history_nodes_v179 RENAME TO dreaming_history_nodes;
 		CREATE UNIQUE INDEX idx_dreaming_history_nodes_partition
@@ -31,6 +25,56 @@ function partitionDreamingHistory(db: MigrationDb): void {
 		CREATE UNIQUE INDEX idx_dreaming_history_nodes_pass ON dreaming_history_nodes(pass_id) WHERE pass_id IS NOT NULL;
 		CREATE INDEX idx_dreaming_history_nodes_compartment ON dreaming_history_nodes(agent_id,compartment_id);
 	`);
+}
+
+function partitionOntologyKeys(db: MigrationDb): void {
+	const dependencyIndex = db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_entity_deps_unique'").get()?.sql;
+	if (typeof dependencyIndex !== "string" || !dependencyIndex.includes("compartment_id"))
+		db.exec(
+			"DROP INDEX IF EXISTS idx_entity_deps_unique; CREATE UNIQUE INDEX idx_entity_deps_unique ON entity_dependencies(source_entity_id,target_entity_id,dependency_type,agent_id,COALESCE(compartment_id,0));",
+		);
+
+	for (const [table, key, index] of [
+		["entities", "agent_id,name", "idx_entities_partition_name"],
+		["entity_aspects", "entity_id,canonical_name", "idx_entity_aspects_partition_name"],
+	] as const) {
+		if (db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(index)) continue;
+		if (db.prepare("PRAGMA foreign_keys").get()?.foreign_keys === 1)
+			throw new Error("Migration 179 requires foreign keys disabled before its transaction");
+		const original = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql;
+		if (typeof original !== "string") throw new Error(`Missing ontology table: ${table}`);
+		const attached = db
+			.prepare("SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL")
+			.all(table);
+		const columns = db
+			.prepare(`PRAGMA table_info(${table})`)
+			.all()
+			.map((row) => {
+				if (typeof row.name !== "string") throw new Error("Invalid ontology column");
+				return '"' + row.name.replaceAll('"', '""') + '"';
+			})
+			.join(",");
+		const replacement = table + "_v179";
+		const schema = original
+			.replace(
+				/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)/i,
+				`CREATE TABLE ${replacement}`,
+			)
+			.replace(/,\s*UNIQUE\s*\(\s*(?:agent_id\s*,\s*name|entity_id\s*,\s*canonical_name)\s*\)/i, "");
+		if (schema === original) throw new Error("Ontology partition key was not replaced");
+		const legacyAlter = db.prepare("PRAGMA legacy_alter_table").get()?.legacy_alter_table;
+		db.exec("PRAGMA legacy_alter_table=ON");
+		try {
+			db.exec(schema);
+			db.exec(
+				`INSERT INTO ${replacement}(rowid,${columns}) SELECT rowid,${columns} FROM ${table}; DROP TABLE ${table}; ALTER TABLE ${replacement} RENAME TO ${table};`,
+			);
+		} finally {
+			if (legacyAlter !== 1) db.exec("PRAGMA legacy_alter_table=OFF");
+		}
+		for (const row of attached) if (typeof row.sql === "string") db.exec(row.sql);
+		db.exec(`CREATE UNIQUE INDEX ${index} ON ${table}(${key},COALESCE(compartment_id,0));`);
+	}
 }
 
 function installPersonIdentityOwner(db: MigrationDb): void {
@@ -91,6 +135,164 @@ function installPersonIdentityOwner(db: MigrationDb): void {
 	}
 }
 
+function partitionEvidenceProgress(db: MigrationDb): void {
+	const revision = "agent_id,source_kind,source_id,source_captured_at,source_entry_id,source_revision";
+	for (const [table, key] of [
+		["dreaming_evidence_consumption", revision],
+		["dreaming_evidence_reviews", revision],
+		["dreaming_evidence_exclusions", "agent_id,source_kind,source_id"],
+	] as const) {
+		const index = `idx_${table}_partition`;
+		if (db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(index)) continue;
+		const original = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql;
+		if (typeof original !== "string") throw new Error(`Missing evidence progress table: ${table}`);
+		const columns = db
+			.prepare(`PRAGMA table_info(${table})`)
+			.all()
+			.map((row) => {
+				if (typeof row.name !== "string") throw new Error("Invalid evidence progress column");
+				return '"' + row.name.replaceAll('"', '""') + '"';
+			})
+			.join(",");
+		const attached = db
+			.prepare("SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL")
+			.all(table);
+		const replacement = table + "_v179";
+		const schema = original
+			.replace(
+				/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)/i,
+				`CREATE TABLE ${replacement}`,
+			)
+			.replace(/,\s*PRIMARY KEY\s*\([^)]*\)/i, ", compartment_id INTEGER");
+		if (schema === original) throw new Error("Evidence progress key was not replaced");
+		const legacyAlter = db.prepare("PRAGMA legacy_alter_table").get()?.legacy_alter_table;
+		db.exec("PRAGMA legacy_alter_table=ON");
+		try {
+			db.exec(schema);
+			db.exec(
+				`INSERT INTO ${replacement}(rowid,${columns}) SELECT rowid,${columns} FROM ${table}; DROP TABLE ${table}; ALTER TABLE ${replacement} RENAME TO ${table};`,
+			);
+		} finally {
+			if (legacyAlter !== 1) db.exec("PRAGMA legacy_alter_table=OFF");
+		}
+		for (const row of attached) if (typeof row.sql === "string") db.exec(row.sql);
+		db.exec(
+			`CREATE UNIQUE INDEX ${index} ON ${table}(${key},COALESCE(compartment_id,0)); CREATE INDEX idx_${table}_label ON ${table}(agent_id,compartment_id);`,
+		);
+	}
+}
+
+function upgradeDreamingAliases(db: MigrationDb): void {
+	if (
+		!db
+			.prepare("PRAGMA table_info(entity_aliases)")
+			.all()
+			.some((row) => row.name === "compartment_id")
+	)
+		db.exec("ALTER TABLE entity_aliases ADD COLUMN compartment_id INTEGER REFERENCES compartments(id)");
+	if (
+		!db
+			.prepare("PRAGMA table_info(entity_aliases)")
+			.all()
+			.some((row) => row.name === "dreaming_pass_id")
+	)
+		db.exec("ALTER TABLE entity_aliases ADD COLUMN dreaming_pass_id TEXT");
+	db.exec(`
+		DROP INDEX IF EXISTS idx_entity_aliases_active_unique;
+		CREATE UNIQUE INDEX idx_entity_aliases_active_unique ON entity_aliases(agent_id, canonical_alias, COALESCE(compartment_id, 0)) WHERE status = 'active';
+		CREATE INDEX IF NOT EXISTS idx_entity_aliases_compartment ON entity_aliases(agent_id, compartment_id);
+	`);
+}
+
+function backfillDreamingAliases(db: MigrationDb): void {
+	const creator = `p.agent_id=entity_aliases.agent_id AND p.operation='create_entity_alias' AND p.status='applied' AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=entity_aliases.id`;
+	db.exec(`
+		UPDATE entity_aliases SET
+			compartment_id=(SELECT p.compartment_id FROM ontology_proposals p WHERE ${creator} ORDER BY p.created_at,p.id LIMIT 1),
+			dreaming_pass_id=(SELECT p.dreaming_pass_id FROM ontology_proposals p WHERE ${creator} ORDER BY p.created_at,p.id LIMIT 1)
+		WHERE (SELECT COUNT(*) FROM ontology_proposals p WHERE ${creator})=1
+		AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.derived_kind='alias' AND c.derived_id=entity_aliases.id AND c.agent_id=entity_aliases.agent_id);
+		WITH creators AS (
+			SELECT a.id AS alias_id,p.id AS proposal_id,a.agent_id,p.evidence
+			FROM entity_aliases a JOIN ontology_proposals p ON p.agent_id=a.agent_id
+			AND p.operation='create_entity_alias' AND p.status='applied'
+			AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=a.id
+			WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END=a.id)=1
+		), refs AS (
+			SELECT c.*,CASE WHEN j.type='text' THEN j.value WHEN j.type='object' THEN json_extract(j.value,'$.source_ref') END AS ref
+			FROM creators c,json_each(CASE WHEN json_valid(c.evidence) THEN CASE WHEN json_type(c.evidence)='array' THEN c.evidence ELSE '[]' END ELSE '[]' END) j
+		), parsed AS (
+			SELECT *,substr(ref,1,instr(ref,':')-1) AS kind,substr(ref,instr(ref,':')+1) AS source_id FROM refs WHERE instr(ref,':')>0
+		), canonical AS (
+			SELECT p.proposal_id,p.agent_id,p.kind,m.id AS evidence_id FROM parsed p JOIN memories m ON p.kind='memory' AND m.id=p.source_id AND m.agent_id=p.agent_id
+			UNION ALL SELECT p.proposal_id,p.agent_id,p.kind,t.session_key FROM parsed p JOIN session_transcripts t ON p.kind='transcript' AND t.session_key=p.source_id AND t.agent_id=p.agent_id
+			UNION ALL SELECT p.proposal_id,p.agent_id,p.kind,a.source_path FROM parsed p JOIN memory_artifacts a ON p.kind='artifact' AND a.source_path=p.source_id AND a.agent_id=p.agent_id
+			UNION ALL SELECT p.proposal_id,p.agent_id,p.kind,s.id FROM parsed p JOIN session_summaries s ON p.kind='summary' AND s.id=p.source_id AND s.agent_id=p.agent_id
+			UNION ALL SELECT p.proposal_id,p.agent_id,p.kind,a.id FROM parsed p JOIN entity_attributes a ON p.kind='attribute' AND a.id=p.source_id AND a.agent_id=p.agent_id
+		)
+		INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id)
+		SELECT 'proposal',proposal_id,agent_id,kind,evidence_id FROM canonical;
+		INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id)
+		SELECT 'alias',a.id,a.agent_id,c.evidence_kind,c.evidence_id
+		FROM entity_aliases a JOIN ontology_proposals p ON p.agent_id=a.agent_id
+		AND p.operation='create_entity_alias' AND p.status='applied'
+		AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=a.id
+		JOIN evidence_citations c ON c.derived_kind='proposal' AND c.derived_id=p.id AND c.agent_id=a.agent_id
+		WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END=a.id)=1;
+	`);
+}
+
+function upgradeDreamingChildren(db: MigrationDb): void {
+	for (const [table, parents] of [
+		[
+			"memory_entity_mentions",
+			"SELECT agent_id,compartment_id FROM memories WHERE id=child.memory_id UNION ALL SELECT agent_id,compartment_id FROM entities WHERE id=child.entity_id",
+		],
+		[
+			"derived_memory_sources",
+			"SELECT agent_id,compartment_id FROM memories WHERE id=child.derived_memory_id UNION ALL SELECT agent_id,compartment_id FROM memories WHERE child.source_kind='memory' AND id=child.source_id UNION ALL SELECT agent_id,compartment_id FROM entity_attributes WHERE child.source_kind='ontology_claim' AND id=child.source_id",
+		],
+		["memory_history", "SELECT agent_id,compartment_id FROM memories WHERE id=child.memory_id"],
+		[
+			"relations",
+			"SELECT agent_id,compartment_id FROM entities WHERE id=child.source_entity_id OR id=child.target_entity_id",
+		],
+	] as const) {
+		const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+		const needsLabel = !columns.some((row) => row.name === "compartment_id");
+		if (needsLabel) db.exec(`ALTER TABLE ${table} ADD COLUMN compartment_id INTEGER REFERENCES compartments(id)`);
+		if (!columns.some((row) => row.name === "agent_id")) db.exec(`ALTER TABLE ${table} ADD COLUMN agent_id TEXT`);
+		if (!columns.some((row) => row.name === "dreaming_pass_id"))
+			db.exec(`ALTER TABLE ${table} ADD COLUMN dreaming_pass_id TEXT`);
+		if (needsLabel) {
+			const rows = db.prepare(`SELECT child.*,child.rowid AS child_rowid FROM ${table} child`).all();
+			for (const row of rows) {
+				const args: unknown[] = [];
+				const parentSql = parents.replace(/child\.(\w+)/g, (_, column: string) => {
+					args.push(row[column]);
+					return "?";
+				});
+				const inherited = db.prepare(parentSql).all(...args);
+				const agents = new Set(
+					inherited.flatMap((parent) => (typeof parent.agent_id === "string" ? [parent.agent_id] : [])),
+				);
+				const labels = inherited.flatMap((parent) =>
+					db
+						.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
+						.all(parent.compartment_id)
+						.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : [])),
+				);
+				db.prepare(`UPDATE ${table} SET agent_id=COALESCE(agent_id,?),compartment_id=? WHERE rowid=?`).run(
+					agents.size === 1 ? [...agents][0] : null,
+					compartmentFor(db, labels),
+					row.child_rowid,
+				);
+			}
+		}
+		db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_compartment ON ${table}(agent_id,compartment_id)`);
+	}
+}
+
 export function up(db: MigrationDb): void {
 	for (const [table, column, declaration] of [
 		["ontology_proposals", "dreaming_pass_id", "TEXT"],
@@ -98,24 +300,69 @@ export function up(db: MigrationDb): void {
 		["dreaming_attention", "dreaming_pass_id", "TEXT"],
 		["memory_head_revisions", "compartment_id", "INTEGER"],
 		["memory_head_publications", "compartment_id", "INTEGER"],
-		["dreaming_passes", "classification_epoch", "INTEGER NOT NULL DEFAULT 0"],
 	]) {
 		if (!table || !column || !declaration) throw new Error("Invalid migration column");
 		const columns = db.prepare(`PRAGMA table_info(${table})`).all();
 		if (!columns.some((row) => row.name === column))
 			db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${declaration}`);
 	}
+	const epochColumns = db.prepare("PRAGMA table_info(dreaming_classification_epoch)").all();
+	if (epochColumns.some((column) => column.name === "id")) {
+		db.exec(`
+			DROP TRIGGER IF EXISTS dreaming_pass_classification_epoch;
+			DROP TRIGGER IF EXISTS dreaming_pass_completion_epoch;
+			DROP TRIGGER IF EXISTS dreaming_classification_epoch_insert;
+			DROP TRIGGER IF EXISTS dreaming_classification_epoch_update;
+			DROP TRIGGER IF EXISTS dreaming_classification_epoch_delete;
+			DROP TRIGGER IF EXISTS dreaming_evidence_lease_insert;
+			DROP TRIGGER IF EXISTS dreaming_evidence_lease_update;
+			DROP TABLE dreaming_classification_epoch;
+		`);
+	}
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_classification_epoch (
-			id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL
+			agent_id TEXT PRIMARY KEY, epoch INTEGER NOT NULL DEFAULT 0
 		);
-		INSERT OR IGNORE INTO dreaming_classification_epoch (id, epoch) VALUES (1, 0);
+		CREATE TABLE IF NOT EXISTS dreaming_pass_classification_epochs (
+			pass_id TEXT NOT NULL, agent_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+			PRIMARY KEY(pass_id,agent_id), FOREIGN KEY(pass_id) REFERENCES dreaming_passes(id) ON DELETE CASCADE
+		);
+		CREATE VIEW IF NOT EXISTS dreaming_classification_job_agents AS
+			SELECT j.id AS job_id, json_extract(j.params_json,'$.target.agentId') AS agent_id
+			FROM org_jobs j WHERE j.kind IN ('classify','unclassify') AND j.status IN ('pending','running');
+		CREATE VIEW IF NOT EXISTS dreaming_pass_fences AS
+			SELECT p.id AS pass_id, (
+				EXISTS(SELECT 1 FROM dreaming_pass_classification_epochs s WHERE s.pass_id=p.id AND s.agent_id=p.agent_id)
+				AND NOT EXISTS(SELECT 1 FROM dreaming_pass_classification_epochs s
+					LEFT JOIN dreaming_classification_epoch e ON e.agent_id=s.agent_id
+					WHERE s.pass_id=p.id AND (s.epoch != COALESCE(e.epoch,0)
+						OR EXISTS(SELECT 1 FROM dreaming_classification_job_agents j WHERE j.agent_id=s.agent_id)))
+			) AS valid FROM dreaming_passes p;
+		CREATE TRIGGER IF NOT EXISTS dreaming_pass_agent_policy BEFORE INSERT ON dreaming_passes
+		WHEN EXISTS(SELECT 1 FROM agents a WHERE a.id=NEW.agent_id AND (a.archived_at IS NOT NULL OR
+			(a.kind='organization' AND EXISTS(SELECT 1 FROM organization o WHERE o.id=1 AND o.claimed_at IS NOT NULL AND o.agent_model='personal'))))
+		BEGIN SELECT RAISE(ABORT,'org_policy'); END;
 		CREATE TRIGGER IF NOT EXISTS dreaming_pass_classification_epoch AFTER INSERT ON dreaming_passes BEGIN
-			UPDATE dreaming_passes SET classification_epoch = (SELECT epoch FROM dreaming_classification_epoch WHERE id = 1)
-			WHERE id = NEW.id;
+			INSERT INTO dreaming_pass_classification_epochs(pass_id,agent_id,epoch)
+			WITH RECURSIVE scopes(agent_id,rest) AS (
+				SELECT NEW.agent_id, COALESCE(NULLIF(NEW.scope_key,''),NEW.agent_id) || ','
+				UNION ALL SELECT substr(rest,1,instr(rest,',')-1),substr(rest,instr(rest,',')+1) FROM scopes WHERE rest!=''
+			)
+			SELECT NEW.id,s.agent_id,COALESCE(e.epoch,0) FROM scopes s LEFT JOIN dreaming_classification_epoch e ON e.agent_id=s.agent_id
+			WHERE s.agent_id!='' GROUP BY s.agent_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS dreaming_pass_scope_classification_epoch AFTER UPDATE OF scope_key ON dreaming_passes
+		WHEN NEW.status='running' BEGIN
+			INSERT OR IGNORE INTO dreaming_pass_classification_epochs(pass_id,agent_id,epoch)
+			WITH RECURSIVE scopes(agent_id,rest) AS (
+				SELECT NEW.agent_id, COALESCE(NULLIF(NEW.scope_key,''),NEW.agent_id) || ','
+				UNION ALL SELECT substr(rest,1,instr(rest,',')-1),substr(rest,instr(rest,',')+1) FROM scopes WHERE rest!=''
+			)
+			SELECT NEW.id,s.agent_id,COALESCE(e.epoch,0) FROM scopes s LEFT JOIN dreaming_classification_epoch e ON e.agent_id=s.agent_id
+			WHERE s.agent_id!='' GROUP BY s.agent_id;
 		END;
 		CREATE TRIGGER IF NOT EXISTS dreaming_pass_completion_epoch BEFORE UPDATE OF status ON dreaming_passes
-		WHEN OLD.status='running' AND NEW.status='completed' AND NEW.classification_epoch != (SELECT epoch FROM dreaming_classification_epoch WHERE id=1)
+		WHEN OLD.status='running' AND NEW.status='completed' AND NOT EXISTS(SELECT 1 FROM dreaming_pass_fences WHERE pass_id=NEW.id AND valid=1)
 		BEGIN SELECT RAISE(ABORT,'compartment_mismatch'); END;
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_leases (
 			agent_id TEXT NOT NULL,
@@ -131,27 +378,38 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_dreaming_evidence_leases_pass ON dreaming_evidence_leases (pass_id);
 	`);
 	for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+		const agents =
+			operation === "INSERT" ? "NEW.agent_id" : operation === "DELETE" ? "OLD.agent_id" : "OLD.agent_id,NEW.agent_id";
+		const targets = operation === "UPDATE" ? "SELECT OLD.agent_id UNION SELECT NEW.agent_id" : `SELECT ${agents}`;
 		db.exec(`CREATE TRIGGER IF NOT EXISTS dreaming_classification_epoch_${operation.toLowerCase()}
 		AFTER ${operation} ON classification_assignments BEGIN
-			UPDATE dreaming_classification_epoch SET epoch = epoch + 1 WHERE id = 1;
+			INSERT OR IGNORE INTO dreaming_classification_epoch(agent_id,epoch)
+			SELECT agent_id,0 FROM (${targets}) WHERE agent_id IS NOT NULL;
+			UPDATE dreaming_classification_epoch SET epoch=epoch+1 WHERE agent_id IN (${agents});
 		END;`);
 	}
+	partitionDreamingKeys(db);
 	partitionMemoryHeads(db);
+	migrateMemoryHeadCitationKeys(db);
 	partitionDreamingHistory(db);
 	db.exec(
 		"CREATE INDEX IF NOT EXISTS idx_memory_artifacts_dreaming_partition_path ON memory_artifacts(agent_id,compartment_id,source_path)",
 	);
 	partitionDreamingState(db);
+	partitionEvidenceProgress(db);
+	upgradeDreamingChildren(db);
+	upgradeDreamingAliases(db);
 	extendDreamingCitations(db);
+	backfillDreamingAliases(db);
+	partitionOntologyKeys(db);
 	installPersonIdentityOwner(db);
 	for (const operation of ["INSERT", "UPDATE"]) {
 		db.exec(`CREATE TRIGGER IF NOT EXISTS dreaming_evidence_lease_${operation.toLowerCase()}
 		BEFORE ${operation} ON dreaming_evidence_leases BEGIN
 			SELECT CASE WHEN NOT EXISTS (
-				SELECT 1 FROM dreaming_passes p JOIN dreaming_classification_epoch e ON e.id = 1
+				SELECT 1 FROM dreaming_passes p JOIN dreaming_pass_fences f ON f.pass_id = p.id
 				WHERE p.id = NEW.pass_id AND p.status = 'running'
-				AND p.compartment_id IS NEW.compartment_id AND p.classification_epoch = e.epoch
-				AND NOT EXISTS(SELECT 1 FROM org_jobs WHERE kind IN ('classify','unclassify') AND status IN ('pending','running'))
+				AND p.compartment_id IS NEW.compartment_id AND f.valid = 1
 				AND instr(',' || COALESCE(NULLIF(p.scope_key, ''), p.agent_id) || ',', ',' || NEW.agent_id || ',') > 0
 			) THEN RAISE(ABORT, 'compartment_mismatch') END;
 			SELECT CASE WHEN EXISTS (
@@ -185,7 +443,10 @@ function partitionMemoryHeads(db: MigrationDb): void {
 				compartment_id INTEGER, is_current INTEGER NOT NULL DEFAULT 1
 			);
 			INSERT INTO memory_head_revisions_v179 SELECT id,agent_id,revision,content,content_hash,rendered_token_count,
-				pass_id,base_revision,base_hash,created_at,entry_id,entry_text,operation,source_refs_json,supporting_quotes_json,compartment_id,1
+				pass_id,base_revision,base_hash,created_at,entry_id,entry_text,operation,source_refs_json,supporting_quotes_json,compartment_id,
+				CASE WHEN revision = (SELECT MAX(latest.revision) FROM memory_head_revisions latest
+					WHERE latest.agent_id=memory_head_revisions.agent_id
+					AND latest.compartment_id IS memory_head_revisions.compartment_id) THEN 1 ELSE 0 END
 				FROM memory_head_revisions;
 			DROP TABLE memory_head_revisions;
 			ALTER TABLE memory_head_revisions_v179 RENAME TO memory_head_revisions;
@@ -217,6 +478,10 @@ function partitionMemoryHeads(db: MigrationDb): void {
 			CREATE INDEX idx_memory_head_publications_pending ON memory_head_publications(agent_id,compartment_id,status,revision DESC);
 		`);
 	}
+	db.exec(`UPDATE memory_head_revisions SET is_current=0 WHERE EXISTS (
+		SELECT 1 FROM memory_head_revisions newer WHERE newer.agent_id=memory_head_revisions.agent_id
+		AND newer.compartment_id IS memory_head_revisions.compartment_id AND newer.revision>memory_head_revisions.revision
+	);`);
 	const entryColumns = db.prepare("PRAGMA table_info(memory_head_entries)").all();
 	if (!entryColumns.some((row) => row.name === "pass_id"))
 		db.exec("ALTER TABLE memory_head_entries ADD COLUMN pass_id TEXT");
@@ -307,12 +572,13 @@ function extendDreamingCitations(db: MigrationDb): void {
 	if (
 		typeof definition?.sql === "string" &&
 		definition.sql.includes("'attention'") &&
-		definition.sql.includes("'community'")
+		definition.sql.includes("'community'") &&
+		definition.sql.includes("'alias'")
 	)
 		return;
 	db.exec(`
 		CREATE TABLE evidence_citations_v179 (
-			derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection','contradiction','head_revision','proposal','telemetry','temporal_edge','attention','community')),
+			derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection','contradiction','head_revision','proposal','telemetry','temporal_edge','attention','community','alias')),
 			derived_id TEXT NOT NULL, agent_id TEXT NOT NULL,
 			evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('memory','transcript','artifact','summary','attribute')),
 			evidence_id TEXT NOT NULL,
@@ -322,5 +588,85 @@ function extendDreamingCitations(db: MigrationDb): void {
 		DROP TABLE evidence_citations;
 		ALTER TABLE evidence_citations_v179 RENAME TO evidence_citations;
 		CREATE INDEX idx_evidence_citations_reverse ON evidence_citations(agent_id,evidence_kind,evidence_id);
+	`);
+}
+
+function partitionDreamingKeys(db: MigrationDb): void {
+	for (const [table, constraint, key] of [
+		["memory_head_entries", "PRIMARY KEY(agent_id, entry_id)", "agent_id,entry_id,COALESCE(compartment_id,0)"],
+		[
+			"dreaming_attention",
+			"UNIQUE(agent_id, kind, subject_ref)",
+			"agent_id,kind,subject_ref,COALESCE(compartment_id,0)",
+		],
+	]) {
+		if (!table || !constraint || !key) throw new Error("Invalid Dreaming partition key");
+		const index = `idx_${table}_partition`;
+		if (db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(index)) continue;
+		const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql;
+		if (typeof schema !== "string") throw new Error("Missing Dreaming table");
+		const expression =
+			table === "memory_head_entries"
+				? /,\s*PRIMARY KEY\s*\(\s*agent_id\s*,\s*entry_id\s*\)/i
+				: /,\s*UNIQUE\s*\(\s*agent_id\s*,\s*kind\s*,\s*subject_ref\s*\)/i;
+		const rewritten = schema.replace(expression, "");
+		if (rewritten === schema) throw new Error(`Missing Dreaming legacy key: ${constraint}`);
+		const objects = db
+			.prepare("SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL")
+			.all(table);
+		const temporary = `${table}_partition_v179`;
+		const withIdentity =
+			table === "memory_head_entries"
+				? rewritten.replace(/(CREATE TABLE[^(]+\()/i, "$1id TEXT NOT NULL UNIQUE,")
+				: rewritten;
+		db.exec(
+			withIdentity.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"[^"]+"|[^\s(]+)/i, `CREATE TABLE ${temporary}`),
+		);
+		const columns = db
+			.prepare(`PRAGMA table_info(${table})`)
+			.all()
+			.map((row) => String(row.name))
+			.join(",");
+		db.exec(
+			table === "memory_head_entries"
+				? `INSERT INTO ${temporary}(id,${columns}) SELECT lower(hex(randomblob(16))),${columns} FROM ${table}`
+				: `INSERT INTO ${temporary}(${columns}) SELECT ${columns} FROM ${table}`,
+		);
+		db.exec(`DROP TABLE ${table}`);
+		db.exec(`ALTER TABLE ${temporary} RENAME TO ${table}`);
+		for (const object of objects) if (typeof object.sql === "string") db.exec(object.sql);
+		db.exec(`CREATE UNIQUE INDEX ${index} ON ${table}(${key})`);
+	}
+}
+
+function migrateMemoryHeadCitationKeys(db: MigrationDb): void {
+	if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='idx_head_revision_identity_citation'").get()) return;
+	db.exec(`
+		UPDATE evidence_citations SET evidence_id=(
+			SELECT h.id FROM memory_head_revision_entries e JOIN memory_head_entries h
+			ON h.agent_id=e.agent_id AND h.entry_id=e.entry_id AND h.compartment_id IS e.compartment_id
+			WHERE e.agent_id=evidence_citations.agent_id AND json_array(e.revision,e.entry_id)=evidence_citations.derived_id
+			AND h.entry_id=evidence_citations.evidence_id
+		) WHERE derived_kind='head_revision' AND evidence_kind='attribute' AND EXISTS (
+			SELECT 1 FROM memory_head_revision_entries e JOIN memory_head_entries h
+			ON h.agent_id=e.agent_id AND h.entry_id=e.entry_id AND h.compartment_id IS e.compartment_id
+			WHERE e.agent_id=evidence_citations.agent_id AND json_array(e.revision,e.entry_id)=evidence_citations.derived_id
+			AND h.entry_id=evidence_citations.evidence_id
+		);
+		UPDATE evidence_citations SET derived_id=(
+			SELECT json_array(e.revision_id,e.entry_id) FROM memory_head_revision_entries e
+			WHERE e.agent_id=evidence_citations.agent_id AND json_array(e.revision,e.entry_id)=evidence_citations.derived_id
+			AND e.revision_id IS NOT NULL
+		) WHERE derived_kind='head_revision' AND EXISTS (
+			SELECT 1 FROM memory_head_revision_entries e WHERE e.agent_id=evidence_citations.agent_id
+			AND json_array(e.revision,e.entry_id)=evidence_citations.derived_id AND e.revision_id IS NOT NULL
+		);
+		UPDATE evidence_citations SET derived_id=(
+			SELECT h.id FROM memory_head_entries h WHERE h.agent_id=evidence_citations.agent_id AND h.entry_id=evidence_citations.derived_id
+		) WHERE derived_kind='head_entry' AND EXISTS (
+			SELECT 1 FROM memory_head_entries h WHERE h.agent_id=evidence_citations.agent_id AND h.entry_id=evidence_citations.derived_id
+		);
+		DROP INDEX IF EXISTS idx_head_revision_citation;
+		CREATE INDEX idx_head_revision_identity_citation ON memory_head_revision_entries(agent_id,json_array(revision_id,entry_id));
 	`);
 }

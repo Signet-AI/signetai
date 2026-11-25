@@ -17,6 +17,44 @@ function people(db: Database) {
 }
 
 describe("identity-owned structural people", () => {
+	it("upgrades partition keys without cascading children and restores foreign-key enforcement", () => {
+		const db = new Database(":memory:");
+		try {
+			db.exec(
+				"CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL,checksum TEXT NOT NULL)",
+			);
+			for (const migration of MIGRATIONS.filter((m) => m.version < 179)) {
+				migration.up(db);
+				db.query("INSERT INTO schema_migrations VALUES(?,'now','fixture')").run(migration.version);
+			}
+			seed(db);
+			db.exec(
+				"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) VALUES('parent','Project Falcon','project falcon','project','team','now','now'); INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name) VALUES('aspect','parent','team','Preferences','preferences'); INSERT INTO entity_attributes(id,aspect_id,agent_id,kind,content,normalized_content) VALUES('attribute','aspect','team','fact','tea','tea'); PRAGMA foreign_keys=ON",
+			);
+			runMigrations(db);
+			expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+			expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+			expect(db.query("SELECT aspect_id,content FROM entity_attributes WHERE id='attribute'").get()).toEqual({
+				aspect_id: "aspect",
+				content: "tea",
+			});
+			db.exec(
+				"INSERT INTO compartments(id,key) VALUES(7,'secret'); INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,compartment_id,created_at,updated_at) VALUES('other-label','Project Falcon','project falcon','project','team',7,'now','now'); INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name,compartment_id) VALUES('other-aspect','parent','team','Preferences','preferences',7)",
+			);
+			expect(db.query("SELECT COUNT(*) AS n FROM entities WHERE name='Project Falcon'").get()).toEqual({ n: 2 });
+			expect(db.query("SELECT COUNT(*) AS n FROM entity_aspects WHERE entity_id='parent'").get()).toEqual({ n: 2 });
+			expect(() =>
+				db
+					.query(
+						"INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name) VALUES('invalid','missing','team','Invalid','invalid')",
+					)
+					.run(),
+			).toThrow("FOREIGN KEY");
+		} finally {
+			db.close();
+		}
+	});
+
 	it("creates personal owners before evidence and follows group-derived act-as grants atomically", () => {
 		const db = new Database(":memory:");
 		try {
