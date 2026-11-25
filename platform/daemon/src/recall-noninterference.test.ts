@@ -54,8 +54,8 @@ test("hybrid recall and prompt injection cannot observe hidden corpus mutations"
 					"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,compartment_id,mentions,created_at,updated_at) VALUES (?,?,?,'project','default',?,10,?,?)",
 				).run(
 					`${prefix}-entity`,
-					prefix === "visible" ? "Atlas" : "Atlas classified",
-					prefix === "visible" ? "atlas" : "atlas classified",
+					prefix === "visible" ? "Atlas deploy" : "Atlas classified",
+					prefix === "visible" ? "atlas deploy" : "atlas classified",
 					compartment,
 					timestamp,
 					timestamp,

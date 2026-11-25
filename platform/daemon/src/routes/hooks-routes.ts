@@ -5,6 +5,7 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { resolveHookReadScope } from "../hook-read-scope";
+import { publicRecallResponse } from "../recall-public-response";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import {
@@ -1390,7 +1391,7 @@ function registerRecall(app: Hono): void {
 					truncated: result.results.length >= effectiveRecallLimit(params.limit),
 					delivery: "returned",
 				});
-				return c.json(withHookRecallCompat(result));
+				return c.json(withHookRecallCompat(publicRecallResponse(result)));
 			} catch (e) {
 				if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 				logger.error("hooks", "Recall hook failed", e as Error);

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { recallAgentId } from "./memory-search-filters";
+import { cachedRecallShardNames, withRecallShardCatalogue } from "./recall-shard-catalogue";
 import {
 	type AccountingProvenance,
 	type AccountingSummaryProvenance,
@@ -12,9 +14,9 @@ import {
 	SOURCE_CHUNK_SOURCE_TYPE,
 	redactCredentials,
 	redactCredentialsDeep,
-	ftsShardTables,
+	selectShardTables,
 	readScopeSql,
-	vecShardTables,
+	requireReadScope,
 	type VectorSearchCompleteness,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
@@ -78,7 +80,12 @@ import {
 	scoreStructuredPathEvidenceViaOwner,
 } from "./pipeline/structured-path-evidence";
 import { rankPositions, reciprocalRankScore, selectPrimaryCandidates } from "./recall-rank-fusion";
-import { type RecallDedupeMeta, applyRecallDedupeAsync, recallItemKey } from "./session-recall-dedupe";
+import {
+	type RecallDedupeMeta,
+	type RecallReadProvenance,
+	applyRecallDedupeAsync,
+	recallItemKey,
+} from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
 import { recordRecallPerformed } from "./recall-telemetry";
@@ -99,7 +106,6 @@ interface ScopeColumns {
 	readonly project: boolean;
 }
 
-const NO_SCOPE: ScopeClause = { sql: "", args: [] };
 const ARTIFACT_COLUMNS: ScopeColumns = { memory: null, session: "session_key", source: "source_id", project: true };
 const EMBEDDING_COLUMNS: ScopeColumns = { memory: "source_id", session: null, source: "source_id", project: false };
 const ATTRIBUTE_COLUMNS: ScopeColumns = { memory: "memory_id", session: null, source: "source_id", project: false };
@@ -109,33 +115,27 @@ const TRANSCRIPT_COLUMNS: ScopeColumns = { memory: null, session: "session_key",
 const DELIVERED_COLUMNS: ScopeColumns = { memory: "item_id", session: "session_key", source: null, project: false };
 
 export interface RecallScopes {
-	readonly memory: ReadScope | null;
+	readonly memory: ReadScope;
 	readonly owned: ReadScope;
-	readonly child: ReadScope | null;
+	readonly child: ReadScope;
 }
 
 export function recallScopes(
 	params: Pick<RecallParams, "agentId" | "readPolicy" | "policyGroup" | "readScope">,
 ): RecallScopes {
-	const provided = params.readScope;
-	const owned: ReadScope = provided
-		? {
-				...provided,
-				reach:
-					provided.reach.kind === "shared" || provided.reach.kind === "group"
-						? { kind: "own", agentId: provided.reach.agentId }
-						: provided.reach,
-			}
-		: { reach: { kind: "own", agentId: params.agentId ?? "default" }, compartments: "all", projects: null };
-	const child: ReadScope | null =
-		provided && (provided.compartments !== "all" || provided.inFlightUserId)
-			? { ...provided, reach: { kind: "all" } }
-			: null;
-	return { memory: memorySearchReadScope(params), owned, child };
+	const provided = memorySearchReadScope(params);
+	const owned: ReadScope = {
+		...provided,
+		reach:
+			provided.reach.kind === "shared" || provided.reach.kind === "group"
+				? { kind: "own", agentId: provided.reach.agentId }
+				: provided.reach,
+	};
+	const child: ReadScope = { ...provided, reach: { kind: "all" } };
+	return { memory: provided, owned, child };
 }
 
-function scopedRowSql(alias: string, scope: ReadScope | null, columns: ScopeColumns): ScopeClause {
-	if (scope === null) return NO_SCOPE;
+function scopedRowSql(alias: string, scope: ReadScope, columns: ScopeColumns): ScopeClause {
 	if (!columns.project && scope.projects !== null) return { sql: " AND 0", args: [] };
 	return readScopeSql(
 		alias,
@@ -144,12 +144,12 @@ function scopedRowSql(alias: string, scope: ReadScope | null, columns: ScopeColu
 	);
 }
 
-function childRowSql(alias: string, scope: ReadScope | null, columns: ScopeColumns): ScopeClause {
-	return scopedRowSql(alias, scope === null ? null : { ...scope, projects: null }, columns);
+function childRowSql(alias: string, scope: ReadScope, columns: ScopeColumns): ScopeClause {
+	return scopedRowSql(alias, { ...scope, projects: null }, columns);
 }
 
-function memoryScopeSql(alias: string, scope: ReadScope | null): ScopeClause {
-	return scope === null ? NO_SCOPE : readScopeSql(alias, scope);
+function memoryScopeSql(alias: string, scope: ReadScope): ScopeClause {
+	return readScopeSql(alias, scope);
 }
 
 type RecallFtsBase =
@@ -161,35 +161,22 @@ type RecallFtsBase =
 
 async function readShardCatalogue(
 	owner: DbOwnerClient,
-	base: string,
 	workloadClass: "foreground" | "maintenance",
-): Promise<ReadonlyArray<Record<string, unknown>>> {
-	return await ownerReadAll<Record<string, unknown>>(
-		owner,
-		"SELECT name FROM sqlite_master WHERE type='table' AND (name=? OR name GLOB ?) ORDER BY name",
-		[base, `${base}__c[0-9]*`],
-		{
-			operation: "memory-search.shard-catalogue",
-			workloadClass,
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	);
-}
-
-function shardCatalogue(rows: ReadonlyArray<Record<string, unknown>>) {
-	return {
-		exec: (): void => {
-			throw new Error("Read-only shard catalogue");
-		},
-		prepare: () => ({
-			run: (): void => {
-				throw new Error("Read-only shard catalogue");
+): Promise<readonly string[]> {
+	return cachedRecallShardNames(async () => {
+		const rows = await ownerReadAll<Record<string, unknown>>(
+			owner,
+			"SELECT name FROM sqlite_master WHERE type='table'",
+			[],
+			{
+				operation: "memory-search.shard-catalogue",
+				workloadClass,
+				estimatedWorkUnits: 1,
+				deadlineMs: 5_000,
 			},
-			get: () => rows[0],
-			all: () => [...rows],
-		}),
-	};
+		);
+		return rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : []));
+	});
 }
 
 export async function ownerFtsShardTables(
@@ -198,7 +185,10 @@ export async function ownerFtsShardTables(
 	compartments: ReadScope["compartments"],
 	workloadClass: "foreground" | "maintenance" = "foreground",
 ): Promise<string[]> {
-	return ftsShardTables(base, compartments, shardCatalogue(await readShardCatalogue(owner, base, workloadClass)));
+	if (compartments !== "all" && compartments.length === 0) return [base];
+	return selectShardTables(await readShardCatalogue(owner, workloadClass), compartments).filter(
+		(name) => name === base || name.startsWith(`${base}__c`),
+	);
 }
 
 export async function ownerVecShardTables(
@@ -206,7 +196,10 @@ export async function ownerVecShardTables(
 	compartments: ReadScope["compartments"],
 	base: "vec_embeddings" | "vec_embeddings_staging" = "vec_embeddings",
 ): Promise<string[]> {
-	return vecShardTables(compartments, shardCatalogue(await readShardCatalogue(owner, base, "foreground")), base);
+	if (compartments !== "all" && compartments.length === 0) return [base];
+	return selectShardTables(await readShardCatalogue(owner, "foreground"), compartments).filter(
+		(name) => name === base || name.startsWith(`${base}__c`),
+	);
 }
 
 export interface RecallParams {
@@ -243,7 +236,7 @@ export interface RecallParams {
 	trackRecallAccess?: boolean;
 	telemetrySurface?: RecallSurface;
 	transcriptEvidence?: boolean;
-	readScope?: ReadScope;
+	readScope: ReadScope;
 }
 
 export interface RecallTranscriptEvidenceMeta {
@@ -253,7 +246,7 @@ export interface RecallTranscriptEvidenceMeta {
 }
 
 export interface RecallResult {
-	readProvenance?: import("./session-recall-dedupe").RecallReadProvenance;
+	readProvenance?: RecallReadProvenance;
 	id: string;
 	content: string;
 	content_length: number;
@@ -551,7 +544,7 @@ async function applyRehearsalBoost(
 		}>(
 			await recallOwner(execution),
 			`SELECT m.id, m.access_count, m.last_accessed, m.created_at
-			 FROM memories m INDEXED BY sqlite_autoindex_memories_1
+			 FROM memories m
 			 WHERE m.id IN (${placeholders})${filter.sql}`,
 			[...ids, ...filter.args],
 			{
@@ -690,7 +683,7 @@ async function authorizeScoredCandidates(
 		const rows = await ownerReadAll<{ id: string }>(
 			owner,
 			`SELECT m.id
-			 FROM memories m INDEXED BY sqlite_autoindex_memories_1
+			 FROM memories m
 			 WHERE m.id IN (${placeholders})
 			   ${currentMemorySql("m")}
 			   ${filter.sql}`,
@@ -718,12 +711,16 @@ async function findAuthorizedVectorCandidates(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
 	filter: FilterClause,
-	readScope: ReadScope | null,
+	readScope: ReadScope,
 	execution?: RecallExecutionOptions,
 ): Promise<AuthorizedVectorCandidates> {
 	const maxWork = Math.min(DB_OWNER_MAX_WORK_UNITS, 10_000);
 	const targetCount = Math.min(cfg.search.top_k, maxWork);
 	const owner = cancellableOwner(await getDbRecallOwner(getDbAccessorPath()), execution?.signal);
+	const shardNames =
+		readScope.compartments !== "all" && readScope.compartments.length === 0
+			? []
+			: await readShardCatalogue(owner, "foreground");
 	const discovered = new Set<string>();
 	const authorized = new Map<string, { readonly id: string; readonly score: number }>();
 	let usedWork = 0;
@@ -739,7 +736,8 @@ async function findAuthorizedVectorCandidates(
 			type: params.type,
 			excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
 			maxScanRows: requested,
-			...(readScope === null ? {} : { readScope }),
+			readScope,
+			shardNames,
 		});
 		usedWork += requested;
 		completeness = vectorResult.completeness;
@@ -776,16 +774,13 @@ async function findAuthorizedVectorCandidates(
 async function loadObservedScores(
 	ids: readonly string[],
 	agentId: string,
-	child: ReadScope | null,
+	child: ReadScope,
 	execution?: RecallExecutionOptions,
 ): Promise<Map<string, number>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
 	const session = scopedRowSql("st", child, TRANSCRIPT_COLUMNS);
-	const sessionVisible =
-		child === null
-			? ""
-			: `AND (NOT EXISTS (SELECT 1 FROM session_transcripts st WHERE st.session_key = sm.session_key)
+	const sessionVisible = `AND (NOT EXISTS (SELECT 1 FROM session_transcripts st WHERE st.session_key = sm.session_key)
 			   OR EXISTS (SELECT 1 FROM session_transcripts st WHERE st.session_key = sm.session_key${session.sql}))`;
 	const rows = await ownerReadAll<{ memory_id: string; score: number }>(
 		await recallOwner(execution),
@@ -918,7 +913,7 @@ function annotateCurrentness(content: string, info: CurrentnessInfo | undefined)
 }
 
 interface NativeArtifactRecallHit {
-	readonly rowid: number;
+	readonly agentId: string;
 	readonly sourceId: string | null;
 	readonly sourcePath: string;
 	readonly sourceKind: string;
@@ -967,6 +962,7 @@ const SOURCE_CHUNK_BATCH_ROWS = 64;
 const SOURCE_CHUNK_BODY_BATCH_ROWS = 64;
 const SOURCE_CHUNK_MAX_WORK_UNITS = Math.min(DB_OWNER_MAX_WORK_UNITS, 10_000);
 const MAX_SOURCE_CHUNK_BODY_BYTES = 64 * 1024;
+const SOURCE_CHUNK_KNN_MAX_K = 4096;
 
 function checkRecallCancellation(options?: RecallExecutionOptions): void {
 	options?.checkCancelled?.();
@@ -1011,8 +1007,9 @@ export async function readOwnerVectorsBySource(
 	sourceIds: readonly string[],
 	dimensions: number,
 	read: (sql: string, params: readonly unknown[], pageRows: number) => Promise<ReadonlyArray<OwnerVectorRow>>,
-	scope: ScopeClause = NO_SCOPE,
+	readScope: ReadScope,
 ): Promise<Array<{ source_id: string; vector: Float32Array }>> {
+	const scope = childRowSql("e", requireReadScope(readScope), EMBEDDING_COLUMNS);
 	const pageRows = ownerVectorPageRows(dimensions);
 	const vectors: Array<{ source_id: string; vector: Float32Array }> = [];
 	for (let offset = 0; offset < sourceIds.length; offset += pageRows) {
@@ -1081,7 +1078,18 @@ function nativeIdSegment(value: string | null | undefined): string {
 	);
 }
 
-function nativeArtifactPublicId(hit: NativeArtifactRecallHit): string {
+export function nativeArtifactResultId(agentId: string, sourcePath: string): string {
+	return `native-artifact:${createHash("sha256")
+		.update(JSON.stringify([agentId, sourcePath]))
+		.digest("hex")
+		.slice(0, 32)}`;
+}
+
+function nativeArtifactProvenance(agentId: string, sourcePath: string): RecallReadProvenance {
+	return { artifactKeys: [{ agentId, sourcePath }] };
+}
+
+function nativeArtifactPublicId(hit: Pick<NativeArtifactRecallHit, "harness" | "sourceKind" | "sourcePath">): string {
 	const digest = createHash("sha256").update(hit.sourcePath).digest("hex").slice(0, 16);
 	return `native:${nativeIdSegment(hit.harness)}:${nativeIdSegment(hit.sourceKind)}:${digest}`;
 }
@@ -1139,9 +1147,9 @@ export async function buildSourceChunkVectorHits(
 	limit: number,
 	agentId: string,
 	embedding: EmbeddingConfig,
-	project?: string,
-	execution?: RecallExecutionOptions,
-	readScope?: ReadScope,
+	project: string | undefined,
+	execution: RecallExecutionOptions | undefined,
+	readScope: ReadScope,
 ): Promise<SourceChunkVectorOutcome> {
 	const hits: SourceChunkVectorHit[] = [];
 	const scope = recallScopes({ agentId, readScope }).owned;
@@ -1224,7 +1232,7 @@ export async function buildSourceChunkVectorHits(
 			checkRecallCancellation(execution);
 			const batch = candidates.slice(offset, offset + SOURCE_CHUNK_BODY_BATCH_ROWS);
 			if (batch.length === 0) continue;
-			const placeholders = batch.map(() => "?").join(", ");
+			const wanted = batch.map(() => "(?)").join(", ");
 			const rows = await ownerReadAll<{
 				id: string;
 				source_id: string;
@@ -1233,13 +1241,14 @@ export async function buildSourceChunkVectorHits(
 				created_at: string;
 			}>(
 				owner,
-				`SELECT e.id, e.source_id, e.source_type, e.chunk_text, e.created_at
-				 FROM embeddings e
-				 WHERE e.id IN (${placeholders})
+				`WITH wanted(id) AS (VALUES ${wanted})
+				 SELECT e.id, e.source_id, e.source_type, e.chunk_text, e.created_at
+				 FROM wanted
+				 CROSS JOIN embeddings e ON e.id = wanted.id
+				 WHERE e.source_type IN (?, ?)
 				   ${embeddingScope.sql}
-				   AND e.source_type IN (?, ?)
 				   AND length(CAST(e.chunk_text AS BLOB)) <= ?`,
-				[...batch.map((candidate) => candidate.id), ...embeddingScope.args, ...types, MAX_SOURCE_CHUNK_BODY_BYTES],
+				[...batch.map((candidate) => candidate.id), ...types, ...embeddingScope.args, MAX_SOURCE_CHUNK_BODY_BYTES],
 				{
 					operation: "memory-search.source-chunk-bodies",
 					workloadClass: "foreground",
@@ -1268,95 +1277,125 @@ export async function buildSourceChunkVectorHits(
 		}
 	};
 
+	const scopedChunks = await ownerReadOne<{ readonly present: number }>(
+		owner,
+		`SELECT EXISTS(SELECT 1 FROM embeddings e WHERE e.source_type IN (?, ?)${embeddingScope.sql}) AS present`,
+		[...types, ...embeddingScope.args],
+		{
+			operation: "memory-search.source-chunk-presence",
+			workloadClass: "foreground",
+			estimatedWorkUnits: 1,
+			deadlineMs: 5_000,
+		},
+	);
+	if (scopedChunks?.present !== 1) return outcome("complete", 0);
+
+	const excludedSourceIds = [...existingSourceIds];
+	const excludedPlaceholders = excludedSourceIds.map(() => "?").join(", ");
+	const eligibleSql = (alias: string, clause: ScopeClause): ScopeClause => {
+		const excluded = excludedSourceIds.length === 0 ? "" : ` AND ${alias}.source_id NOT IN (${excludedPlaceholders})`;
+		return {
+			sql: `${alias}.source_type IN (?, ?)${clause.sql}
+			   AND length(CAST(${alias}.chunk_text AS BLOB)) <= ?${excluded}`,
+			args: [...types, ...clause.args, MAX_SOURCE_CHUNK_BODY_BYTES, ...excludedSourceIds],
+		};
+	};
+	const hitPredicate = eligibleSql("e", embeddingScope);
+	const prefilterPredicate = eligibleSql("se", eligibleScope);
+	const queryBlob = Buffer.from(queryVec.buffer, queryVec.byteOffset, queryVec.byteLength);
+	type KnnRow = {
+		readonly id: string;
+		readonly source_id: string;
+		readonly source_type: string;
+		readonly created_at: string;
+		readonly distance: number;
+	};
+	const knnOptions = (requested: number) => ({
+		operation: "memory-search.source-chunk-knn",
+		workloadClass: "foreground" as const,
+		estimatedWorkUnits: requested,
+		deadlineMs: 30_000,
+	});
+	let workUsed = 0;
+	let budgetLimited = false;
+	const spend = (requested: number): boolean => {
+		if (workUsed + requested > SOURCE_CHUNK_MAX_WORK_UNITS) {
+			budgetLimited = true;
+			return false;
+		}
+		checkRecallCancellation(execution);
+		stats.indexedQueries++;
+		stats.workUnits += requested;
+		workUsed += requested;
+		return true;
+	};
+	const prefilteredShardRows = async (shard: string): Promise<ReadonlyArray<KnnRow>> => {
+		const requested = Math.min(limit, SOURCE_CHUNK_KNN_MAX_K);
+		if (!spend(requested)) return [];
+		return await ownerReadAll<KnnRow>(
+			owner,
+			`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance
+			 FROM ${shard} v
+			 CROSS JOIN embeddings e ON e.id = v.id
+			 WHERE v.embedding MATCH ? AND k = ?
+			   AND v.id IN (SELECT se.id FROM embeddings se WHERE ${prefilterPredicate.sql})
+			 ORDER BY v.distance, e.id`,
+			[queryBlob, requested, ...prefilterPredicate.args],
+			knnOptions(requested),
+		);
+	};
+	const oversampledShardRows = async (shard: string, size: number): Promise<ReadonlyArray<KnnRow>> => {
+		let requested = Math.min(size, limit * 4, SOURCE_CHUNK_KNN_MAX_K);
+		for (;;) {
+			if (!spend(requested)) return [];
+			const rows = await ownerReadAll<KnnRow>(
+				owner,
+				`WITH hits AS MATERIALIZED (
+				   SELECT id, distance FROM ${shard} WHERE embedding MATCH ? AND k = ?
+				 )
+				 SELECT e.id, e.source_id, e.source_type, e.created_at, hits.distance
+				 FROM hits
+				 CROSS JOIN embeddings e ON e.id = hits.id
+				 WHERE ${hitPredicate.sql}
+				 ORDER BY hits.distance, e.id
+				 LIMIT ?`,
+				[queryBlob, requested, ...hitPredicate.args, limit],
+				knnOptions(requested),
+			);
+			if (rows.length >= limit || requested >= size) return rows;
+			const oneDoublingExpected = rows.length * 2 >= limit;
+			if (!oneDoublingExpected || requested >= SOURCE_CHUNK_KNN_MAX_K) return await prefilteredShardRows(shard);
+			requested = Math.min(size, requested * 2, SOURCE_CHUNK_KNN_MAX_K);
+		}
+	};
+
 	const vecTables = await ownerVecShardTables(owner, scope.compartments, vecTable);
 	let indexedSearchAvailable = vecTables.length > 0;
-	let workUsed = 0;
-	let requested = Math.min(limit, SOURCE_CHUNK_MAX_WORK_UNITS);
-	let exhausted = false;
-	let iterations = 0;
-	while (indexedSearchAvailable && workUsed < SOURCE_CHUNK_MAX_WORK_UNITS && requested > 0) {
-		checkRecallCancellation(execution);
-		const queryBlob = Buffer.from(queryVec.buffer, queryVec.byteOffset, queryVec.byteLength);
-		iterations++;
-		try {
-			const rows: Array<{
-				readonly id: string;
-				readonly source_id: string;
-				readonly source_type: string;
-				readonly created_at: string;
-				readonly distance: number;
-			}> = [];
-			let shardsExhausted = true;
-			for (const shard of vecTables) {
-				checkRecallCancellation(execution);
-				stats.indexedQueries++;
-				const shardRows = await ownerReadAll<{
-					id: string;
-					source_id: string;
-					source_type: string;
-					created_at: string;
-					distance: number;
-				}>(
-					owner,
-					`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance
-					 FROM ${shard} v
-					 JOIN embeddings e ON e.id = v.id
-					 WHERE v.embedding MATCH ? AND k = ?
-					   AND v.id IN (
-					     SELECT eligible.id FROM ${shard} eligible
-					     JOIN embeddings se ON se.id = eligible.id
-					     WHERE se.source_type IN (?, ?)
-					       ${eligibleScope.sql}
-					       AND length(CAST(se.chunk_text AS BLOB)) <= ?
-					   )
-					 ORDER BY v.distance`,
-					[queryBlob, requested, ...types, ...eligibleScope.args, MAX_SOURCE_CHUNK_BODY_BYTES],
-					{
-						operation: "memory-search.source-chunk-knn",
-						workloadClass: "foreground",
-						estimatedWorkUnits: requested,
-						deadlineMs: 30_000,
-					},
-				);
-				stats.workUnits += requested;
-				workUsed += requested;
-				if (shardRows.length >= requested) shardsExhausted = false;
-				rows.push(...shardRows);
-			}
-			rows.sort((left, right) => left.distance - right.distance);
+	const ranked: KnnRow[] = [];
+	try {
+		for (const shard of vecTables) {
+			checkRecallCancellation(execution);
+			const shardSize = await ownerReadOne<{ readonly count: number }>(
+				owner,
+				`SELECT COUNT(*) AS count FROM ${shard}`,
+				[],
+				{
+					operation: "memory-search.source-chunk-shard-size",
+					workloadClass: "foreground",
+					estimatedWorkUnits: 1,
+					deadlineMs: 5_000,
+				},
+			);
+			const size = shardSize?.count ?? 0;
+			if (size === 0) continue;
+			const rows = await oversampledShardRows(shard, size);
 			stats.candidateRows += rows.length;
-			const fresh = rows.flatMap((row) => {
-				if (seenIds.has(row.id) || !Number.isFinite(row.distance)) return [];
-				seenIds.add(row.id);
-				const score = Math.max(0, Math.min(1, 1 - row.distance));
-				if (score <= 0) return [];
-				const candidate = {
-					id: row.id,
-					sourceId: row.source_id,
-					sourceType: row.source_type,
-					score,
-					createdAt: row.created_at,
-				};
-				candidateRows.set(row.id, candidate);
-				return [candidate];
-			});
-			stats.retainedCandidates = candidateRows.size;
-			await hydrateCandidates(fresh);
-			if (hits.length >= limit) {
-				stats.termination = "enough-eligible";
-				return outcome("complete", seenIds.size);
-			}
-			if (shardsExhausted) {
-				exhausted = true;
-				break;
-			}
-			const remainingWork = SOURCE_CHUNK_MAX_WORK_UNITS - workUsed;
-			if (remainingWork <= 0) break;
-			requested = Math.min(requested * 2, remainingWork);
-		} catch (error) {
-			if (iterations > 1 || !isVectorIndexUnavailable(error)) throw error;
-			indexedSearchAvailable = false;
+			ranked.push(...rows);
+			if (budgetLimited) break;
 		}
+	} catch (error) {
+		if (stats.indexedQueries > 1 || !isVectorIndexUnavailable(error)) throw error;
+		indexedSearchAvailable = false;
 	}
 
 	if (!indexedSearchAvailable) {
@@ -1483,12 +1522,32 @@ export async function buildSourceChunkVectorHits(
 		return outcome(completeness, stats.candidateRows);
 	}
 
-	if (exhausted) {
-		stats.termination = "exhausted";
-		return outcome("complete", seenIds.size);
+	ranked.sort((left, right) => left.distance - right.distance || left.id.localeCompare(right.id));
+	const selected = ranked.flatMap((row) => {
+		if (seenIds.has(row.id) || !Number.isFinite(row.distance)) return [];
+		seenIds.add(row.id);
+		const score = Math.max(0, Math.min(1, 1 - row.distance));
+		if (score <= 0) return [];
+		const candidate = {
+			id: row.id,
+			sourceId: row.source_id,
+			sourceType: row.source_type,
+			score,
+			createdAt: row.created_at,
+		};
+		candidateRows.set(row.id, candidate);
+		return [candidate];
+	});
+	const retained = selected.slice(0, limit);
+	for (const dropped of selected.slice(limit)) candidateRows.delete(dropped.id);
+	stats.retainedCandidates = retained.length;
+	await hydrateCandidates(retained);
+	if (budgetLimited) {
+		stats.termination = "budget";
+		return outcome("recent-window", seenIds.size);
 	}
-	stats.termination = "budget";
-	return outcome("recent-window", seenIds.size);
+	stats.termination = hits.length >= limit ? "enough-eligible" : "exhausted";
+	return outcome("complete", seenIds.size);
 }
 
 function sessionIdFromSourceId(sourceId: string): string {
@@ -1667,6 +1726,7 @@ interface TranscriptEvidenceRow {
 	readonly harness: string | null;
 	readonly project: string | null;
 	readonly captured_at: string;
+	readonly agent_id: string;
 	readonly artifact_rowid: number;
 	readonly content_bytes: number;
 	readonly rank: number;
@@ -1706,7 +1766,7 @@ async function readTranscriptEvidenceRows(
 			await ownerReadAll<TranscriptEvidenceRow>(
 				owner,
 				`SELECT ma.session_id, ma.source_id, ma.source_path, ma.source_sha256, ma.updated_at, ma.harness, ma.project,
-					COALESCE(ma.started_at, ma.captured_at) AS captured_at, ma.rowid AS artifact_rowid,
+					COALESCE(ma.started_at, ma.captured_at) AS captured_at, ma.agent_id, ma.rowid AS artifact_rowid,
 					length(CAST(ma.content AS BLOB)) AS content_bytes, bm25(${table}) AS rank
 				 FROM ${table}
 				 JOIN memory_artifacts ma ON ma.rowid = ${table}.rowid
@@ -1758,7 +1818,7 @@ async function readTranscriptEvidenceResult(
 		truncated: !transcript.complete || content.length < transcript.text.length,
 		score: Math.round((1 / (1 + Math.abs(row.rank))) * 100) / 100,
 		source: "transcript",
-		readProvenance: { resultIds: [`native-artifact:${row.artifact_rowid}`] },
+		readProvenance: nativeArtifactProvenance(row.agent_id, row.source_path),
 		source_id: row.source_id ?? sessionId,
 		session_id: sessionId,
 		source_path: row.source_path,
@@ -1774,18 +1834,17 @@ async function readTranscriptEvidenceResult(
 }
 
 export async function prefetchTranscriptEvidence(
-	agentId: string,
 	project: string | undefined,
 	dateBounds: Pick<RecallParams, "since" | "until">,
 	query: string,
 	maxResults: number,
 	resultLimit: number,
-	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
-	execution?: RecallExecutionOptions,
-	readScope?: ReadScope,
+	deadlineAt: number,
+	execution: RecallExecutionOptions | undefined,
+	readScope: ReadScope,
 ): Promise<TranscriptEvidencePrefetch | null> {
 	checkRecallCancellation(execution);
-	const scope = recallScopes({ agentId, readScope }).owned;
+	const scope = recallScopes({ readScope }).owned;
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0 || maxResults <= 0) return null;
 	const owner = await recallOwner(execution);
@@ -1937,6 +1996,7 @@ async function buildNativeArtifactRecallHits(
 			async (ftsTable) =>
 				await ownerReadAll<{
 					rowid: number;
+					agent_id: string;
 					source_id: string | null;
 					source_path: string;
 					source_kind: string;
@@ -1948,7 +2008,7 @@ async function buildNativeArtifactRecallHits(
 					rank: number;
 				}>(
 					owner,
-					`SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,
+					`SELECT ma.rowid, ma.agent_id, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,
 						COALESCE(ma.captured_at, ma.updated_at) AS updated_at, ma.content,
 						bm25(${ftsTable}) AS rank
 					 FROM ${ftsTable}
@@ -2046,7 +2106,7 @@ async function buildNativeArtifactRecallHits(
 		const maxRank = dedupedRows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
 		return dedupedRows
 			.map((row) => ({
-				rowid: row.rowid,
+				agentId: row.agent_id,
 				sourceId: row.source_id,
 				sourcePath: row.source_path,
 				sourceKind: row.source_kind,
@@ -2136,13 +2196,23 @@ export async function hybridRecall(
 	embedFn: EmbedFn,
 	execution?: RecallExecutionOptions,
 ): Promise<RecallResponse> {
+	return withRecallShardCatalogue(() => scopedHybridRecall(params, cfg, embedFn, execution));
+}
+
+async function scopedHybridRecall(
+	params: RecallParams,
+	cfg: ResolvedMemoryConfig,
+	embedFn: EmbedFn,
+	execution?: RecallExecutionOptions,
+): Promise<RecallResponse> {
 	checkRecallCancellation(execution);
+	const actingAgentId = recallAgentId(params);
 	let query = params.query;
 	const limit = normalizeRecallLimit(params.limit);
 	const minScore = cfg.search.min_score;
 	const filter = buildFilterClause(params);
 	const scopes = recallScopes(params);
-	const shardCompartments = scopes.memory?.compartments ?? "all";
+	const shardCompartments = scopes.memory.compartments;
 	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId || !!params.readScope;
 	const timings = createRecallTimingCollector();
 	let lexicalSearchPartial = false;
@@ -2194,7 +2264,7 @@ export async function hybridRecall(
 	};
 	const deliveredSession = selectionDedupeEnabled ? undefined : params.skipDeliveredIn?.trim();
 	const loadDelivered = async (sessionKey: string): Promise<Set<string>> => {
-		const agentId = params.agentId ?? "default";
+		const agentId = actingAgentId;
 		const eventScope = childRowSql("ev", scopes.child, DELIVERED_COLUMNS);
 		const keys = new Set<string>();
 		let before = Number.MAX_SAFE_INTEGER;
@@ -2269,7 +2339,7 @@ export async function hybridRecall(
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
 		checkRecallCancellation(execution);
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
-		if (transcriptEvidenceAllowed && (params.agentId !== undefined || params.readScope !== undefined)) {
+		if (transcriptEvidenceAllowed) {
 			const textQuery = params.keywordQuery ?? query;
 			const maxExcerpts = Math.min(cfg.search.transcript_evidence_limit, limit);
 			const reranker = cfg.pipelineV2.reranker;
@@ -2368,7 +2438,7 @@ export async function hybridRecall(
 							 SET last_accessed = datetime('now'), access_count = access_count + 1
 							 WHERE id IN (
 							   SELECT m.id
-							   FROM memories m INDEXED BY sqlite_autoindex_memories_1
+							   FROM memories m
 							   WHERE m.id IN (${trackedPlaceholders})
 							     AND m.is_deleted = 0${filter.sql}
 							 )`,
@@ -2389,10 +2459,10 @@ export async function hybridRecall(
 			const source = lifecycleSourceResults.get(row.id);
 			return source ? [source] : [];
 		});
-		await recordFirstSourceRecall(params.agentId ?? "default", [...response.results, ...selectedLifecycleSources]);
+		await recordFirstSourceRecall(actingAgentId, [...response.results, ...selectedLifecycleSources]);
 		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
 			logger.warn("memory", "Recall stage timings", {
-				agentId: params.agentId ?? "default",
+				agentId: actingAgentId,
 				limit,
 				resultCount: response.meta.totalReturned,
 				totalMs: recallTimings.totalMs,
@@ -2451,10 +2521,9 @@ export async function hybridRecall(
 		params.sourceOnly !== true &&
 		!hasMemoryOnlyFilters(params) &&
 		cfg.search.transcript_evidence_limit > 0;
-	if (transcriptEvidenceAllowed && (params.agentId !== undefined || params.readScope !== undefined)) {
+	if (transcriptEvidenceAllowed) {
 		transcriptEvidenceDeadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
 		transcriptPrefetch = prefetchTranscriptEvidence(
-			params.agentId ?? "default",
 			params.project,
 			params,
 			params.keywordQuery ?? query,
@@ -2664,7 +2733,7 @@ export async function hybridRecall(
 	let ontologyClaimCandidates: StructuredClaimCandidate[] = [];
 	if (cfg.pipelineV2.graph.enabled) {
 		try {
-			const agentId = params.agentId ?? "default";
+			const agentId = actingAgentId;
 			const candidates = await timings.timeAsync("structured_path_candidates", async () =>
 				findStructuredPathCandidatesViaOwner(await getGraphOwner(), query, agentId, {
 					limit: cfg.search.top_k,
@@ -2683,7 +2752,7 @@ export async function hybridRecall(
 		}
 		if (canUseOntologyClaimRecall(params) && temporalCandidateSet.size === 0 && !temporal.meta) {
 			try {
-				const agentId = params.agentId ?? "default";
+				const agentId = actingAgentId;
 				ontologyClaimCandidates = await timings.timeAsync("ontology_claim_candidates", async () =>
 					findStructuredClaimCandidatesViaOwner(await getGraphOwner(), query, agentId, {
 						limit: cfg.search.top_k,
@@ -2704,7 +2773,7 @@ export async function hybridRecall(
 	const primaryTraversalFetch = timings.timeAsync("traversal_fetch", async () => {
 		const traversalCfg = cfg.pipelineV2.traversal;
 		if (!traversalPrimary || !traversalCfg || getGraphQueryTokens().length === 0) return null;
-		const agentId = params.agentId ?? "default";
+		const agentId = actingAgentId;
 		const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
 		const owner = await getGraphOwner();
 		const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
@@ -2869,7 +2938,7 @@ export async function hybridRecall(
 												"memory-search.traversal.embedding-rescore",
 												pageRows,
 											),
-										childRowSql("e", scopes.child, EMBEDDING_COLUMNS),
+										scopes.child,
 									);
 								} catch (e) {
 									checkRecallCancellation(execution);
@@ -2968,7 +3037,7 @@ export async function hybridRecall(
 					const traversalCfg = cfg.pipelineV2.traversal;
 					const queryTokens = getGraphQueryTokens();
 					if (traversalCfg && queryTokens.length > 0) {
-						const agentId = params.agentId ?? "default";
+						const agentId = actingAgentId;
 						const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
 						const owner = await getGraphOwner();
 						const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
@@ -3093,7 +3162,7 @@ export async function hybridRecall(
 						async (db) =>
 							db
 								.prepare(
-									`SELECT m.id, m.content FROM memories m INDEXED BY sqlite_autoindex_memories_1
+									`SELECT m.id, m.content FROM memories m
 								 WHERE m.id IN (${placeholders})${filter.sql}`,
 								)
 								.all(...candidateIds, ...filter.args) as Array<{ id: string; content: string }>,
@@ -3131,7 +3200,7 @@ export async function hybridRecall(
 
 			const candidates = [...byId.values()];
 			try {
-				const agentId = params.agentId ?? "default";
+				const agentId = actingAgentId;
 				const structured = await scoreStructuredPathEvidenceViaOwner(
 					await getGraphOwner(),
 					candidates.map((row) => row.id),
@@ -3171,7 +3240,7 @@ export async function hybridRecall(
 							async (db) =>
 								db
 									.prepare(
-										`SELECT m.id, m.content FROM memories m INDEXED BY sqlite_autoindex_memories_1
+										`SELECT m.id, m.content FROM memories m
 									 WHERE m.id IN (${placeholders})${filter.sql}`,
 									)
 									.all(...coverageIds, ...filter.args) as Array<{ id: string; content: string }>,
@@ -3215,7 +3284,7 @@ export async function hybridRecall(
 					async (db) =>
 						db
 							.prepare(
-								`SELECT m.id, m.content FROM memories m INDEXED BY sqlite_autoindex_memories_1
+								`SELECT m.id, m.content FROM memories m
 							 WHERE m.id IN (${rerankPlaceholders})${filter.sql}`,
 							)
 							.all(...rerankIds, ...filter.args) as Array<{
@@ -3309,7 +3378,7 @@ export async function hybridRecall(
 					async (db) =>
 						db
 							.prepare(
-								`SELECT m.id, m.content, m.type FROM memories m INDEXED BY sqlite_autoindex_memories_1
+								`SELECT m.id, m.content, m.type FROM memories m
 							 WHERE m.id IN (${dampenPh})${filter.sql}`,
 							)
 							.all(...dampenIds, ...filter.args) as Array<{
@@ -3352,17 +3421,12 @@ export async function hybridRecall(
 				if (entityIds.size > 0) {
 					const eidList = [...entityIds];
 					const eidPh = eidList.map(() => "?").join(", ");
-					const mentionScope = memoryScopeSql("m", params.readScope ?? null);
+					const mentionScope = memoryScopeSql("m", params.readScope);
 					const degreeRows = await graphOwnerReadAll<{
 						entity_id: string;
 						cnt: number;
 					}>(
-						params.readScope === undefined
-							? `SELECT entity_id, COUNT(*) AS cnt
-							 FROM memory_entity_mentions
-							 WHERE entity_id IN (${eidPh})
-							 GROUP BY entity_id`
-							: `SELECT mem.entity_id, COUNT(*) AS cnt
+						`SELECT mem.entity_id, COUNT(*) AS cnt
 							 FROM memory_entity_mentions mem
 							 JOIN memories m ON m.id = mem.memory_id
 							 WHERE mem.entity_id IN (${eidPh})${mentionScope.sql}
@@ -3374,12 +3438,10 @@ export async function hybridRecall(
 					for (const row of degreeRows) {
 						degrees.set(row.entity_id, row.cnt);
 					}
-					const countScope = memoryScopeSql("m", params.readScope ?? null);
+					const countScope = memoryScopeSql("m", params.readScope);
 					const [memoryCount] = await graphOwnerReadAll<{ cnt: number }>(
-						params.readScope
-							? `SELECT COUNT(*) AS cnt FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0${countScope.sql}`
-							: "SELECT COUNT(*) AS cnt FROM memories WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0",
-						params.readScope ? countScope.args : [params.agentId ?? "default"],
+						`SELECT COUNT(*) AS cnt FROM memories m WHERE COALESCE(m.is_deleted, 0) = 0${countScope.sql}`,
+						countScope.args,
 						"memory-search.dampening.agent-memories",
 						1,
 					);
@@ -3467,7 +3529,7 @@ export async function hybridRecall(
 		}
 		const observedScores = await loadObservedScores(
 			scored.map((row) => row.id),
-			params.agentId ?? "default",
+			actingAgentId,
 			scopes.child,
 			execution,
 		);
@@ -3490,7 +3552,7 @@ export async function hybridRecall(
 							cfg.embedding.dimensions,
 							async (sql, sqlParams, pageRows) =>
 								await graphOwnerReadAll<OwnerVectorRow>(sql, sqlParams, "memory-search.temporal-window-fill", pageRows),
-							childRowSql("e", scopes.child, EMBEDDING_COLUMNS),
+							scopes.child,
 						);
 					} catch (e) {
 						checkRecallCancellation(execution);
@@ -3544,7 +3606,7 @@ export async function hybridRecall(
 								queryVecF32,
 								new Set(),
 								fallbackLimit,
-								params.agentId ?? "default",
+								actingAgentId,
 								cfg.embedding,
 								params.project,
 								execution,
@@ -3604,13 +3666,15 @@ export async function hybridRecall(
 					const truncated = content.length > recallTruncate;
 					const sourceId =
 						hit.sourceKind.startsWith("source_import_") && hit.sourceId ? hit.sourceId : nativeArtifactPublicId(hit);
+					const id = nativeArtifactResultId(hit.agentId, hit.sourcePath);
 					if (hit.sourceId)
-						lifecycleSourceResults.set(`native-artifact:${hit.rowid}`, {
+						lifecycleSourceResults.set(id, {
 							source: nativeArtifactRecallSource(hit),
 							source_id: hit.sourceId,
 						});
 					return {
-						id: `native-artifact:${hit.rowid}`,
+						id,
+						readProvenance: nativeArtifactProvenance(hit.agentId, hit.sourcePath),
 						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
 						content_length: content.length,
 						truncated,
@@ -3661,7 +3725,7 @@ export async function hybridRecall(
 						db
 							.prepare(
 								`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
-        FROM memories m INDEXED BY sqlite_autoindex_memories_1
+        FROM memories m
         WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
 							)
 							.all(...topIds, ...filter.args) as Array<{
@@ -3739,7 +3803,7 @@ export async function hybridRecall(
 							queryVecF32,
 							existingSourceIds,
 							selectionDedupeEnabled ? Math.max(fill * 3, fill + 10) : fill,
-							params.agentId ?? "default",
+							actingAgentId,
 							cfg.embedding,
 							params.project,
 							execution,
@@ -3793,13 +3857,15 @@ export async function hybridRecall(
 			const content = nativeArtifactRecallContent(hit);
 			const truncated = content.length > recallTruncate;
 			const sourceId = nativeArtifactPublicId(hit);
+			const id = nativeArtifactResultId(hit.agentId, hit.sourcePath);
 			if (hit.sourceId)
-				lifecycleSourceResults.set(`native-artifact:${hit.rowid}`, {
+				lifecycleSourceResults.set(id, {
 					source: nativeArtifactRecallSource(hit),
 					source_id: hit.sourceId,
 				});
 			return {
-				id: `native-artifact:${hit.rowid}`,
+				id,
+				readProvenance: nativeArtifactProvenance(hit.agentId, hit.sourcePath),
 				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
 				content_length: content.length,
 				truncated,
@@ -3852,9 +3918,12 @@ export async function hybridRecall(
 				score,
 				source: "llm_summary",
 				readProvenance: {
-					resultIds: results.slice(0, 12).flatMap((row) => row.readProvenance?.resultIds ?? [row.id]),
+					resultIds: results
+						.slice(0, 12)
+						.flatMap((row) => row.readProvenance?.resultIds ?? (row.readProvenance?.artifactKeys ? [] : [row.id])),
 					compartmentIds: results.slice(0, 12).flatMap((row) => row.readProvenance?.compartmentIds ?? []),
 					attributeIds: results.slice(0, 12).flatMap((row) => row.readProvenance?.attributeIds ?? []),
+					artifactKeys: results.slice(0, 12).flatMap((row) => row.readProvenance?.artifactKeys ?? []),
 				},
 				type: "semantic",
 				tags: null,
@@ -3964,7 +4033,7 @@ export async function hybridRecall(
 		try {
 			const queryTokens = getGraphQueryTokens();
 			if (queryTokens.length > 0) {
-				const agentId = params.agentId ?? "default";
+				const agentId = actingAgentId;
 				const owner = await getGraphOwner();
 				const focal = await getFocalEntities(owner, agentId);
 				if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });

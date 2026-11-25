@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { ftsShardTables, readScopeSql, type ReadScope } from "@signet/core";
+import { ftsShardTables, readScopeSql, requireReadScope, type ReadScope } from "@signet/core";
 
 const TYPE_HINTS: ReadonlyArray<readonly [string, string]> = [
 	["prefer", "preference"],
@@ -31,7 +31,8 @@ export function effectiveScore(importance: number, createdAt: string, pinned: bo
 	const ageDays = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
 	return importance * 0.95 ** ageDays;
 }
-export function isDuplicate(db: Database, content: string, agentId: string, readScope?: ReadScope): boolean {
+export function isDuplicate(db: Database, content: string, _agentId: string, readScope: ReadScope): boolean {
+	const scope = requireReadScope(readScope);
 	const words = content
 		.toLowerCase()
 		.split(/\W+/)
@@ -40,31 +41,16 @@ export function isDuplicate(db: Database, content: string, agentId: string, read
 
 	try {
 		const ftsQuery = words.slice(0, 10).join(" OR ");
-		const scope: ReadScope = readScope ?? { reach: { kind: "own", agentId }, compartments: "all", projects: null };
 		const filter = readScopeSql("m", scope);
 		const args = filter.args.map((value) => {
 			if (typeof value === "string" || typeof value === "number") return value;
 			throw new Error("Invalid duplicate search scope");
 		});
-		const catalogue = {
-			exec: () => {
-				throw new Error("Read-only duplicate index catalogue");
-			},
-			prepare: (sql: string) => ({
-				run: () => {
-					throw new Error("Read-only duplicate index catalogue");
-				},
-				get: () => undefined,
-				all: (...values: unknown[]) =>
-					db.prepare<Record<string, unknown>, string[]>(sql).all(
-						...values.map((value) => {
-							if (typeof value !== "string") throw new Error("Invalid shard catalogue parameter");
-							return value;
-						}),
-					),
-			}),
-		};
-		const rows = ftsShardTables("memories_fts", scope.compartments, catalogue)
+		const tables =
+			scope.compartments !== "all" && scope.compartments.length === 0
+				? ["memories_fts"]
+				: ftsShardTables("memories_fts", scope.compartments, db);
+		const rows = tables
 			.flatMap((table) =>
 				db
 					.prepare(`SELECT m.content,bm25(${table}) AS raw_score FROM ${table}

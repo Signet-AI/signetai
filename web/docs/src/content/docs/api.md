@@ -93,11 +93,18 @@ of a redirected personal write agent. Generated `MEMORY.md` context is rendered
 from readable, still-supported entries rather than injecting the shared disk
 projection. It does not report omitted entries.
 
-Synthesized and transcript results may include server-authored `readProvenance`
-with `resultIds`, `attributeIds`, or `compartmentIds`. These identify copied inputs
-and their labels so recall bookkeeping retains the sensitivity of those inputs,
-including inputs omitted from a model summary's final result list. They are
-response metadata, not request permissions.
+Recall responses never include read provenance or compartment ids. The daemon
+keeps that provenance internally so recall telemetry and the session recall
+ledger still carry the labels of copied inputs, including inputs omitted from a
+model summary's final result list.
+
+Native artifact results use ids of the form `native-artifact:<digest>`. The
+digest comes from the artifact's agent and source path, so the id stays the same
+across re-indexing and does not change when other rows are inserted. Earlier
+releases returned `native-artifact:<number>` ids. Feedback still accepts an
+older id that was recorded for the session, but new responses never return
+them. Recall dedupe treats the new id as a different item, so an artifact already
+shown in the current context can appear once more after an upgrade.
 
 ## Authentication
 

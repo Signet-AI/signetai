@@ -1,3 +1,4 @@
+import { recallAgentId } from "./memory-search-filters";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	type LlmUsage,
@@ -6,6 +7,7 @@ import {
 	type RouterResult,
 	readScopeSql,
 	redactCredentials,
+	requireReadScope,
 	summarizeAccountingProvenance,
 } from "@signet/core";
 import type { WriteAuthor } from "./auth/audit-owner";
@@ -490,11 +492,11 @@ function rowToRecallResult(row: AggregateMemoryRow): RecallResult {
 interface AggregateLookup {
 	readonly agentId: string;
 	readonly project: string | null;
-	readonly readScope?: ReadScope;
+	readonly readScope: ReadScope;
 }
 
-function scopeClause(scope: ReadScope | undefined): { readonly sql: string; readonly args: unknown[] } {
-	return scope ? readScopeSql("m", scope) : { sql: "", args: [] };
+function scopeClause(scope: ReadScope): { readonly sql: string; readonly args: unknown[] } {
+	return readScopeSql("m", scope);
 }
 
 function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
@@ -667,7 +669,7 @@ function resolveAggregateDuplicate(
 		readonly evidenceSources: readonly AggregateEvidenceSource[];
 		readonly saveVisibility: "global" | "private";
 		readonly now: string;
-		readonly readScope?: ReadScope;
+		readonly readScope: ReadScope;
 	},
 ): AggregateDuplicateResolution | null {
 	const existing = loadAggregateByKey(db, input.key, {
@@ -733,7 +735,7 @@ async function embedAggregateMemory(
 	embedFn: EmbedFn,
 ): Promise<boolean> {
 	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-		siteToken: "aggregate-recall.ts:735",
+		siteToken: "aggregate-recall.ts:737",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
@@ -753,7 +755,7 @@ async function embedAggregateMemory(
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
-		{ siteToken: "aggregate-recall.ts:741" },
+		{ siteToken: "aggregate-recall.ts:743" },
 	);
 	return written;
 }
@@ -857,6 +859,7 @@ export async function aggregateRecall(
 	cfg: ResolvedMemoryConfig,
 	deps: AggregateRecallDeps,
 ): Promise<RecallResponse> {
+	requireReadScope(params.readScope);
 	const budget = normalizeBudget(params.aggregateBudget ?? params.aggregate_budget);
 	const maxQueries = BUDGET_QUERY_LIMITS[budget];
 	const recall = deps.hybridRecall ?? hybridRecall;
@@ -871,7 +874,7 @@ export async function aggregateRecall(
 		const usage = buildAggregateUsage(usageStages);
 		if (recallTimings.totalMs >= AGGREGATE_RECALL_TIMING_LOG_THRESHOLD_MS) {
 			log.warn("memory", "Aggregate recall stage timings", {
-				agentId: params.agentId ?? "default",
+				agentId: recallAgentId(params),
 				budget,
 				queryCount: response.aggregate?.queries.length ?? 1,
 				sourceMemoryCount: response.aggregate?.sourceMemoryIds.length ?? 0,
@@ -987,7 +990,7 @@ export async function aggregateRecall(
 		);
 	}
 
-	const agentId = params.agentId ?? "default";
+	const agentId = recallAgentId(params);
 	const project = sourceProject(params);
 	const key = aggregateKey({ agentId, project, query: params.query, budget, sourceMemoryIds: evidenceIds });
 
@@ -1079,7 +1082,7 @@ export async function aggregateRecall(
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:1002" },
+					{ siteToken: "aggregate-recall.ts:1005" },
 				),
 		);
 		if (row && !deduped) {

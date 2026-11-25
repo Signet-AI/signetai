@@ -462,12 +462,13 @@ export interface DbOwnerRecallPayload {
 
 export interface DbOwnerVectorSearchPayload {
 	readonly queryEmbedding: readonly number[];
-	readonly options?: {
+	readonly options: {
 		readonly limit?: number;
 		readonly type?: string;
 		readonly excludeAggregateRecall?: boolean;
 		readonly maxScanRows?: number;
-		readonly readScope?: ReadScope;
+		readonly readScope: ReadScope;
+		readonly shardNames?: readonly string[];
 	};
 }
 

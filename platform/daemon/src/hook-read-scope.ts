@@ -4,7 +4,13 @@ import { getAgentScope } from "./agent-id";
 import { principalAccess, resolveReadAgent } from "./auth/agent-access";
 import { IdentityError } from "./auth/organization-store";
 import type { Principal } from "./auth/principal";
-import { type AgentReach, type ReadScope, audienceSubjectFromPrincipal, resolveReadScope } from "./read-scope";
+import {
+	type AgentReach,
+	type ReadScope,
+	audienceSubjectFromPrincipal,
+	localAllReadScope,
+	resolveReadScope,
+} from "./read-scope";
 
 export function reachForPolicy(
 	agentId: string,
@@ -20,7 +26,7 @@ async function localAgentReach(agentId: string): Promise<AgentReach> {
 }
 
 export async function internalHookReadScope(agentId: string): Promise<ReadScope> {
-	return { reach: await localAgentReach(agentId), compartments: "all", projects: null };
+	return localAllReadScope(await localAgentReach(agentId));
 }
 
 function organizationReach(principal: Principal, agentId: string): AgentReach {
@@ -41,6 +47,11 @@ export async function resolveHookReadScope(
 		agentId = resolved.value;
 	}
 	const reach = organization && principal ? organizationReach(principal, agentId) : await localAgentReach(agentId);
+	return await resolvePrincipalReadScope(c, reach);
+}
+
+export async function resolvePrincipalReadScope(c: Context, reach: AgentReach): Promise<ReadScope> {
+	const principal = c.get("principal");
 	const projects = principal?.allowedProjects ?? null;
 	if (principal && (principal.kind === "local" || principal.userId))
 		return await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal));

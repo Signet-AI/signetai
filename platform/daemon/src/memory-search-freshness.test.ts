@@ -4,8 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
-import { hybridRecall } from "./memory-search";
+import { hybridRecall as scopedHybridRecall } from "./memory-search";
 import { hasFreshnessIntent } from "./temporal-recall";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+import type { RecallParams } from "./memory-search";
+
+type ScopedHybridRecallRest = Parameters<typeof scopedHybridRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function hybridRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedHybridRecallRest
+): ReturnType<typeof scopedHybridRecall> {
+	return scopedHybridRecall(withLocalReadScope(params), ...rest);
+}
 
 const DAY_MS = 86_400_000;
 const TEST_NOW_MS = Date.now();

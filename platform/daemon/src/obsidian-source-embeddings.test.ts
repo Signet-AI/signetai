@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
-import { hybridRecall } from "./memory-search";
+import { hybridRecall as scopedHybridRecall } from "./memory-search";
 import { awaitEmbeddingProviderAvailable, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 import { logger } from "./logger";
 import {
@@ -14,6 +14,16 @@ import {
 	purgeObsidianSourceFileEmbeddings,
 	type SourceEmbeddingFetch,
 } from "./obsidian-source-embeddings";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+import type { RecallParams } from "./memory-search";
+
+type ScopedHybridRecallRest = Parameters<typeof scopedHybridRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function hybridRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedHybridRecallRest
+): ReturnType<typeof scopedHybridRecall> {
+	return scopedHybridRecall(withLocalReadScope(params), ...rest);
+}
 
 const embeddingConfig: EmbeddingConfig = {
 	provider: "native",

@@ -1,7 +1,7 @@
 import { redactCredentials } from "@signet/core";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
-import type { ReadScope } from "../read-scope";
+import { type ReadScope, requireReadScope } from "../read-scope";
 import { derivedScopeSql } from "../read-scope-tables";
 import { memoryOriginEligibilitySql, type MemorySearchFilterClause } from "../memory-search-filters";
 
@@ -111,13 +111,14 @@ function densityScore(aspects: number, attrs: number, constraints: number): numb
 
 export async function constructContextBlocksViaOwner(
 	owner: DbOwnerClient,
-	agentId: string,
+	_agentId: string,
 	focalEntityIds: ReadonlyArray<string>,
 	limit: number,
-	filter?: MemorySearchFilterClause,
-	allowUnlinked = true,
-	readScope?: ReadScope,
+	filter: MemorySearchFilterClause | undefined,
+	allowUnlinked: boolean,
+	readScope: ReadScope,
 ): Promise<ConstructedContextSnapshot> {
+	const scope = requireReadScope(readScope);
 	if (focalEntityIds.length === 0) return { blocks: [], entities: [] };
 	const query = <Row extends object>(
 		sql: string,
@@ -132,7 +133,6 @@ export async function constructContextBlocksViaOwner(
 			deadlineMs: 30_000,
 			estimatedWorkUnits: Math.min(10_000, estimatedWorkUnits),
 		});
-	const scope: ReadScope = readScope ?? { reach: { kind: "own", agentId }, compartments: "all", projects: null };
 	const clause = (alias: string) => derivedScopeSql(alias, scope, { memory: null, session: null, source: null });
 	const entityScope = clause("e");
 	const aspectScope = clause("asp");

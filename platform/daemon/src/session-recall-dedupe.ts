@@ -1,12 +1,18 @@
-import { compartmentFor, compartmentForWrite, type ReadScope, readScopeSql } from "@signet/core";
+import { compartmentFor, compartmentForWrite, type ReadScope, readScopeSql, requireReadScope } from "@signet/core";
 import { resolveAgentId } from "./agent-id";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
+
+export interface RecallArtifactKey {
+	readonly agentId: string;
+	readonly sourcePath: string;
+}
 
 export interface RecallReadProvenance {
 	readonly compartmentIds?: readonly number[];
 	readonly attributeIds?: readonly string[];
 	readonly resultIds?: readonly string[];
+	readonly artifactKeys?: readonly RecallArtifactKey[];
 }
 
 export interface RecallDedupeItem {
@@ -36,7 +42,7 @@ export interface ApplyRecallDedupeOptions<T extends RecallDedupeItem> {
 	readonly select?: (fresh: readonly T[]) => readonly T[];
 	readonly signal?: AbortSignal;
 	readonly deadlineAt?: number;
-	readonly readScope?: ReadScope;
+	readonly readScope: ReadScope;
 }
 
 export interface ClaimRecallItemsOptions<T extends RecallDedupeItem> {
@@ -48,7 +54,7 @@ export interface ClaimRecallItemsOptions<T extends RecallDedupeItem> {
 	readonly select?: (fresh: readonly T[]) => readonly T[];
 	readonly signal?: AbortSignal;
 	readonly deadlineAt?: number;
-	readonly readScope?: ReadScope;
+	readonly readScope: ReadScope;
 }
 
 export type TelemetryCitationKind = "memory" | "transcript" | "artifact" | "attribute";
@@ -86,8 +92,15 @@ export function telemetryEvidenceInTx(
 	];
 	const boundTranscripts = new Set(
 		(input.items ?? [])
-			.filter((item) => item.id.startsWith("transcript:") && item.readProvenance?.resultIds?.length)
+			.filter(
+				(item) =>
+					item.id.startsWith("transcript:") &&
+					((item.readProvenance?.resultIds?.length ?? 0) > 0 || (item.readProvenance?.artifactKeys?.length ?? 0) > 0),
+			)
 			.map((item) => item.id),
+	);
+	const provenanceItems = JSON.stringify(
+		(input.items ?? []).map((item) => ({ id: item.id, readProvenance: item.readProvenance ?? {} })),
 	);
 	const transcripts = stripped(
 		ids.filter((id) => !boundTranscripts.has(id)),
@@ -122,6 +135,9 @@ export function telemetryEvidenceInTx(
 				FROM json_each(?) i CROSS JOIN json_each(i.value,'$.readProvenance.compartmentIds') c
 				UNION ALL SELECT json_extract(i.value,'$.id'), 'attribute', a.id, a.agent_id, a.compartment_id, a.memory_id
 				FROM json_each(?) i CROSS JOIN json_each(i.value,'$.readProvenance.attributeIds') refs JOIN entity_attributes a ON a.id=refs.value
+				UNION ALL SELECT json_extract(i.value,'$.id'), 'artifact', r.source_path, r.agent_id, r.compartment_id, NULL
+				FROM json_each(?) i CROSS JOIN json_each(i.value,'$.readProvenance.artifactKeys') k
+				JOIN memory_artifacts r ON r.agent_id = json_extract(k.value,'$.agentId') AND r.source_path = json_extract(k.value,'$.sourcePath')
 				UNION ALL SELECT NULL, NULL, NULL, NULL, ?, NULL
 			 ) h
 			 LEFT JOIN compartment_members cm ON cm.compartment_id = h.compartment_id`,
@@ -138,8 +154,9 @@ export function telemetryEvidenceInTx(
 		JSON.stringify(stripped(ids, "source-chunk:")),
 		input.agentId,
 		JSON.stringify(stripped(ids, "constructed:")),
-		JSON.stringify(input.items ?? []),
-		JSON.stringify(input.items ?? []),
+		provenanceItems,
+		provenanceItems,
+		provenanceItems,
 		base,
 	);
 	const inheritedItems: RecallDedupeItem[] = [];
@@ -190,6 +207,7 @@ export function telemetryEvidenceInTx(
 		input.agentId,
 		"[]",
 		JSON.stringify(inheritedItems),
+		"[]",
 		"[]",
 		null,
 	)) {
@@ -352,11 +370,7 @@ function recordRecallEvents(
 		});
 }
 
-function ledgerScope(
-	scope: ReadScope | undefined,
-	agentId: string,
-): { readonly sql: string; readonly args: unknown[] } {
-	if (!scope) return { sql: "", args: [] };
+function ledgerScope(scope: ReadScope, agentId: string): { readonly sql: string; readonly args: unknown[] } {
 	return readScopeSql(
 		"e",
 		{ ...scope, reach: { kind: "own", agentId }, projects: scope.projects === null ? null : [] },
@@ -369,7 +383,7 @@ function loadLedger(
 	sessionKey: string,
 	agentId: string,
 	items: readonly RecallDedupeItem[],
-	scope: ReadScope | undefined,
+	scope: ReadScope,
 ): { readonly epoch: number; readonly recalled: Set<string> } {
 	const keys = new Set(items.map((item) => itemKey(item)));
 	const wanted = items.length > 0 ? `(e.item_kind, e.item_id) IN (${items.map(() => "(?, ?)").join(", ")})` : "0";
@@ -471,6 +485,7 @@ function applyRecallDedupeInTx<T extends RecallDedupeItem>(
 export function applyRecallDedupe<T extends RecallDedupeItem>(
 	opts: ApplyRecallDedupeOptions<T>,
 ): { readonly items: T[]; readonly meta: RecallDedupeMeta } {
+	requireReadScope(opts.readScope);
 	const sessionKey = normalizeSessionKey(opts.sessionKey);
 	if (!sessionKey) {
 		return { items: [...opts.items], meta: disabledMeta() };
@@ -496,6 +511,7 @@ export function applyRecallDedupe<T extends RecallDedupeItem>(
 export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 	opts: ApplyRecallDedupeOptions<T>,
 ): Promise<{ readonly items: T[]; readonly meta: RecallDedupeMeta }> {
+	requireReadScope(opts.readScope);
 	const sessionKey = normalizeSessionKey(opts.sessionKey);
 	if (!sessionKey) {
 		return { items: [...opts.items], meta: disabledMeta() };

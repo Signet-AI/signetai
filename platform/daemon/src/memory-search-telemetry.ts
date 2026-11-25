@@ -14,7 +14,7 @@ export interface MemorySearchTelemetryRecordInput {
 	readonly agentId: string;
 	readonly sessionKey: string | null;
 	readonly project: string | null;
-	readonly params: RecallParams;
+	readonly params: Omit<RecallParams, "readScope">;
 	readonly response: RecallResponse;
 	readonly retentionDays: number;
 }
@@ -170,7 +170,7 @@ function parseTimings(raw: string): RecallTimings {
 	}
 }
 
-function buildFilters(params: RecallParams): Readonly<Record<string, unknown>> {
+function buildFilters(params: Omit<RecallParams, "readScope">): Readonly<Record<string, unknown>> {
 	return {
 		limit: params.limit ?? null,
 		type: params.type ?? null,

@@ -1,3 +1,4 @@
+import { localAllReadScope } from "@signet/core";
 import { requestMemoryHead } from "./memory-head";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir } from "node:fs/promises";
@@ -78,6 +79,7 @@ export async function syncAgentWorkspaces({
 		try {
 			authoredMemory = !(
 				await requestMemoryHead<{ generated: boolean }>({
+					readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 					action: "inspect",
 					agentId: "default",
 					content: memoryContent,

@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
+import { requireReadScope, resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { type PurgeBatchResult, purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
@@ -253,7 +253,10 @@ async function executeInlineOwnerRequest(
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
 	if (request.kind === "vector_search") {
 		return invokeAccessor(accessor, "withReadDb", (db) =>
-			vectorSearchWithMetadata(db as never, new Float32Array(request.payload.queryEmbedding), request.payload.options),
+			vectorSearchWithMetadata(db, new Float32Array(request.payload.queryEmbedding), {
+				...request.payload.options,
+				readScope: requireReadScope(request.payload.options.readScope),
+			}),
 		);
 	}
 	switch (request.kind) {

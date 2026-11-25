@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compartmentFor } from "@signet/core";
+import type { ReadScope } from "./read-scope";
+import type { RecallDedupeItem } from "./session-recall-dedupe";
 import { executeClassification } from "./classification-owner";
 import * as dbAccessor from "./db-accessor";
 
@@ -25,9 +27,29 @@ const getDbAccessorSpy = spyOn(dbAccessor, "getDbAccessor").mockImplementation((
 	});
 });
 
-const { advanceRecallContextEpoch, applyRecallDedupe, applyRecallDedupeAsync, claimRecallItems } = await import(
-	"./session-recall-dedupe"
-);
+const dedupe = await import("./session-recall-dedupe");
+const { advanceRecallContextEpoch } = dedupe;
+const { localTestReadScope } = await import("./test-support/local-read-scope");
+type ApplyOptions<T extends RecallDedupeItem> = Omit<Parameters<typeof dedupe.applyRecallDedupe<T>>[0], "readScope"> & {
+	readonly readScope?: ReadScope;
+};
+type ClaimOptions<T extends RecallDedupeItem> = Omit<Parameters<typeof dedupe.claimRecallItems<T>>[0], "readScope"> & {
+	readonly readScope?: ReadScope;
+};
+function scoped<T extends { readonly agentId?: string | null; readonly readScope?: ReadScope }>(
+	opts: T,
+): T & { readonly readScope: ReadScope } {
+	return { ...opts, readScope: opts.readScope ?? localTestReadScope(opts.agentId ?? "default") };
+}
+function applyRecallDedupe<T extends RecallDedupeItem>(opts: ApplyOptions<T>) {
+	return dedupe.applyRecallDedupe(scoped(opts));
+}
+async function applyRecallDedupeAsync<T extends RecallDedupeItem>(opts: ApplyOptions<T>) {
+	return await dedupe.applyRecallDedupeAsync(scoped(opts));
+}
+function claimRecallItems<T extends RecallDedupeItem>(opts: ClaimOptions<T>) {
+	return dedupe.claimRecallItems(scoped(opts));
+}
 
 function ledgerCount(): unknown {
 	return realGetDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM session_recall_events").get()?.n);

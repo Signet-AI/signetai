@@ -1,8 +1,8 @@
 import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
-import type { ReadScope } from "../read-scope";
-import { type ScopeSql, derivedReadScopeSql, localReadScope, memoryReadScopeSql } from "./graph-traversal";
+import { type ReadScope, requireReadScope } from "../read-scope";
+import { type ScopeSql, derivedReadScopeSql, memoryReadScopeSql } from "./graph-traversal";
 import { FTS_STOP } from "./stop-words";
 
 const PUNCT = /[^a-z0-9\s]/g;
@@ -97,8 +97,8 @@ interface PathScoreRow {
 	readonly confidence: number | null;
 }
 
-function graphScope(agentId: string, readScope: ReadScope | undefined): ScopeSql {
-	const scope = readScope ?? localReadScope(agentId);
+function graphScope(readScope: ReadScope): ScopeSql {
+	const scope = requireReadScope(readScope);
 	const parts = [
 		derivedReadScopeSql("ea", scope, { memory: "memory_id", source: "source_id" }),
 		derivedReadScopeSql("asp", scope),
@@ -153,11 +153,11 @@ export function scoreStructuredPathEvidence(
 	memoryIds: readonly string[],
 	query: string,
 	agentId: string,
-	readScope?: ReadScope,
+	readScope: ReadScope,
 ): Map<string, number> {
 	const queryTokens = [...new Set(tokenize(query))];
 	if (memoryIds.length === 0 || queryTokens.length === 0) return new Map();
-	const scope = graphScope(agentId, readScope);
+	const scope = graphScope(readScope);
 
 	const uniqueIds = [...new Set(memoryIds.filter((id) => typeof id === "string" && id.length > 0))];
 	if (uniqueIds.length === 0) return new Map();
@@ -249,8 +249,8 @@ export function findStructuredPathCandidates(
 		readonly minScore?: number;
 		readonly filterSql?: string;
 		readonly filterArgs?: readonly unknown[];
-		readonly readScope?: ReadScope;
-	} = { limit: 20 },
+		readonly readScope: ReadScope;
+	},
 ): Map<string, number> {
 	const parsed = queryTokensForPathSearch(query, options.limit);
 	if (!parsed) return new Map();
@@ -258,7 +258,7 @@ export function findStructuredPathCandidates(
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const filterSql = options.filterSql ?? "";
-	const scope = graphScope(agentId, options.readScope);
+	const scope = graphScope(options.readScope);
 	const memory = memoryReadScopeSql("m", options.readScope);
 	const rows = db
 		.prepare(
@@ -308,7 +308,7 @@ export function findStructuredClaimCandidates(
 	db: ReadDb,
 	query: string,
 	agentId: string,
-	options: { readonly limit: number; readonly minScore?: number; readonly readScope?: ReadScope } = { limit: 20 },
+	options: { readonly limit: number; readonly minScore?: number; readonly readScope: ReadScope },
 ): StructuredClaimCandidate[] {
 	const parsed = queryTokensForPathSearch(query, options.limit);
 	if (!parsed) return [];
@@ -316,7 +316,7 @@ export function findStructuredClaimCandidates(
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
-	const scope = graphScope(agentId, options.readScope);
+	const scope = graphScope(options.readScope);
 	const rows = db
 		.prepare(
 			`SELECT
@@ -407,15 +407,15 @@ export async function findStructuredPathCandidatesViaOwner(
 		readonly minScore?: number;
 		readonly filterSql?: string;
 		readonly filterArgs?: readonly unknown[];
-		readonly readScope?: ReadScope;
-	} = { limit: 20 },
+		readonly readScope: ReadScope;
+	},
 ): Promise<Map<string, number>> {
 	const parsed = queryTokensForPathSearch(query, options.limit);
 	if (!parsed) return new Map();
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
-	const scope = graphScope(agentId, options.readScope);
+	const scope = graphScope(options.readScope);
 	const memory = memoryReadScopeSql("m", options.readScope);
 	const rows = await ownerReadAll<StructuredPathRow>(
 		owner,
@@ -504,12 +504,12 @@ export async function scoreStructuredPathEvidenceViaOwner(
 	memoryIds: readonly string[],
 	query: string,
 	agentId: string,
-	readScope?: ReadScope,
+	readScope: ReadScope,
 ): Promise<Map<string, number>> {
 	const queryTokens = [...new Set(tokenize(query))];
 	const uniqueIds = [...new Set(memoryIds.filter((id) => typeof id === "string" && id.length > 0))];
 	if (uniqueIds.length === 0 || queryTokens.length === 0) return new Map();
-	const scope = graphScope(agentId, readScope);
+	const scope = graphScope(readScope);
 	const placeholders = uniqueIds.map(() => "?").join(", ");
 	const rows = await ownerReadAll<StructuredPathRow>(
 		owner,
@@ -546,14 +546,14 @@ export async function findStructuredClaimCandidatesViaOwner(
 	owner: DbOwnerClient,
 	query: string,
 	agentId: string,
-	options: { readonly limit: number; readonly minScore?: number; readonly readScope?: ReadScope } = { limit: 20 },
+	options: { readonly limit: number; readonly minScore?: number; readonly readScope: ReadScope },
 ): Promise<StructuredClaimCandidate[]> {
 	const parsed = queryTokensForPathSearch(query, options.limit);
 	if (!parsed) return [];
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
-	const scope = graphScope(agentId, options.readScope);
+	const scope = graphScope(options.readScope);
 	const rows = await ownerReadAll<StructuredClaimRow>(
 		owner,
 		`SELECT

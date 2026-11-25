@@ -7,7 +7,18 @@ import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./d
 import { getDbOwner } from "./db-owner-runtime";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
-import { TRANSCRIPT_PAGE_BYTES, hybridRecall, prefetchTranscriptEvidence } from "./memory-search";
+import { TRANSCRIPT_PAGE_BYTES, hybridRecall as scopedHybridRecall, prefetchTranscriptEvidence } from "./memory-search";
+import { type LocalScopeHint, localTestReadScope, withLocalReadScope } from "./test-support/local-read-scope";
+import type { RecallParams } from "./memory-search";
+
+const TRANSCRIPT_EVIDENCE_TEST_DEADLINE_MS = 30_000;
+type ScopedHybridRecallRest = Parameters<typeof scopedHybridRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function hybridRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedHybridRecallRest
+): ReturnType<typeof scopedHybridRecall> {
+	return scopedHybridRecall(withLocalReadScope(params), ...rest);
+}
 
 describe("transcript evidence prefetch owner scheduling", () => {
 	let directory = "";
@@ -47,7 +58,16 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			return submit<Result>(request, options);
 		};
 		try {
-			const prefetch = await prefetchTranscriptEvidence("agent-a", undefined, {}, "Speyer tourism", 1, 3);
+			const prefetch = await prefetchTranscriptEvidence(
+				undefined,
+				{},
+				"Speyer tourism",
+				1,
+				3,
+				Date.now() + TRANSCRIPT_EVIDENCE_TEST_DEADLINE_MS,
+				undefined,
+				localTestReadScope("agent-a"),
+			);
 			expect(prefetch).not.toBeNull();
 			expect(prefetch && [...prefetch.results.values()][0]?.content).toContain("+49 6232 142");
 			expect(submissions.map((options) => [options.operation, options.workloadClass])).toEqual([
@@ -75,7 +95,16 @@ describe("transcript evidence prefetch owner scheduling", () => {
 		const submit = spyOn(owner, "submit");
 		try {
 			await expect(
-				prefetchTranscriptEvidence("agent-a", undefined, {}, "Speyer tourism", 1, 3, undefined, execution),
+				prefetchTranscriptEvidence(
+					undefined,
+					{},
+					"Speyer tourism",
+					1,
+					3,
+					Date.now() + TRANSCRIPT_EVIDENCE_TEST_DEADLINE_MS,
+					execution,
+					localTestReadScope("agent-a"),
+				),
 			).rejects.toThrow("recall abandoned");
 			expect(submit).not.toHaveBeenCalled();
 		} finally {

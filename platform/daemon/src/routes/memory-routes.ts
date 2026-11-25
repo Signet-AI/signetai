@@ -5,12 +5,13 @@ import { join } from "node:path";
 import {
 	type AgentRosterReadPolicy,
 	applyRecallScoreThreshold,
+	readScopeSql,
 	redactCredentials,
 	vectorSearchWithMetadata,
 } from "@signet/core";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../agent-id";
-import { resolveHookReadScope } from "../hook-read-scope";
+import { resolveHookReadScope, resolvePrincipalReadScope } from "../hook-read-scope";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { auditAuthoredWriteInTx } from "../auth/audit-owner";
@@ -35,14 +36,9 @@ import type { EmbeddingRole } from "../embedding-profile";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
-import {
-	buildAgentScopeClause,
-	currentMemorySql,
-	hybridRecall,
-	type RecallParams,
-	type RecallResponse,
-} from "../memory-search";
+import { currentMemorySql, hybridRecall, type RecallParams, type RecallResponse } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
+import { publicRecallResponse } from "../recall-public-response";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
@@ -602,13 +598,14 @@ async function resolveMemoryReadScope(
 		if (!options.allowAllAgents) return c.json({ error: "this route does not support an all-agents view" }, 400);
 		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
+		const everyAgent = readScopeSql("m", await resolvePrincipalReadScope(c, { kind: "all" }));
 		return {
 			agentId: ALL_AGENTS,
 			readPolicy: "shared",
 			policyGroup: null,
 			project,
-			sql: ` AND m.visibility != 'archived'${projectSql}`,
-			args: projectArgs,
+			sql: `${everyAgent.sql}${projectSql}`,
+			args: [...ownerParameters(everyAgent.args), ...projectArgs],
 		};
 	}
 	const scopedAgent = resolveMemoryScopedAgentId(c, {
@@ -617,15 +614,22 @@ async function resolveMemoryReadScope(
 	});
 	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const agentScope = await getAgentScope(scopedAgent.agentId);
-	const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
+	const access = readScopeSql("m", await resolveHookReadScope(c, scopedAgent.agentId));
 	return {
 		agentId: scopedAgent.agentId,
 		readPolicy: agentScope.readPolicy,
 		policyGroup: agentScope.policyGroup,
 		project,
 		sql: `${access.sql}${projectSql}`,
-		args: [...(access.args as DbOwnerParameter[]), ...projectArgs],
+		args: [...ownerParameters(access.args), ...projectArgs],
 	};
+}
+
+function ownerParameters(values: readonly unknown[]): DbOwnerParameter[] {
+	return values.map((value) => {
+		if (typeof value === "string" || typeof value === "number") return value;
+		throw new Error("Invalid memory read scope parameter");
+	});
 }
 
 interface MemoryMutationScope {
@@ -2132,7 +2136,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				c.header("x-signet-operation-degraded", "1");
 				c.header("x-signet-operation-cause", result.meta.degradation ?? "fts_index_incomplete");
 			}
-			return c.json(result);
+			return c.json(publicRecallResponse(result));
 		} catch (e) {
 			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Search (recall alias) failed", e as Error);
@@ -3350,7 +3354,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				c.header("x-signet-operation-cause", returnedResult.meta.degradation ?? "fts_index_incomplete");
 			}
 			recordFirstUseTelemetry("recall");
-			return c.json(returnedResult);
+			return c.json(publicRecallResponse(returnedResult));
 		} catch (e) {
 			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
 			if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });

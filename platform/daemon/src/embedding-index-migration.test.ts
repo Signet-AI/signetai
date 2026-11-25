@@ -1,7 +1,7 @@
 import { up as classificationSchema } from "../../core/src/migrations/177-classifications";
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { findSqliteVecExtension } from "@signet/core";
+import { findSqliteVecExtension, localAllReadScope } from "@signet/core";
 import { vectorSearchWithMetadata } from "../../core/src/search";
 import { syncVecInsert } from "./db-helpers";
 import { up as embeddingIndexGenerations } from "../../core/src/migrations/091-embedding-index-generations";
@@ -14,6 +14,8 @@ import {
 	startEmbeddingIndexMigration,
 } from "./embedding-index-migration";
 import { beginEmbeddingIndexBuild, ensureEmbeddingIndexState, readEmbeddingIndexState } from "./embedding-index-state";
+
+const LOCAL_DEFAULT_SCOPE = localAllReadScope({ kind: "own", agentId: "default" });
 
 const VEC_EXTENSION = findSqliteVecExtension();
 
@@ -63,6 +65,15 @@ function testAccessor(raw: Database, db: WriteDb, withClassifications = false): 
 		checkpointWal: () => undefined,
 		incrementalVacuum: () => 0,
 	};
+}
+
+function ownedEmbeddingFixture(db: Database): Database {
+	for (const table of ["embeddings", "embeddings_staging"]) {
+		const columns = db.prepare<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+		if (columns.length > 0 && !columns.some((row) => row.name === "agent_id"))
+			db.exec(`ALTER TABLE ${table} ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'`);
+	}
+	return db;
 }
 
 function testTransaction<T>(raw: Database, db: WriteDb, fn: (writeDb: WriteDb) => T): T {
@@ -422,7 +433,7 @@ describe("staging promotion", () => {
 		raw.loadExtension(VEC_EXTENSION);
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
 		raw.exec(`
-			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT, type TEXT, source_type TEXT);
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT, type TEXT, source_type TEXT, agent_id TEXT NOT NULL DEFAULT 'default', visibility TEXT NOT NULL DEFAULT 'global');
 			CREATE TABLE embeddings (id TEXT, content_hash TEXT, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT);
 			CREATE TABLE embeddings_staging (id TEXT, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT);
 			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
@@ -465,7 +476,10 @@ describe("staging promotion", () => {
 		`);
 		syncVecInsert(db, "fresh", [0, 0, 1]);
 
-		const found = vectorSearchWithMetadata(raw as never, new Float32Array([0, 0, 1]), { limit: 1 });
+		const found = vectorSearchWithMetadata(ownedEmbeddingFixture(raw), new Float32Array([0, 0, 1]), {
+			limit: 1,
+			readScope: LOCAL_DEFAULT_SCOPE,
+		});
 		expect(found.results.map((row) => row.id)).toEqual(["memory-2"]);
 	});
 
@@ -475,7 +489,7 @@ describe("staging promotion", () => {
 		raw.loadExtension(VEC_EXTENSION);
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
 		raw.exec(`
-			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT, type TEXT, source_type TEXT);
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT, type TEXT, source_type TEXT, agent_id TEXT NOT NULL DEFAULT 'default', visibility TEXT NOT NULL DEFAULT 'global');
 			CREATE TABLE embeddings (id TEXT, content_hash TEXT, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT);
 			CREATE TABLE embeddings_staging (id TEXT, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT);
 			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
@@ -518,12 +532,18 @@ describe("staging promotion", () => {
 		`);
 		raw.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("fresh", new Float32Array([0, 0, 1]));
 		expect(
-			vectorSearchWithMetadata(raw as never, new Float32Array([0, 0, 1]), { limit: 5 }).results.map((row) => row.id),
+			vectorSearchWithMetadata(ownedEmbeddingFixture(raw), new Float32Array([0, 0, 1]), {
+				limit: 5,
+				readScope: LOCAL_DEFAULT_SCOPE,
+			}).results.map((row) => row.id),
 		).not.toContain("memory-2");
 
-		backfillVecEmbeddings(raw as never, 3, undefined, { log: () => undefined });
+		backfillVecEmbeddings(raw, 3, undefined, { log: () => undefined });
 
-		const found = vectorSearchWithMetadata(raw as never, new Float32Array([0, 0, 1]), { limit: 1 });
+		const found = vectorSearchWithMetadata(ownedEmbeddingFixture(raw), new Float32Array([0, 0, 1]), {
+			limit: 1,
+			readScope: LOCAL_DEFAULT_SCOPE,
+		});
 		expect(found.results.map((row) => row.id)).toEqual(["memory-2"]);
 	});
 

@@ -16,7 +16,7 @@ export function audienceSubjectFromPrincipal(
 ): AudienceSubject {
 	return { userId: principal.userId, groupIds: principal.groupIds, local: principal.kind === "local" };
 }
-export { inFlightClassificationSql, readScopeSql } from "@signet/core";
+export { inFlightClassificationSql, localAllReadScope, readScopeSql, requireReadScope } from "@signet/core";
 export type { AgentReach, ReadScope } from "@signet/core";
 import type { AgentReach, ReadScope } from "@signet/core";
 export async function readableCompartments(subject: AudienceSubject): Promise<"all" | readonly number[]> {

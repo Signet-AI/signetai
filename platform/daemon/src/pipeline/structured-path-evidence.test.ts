@@ -6,6 +6,7 @@ import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import type { DbOwnerRequest } from "../db-owner-client";
 import type { ReadScope } from "../read-scope";
+import { localTestReadScope } from "../test-support/local-read-scope";
 import {
 	findStructuredClaimCandidates,
 	findStructuredClaimCandidatesViaOwner,
@@ -154,7 +155,7 @@ describe("structured path evidence", () => {
 			asReadDb(db),
 			"how much were the Artbat invoices for Maksym Getman?",
 			"memorybench",
-			{ limit: 5, minScore: 0.01 },
+			{ limit: 5, minScore: 0.01, readScope: localTestReadScope("memorybench") },
 		);
 
 		expect(candidates.map((row) => row.id)).toEqual(["attr-artbat-invoice"]);
@@ -191,6 +192,7 @@ describe("structured path evidence", () => {
 		const candidates = findStructuredClaimCandidates(asReadDb(db), "source kind provenance", "memorybench", {
 			limit: 5,
 			minScore: 0.01,
+			readScope: localTestReadScope("memorybench"),
 		});
 
 		expect(candidates.map((row) => row.id)).toEqual(["attr-source-kind"]);
@@ -214,6 +216,7 @@ describe("structured path evidence", () => {
 			["mem-owner"],
 			"owner-bound graph evidence",
 			"memorybench",
+			localTestReadScope("memorybench"),
 		);
 
 		expect(scores.get("mem-owner") ?? 0).toBeGreaterThan(0);
@@ -253,14 +256,21 @@ describe("structured path evidence", () => {
 			asOwner(db, operations),
 			"alpha beta gamma",
 			"memorybench",
-			{ limit: 1, minScore: 0.8, filterSql: "AND m.project IS NULL" },
+			{
+				limit: 1,
+				minScore: 0.8,
+				filterSql: "AND m.project IS NULL",
+				readScope: localTestReadScope("memorybench"),
+			},
 		);
 		expect([...candidates.keys()]).toEqual(["strong"]);
 		expect(operations).toEqual(["memory-search.structured-path-candidates", "memory-search.structured-path-evidence"]);
 	});
 
 	it("returns an empty map when there are no candidate IDs", () => {
-		expect(scoreStructuredPathEvidence(asReadDb(db), [], "anything", "memorybench").size).toBe(0);
+		expect(
+			scoreStructuredPathEvidence(asReadDb(db), [], "anything", "memorybench", localTestReadScope("memorybench")).size,
+		).toBe(0);
 	});
 });
 

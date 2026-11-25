@@ -1,4 +1,4 @@
-import { cosineSimilarity, type ReadScope, readScopeSql } from "@signet/core";
+import { cosineSimilarity, type ReadScope, readScopeSql, requireReadScope } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { ownerBytesFromHex, ownerReadAll } from "../db-owner-sql";
@@ -13,23 +13,22 @@ interface CachedEmbedding {
 export function createEmbeddingReranker(
 	accessor: DbAccessor,
 	queryVector: Float32Array,
-	readScope?: ReadScope,
+	readScope: ReadScope,
 ): RerankProvider {
+	const scope = requireReadScope(readScope);
 	return async (_query: string, candidates: RerankCandidate[], cfg: RerankConfig): Promise<RerankCandidate[]> => {
 		if (candidates.length === 0) return candidates;
 		const ids = candidates.map((candidate) => candidate.id);
-		const memory = readScope ? readScopeSql("m", readScope) : { sql: "", args: [] };
-		const embedding = readScope
-			? derivedScopeSql(
-					"e",
-					{ ...readScope, reach: { kind: "all" }, projects: null },
-					{ memory: "source_id", session: null, source: "source_id" },
-				)
-			: { sql: "", args: [] };
+		const memory = readScopeSql("m", scope);
+		const embedding = derivedScopeSql(
+			"e",
+			{ ...scope, reach: { kind: "all" }, projects: null },
+			{ memory: "source_id", session: null, source: "source_id" },
+		);
 		const rows = await ownerReadAll<CachedEmbedding>(
 			await getDbOwnerForAccessor(accessor),
 			`SELECT e.source_id, hex(e.vector) AS vector_hex FROM embeddings e
-			 ${readScope ? "JOIN memories m ON m.id=e.source_id" : ""}
+			 JOIN memories m ON m.id=e.source_id
 			 WHERE e.source_type='memory' AND e.source_id IN (${ids.map(() => "?").join(",")})${memory.sql}${embedding.sql}`,
 			[...ids, ...memory.args, ...embedding.args],
 			{

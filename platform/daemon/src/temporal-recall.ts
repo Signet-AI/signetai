@@ -6,8 +6,13 @@ import {
 } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-import { buildMemorySearchFilterClause, currentMemorySql, type MemorySearchFilterInput } from "./memory-search-filters";
-import { derivedReadScopeSql, memoryReadScopeSql } from "./pipeline/graph-traversal";
+import {
+	buildMemorySearchFilterClause,
+	currentMemorySql,
+	type MemorySearchFilterInput,
+	memorySearchReadScope,
+} from "./memory-search-filters";
+import { derivedReadScopeSql } from "./pipeline/graph-traversal";
 import type { ReadScope } from "./read-scope";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
@@ -92,7 +97,7 @@ export interface TemporalRecallParams extends MemorySearchFilterInput {
 	readonly sessionKey?: string;
 	readonly transcriptEvidence?: boolean;
 	readonly skip?: (id: string) => boolean;
-	readonly readScope?: ReadScope;
+	readonly readScope: ReadScope;
 }
 
 export interface TemporalRecallResult {
@@ -400,23 +405,11 @@ function temporalOwnerSql(
 	params: TemporalRecallParams,
 	cols: { readonly project?: string; readonly session?: string; readonly source?: string } = {},
 ): { sql: string; args: readonly unknown[] } {
-	if (params.readScope) return derivedReadScopeSql(alias, params.readScope, { ...cols, group: "keep" });
-	const column = alias ? `${alias}.agent_id` : "agent_id";
-	const agentId = params.agentId ?? "default";
-	if (params.readPolicy === "group" && params.policyGroup) {
-		return {
-			sql: ` AND (${column} = ? OR ${column} IN (SELECT id FROM agents WHERE policy_group = ?))`,
-			args: [agentId, params.policyGroup],
-		};
-	}
-	return { sql: ` AND ${column} = ?`, args: [agentId] };
+	return derivedReadScopeSql(alias, memorySearchReadScope(params), { ...cols, group: "keep" });
 }
 
 function temporalMemoryFilter(params: TemporalRecallParams): { sql: string; args: readonly unknown[] } {
-	if (!params.readScope) return buildMemorySearchFilterClause(params);
-	const filter = buildMemorySearchFilterClause({ ...params, agentId: undefined });
-	const scope = memoryReadScopeSql("m", params.readScope);
-	return { sql: filter.sql + scope.sql, args: [...filter.args, ...scope.args] };
+	return buildMemorySearchFilterClause(params);
 }
 
 function shorten(content: string, maxChars: number): { content: string; truncated: boolean; length: number } {
@@ -749,10 +742,11 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		return rows;
-	}, "temporal-recall.ts:468");
+	}, "temporal-recall.ts:461");
 }
 
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {
+	memorySearchReadScope(params);
 	const intent = parseTemporalRecallIntent({ query: params.query, time: params.time });
 	if (!intent) return {};
 	const rowLimit = temporalRowLimit(intent, params.limit);

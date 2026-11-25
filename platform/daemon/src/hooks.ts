@@ -10,6 +10,7 @@ import {
 	identityModeManagesFiles,
 	identityModeReadsFiles,
 	loadIdentityMode,
+	requireReadScope,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
 	redactCredentials,
@@ -53,7 +54,6 @@ import {
 } from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
-import { internalHookReadScope, reachForPolicy } from "./hook-read-scope";
 import { evidenceScopeSql } from "./read-scope-tables";
 import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
@@ -613,12 +613,12 @@ function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: strin
 
 export async function handleSessionStart(
 	req: SessionStartRequest,
-	readScope?: ReadScope,
+	readScope: ReadScope,
 ): Promise<SessionStartResponse> {
+	const scope = requireReadScope(readScope);
 	const start = Date.now();
 	const agentId = resolveAgentId(req);
 	await ensureAgentRegistered(agentId);
-	const scope = readScope ?? (await internalHookReadScope(agentId));
 	const resolvedHooksConfig = loadHooksConfigForHarness(req.harness);
 	const config = resolvedHooksConfig.sessionStart || {};
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
@@ -966,6 +966,7 @@ export async function handleSessionStart(
 	const sessionStartDedupe = await applyRecallDedupeAsync({
 		sessionKey: sessionStartRecallSessionKey,
 		agentId,
+		readScope: scope,
 		surface: "api.hooks.session-start",
 		mode: "automatic",
 		includeRecalled: false,
@@ -1218,6 +1219,7 @@ export async function handleSessionStart(
 	const claimedMemories = await claimRecallItemsAsync({
 		sessionKey: sessionStartRecallSessionKey,
 		agentId,
+		readScope: scope,
 		surface: "api.hooks.session-start",
 		mode: "automatic",
 		items: sessionContinuity.included,
@@ -1294,8 +1296,9 @@ export async function handleSessionStart(
 
 export async function handlePreCompaction(
 	req: PreCompactionRequest,
-	readScope?: ReadScope,
+	readScope: ReadScope,
 ): Promise<PreCompactionResponse> {
+	const scope = requireReadScope(readScope);
 	const config = loadHooksConfig().preCompaction || {};
 
 	logger.info("hooks", "Pre-compaction hook", {
@@ -1312,7 +1315,6 @@ ${guidelines}
 `;
 
 	if (config.includeRecentMemories !== false) {
-		const scope = readScope ?? (await internalHookReadScope(resolveAgentId(req)));
 		const configuredLimit =
 			typeof config.memoryLimit === "number" && Number.isFinite(config.memoryLimit) ? config.memoryLimit : 5;
 		const memoryLimit = Math.max(0, Math.min(50, Math.trunc(configuredLimit)));
@@ -1520,9 +1522,10 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 
 export async function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
-	overrides?: Partial<UserPromptSubmitDeps>,
-	scope: { readonly project?: string; readonly readScope?: ReadScope } = {},
+	overrides: Partial<UserPromptSubmitDeps> | undefined,
+	scope: { readonly project?: string; readonly readScope: ReadScope },
 ): Promise<UserPromptSubmitResponse> {
+	const promptScope = requireReadScope(scope.readScope);
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = deps.now();
 	const clockContext = formatPromptClockContext(new Date(start));
@@ -1681,7 +1684,7 @@ export async function handleUserPromptSubmit(
 			() => controller.abort(new Error("Prompt-submit recall exceeded its deadline")),
 			timeoutMs,
 		);
-		const readScope = scope.readScope ?? (await promptReadScope(deps, agentId));
+		const readScope = promptScope;
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
@@ -1751,6 +1754,7 @@ export async function handleUserPromptSubmit(
 				? await claimRecallItemsAsync({
 						sessionKey: recallSessionKey(req),
 						agentId,
+						readScope: promptScope,
 						surface: PROMPT_RECALL_SURFACE,
 						mode: "automatic",
 						items: recall.results,
@@ -1872,11 +1876,6 @@ export async function handleUserPromptSubmit(
 }
 
 const PROMPT_RECALL_SURFACE = "api.hooks.user-prompt-submit";
-
-async function promptReadScope(deps: UserPromptSubmitDeps, agentId: string): Promise<ReadScope> {
-	const policy = await deps.getAgentScope(agentId);
-	return { reach: reachForPolicy(agentId, policy), compartments: "all", projects: null };
-}
 
 type PromptEntityRecall = {
 	readonly entities: readonly PromptEntityMatch[];

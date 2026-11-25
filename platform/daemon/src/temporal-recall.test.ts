@@ -5,7 +5,18 @@ import { join } from "node:path";
 import { ensureCompartmentShards } from "../../core/src/compartment-shards";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import type { ReadScope } from "./read-scope";
-import { parseTemporalRecallIntent, resolveTemporalRecall } from "./temporal-recall";
+import { parseTemporalRecallIntent, resolveTemporalRecall as scopedResolveTemporalRecall } from "./temporal-recall";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+import type { TemporalRecallParams } from "./temporal-recall";
+
+type ScopedResolveTemporalRecallRest =
+	Parameters<typeof scopedResolveTemporalRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function resolveTemporalRecall(
+	params: Omit<TemporalRecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedResolveTemporalRecallRest
+): ReturnType<typeof scopedResolveTemporalRecall> {
+	return scopedResolveTemporalRecall(withLocalReadScope(params), ...rest);
+}
 
 describe("temporal recall parser", () => {
 	it("parses abbreviated numeric ranges without leaving the end day in the content query", () => {

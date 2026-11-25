@@ -4,13 +4,27 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RouteRequest } from "@signet/core";
-import { type AggregateInferenceRouter, aggregateRecall, InvalidAggregateRecallBudgetError } from "./aggregate-recall";
+import {
+	type AggregateInferenceRouter,
+	aggregateRecall as scopedAggregateRecall,
+	InvalidAggregateRecallBudgetError,
+} from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
 import { loadMemoryConfig } from "./memory-config";
 import type { RecallParams, RecallResponse, RecallResult } from "./memory-search";
 import { txIngestEnvelope } from "./transactions";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+
+type ScopedAggregateRecallRest =
+	Parameters<typeof scopedAggregateRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function aggregateRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedAggregateRecallRest
+): ReturnType<typeof scopedAggregateRecall> {
+	return scopedAggregateRecall(withLocalReadScope(params), ...rest);
+}
 
 const originalFetch = globalThis.fetch;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;

@@ -1,7 +1,13 @@
-import { type AgentReach, type AgentRosterReadPolicy, type ReadScope, readScopeSql } from "@signet/core";
+import {
+	type AgentReach,
+	type AgentRosterReadPolicy,
+	type ReadScope,
+	readScopeSql,
+	requireReadScope,
+} from "@signet/core";
 import { escapeLike } from "./sql-utils";
 
-export interface MemorySearchFilterInput {
+export interface MemorySearchFilterFields {
 	readonly scope?: string | null;
 	readonly type?: string;
 	readonly tags?: string;
@@ -16,7 +22,10 @@ export interface MemorySearchFilterInput {
 	readonly policyGroup?: string | null;
 	readonly aggregate?: boolean;
 	readonly excludeAggregateRecallMemories?: boolean;
-	readonly readScope?: ReadScope;
+}
+
+export interface MemorySearchFilterInput extends MemorySearchFilterFields {
+	readonly readScope: ReadScope;
 }
 
 export interface MemorySearchFilterClause {
@@ -25,6 +34,7 @@ export interface MemorySearchFilterClause {
 }
 
 export function buildMemorySearchFilterClause(params: MemorySearchFilterInput): MemorySearchFilterClause {
+	const readScope = memorySearchReadScope(params);
 	const parts: string[] = [];
 	const args: unknown[] = [];
 	if (params.scope === null || params.scope === undefined) {
@@ -76,8 +86,6 @@ export function buildMemorySearchFilterClause(params: MemorySearchFilterInput): 
 		sql: parts.length > 0 ? ` AND ${parts.join(" AND ")}` : "",
 		args,
 	};
-	const readScope = memorySearchReadScope(params);
-	if (readScope === null) return base;
 	const scope = readScopeSql("m", readScope);
 	return { sql: base.sql + scope.sql, args: [...base.args, ...scope.args] };
 }
@@ -92,22 +100,22 @@ export function localAgentReach(
 	return { kind: "own", agentId };
 }
 
-export function memorySearchReadScope(
-	params: Pick<MemorySearchFilterInput, "agentId" | "readPolicy" | "policyGroup" | "readScope">,
-): ReadScope | null {
-	if (params.readScope) return params.readScope;
-	if (!params.agentId) return null;
-	return {
-		reach: localAgentReach(params.agentId, params.readPolicy, params.policyGroup),
-		compartments: "all",
-		projects: null,
-	};
+export function recallAgentId(params: Pick<MemorySearchFilterInput, "agentId" | "readScope">): string {
+	const scope = requireReadScope(params.readScope);
+	if (typeof params.agentId === "string" && params.agentId.length > 0) return params.agentId;
+	if (params.agentId === undefined && scope.reach.kind !== "all") return scope.reach.agentId;
+	throw new Error("acting agent required for recall");
 }
 
-export function hasMemoryMetadataFilters(params: MemorySearchFilterInput): boolean {
+export function memorySearchReadScope(params: Pick<MemorySearchFilterInput, "readScope">): ReadScope {
+	if (typeof params !== "object" || params === null) throw new Error("read scope required");
+	return requireReadScope(params.readScope);
+}
+
+export function hasMemoryMetadataFilters(params: MemorySearchFilterFields): boolean {
 	return hasMemoryOnlyFilters(params) || hasDateBounds(params);
 }
-export function hasMemoryOnlyFilters(params: MemorySearchFilterInput): boolean {
+export function hasMemoryOnlyFilters(params: MemorySearchFilterFields): boolean {
 	const hasTags =
 		params.tags
 			?.split(",")
@@ -123,10 +131,10 @@ export function hasMemoryOnlyFilters(params: MemorySearchFilterInput): boolean {
 	);
 }
 
-export function hasDateBounds(params: MemorySearchFilterInput): boolean {
+export function hasDateBounds(params: MemorySearchFilterFields): boolean {
 	return params.since !== undefined || params.until !== undefined;
 }
-export function dateBoundsSql(column: string, params: MemorySearchFilterInput): { sql: string; args: string[] } {
+export function dateBoundsSql(column: string, params: MemorySearchFilterFields): { sql: string; args: string[] } {
 	const parts: string[] = [];
 	const args: string[] = [];
 	if (params.since) {
@@ -140,7 +148,7 @@ export function dateBoundsSql(column: string, params: MemorySearchFilterInput): 
 	return { sql: parts.join(" "), args };
 }
 
-export function hasRestrictedMemoryContentFilters(params: MemorySearchFilterInput): boolean {
+export function hasRestrictedMemoryContentFilters(params: MemorySearchFilterFields): boolean {
 	return hasMemoryMetadataFilters(params) || Boolean(params.project);
 }
 

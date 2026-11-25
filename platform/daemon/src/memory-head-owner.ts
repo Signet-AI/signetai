@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { attempt, type ReadScope, readScopeSql, redactCredentials } from "@signet/core";
+import {
+	localAllReadScope,
+	requireReadScope,
+	attempt,
+	type ReadScope,
+	readScopeSql,
+	redactCredentials,
+} from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource } from "./episodic-sources";
@@ -40,10 +47,10 @@ export function memoryHeadInputError(input: MemoryHeadCommitInput): {
 	};
 }
 
-function currentSource(db: WriteDb, agentId: string, from: string, readScope?: ReadScope) {
+function currentSource(db: WriteDb, agentId: string, from: string, readScope: ReadScope) {
 	from = from.replace(/^source:/, "artifact:").replace(/^session:/, "transcript:");
 	if (!/^(memory|artifact|transcript|summary):.+$/.test(from)) return null;
-	const memoryScope = readScope ? readScopeSql("m", readScope) : { sql: "", args: [] };
+	const memoryScope = readScopeSql("m", readScope);
 	if (
 		from.startsWith("memory:") &&
 		!db
@@ -53,7 +60,7 @@ function currentSource(db: WriteDb, agentId: string, from: string, readScope?: R
 			.get(from.slice(7), agentId, ...memoryScope.args)
 	)
 		return null;
-	if (readScope && !from.startsWith("memory:")) {
+	if (!from.startsWith("memory:")) {
 		const separator = from.indexOf(":");
 		const kind = from.slice(0, separator);
 		const id = from.slice(separator + 1);
@@ -315,8 +322,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 		}
 		return result;
 	}
-	const restrictedInspect =
-		request.action === "inspect" && request.readScope !== undefined && request.readScope.compartments !== "all";
+	const restrictedInspect = request.action === "inspect" && requireReadScope(request.readScope).compartments !== "all";
 	const head = db
 		.prepare(
 			`SELECT revision, ${restrictedInspect ? "'' AS content, '' AS content_hash" : "content, content_hash"}, revision_id, is_current FROM memory_md_heads WHERE agent_id=?`,
@@ -333,15 +339,15 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			return {
 				generated,
 				status: "authored",
-				content: scope === undefined || authoredHeadReadable(db, agentId, scope) ? request.content : null,
+				content: authoredHeadReadable(db, agentId, scope) ? request.content : null,
 			};
-		if (scope && scope.compartments !== "all" && head && head.revision > 0)
+		if (scope.compartments !== "all" && head && head.revision > 0)
 			return { generated, status: "current", content: readableHeadBody(db, agentId, head.revision, scope) };
 		if (head?.is_current !== 1) return { generated, status: "stale", content: null };
 		return {
 			generated,
 			status: "current",
-			content: scope === undefined ? head.content : readableHeadBody(db, agentId, head.revision, scope),
+			content: readableHeadBody(db, agentId, head.revision, scope),
 		};
 	}
 	const pass =
@@ -418,7 +424,8 @@ function committedEntries(
 			continue;
 		}
 		const support = (parsed as Record<string, unknown>[]).filter(
-			(item) => supportError(db, agentId, row.entryId, item, evidence) === null,
+			(item) =>
+				supportError(db, agentId, row.entryId, item, evidence, localAllReadScope({ kind: "own", agentId })) === null,
 		);
 		if (support.length > 0) entries.push({ entryId: row.entryId, text: row.text, support });
 	}
@@ -431,7 +438,7 @@ function supportError(
 	entryId: string,
 	support: Record<string, unknown>,
 	evidence: Evidence,
-	readScope?: ReadScope,
+	readScope: ReadScope,
 ): { code: string; error: string } | null {
 	const sourceRef =
 		typeof support.source_ref === "string"
@@ -466,7 +473,14 @@ function commitEntries(
 		if (entry.support.length === 0)
 			return { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
 		for (const support of entry.support) {
-			const invalid = supportError(db, input.agentId, entry.entryId, support, evidence);
+			const invalid = supportError(
+				db,
+				input.agentId,
+				entry.entryId,
+				support,
+				evidence,
+				localAllReadScope({ kind: "own", agentId: input.agentId }),
+			);
 			if (invalid !== null) return { ok: false, ...invalid };
 		}
 	}

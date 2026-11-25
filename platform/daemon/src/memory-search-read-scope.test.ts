@@ -11,6 +11,7 @@ import { setFtsIndexIncomplete } from "./fts-index-state";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { type RecallParams, type RecallResponse, hybridRecall } from "./memory-search";
 import { buildMemorySearchFilterClause } from "./memory-search-filters";
+import { localTestReadScope } from "./test-support/local-read-scope";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { setActiveTelemetry } from "./telemetry";
 
@@ -432,7 +433,10 @@ describe("hybridRecall read scope", () => {
 		expect(scoped.sql).toContain("m.compartment_id IS NULL");
 		expect(scoped.sql).toContain("SELECT id FROM agents WHERE archived_at IS NULL");
 		expect(scoped.sql).not.toContain("m.visibility = 'global'");
-		const local = buildMemorySearchFilterClause({ agentId: "agent-a", readPolicy: "shared" });
+		const local = buildMemorySearchFilterClause({
+			agentId: "agent-a",
+			readScope: localTestReadScope("agent-a", "shared"),
+		});
 		expect(local.sql).toContain("(m.visibility = 'global' OR m.agent_id = ?)");
 		expect(local.args).toContain("agent-a");
 	});

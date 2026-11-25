@@ -1,3 +1,4 @@
+import { localAllReadScope } from "@signet/core";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,13 +54,27 @@ describe("memory head owner runtime", () => {
 		expect(await commit("first")).toMatchObject({ ok: true, revision: 1 });
 		const oldFile = readFileSync(join(root, "MEMORY.md"), "utf8");
 		expect(oldFile).toContain("signet-generated-memory");
-		expect(await head({ action: "inspect", agentId: "default", content: oldFile })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: oldFile,
+			}),
+		).toMatchObject({
 			status: "current",
 			content: "- Meeting is Tuesday.",
 		});
 		await sql("UPDATE memories SET content='Meeting is Thursday.' WHERE id='meeting'");
 		expect(await snapshot()).toMatchObject({ status: "stale", revision: 2, entries: [] });
-		expect(await head({ action: "inspect", agentId: "default", content: oldFile })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: oldFile,
+			}),
+		).toMatchObject({
 			status: "stale",
 			content: null,
 		});
@@ -113,7 +128,14 @@ describe("memory head owner runtime", () => {
 		});
 		expect(await snapshot()).toMatchObject({ status: "current" });
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toBe(authored);
-		expect(await head({ action: "inspect", agentId: "default", content: authored })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: authored,
+			}),
+		).toMatchObject({
 			generated: false,
 			status: "authored",
 			content: authored,
@@ -244,7 +266,14 @@ describe("memory head owner runtime", () => {
 				readScope: { ...outside, compartments: [9], projects: ["atlas"] },
 			}),
 		).toMatchObject({ content: null });
-		expect(await head({ action: "inspect", agentId: "default", content: authored })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: authored,
+			}),
+		).toMatchObject({
 			content: authored,
 		});
 	});
@@ -388,7 +417,14 @@ describe("memory head owner runtime", () => {
 		writeFileSync(target, edited);
 		await snapshot();
 		expect(readFileSync(target, "utf8")).toBe(edited);
-		expect(await head({ action: "inspect", agentId: "default", content: edited })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: edited,
+			}),
+		).toMatchObject({
 			generated: false,
 			status: "authored",
 			content: edited,

@@ -5,7 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { loadMemoryConfig } from "./memory-config";
-import { hybridRecall } from "./memory-search";
+import { hybridRecall as scopedHybridRecall } from "./memory-search";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+import type { RecallParams } from "./memory-search";
+
+type ScopedHybridRecallRest = Parameters<typeof scopedHybridRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function hybridRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedHybridRecallRest
+): ReturnType<typeof scopedHybridRecall> {
+	return scopedHybridRecall(withLocalReadScope(params), ...rest);
+}
 
 test("recall delivery still dedupes when parent synchronous writes are unavailable", async () => {
 	const directory = mkdtempSync(join(tmpdir(), "signet-recall-owner-write-"));
