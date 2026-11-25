@@ -1279,8 +1279,32 @@ describe("session control permissions in team mode", () => {
 			"sess-a",
 			"agent-a",
 		);
-		expect(row?.project).toBe("proj-a");
-		expect(String(row?.content)).not.toContain("moved reply");
+		expect(row).toEqual({ project: "proj-a", content: "User: scoped evidence" });
+	});
+
+	it("does not let transcript hooks retag a stored transcript from another project", async () => {
+		await transcripts.upsertSessionTranscriptAsync("sess-a", "User: other project", "codex", "proj-b", "agent-a");
+		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
+		for (const [name, body] of [
+			["session-end", { lastAssistantMessage: "retag reply" }],
+			["session-end", { cwd: "proj-a", lastAssistantMessage: "retag reply" }],
+			["stop", { cwd: "proj-a", lastAssistantMessage: "retag reply" }],
+			["user-prompt-submit", { project: "proj-a", userPrompt: "retag reply" }],
+		] as const) {
+			const res = await hook(
+				teamApp(),
+				name,
+				{ harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "plugin", ...body },
+				projectA,
+			);
+			expect({ name, body, status: res.status }).toEqual({ name, body, status: 403 });
+		}
+		const row = await readOne(
+			"SELECT project, content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			"sess-a",
+			"agent-a",
+		);
+		expect(row).toEqual({ project: "proj-b", content: "User: other project" });
 	});
 
 	it("requires a recorded project before a project-limited credential controls a claim-only session", async () => {
