@@ -1,11 +1,15 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
+import { ensureCompartmentShards } from "../../../core/src/compartment-shards";
 import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import type { DbOwnerRequest } from "../db-owner-client";
+import type { ReadScope } from "../read-scope";
 import {
 	findStructuredClaimCandidates,
+	findStructuredClaimCandidatesViaOwner,
+	findStructuredPathCandidates,
 	findStructuredPathCandidatesViaOwner,
 	scoreStructuredPathEvidence,
 	scoreStructuredPathEvidenceViaOwner,
@@ -257,5 +261,128 @@ describe("structured path evidence", () => {
 
 	it("returns an empty map when there are no candidate IDs", () => {
 		expect(scoreStructuredPathEvidence(asReadDb(db), [], "anything", "memorybench").size).toBe(0);
+	});
+});
+
+describe("structured path evidence read scope", () => {
+	let db: Database;
+	const now = "2026-11-25T00:00:00.000Z";
+	const org: ReadScope = { reach: { kind: "all" }, compartments: [], projects: null };
+	const query = "alpha beta gamma";
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		for (const id of ["alice", "bob"]) {
+			db.prepare("INSERT OR IGNORE INTO agents (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+				id,
+				id,
+				now,
+				now,
+			);
+		}
+		db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (1, 'cls_hr', ?)").run(now);
+		ensureCompartmentShards(db as unknown as Parameters<typeof ensureCompartmentShards>[0], 1, 0);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	function graph(prefix: string, agent: string, compartment: { entity?: number; aspect?: number } = {}): string {
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, compartment_id, created_at, updated_at)
+			 VALUES (?, ?, ?, 'project', ?, 1, ?, ?, ?)`,
+		).run(`e-${prefix}`, `Entity ${prefix}`, `entity ${prefix}`, agent, compartment.entity ?? null, now, now);
+		db.prepare(
+			`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, compartment_id, created_at, updated_at)
+			 VALUES (?, ?, ?, 'overview', 'overview', 0.9, ?, ?, ?)`,
+		).run(`a-${prefix}`, `e-${prefix}`, agent, compartment.aspect ?? null, now, now);
+		return `a-${prefix}`;
+	}
+
+	function memory(id: string, agent: string, compartment: number | null): void {
+		db.prepare(
+			`INSERT INTO memories (id, content, type, agent_id, compartment_id, is_deleted, created_at, updated_at, updated_by)
+			 VALUES (?, 'memory', 'fact', ?, ?, 0, ?, ?, 'test')`,
+		).run(id, agent, compartment, now, now);
+	}
+
+	function attribute(
+		id: string,
+		aspectId: string,
+		agent: string,
+		memoryId: string | null,
+		content: string,
+		compartment: number | null,
+		importance = 0.5,
+	): void {
+		db.prepare(
+			`INSERT INTO entity_attributes (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, source_kind, compartment_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 'claim', ?, ?, 0.5, ?, 'active', 'transcript', ?, ?, ?)`,
+		).run(id, aspectId, agent, memoryId, content, content, importance, compartment, now, now);
+	}
+
+	async function observe(agentId: string, scope: ReadScope) {
+		const owner = asOwner(db, []);
+		const options = { limit: 5, minScore: 0.01, readScope: scope };
+		const paths = [...findStructuredPathCandidates(asReadDb(db), query, agentId, options).entries()];
+		expect([...(await findStructuredPathCandidatesViaOwner(owner, query, agentId, options)).entries()]).toEqual(paths);
+		const ids = ["m-visible", "m-hidden-attr", "m-bob"];
+		const scores = [...scoreStructuredPathEvidence(asReadDb(db), ids, query, agentId, scope).entries()].sort();
+		expect(
+			[...(await scoreStructuredPathEvidenceViaOwner(owner, ids, query, agentId, scope)).entries()].sort(),
+		).toEqual(scores);
+		const claims = findStructuredClaimCandidates(asReadDb(db), query, agentId, options).map((row) => [
+			row.id,
+			row.score,
+		]);
+		expect(
+			(await findStructuredClaimCandidatesViaOwner(owner, query, agentId, options)).map((row) => [row.id, row.score]),
+		).toEqual(claims);
+		return { paths, scores, claims };
+	}
+
+	it("returns identical candidates, scores and claims whether hidden rows exist", async () => {
+		const aspect = graph("visible", "alice");
+		memory("m-visible", "alice", null);
+		attribute("at-visible", aspect, "alice", "m-visible", "alpha beta", null);
+		attribute("claim-visible", aspect, "alice", null, "alpha beta gamma claim", null);
+		const before = await observe("alice", org);
+		expect(before.paths.map(([id]) => id)).toEqual(["m-visible"]);
+		expect(before.claims.map(([id]) => id)).toEqual(["claim-visible"]);
+		memory("m-hidden", "alice", 1);
+		attribute("at-hidden-memory", aspect, "alice", "m-hidden", "alpha beta gamma", null, 0.9);
+		attribute("at-hidden-boost", aspect, "alice", "m-visible", "alpha beta gamma", 1, 1);
+		memory("m-hidden-attr", "alice", null);
+		attribute("at-hidden-attr", aspect, "alice", "m-hidden-attr", "alpha beta gamma", 1, 1);
+		attribute("claim-hidden", aspect, "alice", null, "alpha beta gamma hidden claim", 1, 1);
+		const hiddenAspect = graph("hidden-aspect", "alice", { aspect: 1 });
+		attribute("at-hidden-aspect", hiddenAspect, "alice", "m-visible", "alpha beta gamma", null, 1);
+		attribute("claim-hidden-aspect", hiddenAspect, "alice", null, "alpha beta gamma aspect claim", null, 1);
+		const hiddenEntity = graph("hidden-entity", "alice", { entity: 1 });
+		attribute("at-hidden-entity", hiddenEntity, "alice", "m-visible", "alpha beta gamma", null, 1);
+		attribute("claim-hidden-entity", hiddenEntity, "alice", null, "alpha beta gamma entity claim", null, 1);
+		expect(await observe("alice", org)).toEqual(before);
+	});
+
+	it("lets organization reach read every active agent without agent equality", async () => {
+		const aspect = graph("bob", "bob");
+		memory("m-bob", "bob", null);
+		attribute("at-bob", aspect, "bob", "m-bob", "alpha beta gamma", null);
+		attribute("claim-bob", aspect, "bob", null, "alpha beta gamma claim", null);
+		const observed = await observe("alice", org);
+		expect(observed.paths.map(([id]) => id)).toEqual(["m-bob"]);
+		expect(observed.scores.map(([id]) => id)).toEqual(["m-bob"]);
+		expect(observed.claims.map(([id]) => id)).toEqual(["claim-bob"]);
+	});
+
+	it("fails closed for project-restricted reads of project-less graph rows", async () => {
+		const aspect = graph("visible", "alice");
+		memory("m-visible", "alice", null);
+		db.exec("UPDATE memories SET project = 'atlas'");
+		attribute("at-visible", aspect, "alice", "m-visible", "alpha beta gamma", null);
+		attribute("claim-visible", aspect, "alice", null, "alpha beta gamma claim", null);
+		expect(await observe("alice", { ...org, projects: ["atlas"] })).toEqual({ paths: [], scores: [], claims: [] });
 	});
 });

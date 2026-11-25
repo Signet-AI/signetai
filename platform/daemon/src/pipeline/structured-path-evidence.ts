@@ -1,6 +1,8 @@
 import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
+import type { ReadScope } from "../read-scope";
+import { type ScopeSql, derivedReadScopeSql, localReadScope, memoryReadScopeSql } from "./graph-traversal";
 import { FTS_STOP } from "./stop-words";
 
 const PUNCT = /[^a-z0-9\s]/g;
@@ -95,6 +97,16 @@ interface PathScoreRow {
 	readonly confidence: number | null;
 }
 
+function graphScope(agentId: string, readScope: ReadScope | undefined): ScopeSql {
+	const scope = readScope ?? localReadScope(agentId);
+	const parts = [
+		derivedReadScopeSql("ea", scope, { memory: "memory_id", source: "source_id" }),
+		derivedReadScopeSql("asp", scope),
+		derivedReadScopeSql("e", scope, { source: "source_id" }),
+	];
+	return { sql: parts.map((part) => part.sql).join(""), args: parts.flatMap((part) => part.args) };
+}
+
 function scoreStructuredClaimCandidate(baseScore: number): number {
 	return Math.max(0, Math.min(1.15, baseScore));
 }
@@ -141,9 +153,11 @@ export function scoreStructuredPathEvidence(
 	memoryIds: readonly string[],
 	query: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Map<string, number> {
 	const queryTokens = [...new Set(tokenize(query))];
 	if (memoryIds.length === 0 || queryTokens.length === 0) return new Map();
+	const scope = graphScope(agentId, readScope);
 
 	const uniqueIds = [...new Set(memoryIds.filter((id) => typeof id === "string" && id.length > 0))];
 	if (uniqueIds.length === 0) return new Map();
@@ -164,13 +178,10 @@ export function scoreStructuredPathEvidence(
 			 FROM entity_attributes ea
 			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 			 JOIN entities e ON e.id = asp.entity_id
-			 WHERE ea.memory_id IN (${placeholders})
-			   AND ea.agent_id = ?
-			   AND asp.agent_id = ?
-			   AND e.agent_id = ?
+			 WHERE ea.memory_id IN (${placeholders})${scope.sql}
 			   AND ea.status = 'active'`,
 		)
-		.all(...uniqueIds, agentId, agentId, agentId) as StructuredPathRow[];
+		.all(...uniqueIds, ...scope.args) as StructuredPathRow[];
 
 	return scorePathRows(
 		rows.map((row) => ({ ...row, key: row.memory_id })),
@@ -238,6 +249,7 @@ export function findStructuredPathCandidates(
 		readonly minScore?: number;
 		readonly filterSql?: string;
 		readonly filterArgs?: readonly unknown[];
+		readonly readScope?: ReadScope;
 	} = { limit: 20 },
 ): Map<string, number> {
 	const parsed = queryTokensForPathSearch(query, options.limit);
@@ -246,6 +258,8 @@ export function findStructuredPathCandidates(
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const filterSql = options.filterSql ?? "";
+	const scope = graphScope(agentId, options.readScope);
+	const memory = memoryReadScopeSql("m", options.readScope);
 	const rows = db
 		.prepare(
 			`SELECT
@@ -262,28 +276,25 @@ export function findStructuredPathCandidates(
 			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 			 JOIN entities e ON e.id = asp.entity_id
 			 JOIN memories m ON m.id = ea.memory_id
-			 WHERE ea.agent_id = ?
-			   AND asp.agent_id = ?
-			   AND e.agent_id = ?
+			 WHERE 1 = 1${scope.sql}
 			   AND ea.status = 'active'
 			   AND ea.memory_id IS NOT NULL
-			   AND m.is_deleted = 0
+			   AND m.is_deleted = 0${memory.sql}
 			   ${filterSql}
 			   AND (${like})
 			 ORDER BY ea.version_root_id, ea.version DESC, ea.rowid
 			 LIMIT ?`,
 		)
 		.all(
-			agentId,
-			agentId,
-			agentId,
+			...scope.args,
+			...memory.args,
 			...(options.filterArgs ?? []),
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			Math.max(options.limit * 8, options.limit),
 		) as StructuredPathRow[];
 
 	const ids = [...new Set(rows.map((row) => row.memory_id))];
-	const scores = scoreStructuredPathEvidence(db, ids, query, agentId);
+	const scores = scoreStructuredPathEvidence(db, ids, query, agentId, options.readScope);
 	const minScore = options.minScore ?? 0;
 	return new Map(
 		[...scores.entries()]
@@ -297,7 +308,7 @@ export function findStructuredClaimCandidates(
 	db: ReadDb,
 	query: string,
 	agentId: string,
-	options: { readonly limit: number; readonly minScore?: number } = { limit: 20 },
+	options: { readonly limit: number; readonly minScore?: number; readonly readScope?: ReadScope } = { limit: 20 },
 ): StructuredClaimCandidate[] {
 	const parsed = queryTokensForPathSearch(query, options.limit);
 	if (!parsed) return [];
@@ -305,6 +316,7 @@ export function findStructuredClaimCandidates(
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
+	const scope = graphScope(agentId, options.readScope);
 	const rows = db
 		.prepare(
 			`SELECT
@@ -328,9 +340,7 @@ export function findStructuredClaimCandidates(
 			 FROM entity_attributes ea
 			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 			 JOIN entities e ON e.id = asp.entity_id
-			 WHERE ea.agent_id = ?
-			   AND asp.agent_id = ?
-			   AND e.agent_id = ?
+			 WHERE 1 = 1${scope.sql}
 			   AND ea.status = 'active'
 			   AND asp.status = 'active'
 			   AND e.status = 'active'
@@ -346,9 +356,7 @@ export function findStructuredClaimCandidates(
 			 LIMIT ?`,
 		)
 		.all(
-			agentId,
-			agentId,
-			agentId,
+			...scope.args,
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			Math.max(options.limit * 32, 500),
@@ -399,6 +407,7 @@ export async function findStructuredPathCandidatesViaOwner(
 		readonly minScore?: number;
 		readonly filterSql?: string;
 		readonly filterArgs?: readonly unknown[];
+		readonly readScope?: ReadScope;
 	} = { limit: 20 },
 ): Promise<Map<string, number>> {
 	const parsed = queryTokensForPathSearch(query, options.limit);
@@ -406,6 +415,8 @@ export async function findStructuredPathCandidatesViaOwner(
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
+	const scope = graphScope(agentId, options.readScope);
+	const memory = memoryReadScopeSql("m", options.readScope);
 	const rows = await ownerReadAll<StructuredPathRow>(
 		owner,
 		`SELECT
@@ -422,20 +433,17 @@ export async function findStructuredPathCandidatesViaOwner(
 		 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 		 JOIN entities e ON e.id = asp.entity_id
 		 JOIN memories m ON m.id = ea.memory_id
-		 WHERE ea.agent_id = ?
-		   AND asp.agent_id = ?
-		   AND e.agent_id = ?
+		 WHERE 1 = 1${scope.sql}
 		   AND ea.status = 'active'
 		   AND ea.memory_id IS NOT NULL
-		   AND m.is_deleted = 0
+		   AND m.is_deleted = 0${memory.sql}
 		   ${options.filterSql ?? ""}
 		   AND (${like})
 		 ORDER BY (${roughScore}) DESC, ea.version_root_id, ea.version DESC, ea.rowid
 		 LIMIT ?`,
 		[
-			agentId,
-			agentId,
-			agentId,
+			...scope.args,
+			...memory.args,
 			...(options.filterArgs ?? []),
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
@@ -468,12 +476,9 @@ export async function findStructuredPathCandidatesViaOwner(
 					 FROM entity_attributes ea
 					 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 					 JOIN entities e ON e.id = asp.entity_id
-					 WHERE ea.memory_id IN (${ids.map(() => "?").join(", ")})
-					   AND ea.agent_id = ?
-					   AND asp.agent_id = ?
-					   AND e.agent_id = ?
+					 WHERE ea.memory_id IN (${ids.map(() => "?").join(", ")})${scope.sql}
 					   AND ea.status = 'active'`,
-					[...ids, agentId, agentId, agentId],
+					[...ids, ...scope.args],
 					{
 						operation: "memory-search.structured-path-evidence",
 						lane: "read",
@@ -499,10 +504,12 @@ export async function scoreStructuredPathEvidenceViaOwner(
 	memoryIds: readonly string[],
 	query: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<Map<string, number>> {
 	const queryTokens = [...new Set(tokenize(query))];
 	const uniqueIds = [...new Set(memoryIds.filter((id) => typeof id === "string" && id.length > 0))];
 	if (uniqueIds.length === 0 || queryTokens.length === 0) return new Map();
+	const scope = graphScope(agentId, readScope);
 	const placeholders = uniqueIds.map(() => "?").join(", ");
 	const rows = await ownerReadAll<StructuredPathRow>(
 		owner,
@@ -519,12 +526,9 @@ export async function scoreStructuredPathEvidenceViaOwner(
 		 FROM entity_attributes ea
 		 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 		 JOIN entities e ON e.id = asp.entity_id
-		 WHERE ea.memory_id IN (${placeholders})
-		   AND ea.agent_id = ?
-		   AND asp.agent_id = ?
-		   AND e.agent_id = ?
+		 WHERE ea.memory_id IN (${placeholders})${scope.sql}
 		   AND ea.status = 'active'`,
-		[...uniqueIds, agentId, agentId, agentId],
+		[...uniqueIds, ...scope.args],
 		{
 			operation: "memory-search.structured-path-evidence",
 			lane: "read",
@@ -542,13 +546,14 @@ export async function findStructuredClaimCandidatesViaOwner(
 	owner: DbOwnerClient,
 	query: string,
 	agentId: string,
-	options: { readonly limit: number; readonly minScore?: number } = { limit: 20 },
+	options: { readonly limit: number; readonly minScore?: number; readonly readScope?: ReadScope } = { limit: 20 },
 ): Promise<StructuredClaimCandidate[]> {
 	const parsed = queryTokensForPathSearch(query, options.limit);
 	if (!parsed) return [];
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
 	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
+	const scope = graphScope(agentId, options.readScope);
 	const rows = await ownerReadAll<StructuredClaimRow>(
 		owner,
 		`SELECT
@@ -572,9 +577,7 @@ export async function findStructuredClaimCandidatesViaOwner(
 		 FROM entity_attributes ea
 		 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 		 JOIN entities e ON e.id = asp.entity_id
-		 WHERE ea.agent_id = ?
-		   AND asp.agent_id = ?
-		   AND e.agent_id = ?
+		 WHERE 1 = 1${scope.sql}
 		   AND ea.status = 'active'
 		   AND asp.status = 'active'
 		   AND e.status = 'active'
@@ -589,9 +592,7 @@ export async function findStructuredClaimCandidatesViaOwner(
 		 ORDER BY (${roughScore}) DESC, ea.importance DESC, ea.updated_at DESC
 		 LIMIT ?`,
 		[
-			agentId,
-			agentId,
-			agentId,
+			...scope.args,
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			Math.max(options.limit * 32, 500),

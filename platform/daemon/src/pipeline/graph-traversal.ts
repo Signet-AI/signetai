@@ -1,8 +1,123 @@
+import { ftsShardTables } from "@signet/core";
 import { yieldEvery } from "../async-yield";
 import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
+import { type ReadScope, readScopeSql } from "../read-scope";
 const ROW_YIELD_BATCH = 500;
+
+export interface ScopeSql {
+	readonly sql: string;
+	readonly args: readonly unknown[];
+}
+
+const NO_SCOPE: ScopeSql = { sql: "", args: [] };
+
+export function localReadScope(agentId: string): ReadScope {
+	return { reach: { kind: "own", agentId }, compartments: "all", projects: null };
+}
+
+export function derivedReadScopeSql(
+	alias: string,
+	scope: ReadScope,
+	cols: {
+		readonly project?: string;
+		readonly memory?: string;
+		readonly session?: string;
+		readonly source?: string;
+		readonly group?: "keep" | "own";
+	} = {},
+): ScopeSql {
+	const reach = scope.reach;
+	const narrowed =
+		reach.kind === "shared" || (reach.kind === "group" && cols.group !== "keep")
+			? { kind: "own" as const, agentId: reach.agentId }
+			: reach;
+	const projectless = cols.project === undefined && scope.projects !== null;
+	const result = readScopeSql(
+		alias,
+		{ ...scope, reach: narrowed, projects: projectless ? null : scope.projects },
+		{
+			visibility: null,
+			project: cols.project,
+			memory: cols.memory ?? null,
+			session: cols.session ?? null,
+			source: cols.source ?? null,
+		},
+	);
+	return projectless ? { sql: `${result.sql} AND 0`, args: result.args } : result;
+}
+
+export function memoryReadScopeSql(alias: string, scope: ReadScope | undefined): ScopeSql {
+	return scope ? readScopeSql(alias, scope) : NO_SCOPE;
+}
+
+function shardCatalog(names: readonly string[]): Parameters<typeof ftsShardTables>[2] {
+	return {
+		exec() {
+			throw new Error("Read-only shard catalogue");
+		},
+		prepare() {
+			return {
+				run() {
+					throw new Error("Read-only shard catalogue");
+				},
+				get: () => undefined,
+				all: () => names.map((name) => ({ name })),
+			};
+		},
+	};
+}
+
+function databaseCatalog(db: ReadDb): Parameters<typeof ftsShardTables>[2] {
+	return {
+		exec() {
+			throw new Error("Read-only shard catalogue");
+		},
+		prepare(sql) {
+			const statement = db.prepare(sql);
+			return {
+				run() {
+					throw new Error("Read-only shard catalogue");
+				},
+				get: (...args) => statement.get(...args),
+				all: (...args) =>
+					statement
+						.all(...args)
+						.flatMap((row) => (typeof row === "object" && row !== null && "name" in row ? [{ name: row.name }] : [])),
+			};
+		},
+	};
+}
+
+export function entityFtsTablesFromNames(names: readonly string[], scope: ReadScope): string[] {
+	const catalog = shardCatalog(names.filter((name) => name === "entities_fts" || name.startsWith("entities_fts__c")));
+	return ftsShardTables("entities_fts", scope.compartments, catalog);
+}
+
+export function entityFtsTablesFromDb(db: ReadDb, scope: ReadScope): string[] {
+	return ftsShardTables("entities_fts", scope.compartments, databaseCatalog(db));
+}
+
+function ftsRows(rows: ReadonlyArray<unknown>): Array<{ readonly id: string; readonly raw: number }> {
+	return rows.flatMap((row) =>
+		typeof row === "object" &&
+		row !== null &&
+		"id" in row &&
+		"raw" in row &&
+		typeof row.id === "string" &&
+		typeof row.raw === "number"
+			? [{ id: row.id, raw: row.raw }]
+			: [],
+	);
+}
+
+export function mergeEntityFtsRows(rows: ReadonlyArray<unknown>, limit: number): string[] {
+	return ftsRows(rows)
+		.sort((a, b) => a.raw - b.raw || a.id.localeCompare(b.id))
+		.slice(0, limit)
+		.map((row) => row.id);
+}
 
 export interface TraversalPath {
 	readonly entityIds: ReadonlyArray<string>;
@@ -43,6 +158,7 @@ export interface TraversalConfig {
 	readonly timeoutMs: number;
 	readonly deadlineAt?: number;
 	readonly aspectFilter?: string;
+	readonly readScope?: ReadScope;
 }
 type ReadDbSource = ReadDb | (<T>(fn: (db: ReadDb) => T) => T) | (<T>(fn: (db: ReadDb) => T) => Promise<T>);
 type ReadAll = <Row extends object>(
@@ -159,33 +275,51 @@ function sanitizeEntityIds(ids: ReadonlyArray<string>): string[] {
 	return [...unique];
 }
 
-function getEntityNames(db: ReadDb, ids: ReadonlyArray<string>): string[] {
+function entityReadScope(scope: ReadScope, alias = "e"): ScopeSql {
+	return derivedReadScopeSql(alias, scope, { source: "source_id" });
+}
+
+function focalNames(
+	entityIds: ReadonlyArray<string>,
+	rows: ReadonlyArray<{ readonly id: string; readonly name: string }>,
+	scoped: boolean,
+): { readonly entityIds: string[]; readonly entityNames: string[] } {
+	const nameById = new Map(rows.map((row) => [row.id, row.name]));
+	const ids = scoped ? entityIds.filter((id) => nameById.has(id)) : [...entityIds];
+	return {
+		entityIds: ids,
+		entityNames: ids.flatMap((id) => {
+			const name = nameById.get(id);
+			return typeof name === "string" && name.length > 0 ? [name] : [];
+		}),
+	};
+}
+
+function getEntityNames(
+	db: ReadDb,
+	ids: ReadonlyArray<string>,
+	entity: ScopeSql,
+): ReadonlyArray<{ readonly id: string; readonly name: string }> {
 	const entityIds = sanitizeEntityIds(ids);
 	if (entityIds.length === 0) return [];
 	const placeholders = entityIds.map(() => "?").join(", ");
-	const rows = db
+	return db
 		.prepare(
-			`SELECT id, name
-			 FROM entities
-			 WHERE id IN (${placeholders})`,
+			`SELECT e.id, e.name
+			 FROM entities e
+			 WHERE e.id IN (${placeholders})${entity.sql}`,
 		)
-		.all(...entityIds) as Array<{ id: string; name: string }>;
-	const nameById = new Map(rows.map((row) => [row.id, row.name]));
-	return entityIds.flatMap((id) => {
-		const name = nameById.get(id);
-		return typeof name === "string" && name.length > 0 ? [name] : [];
-	});
+		.all(...entityIds, ...entity.args) as Array<{ id: string; name: string }>;
 }
 
-function getPinnedEntityIds(db: ReadDb, agentId: string): string[] {
+function getPinnedEntityIds(db: ReadDb, entity: ScopeSql): string[] {
 	const rows = db
 		.prepare(
-			`SELECT id FROM entities
-			 WHERE agent_id = ?
-			   AND pinned = 1
-			 ORDER BY pinned_at DESC, updated_at DESC`,
+			`SELECT e.id FROM entities e
+			 WHERE e.pinned = 1${entity.sql}
+			 ORDER BY e.pinned_at DESC, e.updated_at DESC, e.id`,
 		)
-		.all(agentId) as Array<{ id: string }>;
+		.all(...entity.args) as Array<{ id: string }>;
 	return sanitizeEntityIds(rows.map((row) => row.id));
 }
 
@@ -227,74 +361,64 @@ function hasTraversalTables(db: ReadDb): boolean {
 	return available;
 }
 
-function resolveByProject(db: ReadDb, agentId: string, projectPath: string): string[] {
-	const tokens = extractProjectTokens(projectPath);
-	if (tokens.length === 0) return [];
-
-	const clauses = tokens.map(() => "(canonical_name LIKE ? OR name LIKE ?)").join(" OR ");
-	const args: string[] = [];
-	for (const token of tokens) {
-		const pattern = `%${token}%`;
-		args.push(pattern, pattern);
-	}
-
-	const rows = db
-		.prepare(
-			`SELECT id FROM entities
-			 WHERE agent_id = ?
-			   AND entity_type = 'project'
-			   AND (${clauses})
-			 ORDER BY mentions DESC
-			 LIMIT 5`,
-		)
-		.all(agentId, ...args) as Array<{ id: string }>;
-	return sanitizeEntityIds(rows.map((row) => row.id));
-}
-
-function resolveByQueryTokens(db: ReadDb, agentId: string, queryTokens: ReadonlyArray<string>): string[] {
-	const tokens = sanitizeQueryTokens(queryTokens);
-	if (tokens.length === 0) return [];
-	try {
-		const fts = tokens.join(" OR ");
-		const rows = db
-			.prepare(
-				`SELECT e.id FROM entities_fts
-					 CROSS JOIN entities e ON e.rowid = entities_fts.rowid
-				 WHERE entities_fts MATCH ?
-				   AND e.agent_id = ?
-				 ORDER BY rank
-				 LIMIT 20`,
-			)
-			.all(fts, agentId) as Array<{ id: string }>;
-		if (rows.length > 0) return sanitizeEntityIds(rows.map((r) => r.id));
-	} catch {}
-
-	return resolveByQueryTokensLike(db, agentId, tokens);
-}
-
-function buildQueryTokenLikeStatement(tokens: ReadonlyArray<string>): {
+function entityLikeStatement(
+	tokens: ReadonlyArray<string>,
+	entity: ScopeSql,
+	project: boolean,
+): {
 	readonly sql: string;
-	readonly params: string[];
+	readonly params: unknown[];
 } {
-	const clauses = tokens.map(() => "(canonical_name LIKE ? OR name LIKE ?)").join(" OR ");
+	const clauses = tokens.map(() => "(e.canonical_name LIKE ? OR e.name LIKE ?)").join(" OR ");
 	const args: string[] = [];
 	for (const token of tokens) {
 		const pattern = `%${token}%`;
 		args.push(pattern, pattern);
 	}
 	return {
-		sql: `SELECT id FROM entities
-			 WHERE agent_id = ?
-			   AND (${clauses})
-			 ORDER BY mentions DESC
-			 LIMIT 20`,
-		params: args,
+		sql: `SELECT e.id FROM entities e
+			 WHERE (${clauses})${project ? " AND e.entity_type = 'project'" : ""}${entity.sql}
+			 ORDER BY e.mentions DESC, e.id
+			 LIMIT ${project ? 5 : 20}`,
+		params: [...args, ...entity.args],
 	};
 }
 
-function resolveByQueryTokensLike(db: ReadDb, agentId: string, tokens: ReadonlyArray<string>): string[] {
-	const query = buildQueryTokenLikeStatement(tokens);
-	const rows = db.prepare(query.sql).all(agentId, ...query.params) as Array<{ id: string }>;
+function entityFtsStatement(table: string, entity: ScopeSql): string {
+	return `SELECT e.id, bm25(${table}) AS raw FROM ${table}
+			 CROSS JOIN entities e ON e.rowid = ${table}.rowid
+			 WHERE ${table} MATCH ?${entity.sql}
+			 ORDER BY raw, e.id
+			 LIMIT 20`;
+}
+
+function resolveByProject(db: ReadDb, entity: ScopeSql, projectPath: string): string[] {
+	const tokens = extractProjectTokens(projectPath);
+	if (tokens.length === 0) return [];
+	const query = entityLikeStatement(tokens, entity, true);
+	const rows = db.prepare(query.sql).all(...query.params) as Array<{ id: string }>;
+	return sanitizeEntityIds(rows.map((row) => row.id));
+}
+
+function resolveByQueryTokens(
+	db: ReadDb,
+	scope: ReadScope,
+	entity: ScopeSql,
+	queryTokens: ReadonlyArray<string>,
+): string[] {
+	const tokens = sanitizeQueryTokens(queryTokens);
+	if (tokens.length === 0) return [];
+	try {
+		const fts = tokens.join(" OR ");
+		const rows = entityFtsTablesFromDb(db, scope).flatMap((table) =>
+			db.prepare(entityFtsStatement(table, entity)).all(fts, ...entity.args),
+		);
+		const ids = mergeEntityFtsRows(rows, 20);
+		if (ids.length > 0) return sanitizeEntityIds(ids);
+	} catch {}
+
+	const query = entityLikeStatement(tokens, entity, false);
+	const rows = db.prepare(query.sql).all(...query.params) as Array<{ id: string }>;
 	return sanitizeEntityIds(rows.map((row) => row.id));
 }
 
@@ -307,9 +431,12 @@ export function resolveFocalEntities(
 		checkpointEntityIds?: string[];
 		queryTokens?: string[];
 		includePinned?: boolean;
+		readScope?: ReadScope;
 	},
 ): FocalEntityResult {
 	try {
+		const scope = signals.readScope ?? localReadScope(agentId);
+		const entity = entityReadScope(scope);
 		if (!hasTraversalTables(db)) {
 			return {
 				entityIds: [],
@@ -319,7 +446,7 @@ export function resolveFocalEntities(
 			};
 		}
 
-		const pinnedEntityIds = signals.includePinned === false ? [] : getPinnedEntityIds(db, agentId);
+		const pinnedEntityIds = signals.includePinned === false ? [] : getPinnedEntityIds(db, entity);
 		let resolvedEntityIds: string[] = [];
 		let source: FocalEntityResult["source"] = signals.project ? "project" : "query";
 
@@ -327,7 +454,7 @@ export function resolveFocalEntities(
 			resolvedEntityIds = sanitizeEntityIds(signals.checkpointEntityIds);
 			source = "checkpoint";
 		} else if (signals.project) {
-			const projectIds = resolveByProject(db, agentId, signals.project);
+			const projectIds = resolveByProject(db, entity, signals.project);
 			if (projectIds.length > 0) {
 				resolvedEntityIds = projectIds;
 				source = "project";
@@ -335,7 +462,7 @@ export function resolveFocalEntities(
 		}
 
 		if (resolvedEntityIds.length === 0 && signals.queryTokens && signals.queryTokens.length > 0) {
-			const queryIds = resolveByQueryTokens(db, agentId, signals.queryTokens);
+			const queryIds = resolveByQueryTokens(db, scope, entity, signals.queryTokens);
 			if (queryIds.length > 0) {
 				resolvedEntityIds = queryIds;
 				source = "query";
@@ -346,10 +473,9 @@ export function resolveFocalEntities(
 			source = "session_key";
 		}
 
-		const entityIds = sanitizeEntityIds([...pinnedEntityIds, ...resolvedEntityIds]).slice(0, 200);
+		const candidates = sanitizeEntityIds([...pinnedEntityIds, ...resolvedEntityIds]).slice(0, 200);
 		return {
-			entityIds,
-			entityNames: getEntityNames(db, entityIds),
+			...focalNames(candidates, getEntityNames(db, candidates, entity), signals.readScope !== undefined),
 			pinnedEntityIds,
 			source,
 		};
@@ -373,14 +499,18 @@ export async function resolveFocalEntitiesViaOwner(
 		queryTokens?: string[];
 		includePinned?: boolean;
 		deadlineAt?: number;
+		readScope?: ReadScope;
 	},
 ): Promise<FocalEntityResult> {
 	const readAll = readAllFromOwner(owner);
 	try {
+		const scope = signals.readScope ?? localReadScope(agentId);
+		const entity = entityReadScope(scope);
 		const tableRows = await readAll<{ readonly name: string }>(
 			`SELECT name FROM sqlite_master
 			 WHERE type = 'table'
-			   AND name IN ('entities', 'entity_aspects', 'entity_attributes', 'entity_dependencies')`,
+			   AND (name IN ('entities', 'entity_aspects', 'entity_attributes', 'entity_dependencies')
+			     OR name = 'entities_fts' OR name GLOB 'entities_fts__c[0-9]*')`,
 			[],
 			"session-start.graph-focal.table-check",
 			4,
@@ -396,19 +526,20 @@ export async function resolveFocalEntitiesViaOwner(
 		const pinnedEntityIds =
 			signals.includePinned === false
 				? []
-				: (
-						await readAll<{ readonly id: string }>(
-							`SELECT id FROM entities
-							 WHERE agent_id = ?
-							   AND pinned = 1
-							 ORDER BY pinned_at DESC, updated_at DESC
-			 LIMIT 200`,
-							[agentId],
-							"session-start.graph-focal.pinned",
-							200,
-							signals.deadlineAt,
-						)
-					).map((row) => row.id);
+				: sanitizeEntityIds(
+						(
+							await readAll<{ readonly id: string }>(
+								`SELECT e.id FROM entities e
+								 WHERE e.pinned = 1${entity.sql}
+								 ORDER BY e.pinned_at DESC, e.updated_at DESC, e.id
+								 LIMIT 200`,
+								entity.args,
+								"session-start.graph-focal.pinned",
+								200,
+								signals.deadlineAt,
+							)
+						).map((row) => row.id),
+					);
 		let resolvedEntityIds: string[] = [];
 		let source: FocalEntityResult["source"] = signals.project ? "project" : "query";
 
@@ -418,20 +549,10 @@ export async function resolveFocalEntitiesViaOwner(
 		} else if (signals.project) {
 			const tokens = extractProjectTokens(signals.project);
 			if (tokens.length > 0) {
-				const clauses = tokens.map(() => "(canonical_name LIKE ? OR name LIKE ?)").join(" OR ");
-				const args: string[] = [];
-				for (const token of tokens) {
-					const pattern = `%${token}%`;
-					args.push(pattern, pattern);
-				}
+				const projectStatement = entityLikeStatement(tokens, entity, true);
 				const projectRows = await readAll<{ readonly id: string }>(
-					`SELECT id FROM entities
-					 WHERE agent_id = ?
-					   AND entity_type = 'project'
-					   AND (${clauses})
-					 ORDER BY mentions DESC
-					 LIMIT 5`,
-					[agentId, ...args],
+					projectStatement.sql,
+					projectStatement.params,
 					"session-start.graph-focal.project",
 					Math.max(1, tokens.length * 5),
 					signals.deadlineAt,
@@ -445,27 +566,28 @@ export async function resolveFocalEntitiesViaOwner(
 			if (tokens.length > 0) {
 				let queryIds: string[] = [];
 				try {
-					const queryRows = await readAll<{ readonly id: string }>(
-						`SELECT e.id FROM entities_fts
-						 CROSS JOIN entities e ON e.rowid = entities_fts.rowid
-						 WHERE entities_fts MATCH ?
-						   AND e.agent_id = ?
-						 ORDER BY rank
-						 LIMIT 20`,
-						[tokens.join(" OR "), agentId],
-						"session-start.graph-focal.query-fts",
-						20,
-						signals.deadlineAt,
-					);
-					queryIds = sanitizeEntityIds(queryRows.map((row) => row.id));
+					const fts = tokens.join(" OR ");
+					const queryRows: unknown[] = [];
+					for (const table of entityFtsTablesFromNames([...tableNames], scope)) {
+						queryRows.push(
+							...(await readAll<object>(
+								entityFtsStatement(table, entity),
+								[fts, ...entity.args],
+								"session-start.graph-focal.query-fts",
+								20,
+								signals.deadlineAt,
+							)),
+						);
+					}
+					queryIds = sanitizeEntityIds(mergeEntityFtsRows(queryRows, 20));
 				} catch (error) {
 					if (isTraversalDeadlineError(error)) throw error;
 				}
 				if (queryIds.length === 0) {
-					const likeStatement = buildQueryTokenLikeStatement(tokens);
+					const likeStatement = entityLikeStatement(tokens, entity, false);
 					const likeRows = await readAll<{ readonly id: string }>(
 						likeStatement.sql,
-						[agentId, ...likeStatement.params],
+						likeStatement.params,
 						"session-start.graph-focal.query-like",
 						20,
 						signals.deadlineAt,
@@ -478,25 +600,23 @@ export async function resolveFocalEntitiesViaOwner(
 		}
 
 		if (resolvedEntityIds.length === 0 && signals.sessionKey) source = "session_key";
-		const entityIds = sanitizeEntityIds([...pinnedEntityIds, ...resolvedEntityIds]).slice(0, 200);
+		const candidates = sanitizeEntityIds([...pinnedEntityIds, ...resolvedEntityIds]).slice(0, 200);
 		const entityNameRows =
-			entityIds.length === 0
+			candidates.length === 0
 				? []
 				: await readAll<{ readonly id: string; readonly name: string }>(
-						`SELECT id, name FROM entities
-						 WHERE agent_id = ?
-						   AND id IN (${entityIds.map(() => "?").join(", ")})`,
-						[agentId, ...entityIds],
+						`SELECT e.id, e.name FROM entities e
+						 WHERE e.id IN (${candidates.map(() => "?").join(", ")})${entity.sql}`,
+						[...candidates, ...entity.args],
 						"session-start.graph-focal.names",
-						entityIds.length,
+						candidates.length,
 						signals.deadlineAt,
 					);
-		const nameById = new Map(entityNameRows.map((row) => [row.id, row.name]));
-		const entityNames = entityIds.flatMap((id) => {
-			const name = nameById.get(id);
-			return typeof name === "string" && name.length > 0 ? [name] : [];
-		});
-		return { entityIds, entityNames, pinnedEntityIds, source };
+		return {
+			...focalNames(candidates, entityNameRows, signals.readScope !== undefined),
+			pinnedEntityIds,
+			source,
+		};
 	} catch (error) {
 		return {
 			entityIds: [],
@@ -555,6 +675,17 @@ async function batchCollectForEntities(
 	const constraintKeys = new Set<string>();
 	const visitedEntities = new Set<string>(entityIds);
 
+	const scope = config.readScope ?? localReadScope(agentId);
+	const entity = entityReadScope(scope);
+	const aspect = derivedReadScopeSql("asp", scope);
+	const attribute = derivedReadScopeSql("ea", scope, { memory: "memory_id", source: "source_id" });
+	const memory = memoryReadScopeSql("m", config.readScope);
+	const memoryScope =
+		config.scope === undefined
+			? { sql: "", args: [] }
+			: config.scope === null
+				? { sql: " AND m.scope IS NULL", args: [] }
+				: { sql: " AND m.scope = ?", args: [config.scope] };
 	const entityPh = entityIds.map(() => "?").join(", ");
 	const constraintRows = await readAll<{
 		entity_id: string;
@@ -567,13 +698,11 @@ async function batchCollectForEntities(
 		 CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect
 		   ON ea.aspect_id = asp.id
 		 JOIN entities e ON e.id = asp.entity_id
-		 WHERE asp.entity_id IN (${entityPh})
-		   AND asp.agent_id = ?
-		   AND ea.agent_id = ?
+		 WHERE asp.entity_id IN (${entityPh})${aspect.sql}${attribute.sql}${entity.sql}
 		   AND ea.kind = 'constraint'
 		   AND ea.status = 'active'
 		 ORDER BY ea.importance DESC`,
-		[...entityIds, agentId, agentId],
+		[...entityIds, ...aspect.args, ...attribute.args, ...entity.args],
 		"session-start.graph-traversal.constraints",
 		Math.max(1, entityIds.length * config.maxAttributesPerAspect),
 		deadlineAt,
@@ -592,24 +721,13 @@ async function batchCollectForEntities(
 	}
 
 	await stageYield();
-	let aspectQuery: string;
-	let aspectArgs: unknown[];
-	if (config.aspectFilter) {
-		aspectQuery = `SELECT id, entity_id FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-					 WHERE entity_id IN (${entityPh}) AND agent_id = ?
-					   AND canonical_name LIKE ?
-					 ORDER BY weight DESC`;
-		aspectArgs = [...entityIds, agentId, `%${config.aspectFilter}%`];
-	} else {
-		aspectQuery = `SELECT id, entity_id FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-					 WHERE entity_id IN (${entityPh}) AND agent_id = ?
-					 ORDER BY weight DESC`;
-		aspectArgs = [...entityIds, agentId];
-	}
-
+	const aspectFilter = config.aspectFilter ? " AND asp.canonical_name LIKE ?" : "";
 	const allAspectRows = await readAll<{ id: string; entity_id: string }>(
-		aspectQuery,
-		aspectArgs,
+		`SELECT asp.id, asp.entity_id FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity
+		 JOIN entities e ON e.id = asp.entity_id
+		 WHERE asp.entity_id IN (${entityPh})${aspect.sql}${entity.sql}${aspectFilter}
+		 ORDER BY asp.weight DESC`,
+		[...entityIds, ...aspect.args, ...entity.args, ...(config.aspectFilter ? [`%${config.aspectFilter}%`] : [])],
 		"session-start.graph-traversal.aspects",
 		Math.max(1, entityIds.length * config.maxAspectsPerEntity),
 		deadlineAt,
@@ -638,54 +756,22 @@ async function batchCollectForEntities(
 	}
 	if (budgetedAspectIds.length > 0) {
 		const aspectPh = budgetedAspectIds.map(() => "?").join(", ");
-		let attributeRows: Array<{
+		const joinMemories = config.scope !== undefined || config.readScope !== undefined;
+		const attributeRows = await readAll<{
 			memory_id: string | null;
 			importance: number;
 			aspect_id: string;
-		}>;
-
-		if (config.scope !== undefined) {
-			const scopeClause = config.scope === null ? "AND m.scope IS NULL" : "AND m.scope = ?";
-			const scopeArgs: unknown[] = config.scope === null ? [] : [config.scope];
-			attributeRows = [
-				...(await readAll<{
-					memory_id: string | null;
-					importance: number;
-					aspect_id: string;
-				}>(
-					`SELECT ea.memory_id, ea.importance, ea.aspect_id
-				 FROM entity_attributes ea INDEXED BY idx_entity_attributes_aspect
-				 JOIN memories m ON m.id = ea.memory_id
-				 WHERE ea.aspect_id IN (${aspectPh})
-				   AND ea.agent_id = ?
-				   AND ea.status = 'active'
-				   AND m.is_deleted = 0 ${scopeClause}
-				 ORDER BY ea.importance DESC`,
-					[...budgetedAspectIds, agentId, ...scopeArgs],
-					"session-start.graph-traversal.attributes",
-					Math.max(1, budgetedAspectIds.length * config.maxAttributesPerAspect),
-					deadlineAt,
-				)),
-			];
-		} else {
-			attributeRows = [
-				...(await readAll<{
-					memory_id: string | null;
-					importance: number;
-					aspect_id: string;
-				}>(
-					`SELECT memory_id, importance, aspect_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
-				 WHERE aspect_id IN (${aspectPh})
-				   AND agent_id = ?
-				   AND status = 'active'
-				 ORDER BY importance DESC`,
-					[...budgetedAspectIds, agentId],
-					"session-start.graph-traversal.attributes",
-					Math.max(1, budgetedAspectIds.length * config.maxAttributesPerAspect),
-					deadlineAt,
-				)),
-			];
-		}
+		}>(
+			`SELECT ea.memory_id, ea.importance, ea.aspect_id
+			 FROM entity_attributes ea INDEXED BY idx_entity_attributes_aspect${joinMemories ? " JOIN memories m ON m.id = ea.memory_id" : ""}
+			 WHERE ea.aspect_id IN (${aspectPh})${attribute.sql}
+			   AND ea.status = 'active'${joinMemories ? ` AND m.is_deleted = 0${memoryScope.sql}${memory.sql}` : ""}
+			 ORDER BY ea.importance DESC`,
+			[...budgetedAspectIds, ...attribute.args, ...(joinMemories ? [...memoryScope.args, ...memory.args] : [])],
+			"session-start.graph-traversal.attributes",
+			Math.max(1, budgetedAspectIds.length * config.maxAttributesPerAspect),
+			deadlineAt,
+		);
 		const attrCountByAspect = new Map<string, number>();
 		for (const row of attributeRows) {
 			if (!row.memory_id) continue;
@@ -712,50 +798,24 @@ async function batchCollectForEntities(
 	await stageYield();
 	if (memoryIds.size < budget) {
 		const mentionBudget = budget - memoryIds.size;
-		let mentionRows: Array<{ memory_id: string; importance: number; entity_id: string }>;
-		if (config.scope !== undefined) {
-			const scopeClause = config.scope === null ? "AND m.scope IS NULL" : "AND m.scope = ?";
-			const scopeArgs: unknown[] = config.scope === null ? [] : [config.scope];
-			mentionRows = [
-				...(await readAll<{
-					memory_id: string;
-					importance: number;
-					entity_id: string;
-				}>(
-					`SELECT mem.memory_id, COALESCE(m.importance, 0.5) AS importance, mem.entity_id
-				 FROM memory_entity_mentions mem
-				 JOIN memories m ON m.id = mem.memory_id
-				 WHERE mem.entity_id IN (${entityPh})
-				   AND m.is_deleted = 0 ${scopeClause}
-				 ORDER BY mem.confidence DESC, m.importance DESC, m.rowid, mem.entity_id
-				 LIMIT ?`,
-					[...entityIds, ...scopeArgs, mentionBudget],
-					"session-start.graph-traversal.mentions",
-					mentionBudget,
-					deadlineAt,
-				)),
-			];
-		} else {
-			mentionRows = [
-				...(await readAll<{
-					memory_id: string;
-					importance: number;
-					entity_id: string;
-				}>(
-					`SELECT mem.memory_id, COALESCE(m.importance, 0.5) AS importance, mem.entity_id
-				 FROM memory_entity_mentions mem
-				 JOIN memories m ON m.id = mem.memory_id
-				 WHERE mem.entity_id IN (${entityPh})
-				   AND m.is_deleted = 0
-				 ORDER BY mem.confidence DESC, m.importance DESC, m.rowid, mem.entity_id
-				 LIMIT ?`,
-					[...entityIds, mentionBudget],
-					"session-start.graph-traversal.mentions",
-					mentionBudget,
-					deadlineAt,
-				)),
-			];
-		}
+		const mentionRows = await readAll<{
+			memory_id: string;
+			importance: number;
+			entity_id: string;
+		}>(
+			`SELECT mem.memory_id, COALESCE(m.importance, 0.5) AS importance, mem.entity_id
+			 FROM memory_entity_mentions mem
+			 JOIN memories m ON m.id = mem.memory_id
+			 JOIN entities e ON e.id = mem.entity_id
+			 WHERE mem.entity_id IN (${entityPh})
+			   AND m.is_deleted = 0${memoryScope.sql}${memory.sql}${entity.sql}
+			 ORDER BY mem.confidence DESC, m.importance DESC, m.rowid, mem.entity_id
+			 LIMIT ?`,
+			[...entityIds, ...memoryScope.args, ...memory.args, ...entity.args, mentionBudget],
+			"session-start.graph-traversal.mentions",
+			mentionBudget,
+			deadlineAt,
+		);
 
 		for (const row of mentionRows) {
 			if (memoryIds.size >= budget) break;
@@ -824,18 +884,25 @@ async function traverseKnowledgeGraphWithReadAll(
 		await stageYield();
 		if (!timedOut && collected.memoryIds.size < budget) {
 			const focalPh = focalIds.map(() => "?").join(", ");
+			const scope = config.readScope ?? localReadScope(agentId);
+			const dependency = derivedReadScopeSql("d", scope, { source: "source_id" });
+			const sourceEntity = entityReadScope(scope, "s");
+			const targetEntity = entityReadScope(scope, "t");
 			const dependencyRows = await readAll<{ id: string; source_entity_id: string; target_entity_id: string }>(
-				`SELECT id, source_entity_id, target_entity_id FROM entity_dependencies
+				`SELECT d.id, d.source_entity_id, d.target_entity_id FROM entity_dependencies d
 				 INDEXED BY idx_entity_dependencies_source
-				 WHERE agent_id = ?
-				   AND source_entity_id IN (${focalPh})
-				   AND (COALESCE(confidence, 0.7) * strength) >= ?
-				   AND COALESCE(confidence, 0.7) >= ?
-				 ORDER BY (COALESCE(confidence, 0.7) * strength) DESC
+				 JOIN entities s ON s.id = d.source_entity_id
+				 JOIN entities t ON t.id = d.target_entity_id
+				 WHERE d.source_entity_id IN (${focalPh})${dependency.sql}${sourceEntity.sql}${targetEntity.sql}
+				   AND (COALESCE(d.confidence, 0.7) * d.strength) >= ?
+				   AND COALESCE(d.confidence, 0.7) >= ?
+				 ORDER BY (COALESCE(d.confidence, 0.7) * d.strength) DESC, d.id
 				 LIMIT ?`,
 				[
-					agentId,
 					...focalIds,
+					...dependency.args,
+					...sourceEntity.args,
+					...targetEntity.args,
 					config.minDependencyStrength,
 					config.minConfidence,
 					config.maxBranching * focalIds.length,
