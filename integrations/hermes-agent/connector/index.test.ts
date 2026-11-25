@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {

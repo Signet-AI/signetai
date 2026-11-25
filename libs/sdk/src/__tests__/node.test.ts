@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";

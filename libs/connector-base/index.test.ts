@@ -1,3 +1,4 @@
+import "../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
 	chmodSync,

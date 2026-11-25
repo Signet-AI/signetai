@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, expect, test } from "bun:test";
 import { Command } from "commander";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";

@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, expect, test } from "bun:test";
 import { SignetTransport, type RequestControl } from "../transport.js";
 import { SignetForbiddenError, SignetTimeoutError, SignetUnauthorizedError } from "../errors.js";

@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as realOs from "node:os";

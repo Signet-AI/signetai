@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createDaemonClient } from "./src/daemon-client.js";
 import { OMP_LIFECYCLE_CONFIG } from "./src/lifecycle.js";

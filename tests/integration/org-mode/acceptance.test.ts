@@ -1,3 +1,4 @@
+import "../../support/connector-safety.js";
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";

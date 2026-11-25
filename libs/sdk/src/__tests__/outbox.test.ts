@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { withFileLock } from "../node/storage.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, readdir, stat, utimes } from "node:fs/promises";
