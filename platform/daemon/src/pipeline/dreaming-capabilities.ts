@@ -1,3 +1,4 @@
+import { publicReadValue } from "../public-read-response";
 import type { ReadScope } from "../read-scope";
 import { ownerQueryAll } from "../db-owner-maintenance";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
@@ -277,7 +278,10 @@ function capability<T extends z.ZodType>(
 			}
 			try {
 				const output = await run(parsed.data);
-				return { tool: id, ...redactCredentialsDeep(output) };
+				const safe = publicReadValue(redactCredentialsDeep(output));
+				if (safe === null || typeof safe !== "object" || Array.isArray(safe))
+					throw new Error("invalid_capability_output");
+				return { ...safe, tool: id, ok: output.ok, ...(output.error ? { error: output.error } : {}) };
 			} catch (error) {
 				return { tool: id, ok: false, error: error instanceof Error ? error.message : String(error) };
 			}

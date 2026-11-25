@@ -39,6 +39,19 @@ unchanged. Local `shared` and `group` policies do not widen graph or other
 derived tables that lack a visibility field: those rows remain own-agent only.
 Organization all-agent reach still crosses active agents.
 
+Readable rows do not authorize their linked targets. Hidden or missing memory,
+proposal, supersession, version-chain, and source references return `null` or
+are absent. A hidden replacement does not remove the readable original from
+current-claim queries. Structured evidence/proposal references are checked in
+bounded SQL before they are returned. Community IDs are stable keys derived
+from readable member IDs, not global cluster numbers. Scoped history text omits
+storage indexes, and tool-call sequence numbers are relative to readable calls.
+
+Public graph, ontology, Dreaming, reflection, and inspector responses omit
+compartment IDs, SQLite rowids, content hashes, normalized-content columns,
+vector clocks, and idempotency keys. Database samples also omit numeric storage
+IDs and shared revision/index columns. These internals are not public API fields.
+
 ### GET /api/knowledge/navigation/entities
 
 List entities with structural counts. Query parameters: `q`, `type`, `limit`,

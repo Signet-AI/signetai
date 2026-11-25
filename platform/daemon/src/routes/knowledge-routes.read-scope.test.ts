@@ -187,6 +187,35 @@ describe("knowledge and ontology organization reads", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	test("public graph pointers hide unreadable targets and internal fields", async () => {
+		seed(true);
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec(
+				"UPDATE entity_attributes SET memory_id='hidden-memory',superseded_by='hidden-attribute',previous_attribute_id='hidden-other',version_root_id='hidden-attribute',status='superseded',version=7,proposal_evidence=json_array(json_object('memory_id','hidden-memory')) WHERE id='public-attribute'",
+			),
+		);
+		const path =
+			"/api/knowledge/navigation/attributes?entity=public%20needle&aspect=details&group=general&claim=claim&status=all";
+		const outside = await capture(await appFor(), [path]);
+		const encoded = JSON.stringify(outside);
+		for (const value of [
+			"hidden-memory",
+			"hidden-attribute",
+			"hidden-other",
+			"normalizedContent",
+			"normalized_content",
+			"compartment_id",
+			"rowid",
+		])
+			expect(encoded).not.toContain(value);
+		expect(encoded).toContain("public value");
+		const active = JSON.stringify(await capture(await appFor(), [path.replace("status=all", "status=active")]));
+		expect(active).toContain("public value");
+		const audience = JSON.stringify(await capture(await appFor("audience"), [path]));
+		expect(audience).toContain("hidden-memory");
+		expect(audience).toContain("hidden-attribute");
+	});
+
 	test("entity FTS ordering in an isolated reach ignores other-agent index statistics", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

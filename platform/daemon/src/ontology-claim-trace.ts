@@ -45,7 +45,7 @@ interface TraceSource {
 
 interface TraceEvidence {
 	readonly sourceKind: TraceSourceKind;
-	readonly sourceId: string;
+	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
 	readonly exactQuote: string | null;
 	readonly excerpt: string | null;
@@ -810,7 +810,7 @@ async function sourceFromReference(
 				visibility: source.visibility,
 				sessionKeys: visibleSessionKeys(params.sessionKey),
 			},
-			reference: publicReference(params.reference.reference),
+			reference: readScope ? null : publicReference(params.reference.reference),
 		};
 	}
 	if (source.state === "available" && quote !== null && !exact) {
@@ -818,8 +818,8 @@ async function sourceFromReference(
 	}
 	return {
 		sourceKind: kind,
-		sourceId: source.id,
-		sourcePath: source.path,
+		sourceId: readScope && source.state === "deleted" ? null : source.id,
+		sourcePath: readScope && source.state === "deleted" ? null : source.path,
 		exactQuote: exact ? quote : null,
 		excerpt: exact && source.content !== null && quote !== null ? compactExcerpt(source.content, quote) : null,
 		found: source.state !== "deleted",
@@ -830,7 +830,7 @@ async function sourceFromReference(
 			visibility: source.visibility,
 			sessionKeys: visibleSessionKeys(params.sessionKey),
 		},
-		reference: publicReference(params.reference.reference),
+		reference: readScope ? null : publicReference(params.reference.reference),
 	};
 }
 

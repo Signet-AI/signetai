@@ -281,10 +281,10 @@ export async function resolveOntologyEvidenceRef(
 			found: true,
 			sourceKind: "ontology_proposal",
 			sourceId: proposal.id,
-			sourcePath: ref.sourcePath,
+			sourcePath: readScope ? null : ref.sourcePath,
 			label: `proposal:${proposal.id}`,
 			excerpt: compactExcerpt((ref.quote ?? proposal.rationale) || proposal.evidence, null),
-			reference: ref.reference,
+			reference: readScope ? null : ref.reference,
 		};
 	}
 
@@ -299,7 +299,7 @@ export async function resolveOntologyEvidenceRef(
 			sourcePath: sourcePathArtifact.source_path,
 			label: sourcePathArtifact.source_path,
 			excerpt: compactExcerpt(sourcePathArtifact.content, ref.quote),
-			reference: ref.reference,
+			reference: readScope ? null : ref.reference,
 		};
 	}
 
@@ -312,10 +312,10 @@ export async function resolveOntologyEvidenceRef(
 			found: true,
 			sourceKind: ref.sourceKind ?? "transcript",
 			sourceId: transcript.session_key,
-			sourcePath: ref.sourcePath,
+			sourcePath: readScope ? null : ref.sourcePath,
 			label: `transcript:${transcript.session_key}`,
 			excerpt: compactExcerpt(transcript.content, ref.quote),
-			reference: ref.reference,
+			reference: readScope ? null : ref.reference,
 		};
 	}
 
@@ -329,7 +329,7 @@ export async function resolveOntologyEvidenceRef(
 			sourcePath: artifact.source_path,
 			label: artifact.source_path,
 			excerpt: compactExcerpt(artifact.content, ref.quote),
-			reference: ref.reference,
+			reference: readScope ? null : ref.reference,
 		};
 	}
 
@@ -343,7 +343,7 @@ export async function resolveOntologyEvidenceRef(
 			sourcePath: memory.source_path,
 			label: `memory:${memory.id}`,
 			excerpt: compactExcerpt(memory.content, ref.quote),
-			reference: ref.reference,
+			reference: readScope ? null : ref.reference,
 		};
 	}
 
@@ -352,11 +352,11 @@ export async function resolveOntologyEvidenceRef(
 			kind: "provided_quote",
 			found: true,
 			sourceKind: ref.sourceKind,
-			sourceId: ref.sourceId,
-			sourcePath: ref.sourcePath,
+			sourceId: readScope ? null : ref.sourceId,
+			sourcePath: readScope ? null : ref.sourcePath,
 			label: "embedded quote",
 			excerpt: compactExcerpt(ref.quote, null),
-			reference: ref.reference,
+			reference: readScope ? null : ref.reference,
 		};
 	}
 
@@ -364,10 +364,10 @@ export async function resolveOntologyEvidenceRef(
 		kind: "unresolved",
 		found: false,
 		sourceKind: ref.sourceKind,
-		sourceId: ref.sourceId,
-		sourcePath: ref.sourcePath,
-		label: ref.sourcePath ?? ref.sourceId ?? ref.memoryId ?? "unknown evidence",
+		sourceId: readScope ? null : ref.sourceId,
+		sourcePath: readScope ? null : ref.sourcePath,
+		label: readScope ? "unknown evidence" : (ref.sourcePath ?? ref.sourceId ?? ref.memoryId ?? "unknown evidence"),
 		excerpt: "",
-		reference: ref.reference,
+		reference: readScope ? null : ref.reference,
 	};
 }

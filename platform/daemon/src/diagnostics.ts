@@ -1,3 +1,4 @@
+import { isPublicReadField } from "./public-read-response";
 import { z } from "zod";
 import type { DbAccessor } from "./db-accessor";
 
@@ -1105,14 +1106,25 @@ export async function readTableSampleAsync(
 	const predicate = diagnosticPredicate(table, columns, scope);
 	const blocked = sampleBlockedReason(match) ?? (predicate ? undefined : "table has no content read scope");
 	if (blocked || !predicate) return { error: `sample unavailable: ${blocked}`, status: 400 };
-	const rows = await databaseDiagnosticRows(
-		accessor,
-		`SELECT ${columns.map((column) => `CASE WHEN typeof(d.${quoteIdentifier(column.name)})='blob' THEN '[blob '||length(d.${quoteIdentifier(column.name)})||' bytes]' ELSE d.${quoteIdentifier(column.name)} END AS ${quoteIdentifier(column.name)}`).join(",")} FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql} ORDER BY ${[...columns.filter((column) => column.primaryKey), ...columns.filter((column) => !column.primaryKey)].map((column) => `d.${quoteIdentifier(column.name)}`).join(",")} LIMIT ? OFFSET ?`,
-		[...predicate.args, limit + 1, offset],
+	const publicColumns = columns.filter(
+		(column) =>
+			isPublicReadField(column.name) &&
+			!(column.name === "id" && /INT/i.test(column.type)) &&
+			!["idx", "sequence", "head_revision", "head_base_revision", "revision"].includes(column.name),
 	);
+	if (publicColumns.length === 0) return { error: "sample unavailable: no public columns", status: 400 };
+	const identifier = /^[a-z_][a-z0-9_]*$/i.test(table) ? table : quoteIdentifier(table);
+	const rawStatement = {
+		sql: `SELECT ${publicColumns.map((column) => `CASE WHEN typeof(d.${quoteIdentifier(column.name)})='blob' THEN '[blob '||length(d.${quoteIdentifier(column.name)})||' bytes]' ELSE d.${quoteIdentifier(column.name)} END AS ${quoteIdentifier(column.name)}`).join(",")} FROM ${identifier} d WHERE 1=1${predicate.sql} ORDER BY ${[...publicColumns.filter((column) => column.primaryKey), ...publicColumns.filter((column) => !column.primaryKey)].map((column) => `d.${quoteIdentifier(column.name)}`).join(",")} LIMIT ? OFFSET ?`,
+		params: [...predicate.args, limit + 1, offset],
+	};
+	const statement = scope
+		? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
+		: rawStatement;
+	const rows = await databaseDiagnosticRows(accessor, statement.sql, statement.params);
 	return {
 		table,
-		columns: columns.map((col) => col.name),
+		columns: publicColumns.map((col) => col.name),
 		rows: rows.slice(0, limit).map(serializeRow),
 		limit,
 		offset,
@@ -1131,7 +1143,7 @@ export async function readScopedSearchTelemetry(
 	const readable = readScopeSql("t", scope, { visibility: null, memory: null, session: "session_key", source: null });
 	const copied = citedEvidenceReadScopeSql("t", scope, "telemetry");
 	const label = telemetryLabelReadScopeSql("t", scope);
-	let sql = `SELECT t.* FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}${label.sql}`;
+	let sql = `SELECT t.id,t.created_at,t.route,t.agent_id,t.session_key,t.project,t.query,t.keyword_query,t.filters_json,t.method,t.result_count,t.top_score,t.no_hits,t.duration_ms,t.timings_json,t.results_json,t.sources_json FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}${label.sql}`;
 	const args = [...readable.args, ...copied.args, ...label.args];
 	for (const [column, value, operator] of [
 		["agent_id", query.agentId, "="],
@@ -1184,7 +1196,7 @@ export function scopedCheckpointStatement(
 	const readable = readScopeSql("c", scope, { visibility: null, checkpoint: true, project: "project_normalized" });
 	const filter = query.project !== undefined ? " AND c.project_normalized=?" : " AND c.session_key=?";
 	return {
-		sql: `SELECT c.* FROM session_checkpoints c WHERE 1=1${readable.sql}${filter} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
+		sql: `SELECT c.id,c.session_key,c.harness,c.project,c.project_normalized,c.trigger,c.digest,c.prompt_count,c.memory_queries,c.recent_remembers,c.focal_entity_ids,c.focal_entity_names,c.active_aspect_ids,c.surfaced_constraint_count,c.traversal_memory_count,c.created_at FROM session_checkpoints c WHERE 1=1${readable.sql}${filter} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
 		params: z
 			.array(z.union([z.string(), z.number()]))
 			.parse([...readable.args, query.project ?? query.sessionKey, query.limit]),

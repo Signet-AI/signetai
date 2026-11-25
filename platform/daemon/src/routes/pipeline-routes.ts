@@ -1,3 +1,4 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { logger } from "../logger";
 import type { ReadScope } from "../read-scope";
 import { resolveRouteReadScope } from "./read-scope";
@@ -348,6 +349,7 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 const scopedTotalsUnavailable = { status: "unavailable", reason: "scoped_totals_omitted" } as const;
 
 export function registerPipelineRoutes(app: Hono): void {
+	registerPublicReadResponse(app, "/api/dream/*");
 	app.use("/api/diagnostics", async (c, next) => {
 		return requirePermission("diagnostics", authConfig)(c, next);
 	});

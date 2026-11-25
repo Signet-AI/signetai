@@ -3512,7 +3512,7 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 152,
+      "line": 153,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: ReadDb) => {",
       "category": "hot-path",
@@ -3520,28 +3520,28 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 410,
+      "line": 412,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 411,
+      "line": 413,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 454,
+      "line": 456,
       "api": "existsSync",
       "source": "memoryDb: existsSync(MEMORY_DB),",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 513,
+      "line": 515,
       "api": "readFileSync",
       "source": "soulContent = readFileSync(soulPath, \"utf-8\").slice(0, 500);",
       "category": "hot-path"

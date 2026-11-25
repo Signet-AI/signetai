@@ -1,3 +1,4 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { reconcileAgentSources } from "../auth/agent-access";
 import { resolveRouteReadScope } from "./read-scope";
 import { knowledgeReadOwner, getKnowledgeCommunities, expandKnowledgeSessions } from "../knowledge-graph-hygiene";
@@ -42,6 +43,7 @@ import { AGENTS_DIR, authConfig } from "./state";
 import { resolveMutationActor, resolveScopedAgentId, resolveScopedProject } from "./utils";
 
 export function registerKnowledgeRoutes(app: Hono): void {
+	registerPublicReadResponse(app, "/api/knowledge/*");
 	const parseNavigationLimit = (value: string | undefined, fallback: number, max: number): number => {
 		const parsed = Number.parseInt(value ?? String(fallback), 10);
 		return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), max) : fallback;
@@ -414,7 +416,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const readScope = await resolveRouteReadScope(c, requestedReadAgent);
 
 		return c.json({
-			status: readScope.compartments === "all" ? getTraversalStatus() : null,
+			status: readScope.reach.kind === "all" && readScope.compartments === "all" ? getTraversalStatus() : null,
 		});
 	});
 	app.get("/api/knowledge/constellation", etag(), async (c) => {
@@ -439,29 +441,35 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const agentId = scopedAgent?.agentId ?? resolveDaemonAgentId();
 		const accessor = getDbAccessor();
 		const backlogProbe =
-			readScope.compartments === "all"
+			readScope.reach.kind === "all" && readScope.compartments === "all"
 				? await probeDreamingEpisodicBacklog(accessor, agentId, loadMemoryConfig(AGENTS_DIR).dreaming.tokenThreshold)
 				: undefined;
-		return c.json(
-			await getKnowledgeGraphForConstellation(
-				accessor,
-				agentId,
-				{
-					limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
-					maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
-					maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
-					maxAttributes: parseNavigationLimit(
-						c.req.query("max_attributes"),
-						MAX_CONSTELLATION_ATTRIBUTES,
-						MAX_CONSTELLATION_ATTRIBUTES,
+		return c.body(
+			JSON.stringify(
+				publicReadValue(
+					await getKnowledgeGraphForConstellation(
+						accessor,
+						agentId,
+						{
+							limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
+							maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
+							maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
+							maxAttributes: parseNavigationLimit(
+								c.req.query("max_attributes"),
+								MAX_CONSTELLATION_ATTRIBUTES,
+								MAX_CONSTELLATION_ATTRIBUTES,
+							),
+							dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
+							assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
+							backlogProbe,
+							allAgents,
+						},
+						readScope,
 					),
-					dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
-					assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
-					backlogProbe,
-					allAgents,
-				},
-				readScope,
+				),
 			),
+			200,
+			{ "Content-Type": "application/json; charset=UTF-8" },
 		);
 	});
 

@@ -1,3 +1,4 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
 import { resolveRouteReadScope } from "./read-scope";
 import { realpathSync } from "node:fs";
@@ -145,6 +146,9 @@ function boundedTelemetryLimit(raw: string | undefined, fallback: number, maximu
 }
 
 export function registerTelemetryRoutes(app: Hono): void {
+	registerPublicReadResponse(app, "/api/telemetry/*");
+	registerPublicReadResponse(app, "/api/checkpoints");
+	registerPublicReadResponse(app, "/api/checkpoints/*");
 	app.use("/api/checkpoints", async (c, next) => requirePermission("recall", authConfig)(c, next));
 	app.use("/api/checkpoints/*", async (c, next) => requirePermission("recall", authConfig)(c, next));
 	app.use("/api/analytics", async (c, next) => {

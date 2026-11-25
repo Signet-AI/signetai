@@ -1076,7 +1076,7 @@ export async function getDreamingToolCalls(
 	}>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.tool-calls.list",
-		`SELECT id, pass_id AS passId, sequence, tool_call_id AS toolCallId,
+		`SELECT id, pass_id AS passId, ${readScope ? "ROW_NUMBER() OVER(ORDER BY sequence,id)-1" : "sequence"} AS sequence, tool_call_id AS toolCallId,
 		        tool_name AS toolName, input_json AS inputJson, output_json AS outputJson,
 		        success, latency_ms AS latencyMs, created_at AS createdAt
 		 FROM dreaming_tool_calls

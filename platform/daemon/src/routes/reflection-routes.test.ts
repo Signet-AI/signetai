@@ -136,6 +136,20 @@ afterEach(async () => {
 });
 
 describe("reflection routes", () => {
+	it("reflection answer pointers require a readable target", async () => {
+		seedReflection("pointer-reflection", "default");
+		await dbAccessor.withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_pointer','Pointer'); INSERT INTO classification_audience VALUES('cls_pointer','user','carol'); INSERT INTO compartments(id,key) VALUES(1,'cls_pointer'); INSERT INTO compartment_members VALUES(1,'cls_pointer'); INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('private-answer','private answer','default',1,'now','now'); UPDATE daily_reflections SET answer_memory_id='private-answer' WHERE id='pointer-reflection'",
+			),
+		);
+		expect(await (await app("alice").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: null }],
+		});
+		expect(await (await app("carol").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: "private-answer" }],
+		});
+	});
 	it("reflection reads do not observe hidden inserts, edits, or reclassification", async () => {
 		const date = new Date().toISOString().slice(0, 10);
 		seedReflection("public", "default", date, "Public reflection", `${date}T08:00:00.000Z`);

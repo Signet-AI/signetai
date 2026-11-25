@@ -51,6 +51,14 @@ export function readReflection(scope: ReadScope, id: string): Promise<Reflection
 	return dbOwnerReflectionGet(scope, id);
 }
 
+function reflectionProjection(scope: ReadScope): ReturnType<typeof readScopeSql> {
+	const answer = readScopeSql("answer_memory", scope);
+	return {
+		sql: `r.id,r.agent_id,r.date,r.summary,r.patterns,r.question,r.answer,CASE WHEN EXISTS(SELECT 1 FROM memories answer_memory WHERE answer_memory.id=r.answer_memory_id${answer.sql}) THEN r.answer_memory_id ELSE NULL END AS answer_memory_id,r.memory_ids,r.summary_ids,r.model,r.created_at,r.answered_at`,
+		args: answer.args,
+	};
+}
+
 export function readReflectionsInOwner(
 	db: ReadDb,
 	scope: ReadScope,
@@ -58,7 +66,8 @@ export function readReflectionsInOwner(
 ): readonly ReflectionRow[] {
 	const predicate = reflectionPredicate(scope);
 	const filters = ["1=1", predicate.sql];
-	const params = [...predicate.args];
+	const projection = reflectionProjection(scope);
+	const params = [...projection.args, ...predicate.args];
 	if (input.date !== undefined) {
 		filters.push("AND r.date=?");
 		params.push(input.date);
@@ -75,7 +84,7 @@ export function readReflectionsInOwner(
 		.parse(
 			db
 				.prepare(
-					`SELECT r.* FROM daily_reflections r WHERE ${filters.join(" ")} ORDER BY r.created_at DESC,r.id LIMIT ?`,
+					`SELECT ${projection.sql} FROM daily_reflections r WHERE ${filters.join(" ")} ORDER BY r.created_at DESC,r.id LIMIT ?`,
 				)
 				.all(...params),
 		);
@@ -83,11 +92,13 @@ export function readReflectionsInOwner(
 
 export function readReflectionInOwner(db: ReadDb, scope: ReadScope, id: string): ReflectionRow | null {
 	const predicate = reflectionPredicate(scope);
+	const projection = reflectionProjection(scope);
 	return reflectionRowSchema
 		.nullable()
 		.parse(
-			db.prepare(`SELECT r.* FROM daily_reflections r WHERE r.id=? ${predicate.sql}`).get(id, ...predicate.args) ??
-				null,
+			db
+				.prepare(`SELECT ${projection.sql} FROM daily_reflections r WHERE r.id=? ${predicate.sql}`)
+				.get(...projection.args, id, ...predicate.args) ?? null,
 		);
 }
 

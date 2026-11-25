@@ -1,3 +1,4 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { resolveRouteReadScope } from "./read-scope";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
@@ -127,6 +128,7 @@ function resolveAgent(c: Context, requested: string | undefined): { agentId: str
 }
 
 export function registerOntologyRoutes(app: Hono): void {
+	registerPublicReadResponse(app, "/api/ontology/*");
 	app.use("/api/ontology/proposals", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);

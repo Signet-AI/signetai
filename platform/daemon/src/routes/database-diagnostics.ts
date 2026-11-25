@@ -1,3 +1,4 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import type { DbAccessor } from "../db-accessor";
@@ -18,6 +19,7 @@ export type {
 } from "../diagnostics";
 
 export function registerDatabaseDiagnosticsRoutes(app: Hono, deps?: { readonly accessor?: DbAccessor }): void {
+	registerPublicReadResponse(app, "/api/diagnostics/database/*");
 	const accessor = () => deps?.accessor;
 
 	app.use("/api/diagnostics/database", async (c, next) => requirePermission("diagnostics", authConfig)(c, next));

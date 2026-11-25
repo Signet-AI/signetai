@@ -1,3 +1,4 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { randomUUID } from "node:crypto";
 import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
@@ -57,6 +58,7 @@ function formatReflection(r: ReflectionRow) {
 }
 
 export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = {}): void {
+	registerPublicReadResponse(app, "/api/reflections/*");
 	const resolveDbAccessor = deps.getDbAccessor ?? getDbAccessor;
 
 	app.use("/api/reflections", async (c, next) => {

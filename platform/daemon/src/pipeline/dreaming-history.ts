@@ -403,7 +403,10 @@ export async function zoomDreamingHistory(
 		params.readScope,
 	);
 	if (lines.length !== 3) return { ok: false, error: `No line ${id}+${n}.` };
-	return { ok: true, lines: lines.slice(1).map((line) => `${lineLabel(line.node)}|${line.text}`) };
+	return {
+		ok: true,
+		lines: lines.slice(1).map((line) => (params.readScope ? line.text : `${lineLabel(line.node)}|${line.text}`)),
+	};
 }
 
 function nextMerge(counts: readonly number[]): HistoryNode | null {
