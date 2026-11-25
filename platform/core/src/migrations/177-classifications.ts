@@ -30,6 +30,7 @@ export const COMPARTMENT_TABLES = [
 	"memory_head_revision_entries",
 	"memory_search_telemetry",
 	"session_recall_events",
+	"cross_agent_messages",
 ] as const;
 function exists(db: MigrationDb, table: string): boolean {
 	return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table) != null;
@@ -130,8 +131,9 @@ export function backfillEvidenceCitations(db: MigrationDb): void {
 			);
 	}
 }
-function installWriteGuards(db: MigrationDb): void {
+export function installWriteGuards(db: MigrationDb): void {
 	for (const table of [
+		"cross_agent_messages",
 		"memories",
 		"memory_artifacts",
 		"session_transcripts",
@@ -149,8 +151,9 @@ function installWriteGuards(db: MigrationDb): void {
 				.all()
 				.map((row) => row.name),
 		);
-		if (!columns.has("agent_id")) continue;
-		const sessions = ["session_key", "session_id"]
+		const ownerColumn = table === "cross_agent_messages" ? "from_agent_id" : "agent_id";
+		if (!columns.has(ownerColumn)) continue;
+		const sessions = ["session_key", "session_id", "from_session_key"]
 			.filter((column) => columns.has(column))
 			.map((column) => `new.${column}`);
 		const sources = ["source_id", "source_ref"]
@@ -167,7 +170,7 @@ function installWriteGuards(db: MigrationDb): void {
 						: "NULL";
 		const agent = table.startsWith("embeddings")
 			? `COALESCE(new.agent_id,(SELECT agent_id FROM memories WHERE id=${memory}))`
-			: "new.agent_id";
+			: `new.${ownerColumn}`;
 		const lookup = (kind: string, targets: string, owner = agent) =>
 			`SELECT a.classification_id FROM classification_assignments a WHERE a.agent_id=${owner} AND a.target_kind='${kind}' AND a.target_id IN (${targets})`;
 		const sessionTargets = (session: string) =>
@@ -200,6 +203,8 @@ function installWriteGuards(db: MigrationDb): void {
 			);
 		const scopeColumns = [
 			"compartment_id",
+			"from_agent_id",
+			"from_session_key",
 			"agent_id",
 			"session_key",
 			"session_id",
@@ -321,8 +326,71 @@ export function up(db: MigrationDb): void {
 		db.exec(
 			"CREATE INDEX IF NOT EXISTS idx_classification_visibility ON org_jobs(kind,status) WHERE kind='classify' AND status IN ('pending','running','failed')",
 		);
+	installEvidencePurgeLifecycle(db);
 	installWriteGuards(db);
 	backfillEvidenceCitations(db);
 	rebuildBaseCompartmentFts(db);
 	if (exists(db, "memories_fts")) createMemoriesFts(db);
+}
+
+export function configureEvidencePurgeConnection(db: MigrationDb): void {
+	db.exec("PRAGMA recursive_triggers=ON");
+}
+
+export function installEvidencePurgeLifecycle(db: MigrationDb): void {
+	configureEvidencePurgeConnection(db);
+	const derived = [
+		["entity", "entities", "id"],
+		["attribute", "entity_attributes", "id"],
+		["dependency", "entity_dependencies", "id"],
+		["aspect", "entity_aspects", "id"],
+		["assertion", "epistemic_assertions", "id"],
+		["memory", "memories", "id"],
+		["reflection", "daily_reflections", "id"],
+		["proposal", "ontology_proposals", "id"],
+		["contradiction", "ontology_contradictions", "id"],
+		["community", "entity_communities", "id"],
+		["head_entry", "memory_head_entries", "entry_id"],
+		["head_revision", "memory_head_revision_entries", "json_array(revision,entry_id)"],
+		["telemetry", "memory_search_telemetry", "id"],
+		["telemetry", "session_recall_events", "json_array(session_key,context_epoch,item_kind,item_id)"],
+	] as const;
+	for (const [table, kind, key] of [
+		["memories", "memory", "id"],
+		["session_transcripts", "transcript", "session_key"],
+		["memory_artifacts", "artifact", "source_path"],
+		["session_summaries", "summary", "id"],
+		["entity_attributes", "attribute", "id"],
+	] as const) {
+		if (!exists(db, table)) continue;
+		const affected = `SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}' AND evidence_id=old.${key}`;
+		const deletes = derived
+			.filter(([, target]) => exists(db, target))
+			.map(
+				([derivedKind, target, targetKey]) =>
+					`DELETE FROM ${target} WHERE agent_id=old.agent_id ${target === "entities" && db.prepare("SELECT 1 FROM pragma_table_info('entities') WHERE name='person_user_id'").get() ? "AND person_user_id IS NULL" : ""} AND ${targetKey} IN (SELECT derived_id FROM (${affected}) WHERE derived_kind='${derivedKind}') AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.agent_id=old.agent_id AND c.derived_kind='${derivedKind}' AND c.derived_id=${targetKey.startsWith("json_array") ? targetKey.replace(/\b(revision|entry_id|session_key|context_epoch|item_kind|item_id)\b/g, `${target}.$1`) : `${target}.${targetKey}`} AND NOT(c.evidence_kind='${kind}' AND c.evidence_id=old.${key}));`,
+			)
+			.join("");
+		const enqueue = exists(db, "org_jobs")
+			? `UPDATE org_jobs SET status='pending',progress_json=NULL,error=NULL,finished_at=NULL WHERE kind='recompute' AND status IN ('pending','running') AND json_extract(params_json,'$.agentId')=old.agent_id AND EXISTS(${affected}); INSERT INTO org_jobs(id,kind,status,params_json,created_at) SELECT 'job_recompute_'||lower(hex(randomblob(16))),'recompute','pending',json_object('agentId',old.agent_id),datetime('now') WHERE EXISTS(${affected}) AND NOT EXISTS(SELECT 1 FROM org_jobs WHERE kind='recompute' AND status IN ('pending','running') AND json_extract(params_json,'$.agentId')=old.agent_id);`
+			: "";
+		db.exec(
+			`DROP TRIGGER IF EXISTS ${table}_evidence_purge; CREATE TRIGGER ${table}_evidence_purge AFTER DELETE ON ${table} BEGIN ${enqueue}${deletes} DELETE FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}' AND evidence_id=old.${key}; END`,
+		);
+	}
+	for (const [kind, table, key] of derived) {
+		if (!exists(db, table)) continue;
+		const oldKey = key.startsWith("json_array")
+			? key
+					.replaceAll("revision", "old.revision")
+					.replaceAll("entry_id", "old.entry_id")
+					.replaceAll("session_key", "old.session_key")
+					.replaceAll("context_epoch", "old.context_epoch")
+					.replaceAll("item_kind", "old.item_kind")
+					.replaceAll("item_id", "old.item_id")
+			: `old.${key}`;
+		db.exec(
+			`DROP TRIGGER IF EXISTS ${table}_citation_purge; CREATE TRIGGER ${table}_citation_purge AFTER DELETE ON ${table} BEGIN DELETE FROM evidence_citations WHERE derived_kind='${kind}' AND agent_id=old.agent_id AND derived_id=${oldKey}; END`,
+		);
+	}
 }

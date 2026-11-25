@@ -2,7 +2,7 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { type DbAccessor, type WriteDb, prepareTypedStatement } from "./db-accessor";
 import { compartmentForWrite } from "@signet/core";
 import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
-import { recallResultEvidenceInTx, pruneTelemetryCitationsInTx } from "./db-helpers";
+import { recallResultEvidenceInTx } from "./db-helpers";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
 
@@ -283,7 +283,6 @@ export async function recordMemorySearchTelemetry(
 				compartment,
 			);
 			recordEvidenceCitationsInTx(w, { agentId: input.agentId, derivedKind: "telemetry", derivedId: id, evidence });
-			pruneTelemetryCitationsInTx(w, cutoff);
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});
 	} catch (err) {

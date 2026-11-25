@@ -137,7 +137,8 @@ export function persistCommunities(
 		}
 		const cohesion = computeCohesion(graph, nodeIds);
 
-		writeCommunityProjectionInTx(db, { id: communityId, agentId, name: bestName, cohesion, memberIds: nodeIds });
+		if (!writeCommunityProjectionInTx(db, { id: communityId, agentId, name: bestName, cohesion, memberIds: nodeIds }))
+			continue;
 
 		for (const nodeId of nodeIds) {
 			updateEntity.run(communityId, nodeId, agentId);

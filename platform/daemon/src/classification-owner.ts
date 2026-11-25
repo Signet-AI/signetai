@@ -1,5 +1,6 @@
 import {
 	compartmentFor,
+	classificationsForWrite,
 	attempt,
 	syncEmbeddingCompartment,
 	COMPARTMENT_TABLES,
@@ -214,7 +215,7 @@ function tableInfo(db: MigrationDb, table: string): TableInfo | undefined {
 		columns,
 		key,
 		kind,
-		select: `rowid AS _classification_rowid,${key} AS _classification_key${selected.length ? "," + selected.join(",") : ""}`,
+		select: `rowid AS _classification_rowid,${key} AS _classification_key${table === "cross_agent_messages" ? ",from_agent_id AS agent_id,from_session_key AS session_key" : ""}${selected.length ? "," + selected.join(",") : ""}`,
 	};
 	cache.set(table, info);
 	return info;
@@ -230,7 +231,7 @@ function contentRows(
 	if (!info) return [];
 	return db
 		.prepare(
-			`SELECT ${info.select} FROM ${table} WHERE ${where}${limit === undefined ? "" : " ORDER BY rowid LIMIT ?"}`,
+			`SELECT ${info.select} FROM ${table} WHERE ${table === "cross_agent_messages" ? where.replace(/\bagent_id\b/g, "from_agent_id").replace(/\bsession_key\b/g, "from_session_key") : where}${limit === undefined ? "" : " ORDER BY rowid LIMIT ?"}`,
 		)
 		.all(...args, ...(limit === undefined ? [] : [limit]))
 		.map((row) => ({ table, row, key: String(row._classification_key), kind: info.kind }));
@@ -721,15 +722,17 @@ function batch(
 				? "1"
 				: name === "session_checkpoints"
 					? "(agent_id=? OR (agent_id IS NULL AND session_key IN (SELECT session_key FROM session_transcripts WHERE agent_id=? UNION SELECT session_key FROM session_claims WHERE agent_id=?)))"
-					: info.columns.has("agent_id")
-						? "agent_id=?"
-						: "0";
+					: name === "cross_agent_messages"
+						? "from_agent_id=?"
+						: info.columns.has("agent_id")
+							? "agent_id=?"
+							: "0";
 		const args =
 			agentId === undefined
 				? []
 				: name === "session_checkpoints"
 					? [agentId, agentId, agentId]
-					: info.columns.has("agent_id")
+					: name === "cross_agent_messages" || info.columns.has("agent_id")
 						? [agentId]
 						: [];
 		const page = contentRows(db, name, `rowid>? AND ${scope}`, [rowid, ...args], 2000 - rows.length);
@@ -907,13 +910,17 @@ function visibility(db: MigrationDb, subject: AudienceSubject) {
 	return { compartments: readable(db, subject), ...(pending ? { inFlightUserId: subject.userId } : {}) };
 }
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
+	if (request.op === "admit-write") {
+		for (const scope of request.scopes) classificationsForWrite(db, scope);
+		return true;
+	}
 	if (request.op === "visibility") return visibility(db, request.subject);
 	if (request.op === "readable") return request.subject.local ? "all" : readable(db, request.subject);
 	if (request.op === "record-error")
 		return transaction(db, () => {
 			const job = db
 				.prepare(
-					"SELECT status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify')",
+					"SELECT kind,status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','recompute')",
 				)
 				.get(request.jobId);
 			if (!job) throw new Error("not_found");
@@ -934,7 +941,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 				failed ? new Date().toISOString() : null,
 				request.jobId,
 			);
-			if (failed) {
+			if (failed && job.kind !== "recompute") {
 				const params = enqueuedSchema.parse(JSON.parse(String(job.params_json)));
 				audit(
 					db,
@@ -951,7 +958,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 	if (request.op === "recover") {
 		const jobs = db
 			.prepare(
-				"SELECT id FROM org_jobs WHERE kind IN ('classify','unclassify') AND status IN ('pending','running') AND id>? ORDER BY id LIMIT 100",
+				"SELECT id FROM org_jobs WHERE kind IN ('classify','unclassify','recompute') AND status IN ('pending','running') AND id>? ORDER BY id LIMIT 100",
 			)
 			.all(request.cursor ?? "")
 			.flatMap((row) => (typeof row.id === "string" ? [row.id] : []));
@@ -1094,6 +1101,25 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 		});
 	if (request.op === "execute") {
 		try {
+			const repair = db.prepare("SELECT * FROM org_jobs WHERE id=? AND kind='recompute'").get(request.jobId);
+			if (repair)
+				return transaction(db, () => {
+					if (repair.status === "complete") return { status: "complete" };
+					if (repair.status === "failed") throw new Error("recompute_failed");
+					const params = z.object({ agentId: z.string().min(1) }).parse(JSON.parse(String(repair.params_json)));
+					const cursor = repair.progress_json
+						? cursorSchema.parse(JSON.parse(String(repair.progress_json)))
+						: { table: 0, rowid: 0, updated: 0 };
+					const page = batch(db, params.agentId, cursor);
+					const updated = cursor.updated + recompute(db, page.rows);
+					db.prepare("UPDATE org_jobs SET status=?,progress_json=?,finished_at=? WHERE id=?").run(
+						page.done ? "complete" : "running",
+						JSON.stringify({ ...page.cursor, updated }),
+						page.done ? new Date().toISOString() : null,
+						request.jobId,
+					);
+					return { status: page.done ? "complete" : "running" };
+				});
 			return executeJob(db, request.jobId);
 		} catch (error) {
 			db.prepare("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=? AND status='pending'").run(

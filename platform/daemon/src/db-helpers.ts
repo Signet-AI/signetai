@@ -146,6 +146,14 @@ const EVIDENCE_ROWS = {
 	summary: { table: "session_summaries", key: "id", session: "session_key", source: "source_ref" },
 	attribute: { table: "entity_attributes", key: "id", session: "NULL", source: "source_id" },
 } as const;
+export class MissingEvidenceError extends Error {
+	constructor(
+		readonly evidence: CitationEvidence,
+		readonly agentId: string,
+	) {
+		super("evidence_missing");
+	}
+}
 export function evidenceCompartmentInTx(
 	db: WriteDb,
 	agentId: string,
@@ -163,7 +171,7 @@ export function evidenceCompartmentInTx(
 			db,
 			`SELECT compartment_id,${source.session} AS session_key,${source.source} AS source_id FROM ${source.table} WHERE ${source.key}=? AND agent_id=?`,
 		).get(ref.id, agentId);
-		if (!row) throw new Error("evidence_not_in_agent");
+		if (!row) throw new MissingEvidenceError(ref, agentId);
 		const inherited = compartmentForWrite(db, {
 			agentId,
 			sessionKey: typeof row.session_key === "string" ? row.session_key : null,
@@ -308,10 +316,14 @@ export function recallResultEvidenceInTx(
 	return [{ kind: "memory", id: item.id }];
 }
 
-export function pruneTelemetryCitationsInTx(db: WriteDb, cutoff: string): void {
-	db.prepare(
-		"DELETE FROM evidence_citations WHERE derived_kind='telemetry' AND derived_id IN (SELECT id FROM memory_search_telemetry WHERE created_at < ?)",
-	).run(cutoff);
+export function pruneSessionRecallEventsInTx(db: WriteDb, cutoff: string, limit: number): number {
+	return countChanges(
+		db
+			.prepare(
+				"DELETE FROM session_recall_events WHERE rowid IN (SELECT rowid FROM session_recall_events WHERE created_at < ? ORDER BY rowid LIMIT ?)",
+			)
+			.run(cutoff, limit),
+	);
 }
 
 export function resetCommunityProjectionInTx(db: WriteDb, agentId: string): void {
@@ -328,7 +340,7 @@ export function writeCommunityProjectionInTx(
 		readonly cohesion: number;
 		readonly memberIds: readonly string[];
 	},
-): void {
+): boolean {
 	const labels = new Set<string>();
 	const evidence: CitationEvidence[] = [];
 	for (const id of input.memberIds) {
@@ -352,9 +364,21 @@ export function writeCommunityProjectionInTx(
 				.map((row) => ({ kind: row.evidence_kind, id: row.evidence_id })),
 		);
 	}
-	const compartment = evidenceCompartmentInTx(db, input.agentId, evidence, compartmentFor(db, [...labels]));
+	let compartment: number | null;
+	try {
+		compartment = evidenceCompartmentInTx(db, input.agentId, evidence, compartmentFor(db, [...labels]));
+	} catch (error) {
+		if (!(error instanceof MissingEvidenceError)) throw error;
+		db.prepare("DELETE FROM evidence_citations WHERE agent_id=? AND evidence_kind=? AND evidence_id=?").run(
+			error.agentId,
+			error.evidence.kind,
+			error.evidence.id,
+		);
+		return false;
+	}
 	db.prepare(
 		"INSERT INTO entity_communities(id,agent_id,name,cohesion,member_count,created_at,updated_at,compartment_id) VALUES(?,?,?,?,?,datetime('now'),datetime('now'),?)",
 	).run(input.id, input.agentId, input.name, input.cohesion, input.memberIds.length, compartment);
 	recordEvidenceCitationsInTx(db, { agentId: input.agentId, derivedKind: "community", derivedId: input.id, evidence });
+	return true;
 }
