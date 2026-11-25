@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { txAnswerReflection } from "./transactions";
+import { txAnswerReflection } from "./reflection-owner";
 import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -692,7 +692,7 @@ export async function dbOwnerSourcePurge(
 }
 
 export async function dbOwnerReflectionAnswer(
-	input: import("./transactions").ReflectionAnswerInput,
+	input: import("./reflection-owner").ReflectionAnswerInput,
 	accessor: DbAccessor,
 ): Promise<boolean> {
 	return submitWithAdmission(

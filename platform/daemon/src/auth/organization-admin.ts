@@ -1,21 +1,4 @@
 import { z } from "zod";
-export async function settleOffboardPurge(work: Promise<void>, jobId: string): Promise<void> {
-	await work
-		.catch(async (error: unknown) => {
-			await organizationWrite([
-				statement("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=?", [
-					error instanceof Error ? error.message : String(error),
-					new Date().toISOString(),
-					jobId,
-				]),
-			]);
-		})
-		.catch((error: unknown) => {
-			logger.error("auth", "Offboarding failure could not be persisted", error instanceof Error ? error : undefined, {
-				jobId,
-			});
-		});
-}
 
 import { logger } from "../logger";
 import type { Principal } from "./principal";
@@ -435,6 +418,27 @@ export async function assignKey(p: Principal, keyId: string, input: unknown) {
 	]);
 	return { ok: true };
 }
+export async function settleOffboardPurge(work: Promise<void>, jobId: string): Promise<void> {
+	const [result] = await Promise.allSettled([work]);
+	if (result?.status !== "rejected") return;
+	const [recorded] = await Promise.allSettled([
+		organizationWrite([
+			statement("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=?", [
+				result.reason instanceof Error ? result.reason.message : String(result.reason),
+				new Date().toISOString(),
+				jobId,
+			]),
+		]),
+	]);
+	if (recorded?.status === "rejected")
+		logger.error(
+			"auth",
+			"Offboarding failure could not be persisted",
+			recorded.reason instanceof Error ? recorded.reason : undefined,
+			{ jobId },
+		);
+}
+
 async function activeTarget(userId: string) {
 	const u = await readUser(userId);
 	if (!u || u.status !== "active") throw new IdentityError(400, "invalid_user");

@@ -14,7 +14,7 @@ const SQL_OWNERS = [
 	"platform/daemon/src/auth/oidc.ts",
 	"platform/daemon/src/auth/organization-runtime.ts",
 	"platform/daemon/src/auth/audit-owner.ts",
-	"platform/daemon/src/auth/write-attribution.ts",
+	"platform/daemon/src/reflection-owner.ts",
 	"platform/daemon/src/cross-agent-message-owner.ts",
 	"platform/daemon/src/db-accessor.ts",
 	"platform/daemon/src/diagnostics.ts",

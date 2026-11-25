@@ -1237,7 +1237,7 @@ export function runDbOwnerWorker(): void {
 			}
 		}
 		if (job.request.kind === "reflection_answer") {
-			const { txAnswerReflection } = await import("./transactions");
+			const { txAnswerReflection } = await import("./reflection-owner");
 			const input = job.request.input;
 			return withBusyRetry(() => txAnswerReflection(db, input), context);
 		}
