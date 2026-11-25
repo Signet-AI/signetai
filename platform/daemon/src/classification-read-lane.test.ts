@@ -6,7 +6,11 @@ import { classificationFixture } from "./test-support/classification-fixture.tes
 import { classificationRequest } from "./classifications";
 import { initDbAccessorLite, closeDbAccessor } from "./db-accessor";
 import { createDbOwnerClient } from "./db-owner-client";
-import { createDbOwnerMaintenance, registerDbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+	closeRegisteredDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 
 test("readable compartment reads overtake queued maintenance work", async () => {
 	const directory = mkdtempSync(join(tmpdir(), "classification-lane-")),
@@ -35,6 +39,7 @@ test("readable compartment reads overtake queued maintenance work", async () => 
 		expect(await Promise.race([read.then(() => "read"), second.result.then(() => "maintenance")])).toBe("read");
 		await Promise.all([first.result, second.result, read]);
 	} finally {
+		await closeRegisteredDbOwnerMaintenance();
 		await closeDbAccessor();
 		await owner.close();
 		rmSync(directory, { recursive: true, force: true });

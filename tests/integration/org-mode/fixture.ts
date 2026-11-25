@@ -161,7 +161,7 @@ export class Fixture {
 			}),
 			"PATCH /api/org/users/:id compliance",
 		);
-		this.engAgent = id(
+		this.engAgent = text(
 			success(
 				await request(this.daemon.origin, "/api/agents", this.admin, "POST", {
 					name: "eng-agent",
@@ -169,7 +169,7 @@ export class Fixture {
 					ownerGroupId: this.engId,
 				}),
 				"POST /api/agents team",
-			),
+			).agentId,
 		);
 		const inventory = success(
 			await request(this.daemon.origin, "/api/agents", this.admin),

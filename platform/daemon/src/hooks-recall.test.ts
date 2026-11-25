@@ -897,7 +897,7 @@ memory:
 			body: "{",
 		});
 		expect(badBody.status).toBe(400);
-		expect(await badBody.json()).toEqual({ error: "invalid request body" });
+		expect(await badBody.json()).toEqual({ error: "invalid_request", reason: "invalid_request" });
 
 		const sessionKey = `claude-stop-rejected-${crypto.randomUUID()}`;
 		const rejected = [
@@ -987,7 +987,9 @@ memory:
 				);
 
 				expect(resp.status).toBe(403);
-				expect(await resp.json()).toEqual({ error });
+				expect(await resp.json()).toEqual(
+					role === "readonly" ? { error, reason: "permission", required: "remember" } : { error },
+				);
 				expect(storedTranscript(sessionKey)).toBeNull();
 				expect(stopRecords(sessionKey)).toEqual([]);
 			}
@@ -1581,6 +1583,7 @@ memory:
 			const release = await admission.acquire("local");
 			if (typeof release !== "function") throw new Error("expected grant");
 			const routes = new Hono();
+			(await import("./middleware")).registerGlobalMiddleware(routes);
 			registerMemoryRoutes(routes, { memoryCaptureAdmission: admission, fetchEmbedding: async () => null });
 			let settled = false;
 			const content = `Remember admission durable receipt ${crypto.randomUUID()}`;

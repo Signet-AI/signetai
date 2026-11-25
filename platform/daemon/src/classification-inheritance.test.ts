@@ -66,6 +66,7 @@ test("compaction summaries inherit their session classification on insert and re
 	for (const summaryId of ["summary-one", "summary-two"])
 		db.transaction(() =>
 			commitCompactionSummaryInTx(db, {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				sessionKey: "session",
 				harness: "test",
@@ -89,6 +90,7 @@ test("canonical memory ingestion inherits an already classified agent", () => {
 	const db = assigned();
 	db.transaction(() =>
 		txIngestEnvelope(db, {
+			author: { userId: null, credential: "system" },
 			id: "ingested",
 			content: "new secret",
 			contentHash: "new-hash",

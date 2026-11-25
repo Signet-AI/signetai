@@ -44,16 +44,13 @@ export function registerGlobalMiddleware(app: Hono): void {
 		return next();
 	});
 	const limitBody = bodyLimit({ maxSize: 10 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) });
-	const stopBody = bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) });
 	const importBody = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: "payload too large" }, 413) });
 	app.use("*", (c, next) =>
-		streamedRequestBody(c)
+		streamedRequestBody(c) || c.req.path === "/api/hooks/stop"
 			? next()
-			: c.req.path === "/api/hooks/stop"
-				? stopBody(c, next)
-				: c.req.method === "POST" && c.req.path === "/api/sources/imports"
-					? importBody(c, next)
-					: limitBody(c, next),
+			: c.req.method === "POST" && c.req.path === "/api/sources/imports"
+				? importBody(c, next)
+				: limitBody(c, next),
 	);
 	let identityConfig = authConfig,
 		identitySecret = authSecret,

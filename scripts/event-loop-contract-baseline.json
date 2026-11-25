@@ -3395,14 +3395,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1536,
+      "line": 1515,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1543,
+      "line": 1522,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3410,7 +3410,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1628,
+      "line": 1607,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: WriteDb) => {",
       "category": "hot-path",

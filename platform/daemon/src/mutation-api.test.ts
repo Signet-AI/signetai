@@ -30,6 +30,7 @@ function seedMemory(args: {
 	getDbAccessor().withWriteTx((db) => {
 		txIngestEnvelope(db, {
 			author: { userId: null, credential: "system" },
+			agentId: "default",
 			id: args.id,
 			content: args.content,
 			normalizedContent: args.content.toLowerCase(),
@@ -1248,6 +1249,7 @@ memory:
 		getDbAccessor().withWriteTx((db) => {
 			txIngestEnvelope(db, {
 				author: { userId: null, credential: "system" },
+				agentId: "default",
 				id: "mem-episodic",
 				content: "Original episodic evidence",
 				normalizedContent: "original episodic evidence",
@@ -1297,6 +1299,7 @@ memory:
 		getDbAccessor().withWriteTx((db) => {
 			txIngestEnvelope(db, {
 				author: { userId: null, credential: "system" },
+				agentId: "default",
 				id: "semantic-claim-api",
 				content: "Signet is a memory system.",
 				normalizedContent: "signet is a memory system.",

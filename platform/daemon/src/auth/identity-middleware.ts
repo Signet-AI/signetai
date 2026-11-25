@@ -1,4 +1,6 @@
-import type { Context, MiddlewareHandler } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { withStopAdmission } from "../stop-admission";
+import type { Context, MiddlewareHandler, Next } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { hasDbAccessor } from "../db-accessor";
@@ -41,6 +43,27 @@ declare module "hono" {
 		author: { userId: string | null; credential: string };
 	}
 }
+async function withIdentityBody(c: Context, next: Next): Promise<Response | undefined> {
+	if (c.req.method !== "POST" || c.req.path !== "/api/hooks/stop") {
+		await next();
+		return;
+	}
+	try {
+		return await withStopAdmission(c, async () => {
+			const response = await bodyLimit({
+				maxSize: 2 * 1_048_576,
+				onError: (ctx) => ctx.json({ error: "payload too large" }, 413),
+			})(c, async () => {
+				await prepareJsonBody(c);
+				await next();
+			});
+			if (response) c.res = response;
+		});
+	} catch (error) {
+		if (error instanceof JsonBodyError) return c.json({ error: error.message, reason: error.reason }, error.status);
+		throw error;
+	}
+}
 export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | null): MiddlewareHandler {
 	const legacy = createAuthMiddleware(config, secret, verifyApiKey);
 	const ipLimits = new AuthRateLimiter(60_000, 20),
@@ -74,7 +97,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${rateLimitClientAddress(c) ?? "unknown"}`, c))
 			return failure(c, new IdentityError(429, "rate_limit"));
 		try {
-			await prepareJsonBody(c);
+			if (c.req.path !== "/api/hooks/stop" || c.req.method !== "POST") await prepareJsonBody(c);
 		} catch (error) {
 			if (error instanceof JsonBodyError) return c.json({ error: error.message, reason: error.reason }, error.status);
 			throw error;
@@ -108,7 +131,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					c.set("principal", localPrincipal());
 					c.set("author", { userId: null, credential: "local" });
 				}
-				return next();
+				const response = await withIdentityBody(c, next);
+				if (response) c.res = response;
 			});
 		const org = await readOrganization();
 		if (
@@ -127,8 +151,12 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 						return;
 					}
 				}
-				if (claims) c.set("principal", legacyPrincipal(claims));
-				return next();
+				if (claims) {
+					c.set("principal", legacyPrincipal(claims));
+					c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				}
+				const response = await withIdentityBody(c, next);
+				if (response) c.res = response;
 			});
 		c.set("organization", org);
 		const open = isAuthOpenPath(c.req.path);
@@ -241,84 +269,87 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			)
 				return failure(c, new IdentityError(429, "rate_limit"));
 			c.set("author", { userId: p.userId, credential: `${p.credential.kind}:${p.credential.id}` });
-			if (!open) {
-				for (const header of ["x-signet-actor", "x-signet-actor-type"]) {
-					const actor = c.req.header(header);
-					if (actor !== undefined && actor !== p.userId) throw new IdentityError(403, "actor_conflict");
-				}
-				const parsed = c.get("parsedJsonBody");
-				const body =
-					typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-						? z.record(z.string(), z.unknown()).parse(parsed)
-						: {};
-				if (p.harness && typeof body.harness === "string" && body.harness !== p.harness)
-					throw new IdentityError(403, "org_policy", "Credential is bound to another harness");
-				const headerSession = c.req.header("x-signet-session-key");
-				const sessionKey =
-					typeof body.sessionKey === "string"
-						? body.sessionKey
-						: typeof body.fromSessionKey === "string"
-							? body.fromSessionKey
-							: headerSession;
-				const sessionAgent = sessionKey?.startsWith("agent:") ? sessionKey.split(":")[1] : undefined;
-				const headerSessionAgent = headerSession?.startsWith("agent:") ? headerSession.split(":")[1] : undefined;
-				const requested = reconcileAgentSources([
-					typeof body.fromAgentId === "string" ? body.fromAgentId : undefined,
-					typeof body.agentId === "string" ? body.agentId : undefined,
-					typeof body.agent_id === "string" ? body.agent_id : undefined,
-					...(c.req.queries("agentId") ?? []),
-					...(c.req.queries("agent_id") ?? []),
-					c.req.header("x-signet-agent-id"),
-					sessionAgent,
-					headerSessionAgent,
-					...[
-						body.sessionKey,
-						body.session_key,
-						body.fromSessionKey,
-						...(c.req.queries("sessionKey") ?? []),
-						...(c.req.queries("session_key") ?? []),
-					].map((key) => (typeof key === "string" && key.startsWith("agent:") ? key.split(":")[1] : undefined)),
-				]);
-				if (!requested.ok) throw new IdentityError(requested.error.status, requested.error.reason);
-				if (p.boundAgentId && requested.value && requested.value !== p.boundAgentId)
-					throw new IdentityError(403, "agent_binding_conflict");
-				c.set("requestedOrganizationAgent", requested.value);
-				if (organizationReadRequest(c.req.method, c.req.path)) await bindRequestedReadAgent(p, requested.value);
-				const project = checkPrincipalProject(
-					p,
-					typeof body.project === "string" ? body.project : c.req.query("project"),
-				);
-				if (!project.ok) throw new IdentityError(403, project.error.reason);
-				if (
-					!c.req.path.startsWith("/api/auth/") &&
-					!c.req.path.startsWith("/api/org/") &&
-					!c.req.path.startsWith("/api/agents") &&
-					["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
-					!organizationReadRequest(c.req.method, c.req.path)
-				) {
-					if (body.scope === "all" || c.req.query("scope") === "all")
-						throw new IdentityError(403, "agent_not_permitted");
-					const access = principalAccess(p);
-					if (!access) throw new IdentityError(403, "org_policy");
-					const target = resolveWriteAgent(p, requested.value, access);
-					if (!target.ok) throw new IdentityError(target.error.status, target.error.reason);
+			return await withIdentityBody(c, async () => {
+				if (!open) {
+					for (const header of ["x-signet-actor", "x-signet-actor-type"]) {
+						const actor = c.req.header(header);
+						if (actor !== undefined && actor !== p.userId) throw new IdentityError(403, "actor_conflict");
+					}
+					const parsed = c.get("parsedJsonBody");
+					const body =
+						typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+							? z.record(z.string(), z.unknown()).parse(parsed)
+							: {};
+					if (p.harness && typeof body.harness === "string" && body.harness !== p.harness)
+						throw new IdentityError(403, "org_policy", "Credential is bound to another harness");
+					const headerSession = c.req.header("x-signet-session-key");
+					const sessionKey =
+						typeof body.sessionKey === "string"
+							? body.sessionKey
+							: typeof body.fromSessionKey === "string"
+								? body.fromSessionKey
+								: headerSession;
+					const sessionAgent = sessionKey?.startsWith("agent:") ? sessionKey.split(":")[1] : undefined;
+					const headerSessionAgent = headerSession?.startsWith("agent:") ? headerSession.split(":")[1] : undefined;
+					const requested = reconcileAgentSources([
+						typeof body.fromAgentId === "string" ? body.fromAgentId : undefined,
+						typeof body.agentId === "string" ? body.agentId : undefined,
+						typeof body.agent_id === "string" ? body.agent_id : undefined,
+						...(c.req.queries("agentId") ?? []),
+						...(c.req.queries("agent_id") ?? []),
+						c.req.header("x-signet-agent-id"),
+						sessionAgent,
+						headerSessionAgent,
+						...[
+							body.sessionKey,
+							body.session_key,
+							body.fromSessionKey,
+							...(c.req.queries("sessionKey") ?? []),
+							...(c.req.queries("session_key") ?? []),
+						].map((key) => (typeof key === "string" && key.startsWith("agent:") ? key.split(":")[1] : undefined)),
+					]);
+					if (!requested.ok) throw new IdentityError(requested.error.status, requested.error.reason);
+					if (p.boundAgentId && requested.value && requested.value !== p.boundAgentId)
+						throw new IdentityError(403, "agent_binding_conflict");
+					c.set("requestedOrganizationAgent", requested.value);
+					if (organizationReadRequest(c.req.method, c.req.path)) await bindRequestedReadAgent(p, requested.value);
+					const project = checkPrincipalProject(
+						p,
+						typeof body.project === "string" ? body.project : c.req.query("project"),
+					);
+					if (!project.ok) throw new IdentityError(403, project.error.reason);
 					if (
-						sessionKey &&
-						/^\/api\/hooks?\/(session-start|user-prompt-submit|session-end|remember|compaction-complete)$/.test(
-							c.req.path,
-						)
+						!c.req.path.startsWith("/api/auth/") &&
+						!c.req.path.startsWith("/api/org/") &&
+						!c.req.path.startsWith("/api/agents") &&
+						["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+						!organizationReadRequest(c.req.method, c.req.path)
 					) {
-						if (!p.permissions.has("remember")) throw new IdentityError(403, "permission");
-						await bindHookSpeaker(
-							p,
-							sessionKey,
-							target.value,
-							p.harness ?? (typeof body.harness === "string" ? body.harness : "unknown"),
-							typeof body.project === "string" ? body.project : null,
-						);
+						if (body.scope === "all" || c.req.query("scope") === "all")
+							throw new IdentityError(403, "agent_not_permitted");
+						const access = principalAccess(p);
+						if (!access) throw new IdentityError(403, "org_policy");
+						const target = resolveWriteAgent(p, requested.value, access);
+						if (!target.ok) throw new IdentityError(target.error.status, target.error.reason);
+						if (
+							sessionKey &&
+							/^\/api\/hooks?\/(session-start|user-prompt-submit|session-end|remember|compaction-complete)$/.test(
+								c.req.path,
+							)
+						) {
+							if (!p.permissions.has("remember")) throw new IdentityError(403, "permission");
+							await bindHookSpeaker(
+								p,
+								sessionKey,
+								target.value,
+								p.harness ?? (typeof body.harness === "string" ? body.harness : "unknown"),
+								typeof body.project === "string" ? body.project : null,
+							);
+						}
 					}
 				}
-			}
+				await next();
+			});
 		} catch (error) {
 			if (error instanceof SyntaxError || error instanceof z.ZodError)
 				return failure(c, new IdentityError(400, "invalid_request"));
@@ -329,7 +360,6 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			}
 			return failure(c, error);
 		}
-		return next();
 	};
 }
 export function failure(c: Context, error: IdentityError): Response {

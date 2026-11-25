@@ -1,3 +1,4 @@
+import { withStopAdmission } from "../stop-admission";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context, Hono } from "hono";
@@ -858,34 +859,12 @@ function registerDirectMessageWakeRelease(app: Hono): void {
 }
 
 const MAX_STOP_REPLY_CHARS = 262_144;
-const STOP_MAX_IN_FLIGHT = 8;
-let stopAdmission: ConcurrencyAdmission = createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
-export function __setStopAdmissionForTests(admission: ConcurrencyAdmission | null): void {
-	stopAdmission = admission ?? createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
-}
+export { __setStopAdmissionForTests } from "../stop-admission";
 
 function registerStop(app: Hono): void {
 	app.post(
 		"/api/hooks/stop",
-		async (c, next) => {
-			const release = await stopAdmission.acquire(admissionKey(c), c.req.raw.signal);
-			if (typeof release !== "function" || c.req.raw.signal.aborted) {
-				if (typeof release === "function") release();
-				c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
-				return c.json(
-					{
-						error: `Too many concurrent stop hooks (max ${stopAdmission.maxInFlight}); retry shortly`,
-						reason: "admission",
-					},
-					503,
-				);
-			}
-			try {
-				await next();
-			} finally {
-				release();
-			}
-		},
+		(c, next) => withStopAdmission(c, next),
 		(c, next) =>
 			c.get("jsonBodyParsed")
 				? next()
