@@ -283,6 +283,7 @@ export {
 	vectorSearch,
 	vectorSearchWithMetadata,
 	keywordSearch,
+	promptEntityPageSql,
 	hybridSearch,
 	cosineSimilarity,
 	activeVectorProjectionTable,

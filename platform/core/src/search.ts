@@ -493,6 +493,66 @@ export function hybridSearch(
 		})
 		.filter((r): r is NonNullable<typeof r> => r !== null);
 }
+const PROMPT_ENTITY_MAX_TEXT_BYTES = 256;
+
+const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
+		   AND LOWER(e.entity_type) IN ('person', 'project')
+		   AND TYPEOF(e.id) = 'text'
+		   AND TYPEOF(e.name) = 'text'
+		   AND LENGTH(CAST(e.id AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND LENGTH(CAST(e.name AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}`;
+
+const promptEntityCounts = (
+	global: boolean,
+) => `${global ? "CAST(COALESCE(e.mentions, 0) AS INTEGER)" : "0"} AS mentions,
+		   CAST(COALESCE(e.pinned, 0) AS INTEGER) AS pinned`;
+
+const promptEntityNames = (scope: string, global: boolean) => `SELECT
+		   e.rowid AS cursor,
+		   e.id AS entity_id,
+		   e.name AS entity_name,
+		   COALESCE(e.entity_type, 'unknown') AS entity_type,
+		   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
+		   'name' AS match_source,
+		   ${promptEntityCounts(global)}
+		 FROM entities e
+		 WHERE e.rowid > ?${scope}
+		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		   AND TYPEOF(COALESCE(e.canonical_name, LOWER(e.name))) = 'text'
+		   AND LENGTH(CAST(COALESCE(e.canonical_name, LOWER(e.name)) AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		 ORDER BY e.rowid
+		 LIMIT ?`;
+
+const promptEntityAliases = (scope: string, global: boolean) => `SELECT
+		   a.canonical_alias AS cursor,
+		   e.id AS entity_id,
+		   e.name AS entity_name,
+		   COALESCE(e.entity_type, 'unknown') AS entity_type,
+		   a.alias AS matched_text,
+		   'alias' AS match_source,
+		   ${promptEntityCounts(global)}
+		 FROM entity_aliases a
+		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
+		 WHERE a.status = 'active'
+		   AND a.canonical_alias > ?${scope}
+		   AND TYPEOF(a.canonical_alias) = 'text'
+		   AND TYPEOF(a.alias) = 'text'
+		   AND LENGTH(CAST(a.canonical_alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND LENGTH(CAST(a.alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		 ORDER BY a.canonical_alias
+		 LIMIT ?`;
+
+export function promptEntityPageSql(kind: "names" | "aliases", readScope: ReadScope, predicate: string): string {
+	if (!readScope) throw new Error("readScope is required for entity search");
+	const global =
+		readScope.reach.kind === "all" &&
+		readScope.compartments === "all" &&
+		readScope.projects === null &&
+		readScope.inFlightUserId === undefined;
+	return kind === "names" ? promptEntityNames(predicate, global) : promptEntityAliases(predicate, global);
+}
+
 function hasPrepareMethod(db: unknown): db is SQLiteDatabase {
 	return (
 		typeof db === "object" && db !== null && "prepare" in db && typeof (db as SQLiteDatabase).prepare === "function"

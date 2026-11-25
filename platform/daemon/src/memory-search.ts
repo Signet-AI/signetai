@@ -1041,16 +1041,16 @@ function recallQueryVectorIsValid(query: Float32Array, expectedDimensions: numbe
 	return query.length === expectedDimensions && query.length > 0 && query.every(Number.isFinite);
 }
 
-async function activeEmbeddingProfileIsKnown(
+async function readVectorReadiness(
 	embedding: EmbeddingConfig,
 	execution?: RecallExecutionOptions,
-): Promise<boolean> {
+): Promise<{ readonly projection: "vec_embeddings" | "vec_embeddings_staging"; readonly agentOwned: boolean } | null> {
 	const owner = await recallOwner(execution);
-	let row: EmbeddingIndexStateRow | null;
+	let row: (EmbeddingIndexStateRow & { readonly agent_owned: number }) | null;
 	try {
-		row = await ownerReadOne<EmbeddingIndexStateRow>(
+		row = await ownerReadOne<EmbeddingIndexStateRow & { readonly agent_owned: number }>(
 			owner,
-			"SELECT active_profile_json, staging_profile_json, state, last_error FROM embedding_index_state WHERE id = 1",
+			"SELECT active_profile_json, staging_profile_json, state, last_error, EXISTS(SELECT 1 FROM pragma_table_info('embeddings') WHERE name='agent_id') AS agent_owned FROM embedding_index_state WHERE id = 1",
 			[],
 			{
 				operation: "memory-search.embedding-profile-state",
@@ -1060,12 +1060,16 @@ async function activeEmbeddingProfileIsKnown(
 			},
 		);
 	} catch (error) {
-		if (error instanceof Error && /no such table: embedding_index_state/i.test(error.message)) return false;
+		if (error instanceof Error && /no such table: embedding_index_state/i.test(error.message)) return null;
 		throw error;
 	}
 	const state = parseEmbeddingIndexStateRow(row);
-	if (!state || (state.state === "building" && state.staging?.projectionRebuild === true)) return false;
-	return embeddingProfileFingerprintsEqual(embeddingProfileFingerprint(embedding), state.active.fingerprint);
+	if (!state || (state.state === "building" && state.staging?.projectionRebuild === true)) return null;
+	if (!embeddingProfileFingerprintsEqual(embeddingProfileFingerprint(embedding), state.active.fingerprint)) return null;
+	return {
+		projection: state.active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings",
+		agentOwned: row?.agent_owned === 1,
+	};
 }
 
 function nativeIdSegment(value: string | null | undefined): string {
@@ -1172,7 +1176,7 @@ export async function buildSourceChunkVectorHits(
 	if (!queryVec || limit <= 0 || project || scope.projects !== null) return outcome("complete", 0);
 	if (!recallQueryVectorIsValid(queryVec, embedding.dimensions)) return outcome("unavailable");
 
-	const profileCompatible = await activeEmbeddingProfileIsKnown(embedding, execution);
+	const profileCompatible = await readVectorReadiness(embedding, execution);
 	if (!profileCompatible) {
 		logger.warn(
 			"memory",
@@ -1182,28 +1186,11 @@ export async function buildSourceChunkVectorHits(
 	}
 
 	const owner = await recallOwner(execution);
-	const embeddingColumns = await ownerReadAll<{ readonly name: string }>(owner, "PRAGMA table_info(embeddings)", [], {
-		operation: "memory-search.source-chunk-schema",
-		workloadClass: "foreground",
-		estimatedWorkUnits: 1,
-		deadlineMs: 5_000,
-	});
-	if (!embeddingColumns.some((column) => column.name === "agent_id")) {
+	if (!profileCompatible.agentOwned) {
 		logger.warn("memory", "Source vector recall skipped because legacy embeddings have no agent ownership column");
 		return outcome("unavailable");
 	}
-	const indexState = await ownerReadOne<{ readonly active_profile_json: unknown }>(
-		owner,
-		"SELECT active_profile_json FROM embedding_index_state WHERE id = 1",
-		[],
-		{
-			operation: "memory-search.source-chunk-projection",
-			workloadClass: "foreground",
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	).catch(() => undefined);
-	const vecTable = activeVectorProjectionTable({ prepare: () => ({ get: () => indexState }) });
+	const vecTable = profileCompatible.projection;
 	const embeddingScope = scopedRowSql("e", scope, EMBEDDING_COLUMNS);
 	const eligibleScope = scopedRowSql("se", scope, EMBEDDING_COLUMNS);
 	const types = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
@@ -1329,43 +1316,31 @@ export async function buildSourceChunkVectorHits(
 		workUsed += requested;
 		return true;
 	};
-	const prefilteredShardRows = async (shard: string): Promise<ReadonlyArray<KnnRow>> => {
-		const requested = Math.min(limit, SOURCE_CHUNK_KNN_MAX_K);
-		if (!spend(requested)) return [];
-		return await ownerReadAll<KnnRow>(
-			owner,
-			`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance
-			 FROM ${shard} v
-			 CROSS JOIN embeddings e ON e.id = v.id
-			 WHERE v.embedding MATCH ? AND k = ?
-			   AND v.id IN (SELECT se.id FROM embeddings se WHERE ${prefilterPredicate.sql})
-			 ORDER BY v.distance, e.id`,
-			[queryBlob, requested, ...prefilterPredicate.args],
-			knnOptions(requested),
-		);
-	};
 	const oversampledShardRows = async (shard: string, size: number): Promise<ReadonlyArray<KnnRow>> => {
 		let requested = Math.min(size, limit * 4, SOURCE_CHUNK_KNN_MAX_K);
+		let prefiltered = false;
 		for (;;) {
 			if (!spend(requested)) return [];
-			const rows = await ownerReadAll<KnnRow>(
-				owner,
-				`WITH hits AS MATERIALIZED (
-				   SELECT id, distance FROM ${shard} WHERE embedding MATCH ? AND k = ?
-				 )
-				 SELECT e.id, e.source_id, e.source_type, e.created_at, hits.distance
-				 FROM hits
-				 CROSS JOIN embeddings e ON e.id = hits.id
-				 WHERE ${hitPredicate.sql}
-				 ORDER BY hits.distance, e.id
-				 LIMIT ?`,
-				[queryBlob, requested, ...hitPredicate.args, limit],
-				knnOptions(requested),
-			);
-			if (rows.length >= limit || requested >= size) return rows;
-			const oneDoublingExpected = rows.length * 2 >= limit;
-			if (!oneDoublingExpected || requested >= SOURCE_CHUNK_KNN_MAX_K) return await prefilteredShardRows(shard);
-			requested = Math.min(size, requested * 2, SOURCE_CHUNK_KNN_MAX_K);
+			const sql = prefiltered
+				? `SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance
+				 FROM ${shard} v CROSS JOIN embeddings e ON e.id = v.id
+				 WHERE v.embedding MATCH ? AND k = ?
+				 AND v.id IN (SELECT se.id FROM embeddings se WHERE ${prefilterPredicate.sql})
+				 ORDER BY v.distance, e.id`
+				: `WITH hits AS MATERIALIZED (
+				 SELECT id, distance FROM ${shard} WHERE embedding MATCH ? AND k = ?
+				 ) SELECT e.id, e.source_id, e.source_type, e.created_at, hits.distance
+				 FROM hits CROSS JOIN embeddings e ON e.id = hits.id
+				 WHERE ${hitPredicate.sql} ORDER BY hits.distance, e.id LIMIT ?`;
+			const args = prefiltered
+				? [queryBlob, requested, ...prefilterPredicate.args]
+				: [queryBlob, requested, ...hitPredicate.args, limit];
+			const rows = await ownerReadAll<KnnRow>(owner, sql, args, knnOptions(requested));
+			if (prefiltered || rows.length >= limit || requested >= size) return rows;
+			if (rows.length * 2 < limit || requested >= SOURCE_CHUNK_KNN_MAX_K) {
+				prefiltered = true;
+				requested = Math.min(limit, SOURCE_CHUNK_KNN_MAX_K);
+			} else requested = Math.min(size, requested * 2, SOURCE_CHUNK_KNN_MAX_K);
 		}
 	};
 
@@ -2794,7 +2769,7 @@ async function scopedHybridRecall(
 		return { focal, traversal };
 	});
 	primaryTraversalFetch.catch(() => undefined);
-	const embeddingProfileKnown = activeEmbeddingProfileIsKnown(cfg.embedding, execution);
+	const embeddingProfileKnown = readVectorReadiness(cfg.embedding, execution);
 	embeddingProfileKnown.catch(() => undefined);
 	let queryVecF32: Float32Array | null = null;
 	try {
@@ -3234,14 +3209,15 @@ async function scopedHybridRecall(
 				const coverageIds = shaped.slice(0, coverageLimit).map((row) => row.id);
 				let contentMap = new Map<string, string>();
 				if (coverageIds.length > 0) {
-					const placeholders = coverageIds.map(() => "?").join(", ");
+					const wanted = coverageIds.map(() => "(?)").join(", ") || "(NULL)";
 					const contentRows = await getDbAccessor()
 						.withReadDbAsync(
 							async (db) =>
 								db
 									.prepare(
-										`SELECT m.id, m.content FROM memories m
-									 WHERE m.id IN (${placeholders})${filter.sql}`,
+										`WITH wanted(id) AS (VALUES ${wanted})
+ SELECT m.id, m.content FROM wanted CROSS JOIN memories m ON m.id = wanted.id
+ WHERE 1 = 1${filter.sql}`,
 									)
 									.all(...coverageIds, ...filter.args) as Array<{ id: string; content: string }>,
 							{ siteToken: "db:recall.facet-coverage.content", signal: execution?.signal },
@@ -3378,8 +3354,9 @@ async function scopedHybridRecall(
 					async (db) =>
 						db
 							.prepare(
-								`SELECT m.id, m.content, m.type FROM memories m
-							 WHERE m.id IN (${dampenPh})${filter.sql}`,
+								`WITH wanted(id) AS (VALUES ${dampenIds.map(() => "(?)").join(", ") || "(NULL)"})
+ SELECT m.id, m.content, m.type FROM wanted CROSS JOIN memories m ON m.id = wanted.id
+ WHERE 1 = 1${filter.sql}`,
 							)
 							.all(...dampenIds, ...filter.args) as Array<{
 							id: string;
@@ -3714,7 +3691,7 @@ async function scopedHybridRecall(
 			},
 		});
 	}
-	const placeholders = topIds.map(() => "?").join(", ");
+	const wantedIds = topIds.map(() => "(?)").join(", ") || "(NULL)";
 
 	const rows = await timings.timeAsync(
 		"hydrate_memory_rows",
@@ -3724,9 +3701,10 @@ async function scopedHybridRecall(
 					async (db) =>
 						db
 							.prepare(
-								`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
-        FROM memories m
-        WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
+								`WITH wanted(id) AS (VALUES ${wantedIds})
+ SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
+ FROM wanted CROSS JOIN memories m ON m.id = wanted.id
+ WHERE 1 = 1${currentMemorySql("m")}${filter.sql}`,
 							)
 							.all(...topIds, ...filter.args) as Array<{
 							id: string;
