@@ -1,4 +1,4 @@
-import { auditAuthoredWriteInTx, LOCAL_AUTHOR, type WriteAuthor } from "./auth/audit-owner";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { compartmentForWrite } from "@signet/core";
 import {
@@ -83,7 +83,7 @@ export interface ModifyMemoryTxInput {
 	embeddingModelOnContentChange?: string | null;
 	embeddingVector?: readonly number[] | null;
 	embeddingConfig?: EmbeddingConfig;
-	ctx?: MutationContext;
+	ctx: MutationContext & { readonly author: WriteAuthor };
 }
 
 export type ModifyMemoryTxStatus =
@@ -320,6 +320,7 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 	return mem.id;
 }
 export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {
+	const author = requireWriteAuthor(input.ctx?.author);
 	const existing = db
 		.prepare(
 			`SELECT id, content, type, tags, importance, pinned, version, is_deleted,
@@ -396,7 +397,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			if (!existing.agent_id) throw new Error("agent_required");
 			const boundary = memoryWriteDedupeSql(db, {
 				writeScope: { agentId: existing.agent_id, memoryId: input.memoryId },
-				author: input.ctx?.author ?? LOCAL_AUTHOR,
+				author,
 			});
 			const duplicate = db
 				.prepare(
@@ -515,7 +516,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
 				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
-				 ON CONFLICT DO UPDATE SET
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,
@@ -550,7 +551,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			contentChanged,
 		}),
 		createdAt: input.changedAt,
-		author: input.ctx?.author,
+		author,
 		agentId: existing.agent_id,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,

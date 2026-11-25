@@ -20,7 +20,7 @@ import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { getDbAccessor, prepareTypedStatement, type ReadDb, runWriteTxAsync, type WriteDb } from "../db-accessor";
 import { evidenceCompartmentInTx, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { memoryWriteDedupeSql } from "../db-helpers";
-import { LOCAL_AUTHOR } from "../auth/audit-owner";
+import { requireWriteAuthor } from "../auth/audit-owner";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
@@ -795,6 +795,19 @@ export function createMemoryCaptureAdmissionMiddleware(admission: ConcurrencyAdm
 }
 
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
+	for (const path of ["/api/memory/*", "/api/memories/*", "/api/documents", "/api/documents/*", "/api/hook/remember"]) {
+		app.use(path, async (c, next) => {
+			if (
+				["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+				c.req.path !== "/api/memory/recall" &&
+				!c.get("author")
+			) {
+				c.header("WWW-Authenticate", "Bearer");
+				return c.json({ error: "A write requires an explicit author", reason: "missing_credential" }, 401);
+			}
+			await next();
+		});
+	}
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
 	const recallOwner = deps.recallOwner;
@@ -1458,7 +1471,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			visibility,
 			project: body.project ?? null,
 			scope,
-			author: c.get("author") ?? LOCAL_AUTHOR,
+			author: requireWriteAuthor(c.get("author")),
 			writeScope: { agentId, sessionKey: c.req.header("x-signet-session-key") ?? null, sourceId: body.sourceId },
 		};
 		const hasBodyTags = Object.hasOwn(body, "tags");
@@ -1527,17 +1540,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return c.json({ error: "content produced no valid chunks" }, 400);
 			}
 
-			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
-				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "db:memory.capture.base-idempotency.read" },
+			const baseIdempotencyMemory = await runWriteTxAsync(getDbAccessor(), (db) =>
+				getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
 			}
 
-			const existingChunks = await getDbAccessor().withReadDbAsync(
-				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "db:memory.capture.chunk-idempotency.read" },
+			const existingChunks = await runWriteTxAsync(getDbAccessor(), (db) =>
+				getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1568,9 +1579,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return c.json({ error: "chunked content contains duplicate chunks" }, 409);
 				}
 				contentHashes.add(plan.normalized.contentHash);
-				const byHash = await getDbAccessor().withReadDbAsync(
-					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "db:memory.capture.chunk-hash.read" },
+				const byHash = await runWriteTxAsync(getDbAccessor(), (db) =>
+					getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1787,9 +1797,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const chunkedIdempotencyMemory =
 			rowProvenance.idempotencyKey === undefined
 				? []
-				: await getDbAccessor().withReadDbAsync(
-						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "db:memory.capture.single-idempotency.read" },
+				: await runWriteTxAsync(getDbAccessor(), (db) =>
+						getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1923,43 +1932,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				});
 			}
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : "";
-			if (msg.includes("UNIQUE constraint")) {
-				const existing = await getDbAccessor().withReadDbAsync(
-					async (db) => {
-						const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
-						if (byIdempotencyKey) return byIdempotencyKey;
-						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
-					},
-					{ siteToken: "db:memory.capture.conflict-dedupe.read" },
-				);
-				if (existing) {
-					c.header("x-signet-operation-skipped", "1");
-					await runWriteTxAsync(getDbAccessor(), (db) =>
-						txInsertMemoryTemporalEdges({
-							db,
-							memoryId: existing.id,
-							agentId: existing.agentId,
-							inputs: temporalInputs.inputs ?? [],
-							now,
-						}),
-					);
-					recordFirstUseTelemetry("remember");
-					return c.json({
-						id: existing.id,
-						type: existing.type,
-						tags: existing.tags || "",
-						pinned: !!existing.pinned,
-						importance: existing.importance,
-						content: existing.content,
-						embedded: true,
-						deduped: true,
-					});
-				}
-				if (msg.includes("idempotency_key")) {
-					return c.json({ error: "idempotencyKey is already used by a memory outside this project" }, 409);
-				}
-			}
 			if (e instanceof Error && e.message === TRANSCRIPT_PROJECT_CONFLICT) {
 				return c.json({ error: "this session's transcript belongs to another project" }, 409);
 			}
@@ -2921,7 +2893,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
 		try {
 			const result = recordPathFeedback(getDbAccessor(), {
-				author: c.get("author") ?? LOCAL_AUTHOR,
+				author: requireWriteAuthor(c.get("author")),
 				sessionKey,
 				agentId,
 				ratings: parsed,
@@ -3837,7 +3809,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
 		await ensureAgentRegistered(scopedAgent.agentId);
 		const metadataJson = documentMetadataJson(body.metadata);
-		const author = c.get("author");
+		const author = requireWriteAuthor(c.get("author"));
 
 		const accessor = getDbAccessor();
 
@@ -3883,7 +3855,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					scopedProject.project ?? null,
 					now,
 					now,
-					author?.userId ?? null,
+					author.userId,
 					compartmentForWrite(db, {
 						agentId: scopedAgent.agentId,
 						sessionKey: c.req.header("x-signet-session-key") ?? null,

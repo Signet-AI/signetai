@@ -7,6 +7,7 @@ import { execFileSyncHidden } from "./child-process";
 import { compartmentForWrite } from "./compartment-shards";
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
+import { configureEvidencePurgeConnection } from "./migrations/177-classifications";
 import { resolveSqliteJournalConfig } from "./sqlite-journal";
 import type { Memory } from "./types";
 import type { MemoryHistory, MemoryJob } from "./types";
@@ -212,6 +213,7 @@ export class Database {
 		}
 		loadSqliteVec(this.db);
 		if (!this.options?.readonly) {
+			configureEvidencePurgeConnection(this.getDb());
 			this.getDb().exec("PRAGMA auto_vacuum = INCREMENTAL");
 			const journal = resolveSqliteJournalConfig({ directory: dirname(this.dbPath) });
 			const journalMode = `journal_mode = ${journal.journalMode}`;
