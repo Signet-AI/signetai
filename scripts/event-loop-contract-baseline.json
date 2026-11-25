@@ -4702,7 +4702,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 476,
+      "line": 482,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -4710,7 +4710,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 502,
+      "line": 508,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path",
@@ -4718,7 +4718,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 566,
+      "line": 572,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path",
@@ -4726,7 +4726,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 606,
+      "line": 612,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path",

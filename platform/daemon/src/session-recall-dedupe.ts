@@ -98,51 +98,51 @@ export function telemetryEvidenceInTx(
 		return /^\d+$/.test(id) && Number.isSafeInteger(value) ? [value] : [];
 	});
 	const base = compartmentForWrite(db, { agentId: input.agentId, sessionKey: input.sessionKey });
-	const rows = db
-		.prepare(
-			`SELECT h.result_id, h.kind, h.evidence_id, h.agent_id, cm.classification_id
+	const evidenceQuery = db.prepare(
+		`SELECT h.result_id, h.kind, h.evidence_id, h.agent_id, h.memory_id, cm.classification_id
 			 FROM (
-				SELECT m.id AS result_id, 'memory' AS kind, m.id AS evidence_id, m.agent_id, m.compartment_id
+				SELECT m.id AS result_id, 'memory' AS kind, m.id AS evidence_id, m.agent_id, m.compartment_id, m.id AS memory_id
 				FROM memories m WHERE m.id IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'ontology-claim:' || a.id, 'attribute', a.id, a.agent_id, a.compartment_id
+				UNION ALL SELECT 'ontology-claim:' || a.id, 'attribute', a.id, a.agent_id, a.compartment_id, a.memory_id
 				FROM entity_attributes a WHERE a.id IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'transcript:' || t.session_key, 'transcript', t.session_key, t.agent_id, t.compartment_id
+				UNION ALL SELECT 'transcript:' || t.session_key, 'transcript', t.session_key, t.agent_id, t.compartment_id, NULL
 				FROM session_transcripts t WHERE t.agent_id = ? AND t.session_key IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'transcript:' || r.session_id, 'artifact', r.source_path, r.agent_id, r.compartment_id
+				UNION ALL SELECT 'transcript:' || r.session_id, 'artifact', r.source_path, r.agent_id, r.compartment_id, NULL
 				FROM memory_artifacts r WHERE r.agent_id = ? AND r.source_kind = 'transcript' AND r.session_id IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'native-artifact:' || r.rowid, 'artifact', r.source_path, r.agent_id, r.compartment_id
+				UNION ALL SELECT 'native-artifact:' || r.rowid, 'artifact', r.source_path, r.agent_id, r.compartment_id, NULL
 				FROM memory_artifacts r WHERE r.rowid IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'source-chunk:' || e.id, NULL, e.source_id, e.agent_id, e.compartment_id
+				UNION ALL SELECT 'source-chunk:' || e.id, NULL, e.source_id, e.agent_id, e.compartment_id, NULL
 				FROM embeddings e WHERE e.id IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'source-chunk:' || e.id, 'artifact', r.source_path, r.agent_id, r.compartment_id
+				UNION ALL SELECT 'source-chunk:' || e.id, 'artifact', r.source_path, r.agent_id, r.compartment_id, NULL
 				FROM embeddings e JOIN memory_artifacts r ON r.agent_id = e.agent_id AND r.source_path = e.source_id
 				WHERE e.id IN (SELECT value FROM json_each(?))
-				UNION ALL SELECT 'constructed:' || n.name, NULL, NULL, n.agent_id, n.compartment_id
+				UNION ALL SELECT 'constructed:' || n.name, NULL, NULL, n.agent_id, n.compartment_id, NULL
 				FROM entities n WHERE n.agent_id = ? AND n.name IN (SELECT value FROM json_each(?))
- 				UNION ALL SELECT json_extract(i.value,'$.id'), NULL, NULL, NULL, c.value
+ 				UNION ALL SELECT json_extract(i.value,'$.id'), NULL, NULL, NULL, c.value, NULL
 				FROM json_each(?) i CROSS JOIN json_each(i.value,'$.readProvenance.compartmentIds') c
-				UNION ALL SELECT json_extract(i.value,'$.id'), 'attribute', a.id, a.agent_id, a.compartment_id
+				UNION ALL SELECT json_extract(i.value,'$.id'), 'attribute', a.id, a.agent_id, a.compartment_id, a.memory_id
 				FROM json_each(?) i CROSS JOIN json_each(i.value,'$.readProvenance.attributeIds') refs JOIN entity_attributes a ON a.id=refs.value
-				UNION ALL SELECT NULL, NULL, NULL, NULL, ?
+				UNION ALL SELECT NULL, NULL, NULL, NULL, ?, NULL
 			 ) h
 			 LEFT JOIN compartment_members cm ON cm.compartment_id = h.compartment_id`,
-		)
-		.all(
-			JSON.stringify(ids),
-			JSON.stringify(stripped(ids, "ontology-claim:")),
-			input.agentId,
-			JSON.stringify(transcripts),
-			input.agentId,
-			JSON.stringify(transcripts),
-			JSON.stringify(rowids),
-			JSON.stringify(stripped(ids, "source-chunk:")),
-			JSON.stringify(stripped(ids, "source-chunk:")),
-			input.agentId,
-			JSON.stringify(stripped(ids, "constructed:")),
-			JSON.stringify(input.items ?? []),
-			JSON.stringify(input.items ?? []),
-			base,
-		);
+	);
+	const rows = evidenceQuery.all(
+		JSON.stringify(ids),
+		JSON.stringify(stripped(ids, "ontology-claim:")),
+		input.agentId,
+		JSON.stringify(transcripts),
+		input.agentId,
+		JSON.stringify(transcripts),
+		JSON.stringify(rowids),
+		JSON.stringify(stripped(ids, "source-chunk:")),
+		JSON.stringify(stripped(ids, "source-chunk:")),
+		input.agentId,
+		JSON.stringify(stripped(ids, "constructed:")),
+		JSON.stringify(input.items ?? []),
+		JSON.stringify(input.items ?? []),
+		base,
+	);
+	const inheritedItems: RecallDedupeItem[] = [];
 	const baseLabels = new Set<string>();
 	const labels = new Map<string, Set<string>>();
 	const citations = new Map<string, Map<string, TelemetryCitation>>();
@@ -160,18 +160,7 @@ export function telemetryEvidenceInTx(
 		const kind = "kind" in row ? citationKind(row.kind) : null;
 		const evidenceId = "evidence_id" in row && typeof row.evidence_id === "string" ? row.evidence_id : null;
 		if ("agent_id" in row && typeof row.agent_id === "string") {
-			const attribute =
-				kind === "attribute" && evidenceId !== null
-					? db
-							.prepare("SELECT memory_id FROM entity_attributes WHERE id=? AND agent_id=?")
-							.get(evidenceId, row.agent_id)
-					: null;
-			const memoryId =
-				kind === "memory"
-					? evidenceId
-					: attribute && typeof attribute.memory_id === "string"
-						? attribute.memory_id
-						: null;
+			const memoryId = "memory_id" in row && typeof row.memory_id === "string" ? row.memory_id : null;
 			const inherited = compartmentForWrite(db, {
 				agentId: row.agent_id,
 				memoryId,
@@ -179,17 +168,7 @@ export function telemetryEvidenceInTx(
 				sourceId:
 					kind === "artifact" || kind === "transcript" || resultId.startsWith("source-chunk:") ? evidenceId : null,
 			});
-			for (const member of db
-				.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
-				.all(inherited)) {
-				if (
-					typeof member === "object" &&
-					member !== null &&
-					"classification_id" in member &&
-					typeof member.classification_id === "string"
-				)
-					own.add(member.classification_id);
-			}
+			if (inherited !== null) inheritedItems.push({ id: resultId, readProvenance: { compartmentIds: [inherited] } });
 		}
 		labels.set(resultId, own);
 		const sameAgent = "agent_id" in row && row.agent_id === input.agentId;
@@ -197,6 +176,33 @@ export function telemetryEvidenceInTx(
 		const cited = citations.get(resultId) ?? new Map<string, TelemetryCitation>();
 		cited.set(`${kind}\0${evidenceId}`, { kind, id: evidenceId });
 		citations.set(resultId, cited);
+	}
+	for (const row of evidenceQuery.all(
+		"[]",
+		"[]",
+		input.agentId,
+		"[]",
+		input.agentId,
+		"[]",
+		"[]",
+		"[]",
+		"[]",
+		input.agentId,
+		"[]",
+		JSON.stringify(inheritedItems),
+		"[]",
+		null,
+	)) {
+		if (
+			typeof row !== "object" ||
+			row === null ||
+			!("result_id" in row) ||
+			typeof row.result_id !== "string" ||
+			!("classification_id" in row) ||
+			typeof row.classification_id !== "string"
+		)
+			continue;
+		labels.get(row.result_id)?.add(row.classification_id);
 	}
 	for (const item of input.items ?? []) {
 		const copiedLabels = labels.get(item.id) ?? new Set<string>();
