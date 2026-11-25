@@ -642,6 +642,7 @@ export interface DbOwnerProviderTrackerStats {
 }
 
 export interface DbOwnerJob {
+	readonly writePrincipal?: import("@signet/core").WritePrincipal;
 	readonly id: string;
 	readonly operation: string;
 	readonly lane: DbOwnerLane;

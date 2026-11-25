@@ -688,8 +688,6 @@ memory:
 		}
 	});
 
-	it.todo("A14 unreadable matches in the destination compartment need a unique-key policy");
-
 	it("dedupes repeated aggregate runs for the same evidence set", async () => {
 		const params: RecallParams = {
 			query: "what happened",

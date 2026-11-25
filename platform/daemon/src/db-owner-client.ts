@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
+import {
+	spawnHidden as spawn,
+	type ChildProcess,
+	currentWritePrincipal,
+	recordClassifiedDestination,
+} from "@signet/core";
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -704,6 +709,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		};
 		const now = dbOwnerWallClockNow();
 		const job: DbOwnerJob = {
+			writePrincipal: currentWritePrincipal(),
 			id: `db-owner-${process.pid}-${++sequence}`,
 			operation: submitOptions.operation,
 			lane: submitOptions.lane,
@@ -759,7 +765,15 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			if (request.kind === "initialize") initialization = "running";
 			dispatch(job.id);
 		});
-		return { job, result, metrics, cancel: () => cancel(job.id) };
+		return {
+			job,
+			result: result.catch((error: unknown) => {
+				recordClassifiedDestination(error);
+				throw error;
+			}),
+			metrics,
+			cancel: () => cancel(job.id),
+		};
 	}
 
 	function cancel(jobId: string): void {

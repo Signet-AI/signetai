@@ -7,6 +7,8 @@ import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { dirname, resolve } from "node:path";
 import {
 	compartmentForWrite,
+	configureEvidencePurgeConnection,
+	withWritePrincipal,
 	syncEmbeddingCompartment,
 	deleteCompartmentVectors,
 	activeVectorProjectionTable,
@@ -191,6 +193,7 @@ export function runDbOwnerWorker(): void {
 			Database.setCustomSQLite(sqlitePath);
 		}
 		db = new Database(dbPath);
+		configureEvidencePurgeConnection(db);
 		db.exec("PRAGMA busy_timeout = 5000");
 		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
@@ -887,7 +890,7 @@ export function runDbOwnerWorker(): void {
 						`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-					 ON CONFLICT DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+					 ON CONFLICT(id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
 					 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
 					 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 					)
@@ -904,7 +907,7 @@ export function runDbOwnerWorker(): void {
 						compartmentForWrite(database, { agentId: input.agentId, sourceId: chunk.id }),
 					);
 				if (vecAvailable && vecDimensions === String(vector.length)) {
-					for (const stored of database.prepare("SELECT id FROM embeddings WHERE content_hash=?").all(contentHash))
+					for (const stored of database.prepare("SELECT id FROM embeddings WHERE id=?").all(embeddingId))
 						if (typeof stored === "object" && stored !== null && "id" in stored && typeof stored.id === "string")
 							syncEmbeddingCompartment(database, "embeddings", stored.id, vecTable);
 				}
@@ -1432,7 +1435,7 @@ export function runDbOwnerWorker(): void {
 				} else if (Date.now() >= job.deadlineAt) {
 					result(job.id, "timed_out");
 				} else {
-					const value = await execute(job, context);
+					const value = await withWritePrincipal(job.writePrincipal, () => execute(job, context));
 					if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
 					else
 						result(job.id, "completed", value, {
