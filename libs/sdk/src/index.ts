@@ -905,3 +905,5 @@ export type {
 	TimelineResponse,
 	InstalledSkill,
 } from "./types.js";
+
+export { SignetCredentialError } from "./errors.js";

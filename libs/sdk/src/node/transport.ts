@@ -1,6 +1,12 @@
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { randomUUID } from "node:crypto";
-import { SignetNetworkError, SignetTimeoutError, SignetUnauthorizedError } from "../errors.js";
+import {
+	SignetError,
+	SignetCredentialError,
+	SignetNetworkError,
+	SignetTimeoutError,
+	SignetUnauthorizedError,
+} from "../errors.js";
 import { SignetClient } from "../index.js";
 import { abortable, requestSignal, SignetTransport, type RequestOptions, type TransportConfig } from "../transport.js";
 import {
@@ -21,17 +27,19 @@ export interface NodeTransportOptions
 }
 export class NodeTransport extends SignetTransport {
 	readonly outbox: DurableOutbox;
-	lastReplayError: Error | null = null;
 	private readonly deliveryPaths: ReadonlySet<string>;
+	private readonly options: Omit<NodeTransportOptions, "env">;
 	constructor(
 		private readonly target: ResolvedTarget,
-		private readonly options: NodeTransportOptions = {},
+		options: NodeTransportOptions = {},
 	) {
-		super({ ...options, baseUrl: target.url, credentialProvider: () => target.credential.get() });
+		const { env, ...runtimeOptions } = options;
+		super({ ...runtimeOptions, baseUrl: target.url });
+		this.options = runtimeOptions;
 		if (new URL(target.url).origin !== target.origin) throw new Error("Target origin does not match URL");
 		const url = resolveSignetDaemonUrl({ env: {}, configUrl: target.url });
 		this.target = { ...target, url, origin: new URL(url).origin };
-		this.outbox = new DurableOutbox(this.target.origin, options);
+		this.outbox = new DurableOutbox(this.target.origin, { env, harness: target.harness ?? "cli" });
 		this.deliveryPaths = new Set(["/api/hooks/session-end", ...(options.deliveryPaths ?? [])]);
 		for (const path of this.deliveryPaths) deliveryPath(path);
 	}
@@ -40,7 +48,7 @@ export class NodeTransport extends SignetTransport {
 		path: string,
 		opts: RequestOptions,
 		capturedHeaders?: Readonly<Record<string, string>>,
-	): Promise<{ value: T; authenticated: boolean }> {
+	): Promise<T> {
 		let used: string | null = null;
 		let acquired = false;
 		const callHeaders = new Headers(opts.headers);
@@ -64,7 +72,7 @@ export class NodeTransport extends SignetTransport {
 		});
 		try {
 			const value = await transport.request<T>(method, path, { ...opts, headers: Object.fromEntries(callHeaders) });
-			return { value, authenticated: used !== null };
+			return value;
 		} catch (error) {
 			if (
 				!acquired ||
@@ -74,8 +82,8 @@ export class NodeTransport extends SignetTransport {
 				!this.target.credential.refresh
 			)
 				throw error;
-			const refresh = this.target.credential.refresh(used, opts);
 			try {
+				const refresh = this.target.credential.refresh(used, opts);
 				if (opts.signal) await abortable(refresh, opts.signal);
 				else await refresh;
 			} catch (failure) {
@@ -84,10 +92,11 @@ export class NodeTransport extends SignetTransport {
 						throw new SignetTimeoutError(opts.timeoutMs ?? this.options.timeoutMs ?? 10_000);
 					throw new SignetNetworkError("Request cancelled", new Error("cancelled"));
 				}
-				throw failure;
+				if (failure instanceof SignetError) throw failure;
+				throw new SignetCredentialError(failure);
 			}
 			const value = await transport.request<T>(method, path, { ...opts, headers: Object.fromEntries(callHeaders) });
-			return { value, authenticated: used !== null };
+			return value;
 		}
 	}
 	override async request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
@@ -104,7 +113,7 @@ export class NodeTransport extends SignetTransport {
 			deadline: Date.now() + scope.timeoutMs,
 		};
 		try {
-			let result: { value: T; authenticated: boolean };
+			let result: T;
 			if (delivery) {
 				if (
 					Object.keys(opts.query ?? {}).length ||
@@ -130,44 +139,26 @@ export class NodeTransport extends SignetTransport {
 				);
 				result = delivered.value;
 				if (delivered.cleanupError) {
-					this.lastReplayError = delivered.cleanupError;
-					return result.value;
+					return result;
 				}
 			} else result = await this.send<T>(method, path, request);
-			if (result.authenticated) {
-				try {
-					await this.flush({ signal: scope.signal, deadline: request.deadline });
-				} catch (error) {
-					this.lastReplayError = error instanceof Error ? error : new Error("Outbox replay failed");
-				}
-			}
-			return result.value;
+			if (delivery) await this.flush({ signal: scope.signal, deadline: request.deadline });
+			return result;
 		} finally {
 			scope.cleanup();
 		}
 	}
 	async flush(options?: FlushOptions): Promise<OutboxFlushResult> {
-		try {
-			const result = await this.outbox.flush(
-				(entry, control) =>
-					this.send(
-						entry.method,
-						entry.path,
-						{
-							...control,
-							body: entry.body,
-							headers: { "Idempotency-Key": entry.idempotencyKey },
-						},
-						entry.headers,
-					),
-				{ ...options, origin: this.target.origin },
-			);
-			if (result.pending === 0) this.lastReplayError = null;
-			return result;
-		} catch (error) {
-			this.lastReplayError = error instanceof Error ? error : new Error("Outbox replay failed");
-			throw error;
-		}
+		return this.outbox.flush(
+			(entry, control) =>
+				this.send(
+					entry.method,
+					entry.path,
+					{ ...control, body: entry.body, headers: { "Idempotency-Key": entry.idempotencyKey } },
+					entry.headers,
+				),
+			{ ...options, origin: this.target.origin, harness: this.target.harness ?? "cli" },
+		);
 	}
 }
 export function createNodeClient(target: ResolvedTarget, options?: NodeTransportOptions): SignetClient {

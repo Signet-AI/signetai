@@ -5,6 +5,7 @@ export {
 	DurableOutbox,
 	type OutboxEntry,
 	type OutboxRequest,
+	type OutboxOptions,
 	type OutboxStatus,
 	type OutboxFlushResult,
 	type FlushOptions,

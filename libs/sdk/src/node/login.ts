@@ -1,11 +1,11 @@
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { join } from "node:path";
-import { rm } from "node:fs/promises";
 import { credentialKeyring, type SecretKeyringAdapter } from "@signet/core/secrets-keyring";
-import { SignetApiError, SignetUnauthorizedError } from "../errors.js";
+import { SignetForbiddenError, SignetCredentialError, SignetUnauthorizedError } from "../errors.js";
 import { SignetTransport, type RequestControl } from "../transport.js";
 import {
 	atomicPrivateWrite,
+	privateRemove as rm,
 	configDirectory,
 	originHash,
 	readPrivate,
@@ -55,6 +55,9 @@ export class LoginStore {
 	private readonly keyring: LoginKeyring;
 	private observedSource: LoginSource | "none" = "none";
 	private observedReason: string | null = null;
+	#pendingRotation: LoginCredential | null = null;
+	#pendingPreviousRefresh: string | null = null;
+
 	get reason(): string | null {
 		return this.observedReason;
 	}
@@ -67,6 +70,15 @@ export class LoginStore {
 		this.keyring = options.keyring ?? credentialKeyring("signet-login", this.origin);
 	}
 	async load(control: RequestControl = {}): Promise<{ source: LoginSource; credential: LoginCredential } | null> {
+		let deadReason: string | null = null;
+		const marker = await readPrivate(`${this.path}.state`);
+		if (marker !== null) {
+			const state: unknown = JSON.parse(marker);
+			if (typeof state !== "object" || state === null || !("reason" in state) || typeof state.reason !== "string")
+				throw new SignetCredentialError(new Error("Corrupt login state"));
+			deadReason = state.reason;
+		}
+		if (deadReason) throw new SignetUnauthorizedError(deadReason);
 		this.observedSource = "none";
 		this.observedReason = null;
 		const fallback = await readPrivate(this.path);
@@ -99,7 +111,14 @@ export class LoginStore {
 		return { source: "keychain", credential };
 	}
 	async save(value: LoginCredential): Promise<LoginSource> {
-		return withFileLock(`${this.path}.lock`, () => this.write(parseLogin(value)));
+		return withFileLock(`${this.path}.lock`, async () => {
+			const source = await this.write(parseLogin(value));
+			await rm(`${this.path}.state`, { force: true });
+
+			this.#pendingRotation = null;
+			this.#pendingPreviousRefresh = null;
+			return source;
+		});
 	}
 	private async write(value: LoginCredential): Promise<LoginSource> {
 		const encoded = JSON.stringify(value);
@@ -118,46 +137,97 @@ export class LoginStore {
 	}
 	async clear(): Promise<void> {
 		await withFileLock(`${this.path}.lock`, async () => {
-			const result = await this.keyring.set("null");
-			if (result.state === "found") await rm(this.path, { force: true });
-			else await atomicPrivateWrite(this.path, "null");
+			await this.keyring.set("null");
+			await atomicPrivateWrite(this.path, "null");
 			this.observedSource = "none";
+			await rm(`${this.path}.state`, { force: true });
+
+			this.#pendingRotation = null;
+			this.#pendingPreviousRefresh = null;
 			this.observedReason = null;
 		});
 	}
 	async accessToken(control: RequestControl = {}): Promise<string | null> {
+		if (this.#pendingRotation) return this.refresh(undefined, control);
 		const saved = await this.load(control);
 		if (!saved) return null;
 		if (Date.parse(saved.credential.accessExpiresAt) > Date.now()) return saved.credential.accessToken;
 		return this.refresh(saved.credential.accessToken, control);
 	}
+	private async persistRotation(control: RequestControl): Promise<string | null> {
+		const rotated = this.#pendingRotation;
+		if (!rotated) throw new Error("No refresh rotation pending");
+		let saved: Awaited<ReturnType<LoginStore["load"]>>;
+		try {
+			saved = await this.load(control);
+		} catch (error) {
+			if (error instanceof SignetUnauthorizedError) {
+				this.#pendingRotation = null;
+				this.#pendingPreviousRefresh = null;
+				throw error;
+			}
+			this.observedReason = "refresh_in_doubt";
+			throw new SignetCredentialError(error, "refresh_in_doubt");
+		}
+		if (saved === null && this.observedReason === null) {
+			this.#pendingRotation = null;
+			this.#pendingPreviousRefresh = null;
+			throw new SignetUnauthorizedError("missing_credential");
+		}
+		if (
+			saved &&
+			saved.credential.refreshToken !== this.#pendingPreviousRefresh &&
+			saved.credential.refreshToken !== rotated.refreshToken
+		) {
+			this.#pendingRotation = null;
+			this.#pendingPreviousRefresh = null;
+			return Date.parse(saved.credential.accessExpiresAt) > Date.now() ? saved.credential.accessToken : null;
+		}
+		try {
+			await this.write(rotated);
+		} catch (error) {
+			this.observedReason = "refresh_in_doubt";
+			throw new SignetCredentialError(error, "refresh_in_doubt");
+		}
+		this.#pendingRotation = null;
+		this.#pendingPreviousRefresh = null;
+		return rotated.accessToken;
+	}
+
 	async refresh(rejectedAccessToken?: string | null, control: RequestControl = {}): Promise<string> {
 		return withFileLock(
 			`${this.path}.lock`,
 			async () => {
+				if (this.#pendingRotation) {
+					const persisted = await this.persistRotation(control);
+					if (persisted !== null) return persisted;
+				}
 				const saved = await this.load(control);
 				if (!saved) throw new SignetUnauthorizedError("missing_credential");
 				const current = saved.credential;
 				if (current.accessToken !== rejectedAccessToken && Date.parse(current.accessExpiresAt) > Date.now())
 					return current.accessToken;
 				if (Date.parse(current.refreshExpiresAt) <= Date.now()) throw new SignetUnauthorizedError("expired");
+				let rotated: LoginCredential;
 				try {
 					const transport = new SignetTransport({ baseUrl: this.origin, retries: 0 });
-					const rotated = parseLogin(
+					rotated = parseLogin(
 						await transport.post("/api/auth/refresh", { refreshToken: current.refreshToken }, control),
 					);
-					await this.write(rotated);
-					return rotated.accessToken;
 				} catch (error) {
-					const body = error instanceof SignetApiError ? error.body : undefined;
-					const reason =
-						error instanceof SignetUnauthorizedError
-							? error.reason
-							: typeof body === "object" && body !== null && "reason" in body && typeof body.reason === "string"
-								? body.reason
-								: "expired";
-					throw new SignetUnauthorizedError(reason, body, { cause: error });
+					if (
+						(error instanceof SignetUnauthorizedError || error instanceof SignetForbiddenError) &&
+						["revoked", "refresh_reuse", "user_deactivated"].includes(error.reason)
+					) {
+						await atomicPrivateWrite(`${this.path}.state`, JSON.stringify({ state: "dead", reason: error.reason }));
+					}
+					throw error;
 				}
+				this.#pendingRotation = rotated;
+				this.#pendingPreviousRefresh = current.refreshToken;
+				const persisted = await this.persistRotation(control);
+				if (persisted === null) throw new SignetCredentialError(new Error("Credential changed during refresh"));
+				return persisted;
 			},
 			control.signal,
 		);

@@ -1,6 +1,7 @@
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { LoginStore, type LoginStoreOptions } from "./login.js";
 import { ConnectorRegistry, readKeyFile } from "./registry.js";
+import { identifier } from "./storage.js";
 import type { RequestControl } from "../transport.js";
 
 export interface ResolveTargetOptions extends LoginStoreOptions {
@@ -16,12 +17,14 @@ export interface TargetCredential {
 	refresh?(rejectedToken: string | null, control?: RequestControl): Promise<string>;
 }
 export interface ResolvedTarget {
+	readonly harness?: string;
 	readonly url: string;
 	readonly origin: string;
 	readonly credential: TargetCredential;
 	readonly remote: boolean;
 }
 export async function resolveTarget(options: ResolveTargetOptions = {}): Promise<ResolvedTarget> {
+	const harness = identifier(options.harness ?? "cli");
 	const env = options.env ?? process.env;
 	const flagUrl = options.flagUrl?.trim();
 	if (options.flagUrl !== undefined && !flagUrl) throw new TypeError("flagUrl cannot be empty");
@@ -71,6 +74,7 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 	}
 	return {
 		url,
+		harness,
 		origin,
 		credential,
 		remote: Boolean(explicit) || !["127.0.0.1", "[::1]", "localhost"].includes(new URL(url).hostname),

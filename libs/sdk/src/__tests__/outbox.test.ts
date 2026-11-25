@@ -1,9 +1,10 @@
+import { withFileLock } from "../node/storage.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, readdir, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DurableOutbox, LoginStore, NodeTransport, resolveTarget } from "../node.js";
-import { SignetUnauthorizedError, SignetApiError, SignetTimeoutError } from "../errors.js";
+import { SignetUnauthorizedError } from "../errors.js";
 let home: string;
 let env: Record<string, string>;
 const servers: ReturnType<typeof Bun.serve>[] = [];
@@ -108,6 +109,7 @@ test("session end rejected with 401 is durable and replayed with current credent
 	expect((await transport.outbox.status()).pending).toBe(1);
 	credential = "valid";
 	await transport.get("/authenticated");
+	await transport.flush({ force: true });
 	expect(received).toEqual([{ key: queued[0]?.idempotencyKey, body: { transcript: "evidence" } }]);
 	expect((await transport.outbox.status()).pending).toBe(0);
 });
@@ -147,14 +149,14 @@ test("outbox replay stops on temporary errors and honors deadline without deleti
 		outbox.flush(async () => {
 			throw busy;
 		}),
-	).rejects.toBe(busy);
+	).resolves.toMatchObject({ state: "failed", failure: { status: 429 } });
 	expect((await outbox.entries())[0]?.attempts).toBe(1);
 	expect((await outbox.entries())[0]?.lastError).toContain("429");
 	await expect(
 		outbox.flush(async () => {
 			throw new Error("Replay ignored backoff");
 		}),
-	).resolves.toEqual({ pending: 1 });
+	).resolves.toMatchObject({ pending: 1, state: "deferred" });
 	await expect(
 		outbox.flush(
 			async (_entry, control) => {
@@ -164,11 +166,11 @@ test("outbox replay stops on temporary errors and honors deadline without deleti
 			},
 			{ timeoutMs: 20, force: true },
 		),
-	).rejects.toBeInstanceOf(SignetTimeoutError);
+	).resolves.toMatchObject({ state: "failed", pending: null });
 	expect((await outbox.status()).pending).toBe(1);
 });
 
-test("failed automatic replay remains observable until a complete flush", async () => {
+test("explicit replay failure is a typed persisted result", async () => {
 	let available = false;
 	const origin = daemon((req) =>
 		new URL(req.url).pathname === "/api/hooks/session-end" && !available
@@ -181,13 +183,17 @@ test("failed automatic replay remains observable until a complete flush", async 
 	});
 	await transport.outbox.enqueue({ method: "POST", path: "/api/hooks/session-end", body: { transcript: "pending" } });
 	expect(await transport.get<{ ok: boolean }>("/success")).toEqual({ ok: true });
-	expect(transport.lastReplayError).toBeInstanceOf(SignetApiError);
-	expect(transport.lastReplayError).toMatchObject({ status: 503 });
-	expect(await transport.flush()).toEqual({ pending: 1 });
-	expect(transport.lastReplayError).toMatchObject({ status: 503 });
+	expect((await transport.outbox.status()).lastFlush).toBeNull();
+	expect(await transport.flush({ force: true })).toMatchObject({
+		state: "failed",
+		pending: 1,
+		failure: { status: 503 },
+	});
+	expect((await transport.outbox.status()).lastFlush).toMatchObject({ state: "failed", failure: { status: 503 } });
+	expect(await transport.flush()).toMatchObject({ state: "deferred", pending: 1 });
 	available = true;
-	expect(await transport.flush({ force: true })).toEqual({ pending: 0 });
-	expect(transport.lastReplayError).toBeNull();
+	expect(await transport.flush({ force: true })).toMatchObject({ state: "complete", pending: 0 });
+	expect((await transport.outbox.status()).lastFlush).toMatchObject({ state: "complete", failure: null });
 	expect((await transport.outbox.status()).pending).toBe(0);
 });
 
@@ -195,6 +201,7 @@ test("durable replay restores captured scope instead of current fixed headers", 
 	let authorized = false;
 	const seen: { headers: Record<string, string>; body: unknown }[] = [];
 	const origin = daemon(async (req) => {
+		if (req.method !== "POST") return Response.json({ ok: true });
 		seen.push({ headers: Object.fromEntries(req.headers), body: await req.json() });
 		return Response.json({ ok: true }, { status: authorized ? 200 : 401 });
 	});
@@ -226,7 +233,7 @@ test("durable replay restores captured scope instead of current fixed headers", 
 			"x-signet-harness": "codex",
 		},
 	});
-	expect(await replay.flush({ force: true })).toEqual({ pending: 0 });
+	expect(await replay.flush({ force: true })).toMatchObject({ pending: 0 });
 	expect(seen[1]).toEqual(seen[0]);
 	authorized = false;
 	const withoutHeaders = new NodeTransport(target, { env });
@@ -239,7 +246,7 @@ test("durable replay restores captured scope instead of current fixed headers", 
 		}),
 	).rejects.toMatchObject({ status: 401 });
 	authorized = true;
-	expect(await replay.flush({ force: true })).toEqual({ pending: 0 });
+	expect(await replay.flush({ force: true })).toMatchObject({ pending: 0 });
 	expect(seen[3]).toEqual(seen[2]);
 });
 
@@ -256,7 +263,7 @@ test("foreign-origin entries are left untouched instead of replayed", async () =
 		await second.flush(async () => {
 			sent = true;
 		}),
-	).toEqual({ pending: 1 });
+	).toMatchObject({ pending: 1 });
 	expect(sent).toBe(false);
 	expect((await second.entries())[0]).toEqual(entry);
 });
@@ -322,9 +329,7 @@ test("a failed proactive refresh is not mistaken for a daemon 401 and attempted 
 	});
 	const transport = new NodeTransport(await resolveTarget({ flagUrl: origin, env, keyring }), { env });
 	await expect(transport.get("/protected")).rejects.toMatchObject({
-		status: 401,
-		reason: "expired",
-		cause: { status: 503 },
+		status: 503,
 	});
 	expect(refreshes).toBe(1);
 });
@@ -377,13 +382,19 @@ test("delivery admission respects cancellation while another process holds the o
 	);
 	await transport.outbox.status();
 	const lock = join(transport.outbox.directory, ".lock");
-	await Bun.write(lock, JSON.stringify({ pid: process.pid, token: "held", createdAt: Date.now() }));
-	await import("node:fs/promises").then((fs) => fs.chmod(lock, 0o600));
-	const release = new Promise<void>((resolve) =>
-		setTimeout(() => {
-			void rm(lock, { force: true }).then(resolve);
-		}, 200),
-	);
+	let entered: () => void = () => {};
+	let unlock: () => void = () => {};
+	const ready = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		unlock = resolve;
+	});
+	const release = withFileLock(lock, async () => {
+		entered();
+		await gate;
+	});
+	await ready;
 	const start = Date.now();
 	try {
 		await expect(
@@ -392,6 +403,7 @@ test("delivery admission respects cancellation while another process holds the o
 		expect(Date.now() - start).toBeLessThan(120);
 		expect(requests).toBe(0);
 	} finally {
+		unlock();
 		await release;
 	}
 });
@@ -435,8 +447,8 @@ test("a committed mutation still returns its result if automatic replay cannot r
 	await import("node:fs/promises").then((fs) => fs.chmod(corrupt, 0o600));
 	expect(await transport.post("/non-idempotent", {})).toEqual({ receipt: 1 });
 	expect(mutations).toBe(1);
-	expect(transport.lastReplayError).toBeInstanceOf(Error);
-	await expect(transport.flush()).rejects.toThrow();
+	expect(await transport.flush()).toMatchObject({ state: "deferred", pending: 0, quarantined: 1 });
+	expect((await transport.outbox.status()).quarantined).toBe(1);
 });
 
 test("delivery is durable before dispatch and survives the sending process exiting", async () => {
@@ -474,10 +486,16 @@ test("delivery is durable before dispatch and survives the sending process exiti
 		await child.exited;
 	}
 	const box = new DurableOutbox(origin, { env });
-	await utimes(join(box.directory, ".lock"), new Date(0), new Date(0));
+	expect(
+		await stat(join(box.directory, ".lock")).then(
+			() => true,
+			() => false,
+		),
+	).toBe(false);
 	expect((await box.entries())[0]?.body).toEqual({ transcript: "durable before dispatch" });
 	const transport = new NodeTransport(await resolveTarget({ flagUrl: origin, flagKey: "valid", env }), { env });
 	await transport.get("/authenticated");
+	await transport.flush({ force: true });
 	expect(keys).toHaveLength(2);
 	expect(keys[1]).toBe(keys[0]);
 	expect((await box.status()).pending).toBe(0);
@@ -560,7 +578,7 @@ test("cross-process refresh remains serialized while recovering abandoned lock g
 	expect((await store.load())?.credential.refreshToken).toBe("rotated");
 }, 20_000);
 
-test("refresh authentication failure retains the server policy reason and original HTTP error", async () => {
+test("refresh failure preserves the server policy status and reason", async () => {
 	const origin = daemon(() =>
 		Response.json({ error: "policy denied refresh", reason: "org_policy", required: "operator" }, { status: 403 }),
 	);
@@ -572,13 +590,13 @@ test("refresh authentication failure retains the server policy reason and origin
 	});
 	const transport = new NodeTransport(await resolveTarget({ flagUrl: origin, env, keyring }), { env });
 	await expect(transport.get("/protected")).rejects.toMatchObject({
-		status: 401,
+		status: 403,
 		reason: "org_policy",
-		cause: { status: 403, reason: "org_policy", required: "operator" },
+		required: "operator",
 	});
 });
 
-test("a refresh 401 retains the original typed rejection as its cause", async () => {
+test("a refresh 401 preserves its original typed rejection", async () => {
 	const origin = daemon(() => Response.json({ reason: "refresh_reuse", error: "already used" }, { status: 401 }));
 	await new LoginStore(origin, { env, keyring }).save({
 		accessToken: "old",
@@ -590,6 +608,6 @@ test("a refresh 401 retains the original typed rejection as its cause", async ()
 	await expect(new NodeTransport(target, { env }).get("/protected")).rejects.toMatchObject({
 		status: 401,
 		reason: "refresh_reuse",
-		cause: { status: 401, reason: "refresh_reuse", body: { error: "already used" } },
+		body: { error: "already used" },
 	});
 });

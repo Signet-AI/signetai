@@ -1,4 +1,11 @@
-import { apiError, SignetApiError, SignetNetworkError, SignetTimeoutError } from "./errors.js";
+import {
+	SignetError,
+	SignetCredentialError,
+	apiError,
+	SignetApiError,
+	SignetNetworkError,
+	SignetTimeoutError,
+} from "./errors.js";
 
 export type CredentialProvider = () => Promise<string | null>;
 export type Query = Readonly<Record<string, string | number | boolean | undefined>>;
@@ -108,6 +115,18 @@ export class SignetTransport {
 		this.baseUrl = validateBaseUrl(config.baseUrl);
 	}
 
+	private async credential(signal: AbortSignal): Promise<string | null> {
+		try {
+			const token = this.config.credentialProvider ? await abortable(this.config.credentialProvider(), signal) : null;
+			if (token !== null && (typeof token !== "string" || token.length > 65536 || /[^\x21-\x7e]/.test(token)))
+				throw new SignetCredentialError(new Error("Credential provider returned an invalid bearer credential"));
+			return token;
+		} catch (error) {
+			if (signal.aborted) throw signal.reason;
+			if (error instanceof SignetError) throw error;
+			throw new SignetCredentialError(error);
+		}
+	}
 	async request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
 		if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /[\r\n]/.test(path))
 			throw new TypeError("Request path must be daemon-relative");
@@ -128,11 +147,12 @@ export class SignetTransport {
 		const scope = requestSignal(opts, this.config.timeoutMs);
 		try {
 			for (let attempt = 0; ; attempt++) {
+				let fetching = false;
 				try {
 					if (attempt > 0) await sleep(this.retryDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random()), scope.signal);
 					scope.signal.throwIfAborted();
 					if (this.config.credentialProvider) {
-						const token = await abortable(this.config.credentialProvider(), scope.signal);
+						const token = await this.credential(scope.signal);
 						if (token) headers.set("authorization", `Bearer ${token}`);
 						else headers.delete("authorization");
 					}
@@ -148,6 +168,7 @@ export class SignetTransport {
 						if (csrf) headers.set("x-signet-csrf", decodeURIComponent(csrf));
 						else headers.delete("x-signet-csrf");
 					}
+					fetching = true;
 					const response = await abortable(
 						fetch(url, {
 							method,
@@ -164,12 +185,16 @@ export class SignetTransport {
 					return parsed;
 				} catch (error) {
 					if (scope.signal.aborted) throw scope.signal.reason;
-					const transient = !(error instanceof SignetApiError) || [408, 429, 500, 502, 503, 504].includes(error.status);
+					if (!fetching) throw error;
+					const transient =
+						error instanceof SignetApiError
+							? [408, 429, 500, 502, 503, 504].includes(error.status)
+							: !(error instanceof SignetError);
 					if (!retryable || !transient || attempt >= this.retries) throw error;
 				}
 			}
 		} catch (error) {
-			if (error instanceof SignetApiError) throw error;
+			if (error instanceof SignetError) throw error;
 			if (error instanceof Error && error.name === "TimeoutError") throw new SignetTimeoutError(scope.timeoutMs);
 			throw new SignetNetworkError(
 				error instanceof Error ? error.message : "Request failed",
