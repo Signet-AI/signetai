@@ -1236,6 +1236,12 @@ export function runDbOwnerWorker(): void {
 				throw error;
 			}
 		}
+		if (job.request.kind === "organization_memory_purge") {
+			const { purgeAuthoredMemoryBatchInTx } = await import("./auth/organization-purge");
+			const userId = job.request.userId;
+			const author = job.request.author;
+			return withBusyRetry(() => purgeAuthoredMemoryBatchInTx(db, userId, author), context);
+		}
 		if (job.request.kind === "agent_remove") {
 			db.exec("BEGIN IMMEDIATE");
 			try {

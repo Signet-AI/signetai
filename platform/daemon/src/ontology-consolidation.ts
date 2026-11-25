@@ -18,6 +18,7 @@ export interface ConsolidateOntologyParams {
 	readonly limit?: number;
 	readonly writeProposals?: boolean;
 	readonly createdBy?: string;
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly useProvider?: boolean;
 	readonly provider?: LlmProvider | null;
 	readonly providerTimeoutMs?: number;
@@ -352,6 +353,7 @@ export async function consolidateOntologyProposals(
 			sourceKind: "ontology_consolidation",
 			sourceId: `proposals:${source.items.length}`,
 			createdBy: params.createdBy?.trim() || "ontology-consolidate",
+			author: params.author,
 		})),
 	);
 	return {

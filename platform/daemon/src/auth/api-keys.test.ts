@@ -17,6 +17,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	await ownerRuntime.closeDbOwner();
 	await closeDbAccessor();
 	rmSync(tempDir, { recursive: true, force: true });
 });
@@ -51,6 +52,18 @@ function duringScrypt(change: () => Promise<void> | void): { readonly mockRestor
 }
 
 describe("api keys", () => {
+	test("member keys retain explicit permission limits", async () => {
+		const created = createApiKey(getDbAccessor(), {
+			name: "member automation",
+			role: "member",
+			scope: { agent: "alice" },
+			permissions: ["recall"],
+		});
+		const verified = await verifyApiKey(created.key);
+		expect(verified.claims).toMatchObject({ role: "member", scope: { agent: "alice" }, permissions: ["recall"] });
+		expect(checkPermission(verified.claims, "remember", "team").allowed).toBe(false);
+		expect(checkPermission(verified.claims, "audit", "team").allowed).toBe(false);
+	});
 	test("creates a connector key, stores only metadata, and verifies the raw secret", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "work laptop pi", connector: "pi", agentId: "agent-pi" });
 		expect(created.key.startsWith("sig_sk_")).toBe(true);

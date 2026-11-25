@@ -21,7 +21,7 @@ import {
 	acknowledgeAgentMessage,
 	claimAcpMessageDelivery,
 	completeAcpMessageDelivery,
-	createAgentMessage,
+	createAgentMessageAsync,
 	getAgentPresenceForSession,
 	getAgentPresenceForSessionAgent,
 	isMessageVisibleToAgent,
@@ -2060,7 +2060,8 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		let message: AgentMessage;
 		try {
-			message = createAgentMessage({
+			message = await createAgentMessageAsync({
+				author: c.get("author"),
 				fromAgentId: scopedSender.agentId,
 				fromSessionKey,
 				toAgentId,

@@ -2,7 +2,9 @@ import { isIP } from "node:net";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import { createAuthMiddleware, isAuthOpenPath, verifyApiKey } from "./auth";
+import { isAuthOpenPath } from "./auth";
+import { createIdentityMiddleware } from "./auth/identity-middleware";
+import { bufferReadAudit } from "./auth/organization-runtime";
 import { logger } from "./logger";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
 
@@ -41,7 +43,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 			c.status(503);
 			return c.json({ error: "server initializing" });
 		}
-		const mw = createAuthMiddleware(authConfig, authSecret, verifyApiKey);
+		const mw = createIdentityMiddleware(authConfig, authSecret);
 		return mw(c, next);
 	});
 	app.use("*", async (c, next) => {
@@ -64,6 +66,9 @@ export function registerGlobalMiddleware(app: Hono): void {
 		const start = Date.now();
 		await next();
 		const duration = Date.now() - start;
+		const principal = c.get("principal");
+		if (c.get("organization") && principal && c.req.method === "GET" && c.req.path.startsWith("/api/"))
+			bufferReadAudit(principal, c.req.path, c.get("requestedOrganizationAgent"), null);
 		logger.api.request(c.req.method, c.req.path, c.res.status, duration);
 		const actor = c.req.header("x-signet-actor");
 		analyticsCollector.recordRequest(c.req.method, c.req.path, c.res.status, duration, actor ?? undefined);

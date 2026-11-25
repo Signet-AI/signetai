@@ -1,4 +1,6 @@
 import type { Context, Hono, Next } from "hono";
+import { registerOrganizationRoutes } from "./organization-routes";
+import { hybridProxyDetected } from "../auth/middleware";
 import { randomBytes } from "node:crypto";
 import {
 	PERMISSIONS,
@@ -18,7 +20,7 @@ import {
 } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { readEnvTrimmed } from "./state.js";
-import { authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./state.js";
+import { AGENTS_DIR, authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./state.js";
 
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 1024;
@@ -111,6 +113,7 @@ function authProviderResponse() {
 }
 
 export function registerAuthRoutes(app: Hono): void {
+	registerOrganizationRoutes(app, () => authConfig, AGENTS_DIR);
 	app.get("/api/auth/whoami", (c) => {
 		const auth = c.get("auth");
 		const effectiveAccess = authConfig.mode === "local" || auth?.authenticated === true || auth?.trustedLocal === true;
@@ -123,7 +126,13 @@ export function registerAuthRoutes(app: Hono): void {
 		return c.json({
 			authenticated: auth?.authenticated ?? false,
 			trustedLocal: auth?.trustedLocal === true,
-			effectiveAccess,
+			effectiveAccess:
+				authConfig.mode === "local" || auth?.trustedLocal ? "open" : effectiveAccess ? "authenticated" : "none",
+			organization: null,
+			user: null,
+			credential: c.get("principal")?.credential ?? null,
+			agents: { defaultRead: "default", defaultWrite: "default" },
+			hybridProxyDetected,
 			claims: auth?.claims ?? null,
 			error: auth?.error ?? null,
 			permissions,

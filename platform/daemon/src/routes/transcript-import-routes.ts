@@ -13,6 +13,7 @@ import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
 import { requirePermission, type AuthMode, type TokenClaims } from "../auth";
 import { resolveScopedAgent } from "../request-scope";
+import { resolveScopedAgentId } from "./utils";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
 import { beginSourceMutation, SOURCE_OPERATION_IN_PROGRESS_ERROR } from "../source-deletion-lock";
@@ -66,6 +67,10 @@ export function resolveTranscriptImportAgent(
 }
 
 function agent(c: Context): string | null {
+	if (c.get("organization")) {
+		const resolved = resolveScopedAgentId(c, undefined);
+		return resolved.error ? null : resolved.agentId;
+	}
 	const requested = [
 		...(c.req.queries("agentId") ?? []),
 		...(c.req.queries("agent_id") ?? []),
@@ -170,7 +175,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			requestedFiles.push({ id: randomUUID(), name: file.name.trim() });
 		}
 		const jobId = randomUUID();
-		await createJob({ jobId, agentId, schemaId, duplicateMode, files: requestedFiles });
+		await createJob({ jobId, agentId, author: c.get("author"), schemaId, duplicateMode, files: requestedFiles });
 		return c.json({ id: jobId, jobId, agentId, state: "staging", duplicateMode, files: requestedFiles }, 201);
 	});
 	app.get("/api/sources/imports", async (c) => {

@@ -1,3 +1,5 @@
+import { writeAttributionStatements, readWriteAttribution } from "./auth/write-attribution";
+import type { WriteAuthor } from "./auth/audit-owner";
 import { randomUUID } from "node:crypto";
 import type { AgentRosterReadPolicy } from "@signet/core";
 import { getAgentScope } from "./agent-id";
@@ -48,6 +50,7 @@ export type BoardViewer =
 	  };
 
 export interface BoardAuthor {
+	readonly principalAuthor?: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionKey?: string;
 	readonly harness?: string;
@@ -723,9 +726,10 @@ export async function createBoardThread(input: {
 		"title",
 		BOARD_LIMITS.threadTitle,
 	);
-	const postAuthor: BoardAuthor = promoted
-		? { agentId: promoted.fromAgentId, sessionKey: promoted.fromSessionKey, harness: undefined }
-		: input.author;
+	const postAuthor: BoardAuthor =
+		promoted && !input.author.principalAuthor
+			? { agentId: promoted.fromAgentId, sessionKey: promoted.fromSessionKey, harness: undefined }
+			: input.author;
 	const now = new Date(input.nowMs ?? Date.now()).toISOString();
 	const threadId = randomUUID();
 	const postId = randomUUID();
@@ -763,6 +767,11 @@ export async function createBoardThread(input: {
 				) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, NULL, ?)`,
 				[postId, threadId, postAuthor.agentId, postAuthor.sessionKey ?? null, postAuthor.harness ?? null, body, now],
 			),
+			...writeAttributionStatements(input.author.principalAuthor, {
+				kind: "board_post",
+				id: postId,
+				agentId: postAuthor.agentId,
+			}),
 		],
 		"board.thread.create",
 	);
@@ -832,6 +841,11 @@ export async function replyToBoardThread(input: {
 						now,
 					],
 				),
+				...writeAttributionStatements(input.author.principalAuthor, {
+					kind: "board_post",
+					id: postId,
+					agentId: input.author.agentId,
+				}),
 			],
 			"board.post.create",
 		);
@@ -1066,6 +1080,7 @@ export async function projectBoardPost(postId: string): Promise<boolean> {
 	const post = await readPost(postId);
 	if (!post) return false;
 	const thread = await readVisibleThread(post.threadId, { kind: "operator" });
+	const author = await readWriteAttribution({ kind: "board_post", id: post.id, agentId: post.authorAgentId });
 	const participants = await readAll<{ readonly author_agent_id: string }>(
 		`SELECT DISTINCT author_agent_id FROM board_posts
 		 WHERE thread_id = ? AND created_at <= ?`,
@@ -1077,6 +1092,7 @@ export async function projectBoardPost(postId: string): Promise<boolean> {
 	const path = postPath(thread.id, post.id);
 	for (const agentId of agents) {
 		await indexExternalMemoryArtifact({
+			author,
 			agentId,
 			harness: BOARD_HARNESS,
 			sourcePath: path,

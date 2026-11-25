@@ -55,6 +55,7 @@ export interface ExtractOntologyParams {
 	readonly writeProposals?: boolean;
 	readonly writeAssertions?: boolean;
 	readonly createdBy?: string;
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly limit?: number;
 	readonly useProvider?: boolean;
 	readonly provider?: LlmProvider | null;
@@ -648,7 +649,7 @@ function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "a
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const source = accessor.withReadDb(
 		(db: import("./db-accessor").ReadDb) => readEpisodicSource(db, { agentId: params.agentId, from }),
-		"ontology-extraction.ts:649",
+		"ontology-extraction.ts:650",
 	);
 	if (source) return source;
 	throw new OntologyExtractionError("Extraction source not found", 404);
@@ -707,6 +708,7 @@ export async function extractOntologyProposals(
 		sourceId: source.sourceId,
 		sourcePath: source.sourcePath,
 		createdBy: params.createdBy ?? "ontology-extract",
+		author: params.author,
 	}));
 	const assertionInputs: readonly CreateEpistemicAssertionInput[] = assertions.map((assertion) => ({
 		agentId: params.agentId,
@@ -754,7 +756,7 @@ export async function extractOntologyProposals(
 			: { items: [] as readonly OntologyProposal[], count: 0 };
 		const assertionItems = shouldWriteAssertions ? createEpistemicAssertionsInTx(accessor, db, assertionInputs) : [];
 		return { proposalResult, assertionItems };
-	}, "ontology-extraction.ts:751");
+	}, "ontology-extraction.ts:753");
 
 	return {
 		source: sourceInfo(source),

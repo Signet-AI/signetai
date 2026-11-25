@@ -1,3 +1,4 @@
+import type { WriteAuthor } from "../auth/audit-owner";
 import type { DreamingPassLiveOptions } from "./dreaming";
 import type { DreamingConfig, DreamingPolicies } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
@@ -53,6 +54,7 @@ export interface DreamingWorkerHandle {
 		mode: DreamingMode,
 		agentId?: string,
 		userRequest?: DreamingPassLiveOptions["userRequest"],
+		author?: WriteAuthor,
 	): Promise<string>;
 	readonly running: boolean;
 	readonly activeAgentId: string | null;
@@ -502,6 +504,7 @@ export function startDreamingWorker(
 		scopes: readonly string[],
 		exclusive: boolean,
 		live?: DreamingPassLiveOptions,
+		author?: WriteAuthor,
 	): StartedDreamingPass {
 		let resolveToolCall: (ok: boolean) => void = () => undefined;
 		const firstToolCall = new Promise<boolean>((resolve) => {
@@ -524,8 +527,8 @@ export function startDreamingWorker(
 			const config = options.policies ? { ...cfg, policies: options.policies() } : cfg;
 			const policy = dreamingPassPolicy(config.policies, mode);
 			const id = options.ownerMaintenance
-				? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode, policy)
-				: await createDreamingPass(accessor, runAgentId, mode, policy);
+				? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode, policy, author)
+				: await createDreamingPass(accessor, runAgentId, mode, policy, author);
 			entry.passId = id;
 			return { id, config };
 		})();
@@ -845,11 +848,23 @@ export function startDreamingWorker(
 			mode: DreamingMode,
 			agentId?: string,
 			userRequest?: DreamingPassLiveOptions["userRequest"],
+			author?: WriteAuthor,
 		): Promise<string> {
 			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
-			if (!userRequest && knownScopesLeased()) throw new AlreadyRunningError();
+			if (!author && !userRequest && knownScopesLeased()) throw new AlreadyRunningError();
 			const started = await admit(async () => {
 				if (exclusiveRunning()) throw new AlreadyRunningError();
+				if (author) {
+					if (leasedScopes().has(runAgentId) || usedSlots() >= maxPasses()) throw new AlreadyRunningError();
+					return startPass(
+						runAgentId,
+						mode,
+						[runAgentId],
+						mode !== "incremental",
+						userRequest ? { userRequest } : undefined,
+						author,
+					);
+				}
 				if (userRequest) {
 					if (leasedScopes().has(runAgentId) || usedSlots() >= maxPasses()) throw new AlreadyRunningError();
 					return startPass(runAgentId, mode, [runAgentId], mode !== "incremental", { userRequest });

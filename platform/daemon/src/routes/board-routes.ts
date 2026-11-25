@@ -98,6 +98,7 @@ async function resolveAuthor(
 		value: {
 			viewer: await resolveBoardViewer(scoped.agentId),
 			author: {
+				principalAuthor: c.get("author"),
 				agentId: scoped.agentId,
 				sessionKey: identity.sessionKey,
 				harness: parseOptionalString(payload?.harness),

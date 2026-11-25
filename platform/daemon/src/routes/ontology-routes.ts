@@ -50,7 +50,7 @@ import {
 	rejectOntologyProposal,
 } from "../ontology-proposals";
 import { AGENTS_DIR, authConfig } from "./state";
-import { parseBoundedInt, resolveScopedAgentId, validateSessionAgentBinding } from "./utils";
+import { parseBoundedInt, resolveScopedAgentId, validateSessionAgentBinding, resolveMutationActor } from "./utils";
 
 function asRecord(value: unknown): Record<string, unknown> {
 	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
@@ -216,7 +216,8 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			const { result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: scoped.agentId,
-				actor: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+				actor: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+				author: c.get("author"),
 				operation: "create_entity_alias",
 				payload: {
 					entity_id: c.req.param("id"),
@@ -245,7 +246,8 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			await applyOntologyOperation(getDbAccessor(), {
 				agentId: scoped.agentId,
-				actor: c.req.header("x-signet-actor") ?? "operator",
+				actor: resolveMutationActor(c, "operator").changedBy,
+				author: c.get("author"),
 				operation: "archive_entity_alias",
 				payload: {
 					entity_id: c.req.param("id"),
@@ -286,7 +288,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					agentId: scoped.agentId,
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 			);
 		} catch (err) {
@@ -308,7 +311,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourceEntityIds: readStringArray(body, "source_entity_ids") ?? readStringArray(body, "source_ids"),
 					force: readBoolean(body, "force") ?? false,
 					writeProposal: readBoolean(body, "write_proposal") ?? readBoolean(body, "write_proposals") ?? false,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-merge-plan",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "ontology-merge-plan").changedBy,
+					author: c.get("author"),
 					rationale: readString(body, "rationale") ?? readString(body, "reason"),
 					evidence: readArray(body, "evidence"),
 				}),
@@ -332,7 +336,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					from,
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					writeAssertions: readBoolean(body, "write_assertions") ?? false,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-extract",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "ontology-extract").changedBy,
+					author: c.get("author"),
 					limit: readNumber(body, "limit"),
 					useProvider,
 					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
@@ -359,7 +364,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					status,
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-consolidate",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "ontology-consolidate").changedBy,
+					author: c.get("author"),
 					useProvider,
 					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
 					providerTimeoutMs: readNumber(body, "provider_timeout_ms"),
@@ -628,7 +634,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourcePath: readString(body, "source_path") ?? null,
 					sourceRoot: readString(body, "source_root") ?? null,
 					claimAttributeId: readString(body, "claim_attribute_id") ?? null,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 				201,
 			);
@@ -665,7 +672,8 @@ export function registerOntologyRoutes(app: Hono): void {
 				archiveEpistemicAssertion(getDbAccessor(), {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
-					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					reason: readString(body, "reason") ?? null,
 				}),
 			);
@@ -697,7 +705,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourcePath: readString(body, "source_path") ?? null,
 					sourceRoot: readString(body, "source_root") ?? null,
 					claimAttributeId: readString(body, "claim_attribute_id") ?? null,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 			);
 		} catch (err) {
@@ -717,7 +726,8 @@ export function registerOntologyRoutes(app: Hono): void {
 			return c.json(
 				await applyOntologyOperation(getDbAccessor(), {
 					agentId: scoped.agentId,
-					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
 					operation,
 					payload,
@@ -744,7 +754,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		const operations = readArray(body, "operations") ?? readArray(body, "items") ?? [];
 		if (operations.length === 0) return c.json({ error: "operations are required" }, 400);
-		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator";
+		const actor = resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy;
 		try {
 			return c.json(
 				await applyOntologyOperationBatch(getDbAccessor(), {
@@ -807,7 +817,8 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourceId: readString(body, "source_id") ?? null,
 					sourcePath: readString(body, "source_path") ?? null,
 					sourceRoot: readString(body, "source_root") ?? null,
-					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 				201,
 			);
@@ -820,7 +831,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const body = await readJsonRecord(c);
 		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
 		if (scoped.response) return scoped.response;
-		const createdBy = readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator";
+		const createdBy = resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy;
 		const sourceKind = readString(body, "source_kind") ?? null;
 		const sourceId = readString(body, "source_id") ?? null;
 		const sourcePath = readString(body, "source_path") ?? null;
@@ -867,7 +878,8 @@ export function registerOntologyRoutes(app: Hono): void {
 				await applyOntologyProposal(getDbAccessor(), {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
-					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
 				}),
 			);
@@ -885,7 +897,8 @@ export function registerOntologyRoutes(app: Hono): void {
 				await rejectOntologyProposal(getDbAccessor(), {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
-					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					reason: readString(body, "reason"),
 				}),
 			);

@@ -516,6 +516,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	return path;
 }
 export interface MemoryArtifactUpsertFields {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;
@@ -552,8 +553,8 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		started_at, ended_at, manifest_path, source_node_id,
 		memory_sentence, memory_sentence_quality, content, updated_at,
 		source_mtime_ms, source_id, source_root, source_external_id,
-		source_parent_path, source_meta_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_parent_path, source_meta_json, author_user_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(agent_id, source_path) DO UPDATE SET
 		source_sha256 = excluded.source_sha256,
 		source_kind = excluded.source_kind,
@@ -577,6 +578,7 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		source_external_id = excluded.source_external_id,
 		source_parent_path = excluded.source_parent_path,
 		source_meta_json = excluded.source_meta_json,
+		author_user_id = COALESCE(memory_artifacts.author_user_id, excluded.author_user_id),
 		is_deleted = 0,
 		deleted_at = NULL`;
 export function upsertMemoryArtifactInTx(
@@ -592,6 +594,19 @@ export function upsertMemoryArtifactInTx(
 	const sql = options.conflictGuardSourceId
 		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n		WHERE memory_artifacts.source_id = excluded.source_id`
 		: MEMORY_ARTIFACT_UPSERT_SQL;
+	const speaker =
+		!fields.author && fields.sessionKey
+			? db
+					.query<{ speaker_user_id: string | null }, [string, string, string | null, string | null]>(
+						"SELECT speaker_user_id FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND ((source_id IS NULL AND ? IS NULL) OR source_id = ?)",
+					)
+					.get(fields.agentId, fields.sessionKey, fields.sourceId, fields.sourceId)
+			: null;
+	const author =
+		fields.author ??
+		(speaker?.speaker_user_id
+			? { userId: speaker.speaker_user_id, credential: "system:transcript-projection" }
+			: undefined);
 	db.prepare(sql).run(
 		fields.agentId,
 		fields.sourcePath,
@@ -617,6 +632,7 @@ export function upsertMemoryArtifactInTx(
 		fields.sourceExternalId,
 		fields.sourceParentPath,
 		fields.sourceMetaJson,
+		author?.userId ?? null,
 	);
 	return true;
 }
@@ -722,10 +738,16 @@ async function upsertSourceArtifactRow(
 		readonly trustSourcePath?: boolean;
 		readonly trustNativeMarker?: boolean;
 		readonly signal?: AbortSignal;
+		readonly author?: import("./auth/audit-owner").WriteAuthor;
 	} = {},
 ): Promise<void> {
 	await dbOwnerSourceArtifactUpsert(
-		{ fields: artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options) },
+		{
+			fields: {
+				...artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options),
+				author: options.author,
+			},
+		},
 		{
 			operation: "sources.artifacts.upsert",
 			lane: "write",
@@ -738,6 +760,7 @@ async function upsertSourceArtifactRow(
 }
 
 export async function indexExternalMemoryArtifact(input: {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId?: string;
 	readonly sourcePath: string;
 	readonly sourceKind: string;
@@ -782,7 +805,7 @@ export async function indexExternalMemoryArtifact(input: {
 		},
 		input.content,
 		input.sourceMtimeMs,
-		{ trustNativeMarker: true, trustSourcePath: true, signal: input.signal },
+		{ author: input.author, trustNativeMarker: true, trustSourcePath: true, signal: input.signal },
 	);
 }
 

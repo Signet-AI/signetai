@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { getDbAccessorPath, hasDbAccessor, resolveSqliteAgentsDir } from "./db-accessor";
@@ -230,6 +231,11 @@ async function executeInlineOwnerRequest(
 			return {
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
+		});
+	if (request.kind === "organization_memory_purge")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Purge requires writer");
+			return purgeAuthoredMemoryBatchInTx(db, request.userId, request.author);
 		});
 	if (request.kind === "agent_remove")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
@@ -679,6 +685,16 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
+export async function dbOwnerOrganizationPurge(
+	userId: string,
+	author: import("./auth/audit-owner").WriteAuthor,
+): Promise<{ removed: number; remaining: number }> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "organization_memory_purge", userId, author },
+		{ operation: "organization.purge-memory", lane: "write", deadlineMs: 60_000 },
+	);
+}
 export async function dbOwnerAgentRemove(
 	input: AgentRemovalInput,
 	options: DbOwnerSqlOptions,

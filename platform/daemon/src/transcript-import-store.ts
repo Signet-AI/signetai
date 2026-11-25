@@ -1,3 +1,4 @@
+import { writeAttributionStatements } from "./auth/write-attribution";
 import { dbOwnerQuery, dbOwnerTransaction, dbOwnerTranscriptBulkCommit } from "./db-owner-runtime";
 
 export type ImportJobState =
@@ -230,6 +231,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 	};
 }
 export function createJob(input: {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly jobId: string;
 	readonly agentId: string;
 	readonly schemaId?: string;
@@ -244,6 +246,11 @@ export function createJob(input: {
 				params: [input.jobId, input.agentId, input.schemaId ?? "signet-export", input.duplicateMode ?? "skip"],
 				result: "run",
 			},
+			...writeAttributionStatements(input.author, {
+				kind: "transcript_import",
+				id: input.jobId,
+				agentId: input.agentId,
+			}),
 			...(input.files ?? []).map((file, ordinal) => ({
 				sql: "INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state,storage_state) VALUES (?,?,?,?,?,?,?,'staging','uploading')",
 				params: [file.id, input.jobId, `reserved:${input.jobId}:${file.id}`, input.agentId, ordinal, file.name, ""],

@@ -176,6 +176,7 @@ import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-boa
 import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
+import { up as organizationIdentity, artifacts as organizationIdentityArtifacts } from "./176-organization-identity";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1627,6 +1628,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-artifact-manifest-path-repair",
 		up: memoryArtifactManifestPathRepair,
 	},
+	{ version: 176, name: "organization-identity", up: organizationIdentity, artifacts: organizationIdentityArtifacts },
 ];
 function checksum(m: Migration): string {
 	let h = 0;
