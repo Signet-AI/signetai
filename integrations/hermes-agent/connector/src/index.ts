@@ -1514,7 +1514,11 @@ async function ensureNamedAgentRegistered(
 		return null;
 	} catch (error) {
 		if (!(error instanceof SignetApiError) || error.status !== 404) {
-			warnings.push(`Could not check Signet agent '${agentId}' before registration; no agent was created`);
+			warnings.push(
+				`Could not check Signet agent '${agentId}' before registration${error instanceof SignetApiError ? `: HTTP ${error.status}` : ""}; no agent was created`,
+			);
+			if (error instanceof SignetApiError && error.status === 401)
+				warnings.push("Signet session expired, run `signet login`");
 			return null;
 		}
 	}

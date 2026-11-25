@@ -41,6 +41,7 @@ const PRELUDE = [
 	"calls = []",
 	"class FakeClient:",
 	"    _agent_id = 'agent-a'",
+	"    agent_id = 'agent-a'",
 	"    def request_result(self, method, path, body=None, **kw):",
 	"        calls.append(['http', method, path, body])",
 	"        return {'ok': True, 'data': {'ok': True}}",

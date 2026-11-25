@@ -21,6 +21,5 @@ if (original) {
 			},
 		},
 	);
-	Object.defineProperty(guarded, "signetBlocksLiveDaemon", { value: true });
 	globalThis.fetch = guarded;
 }

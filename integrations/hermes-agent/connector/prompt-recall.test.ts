@@ -36,6 +36,7 @@ const PRELUDE = [
 	"submitted = []",
 	"stopped = []",
 	"class FakeClient:",
+	"    agent_id = 'fixture-agent'",
 	"    delays = {}",
 	"    responses = {}",
 	"    def user_prompt_submit(self, key, msg, **kw):",

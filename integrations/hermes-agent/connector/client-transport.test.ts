@@ -26,6 +26,8 @@ with tempfile.TemporaryDirectory() as home:
  ConnectorRegistry(env=env).set('hermes-agent',{'url':url,'keyFile':str(path),'agentId':'alice'})
  os.environ['HOME'] = home
  os.environ['SIGNET_DAEMON_URL'] = 'http://127.0.0.1:1'
+ os.environ['SIGNET_TOKEN'] = 'wrong-process-global-key'
+ os.environ['SIGNET_API_KEY'] = 'wrong-process-global-key'
  client = SignetClient()
  assert client.base_url == url
  os.environ['SIGNET_DAEMON_URL'] = 'http://127.0.0.1:1'
