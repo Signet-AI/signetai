@@ -1,4 +1,4 @@
-import { prepareTypedStatement, type ReadDb } from "../db-accessor";
+import { prepareTypedStatement, type ReadDb, type WriteDb } from "../db-accessor";
 import type { ReadScope } from "../read-scope";
 
 export interface DreamingPartition {
@@ -100,4 +100,115 @@ export function assertDreamingMutationLabelInDb(
 		`SELECT id FROM ${table} WHERE id = ? AND agent_id = ? AND compartment_id IS ?`,
 	).get(id, partition.agentId, partition.compartmentId);
 	if (!row) throw new Error("compartment_mismatch");
+}
+export type SemanticCitationKind =
+	| "attribute"
+	| "memory"
+	| "dependency"
+	| "entity"
+	| "aspect"
+	| "assertion"
+	| "proposal"
+	| "contradiction"
+	| "temporal_edge";
+export type CitationEvidenceKind = "memory" | "artifact" | "transcript" | "summary" | "attribute";
+export interface SemanticEvidenceCitation {
+	readonly kind: CitationEvidenceKind;
+	readonly id: string;
+}
+
+export function dreamingEvidenceRecordInDb(
+	db: ReadDb,
+	agentId: string,
+	evidence: SemanticEvidenceCitation,
+): { readonly compartment_id: number | null; readonly author_user_id: string | null } | undefined {
+	const tables = {
+		memory: "memories",
+		artifact: "memory_artifacts",
+		transcript: "session_transcripts",
+		summary: "session_summaries",
+		attribute: "entity_attributes",
+	} as const;
+	const author =
+		evidence.kind === "transcript"
+			? "speaker_user_id"
+			: evidence.kind === "memory" || evidence.kind === "artifact" || evidence.kind === "summary"
+				? "author_user_id"
+				: evidence.kind === "attribute"
+					? "(SELECT author_user_id FROM memories WHERE memories.id = entity_attributes.memory_id AND memories.agent_id = entity_attributes.agent_id AND memories.compartment_id IS entity_attributes.compartment_id)"
+					: "NULL";
+	return prepareTypedStatement<{ compartment_id: number | null; author_user_id: string | null }>(
+		db,
+		`SELECT compartment_id, ${author} AS author_user_id FROM ${tables[evidence.kind]} WHERE ${evidence.kind === "transcript" ? "session_key" : evidence.kind === "artifact" ? "source_path" : "id"} = ? AND agent_id = ?`,
+	).get(evidence.id, agentId);
+}
+
+export function evidenceCitationInDb(
+	db: ReadDb,
+	partition: DreamingPartition,
+	evidence: SemanticEvidenceCitation,
+): { readonly authorUserId: string | null } {
+	const row = dreamingEvidenceRecordInDb(db, partition.agentId, evidence);
+	if (!row) throw new Error(`Derived memory provenance source is not in the authorized agent scope: ${evidence.id}`);
+	const scope = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+	if (row.compartment_id !== null && scope.compartments !== "all" && !scope.compartments.includes(row.compartment_id))
+		throw new Error("compartment_mismatch");
+	return { authorUserId: row.author_user_id };
+}
+
+export function recordSemanticCitationsInTx(
+	db: WriteDb,
+	input: {
+		readonly kind: SemanticCitationKind;
+		readonly id: string;
+		readonly partition: DreamingPartition;
+		readonly evidence: readonly SemanticEvidenceCitation[];
+	},
+): void {
+	for (const evidence of input.evidence) evidenceCitationInDb(db, input.partition, evidence);
+	for (const evidence of input.evidence)
+		db.prepare(
+			"INSERT INTO evidence_citations (derived_kind, derived_id, agent_id, evidence_kind, evidence_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT (derived_kind, derived_id, evidence_kind, evidence_id) DO NOTHING",
+		).run(input.kind, input.id, input.partition.agentId, evidence.kind, evidence.id);
+}
+
+export function assertDreamingAttentionSubjectInDb(
+	db: ReadDb,
+	partition: DreamingPartition,
+	subject: string | null,
+): void {
+	const separator = subject?.indexOf(":") ?? -1;
+	const kind = subject?.slice(0, separator) ?? "";
+	const sourceId = subject?.slice(separator + 1) ?? "";
+	const definitions: Readonly<Record<string, readonly [string, string]>> = {
+		entity: ["entities", "id"],
+		aspect: ["entity_aspects", "id"],
+		attribute: ["entity_attributes", "id"],
+		claim: ["entity_attributes", "id"],
+		link: ["entity_dependencies", "id"],
+		memory: ["memories", "id"],
+		artifact: ["memory_artifacts", "source_path"],
+		transcript: ["session_transcripts", "session_key"],
+		summary: ["session_summaries", "id"],
+	};
+	const definition = Object.hasOwn(definitions, kind) ? definitions[kind] : undefined;
+	if (separator > 0 && definition) {
+		const [table, key] = definition;
+		const source = prepareTypedStatement<{ compartment_id: number | null }>(
+			db,
+			`SELECT compartment_id FROM ${table} WHERE ${key} = ? AND agent_id = ?`,
+		).get(sourceId, partition.agentId);
+		const readable = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+		if (
+			source?.compartment_id != null &&
+			readable.compartments !== "all" &&
+			!readable.compartments.includes(source.compartment_id)
+		)
+			throw new Error("compartment_mismatch");
+	}
+	for (const row of prepareTypedStatement<{ id: string }>(
+		db,
+		"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = 'hygiene' AND subject_ref = ?",
+	).all(partition.agentId, subject))
+		assertDreamingMutationLabelInDb(db, "dreaming_attention", row.id, partition);
 }

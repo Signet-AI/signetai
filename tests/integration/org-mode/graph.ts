@@ -7,20 +7,23 @@ export interface Evidence {
 	quote: string;
 }
 export async function dreamOperation(
-	fixture: Pick<Fixture, "daemon" | "admin">,
+	fixture: Pick<Fixture, "daemon" | "admin" | "users" | "engAgent">,
 	agentId: string,
 	operation: string,
 	payload: object,
 	evidence: Evidence[],
 ): Promise<Record<string, unknown>> {
 	const endpoint = "/api/dream/tools/apply_ontology_ops";
-	const body = success(
-		await request(fixture.daemon.origin, endpoint, fixture.admin, "POST", {
-			agentId,
-			input: { agentId, operations: [{ operation, payload, evidence }] },
-		}),
-		`POST ${endpoint}: ${operation}`,
-	);
+	const user =
+		[...fixture.users.values()].find((user) => user.agentId === agentId) ??
+		(agentId === fixture.engAgent ? fixture.users.get("alice") : undefined);
+	assert(user, "Dreaming fixture must use an actor permitted to act as the target agent");
+	const reply = await request(fixture.daemon.origin, endpoint, user.session, "POST", {
+		agentId,
+		input: { agentId, operations: [{ operation, payload, evidence }] },
+	});
+	assert(reply.status >= 200 && reply.status < 300, `${operation}: ${JSON.stringify(reply.body)}`);
+	const body = success(reply, `POST ${endpoint}: ${operation}`);
 	assert.equal(body.ok, true, `${endpoint}: ${operation} failed`);
 	assert(Array.isArray(body.items) && body.items.length === 1, `${endpoint}: expected exactly one operation result`);
 	const item = record(body.items[0]);
@@ -28,7 +31,7 @@ export async function dreamOperation(
 	return record(item.result);
 }
 export async function deriveClaim(
-	fixture: Pick<Fixture, "daemon" | "admin">,
+	fixture: Pick<Fixture, "daemon" | "admin" | "users" | "engAgent">,
 	agentId: string,
 	memoryId: string,
 	quote: string,

@@ -573,5 +573,5 @@ export function getKnowledgeHygieneReport(
 			},
 			safeMentionCandidates,
 		};
-	}, "knowledge-graph-hygiene.ts:401");
+	}, "knowledge-graph-hygiene.ts:441");
 }

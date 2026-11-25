@@ -205,7 +205,7 @@ test(
 			const result = await request(
 				fixture.daemon.origin,
 				"/api/dream/tools/apply_ontology_ops",
-				fixture.admin,
+				fixture.user("bob").session,
 				"POST",
 				{
 					agentId: target,

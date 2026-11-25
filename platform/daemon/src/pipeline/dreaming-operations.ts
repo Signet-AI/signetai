@@ -14,6 +14,7 @@ import { readScopeSql, type ReadScope } from "../read-scope";
 import { runWriteBatches } from "../yielding-writes";
 import {
 	assertDreamingAgentInDb,
+	assertDreamingAttentionSubjectInDb,
 	assertDreamingMutationLabelInDb,
 	dreamingPassPartitionInDb,
 	dreamingReadScopeInDb,
@@ -749,6 +750,7 @@ function toApplicatorPayload(
 					source_entity_id: stringField(payload, "fromEntityId"),
 					target_entity_id: stringField(payload, "toEntityId"),
 					link_type: stringField(payload, "linkType"),
+					reason,
 				},
 			};
 		}
@@ -881,40 +883,7 @@ function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperatio
 	for (const operation of params.operations) {
 		if (operation.operation === FLAG_OP) {
 			const subject = stringField(operation.payload, "subjectRef");
-			const separator = subject?.indexOf(":") ?? -1;
-			const kind = subject?.slice(0, separator) ?? "";
-			const sourceId = subject?.slice(separator + 1) ?? "";
-			const definitions: Readonly<Record<string, readonly [string, string]>> = {
-				entity: ["entities", "id"],
-				aspect: ["entity_aspects", "id"],
-				attribute: ["entity_attributes", "id"],
-				claim: ["entity_attributes", "id"],
-				link: ["entity_dependencies", "id"],
-				memory: ["memories", "id"],
-				artifact: ["memory_artifacts", "source_path"],
-				transcript: ["session_transcripts", "session_key"],
-				summary: ["session_summaries", "id"],
-			};
-			const definition = Object.hasOwn(definitions, kind) ? definitions[kind] : undefined;
-			if (separator > 0 && definition) {
-				const [table, key] = definition;
-				const source = prepareTypedStatement<{ compartment_id: number | null }>(
-					db,
-					`SELECT compartment_id FROM ${table} WHERE ${key} = ? AND agent_id = ?`,
-				).get(sourceId, params.agentId);
-				const readable = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
-				if (
-					source?.compartment_id != null &&
-					readable.compartments !== "all" &&
-					!readable.compartments.includes(source.compartment_id)
-				)
-					throw new Error("compartment_mismatch");
-			}
-			for (const row of prepareTypedStatement<{ id: string }>(
-				db,
-				"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = 'hygiene' AND subject_ref = ?",
-			).all(params.agentId, subject))
-				assertDreamingMutationLabelInDb(db, "dreaming_attention", row.id, partition);
+			assertDreamingAttentionSubjectInDb(db, partition, subject);
 			continue;
 		}
 		const attentionId =

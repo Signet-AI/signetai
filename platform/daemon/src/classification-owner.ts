@@ -319,7 +319,7 @@ function covers(db: MigrationDb, target: ClassificationTarget, item: ContentRow,
 	);
 }
 function passLabels(db: MigrationDb, item: ContentRow): string[] {
-	let pass = text(item.row.pass_id ?? item.row.dreaming_pass_id);
+	let pass = item.table === "dreaming_passes" ? item.key : text(item.row.pass_id ?? item.row.dreaming_pass_id);
 	const proposalId = text(item.row.proposal_id);
 	if (!pass && proposalId && tableInfo(db, "ontology_proposals")?.columns.has("dreaming_pass_id")) {
 		const proposal = db
@@ -330,9 +330,9 @@ function passLabels(db: MigrationDb, item: ContentRow): string[] {
 	if (!pass) return [];
 	return db
 		.prepare(
-			"SELECT cm.classification_id FROM dreaming_passes p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.id=? AND p.agent_id=?",
+			"SELECT cm.classification_id FROM dreaming_passes p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.id=? AND (p.agent_id=? OR instr(','||COALESCE(NULLIF(p.scope_key,''),p.agent_id)||',',','||?||',')>0)",
 		)
-		.all(pass, item.row.agent_id)
+		.all(pass, item.row.agent_id, item.row.agent_id)
 		.flatMap((r) => (typeof r.classification_id === "string" ? [r.classification_id] : []));
 }
 function members(db: MigrationDb, c: unknown): string[] {

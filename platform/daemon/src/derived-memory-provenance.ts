@@ -1,73 +1,14 @@
-import { prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import {
 	assertDreamingMutationLabelInDb,
+	dreamingEvidenceRecordInDb,
+	evidenceCitationInDb,
+	recordSemanticCitationsInTx,
+	type SemanticEvidenceCitation,
 	dreamingReadScopeInDb,
 	dreamingPassPartitionInDb,
 	type DreamingPartition,
 } from "./pipeline/dreaming-scope";
-
-export type SemanticCitationKind =
-	| "attribute"
-	| "memory"
-	| "dependency"
-	| "entity"
-	| "aspect"
-	| "assertion"
-	| "proposal"
-	| "contradiction"
-	| "temporal_edge";
-export type CitationEvidenceKind = "memory" | "artifact" | "transcript" | "summary" | "attribute";
-export interface SemanticEvidenceCitation {
-	readonly kind: CitationEvidenceKind;
-	readonly id: string;
-}
-
-export function evidenceCitationInDb(
-	db: ReadDb,
-	partition: DreamingPartition,
-	evidence: SemanticEvidenceCitation,
-): { readonly authorUserId: string | null } {
-	const tables = {
-		memory: "memories",
-		artifact: "memory_artifacts",
-		transcript: "session_transcripts",
-		summary: "session_summaries",
-		attribute: "entity_attributes",
-	} as const;
-	const author =
-		evidence.kind === "transcript"
-			? "speaker_user_id"
-			: evidence.kind === "memory" || evidence.kind === "artifact" || evidence.kind === "summary"
-				? "author_user_id"
-				: evidence.kind === "attribute"
-					? "(SELECT author_user_id FROM memories WHERE memories.id = entity_attributes.memory_id AND memories.agent_id = entity_attributes.agent_id AND memories.compartment_id IS entity_attributes.compartment_id)"
-					: "NULL";
-	const row = prepareTypedStatement<{ compartment_id: number | null; author_user_id: string | null }>(
-		db,
-		`SELECT compartment_id, ${author} AS author_user_id FROM ${tables[evidence.kind]} WHERE ${evidence.kind === "transcript" ? "session_key" : evidence.kind === "artifact" ? "source_path" : "id"} = ? AND agent_id = ?`,
-	).get(evidence.id, partition.agentId);
-	if (!row) throw new Error(`Derived memory provenance source is not in the authorized agent scope: ${evidence.id}`);
-	const scope = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
-	if (row.compartment_id !== null && scope.compartments !== "all" && !scope.compartments.includes(row.compartment_id))
-		throw new Error("compartment_mismatch");
-	return { authorUserId: row.author_user_id };
-}
-
-export function recordSemanticCitationsInTx(
-	db: WriteDb,
-	input: {
-		readonly kind: SemanticCitationKind;
-		readonly id: string;
-		readonly partition: DreamingPartition;
-		readonly evidence: readonly SemanticEvidenceCitation[];
-	},
-): void {
-	for (const evidence of input.evidence) evidenceCitationInDb(db, input.partition, evidence);
-	for (const evidence of input.evidence)
-		db.prepare(
-			"INSERT INTO evidence_citations (derived_kind, derived_id, agent_id, evidence_kind, evidence_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT (derived_kind, derived_id, evidence_kind, evidence_id) DO NOTHING",
-		).run(input.kind, input.id, input.partition.agentId, evidence.kind, evidence.id);
-}
 
 const SEMANTIC_PREMISE_KIND = "ontology_claim";
 const EPISODIC_SOURCE_KINDS = new Set(["memory", "artifact", "transcript", "summary"]);
@@ -139,21 +80,7 @@ function validateSource(db: WriteDb, agentId: string, sourceKind: string, source
 	if (!EPISODIC_SOURCE_KINDS.has(sourceKind)) {
 		throw new Error(`Derived memory provenance source kind is not supported: ${sourceKind}`);
 	}
-	const tables: Readonly<Record<string, string>> = {
-		memory: "memories",
-		artifact: "memory_artifacts",
-		transcript: "session_transcripts",
-		summary: "session_summaries",
-	};
-	const table = tables[sourceKind];
-	if (
-		!table ||
-		!db
-			.prepare(
-				`SELECT ${sourceKind === "transcript" ? "session_key" : sourceKind === "artifact" ? "source_path" : "id"} FROM ${table} WHERE ${sourceKind === "transcript" ? "session_key" : sourceKind === "artifact" ? "source_path" : "id"} = ? AND agent_id = ?`,
-			)
-			.get(sourceId, agentId)
-	)
+	if (!dreamingEvidenceRecordInDb(db, agentId, derivedSourceCitation(sourceKind, sourceId)))
 		throw new Error(`Derived memory provenance source is not in the authorized agent scope: ${sourceId}`);
 }
 function derivedSourceCitation(sourceKind: string, sourceId: string): SemanticEvidenceCitation {
@@ -204,10 +131,7 @@ export function linkDerivedMemorySourcesInTx(
 		sourceKind: required(source.sourceKind, "sourceKind"),
 		sourceId: required(source.sourceId, "sourceId"),
 	}));
-	const target = prepareTypedStatement<{ compartment_id: number | null }>(
-		db,
-		"SELECT compartment_id FROM memories WHERE id = ? AND agent_id = ?",
-	).get(derivedMemoryId, agentId);
+	const target = dreamingEvidenceRecordInDb(db, agentId, { kind: "memory", id: derivedMemoryId });
 	if (!target) throw new Error("Derived memory provenance target is not in the authorized agent scope");
 	const partition =
 		input.passId !== undefined

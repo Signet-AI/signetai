@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 791 sites
+- Exact ledger inventory: 789 sites
 - Synchronous `withWriteTx()` sites: 52
 - Synchronous `withReadDb()` sites: 85
-- Async-named DB sites: 159
-- Async-named ON-PARENT DB sites: 157
+- Async-named DB sites: 157
+- Async-named ON-PARENT DB sites: 155
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 495
 - Compile-visible legacy DB sites remaining: 137
   - `withWriteTx`: 52
   - `withReadDb`: 85
 
-The 791-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 52 synchronous writes, 85 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 137 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 789-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 52 synchronous writes, 85 synchronous reads, and 157 async-named DB sites are the complete database-call inventory; 137 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 155 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 296
-- ON-PARENT callback execution: 294
+- Database accessor sites classified: 294
+- ON-PARENT callback execution: 292
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -97,7 +97,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `imported-source-lifecycle.ts:31` (withWriteTx)
 - `db:sources.import-outcome.write` (withWriteTx)
 - `db:sources.import-outcome.read` (withReadDb)
-- `knowledge-graph-hygiene.ts:401` (withReadDb)
+- `knowledge-graph-hygiene.ts:441` (withReadDb)
 - `db:knowledge.entity-knowledge-tree.read` (withReadDbAsync)
 - `db:knowledge.graph-constellation.read` (withReadDbAsync)
 - `db:memory.reindex.schema` (withReadDbAsync)
@@ -133,19 +133,19 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `ontology-assertions.ts:473` (withWriteTx)
 - `ontology-claim-evidence.ts:153` (withReadDb)
 - `ontology-claim-trace.ts:1051` (withReadDb)
-- `ontology-contradictions.ts:526` (withReadDb)
-- `ontology-contradictions.ts:581` (withReadDb)
+- `ontology-contradictions.ts:627` (withReadDb)
+- `ontology-contradictions.ts:682` (withReadDb)
 - `ontology-extraction.ts:651` (withReadDb)
 - `ontology-extraction.ts:754` (withWriteTx)
 - `ontology-link-evidence.ts:92` (withReadDbAsync)
-- `ontology-proposals.ts:602` (withReadDbAsync)
-- `ontology-proposals.ts:2590` (withReadDbAsync)
-- `ontology-proposals.ts:2607` (withReadDbAsync)
-- `ontology-proposals.ts:2639` (withReadDbAsync)
-- `ontology-proposals.ts:2723` (withReadDbAsync)
-- `ontology-proposals.ts:3203` (withReadDbAsync)
-- `ontology-proposals.ts:3214` (withReadDbAsync)
-- `ontology-proposals.ts:3265` (withReadDbAsync)
+- `ontology-proposals.ts:626` (withReadDbAsync)
+- `ontology-proposals.ts:3190` (withReadDbAsync)
+- `ontology-proposals.ts:3207` (withReadDbAsync)
+- `ontology-proposals.ts:3239` (withReadDbAsync)
+- `ontology-proposals.ts:3323` (withReadDbAsync)
+- `ontology-proposals.ts:3803` (withReadDbAsync)
+- `ontology-proposals.ts:3814` (withReadDbAsync)
+- `ontology-proposals.ts:3865` (withReadDbAsync)
 - `path-feedback.ts:613` (withWriteTx)
 - `pipeline/aspect-feedback.ts:79` (withWriteTx)
 - `pipeline/aspect-feedback.ts:165` (withWriteTx)
@@ -153,11 +153,11 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/document-worker.ts:531` (withReadDbAsync)
 - `pipeline/document-worker.ts:559` (withReadDbAsync)
 - `pipeline/document-worker.ts:573` (withReadDbAsync)
-- `pipeline/dreaming-attention.ts:140` (withReadDb)
-- `pipeline/dreaming-attention.ts:152` (withReadDb)
-- `pipeline/dreaming-attention.ts:226` (withReadDb)
-- `pipeline/dreaming-attention.ts:257` (withReadDb)
-- `pipeline/dreaming-attention.ts:291` (withReadDb)
+- `pipeline/dreaming-attention.ts:159` (withReadDb)
+- `pipeline/dreaming-attention.ts:172` (withReadDb)
+- `pipeline/dreaming-attention.ts:250` (withReadDb)
+- `pipeline/dreaming-attention.ts:280` (withReadDb)
+- `pipeline/dreaming-attention.ts:313` (withReadDb)
 - `db:dreaming.operations.cite-evidence.read` (withReadDb)
 - `db:dreaming.operations.duplicate-group.read` (withReadDb)
 - `db:dreaming.operations.entity-name.read` (withReadDb)
@@ -165,11 +165,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:dreaming.operations.aspect-entity.read` (withReadDb)
 - `db:dreaming.operations.active-claim.read` (withReadDb)
 - `db:dreaming.operations.pending-attention.read` (withReadDb)
-- `pipeline/dreaming-runbook.ts:218` (withWriteTx)
+- `pipeline/dreaming-runbook.ts:220` (withWriteTx)
 - `db:dreaming.worker.sweep-deferral.read` (withReadDbAsync)
 - `db:dreaming.worker.agent-ids.read` (withReadDbAsync)
-- `db:dreaming.worker.check-mode.hygiene-attention.read` (withReadDbAsync)
-- `db:dreaming.worker.check-mode.content-attention.read` (withReadDbAsync)
 - `pipeline/graph-traversal.ts:69` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:313` (withReadDbAsync)

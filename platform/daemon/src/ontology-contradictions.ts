@@ -1,6 +1,6 @@
 import type { OntologyContradiction, OntologyContradictionStatus } from "@signet/core";
 import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
-import { evidenceCitationInDb, recordSemanticCitationsInTx } from "./derived-memory-provenance";
+import { evidenceCitationInDb, recordSemanticCitationsInTx } from "./pipeline/dreaming-scope";
 import {
 	assertDreamingMutationLabelInDb,
 	dreamingPassPartitionInDb,

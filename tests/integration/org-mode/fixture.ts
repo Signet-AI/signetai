@@ -114,9 +114,13 @@ export class Fixture {
 		readonly daemon: OrgDaemon,
 		readonly model: "personal" | "single",
 	) {}
-	static async create(daemon: OrgDaemon, model: "personal" | "single" = "personal"): Promise<Fixture> {
+	static async create(
+		daemon: OrgDaemon,
+		model: "personal" | "single" = "personal",
+		seedEvidence = true,
+	): Promise<Fixture> {
 		const fixture = new Fixture(daemon, model);
-		await fixture.setup();
+		await fixture.setup(seedEvidence);
 		return fixture;
 	}
 	user(name: string): User {
@@ -124,7 +128,7 @@ export class Fixture {
 		assert(user, `Missing fixture user ${name}`);
 		return user;
 	}
-	async setup(): Promise<void> {
+	async setup(seedEvidence = true): Promise<void> {
 		const claim = await request(this.daemon.origin, "/api/org/claim", {}, "POST", {
 			setupToken: await this.daemon.setupToken(),
 			organizationName: "Org acceptance",
@@ -209,6 +213,7 @@ export class Fixture {
 			"POST /api/classifications",
 		);
 		this.hrId = id(classification);
+		if (!seedEvidence) return;
 		for (const name of ["alice", "bob", "carol"])
 			await this.remember(
 				this.user(name),
@@ -328,12 +333,24 @@ export class Fixture {
 		);
 		const memoryId = typeof result.id === "string" ? result.id : id(result.memory);
 		const persisted = success(
-			await request(this.daemon.origin, `/api/memory/${memoryId}?agentId=default`, user.session),
+			await request(
+				this.daemon.origin,
+				`/api/memory/${memoryId}?agentId=${encodeURIComponent(user.agentId)}`,
+				user.session,
+			),
 			"GET /api/memory/:id fixture readback",
 		);
 		assert(JSON.stringify(persisted).includes(content), "Remember did not durably preserve fixture content");
 		assert(
-			JSON.stringify(persisted).includes(user.id),
+			JSON.stringify(
+				success(
+					await request(this.daemon.origin, "/api/dream/tools/search_evidence", user.session, "POST", {
+						agentId: user.agentId,
+						input: { agentId: user.agentId, sourceRef: `memory:${memoryId}` },
+					}),
+					"Dreaming evidence attribution readback",
+				),
+			).includes(user.id),
 			"Remember did not attribute fixture content to credential user",
 		);
 		if (hidden) await this.classify("memory", memoryId, user.agentId);

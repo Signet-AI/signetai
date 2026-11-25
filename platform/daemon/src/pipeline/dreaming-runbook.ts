@@ -225,7 +225,7 @@ export function writeDreamingRunbook(
 			)
 			.run(serializeRunbook(params.entry), params.passId, params.agentId);
 		return result.changes === 1;
-	}, "pipeline/dreaming-runbook.ts:218");
+	}, "pipeline/dreaming-runbook.ts:220");
 }
 export function recordDreamingEvidenceWindowInTx(
 	db: WriteDb,

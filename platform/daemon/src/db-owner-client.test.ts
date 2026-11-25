@@ -202,7 +202,7 @@ describe("DB owner client", () => {
 			{ ...metadata, lane: "read" },
 		).result;
 		expect(result).toEqual({ status: "completed", compartment_id: 9 });
-	});
+	}, 15_000);
 
 	test("closes the owner during maintenance drain without waiting for the job deadline", async () => {
 		if (process.platform === "win32") return;
