@@ -298,9 +298,11 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			.object({ status: z.string(), progress_json: z.string(), error: z.string().nullable() })
 			.parse(purgeStatus);
 		if (finalPurge.status !== "complete") throw new Error(`Purge incomplete: ${JSON.stringify(finalPurge)}`);
-		const residual = z
-			.object({ residual: z.record(z.string(), z.number()) })
-			.parse(JSON.parse(finalPurge.progress_json)).residual;
+		const progress = z
+			.object({ residual: z.record(z.string(), z.number()), removed: z.record(z.string(), z.number()) })
+			.parse(JSON.parse(finalPurge.progress_json));
+		const residual = progress.residual;
+		expect(progress.removed.session_summaries).toBeGreaterThan(0);
 		expect(Object.values(residual).every((n) => n === 0)).toBe(true);
 
 		console.log(

@@ -206,7 +206,9 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 			);
 			if (result.status !== "complete") throw new Error(`Transcript purge did not complete: ${result.status}`);
 			add("session_transcripts", 1);
-			for (const [key, n] of Object.entries(result.counts ?? {})) if (typeof n === "number") add(key, n);
+			for (const [key, n] of Object.entries(result.counts ?? {}))
+				if (typeof n === "number" && key !== "retainedPinned" && key !== "retainedMixed")
+					add(key === "summaries" ? "session_summaries" : key === "artifacts" ? "memory_artifacts" : key, n);
 			for (const table of ["session_claims", "memory_thread_heads", "session_memories"]) {
 				for (;;) {
 					if (Date.now() >= deadline) break;

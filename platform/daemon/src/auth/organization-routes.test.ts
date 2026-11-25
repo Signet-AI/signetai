@@ -595,6 +595,17 @@ describe("organization HTTP flows", () => {
 				[],
 			),
 		]);
+		await organizationWrite([
+			statement(
+				"INSERT INTO session_summaries(id,kind,content,earliest_at,latest_at,created_at,agent_id,session_key) VALUES ('transcript-owned-summary','session','private',?,?,?,?,'departing-session')",
+				[
+					new Date().toISOString(),
+					new Date().toISOString(),
+					new Date().toISOString(),
+					`personal-${departing.user.id.slice(4)}`,
+				],
+			),
+		]);
 		const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
 			mode: "purge",
 			dryRun: false,
@@ -621,6 +632,7 @@ describe("organization HTTP flows", () => {
 			),
 		).toBeNull();
 		const progress = JSON.parse(status.progress_json);
+		expect(progress.removed.session_summaries).toBe(3);
 		expect(progress.residual).toBeDefined();
 		expect(Object.values(progress.residual).every((n) => n === 0)).toBe(true);
 
@@ -732,6 +744,7 @@ describe("organization HTTP flows", () => {
 			}
 			expect(status.status).toBe("incomplete");
 			expect(JSON.parse(status.progress_json).residual.memories).toBe(1);
+			expect(JSON.parse(status.progress_json).removed.retainedPinned).toBeUndefined();
 		},
 	);
 	test("browser login exposes CSRF and expiry but keeps the access secret in HttpOnly cookies", async () => {
