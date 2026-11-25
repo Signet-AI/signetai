@@ -1,3 +1,9 @@
+import { z } from "zod";
+import type { DbAccessor } from "./db-accessor";
+import { ownerReadAll } from "./db-owner-sql";
+import { getDbOwnerForAccessor } from "./db-owner-runtime";
+import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { readMemoriesFtsIndexRowCount } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import {
@@ -670,4 +676,536 @@ export function getDiagnostics(
 		graph,
 		openclaw,
 	};
+}
+
+export type DatabaseSchemaGroup = "core" | "provenance" | "runtime" | "internal" | "other";
+
+export interface DatabaseColumnInfo {
+	readonly cid: number;
+	readonly name: string;
+	readonly type: string;
+	readonly notNull: boolean;
+	readonly defaultValue: unknown;
+	readonly primaryKey: boolean;
+}
+
+export interface DatabaseIndexColumnInfo {
+	readonly seqno: number;
+	readonly cid: number;
+	readonly name: string;
+}
+
+export interface DatabaseIndexInfo {
+	readonly name: string;
+	readonly unique: boolean;
+	readonly origin: string;
+	readonly partial: boolean;
+	readonly columns: readonly DatabaseIndexColumnInfo[];
+}
+
+export interface DatabaseForeignKeyInfo {
+	readonly id: number;
+	readonly seq: number;
+	readonly table: string;
+	readonly from: string;
+	readonly to: string;
+	readonly onUpdate: string;
+	readonly onDelete: string;
+	readonly match: string;
+}
+
+export interface DatabaseTableInfo {
+	readonly name: string;
+	readonly group: DatabaseSchemaGroup;
+	readonly kind: string;
+	readonly rowCount: number | null;
+	readonly sampleAllowed: boolean;
+	readonly sampleBlockedReason?: string;
+	readonly columns: readonly DatabaseColumnInfo[];
+	readonly indexes: readonly DatabaseIndexInfo[];
+	readonly foreignKeys: readonly DatabaseForeignKeyInfo[];
+	readonly sql: string | null;
+}
+
+export interface DatabaseSchemaResponse {
+	readonly generatedAt: string;
+	readonly tables: readonly DatabaseTableInfo[];
+	readonly groups: Record<DatabaseSchemaGroup, number>;
+}
+
+export interface DatabaseTableSampleResponse {
+	readonly table: string;
+	readonly columns: readonly string[];
+	readonly rows: readonly Record<string, unknown>[];
+	readonly limit: number;
+	readonly offset: number;
+	readonly rowCount: number | null;
+	readonly hasMore: boolean;
+}
+
+const KNOWN_GROUPS: Readonly<Record<string, DatabaseSchemaGroup>> = {
+	entities: "core",
+	memories: "core",
+	memory_entity_mentions: "core",
+	relations: "core",
+	entity_aspects: "core",
+	entity_attributes: "core",
+	entity_dependencies: "core",
+	entity_dependency_history: "core",
+	entity_communities: "core",
+	ontology_proposals: "core",
+	documents: "provenance",
+	document_memories: "provenance",
+	memory_artifacts: "provenance",
+	memory_artifact_chunks: "provenance",
+	conversations: "provenance",
+	session_transcripts: "provenance",
+	session_summaries: "provenance",
+	session_summary_memories: "provenance",
+	embeddings: "runtime",
+	vec_embeddings: "internal",
+	memory_hints: "runtime",
+	session_memories: "runtime",
+	session_scores: "runtime",
+	umap_cache: "runtime",
+	predictor_training_runs: "runtime",
+	path_feedback_events: "runtime",
+	path_feedback_stats: "runtime",
+	session_checkpoints: "runtime",
+	memories_cold: "runtime",
+	schema_migrations: "runtime",
+	schema_migrations_audit: "runtime",
+	memory_jobs: "runtime",
+	summary_jobs: "other",
+	telemetry_events: "runtime",
+	connectors: "runtime",
+	connector_documents: "runtime",
+	skill_meta: "runtime",
+	skill_invocations: "runtime",
+	daily_reflections: "runtime",
+	entities_fts: "internal",
+	memories_fts: "internal",
+	memory_hints_fts: "internal",
+};
+
+const UNSAMPLED_TABLES = new Set(["vec_embeddings", "entities_fts", "memories_fts", "memory_hints_fts"]);
+
+function quoteIdentifier(name: string): string {
+	return `"${name.replaceAll('"', '""')}"`;
+}
+
+function groupForTable(name: string): DatabaseSchemaGroup {
+	const known = KNOWN_GROUPS[name];
+	if (known) return known;
+	if (name.includes("_fts") || name.startsWith("fts_") || name.startsWith("vec_")) return "internal";
+	if (name.includes("job") || name.includes("telemetry") || name.includes("cache")) return "runtime";
+	if (name.includes("session") || name.includes("document") || name.includes("artifact")) return "provenance";
+	return "other";
+}
+
+function isVirtualTable(sql: string | null): boolean {
+	return typeof sql === "string" && /\bCREATE\s+VIRTUAL\s+TABLE\b/i.test(sql);
+}
+
+function sampleBlockedReason(row: SqliteMasterRow): string | undefined {
+	if (UNSAMPLED_TABLES.has(row.name)) return "internal index table";
+	if (isVirtualTable(row.sql)) return "virtual table";
+	return undefined;
+}
+
+function serializeCell(value: unknown): unknown {
+	if (value instanceof Uint8Array) return `[blob ${value.byteLength} bytes]`;
+	if (typeof value === "bigint") return value.toString();
+	return value;
+}
+
+function serializeRow(row: Record<string, unknown>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, serializeCell(value)]));
+}
+
+interface SqliteMasterRow {
+	readonly name: string;
+	readonly type: string;
+	readonly sql: string | null;
+}
+
+type DiagnosticsAccessor = DbAccessor;
+type DiagnosticRow = Record<string, unknown>;
+
+async function databaseDiagnosticRows(
+	accessor: DiagnosticsAccessor | undefined,
+	sql: string,
+	params: readonly unknown[] = [],
+): Promise<DiagnosticRow[]> {
+	if (accessor)
+		return [
+			...(await ownerReadAll<DiagnosticRow>(await getDbOwnerForAccessor(accessor), sql, params, {
+				operation: "diagnostics.database.read",
+				deadlineMs: DB_OWNER_READ_DEADLINE_MS,
+			})),
+		];
+	return dbOwnerQuery<DiagnosticRow[]>(
+		{ sql, params: z.array(z.union([z.string(), z.number(), z.null()])).parse(params), result: "all" },
+		{
+			operation: "diagnostics.database.read",
+			lane: "read",
+			deadlineMs: DB_OWNER_READ_DEADLINE_MS,
+		},
+	);
+}
+
+async function diagnosticTables(
+	accessor: DiagnosticsAccessor | undefined,
+	scope?: ReadScope,
+): Promise<SqliteMasterRow[]> {
+	const rows = await databaseDiagnosticRows(
+		accessor,
+		`SELECT name,type,sql FROM sqlite_master
+	 WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'
+	 AND name NOT LIKE '%_fts_data' AND name NOT LIKE '%_fts_idx'
+	 AND name NOT LIKE '%_fts_docsize' AND name NOT LIKE '%_fts_config' ORDER BY name`,
+	);
+	return rows.flatMap((row) =>
+		typeof row.name === "string" && typeof row.type === "string" && (!scope || !/__c\d+(?:_|$)/.test(row.name))
+			? [{ name: row.name, type: row.type, sql: typeof row.sql === "string" ? row.sql : null }]
+			: [],
+	);
+}
+
+async function diagnosticColumns(
+	accessor: DiagnosticsAccessor | undefined,
+	table: string,
+): Promise<DatabaseColumnInfo[]> {
+	const rows = await databaseDiagnosticRows(accessor, `PRAGMA table_info(${quoteIdentifier(table)})`);
+	return rows.map((row) => ({
+		cid: typeof row.cid === "number" ? row.cid : 0,
+		name: typeof row.name === "string" ? row.name : "",
+		type: typeof row.type === "string" ? row.type : "",
+		notNull: typeof row.notnull === "number" && row.notnull > 0,
+		defaultValue: row.dflt_value ?? null,
+		primaryKey: typeof row.pk === "number" && row.pk > 0,
+	}));
+}
+
+const DIAGNOSTIC_DERIVED_KINDS: Readonly<Record<string, string>> = {
+	memories: "memory",
+	entities: "entity",
+	entity_aspects: "aspect",
+	entity_attributes: "attribute",
+	entity_dependencies: "dependency",
+	epistemic_assertions: "assertion",
+	memory_head_entries: "head_entry",
+	daily_reflections: "reflection",
+	ontology_contradictions: "contradiction",
+	memory_head_revision_entries: "head_revision",
+	ontology_proposals: "proposal",
+	memory_search_telemetry: "telemetry",
+};
+const DIAGNOSTIC_EVIDENCE_TABLES = new Set([
+	"memories",
+	"memory_artifacts",
+	"session_transcripts",
+	"session_summaries",
+	"session_checkpoints",
+	"documents",
+]);
+
+export function citedEvidenceReadScopeSql(
+	alias: string,
+	scope: ReadScope,
+	kind: string,
+	keys: readonly string[] = ["id"],
+): { sql: string; args: unknown[] } {
+	if (!scope.inFlightUserId) return { sql: "", args: [] };
+	if (![alias, ...keys].every((value) => /^[a-z_][a-z0-9_]*$/i.test(value)) || keys.length === 0)
+		throw new Error("invalid_citation_identifier");
+	const key =
+		keys.length === 1 ? `${alias}.${keys[0]}` : `json_array(${keys.map((column) => `${alias}.${column}`).join(",")})`;
+	const noProject = { ...scope, projects: scope.projects === null ? null : [] };
+	const sources = [
+		{ kind: "memory", table: "memories", alias: "cited_memory", key: "id", scope: readScopeSql("cited_memory", scope) },
+		{
+			kind: "transcript",
+			table: "session_transcripts",
+			alias: "cited_transcript",
+			key: "session_key",
+			scope: readScopeSql("cited_transcript", scope, {
+				visibility: null,
+				memory: null,
+				session: "session_key",
+				source: "source_id",
+			}),
+		},
+		{
+			kind: "artifact",
+			table: "memory_artifacts",
+			alias: "cited_artifact",
+			key: "source_path",
+			scope: readScopeSql("cited_artifact", scope, {
+				visibility: null,
+				memory: null,
+				session: "session_key",
+				source: "source_id",
+			}),
+		},
+		{
+			kind: "summary",
+			table: "session_summaries",
+			alias: "cited_summary",
+			key: "id",
+			scope: readScopeSql("cited_summary", scope, {
+				visibility: null,
+				memory: null,
+				session: "session_key",
+				source: null,
+			}),
+		},
+		{
+			kind: "attribute",
+			table: "entity_attributes",
+			alias: "cited_attribute",
+			key: "id",
+			scope: readScopeSql("cited_attribute", noProject, {
+				visibility: null,
+				memory: null,
+				session: null,
+				source: "source_id",
+			}),
+		},
+	];
+	return {
+		sql: ` AND NOT EXISTS (
+	 WITH RECURSIVE cited_evidence(kind,id,agent_id) AS (
+	 SELECT evidence_kind,evidence_id,agent_id FROM evidence_citations INDEXED BY sqlite_autoindex_evidence_citations_1 WHERE derived_kind=? AND derived_id=${key} AND agent_id=${alias}.agent_id
+	 UNION
+	 SELECT child.evidence_kind,child.evidence_id,child.agent_id FROM evidence_citations child INDEXED BY sqlite_autoindex_evidence_citations_1 JOIN cited_evidence parent ON child.derived_kind=parent.kind AND child.derived_id=parent.id AND child.agent_id=parent.agent_id
+	 )
+	 SELECT 1 FROM cited_evidence citation WHERE CASE ${sources.map((source) => `WHEN citation.kind='${source.kind}' THEN NOT EXISTS(SELECT 1 FROM ${source.table} ${source.alias} WHERE ${source.alias}.${source.key}=citation.id AND ${source.alias}.agent_id=citation.agent_id${source.scope.sql})`).join(" ")} ELSE 1 END
+	 )`,
+		args: [kind, ...sources.flatMap((source) => source.scope.args)],
+	};
+}
+
+function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo[], scope?: ReadScope) {
+	if (!scope) return { sql: "", args: [] };
+	const names = new Set(columns.map((column) => column.name));
+	if (!names.has("agent_id") || !names.has("compartment_id")) return null;
+	const kind = DIAGNOSTIC_DERIVED_KINDS[table];
+	if (scope.inFlightUserId && !kind && !DIAGNOSTIC_EVIDENCE_TABLES.has(table)) return null;
+	const scoped = names.has("project") ? scope : { ...scope, projects: scope.projects === null ? null : [] };
+	const readable = readScopeSql("d", scoped, {
+		visibility: names.has("visibility") ? "visibility" : null,
+		memory:
+			table === "memories"
+				? "id"
+				: table === "embeddings" || table === "embeddings_staging"
+					? "source_id"
+					: names.has("memory_id")
+						? "memory_id"
+						: null,
+		session: names.has("session_key") ? "session_key" : names.has("source_id") ? "source_id" : null,
+		source: names.has("source_id") ? "source_id" : null,
+		checkpoint: table === "session_checkpoints",
+	});
+	const cited = kind
+		? citedEvidenceReadScopeSql(
+				"d",
+				scope,
+				kind,
+				table === "memory_head_revision_entries" ? ["revision", "entry_id"] : names.has("id") ? ["id"] : ["entry_id"],
+			)
+		: { sql: "", args: [] };
+	return { sql: readable.sql + cited.sql, args: [...readable.args, ...cited.args] };
+}
+
+async function diagnosticCount(
+	accessor: DiagnosticsAccessor | undefined,
+	table: string,
+	predicate: { sql: string; args: unknown[] } | null,
+): Promise<number | null> {
+	if (!predicate) return null;
+	const rows = await databaseDiagnosticRows(
+		accessor,
+		`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql}`,
+		predicate.args,
+	);
+	return typeof rows[0]?.count === "number" ? rows[0].count : null;
+}
+
+export async function readDatabaseSchemaAsync(
+	accessor?: DiagnosticsAccessor,
+	scope?: ReadScope,
+): Promise<DatabaseSchemaResponse> {
+	const tables: DatabaseTableInfo[] = [];
+	for (const row of await diagnosticTables(accessor, scope)) {
+		const columns = await diagnosticColumns(accessor, row.name);
+		const predicate = diagnosticPredicate(row.name, columns, scope);
+		const blocked = sampleBlockedReason(row) ?? (predicate ? undefined : "table has no content read scope");
+		const indexes: DatabaseIndexInfo[] = [];
+		for (const index of await databaseDiagnosticRows(accessor, `PRAGMA index_list(${quoteIdentifier(row.name)})`)) {
+			const name = typeof index.name === "string" ? index.name : "";
+			const indexColumns = name
+				? await databaseDiagnosticRows(accessor, `PRAGMA index_info(${quoteIdentifier(name)})`)
+				: [];
+			indexes.push({
+				name,
+				unique: typeof index.unique === "number" && index.unique > 0,
+				origin: typeof index.origin === "string" ? index.origin : "",
+				partial: typeof index.partial === "number" && index.partial > 0,
+				columns: indexColumns.map((col) => ({
+					seqno: typeof col.seqno === "number" ? col.seqno : 0,
+					cid: typeof col.cid === "number" ? col.cid : -1,
+					name: typeof col.name === "string" ? col.name : "",
+				})),
+			});
+		}
+		const foreignKeys = (
+			await databaseDiagnosticRows(accessor, `PRAGMA foreign_key_list(${quoteIdentifier(row.name)})`)
+		).map((key) => ({
+			id: typeof key.id === "number" ? key.id : 0,
+			seq: typeof key.seq === "number" ? key.seq : 0,
+			table: typeof key.table === "string" ? key.table : "",
+			from: typeof key.from === "string" ? key.from : "",
+			to: typeof key.to === "string" ? key.to : "",
+			onUpdate: typeof key.on_update === "string" ? key.on_update : "",
+			onDelete: typeof key.on_delete === "string" ? key.on_delete : "",
+			match: typeof key.match === "string" ? key.match : "",
+		}));
+		tables.push({
+			name: row.name,
+			group: groupForTable(row.name),
+			kind: row.type,
+			rowCount: scope && sampleBlockedReason(row) ? null : await diagnosticCount(accessor, row.name, predicate),
+			sampleAllowed: !blocked,
+			...(blocked ? { sampleBlockedReason: blocked } : {}),
+			columns,
+			indexes,
+			foreignKeys,
+			sql: row.sql,
+		});
+	}
+	const groups = { core: 0, provenance: 0, runtime: 0, internal: 0, other: 0 };
+	for (const table of tables) groups[table.group] += 1;
+	return { generatedAt: new Date().toISOString(), tables, groups };
+}
+
+export async function readTableSampleAsync(
+	accessor: DiagnosticsAccessor | undefined,
+	table: string,
+	limit: number,
+	offset: number,
+	scope?: ReadScope,
+): Promise<DatabaseTableSampleResponse | { readonly error: string; readonly status: 400 | 404 }> {
+	const match = (await diagnosticTables(accessor, scope)).find((row) => row.name === table);
+	if (!match) return { error: "unknown table", status: 404 };
+	const columns = await diagnosticColumns(accessor, table);
+	const predicate = diagnosticPredicate(table, columns, scope);
+	const blocked = sampleBlockedReason(match) ?? (predicate ? undefined : "table has no content read scope");
+	if (blocked || !predicate) return { error: `sample unavailable: ${blocked}`, status: 400 };
+	const rows = await databaseDiagnosticRows(
+		accessor,
+		`SELECT ${columns.map((column) => `CASE WHEN typeof(d.${quoteIdentifier(column.name)})='blob' THEN '[blob '||length(d.${quoteIdentifier(column.name)})||' bytes]' ELSE d.${quoteIdentifier(column.name)} END AS ${quoteIdentifier(column.name)}`).join(",")} FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql} ORDER BY ${[...columns.filter((column) => column.primaryKey), ...columns.filter((column) => !column.primaryKey)].map((column) => `d.${quoteIdentifier(column.name)}`).join(",")} LIMIT ? OFFSET ?`,
+		[...predicate.args, limit + 1, offset],
+	);
+	return {
+		table,
+		columns: columns.map((col) => col.name),
+		rows: rows.slice(0, limit).map(serializeRow),
+		limit,
+		offset,
+		rowCount: await diagnosticCount(accessor, table, predicate),
+		hasMore: rows.length > limit,
+	};
+}
+
+export async function readScopedSearchTelemetry(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	accessor?: DbAccessor,
+): Promise<readonly import("./memory-search-telemetry").MemorySearchTelemetryRow[]> {
+	const scope = query.scope;
+	if (!scope) throw new Error("telemetry_read_scope_required");
+	const readable = readScopeSql("t", scope, { visibility: null, memory: null, session: "session_key", source: null });
+	const copied = citedEvidenceReadScopeSql("t", scope, "telemetry");
+	let sql = `SELECT t.* FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}`;
+	const args = [...readable.args, ...copied.args];
+	for (const [column, value, operator] of [
+		["agent_id", query.agentId, "="],
+		["session_key", query.sessionKey, "="],
+		["project", query.project, "="],
+		["route", query.route, "="],
+		["created_at", query.since, ">="],
+		["created_at", query.until, "<="],
+	] as const) {
+		if (value !== undefined) {
+			sql += ` AND t.${column} ${operator} ?`;
+			args.push(value);
+		}
+	}
+	if (query.noHits !== undefined) {
+		sql += " AND t.no_hits=?";
+		args.push(query.noHits ? 1 : 0);
+	}
+	sql += " ORDER BY t.created_at DESC,t.id ASC LIMIT ? OFFSET ?";
+	args.push(query.limit ?? 100, query.offset ?? 0);
+	if (accessor)
+		return ownerReadAll<import("./memory-search-telemetry").MemorySearchTelemetryRow>(
+			await getDbOwnerForAccessor(accessor),
+			sql,
+			args,
+			{
+				operation: "telemetry.memory-search.read",
+				deadlineMs: DB_OWNER_READ_DEADLINE_MS,
+			},
+		);
+	return dbOwnerQuery(
+		{ sql, params: z.array(z.union([z.string(), z.number()])).parse(args), result: "all" },
+		{
+			operation: "telemetry.memory-search.read",
+			lane: "read",
+			deadlineMs: DB_OWNER_READ_DEADLINE_MS,
+		},
+	);
+}
+
+export function scopedCheckpointStatement(
+	scope: ReadScope,
+	query: { project?: string; sessionKey?: string; limit: number },
+) {
+	const readable = readScopeSql("c", scope, { visibility: null, checkpoint: true, project: "project_normalized" });
+	const filter = query.project !== undefined ? " AND c.project_normalized=?" : " AND c.session_key=?";
+	return {
+		sql: `SELECT c.* FROM session_checkpoints c WHERE 1=1${readable.sql}${filter} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
+		params: z
+			.array(z.union([z.string(), z.number()]))
+			.parse([...readable.args, query.project ?? query.sessionKey, query.limit]),
+		result: "all",
+	} as const;
+}
+
+export async function readScopedCheckpoints(
+	scope: ReadScope,
+	query: { project?: string; sessionKey?: string; limit: number },
+): Promise<readonly import("./session-checkpoints").CheckpointRow[]> {
+	return dbOwnerQuery(scopedCheckpointStatement(scope, query), {
+		operation: "telemetry.checkpoints.read",
+		lane: "read",
+		deadlineMs: DB_OWNER_READ_DEADLINE_MS,
+	});
+}
+
+export function readLegacyContinuity(query: {
+	project?: string;
+	limit: number;
+	latest?: boolean;
+}): Promise<Record<string, unknown>[]> {
+	const sql = query.latest
+		? `SELECT project,score,created_at FROM session_scores WHERE id IN
+		 (SELECT id FROM session_scores s2 WHERE s2.project=session_scores.project ORDER BY s2.created_at DESC LIMIT 1)
+		 ORDER BY created_at DESC LIMIT ?`
+		: `SELECT id,session_key,project,harness,score,memories_recalled,memories_used,novel_context_count,reasoning,created_at
+		 FROM session_scores${query.project ? " WHERE project=?" : ""} ORDER BY created_at DESC LIMIT ?`;
+	return dbOwnerQuery(
+		{ sql, params: query.project && !query.latest ? [query.project, query.limit] : [query.limit], result: "all" },
+		{ operation: "telemetry.continuity.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
 }

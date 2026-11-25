@@ -252,6 +252,20 @@ at most 8 at a time.
 
 ### GET /api/diagnostics/database/schema
 
+In organization mode, counts and samples include only content readable by the
+caller. Tables without an enforceable content scope have `rowCount: null` and
+sampling is unavailable. Classification index shards are omitted. The
+`diagnostics` permission does not override classification audiences. Runtime
+tables without a supported provenance policy expose schema metadata only.
+Cited records and their copies hide as soon as classification starts, before
+the classification job finishes updating their labels.
+
+Queue diagnostics (`GET /api/diagnostics/queue`) likewise count only jobs whose
+parent memory is readable. Hidden jobs cannot supply the oldest-job ID or error
+text. This endpoint still requires administrator permission. Queue repair is unavailable
+in organization mode (`403`, `reason: "org_policy"`) because its global
+mutations and affected-row counts do not enforce a content scope.
+
 Read-only SQLite schema explorer data for the dashboard database table view.
 Returns live table metadata grouped by conceptual area, with row counts,
 columns, indexes, foreign keys, and whether sample rows are available.

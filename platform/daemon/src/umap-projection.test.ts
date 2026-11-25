@@ -3,19 +3,22 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computeProjectionForQuery } from "./umap-projection";
+import { computeProjectionForQuery } from "./test-support/projection-query.test";
 
 const SCHEMA = `
 	CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT, who TEXT, importance REAL,
 		type TEXT, tags TEXT, pinned INTEGER, source_type TEXT, source_id TEXT,
-		created_at TEXT, updated_at TEXT);
+		created_at TEXT, updated_at TEXT, agent_id TEXT DEFAULT 'default', compartment_id INTEGER,
+		project TEXT, visibility TEXT DEFAULT 'global', is_deleted INTEGER DEFAULT 0);
 	CREATE TABLE embeddings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		source_id TEXT NOT NULL REFERENCES memories(id),
 		source_type TEXT NOT NULL,
 		vector BLOB NOT NULL,
 		dimensions INTEGER NOT NULL,
-		created_at TEXT NOT NULL DEFAULT (datetime('now')));
+		created_at TEXT NOT NULL DEFAULT (datetime('now')), agent_id TEXT DEFAULT 'default', compartment_id INTEGER);
+	CREATE TABLE agents(id TEXT PRIMARY KEY, archived_at TEXT);
+	INSERT INTO agents(id) VALUES('default');
 	CREATE INDEX idx_embeddings_source ON embeddings(source_id, source_type);
 `;
 
@@ -27,7 +30,7 @@ function setupDb(): { db: Database; dir: string } {
 }
 
 describe("hasMore pagination regression", () => {
-	it("returns hasMore=false when last page is not full (over-fetch by 1)", () => {
+	it("returns hasMore=false when last page is not full (over-fetch by 1)", async () => {
 		const { db, dir } = setupDb();
 		try {
 			const fakeBlob = new Uint8Array(8);
@@ -44,15 +47,15 @@ describe("hasMore pagination regression", () => {
 				).run(`mem-${i}`, fakeBlob, now);
 			}
 
-			const result = computeProjectionForQuery(db, 2, { limit: 3, offset: 0 });
+			const result = await computeProjectionForQuery(db, 2, { limit: 3, offset: 0 });
 			expect(result.count).toBe(3);
 			expect(result.hasMore).toBe(true);
 
-			const page2 = computeProjectionForQuery(db, 2, { limit: 3, offset: 3 });
+			const page2 = await computeProjectionForQuery(db, 2, { limit: 3, offset: 3 });
 			expect(page2.count).toBe(2);
 			expect(page2.hasMore).toBe(false);
 
-			const allAtOnce = computeProjectionForQuery(db, 2, { limit: 5, offset: 0 });
+			const allAtOnce = await computeProjectionForQuery(db, 2, { limit: 5, offset: 0 });
 			expect(allAtOnce.count).toBe(5);
 			expect(allAtOnce.hasMore).toBe(false);
 		} finally {
@@ -61,7 +64,7 @@ describe("hasMore pagination regression", () => {
 		}
 	});
 
-	it("escapes LIKE metacharacters in projection query filter", () => {
+	it("escapes LIKE metacharacters in projection query filter", async () => {
 		const { db, dir } = setupDb();
 		try {
 			const fakeBlob = new Uint8Array(8);
@@ -77,7 +80,7 @@ describe("hasMore pagination regression", () => {
 				"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
 			).run("mem-percent", fakeBlob, 4, now);
 
-			const result = computeProjectionForQuery(db, 2, {
+			const result = await computeProjectionForQuery(db, 2, {
 				limit: 10,
 				filters: { query: "%" },
 			});
@@ -89,7 +92,7 @@ describe("hasMore pagination regression", () => {
 		}
 	});
 
-	it("escapes LIKE metacharacters in projection tag filters", () => {
+	it("escapes LIKE metacharacters in projection tag filters", async () => {
 		const { db, dir } = setupDb();
 		try {
 			const fakeBlob = new Uint8Array(8);
@@ -105,7 +108,7 @@ describe("hasMore pagination regression", () => {
 				"INSERT INTO embeddings (source_id, source_type, vector, dimensions, created_at) VALUES (?, 'memory', ?, ?, ?)",
 			).run("mem-tagged", fakeBlob, 4, now);
 
-			const result = computeProjectionForQuery(db, 2, {
+			const result = await computeProjectionForQuery(db, 2, {
 				limit: 10,
 				filters: { tags: ["%"] },
 			});
@@ -117,7 +120,7 @@ describe("hasMore pagination regression", () => {
 		}
 	});
 
-	it("detects hasMore=true when toEmbeddingRow discards rows and more pages exist", () => {
+	it("detects hasMore=true when toEmbeddingRow discards rows and more pages exist", async () => {
 		const { db, dir } = setupDb();
 		try {
 			const fakeBlob = new Uint8Array(8);
@@ -145,17 +148,17 @@ describe("hasMore pagination regression", () => {
 				}
 			}
 
-			const page1 = computeProjectionForQuery(db, 2, { limit: 2, offset: 0 });
+			const page1 = await computeProjectionForQuery(db, 2, { limit: 2, offset: 0 });
 			expect(page1.total).toBe(5);
 			expect(page1.count).toBe(2);
 			expect(page1.hasMore).toBe(true);
 
-			const page2 = computeProjectionForQuery(db, 2, { limit: 2, offset: 2 });
+			const page2 = await computeProjectionForQuery(db, 2, { limit: 2, offset: 2 });
 			expect(page2.total).toBe(5);
 			expect(page2.count).toBe(2);
 			expect(page2.hasMore).toBe(true);
 
-			const allRows = computeProjectionForQuery(db, 2, { limit: 10, offset: 0 });
+			const allRows = await computeProjectionForQuery(db, 2, { limit: 10, offset: 0 });
 			expect(allRows.count).toBe(5);
 			expect(allRows.hasMore).toBe(false);
 		} finally {

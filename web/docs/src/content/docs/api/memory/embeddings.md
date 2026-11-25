@@ -150,3 +150,12 @@ with `status: "computing"`. Poll again when ready.
 ```json
 { "status": "computing", "dimensions": 2, "count": 0, "total": 847 }
 ```
+
+In organization mode, projection input is selected through the caller's agent,
+project, and classification scope before pagination or geometry computation.
+Projection reads do not use the shared projection cache. Responses return
+`status: "ready"`, readable `total`, `count`, and pagination fields; an omitted
+`limit` selects at most 5,000 nodes. Use `offset` and `hasMore` for larger sets.
+
+Busy projection requests return `503` with `reason: "admission"` and
+`Retry-After: 1`. Projection read or computation deadlines return `504`.

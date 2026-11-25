@@ -3,7 +3,8 @@ import { getDreamingEvidenceExclusions } from "./dreaming";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { Hono } from "hono";
 import { bindPrincipalAccess } from "../auth/agent-access";
-import type { Principal } from "../auth/principal";
+import { readOrganization } from "../auth/organization-store";
+import { rolePermissions, type Principal } from "../auth/principal";
 import { registerPipelineRoutes } from "../routes/pipeline-routes";
 import { dreamingLiveEvents } from "./dreaming-live-events";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -118,7 +119,7 @@ function orgApp(userId: string): Hono {
 		kind: "user",
 		userId,
 		role: "admin",
-		permissions: new Set(["recall", "modify", "admin"]),
+		permissions: rolePermissions("admin"),
 		compliance: false,
 		groupIds: [],
 		credential: { kind: "session", id: "test" },
@@ -142,12 +143,57 @@ function orgApp(userId: string): Hono {
 	const app = new Hono();
 	app.use("*", async (c, next) => {
 		c.set("principal", principal);
-		c.set("organization", true);
+		c.set("organization", await readOrganization());
 		await next();
 	});
 	registerPipelineRoutes(app);
 	return app;
 }
+
+test("organization diagnostic aggregates omit unscoped corpus state", async () => {
+	const app = orgApp("outside");
+	const paths = [
+		"/api/status/workspace",
+		"/api/diagnostics",
+		"/api/diagnostics/storage",
+		"/api/pipeline/status",
+		"/api/diagnostics/transcripts",
+		"/api/diagnostics/workloads",
+		"/api/diagnostics/openclaw",
+	];
+	const snapshot = async () => {
+		const result: unknown[] = [];
+		const status = await (await app.request("/api/status")).json();
+		expect(status).toMatchObject({
+			status: "running",
+			content: { status: "unavailable", reason: "scoped_totals_omitted" },
+		});
+		for (const field of [
+			"activeSessions",
+			"bypassedSessions",
+			"sessions",
+			"transcripts",
+			"health",
+			"resources",
+			"embedding",
+		])
+			expect(status).not.toHaveProperty(field);
+		result.push(status);
+		for (const path of paths) {
+			const response = await app.request(path);
+			expect(response.status).toBe(200);
+			const body: unknown = await response.json();
+			expect(body).toMatchObject({ status: "unavailable", reason: "scoped_totals_omitted" });
+			result.push(body);
+		}
+		return JSON.stringify(result);
+	};
+	const before = await snapshot();
+	getDbAccessor().withWriteTx((db) =>
+		db.exec("UPDATE dreaming_passes SET tokens_consumed=99999,summary='hidden diagnostic text' WHERE id='hidden'"),
+	);
+	expect(await snapshot()).toBe(before);
+});
 
 test("organization routes hide pass existence and status changes, with audience SSE access", async () => {
 	const app = orgApp("outside");

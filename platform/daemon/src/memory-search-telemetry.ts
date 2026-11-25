@@ -1,4 +1,5 @@
-import type { SQLQueryBindings } from "bun:sqlite";
+import { readScopedSearchTelemetry } from "./diagnostics";
+import type { ReadScope } from "./read-scope";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
@@ -15,6 +16,7 @@ export interface MemorySearchTelemetryRecordInput {
 
 export interface MemorySearchTelemetryQuery {
 	readonly agentId?: string;
+	readonly scope: ReadScope;
 	readonly sessionKey?: string;
 	readonly project?: string;
 	readonly route?: string;
@@ -66,7 +68,7 @@ export interface MemorySearchTelemetryItem {
 	readonly sources: Readonly<Record<string, string>> | null;
 }
 
-interface MemorySearchTelemetryRow {
+export interface MemorySearchTelemetryRow {
 	readonly id: string;
 	readonly created_at: string;
 	readonly route: string;
@@ -280,59 +282,7 @@ export async function recordMemorySearchTelemetry(
 
 export async function listMemorySearchTelemetry(
 	db: DbAccessor,
-	query: MemorySearchTelemetryQuery = {},
+	query: MemorySearchTelemetryQuery,
 ): Promise<readonly MemorySearchTelemetryItem[]> {
-	const conditions: string[] = [];
-	const args: SQLQueryBindings[] = [];
-
-	if (query.agentId) {
-		conditions.push("agent_id = ?");
-		args.push(query.agentId);
-	}
-	if (query.sessionKey) {
-		conditions.push("session_key = ?");
-		args.push(query.sessionKey);
-	}
-	if (query.project) {
-		conditions.push("project = ?");
-		args.push(query.project);
-	}
-	if (query.route) {
-		conditions.push("route = ?");
-		args.push(query.route);
-	}
-	if (query.since) {
-		conditions.push("created_at >= ?");
-		args.push(query.since);
-	}
-	if (query.until) {
-		conditions.push("created_at <= ?");
-		args.push(query.until);
-	}
-	if (typeof query.noHits === "boolean") {
-		conditions.push("no_hits = ?");
-		args.push(query.noHits ? 1 : 0);
-	}
-
-	const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-	const limit = query.limit ?? 100;
-	const offset = query.offset ?? 0;
-
-	return db.withReadDbAsync(
-		async (r) => {
-			const rows = r
-				.prepare(
-					`SELECT id, created_at, route, agent_id, session_key, project, query,
-				        keyword_query, filters_json, method, result_count, top_score,
-				        no_hits, duration_ms, timings_json, results_json, sources_json
-				 FROM memory_search_telemetry
-				 ${where}
-				 ORDER BY created_at DESC
-				 LIMIT ? OFFSET ?`,
-				)
-				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
-			return rows.map(rowToItem);
-		},
-		{ siteToken: "memory-search-telemetry.ts:321" },
-	);
+	return (await readScopedSearchTelemetry(query, db)).map(rowToItem);
 }

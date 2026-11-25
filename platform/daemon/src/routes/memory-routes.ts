@@ -1,3 +1,6 @@
+import { getDbOwner } from "../db-owner-runtime";
+import { resolveRouteReadScope } from "./read-scope";
+import { loadProjectionRowsAsync } from "../embedding-projection-owner";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -68,13 +71,8 @@ import {
 	txRecoverMemory,
 	txSupersedeMemory,
 } from "../transactions";
-import {
-	cacheProjection,
-	computeProjection,
-	computeProjectionForQuery,
-	getCachedProjection,
-	type ProjectionNode,
-} from "../umap-projection";
+import type { ProjectionNode } from "../umap-projection";
+import { computeProjectionAsync, withProjectionAdmission } from "../embedding-projection-task";
 import {
 	AGENTS_DIR,
 	authBatchForgetLimiter,
@@ -83,9 +81,6 @@ import {
 	authModifyLimiter,
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
-	PROJECTION_ERROR_TTL_MS,
-	projectionErrors,
-	projectionInFlight,
 } from "./state";
 
 import {
@@ -3648,120 +3643,59 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			until !== undefined ||
 			importanceMin !== undefined ||
 			importanceMax !== undefined;
-		const useCachedProjection = !hasFilters && limit === undefined && offset === 0;
+		const scope = await resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 
-		if (!useCachedProjection) {
-			try {
-				const projection = await getDbAccessor().withReadDbAsync(
-					async (db) =>
-						computeProjectionForQuery(db, nComponents, {
-							limit,
-							offset,
-							filters: hasFilters
-								? {
-										query,
-										who: whoFilters,
-										types: typeFilters,
-										sourceTypes: sourceTypeFilters,
-										tags: tagFilters,
-										pinned,
-										since,
-										until,
-										importanceMin,
-										importanceMax,
-									}
-								: undefined,
-						}),
-					{ siteToken: "db:memory.projection.filtered.read" },
+		try {
+			return await withProjectionAdmission(async () => {
+				const loaded = await loadProjectionRowsAsync(
+					await getDbOwner(),
+					{
+						scope,
+						limit,
+						offset,
+						filters: hasFilters
+							? {
+									query,
+									who: whoFilters,
+									types: typeFilters,
+									sourceTypes: sourceTypeFilters,
+									tags: tagFilters,
+									pinned,
+									since,
+									until,
+									importanceMin,
+									importanceMax,
+								}
+							: undefined,
+					},
+					c.req.raw.signal,
 				);
-
+				const result = await computeProjectionAsync(loaded.rows, nComponents, c.req.raw.signal);
 				return c.json({
 					status: "ready",
 					dimensions: nComponents,
-					count: projection.count,
-					total: projection.total,
-					limit: projection.limit,
-					offset: projection.offset,
-					hasMore: projection.hasMore,
-					nodes: redactProjectionNodes(projection.result.nodes),
-					edges: projection.result.edges,
+					count: loaded.rows.length,
+					total: loaded.total,
+					limit: loaded.limit,
+					offset: loaded.offset,
+					hasMore: loaded.hasMore,
+					nodes: redactProjectionNodes(result.nodes),
+					edges: result.edges,
 				});
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return c.json({ status: "error", message }, 500);
-			}
-		}
-
-		const { cached, total } = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const cachedResult = getCachedProjection(db, nComponents);
-				const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-				const count =
-					typeof countRow === "object" && countRow !== null && "count" in countRow && typeof countRow.count === "number"
-						? countRow.count
-						: 0;
-				return { cached: cachedResult, total: count };
-			},
-			{ siteToken: "db:memory.projection.cached.read" },
-		);
-
-		if (cached !== null && cached.embeddingCount === total) {
-			return c.json({
-				status: "ready",
-				dimensions: nComponents,
-				count: total,
-				total,
-				limit: total,
-				offset: 0,
-				hasMore: false,
-				nodes: redactProjectionNodes(cached.result.nodes),
-				edges: cached.result.edges,
-				cachedAt: cached.cachedAt,
 			});
-		}
-
-		const recentError = projectionErrors.get(nComponents);
-		if (recentError) {
-			if (Date.now() > recentError.expires) {
-				projectionErrors.delete(nComponents);
-			} else {
-				return c.json({ status: "error", message: recentError.message }, 500);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (message === "projection_admission_limit") {
+				c.header("Retry-After", "1");
+				return c.json({ status: "error", message, reason: "admission" }, 503);
 			}
+			return c.json(
+				{ status: "error", message },
+				message === "projection_compute_deadline" || message === "projection_read_deadline" ? 504 : 500,
+			);
 		}
-
-		if (!projectionInFlight.has(nComponents)) {
-			projectionErrors.delete(nComponents);
-			const computation = (async () => {
-				try {
-					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "db:memory.projection.compute.read",
-					});
-					const count = await getDbAccessor().withReadDbAsync(
-						async (db) => {
-							const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-							return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number"
-								? row.count
-								: 0;
-						},
-						{ siteToken: "db:memory.projection.count.read" },
-					);
-					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					logger.error("projection", "UMAP computation failed", err instanceof Error ? err : new Error(msg));
-					projectionErrors.set(nComponents, {
-						message: msg,
-						expires: Date.now() + PROJECTION_ERROR_TTL_MS,
-					});
-				} finally {
-					projectionInFlight.delete(nComponents);
-				}
-			})();
-			projectionInFlight.set(nComponents, computation);
-		}
-
-		return c.json({ status: "computing", dimensions: nComponents }, 202);
 	});
+
 	app.post("/api/documents", async (c) => {
 		let body: Record<string, unknown>;
 		try {

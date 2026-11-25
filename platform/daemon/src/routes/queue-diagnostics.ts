@@ -1,13 +1,12 @@
+import { resolveRouteReadScope } from "./read-scope";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
-import type { DbAccessor, ReadDb } from "../db-accessor";
+import type { DbAccessor } from "../db-accessor";
 import { getDbAccessor } from "../db-accessor.js";
 import {
 	DEFAULT_QUEUE_THRESHOLDS,
-	type getOldestDeadJob,
-	getQueueDiagnosticsSnapshot,
+	getQueueDiagnosticsSnapshotAsync,
 	invalidateQueueDiagnosticsCache,
-	type QueueCounts,
 	type QueueThresholds,
 } from "../diagnostics-queue.js";
 import { loadMemoryConfig } from "../memory-config.js";
@@ -27,17 +26,6 @@ function resolveAgentsDir(): string {
 	return process.env.SIGNET_AGENTS_DIR ?? process.env.AGENTS_DIR ?? `${process.env.HOME ?? "/tmp"}/.agents`;
 }
 
-interface QueueDiagnosticsResponse {
-	readonly timestamp: string;
-	readonly queues: {
-		readonly memory: QueueCounts;
-		readonly summary: QueueCounts;
-	};
-	readonly oldestDeadSummaryJob: ReturnType<typeof getOldestDeadJob>;
-	readonly oldestDeadMemoryJob: ReturnType<typeof getOldestDeadJob>;
-	readonly thresholds: QueueThresholds;
-}
-
 function loadThresholds(): QueueThresholds {
 	try {
 		const cfg = loadMemoryConfig(resolveAgentsDir());
@@ -47,20 +35,6 @@ function loadThresholds(): QueueThresholds {
 	} catch {
 		return DEFAULT_QUEUE_THRESHOLDS;
 	}
-}
-
-function buildQueueDiagnosticsResponse(db: ReadDb): QueueDiagnosticsResponse {
-	const snapshot = getQueueDiagnosticsSnapshot(db, { fresh: true });
-	return {
-		timestamp: new Date().toISOString(),
-		queues: {
-			memory: snapshot.memory,
-			summary: snapshot.summary,
-		},
-		oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
-		oldestDeadMemoryJob: snapshot.oldestDeadMemoryJob,
-		thresholds: loadThresholds(),
-	};
 }
 
 interface RepairRequestBody {
@@ -151,20 +125,25 @@ export function registerQueueDiagnosticsRoutes(
 		return deps.accessor ?? getDbAccessor();
 	}
 
-	app.get("/api/diagnostics/queue", adminGuard, (c) => {
+	app.get("/api/diagnostics/queue", adminGuard, async (c) => {
+		const scope = await resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const response = resolveAccessor().withReadDb(
-				(db: ReadDb) => buildQueueDiagnosticsResponse(db),
-				"routes/queue-diagnostics.ts:157",
-			);
-			return c.json(response);
-		} catch (err) {
-			return c.json({ error: (err as Error).message }, 500);
+			const snapshot = await getQueueDiagnosticsSnapshotAsync(scope, deps.accessor);
+			return c.json({
+				timestamp: new Date().toISOString(),
+				queues: { memory: snapshot.memory, summary: snapshot.summary },
+				oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
+				oldestDeadMemoryJob: snapshot.oldestDeadMemoryJob,
+				thresholds: loadThresholds(),
+			});
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : String(error) }, 503);
 		}
 	});
 
 	app.post("/api/diagnostics/queue/repair", adminGuard, async (c) => {
+		if (c.get("organization"))
+			return c.json({ error: "Queue repair has no content read scope", reason: "org_policy" }, 403);
 		let rawBody: unknown;
 		try {
 			rawBody = await jsonBody(c)();

@@ -214,6 +214,11 @@ reports a running process but the probe fails or reports shutdown, and
 
 ### GET /health/ready
 
+In organization mode, this public readiness endpoint omits corpus-wide queue
+counts, oldest-job ages, and embedding migration progress. Queue backlog does
+not affect its public readiness response; administrators can inspect readable
+jobs through `/api/diagnostics/queue`.
+
 No authentication required. Readiness probe: reports whether the daemon can
 actually serve work. Returns 200 only when every gate passes, otherwise 503
 with a human-readable `reasons` list. Gates:

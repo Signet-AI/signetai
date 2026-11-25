@@ -1,27 +1,19 @@
+import { withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
+import { resolveRouteReadScope } from "./read-scope";
 import { realpathSync } from "node:fs";
-import { join } from "node:path";
 import type { AccountingSummaryProvenance } from "@signet/core";
 import type { Hono } from "hono";
 import type { ErrorStage } from "../analytics.js";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
-import { getDiagnostics } from "../diagnostics.js";
-import { type LogCategory, type LogEntry, logger } from "../logger.js";
+import { readScopedCheckpoints, readLegacyContinuity } from "../diagnostics.js";
+import { type LogCategory, logger } from "../logger.js";
 import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { addResourceUtilizationSample, emptyResourceUtilizationStats } from "../resource-telemetry.js";
-import { getCheckpointsByProject, getCheckpointsBySessionAsync, redactCheckpointRow } from "../session-checkpoints.js";
+import { redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
-import { type TimelineSources, buildTimeline } from "../timeline.js";
-import {
-	CURRENT_VERSION,
-	analyticsCollector,
-	authConfig,
-	getDiagnosticsOptions,
-	getUpdateState,
-	providerTracker,
-	telemetryRef,
-} from "./state.js";
-import { resolveScopedAgentId, resolveScopedProject } from "./utils.js";
+import { analyticsCollector, authConfig, providerTracker, telemetryRef } from "./state.js";
+import { resolveScopedProject } from "./utils.js";
 
 interface AccountingCoverageTotals {
 	calls: number;
@@ -153,6 +145,8 @@ function boundedTelemetryLimit(raw: string | undefined, fallback: number, maximu
 }
 
 export function registerTelemetryRoutes(app: Hono): void {
+	app.use("/api/checkpoints", async (c, next) => requirePermission("recall", authConfig)(c, next));
+	app.use("/api/checkpoints/*", async (c, next) => requirePermission("recall", authConfig)(c, next));
 	app.use("/api/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
@@ -164,6 +158,23 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 	app.use("/api/timeline/*", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
+	});
+
+	app.use("*", async (c, next) => {
+		const scoped =
+			c.req.path === "/api/checkpoints" ||
+			c.req.path.startsWith("/api/checkpoints/") ||
+			c.req.path === "/api/telemetry/memory-search" ||
+			c.req.path === "/api/telemetry/memory-search/export";
+		if (
+			c.get("organization") &&
+			!scoped &&
+			(c.req.path.startsWith("/api/analytics/") ||
+				c.req.path.startsWith("/api/telemetry/") ||
+				c.req.path.startsWith("/api/timeline/"))
+		)
+			return c.json({ error: "This diagnostic has no content read scope", reason: "org_policy" }, 403);
+		return next();
 	});
 
 	app.get("/api/analytics/usage", (c) => {
@@ -195,13 +206,9 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ logs, count: logs.length });
 	});
 
-	app.get("/api/analytics/memory-safety", (c) => {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const mutationHealth = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
-				getDiagnostics(db, providerTracker, getUpdateState(), undefined, getDiagnosticsOptions()),
-			"routes/telemetry-routes.ts:200",
-		);
+	app.get("/api/analytics/memory-safety", async (c) => {
+		const mutationHealth = await withRegisteredDbOwnerMaintenance((owner) => owner.diagnostics(providerTracker.stats));
+		if (!mutationHealth) return c.json({ error: "Database owner unavailable" }, 503);
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",
 			limit: 50,
@@ -213,38 +220,11 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/analytics/continuity", (c) => {
+	app.get("/api/analytics/continuity", async (c) => {
 		const project = c.req.query("project");
-		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
-
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const scores: Array<Record<string, unknown>> = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-			if (project) {
-				return db
-					.prepare(
-						`SELECT id, session_key, project, harness, score,
-					        memories_recalled, memories_used, novel_context_count,
-					        reasoning, created_at
-					 FROM session_scores
-					 WHERE project = ?
-					 ORDER BY created_at DESC
-					 LIMIT ?`,
-					)
-					.all(project, limit) as Array<Record<string, unknown>>;
-			}
-			return db
-				.prepare(
-					`SELECT id, session_key, project, harness, score,
-					        memories_recalled, memories_used, novel_context_count,
-					        reasoning, created_at
-					 FROM session_scores
-					 ORDER BY created_at DESC
-					 LIMIT ?`,
-				)
-				.all(limit) as Array<Record<string, unknown>>;
-		}, "routes/telemetry-routes.ts:221");
-
-		const scoreValues = scores.map((s) => s.score as number).reverse();
+		const limit = boundedTelemetryLimit(c.req.query("limit"), 50, 1000);
+		const scores = await readLegacyContinuity({ project, limit });
+		const scoreValues = scores.map((s) => (typeof s.score === "number" ? s.score : 0)).reverse();
 		const trend = scoreValues.length >= 2 ? scoreValues[scoreValues.length - 1] - scoreValues[0] : 0;
 		const avg = scoreValues.length > 0 ? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length : 0;
 
@@ -259,31 +239,8 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/analytics/continuity/latest", (c) => {
-		const scores: Array<Record<string, unknown>> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb(
-				(db: import("../db-accessor").ReadDb) =>
-					db
-						.prepare(
-							`SELECT project, score, created_at
-					 FROM session_scores
-					 WHERE id IN (
-					   SELECT id FROM session_scores s2
-					   WHERE s2.project = session_scores.project
-					   ORDER BY s2.created_at DESC
-					   LIMIT 1
-					 )
-					 ORDER BY created_at DESC`,
-						)
-						.all() as Array<{
-						project: string | null;
-						score: number;
-						created_at: string;
-					}>,
-				"routes/telemetry-routes.ts:265",
-			);
-
+	app.get("/api/analytics/continuity/latest", async (c) => {
+		const scores = await readLegacyContinuity({ limit: 1000, latest: true });
 		return c.json({ scores });
 	});
 
@@ -305,8 +262,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/telemetry/memory-search", async (c) => {
-		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
-		if (agent.error) return c.json({ error: agent.error }, 403);
+		const scope = await resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 		const project = resolveScopedProject(c, c.req.query("project"));
 		if (project.error) return c.json({ error: project.error }, 403);
 
@@ -314,7 +270,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const offsetRaw = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const noHitsRaw = c.req.query("no_hits");
 		const items = await listMemorySearchTelemetry(getDbAccessor(), {
-			agentId: agent.agentId,
+			scope,
 			project: project.project,
 			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
 			route: c.req.query("route"),
@@ -775,15 +731,14 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/telemetry/memory-search/export", async (c) => {
-		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
-		if (agent.error) return c.json({ error: agent.error }, 403);
+		const scope = await resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 		const project = resolveScopedProject(c, c.req.query("project"));
 		if (project.error) return c.json({ error: project.error }, 403);
 
 		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
 		const noHitsRaw = c.req.query("no_hits");
 		const items = await listMemorySearchTelemetry(getDbAccessor(), {
-			agentId: agent.agentId,
+			scope,
 			project: project.project,
 			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
 			route: c.req.query("route"),
@@ -803,9 +758,8 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/checkpoints", (c) => {
+	app.get("/api/checkpoints", async (c) => {
 		const project = c.req.query("project");
-		const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 
 		if (!project) {
 			return c.json({ error: "project query parameter required" }, 400);
@@ -816,14 +770,22 @@ export function registerTelemetryRoutes(app: Hono): void {
 			projectNormalized = realpathSync(project);
 		} catch {}
 
-		const rows = getCheckpointsByProject(getDbAccessor(), projectNormalized, Math.min(limit, 100));
+		const scope = await resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId"));
+		const rows = await readScopedCheckpoints(scope, {
+			project: projectNormalized,
+			limit: boundedTelemetryLimit(c.req.query("limit"), 10, 100),
+		});
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});
 
 	app.get("/api/checkpoints/:sessionKey", async (c) => {
 		const sessionKey = c.req.param("sessionKey");
-		const rows = await getCheckpointsBySessionAsync(getDbAccessor(), sessionKey);
+		const scope = await resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId"));
+		const rows = await readScopedCheckpoints(scope, {
+			sessionKey,
+			limit: boundedTelemetryLimit(c.req.query("limit"), 100, 1000),
+		});
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});

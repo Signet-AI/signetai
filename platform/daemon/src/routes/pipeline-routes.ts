@@ -345,6 +345,8 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 	}
 }
 
+const scopedTotalsUnavailable = { status: "unavailable", reason: "scoped_totals_omitted" } as const;
+
 export function registerPipelineRoutes(app: Hono): void {
 	app.use("/api/diagnostics", async (c, next) => {
 		return requirePermission("diagnostics", authConfig)(c, next);
@@ -353,6 +355,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		return requirePermission("diagnostics", authConfig)(c, next);
 	});
 	app.get("/api/diagnostics/transcripts", async (c) => {
+		if (c.get("organization")) return c.json(scopedTotalsUnavailable);
 		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
 		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
 		if (scopedAgent.error) {
@@ -362,9 +365,20 @@ export function registerPipelineRoutes(app: Hono): void {
 		return c.json(await getTranscriptHealthReport(getDbAccessor(), AGENTS_DIR, agentId));
 	});
 
-	app.get("/api/diagnostics/workloads", (c) => workloadDiagnostics(c));
+	app.get("/api/diagnostics/workloads", (c) =>
+		c.get("organization") ? c.json(scopedTotalsUnavailable) : workloadDiagnostics(c),
+	);
 
 	app.get("/api/status", async (c) => {
+		if (c.get("organization"))
+			return c.json({
+				status: "running",
+				version: CURRENT_VERSION,
+				runtime: DAEMON_RUNTIME,
+				auth: { hybridProxyDetected },
+				audit: { dropped: auditRuntimeStatus().dropped },
+				content: scopedTotalsUnavailable,
+			});
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const extractionWorkload = getExtractionWorkloadState({
 			enabled: false,
@@ -519,6 +533,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	app.get("/api/diagnostics", async (c) => {
+		if (c.get("organization")) return c.json(scopedTotalsUnavailable);
 		const report = getCachedDiagnosticsReport();
 		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
 		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
@@ -534,6 +549,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/diagnostics/:domain", async (c, next) => {
 		const domain = c.req.param("domain");
 		if (domain === "queue" || domain === "openclaw" || domain === "workloads") return next();
+		if (c.get("organization")) return c.json(scopedTotalsUnavailable);
 		const report = getCachedDiagnosticsReport();
 
 		const domainData = report[domain as keyof typeof report];
@@ -591,10 +607,12 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	app.get("/api/diagnostics/openclaw", (c) => {
+		if (c.get("organization")) return c.json(scopedTotalsUnavailable);
 		return c.json(buildOpenClawHealth());
 	});
 
 	app.get("/api/pipeline/status", async (c) => {
+		if (c.get("organization")) return c.json(scopedTotalsUnavailable);
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = getDbAccessor();
 		const toCountMap = (rows: readonly { status: string; count: number }[]): Record<string, number> => {
@@ -611,7 +629,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:614",
+				"db:pipeline.memory-job-counts.read",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -1036,7 +1054,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:1039",
+						"db:pipeline.dream-evidence-preview.read",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -1245,6 +1263,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	app.get("/api/status/workspace", async (c) => {
+		if (c.get("organization")) return c.json(scopedTotalsUnavailable);
 		try {
 			return c.json(await getWorkspaceStatusSummary(getDbAccessor(), resolveDaemonAgentId()));
 		} catch {

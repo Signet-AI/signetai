@@ -1,3 +1,4 @@
+import type { ReadScope } from "./read-scope";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +7,8 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import type { RecallResponse } from "./memory-search";
 import { listMemorySearchTelemetry, recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "./memory-search-telemetry-project";
+
+const scope: ReadScope = { reach: { kind: "own", agentId: "ant" }, compartments: "all", projects: null };
 
 describe("memory search telemetry", () => {
 	let dir = "";
@@ -88,7 +91,7 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
-		const items = await listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant" });
+		const items = await listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant", scope });
 
 		expect(items).toHaveLength(1);
 		expect(items[0]?.query).toBe("what did we decide about recall qa");
@@ -129,7 +132,7 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
-		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: true })).toHaveLength(1);
-		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: false })).toHaveLength(0);
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: true, scope })).toHaveLength(1);
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: false, scope })).toHaveLength(0);
 	});
 });

@@ -1,4 +1,8 @@
-import type { ReadDb } from "./db-accessor";
+import { citedEvidenceReadScopeSql } from "./diagnostics";
+import { z } from "zod";
+import { readScopeSql, type ReadScope } from "./read-scope";
+import type { DbAccessor, ReadDb } from "./db-accessor";
+import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import { tableExists } from "./db-helpers";
 
 export interface QueueCounts {
@@ -59,7 +63,22 @@ interface OldestDeadRow {
 	readonly error: string | null;
 }
 
-function safeQueueRows(db: ReadDb, table: string, predicate = "1 = 1"): QueueCountsQueryResult | undefined {
+function readableJobPredicate(scope?: ReadScope): { sql: string; args: unknown[] } {
+	if (!scope) return { sql: "", args: [] };
+	const readable = readScopeSql("m", scope);
+	const copied = citedEvidenceReadScopeSql("m", scope, "memory");
+	return {
+		sql: ` AND EXISTS (SELECT 1 FROM memories m WHERE m.id=memory_jobs.memory_id${readable.sql}${copied.sql})`,
+		args: [...readable.args, ...copied.args],
+	};
+}
+
+function safeQueueRows(
+	db: ReadDb,
+	table: string,
+	predicate = "1 = 1",
+	args: readonly unknown[] = [],
+): QueueCountsQueryResult | undefined {
 	if (!tableExists(db, table)) return undefined;
 	if (!/^[a-z][a-z0-9_]*$/i.test(table)) return undefined;
 	if (table !== "memory_jobs") return undefined;
@@ -76,7 +95,7 @@ function safeQueueRows(db: ReadDb, table: string, predicate = "1 = 1"): QueueCou
 					 WHERE status = ? AND ${predicate}
 					 LIMIT ${QUEUE_DIAGNOSTICS_COUNT_LIMIT + 1}`,
 				)
-				.all(status) as ReadonlyArray<{ readonly status: string }>;
+				.all(status, ...args) as ReadonlyArray<{ readonly status: string }>;
 			if (rows.length > QUEUE_DIAGNOSTICS_COUNT_LIMIT) {
 				counts[status] = QUEUE_DIAGNOSTICS_COUNT_LIMIT;
 				truncated = true;
@@ -92,7 +111,7 @@ function safeQueueRows(db: ReadDb, table: string, predicate = "1 = 1"): QueueCou
 				 WHERE status IN ('pending', 'leased') AND ${predicate}
 				 ORDER BY created_at ASC LIMIT 1`,
 			)
-			.get() as { readonly oldestAt?: string | null } | undefined;
+			.get(...args) as { readonly oldestAt?: string | null } | undefined;
 		const oldestDead = db
 			.prepare(
 				`SELECT created_at AS oldestDeadAt
@@ -100,7 +119,7 @@ function safeQueueRows(db: ReadDb, table: string, predicate = "1 = 1"): QueueCou
 				 WHERE status = 'dead' AND ${predicate}
 				 ORDER BY created_at ASC LIMIT 1`,
 			)
-			.get() as { readonly oldestDeadAt?: string | null } | undefined;
+			.get(...args) as { readonly oldestDeadAt?: string | null } | undefined;
 		const lastError = db
 			.prepare(
 				`SELECT error
@@ -108,7 +127,7 @@ function safeQueueRows(db: ReadDb, table: string, predicate = "1 = 1"): QueueCou
 				 WHERE status IN ('pending', 'leased', 'dead') AND ${predicate} AND error IS NOT NULL
 				 ORDER BY updated_at DESC LIMIT 1`,
 			)
-			.get() as { readonly error?: string | null } | undefined;
+			.get(...args) as { readonly error?: string | null } | undefined;
 
 		return {
 			...counts,
@@ -153,10 +172,11 @@ function rowToCounts(row: QueueCountsQueryResult | undefined): QueueCounts {
 		completeness: row.completeness,
 	};
 }
-export function getQueueCounts(db: ReadDb, source: QueueSource): QueueCounts {
+export function getQueueCounts(db: ReadDb, source: QueueSource, scope?: ReadScope): QueueCounts {
 	if (source === "memory") {
 		if (!tableExists(db, "memory_jobs")) return { ...EMPTY_QUEUE_COUNTS, completeness: "unknown" };
-		const row = safeQueueRows(db, "memory_jobs", "job_type <> 'extract'");
+		const readable = readableJobPredicate(scope);
+		const row = safeQueueRows(db, "memory_jobs", `job_type <> 'extract'${readable.sql}`, readable.args);
 		return row === undefined ? { ...EMPTY_QUEUE_COUNTS, completeness: "unknown" } : rowToCounts(row);
 	}
 	if (source === "summary") return EMPTY_QUEUE_COUNTS;
@@ -219,19 +239,20 @@ export function getQueuePressureSnapshot(db: ReadDb): QueuePressureSnapshot {
 		oldestJobAgeSec: ages.length === 0 ? undefined : Math.max(...ages),
 	};
 }
-export function getOldestDeadJob(db: ReadDb, source: QueueSource): OldestDeadJob | null {
+export function getOldestDeadJob(db: ReadDb, source: QueueSource, scope?: ReadScope): OldestDeadJob | null {
 	if (source === "summary") return null;
 	if (source === "memory") {
 		if (!tableExists(db, "memory_jobs")) return null;
+		const readable = readableJobPredicate(scope);
 		const row = db
 			.prepare(
 				`SELECT id, job_type AS harness, memory_id AS sessionKey, created_at AS createdAt,
 				        attempts, error
 				 FROM memory_jobs
-					 WHERE status = 'dead' AND job_type <> 'extract'
+					 WHERE status = 'dead' AND job_type <> 'extract'${readable.sql}
 				 ORDER BY created_at ASC LIMIT 1`,
 			)
-			.get() as OldestDeadRow | undefined;
+			.get(...readable.args) as OldestDeadRow | undefined;
 		if (!row) return null;
 		return {
 			id: row.id,
@@ -259,19 +280,19 @@ let queueSnapshotCache = new WeakMap<
 >();
 export function getQueueDiagnosticsSnapshot(
 	db: ReadDb,
-	options: { readonly fresh?: boolean } = {},
+	options: { readonly fresh?: boolean; readonly scope?: ReadScope } = {},
 ): QueueDiagnosticsSnapshot {
 	const now = Date.now();
 	const cached = queueSnapshotCache.get(db);
-	if (options.fresh !== true && cached && cached.expiresAt > now) return cached.value;
+	if (!options.scope && options.fresh !== true && cached && cached.expiresAt > now) return cached.value;
 
 	const value: QueueDiagnosticsSnapshot = {
-		memory: getQueueCounts(db, "memory"),
+		memory: getQueueCounts(db, "memory", options.scope),
 		summary: getQueueCounts(db, "summary"),
 		oldestDeadSummaryJob: null,
-		oldestDeadMemoryJob: getOldestDeadJob(db, "memory"),
+		oldestDeadMemoryJob: getOldestDeadJob(db, "memory", options.scope),
 	};
-	queueSnapshotCache.set(db, { expiresAt: now + QUEUE_SNAPSHOT_CACHE_TTL_MS, value });
+	if (!options.scope) queueSnapshotCache.set(db, { expiresAt: now + QUEUE_SNAPSHOT_CACHE_TTL_MS, value });
 	return value;
 }
 
@@ -390,4 +411,77 @@ export function worstQueueScore(scores: readonly QueueScore[]): QueueScore {
 		else if (s.status === "degraded" && worst !== "unhealthy") worst = "degraded";
 	}
 	return { score, status: worst };
+}
+
+export async function getQueueDiagnosticsSnapshotAsync(
+	scope: ReadScope,
+	accessor?: DbAccessor,
+): Promise<QueueDiagnosticsSnapshot> {
+	const { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } = await import("./db-owner-runtime");
+	const readable = readableJobPredicate(scope);
+	const owner = accessor ? await getDbOwnerForAccessor(accessor) : undefined;
+	async function query<Row>(
+		statement: import("./db-owner-protocol").DbOwnerStatement,
+		options: import("./db-owner-runtime").DbOwnerSqlOptions,
+	): Promise<Row> {
+		if (!owner) return dbOwnerQuery<Row>(statement, options);
+		return owner.submit<Row>(
+			{ kind: "query", statement },
+			{ operation: options.operation, lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		).result;
+	}
+
+	const options = { operation: "diagnostics.queue.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS } as const;
+	const counts = { pending: 0, leased: 0, completed: 0, failed: 0, dead: 0 };
+	let truncated = false;
+	for (const status of ["pending", "leased", "completed", "failed", "dead"] as const) {
+		const rows = await query<readonly { status: string }[]>(
+			{
+				sql: `SELECT status FROM memory_jobs WHERE status=? AND job_type<>'extract'${readable.sql} LIMIT ?`,
+				params: z
+					.array(z.union([z.string(), z.number()]))
+					.parse([status, ...readable.args, QUEUE_DIAGNOSTICS_COUNT_LIMIT + 1]),
+				result: "all",
+			},
+			options,
+		);
+		counts[status] = Math.min(rows.length, QUEUE_DIAGNOSTICS_COUNT_LIMIT);
+		truncated ||= rows.length > QUEUE_DIAGNOSTICS_COUNT_LIMIT;
+	}
+	const oldest = await query<{ created_at: string } | null>(
+		{
+			sql: `SELECT created_at FROM memory_jobs WHERE status IN ('pending','leased') AND job_type<>'extract'${readable.sql} ORDER BY created_at ASC LIMIT 1`,
+			params: z.array(z.union([z.string(), z.number()])).parse(readable.args),
+			result: "get",
+		},
+		options,
+	);
+	const oldestDeadMemoryJob = await query<OldestDeadJob | null>(
+		{
+			sql: `SELECT id,job_type harness,memory_id sessionKey,created_at createdAt,attempts,error FROM memory_jobs WHERE status='dead' AND job_type<>'extract'${readable.sql} ORDER BY created_at ASC LIMIT 1`,
+			params: z.array(z.union([z.string(), z.number()])).parse(readable.args),
+			result: "get",
+		},
+		options,
+	);
+	const error = await query<{ error: string } | null>(
+		{
+			sql: `SELECT error FROM memory_jobs WHERE status IN ('pending','leased','dead') AND error IS NOT NULL AND job_type<>'extract'${readable.sql} ORDER BY updated_at DESC LIMIT 1`,
+			params: z.array(z.union([z.string(), z.number()])).parse(readable.args),
+			result: "get",
+		},
+		options,
+	);
+	return {
+		memory: {
+			...counts,
+			oldestAgeSec: ageSec(oldest?.created_at ?? null),
+			oldestDeadAgeSec: ageSec(oldestDeadMemoryJob?.createdAt ?? null),
+			lastError: error?.error ?? null,
+			completeness: truncated ? "truncated" : "exact",
+		},
+		summary: EMPTY_QUEUE_COUNTS,
+		oldestDeadSummaryJob: null,
+		oldestDeadMemoryJob,
+	};
 }

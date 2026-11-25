@@ -7,6 +7,14 @@ Analytics, telemetry, log, and MCP endpoints.
 
 [Back to HTTP API overview](/api/).
 
+In organization mode, analytics, general telemetry (including delivery health),
+and log endpoints return `403` with `reason: "org_policy"`. These collectors do
+not carry content classifications, so an administrator's analytics permission
+cannot authorize their contents. Memory-search telemetry and its NDJSON export
+remain available through the caller's agent, project, and classification scope.
+Checkpoint reads require `recall` permission and use the same scope before
+selecting or limiting results.
+
 ## Analytics
 
 Requires `analytics` permission.
