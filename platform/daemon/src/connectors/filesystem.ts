@@ -10,6 +10,7 @@ import type {
 } from "@signet/core";
 import { yieldEvery } from "../async-yield";
 import type { DbAccessor } from "../db-accessor";
+import { writeFilesystemDocumentInTx } from "../embedding-projection-owner";
 import { logger } from "../logger";
 import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 
@@ -202,22 +203,6 @@ export async function discoverFiles(
 	return results;
 }
 
-interface ExistingDocRow {
-	readonly id: string;
-	readonly updated_at: string;
-}
-
-async function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): Promise<ExistingDocRow | undefined> {
-	return await accessor.withReadDbAsync(
-		(db) => {
-			return db.prepare("SELECT id, updated_at FROM documents WHERE source_url = ? LIMIT 1").get(sourceUrl) as
-				| ExistingDocRow
-				| undefined;
-		},
-		{ siteToken: "connectors/filesystem.ts:211", operation: "connector.filesystem.find-document" },
-	);
-}
-
 export async function readFileContent(
 	file: DiscoveredFile,
 	maxFileSize: number,
@@ -251,51 +236,6 @@ export async function readFileContent(
 		return null;
 	}
 }
-async function insertDocument(
-	accessor: DbAccessor,
-	connectorId: string,
-	sourceUrl: string,
-	title: string,
-	rawContent: string,
-): Promise<string> {
-	const id = crypto.randomUUID();
-	const now = new Date().toISOString();
-
-	await accessor.withWriteTxAsync(
-		(db) => {
-			db.prepare(
-				`INSERT INTO documents
-			 (id, source_url, source_type, content_type, title,
-			  raw_content, status, error, connector_id,
-			  chunk_count, memory_count,
-			  metadata_json, created_at, updated_at, completed_at)
-			 VALUES (?, ?, 'file', 'text/plain', ?,
-			         ?, 'queued', NULL, ?,
-			         0, 0, NULL, ?, ?, NULL)`,
-			).run(id, sourceUrl, title, rawContent, connectorId, now, now);
-		},
-		{ siteToken: "connectors/filesystem.ts:264" },
-	);
-
-	return id;
-}
-async function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): Promise<void> {
-	const now = new Date().toISOString();
-
-	await accessor.withWriteTxAsync(
-		(db) => {
-			db.prepare(
-				`UPDATE documents
-			 SET raw_content = ?, status = 'queued', error = NULL,
-			     chunk_count = 0, memory_count = 0,
-			     completed_at = NULL, updated_at = ?
-			 WHERE id = ?`,
-			).run(rawContent, now, docId);
-		},
-		{ siteToken: "connectors/filesystem.ts:285" },
-	);
-}
-
 async function processFile(
 	accessor: DbAccessor,
 	connectorId: string,
@@ -318,23 +258,20 @@ async function processFile(
 		};
 	}
 
-	const existing = await findDocBySourceUrl(accessor, sourceUrl);
-
-	if (existing === undefined) {
-		const docId = await insertDocument(accessor, connectorId, sourceUrl, file.name, content);
-		await enqueueDocumentIngestJob(accessor, docId);
-		return { added: 1, updated: 0, error: null };
-	}
-	const docUpdatedAt = new Date(existing.updated_at);
-	const needsUpdate = forceUpdate || file.mtime > docUpdatedAt;
-
-	if (!needsUpdate) {
-		return { added: 0, updated: 0, error: null };
-	}
-
-	await updateDocument(accessor, existing.id, content);
-	await enqueueDocumentIngestJob(accessor, existing.id);
-	return { added: 0, updated: 1, error: null };
+	const result = await accessor.withWriteTxAsync(
+		(db) =>
+			writeFilesystemDocumentInTx(db, {
+				connectorId,
+				sourceUrl,
+				title: file.name,
+				content,
+				modifiedAt: file.mtime.getTime(),
+				forceUpdate,
+			}),
+		{ siteToken: "connectors/filesystem.ts:264" },
+	);
+	if (result.added > 0 || result.updated > 0) await enqueueDocumentIngestJob(accessor, result.id);
+	return { added: result.added, updated: result.updated, error: null };
 }
 
 class FilesystemConnector implements ConnectorRuntime {

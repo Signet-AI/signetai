@@ -22,6 +22,7 @@ export interface HintsWorkerHandle {
 interface HintJobRow {
 	readonly id: string;
 	readonly memory_id: string;
+	readonly agent_id: string | null;
 	readonly payload: string;
 	readonly attempts: number;
 	readonly max_attempts: number;
@@ -136,7 +137,8 @@ async function leaseJob(
 			     attempts = CASE WHEN status = 'leased' THEN attempts ELSE attempts + 1 END,
 			     updated_at = CASE WHEN status = 'leased' THEN updated_at ELSE ? END
 			 WHERE id = (SELECT id FROM selected)
-			 RETURNING id, memory_id, payload, attempts, max_attempts, lease_token`,
+			 RETURNING id, memory_id, payload, attempts, max_attempts, lease_token,
+			 (SELECT agent_id FROM memories WHERE id = memory_jobs.memory_id) AS agent_id`,
 			[leaseToken, maxAttempts, epoch, now, leaseToken, now],
 			{ estimatedWorkUnits: 1 },
 		)) ?? null
@@ -158,6 +160,7 @@ async function completeJobAndWriteHints(
 	memoryId: string,
 	hints: readonly string[],
 ): Promise<void> {
+	if (!job.agent_id || memoryId !== job.memory_id) throw new Error("hint_parent_scope_required");
 	const now = new Date().toISOString();
 	await ownerBatch(
 		owner,
@@ -173,11 +176,17 @@ async function completeJobAndWriteHints(
 				requireChanges: true,
 			},
 			ownerRunStatement(
-				`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
-				 SELECT lower(hex(randomblob(16))), ?, m.agent_id, value, ?
+				`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at, compartment_id)
+				 SELECT lower(hex(randomblob(16))), ?, m.agent_id, value, ?, ?
 				 FROM memories m, json_each(?)
 				 WHERE m.id = ? AND m.is_deleted = 0 AND m.agent_id IS NOT NULL AND m.agent_id <> ''`,
-				[memoryId, now, JSON.stringify(hints), memoryId],
+				[
+					memoryId,
+					now,
+					{ type: "compartment", scope: { agentId: job.agent_id, memoryId }, parentMemoryId: memoryId },
+					JSON.stringify(hints),
+					memoryId,
+				],
 			),
 		],
 		{ estimatedWorkUnits: Math.max(1, hints.length) },

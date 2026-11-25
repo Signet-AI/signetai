@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { compartmentFor } from "@signet/core";
+import { compartmentFor, findSqliteVecExtension } from "@signet/core";
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
@@ -173,7 +173,7 @@ function insertMemory(db: Database, id: string, agentId?: string, contentHash?: 
 	db.prepare(
 		`INSERT INTO memories (id, content, content_hash, agent_id, type, created_at, updated_at, updated_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-	).run(id, `content for ${id}`, contentHash ?? null, agentId ?? null, "fact", now, now, "test");
+	).run(id, `content for ${id}`, contentHash ?? null, agentId ?? "default", "fact", now, now, "test");
 }
 
 function repairAuditCount(db: Database, action: string): number {
@@ -1286,6 +1286,44 @@ describe("reembedMissingMemories", () => {
 		db.close();
 	});
 
+	for (const migration of [false, true]) {
+		it(`inherits stored memory compartments during ${migration ? "model migration" : "missing embedding repair"}`, async () => {
+			const extension = findSqliteVecExtension();
+			if (!extension) throw new Error("sqlite-vec required");
+			db.loadExtension(extension);
+			db.exec(
+				"DROP TABLE IF EXISTS vec_embeddings; CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine)",
+			);
+			insertMemory(db, "classified-repair", "default", "classified-repair-hash");
+			db.prepare(
+				"INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_repair','Repair','now','now')",
+			).run();
+			const compartment = compartmentFor(db, ["cls_repair"]);
+			db.prepare("UPDATE memories SET compartment_id = ?, embedding_model = ? WHERE id = 'classified-repair'").run(
+				compartment,
+				migration ? "old-model" : null,
+			);
+			accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, TEST_EMBEDDING_CFG));
+			const repair = migration ? reembedModelMigration : reembedMissingMemories;
+			const result = await repair(
+				accessor,
+				TEST_CFG,
+				CTX_DAEMON,
+				createRateLimiter(),
+				async () => [1, 0, 0],
+				TEST_EMBEDDING_CFG,
+				"default",
+				10,
+			);
+			expect(result.affected).toBe(1);
+			expect(
+				db.prepare("SELECT agent_id, compartment_id FROM embeddings WHERE source_id = 'classified-repair'").get(),
+			).toEqual({ agent_id: "default", compartment_id: compartment });
+			expect(db.prepare("SELECT count(*) n FROM vec_embeddings").get()).toEqual({ n: 0 });
+			expect(db.prepare(`SELECT count(*) n FROM vec_embeddings__c${compartment}`).get()).toEqual({ n: 1 });
+		});
+	}
+
 	it("preserves a committed memory when embedding persistence fails, then retries idempotently", async () => {
 		insertMemory(db, "mem-write-failure");
 		let failWrite = true;
@@ -1689,7 +1727,7 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-lease-race")).toBeNull();
 	});
 
-	it("normalizes an empty memory agent_id on missing-memory repair", async () => {
+	it("rejects an empty memory agent_id on missing-memory repair", async () => {
 		insertMemory(db, "mem-empty-agent", "");
 
 		const result = await reembedMissingMemories(
@@ -1703,10 +1741,8 @@ describe("reembedMissingMemories", () => {
 			1,
 		);
 
-		expect(result.success).toBe(true);
-		expect(db.prepare("SELECT agent_id FROM embeddings WHERE source_id = ?").get("mem-empty-agent")).toEqual({
-			agent_id: "default",
-		});
+		expect(result.affected).toBe(0);
+		expect(db.prepare("SELECT agent_id FROM embeddings WHERE source_id = ?").get("mem-empty-agent")).toBeNull();
 	});
 
 	it("does not overwrite another agent's embedding on migration hash conflict", async () => {
@@ -1796,7 +1832,7 @@ describe("reembedMissingMemories", () => {
 		migrationDb.close();
 	});
 
-	it("normalizes an empty memory agent_id on migration repair", async () => {
+	it("rejects an empty memory agent_id on migration repair", async () => {
 		const migrationDb = new Database(":memory:");
 		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
 		ensureVecTable(migrationDb);
@@ -1822,10 +1858,10 @@ describe("reembedMissingMemories", () => {
 			10,
 		);
 
-		expect(result.success).toBe(true);
+		expect(result.affected).toBe(0);
 		expect(
 			migrationDb.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ?").get("empty-agent-hash"),
-		).toEqual({ agent_id: "default" });
+		).toBeNull();
 		migrationDb.close();
 	});
 

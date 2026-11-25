@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { compartmentFor } from "@signet/core";
 import type { PipelineHintsConfig } from "@signet/core";
 import { type MigrationDb, runMigrations } from "../../../core/src/migrations";
 import { DbWriteQueueFullError, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
@@ -940,9 +941,14 @@ describe("prospective-index", () => {
 			expect(ftsMatches[0]).toBe(mid);
 		});
 
-		it("preserves the memory agent on generated hints", async () => {
+		it("preserves the stored memory compartment and agent on generated hints", async () => {
 			const mid = crypto.randomUUID();
 			insertMemory(db, mid, "Caroline moved to Seattle", "agent-b");
+			db.prepare(
+				"INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_hint','Hints','now','now')",
+			).run();
+			const compartment = compartmentFor(db, ["cls_hint"]);
+			db.prepare("UPDATE memories SET compartment_id = ? WHERE id = ?").run(compartment, mid);
 			accessor.withWriteTx((wdb) => {
 				enqueueHintsJob(wdb, mid, "Caroline moved to Seattle");
 			});
@@ -962,6 +968,10 @@ describe("prospective-index", () => {
 				agent_id: string;
 			}>;
 			expect(agentIds).toEqual([{ agent_id: "agent-b" }]);
+			expect(db.prepare("SELECT DISTINCT compartment_id FROM memory_hints WHERE memory_id = ?").all(mid)).toEqual([
+				{ compartment_id: compartment },
+			]);
+			expect(getHintsFts(db, "Caroline")).toEqual([]);
 		});
 
 		it("completes job with zero hints on empty LLM response", async () => {

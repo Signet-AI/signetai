@@ -17,6 +17,7 @@ import {
 } from "./db-owner-maintenance";
 import {
 	countChanges,
+	evidenceCompartmentInTx,
 	readLiveVecDimensions,
 	syncVecDeleteBySourceExceptHash,
 	syncVecInsert,
@@ -800,15 +801,7 @@ async function reembedMissingMemoriesBatchWithSelector(
 			siteToken: "db:repair.missing-memory-selection.read",
 		},
 	);
-	return reembedMissingMemoriesBatchForRows(
-		accessor,
-		embeddingFn,
-		embeddingCfg,
-		unembedded,
-		agentId,
-		repairLease,
-		options,
-	);
+	return reembedMissingMemoriesBatchForRows(accessor, embeddingFn, embeddingCfg, unembedded, repairLease, options);
 }
 
 async function reembedMissingMemoriesBatchForRows(
@@ -816,7 +809,6 @@ async function reembedMissingMemoriesBatchForRows(
 	embeddingFn: ReembedEmbeddingFunction,
 	embeddingCfg: EmbeddingConfig,
 	unembedded: ReadonlyArray<UnembeddedRow>,
-	agentId?: string,
 	repairLease?: EmbeddingRepairLease,
 	options: ReembedOptions = {},
 ): Promise<ReembedBatchOutcome> {
@@ -1001,7 +993,10 @@ async function reembedMissingMemoriesBatchForRows(
 					stale++;
 					continue;
 				}
-				if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)) {
+				if (
+					!current.agent_id?.trim() ||
+					normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)
+				) {
 					stale++;
 					continue;
 				}
@@ -1010,7 +1005,7 @@ async function reembedMissingMemoriesBatchForRows(
 					typeof current.content_hash === "string" && current.content_hash.trim().length > 0
 						? current.content_hash
 						: normalizeAndHashContent(current.content).contentHash;
-				const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
+				const memoryAgentId = normalizeRepairAgentId(current.agent_id);
 				if (current.content_hash == null) {
 					const collision = checkHash.get(contentHash, memory.id) as { id: string } | undefined;
 					if (!collision) writeHash.run(contentHash, memory.id);
@@ -1035,15 +1030,26 @@ async function reembedMissingMemoriesBatchForRows(
 				db.prepare(
 					`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type,
-					  source_id, chunk_text, created_at, agent_id)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
+					  source_id, chunk_text, created_at, agent_id, compartment_id)
+					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
 					 ON CONFLICT(content_hash) DO UPDATE SET
 					   vector = excluded.vector,
 					   dimensions = excluded.dimensions,
 					   source_type = excluded.source_type,
 					   chunk_text = excluded.chunk_text,
-					   created_at = excluded.created_at`,
-				).run(embId, contentHash, blob, vector.length, memory.id, memory.content, now, memoryAgentId);
+					   created_at = excluded.created_at,
+					   compartment_id = excluded.compartment_id`,
+				).run(
+					embId,
+					contentHash,
+					blob,
+					vector.length,
+					memory.id,
+					memory.content,
+					now,
+					memoryAgentId,
+					evidenceCompartmentInTx(db, memoryAgentId, [{ kind: "memory", id: memory.id }]),
+				);
 				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 					| { id: string }
 					| undefined;
@@ -1546,7 +1552,10 @@ export async function reembedModelMigration(
 							crossAgentConflict: false,
 						};
 					}
-					if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)) {
+					if (
+						!current.agent_id?.trim() ||
+						normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)
+					) {
 						return {
 							wrote: false,
 							profileChanged: false,
@@ -1555,7 +1564,7 @@ export async function reembedModelMigration(
 							crossAgentConflict: false,
 						};
 					}
-					const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
+					const memoryAgentId = normalizeRepairAgentId(current.agent_id);
 					const id = crypto.randomUUID();
 					const existing = db
 						.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ? LIMIT 1")
@@ -1569,8 +1578,17 @@ export async function reembedModelMigration(
 							crossAgentConflict: true,
 						};
 					db.prepare(
-						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
-					).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content, memoryAgentId);
+						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?, ?) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at, compartment_id=excluded.compartment_id`,
+					).run(
+						id,
+						current.content_hash,
+						vectorToBlob(vector),
+						vector.length,
+						row.id,
+						row.content,
+						memoryAgentId,
+						evidenceCompartmentInTx(db, memoryAgentId, [{ kind: "memory", id: row.id }]),
+					);
 					const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
 						| { id: string }
 						| undefined;

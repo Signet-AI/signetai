@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	type AgentRosterReadPolicy,
 	applyRecallScoreThreshold,
+	compartmentForWrite,
 	redactCredentials,
 	vectorSearchWithMetadata,
 } from "@signet/core";
@@ -17,7 +18,7 @@ import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } f
 import { normalizeAndHashContent } from "../content-normalization";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { getDbAccessor, prepareTypedStatement, type ReadDb, runWriteTxAsync, type WriteDb } from "../db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { evidenceCompartmentInTx, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
@@ -1621,6 +1622,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						const plan = chunkPlans[chunkIndex];
 						const chunkId = plannedChunkIds[chunkIndex];
 						txIngestEnvelope(db, {
+							sessionKey: c.req.header("x-signet-session-key") ?? null,
 							author: c.get("author"),
 							id: chunkId,
 							content: plan.normalized.storageContent,
@@ -1682,7 +1684,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					const plan = chunkPlans[chunkIndex];
 					const chunkId = savedChunkIds[chunkIndex];
 					try {
-						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding, "document", {
+						const vec = await fetchEmbeddingFn(plan.normalized.storageContent, fullCfg.embedding, "document", {
 							usage: { source: "memory-capture", agentId },
 							onFailure: recordRouteOperationFailure(c),
 						});
@@ -1704,9 +1706,19 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 									db.prepare(`
 										INSERT INTO embeddings
-										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-									`).run(embId, embHash, blob, vec.length, chunkId, plan.normalized.storageContent, now);
+										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+									`).run(
+										embId,
+										embHash,
+										blob,
+										vec.length,
+										chunkId,
+										plan.normalized.storageContent,
+										now,
+										agentId,
+										evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id: chunkId }]),
+									);
 									syncVecInsert(db, embId, vec);
 									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 										fullCfg.embedding.model,
@@ -1818,6 +1830,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				const byHash = getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				if (byHash) return { deduped: true as const, row: byHash };
 				txIngestEnvelope(db, {
+					sessionKey: c.req.header("x-signet-session-key") ?? null,
 					author: c.get("author"),
 					id,
 					content: normalizedContent.storageContent,
@@ -1961,7 +1974,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const baseCfg = loadMemoryConfig(AGENTS_DIR);
 			const cfg = await withActiveEmbeddingConfig(baseCfg);
-			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding, "document", {
+			const vec = await fetchEmbeddingFn(normalizedContent.storageContent, cfg.embedding, "document", {
 				usage: { source: "memory-capture", agentId },
 				onFailure: recordRouteOperationFailure(c),
 			});
@@ -1983,9 +1996,19 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
 						db.prepare(`
 							INSERT INTO embeddings
-							  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-							VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-						`).run(embId, embHash, blob, vec.length, id, normalizedContent.storageContent, now);
+							  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+							VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+						`).run(
+							embId,
+							embHash,
+							blob,
+							vec.length,
+							id,
+							normalizedContent.storageContent,
+							now,
+							agentId,
+							evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id }]),
+						);
 						syncVecInsert(db, embId, vec);
 						db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.embedding.model, id);
 						return true;
@@ -2008,13 +2031,20 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				try {
 					await runWriteTxAsync(getDbAccessor(), (db) => {
 						const stmt = db.prepare(
-							`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
-							 VALUES (?, ?, ?, ?, ?)`,
+							`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at, compartment_id)
+							 VALUES (?, ?, ?, ?, ?, ?)`,
 						);
 						for (const hint of allHints) {
 							const h = typeof hint === "string" ? hint.trim() : "";
 							if (h.length < 5 || h.length > 300) continue;
-							stmt.run(crypto.randomUUID(), id, agentId, h, now);
+							stmt.run(
+								crypto.randomUUID(),
+								id,
+								agentId,
+								h,
+								now,
+								evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id }]),
+							);
 							hintsWritten++;
 						}
 					});
@@ -3838,8 +3868,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					`INSERT INTO documents
 					 (id, source_url, source_type, content_type, title,
 					  raw_content, status, connector_id, chunk_count,
-					  memory_count, metadata_json, agent_id, project, created_at, updated_at, author_user_id)
-					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?, ?, ?)`,
+					  memory_count, metadata_json, agent_id, project, created_at, updated_at, author_user_id, compartment_id)
+					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
 				).run(
 					id,
 					sourceUrl,
@@ -3854,6 +3884,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					now,
 					now,
 					author?.userId ?? null,
+					compartmentForWrite(db, {
+						agentId: scopedAgent.agentId,
+						sessionKey: c.req.header("x-signet-session-key") ?? null,
+						sourceId: parseOptionalString(body.connector_id) ?? id,
+					}),
 				);
 
 				auditAuthoredWriteInTx(db, author, "document.created", "document", id, scopedAgent.agentId);

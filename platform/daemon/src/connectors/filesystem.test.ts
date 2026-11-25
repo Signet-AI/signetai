@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverFiles, matchConnectorPattern, matchGlob, readFileContent } from "./filesystem";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import {
+	createFilesystemConnector,
+	discoverFiles,
+	matchConnectorPattern,
+	matchGlob,
+	readFileContent,
+} from "./filesystem";
 
 describe("globToRegex", () => {
 	test("**/*.md matches root-level files", () => {
@@ -227,4 +234,67 @@ describe("globToRegex", () => {
 		expect(matchGlob("AGENTS.md", "AGENTS.md")).toBe(true);
 		expect(matchGlob("AGENTS.md", "sub/AGENTS.md")).toBe(false);
 	});
+});
+
+describe("filesystem document scope", () => {
+	for (const storedAgent of ["stored-agent", "", null]) {
+		test(`requires stored connector agent identity: ${storedAgent ?? "missing"}`, async () => {
+			const root = mkdtempSync(join(tmpdir(), "signet-fs-write-"));
+			initDbAccessor(join(root, "signet.db"));
+			const accessor = getDbAccessor();
+			writeFileSync(join(root, "evidence.md"), "Connector evidence");
+			const config = {
+				id: "filesystem-scope",
+				provider: "filesystem" as const,
+				displayName: "Files",
+				enabled: true,
+				settings: { rootPath: root, agentId: "untrusted-runtime-agent" },
+			};
+			accessor.withWriteTx((db) => {
+				db.prepare(
+					"INSERT INTO connectors(id,provider,config_json,created_at,updated_at) VALUES (?,'filesystem',?,'now','now')",
+				).run(
+					config.id,
+					JSON.stringify({
+						...config,
+						settings: { rootPath: root, ...(storedAgent === null ? {} : { agentId: storedAgent }) },
+					}),
+				);
+				if (storedAgent) {
+					db.prepare("INSERT INTO agents(id,name,created_at,updated_at) VALUES (?,?,'now','now')").run(
+						storedAgent,
+						storedAgent,
+					);
+					db.prepare(
+						"INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_files','Files','now','now')",
+					).run();
+					db.prepare(
+						"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_at) VALUES ('agent',?,?,'cls_files','now')",
+					).run(storedAgent, storedAgent);
+				}
+			});
+			const connector = createFilesystemConnector(config, accessor);
+			try {
+				if (!storedAgent) {
+					await expect(connector.syncFull()).rejects.toThrow("connector_agent_required");
+					accessor.withReadDb((db) => expect(db.prepare("SELECT count(*) n FROM documents").get()).toEqual({ n: 0 }));
+				} else {
+					const result = await connector.syncFull();
+					expect(result.documentsAdded).toBe(1);
+					accessor.withReadDb((db) => {
+						const compartment = db.prepare("SELECT id FROM compartments WHERE key = 'cls_files'").get()?.id;
+						expect(compartment).toBeNumber();
+						expect(db.prepare("SELECT agent_id,compartment_id,author_user_id FROM documents").get()).toEqual({
+							agent_id: storedAgent,
+							compartment_id: compartment,
+							author_user_id: null,
+						});
+					});
+				}
+			} finally {
+				await closeDbAccessor();
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	}
 });
