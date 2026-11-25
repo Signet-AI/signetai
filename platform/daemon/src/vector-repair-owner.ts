@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { activeVectorProjectionTable } from "@signet/core";
+import { missingCompartmentVectorSql, syncEmbeddingCompartment, activeVectorProjectionTable } from "@signet/core";
 import type {
 	DbOwnerVectorRepairInput,
 	DbOwnerVectorRepairOperation,
@@ -10,12 +10,13 @@ import { VECTOR_REPAIR_MAX_BYTES_PER_BATCH } from "./db-owner-protocol";
 import { boundedBatchSize, boundedVectorBytes, normalizeAgentId } from "./vector-repair-policy";
 
 interface SqliteStatement {
-	all(...params: readonly unknown[]): unknown[];
-	get(...params: readonly unknown[]): unknown;
+	all(...params: readonly unknown[]): Record<string, unknown>[];
+	get(...params: readonly unknown[]): Record<string, unknown> | undefined;
 	run(...params: readonly unknown[]): { readonly changes?: number };
 }
 
 export interface VectorRepairDb {
+	exec(sql: string): void;
 	prepare(sql: string): SqliteStatement;
 }
 
@@ -152,7 +153,7 @@ function missingVectorWhere(
 			FROM embeddings e
 			LEFT JOIN ${vectorTable} v ON v.id = e.id
 			${quarantineJoin}
-			WHERE v.id IS NULL
+			WHERE ${missingCompartmentVectorSql(db, vectorTable, "e")}
 			${quarantinePredicate}
 			  AND COALESCE(NULLIF(e.agent_id, ''), 'default') = ?
 			${keyset.sql}`,
@@ -372,7 +373,18 @@ function listMissingVectors(
 	const query = missingVectorWhere(db, agentId, cursor);
 	return db
 		.prepare(`SELECT e.id, length(e.vector) AS vector_bytes, e.dimensions ${query.sql} ORDER BY e.id LIMIT ?`)
-		.all(...query.params, limit) as CandidateRow[];
+		.all(...query.params, limit)
+		.flatMap((row) =>
+			typeof row.id === "string"
+				? [
+						{
+							id: row.id,
+							...(typeof row.vector_bytes === "number" ? { vector_bytes: row.vector_bytes } : {}),
+							...(typeof row.dimensions === "number" ? { dimensions: row.dimensions } : {}),
+						},
+					]
+				: [],
+		);
 }
 
 function processMissingVectors(
@@ -388,7 +400,6 @@ function processMissingVectors(
 	const dimensions = vectorTableDimensions(db);
 	let cursor = row.cursor;
 	let lastError: string | null = null;
-	const insert = db.prepare(`INSERT INTO ${activeVectorProjectionTable(db)} (id, embedding) VALUES (?, ?)`);
 
 	for (const candidate of candidates) {
 		guard(options);
@@ -438,7 +449,8 @@ function processMissingVectors(
 
 		try {
 			guard(options);
-			const changed = changes(insert.run(candidate.id, blob));
+			syncEmbeddingCompartment(db, "embeddings", candidate.id, activeVectorProjectionTable(db));
+			const changed = 1;
 			cursor = candidate.id;
 			counters.batchRows += 1;
 			counters.batchProcessed += 1;
@@ -523,7 +535,20 @@ function listOrphanEmbeddings(
 	limit: number,
 ): readonly CandidateRow[] {
 	const query = orphanEmbeddingWhere(agentId, cursor);
-	return db.prepare(`SELECT e.id ${query.sql} ORDER BY e.id LIMIT ?`).all(...query.params, limit) as CandidateRow[];
+	return db
+		.prepare(`SELECT e.id ${query.sql} ORDER BY e.id LIMIT ?`)
+		.all(...query.params, limit)
+		.flatMap((row) =>
+			typeof row.id === "string"
+				? [
+						{
+							id: row.id,
+							...(typeof row.vector_bytes === "number" ? { vector_bytes: row.vector_bytes } : {}),
+							...(typeof row.dimensions === "number" ? { dimensions: row.dimensions } : {}),
+						},
+					]
+				: [],
+		);
 }
 
 function processOrphanEmbeddings(

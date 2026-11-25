@@ -5,6 +5,10 @@ import ts from "typescript";
 const SQL_OWNERS = [
 	"platform/core/src/database.ts",
 	"platform/core/src/fts-schema.ts",
+	"platform/core/src/compartment-shards.ts",
+	"platform/daemon/src/classification-owner.ts",
+	"platform/daemon/src/read-scope.ts",
+	"platform/daemon/src/embedding-projection-owner.ts",
 	"platform/core/src/search.ts",
 	"platform/daemon/src/db-owner-worker.ts",
 	"platform/daemon/src/auth/organization-store.ts",

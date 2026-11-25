@@ -341,6 +341,12 @@ export interface DbOwnerTranscriptBulkCommit {
 	};
 }
 export type DbOwnerRequest =
+	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
+	| {
+			readonly kind: "embedding_projection";
+			readonly request: import("./embedding-projection").EmbeddingProjectionRequest;
+	  }
+	| { readonly kind: "classification"; readonly request: import("./classifications").ClassificationRequest }
 	| { readonly kind: "memory_head"; readonly request: import("./memory-head").MemoryHeadRequest }
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }

@@ -1,3 +1,4 @@
+export { readMemoriesFtsCanonicalRowCount } from "./fts-schema";
 export { attempt, attemptAsync } from "./attempt";
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
@@ -722,3 +723,19 @@ export { parseTranscriptMessages, buildExportTranscriptRecord } from "./transcri
 
 export { parseAssistantChatEvent } from "./assistant-chat";
 export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat";
+export {
+	compartmentFor,
+	compartmentForWrite,
+	type CompartmentWriteScope,
+	ensureCompartmentShards,
+	ftsShardTables,
+	vecShardTables,
+	vectorShardSwapStatements,
+	syncEmbeddingCompartment,
+	resetCompartmentVectorShards,
+	rebuildCompartmentFtsShards,
+	missingCompartmentVectorSql,
+	deleteCompartmentVectors,
+	inheritEmbeddingCompartment,
+} from "./compartment-shards";
+export { COMPARTMENT_TABLES, backfillEvidenceCitations } from "./migrations/177-classifications";

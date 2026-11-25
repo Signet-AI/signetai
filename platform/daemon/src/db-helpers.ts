@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { activeVectorProjectionTable } from "@signet/core";
+import { deleteCompartmentVectors, syncEmbeddingCompartment, activeVectorProjectionTable } from "@signet/core";
 import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
 let native: typeof import("@signet/native") | null = null;
 try {
@@ -49,10 +49,8 @@ export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly
 	invalidateUmapCache(db);
 	const table = activeVecTable(db);
 	if (table === null) return;
-	try {
-		const f32 = new Float32Array(vector);
-		db.prepare(`INSERT OR REPLACE INTO ${table} (id, embedding) VALUES (?, ?)`).run(embeddingId, f32);
-	} catch {}
+	void vector;
+	syncEmbeddingCompartment(db, "embeddings", embeddingId, table);
 }
 export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly string[]): boolean {
 	if (embeddingIds.length === 0) return true;
@@ -60,10 +58,7 @@ export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly 
 	const table = activeVecTable(db);
 	if (table === null) return true;
 	try {
-		const stmt = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
-		for (const id of embeddingIds) {
-			stmt.run(id);
-		}
+		deleteCompartmentVectors(db, embeddingIds);
 		return true;
 	} catch {
 		return false;
@@ -78,10 +73,10 @@ export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceI
 			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ?")
 			.all(sourceType, sourceId) as Array<{ id: string }>;
 		if (rows.length === 0) return;
-		const stmt = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
-		for (const row of rows) {
-			stmt.run(row.id);
-		}
+		deleteCompartmentVectors(
+			db,
+			rows.map((row) => row.id),
+		);
 	} catch {}
 }
 export function syncVecDeleteBySourceExceptHash(
@@ -98,10 +93,10 @@ export function syncVecDeleteBySourceExceptHash(
 			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ? AND content_hash <> ?")
 			.all(sourceType, sourceId, keepContentHash) as Array<{ id: string }>;
 		if (rows.length === 0) return;
-		const stmt = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
-		for (const row of rows) {
-			stmt.run(row.id);
-		}
+		deleteCompartmentVectors(
+			db,
+			rows.map((row) => row.id),
+		);
 	} catch {}
 }
 export function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {

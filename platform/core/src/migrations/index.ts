@@ -177,6 +177,7 @@ import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
 import { up as organizationIdentity, artifacts as organizationIdentityArtifacts } from "./176-organization-identity";
+import { up as classifications } from "./177-classifications";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1629,6 +1630,24 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: memoryArtifactManifestPathRepair,
 	},
 	{ version: 176, name: "organization-identity", up: organizationIdentity, artifacts: organizationIdentityArtifacts },
+	{
+		version: 177,
+		name: "classifications",
+		up: classifications,
+		artifacts: {
+			tables: [
+				"classifications",
+				"classification_audience",
+				"classification_appliers",
+				"compartments",
+				"compartment_members",
+				"classification_assignments",
+				"evidence_citations",
+				"classification_access_version",
+			],
+			columns: [{ table: "memories", column: "compartment_id" }],
+		},
+	},
 ];
 function checksum(m: Migration): string {
 	let h = 0;

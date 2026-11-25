@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { attempt } from "@signet/core";
+import { compartmentForWrite, attempt } from "@signet/core";
 import { normalizeSessionTranscript } from "./transcript-normalization";
 import { upsertThreadHead } from "./thread-heads";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -157,13 +157,18 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		})
 	)
 		return false;
+	const compartmentId = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sessionKey: input.sessionKey,
+		memoryId: input.summaryId,
+	});
 	db.prepare(
 		`INSERT INTO memories (
 			id, content, type, importance, source_id, source_type,
 			who, tags, project, agent_id, created_at, updated_at, updated_by,
-			memory_kind
+			memory_kind, compartment_id
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		input.summaryId,
 		input.summary,
@@ -179,6 +184,7 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		input.now,
 		"system",
 		null,
+		compartmentId,
 	);
 
 	const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
@@ -187,11 +193,11 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		? `${JSON.stringify([input.agentId, input.sessionKey])}:compaction:${Date.parse(input.now)}`
 		: crypto.randomUUID();
 	db.prepare(
-		`INSERT OR REPLACE INTO session_summaries (
+		`INSERT INTO session_summaries (
 			id, project, depth, kind, content, token_count,
 			earliest_at, latest_at, session_key, harness,
-			agent_id, source_type, source_ref, meta_json, created_at
-		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?)`,
+			agent_id, source_type, source_ref, meta_json, created_at, compartment_id
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,token_count=excluded.token_count,latest_at=excluded.latest_at,compartment_id=excluded.compartment_id`,
 	).run(
 		nodeId,
 		input.project,
@@ -205,6 +211,7 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		input.sessionKey,
 		JSON.stringify({ source: "compaction-complete" }),
 		input.now,
+		compartmentId,
 	);
 	upsertThreadHead(db, {
 		agentId: input.agentId,
