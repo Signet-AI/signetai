@@ -725,8 +725,9 @@ export { parseAssistantChatEvent } from "./assistant-chat";
 export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat";
 export {
 	compartmentFor,
+	compartmentForWrite,
+	type CompartmentWriteScope,
 	ensureCompartmentShards,
-	dropEmptyCompartmentShards,
 	ftsShardTables,
 	vecShardTables,
 	vectorShardSwapStatements,

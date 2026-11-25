@@ -130,7 +130,85 @@ export function backfillEvidenceCitations(db: MigrationDb): void {
 			);
 	}
 }
+function installWriteGuards(db: MigrationDb): void {
+	for (const table of [
+		"memories",
+		"memory_artifacts",
+		"session_transcripts",
+		"session_summaries",
+		"session_checkpoints",
+		"documents",
+		"memory_hints",
+		"embeddings",
+		"embeddings_staging",
+	]) {
+		if (!exists(db, table)) continue;
+		const columns = new Set(
+			db
+				.prepare(`PRAGMA table_info(${table})`)
+				.all()
+				.map((r) => r.name),
+		);
+		if (!columns.has("agent_id")) continue;
+		const sessions = ["session_key", "session_id"].filter((c) => columns.has(c)).map((c) => `new.${c}`);
+		const sources = ["source_id", "source_ref"].filter((c) => columns.has(c)).map((c) => `new.${c}`);
+		if (table === "memories") sessions.push("new.source_id");
+		const memory =
+			table === "memories"
+				? "new.id"
+				: table === "memory_hints"
+					? "new.memory_id"
+					: table.startsWith("embeddings")
+						? "CASE WHEN new.source_type='memory' THEN new.source_id END"
+						: "NULL";
+		const match = [
+			"a.target_kind='agent'",
+			`(a.target_kind='memory' AND a.target_id=${memory})`,
+			...sessions.map(
+				(s) =>
+					`(a.target_kind='session' AND (a.target_id=${s} OR a.target_id='session:'||${s} OR 'session:'||a.target_id=${s}))`,
+			),
+			...sources.map(
+				(s) =>
+					`(a.target_kind='source' AND (a.target_id=${s} OR substr(${s},1,length(a.target_id)+1)=a.target_id||':'))`,
+			),
+		];
+		const required = [
+			`SELECT a.classification_id FROM classification_assignments a WHERE a.agent_id=new.agent_id AND (${match.join(" OR ")})`,
+		];
+		if (table === "memory_hints" || table.startsWith("embeddings"))
+			required.push(
+				`SELECT cm.classification_id FROM memories p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.agent_id=new.agent_id AND p.id=${memory}`,
+			);
+		for (const event of ["INSERT", "UPDATE"])
+			db.exec(
+				`DROP TRIGGER IF EXISTS ${table}_compartment_${event.toLowerCase()};CREATE TRIGGER ${table}_compartment_${event.toLowerCase()} BEFORE ${event} ON ${table} BEGIN ${table === "session_checkpoints" && event === "INSERT" ? "SELECT RAISE(ABORT,'agent_required') WHERE new.agent_id IS NULL;" : ""} SELECT RAISE(ABORT,'compartment_required') WHERE EXISTS(SELECT 1 FROM (${required.join(" UNION ")}) required WHERE NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=new.compartment_id AND cm.classification_id=required.classification_id));END`,
+			);
+	}
+}
 export function up(db: MigrationDb): void {
+	const legacyCitations = db.prepare("SELECT sql FROM sqlite_master WHERE name='evidence_citations'").get();
+	const upgradeCitations = typeof legacyCitations?.sql === "string" && !legacyCitations.sql.includes("'contradiction'");
+	if (upgradeCitations) db.exec("ALTER TABLE evidence_citations RENAME TO evidence_citations_177_legacy");
+	if (
+		exists(db, "session_checkpoints") &&
+		!db.prepare("SELECT 1 FROM pragma_table_info('session_checkpoints') WHERE name='agent_id'").get()
+	) {
+		db.exec("ALTER TABLE session_checkpoints ADD COLUMN agent_id TEXT");
+		const owners = [
+			exists(db, "session_transcripts")
+				? "SELECT session_key,agent_id FROM session_transcripts WHERE agent_id IS NOT NULL"
+				: null,
+			exists(db, "session_claims")
+				? "SELECT session_key,agent_id FROM session_claims WHERE agent_id IS NOT NULL"
+				: null,
+		].filter((v) => v !== null);
+		if (owners.length)
+			db.exec(
+				`WITH owners AS (${owners.join(" UNION ")}) UPDATE session_checkpoints SET agent_id=(SELECT MIN(agent_id) FROM owners WHERE owners.session_key=session_checkpoints.session_key) WHERE (SELECT COUNT(DISTINCT agent_id) FROM owners WHERE owners.session_key=session_checkpoints.session_key)=1`,
+			);
+		db.exec("DROP INDEX IF EXISTS idx_session_checkpoints_compartment");
+	}
 	db.exec(`
  CREATE TABLE IF NOT EXISTS classifications(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,color TEXT,description TEXT,created_by TEXT,created_at TEXT,updated_at TEXT,archived_at TEXT);
  CREATE TABLE IF NOT EXISTS classification_audience(classification_id TEXT NOT NULL REFERENCES classifications(id) ON DELETE CASCADE,principal_kind TEXT NOT NULL CHECK(principal_kind IN ('user','group')),principal_id TEXT NOT NULL,PRIMARY KEY(classification_id,principal_kind,principal_id));
@@ -139,11 +217,15 @@ export function up(db: MigrationDb): void {
  CREATE TABLE IF NOT EXISTS compartment_members(compartment_id INTEGER NOT NULL REFERENCES compartments(id),classification_id TEXT NOT NULL REFERENCES classifications(id),PRIMARY KEY(compartment_id,classification_id));
  CREATE TABLE IF NOT EXISTS classification_assignments(target_kind TEXT NOT NULL CHECK(target_kind IN ('memory','session','source','agent')),target_id TEXT NOT NULL,agent_id TEXT NOT NULL,classification_id TEXT NOT NULL REFERENCES classifications(id),applied_by TEXT,applied_at TEXT,PRIMARY KEY(target_kind,target_id,agent_id,classification_id));
  CREATE INDEX IF NOT EXISTS idx_classification_assignments_agent ON classification_assignments(agent_id,target_kind,target_id);
- CREATE TABLE IF NOT EXISTS evidence_citations(derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection')),derived_id TEXT NOT NULL,agent_id TEXT NOT NULL,evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('memory','transcript','artifact','summary')),evidence_id TEXT NOT NULL,PRIMARY KEY(derived_kind,derived_id,evidence_kind,evidence_id));
+ CREATE TABLE IF NOT EXISTS evidence_citations(derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection','contradiction','head_revision','proposal','telemetry')),derived_id TEXT NOT NULL,agent_id TEXT NOT NULL,evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('memory','transcript','artifact','summary','attribute')),evidence_id TEXT NOT NULL,PRIMARY KEY(derived_kind,derived_id,evidence_kind,evidence_id));
  CREATE INDEX IF NOT EXISTS idx_evidence_citations_source ON evidence_citations(agent_id,evidence_kind,evidence_id);
  CREATE TABLE IF NOT EXISTS classification_access_version(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL);
  INSERT OR IGNORE INTO classification_access_version VALUES(1,0);
  `);
+	if (upgradeCitations)
+		db.exec(
+			"INSERT INTO evidence_citations SELECT * FROM evidence_citations_177_legacy;DROP TABLE evidence_citations_177_legacy;CREATE INDEX IF NOT EXISTS idx_evidence_citations_source ON evidence_citations(agent_id,evidence_kind,evidence_id)",
+		);
 	for (const table of COMPARTMENT_TABLES) {
 		if (!exists(db, table)) continue;
 		const columns = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -172,6 +254,15 @@ export function up(db: MigrationDb): void {
 		db.exec(
 			`DROP TRIGGER IF EXISTS users_classification_access_update;CREATE TRIGGER users_classification_access_update AFTER UPDATE OF role,status,compliance ON users WHEN old.role IS NOT new.role OR old.status IS NOT new.status OR old.compliance IS NOT new.compliance BEGIN UPDATE classification_access_version SET version=version+1 WHERE id=1; END`,
 		);
+	for (const store of ["embeddings", "embeddings_staging"])
+		if (
+			exists(db, store) &&
+			!db.prepare(`SELECT 1 FROM pragma_table_info('${store}') WHERE name='projection_compartment_id'`).get()
+		)
+			db.exec(
+				`ALTER TABLE ${store} ADD COLUMN projection_compartment_id INTEGER;UPDATE ${store} SET projection_compartment_id=compartment_id`,
+			);
+	installWriteGuards(db);
 	backfillEvidenceCitations(db);
 	rebuildBaseCompartmentFts(db);
 	if (exists(db, "memories_fts")) createMemoriesFts(db);

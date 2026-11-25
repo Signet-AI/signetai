@@ -19,15 +19,31 @@ function compartment(c: number): number {
 	if (!Number.isSafeInteger(c) || c < 1) throw new Error("Invalid compartment");
 	return c;
 }
-export function ftsShardTables(base: FtsBase, compartments: readonly number[]): string[] {
-	if (!FTS_BASES.includes(base)) throw new Error("Invalid FTS base");
-	return [base, ...[...new Set(compartments)].sort((a, b) => a - b).map((c) => `${base}__c${compartment(c)}`)];
+function physicalShardTables(db: MigrationDb, base: string, readable: readonly number[] | "all"): string[] {
+	const allowed = readable === "all" ? null : new Set(readable.map(compartment));
+	return db
+		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name=? OR name GLOB ?) ORDER BY name")
+		.all(base, `${base}__c[0-9]*`)
+		.flatMap((row) => {
+			if (typeof row.name !== "string") return [];
+			if (row.name === base) return [row.name];
+			const suffix = row.name.slice(base.length);
+			if (!/^__c[1-9][0-9]*$/.test(suffix)) return [];
+			const c = Number(suffix.slice(3));
+			return Number.isSafeInteger(c) && (allowed === null || allowed.has(c)) ? [row.name] : [];
+		})
+		.sort((a, b) => (a === base ? -1 : b === base ? 1 : Number(a.split("__c")[1]) - Number(b.split("__c")[1])));
 }
-export function vecShardTables(compartments: readonly number[]): string[] {
-	return [
-		"vec_embeddings",
-		...[...new Set(compartments)].sort((a, b) => a - b).map((c) => `vec_embeddings__c${compartment(c)}`),
-	];
+export function ftsShardTables(base: FtsBase, compartments: readonly number[] | "all", db: MigrationDb): string[] {
+	if (!FTS_BASES.includes(base)) throw new Error("Invalid FTS base");
+	return physicalShardTables(db, base, compartments);
+}
+export function vecShardTables(
+	compartments: readonly number[] | "all",
+	db: MigrationDb,
+	base: "vec_embeddings" | "vec_embeddings_staging" = "vec_embeddings",
+): string[] {
+	return physicalShardTables(db, base, compartments);
 }
 export function installCompartmentFts(db: MigrationDb, base: FtsBase, c: number | null): void {
 	const schema = db.prepare("SELECT sql FROM sqlite_master WHERE name=? AND type='table'").get(base);
@@ -101,32 +117,13 @@ export function ensureCompartmentShards(db: MigrationDb, c: number, dims: number
 		`CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings__c${c} USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${dims}] distance_metric=cosine)`,
 	);
 }
-export function dropEmptyCompartmentShards(db: MigrationDb): void {
-	for (const row of db
-		.prepare(
-			"SELECT name FROM sqlite_master WHERE type='table' AND (name GLOB '*_fts__c[0-9]*' OR name GLOB 'vec_embeddings*__c[0-9]*')",
-		)
-		.all()) {
-		if (
-			typeof row.name !== "string" ||
-			!/^(?:memories_fts|memory_hints_fts|session_transcripts_fts|memory_artifacts_fts|entities_fts|vec_embeddings(?:_staging)?)__c[1-9][0-9]*$/.test(
-				row.name,
-			)
-		)
-			continue;
-		const name = row.name;
-		const countTable = name.startsWith("vec_") ? name : `${name}_docsize`;
-		if (db.prepare(`SELECT 1 FROM ${countTable} LIMIT 1`).get()) continue;
-		for (const suffix of ["ai", "ad", "au"]) db.exec(`DROP TRIGGER IF EXISTS ${name}_${suffix}`);
-		db.exec(`DROP TABLE ${name}`);
-	}
-}
 export function compartmentFor(db: MigrationDb, classificationIds: readonly string[]): number | null {
 	const ids = [...new Set(classificationIds)].sort();
 	if (ids.length === 0) return null;
 	if (ids.some((id) => !/^cls_[a-zA-Z0-9_-]+$/.test(id))) throw new Error("Invalid classification id");
 	const key = ids.join(",");
-	const existed = db.prepare("SELECT 1 FROM compartments WHERE key=?").get(key) != null;
+	const existing = db.prepare("SELECT id FROM compartments WHERE key=?").get(key);
+	if (typeof existing?.id === "number") return existing.id;
 	db.prepare("INSERT OR IGNORE INTO compartments(key,created_at) VALUES (?,?)").run(key, new Date().toISOString());
 	const row = db.prepare("SELECT id FROM compartments WHERE key=?").get(key);
 	if (typeof row?.id !== "number") throw new Error("Compartment not created");
@@ -135,20 +132,107 @@ export function compartmentFor(db: MigrationDb, classificationIds: readonly stri
 			row.id,
 			id,
 		);
-	if (!existed) ensureCompartmentShards(db, row.id, 0);
+	ensureCompartmentShards(db, row.id, 0);
 	return row.id;
 }
 
+export interface CompartmentWriteScope {
+	readonly agentId: string;
+	readonly sessionKey?: string | null;
+	readonly sourceId?: string | null;
+	readonly memoryId?: string | null;
+	readonly parentCompartment?: number | null;
+}
+export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+	if (!input.agentId) throw new Error("agent_required");
+	const labels = new Set<string>();
+	const add = (rows: readonly Record<string, unknown>[]) => {
+		for (const row of rows) if (typeof row.classification_id === "string") labels.add(row.classification_id);
+	};
+	if (input.parentCompartment !== undefined && input.parentCompartment !== null)
+		add(
+			db
+				.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
+				.all(input.parentCompartment),
+		);
+	const assignments = (session: unknown, source: unknown, memory: unknown) =>
+		add(
+			db
+				.prepare(
+					"SELECT classification_id FROM classification_assignments WHERE agent_id=? AND (target_kind='agent' OR (target_kind='session' AND (target_id=? OR target_id='session:'||? OR 'session:'||target_id=?)) OR (target_kind='source' AND (target_id=? OR substr(?,1,length(target_id)+1)=target_id||':')) OR (target_kind='memory' AND target_id=?))",
+				)
+				.all(input.agentId, session, session, session, source, source, memory),
+		);
+	assignments(input.sessionKey ?? null, input.sourceId ?? null, input.memoryId ?? null);
+	if (input.sourceId)
+		for (const [table, key] of [
+			["memory_artifacts", "source_path"],
+			["session_transcripts", "session_key"],
+		]) {
+			if (!table || !key || !shardSchema(db).tables.has(table)) continue;
+			for (const parent of db
+				.prepare(`SELECT compartment_id,source_id,session_key FROM ${table} WHERE agent_id=? AND ${key}=?`)
+				.all(input.agentId, input.sourceId)) {
+				if (typeof parent.compartment_id === "number")
+					add(
+						db
+							.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
+							.all(parent.compartment_id),
+					);
+				assignments(parent.session_key, parent.source_id, null);
+			}
+		}
+	return compartmentFor(db, [...labels]);
+}
+
+interface ShardSchema {
+	version: unknown;
+	tables: Map<string, string>;
+	columns: Map<string, ReadonlySet<string>>;
+}
+const shardSchemas = new WeakMap<MigrationDb, ShardSchema>();
+function shardSchema(db: MigrationDb): ShardSchema {
+	const version = db.prepare("PRAGMA schema_version").get()?.schema_version;
+	const hit = shardSchemas.get(db);
+	if (hit?.version === version) return hit;
+	const tables = new Map<string, string>();
+	for (const row of db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table'").all())
+		if (typeof row.name === "string" && typeof row.sql === "string") tables.set(row.name, row.sql);
+	const schema = { version, tables, columns: new Map<string, ReadonlySet<string>>() };
+	shardSchemas.set(db, schema);
+	return schema;
+}
+function tableColumns(db: MigrationDb, table: string): ReadonlySet<string> {
+	const schema = shardSchema(db);
+	const hit = schema.columns.get(table);
+	if (hit) return hit;
+	if (!/^\w+$/.test(table)) throw new Error("invalid_table");
+	const columns = new Set(
+		db
+			.prepare(`PRAGMA table_info(${table})`)
+			.all()
+			.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
+	);
+	schema.columns.set(table, columns);
+	return columns;
+}
 export function syncEmbeddingCompartment(
 	db: MigrationDb,
 	store: "embeddings" | "embeddings_staging",
 	id: string,
 	projection?: "vec_embeddings" | "vec_embeddings_staging",
-): void {
+	vector?: Float32Array,
+): number {
 	inheritEmbeddingCompartment(db, store, id);
-	const row = db.prepare(`SELECT id,vector,dimensions,compartment_id FROM ${store} WHERE id=?`).get(id);
+	const columns = tableColumns(db, store);
+	const row = db
+		.prepare(
+			`SELECT id,vector,dimensions,${columns.has("compartment_id") ? "compartment_id" : "NULL AS compartment_id"}${columns.has("projection_compartment_id") ? ",projection_compartment_id" : ""} FROM ${store} WHERE id=?`,
+		)
+		.get(id);
 	let base = projection ?? (store === "embeddings" ? "vec_embeddings" : "vec_embeddings_staging");
-	if (projection === undefined && db.prepare("SELECT 1 FROM sqlite_master WHERE name='embedding_index_state'").get()) {
+	let schema = shardSchema(db);
+	if (projection === undefined && schema.tables.has("embedding_index_state")) {
 		const profile = store === "embeddings" ? "active_profile_json" : "staging_profile_json";
 		const state = db
 			.prepare(
@@ -158,67 +242,75 @@ export function syncEmbeddingCompartment(
 		if (state?.slot === "staging") base = "vec_embeddings_staging";
 		else if (state?.slot === "active") base = "vec_embeddings";
 	}
-	if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(base)) return;
-	if (row && typeof row.compartment_id === "number" && typeof row.dimensions === "number") {
-		compartment(row.compartment_id);
-		if (!Number.isSafeInteger(row.dimensions) || row.dimensions < 1 || row.dimensions > 65536)
-			throw new Error("Invalid vector dimensions");
+	if (!row || !schema.tables.has(base)) return 0;
+	const c = typeof row.compartment_id === "number" ? compartment(row.compartment_id) : null;
+	const previous = columns.has("projection_compartment_id") ? row.projection_compartment_id : row.compartment_id;
+	const old = typeof previous === "number" ? `${base}__c${compartment(previous)}` : base;
+	if (schema.tables.has(old)) db.prepare(`DELETE FROM ${old} WHERE id=?`).run(id);
+	if (row.vector === null && vector === undefined) return 0;
+	const target = c === null ? base : `${base}__c${c}`;
+	if (!schema.tables.has(target)) {
+		const definition = schema.tables.get(base);
+		if (!definition) throw new Error("vector_index_missing");
 		db.exec(
-			`CREATE VIRTUAL TABLE IF NOT EXISTS ${base}__c${row.compartment_id} USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[${row.dimensions}] distance_metric=cosine)`,
+			/USING\s+vec0/i.test(definition)
+				? definition.replace(
+						/CREATE VIRTUAL TABLE\s+(?:IF NOT EXISTS\s+)?["`[]?\w+["`\]]?/i,
+						`CREATE VIRTUAL TABLE ${target}`,
+					)
+				: `CREATE TABLE ${target}(id TEXT PRIMARY KEY,embedding BLOB)`,
 		);
+		schema = shardSchema(db);
+		if (!schema.tables.has(target)) throw new Error("vector_shard_missing");
 	}
-	for (const table of db
-		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name=? OR name GLOB ?)")
-		.all(base, `${base}__c[0-9]*`)) {
-		if (
-			typeof table.name === "string" &&
-			/^(?:vec_embeddings|vec_embeddings_staging)(?:__c[1-9][0-9]*)?$/.test(table.name)
-		)
-			db.prepare(`DELETE FROM ${table.name} WHERE id=?`).run(id);
-	}
-	if (!row || row.vector === null) return;
-	const target = typeof row.compartment_id === "number" ? `${base}__c${row.compartment_id}` : base;
-	db.prepare(`INSERT INTO ${target}(id,embedding) VALUES (?,?)`).run(id, row.vector);
+	db.prepare(`INSERT INTO ${target}(id,embedding) VALUES (?,?)`).run(id, vector ?? row.vector);
+	const changes = db.prepare("SELECT changes() n").get();
+	if (typeof changes?.n !== "number") throw new Error("vector_projection_count_missing");
+	if (columns.has("projection_compartment_id"))
+		db.prepare(`UPDATE ${store} SET projection_compartment_id=? WHERE id=?`).run(c, id);
+	return changes.n;
 }
-
 export function inheritEmbeddingCompartment(
 	db: MigrationDb,
 	store: "embeddings" | "embeddings_staging",
 	id: string,
 ): void {
-	const columns = db.prepare(`PRAGMA table_info(${store})`).all();
-	if (!columns.some((c) => c.name === "source_id") || !columns.some((c) => c.name === "compartment_id")) return;
-	const row = db.prepare(`SELECT * FROM ${store} WHERE id=?`).get(id);
+	const columns = tableColumns(db, store);
+	if (!columns.has("source_id") || !columns.has("compartment_id")) return;
+	const row = db.prepare(`SELECT agent_id,source_type,source_id,compartment_id FROM ${store} WHERE id=?`).get(id);
 	if (!row) return;
-	const labels = new Set<string>();
-	if (typeof row.compartment_id === "number")
-		for (const member of db
-			.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
-			.all(row.compartment_id))
-			if (typeof member.classification_id === "string") labels.add(member.classification_id);
-	for (const a of db
-		.prepare(
-			"SELECT classification_id FROM classification_assignments WHERE agent_id=? AND (target_kind='agent' OR (target_kind='source' AND (target_id=? OR substr(?,1,length(target_id)+1)=target_id||':')))",
-		)
-		.all(row.agent_id, row.source_id, row.source_id))
-		if (typeof a.classification_id === "string") labels.add(a.classification_id);
-	for (const [table, key] of row.source_type === "memory"
-		? [["memories", "id"]]
-		: [
-				["memory_artifacts", "source_path"],
-				["session_transcripts", "session_key"],
-			]) {
+	let agent = typeof row.agent_id === "string" ? row.agent_id : null;
+	let parent: number | null = null;
+	const sources =
+		row.source_type === "memory"
+			? [["memories", "id"]]
+			: [
+					["memory_artifacts", "source_path"],
+					["session_transcripts", "session_key"],
+				];
+	for (const [table, key] of sources) {
+		if (!table || !key || !shardSchema(db).tables.has(table)) continue;
 		const source = db
-			.prepare(`SELECT compartment_id FROM ${table} WHERE ${key}=? AND agent_id=?`)
-			.get(row.source_id, row.agent_id);
+			.prepare(`SELECT agent_id,compartment_id FROM ${table} WHERE ${key}=?${agent === null ? "" : " AND agent_id=?"}`)
+			.get(...(agent === null ? [row.source_id] : [row.source_id, agent]));
+		if (typeof source?.agent_id === "string") agent = source.agent_id;
 		if (typeof source?.compartment_id === "number")
-			for (const member of db
-				.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
-				.all(source.compartment_id))
-				if (typeof member.classification_id === "string") labels.add(member.classification_id);
+			parent = compartmentFor(db, [
+				...db
+					.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id IN (?,?)")
+					.all(parent, source.compartment_id)
+					.flatMap((r) => (typeof r.classification_id === "string" ? [r.classification_id] : [])),
+			]);
 	}
-	const c = compartmentFor(db, [...labels]);
-	db.prepare(`UPDATE ${store} SET compartment_id=? WHERE id=?`).run(c, id);
+	if (agent === null) return;
+	const c = compartmentForWrite(db, {
+		agentId: agent,
+		sourceId: typeof row.source_id === "string" ? row.source_id : null,
+		memoryId: row.source_type === "memory" && typeof row.source_id === "string" ? row.source_id : null,
+		parentCompartment: parent,
+	});
+	if (c !== row.compartment_id || agent !== row.agent_id)
+		db.prepare(`UPDATE ${store} SET compartment_id=?,agent_id=? WHERE id=?`).run(c, agent, id);
 }
 
 export function resetCompartmentVectorShards(db: MigrationDb, base: string): void {

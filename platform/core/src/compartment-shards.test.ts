@@ -3,7 +3,6 @@ import { expect, test } from "bun:test";
 import { findSqliteVecExtension } from "./database";
 import {
 	compartmentFor,
-	dropEmptyCompartmentShards,
 	deleteCompartmentVectors,
 	missingCompartmentVectorSql,
 	ensureCompartmentShards,
@@ -13,6 +12,58 @@ import {
 	vecShardTables,
 } from "./compartment-shards";
 
+test("warm vector writes touch only the previous shard without catalog work", () => {
+	const db = new Database(":memory:");
+	const extension = findSqliteVecExtension();
+	if (!extension) throw new Error("sqlite-vec required");
+	db.loadExtension(extension);
+	db.exec(
+		"CREATE TABLE embeddings(id TEXT PRIMARY KEY,vector BLOB,dimensions INTEGER,compartment_id INTEGER,projection_compartment_id INTEGER);CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+	);
+	for (let c = 1; c <= 12; c++)
+		db.exec(
+			`CREATE VIRTUAL TABLE vec_embeddings__c${c} USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)`,
+		);
+	db.prepare("INSERT INTO embeddings(id,vector,dimensions,compartment_id) VALUES('hot',?,3,1)").run(
+		new Float32Array([1, 0, 0]),
+	);
+	const sql: string[] = [];
+	const traced = new Proxy(db, {
+		get(target, key, receiver) {
+			if (key === "prepare")
+				return (query: string) => {
+					sql.push(query);
+					return target.prepare(query);
+				};
+			if (key === "exec")
+				return (query: string) => {
+					sql.push(query);
+					return target.exec(query);
+				};
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	syncEmbeddingCompartment(traced, "embeddings", "hot");
+	sql.length = 0;
+	db.prepare("UPDATE embeddings SET compartment_id=2 WHERE id='hot'").run();
+	syncEmbeddingCompartment(traced, "embeddings", "hot");
+	expect(sql.filter((q) => /sqlite_master|pragma\s+table_info|CREATE\s/i.test(q))).toEqual([]);
+	expect(sql.filter((q) => /^DELETE FROM vec_embeddings/i.test(q))).toHaveLength(1);
+	expect(db.prepare("SELECT id FROM vec_embeddings__c1").all()).toEqual([]);
+	expect(db.prepare("SELECT id FROM vec_embeddings__c2").all()).toEqual([{ id: "hot" }]);
+	db.close();
+});
+
+test("shard admission intersects physical tables with the readable compartments", () => {
+	const db = new Database(":memory:");
+	db.exec(
+		"CREATE TABLE memories_fts(content TEXT);CREATE TABLE memories_fts__c1(content TEXT);CREATE TABLE memories_fts__c2(content TEXT);CREATE TABLE vec_embeddings(id TEXT);CREATE TABLE vec_embeddings__c1(id TEXT);CREATE TABLE vec_embeddings__c2(id TEXT)",
+	);
+	expect(ftsShardTables("memories_fts", [1, 3], db)).toEqual(["memories_fts", "memories_fts__c1"]);
+	expect(vecShardTables([1, 3], db)).toEqual(["vec_embeddings", "vec_embeddings__c1"]);
+	db.close();
+});
+
 test("hidden FTS and vec rows cannot change base scores, order, counts or top-k and moves roll back atomically", () => {
 	const db = new Database(":memory:");
 	const extension = findSqliteVecExtension();
@@ -20,7 +71,7 @@ test("hidden FTS and vec rows cannot change base scores, order, counts or top-k 
 	if (!extension) throw new Error("sqlite-vec required");
 	db.loadExtension(extension);
 	db.exec(
-		`CREATE TABLE memories(id TEXT PRIMARY KEY,content TEXT,compartment_id INTEGER); CREATE VIRTUAL TABLE memories_fts USING fts5(content,content='memories',content_rowid='rowid',tokenize='porter unicode61'); CREATE TABLE embeddings(id TEXT PRIMARY KEY,vector BLOB,dimensions INTEGER,compartment_id INTEGER); CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine); CREATE TABLE compartments(id INTEGER PRIMARY KEY AUTOINCREMENT,key TEXT UNIQUE,created_at TEXT);CREATE TABLE compartment_members(compartment_id INTEGER,classification_id TEXT,PRIMARY KEY(compartment_id,classification_id));`,
+		`CREATE TABLE memories(id TEXT PRIMARY KEY,content TEXT,compartment_id INTEGER); CREATE VIRTUAL TABLE memories_fts USING fts5(content,content='memories',content_rowid='rowid',tokenize='porter unicode61'); CREATE TABLE embeddings(id TEXT PRIMARY KEY,vector BLOB,dimensions INTEGER,compartment_id INTEGER,projection_compartment_id INTEGER); CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine); CREATE TABLE compartments(id INTEGER PRIMARY KEY AUTOINCREMENT,key TEXT UNIQUE,created_at TEXT);CREATE TABLE compartment_members(compartment_id INTEGER,classification_id TEXT,PRIMARY KEY(compartment_id,classification_id));`,
 	);
 	rebuildBaseCompartmentFts(db);
 	const c = compartmentFor(db, ["cls_hr"]);
@@ -28,7 +79,11 @@ test("hidden FTS and vec rows cannot change base scores, order, counts or top-k 
 	ensureCompartmentShards(db, c, 3);
 	const add = (id: string, content: string, comp: number | null, vector: number[]) => {
 		db.prepare("INSERT INTO memories VALUES(?,?,?)").run(id, content, comp);
-		db.prepare("INSERT INTO embeddings VALUES(?,?,3,?)").run(id, new Float32Array(vector), comp);
+		db.prepare("INSERT INTO embeddings(id,vector,dimensions,compartment_id) VALUES(?,?,3,?)").run(
+			id,
+			new Float32Array(vector),
+			comp,
+		);
 		syncEmbeddingCompartment(db, "embeddings", id);
 	};
 	add("a", "apple apple banana", null, [1, 0, 0]);
@@ -61,8 +116,8 @@ test("hidden FTS and vec rows cannot change base scores, order, counts or top-k 
 	expect(
 		db.prepare(`SELECT count(*) n FROM memories_fts__c${c} WHERE memories_fts__c${c} MATCH 'secret'`).get(),
 	).toEqual({ n: 50 });
-	expect(ftsShardTables("memories_fts", [c, c])).toEqual(["memories_fts", `memories_fts__c${c}`]);
-	expect(vecShardTables([c])).toEqual(["vec_embeddings", `vec_embeddings__c${c}`]);
+	expect(ftsShardTables("memories_fts", [c, c], db)).toEqual(["memories_fts", `memories_fts__c${c}`]);
+	expect(vecShardTables([c], db)).toEqual(["vec_embeddings", `vec_embeddings__c${c}`]);
 	const combined = [
 		...db
 			.prepare("SELECT id,distance FROM vec_embeddings WHERE embedding MATCH ? AND k=1")
@@ -113,8 +168,7 @@ test("hidden FTS and vec rows cannot change base scores, order, counts or top-k 
 	deleteCompartmentVectors(db, removed);
 	db.prepare("DELETE FROM memories WHERE compartment_id=?").run(c);
 	db.prepare("DELETE FROM embeddings WHERE compartment_id=?").run(c);
-	dropEmptyCompartmentShards(db);
-	expect(db.prepare("SELECT name FROM sqlite_master WHERE name=?").get(`memories_fts__c${c}`)).toBeNull();
-	expect(db.prepare("SELECT name FROM sqlite_master WHERE name=?").get(`vec_embeddings__c${c}`)).toBeNull();
+	expect(db.prepare(`SELECT count(*) n FROM memories_fts__c${c}_docsize`).get()).toEqual({ n: 0 });
+	expect(db.prepare(`SELECT count(*) n FROM vec_embeddings__c${c}`).get()).toEqual({ n: 0 });
 	db.close();
 });
