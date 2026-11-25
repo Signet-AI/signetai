@@ -1,10 +1,10 @@
 import { type ContinuityState, type StructuralSnapshot, getState } from "./continuity-state";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
-import type { WriteAuthor } from "./auth/audit-owner";
+import { SYSTEM_AUTHOR, type WriteAuthor } from "./auth/audit-owner";
 import { type WriteCheckpointParams, writeCheckpointAsync } from "./session-checkpoints";
 import type { EvictedSessionInfo, SessionEvictionHandler } from "./session-tracker";
-import { markSessionTranscriptCompletedInTx, sessionFinalizerAuthor } from "./session-transcripts";
+import { markSessionTranscriptCompletedInTx } from "./session-transcripts";
 
 export interface TtlFinalizerDeps {
 	readonly accessor: DbAccessor;
@@ -43,10 +43,9 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 		const snap = getState(info.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
 			try {
-				const author = await sessionFinalizerAuthor(deps.accessor, info.agentId, info.sessionKey);
 				await writeCheckpointAsync(
 					deps.accessor,
-					snapshotToCheckpoint(snap, info.sessionKey, info.agentId, author),
+					snapshotToCheckpoint(snap, info.sessionKey, info.agentId, SYSTEM_AUTHOR),
 					deps.maxCheckpointsPerSession,
 				);
 				logger.info("session-tracker", "TTL-evicted session checkpointed", {

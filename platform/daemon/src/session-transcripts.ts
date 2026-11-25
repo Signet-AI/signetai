@@ -13,6 +13,7 @@ import {
 	dbOwnerWriteSessionTranscript,
 	getDbOwnerForAccessor,
 } from "./db-owner-runtime";
+import { ownerReadOne } from "./db-owner-sql";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
@@ -153,6 +154,18 @@ export interface CompactionSummaryInput {
 }
 
 export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointParams, maxPerSession: number): void {
+	const admittedAuthor = requireWriteAuthor(params.author);
+	const author =
+		params.trigger === "ttl_expired" && admittedAuthor.credential === "system"
+			? {
+					userId:
+						prepareTypedStatement<{ speaker_user_id: string | null }>(
+							db,
+							"SELECT speaker_user_id FROM session_transcripts WHERE session_key=? AND agent_id=?",
+						).get(params.sessionKey, params.agentId)?.speaker_user_id ?? null,
+					credential: "system",
+				}
+			: admittedAuthor;
 	const compartment = compartmentForWrite(db, { agentId: params.agentId, sessionKey: params.sessionKey });
 	const now = new Date().toISOString();
 	const json = (values: readonly string[] | undefined) => (values?.length ? JSON.stringify(values) : null);
@@ -177,7 +190,7 @@ export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointP
 		now,
 		params.agentId,
 		compartment,
-		params.author.userId,
+		author.userId,
 	);
 	db.prepare(`DELETE FROM session_checkpoints WHERE id IN (
 		SELECT id FROM session_checkpoints WHERE session_key=? AND agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET ?
@@ -189,12 +202,13 @@ export async function sessionFinalizerAuthor(
 	agentId: string,
 	sessionKey: string,
 ): Promise<WriteAuthor> {
-	return accessor.withReadDbAsync((db) => {
-		const row = db
-			.prepare("SELECT speaker_user_id FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
-			.get(sessionKey, agentId);
-		return { userId: typeof row?.speaker_user_id === "string" ? row.speaker_user_id : null, credential: "system" };
-	});
+	const row = await ownerReadOne<{ speaker_user_id: string | null }>(
+		await getDbOwnerForAccessor(accessor),
+		"SELECT speaker_user_id FROM session_transcripts WHERE session_key=? AND agent_id=?",
+		[sessionKey, agentId],
+		{ operation: "session.finalizer.author", deadlineMs: 5000 },
+	);
+	return { userId: row?.speaker_user_id ?? null, credential: "system" };
 }
 
 export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummaryInput): boolean {

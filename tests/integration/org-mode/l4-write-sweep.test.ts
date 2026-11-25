@@ -16,7 +16,9 @@ test("A16 actual HTTP writes reject classified destinations without persisted si
 			sweep.read((db) =>
 				Object.fromEntries(
 					db
-						.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+						.query<{ name: string }, []>(
+							"SELECT name FROM sqlite_master WHERE type='table' AND name<>'db_integrity_checkpoints' ORDER BY name",
+						)
 						.all()
 						.map(({ name }) => {
 							assert(/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(name));

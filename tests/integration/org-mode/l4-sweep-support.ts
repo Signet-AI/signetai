@@ -145,8 +145,13 @@ export class WriteSweep {
 
 		await this.daemon.start();
 		await until(
-			async () => /document-worker.*Worker started/.test(this.daemon.stdout + this.daemon.stderr),
-			"document worker readiness",
+			async () => {
+				const response = await request(this.daemon.origin, "/api/pipeline/status", this.credential);
+				if (response.status !== 200) return false;
+				const workers = record(record(response.body).workers);
+				return record(workers.document).running === true && record(workers.retention).running === true;
+			},
+			"document and retention workers ready",
 			60_000,
 		);
 	}
