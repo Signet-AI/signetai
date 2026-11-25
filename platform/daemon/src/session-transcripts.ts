@@ -1763,21 +1763,30 @@ function readStoredSessionTranscriptInfo(
 		contentHash: row.content_hash ?? null,
 	};
 }
-export async function getStoredSessionTranscriptInfoAsync(
+export async function getStoredSessionTranscriptInfoStrictAsync(
 	sessionKey: string,
 	agentId: string,
 	accessor: DbAccessor = getDbAccessor(),
 	signal?: AbortSignal,
 ): Promise<StoredTranscriptInfo | undefined> {
 	if (sessionKey.trim().length === 0 || agentId.trim().length === 0) return undefined;
+	return await accessor.withReadDbAsync(
+		(db) => {
+			if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
+			return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
+		},
+		{ siteToken: "db:transcript.info.read-async", operation: "transcripts.lookup", signal },
+	);
+}
+
+export async function getStoredSessionTranscriptInfoAsync(
+	sessionKey: string,
+	agentId: string,
+	accessor: DbAccessor = getDbAccessor(),
+	signal?: AbortSignal,
+): Promise<StoredTranscriptInfo | undefined> {
 	try {
-		return await accessor.withReadDbAsync(
-			(db) => {
-				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
-				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
-			},
-			{ siteToken: "db:transcript.info.read-async", operation: "transcripts.lookup", signal },
-		);
+		return await getStoredSessionTranscriptInfoStrictAsync(sessionKey, agentId, accessor, signal);
 	} catch (error) {
 		if (signal?.aborted) throw error;
 		return undefined;

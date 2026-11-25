@@ -1258,6 +1258,86 @@ describe("session control permissions in team mode", () => {
 		expect(tracker.claimSession("sess-a", "plugin", "agent-a", "codex").ok).toBe(true);
 	});
 
+	it("does not let transcript hooks move a transcript out of the credential's project", async () => {
+		await seed("sess-a", "User: scoped evidence");
+		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
+		for (const [name, body] of [
+			["session-end", { cwd: "proj-b", lastAssistantMessage: "moved reply" }],
+			["stop", { cwd: "proj-b", lastAssistantMessage: "moved reply" }],
+			["user-prompt-submit", { project: "proj-b", userPrompt: "moved reply" }],
+		] as const) {
+			const res = await hook(
+				teamApp(),
+				name,
+				{ harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "plugin", ...body },
+				projectA,
+			);
+			expect({ name, status: res.status }).toEqual({ name, status: 403 });
+		}
+		const row = await readOne(
+			"SELECT project, content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			"sess-a",
+			"agent-a",
+		);
+		expect(row).toEqual({ project: "proj-a", content: "User: scoped evidence" });
+	});
+
+	it("does not let transcript hooks retag a stored transcript from another project", async () => {
+		await transcripts.upsertSessionTranscriptAsync("sess-a", "User: other project", "codex", "proj-b", "agent-a");
+		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
+		for (const [name, body] of [
+			["session-end", { lastAssistantMessage: "retag reply" }],
+			["session-end", { cwd: "proj-a", lastAssistantMessage: "retag reply" }],
+			["stop", { cwd: "proj-a", lastAssistantMessage: "retag reply" }],
+			["user-prompt-submit", { project: "proj-a", userPrompt: "retag reply" }],
+		] as const) {
+			const res = await hook(
+				teamApp(),
+				name,
+				{ harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "plugin", ...body },
+				projectA,
+			);
+			expect({ name, body, status: res.status }).toEqual({ name, body, status: 403 });
+		}
+		const row = await readOne(
+			"SELECT project, content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			"sess-a",
+			"agent-a",
+		);
+		expect(row).toEqual({ project: "proj-b", content: "User: other project" });
+	});
+
+	it("rejects a project-scoped session end when the stored transcript cannot be read", async () => {
+		await seed("sess-a", "User: scoped evidence");
+		const failedRead = spyOn(transcripts, "getStoredSessionTranscriptInfoStrictAsync").mockRejectedValueOnce(
+			new Error("transcript read failed"),
+		);
+		try {
+			const res = await hook(
+				teamApp(),
+				"session-end",
+				{
+					harness: "codex",
+					sessionKey: "sess-a",
+					agentId: "agent-a",
+					runtimePath: "plugin",
+					lastAssistantMessage: "unchecked reply",
+				},
+				bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } }),
+			);
+			expect(res.status).toBe(500);
+			expect(failedRead).toHaveBeenCalledTimes(1);
+		} finally {
+			failedRead.mockRestore();
+		}
+		const row = await readOne(
+			"SELECT project, content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			"sess-a",
+			"agent-a",
+		);
+		expect(row).toEqual({ project: "proj-a", content: "User: scoped evidence" });
+	});
+
 	it("requires a recorded project before a project-limited credential controls a claim-only session", async () => {
 		const projectB = bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } });
 		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });

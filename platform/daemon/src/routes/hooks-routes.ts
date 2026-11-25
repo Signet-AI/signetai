@@ -992,6 +992,9 @@ function registerSessionEnd(app: Hono): void {
 			if (endScope.error) return c.json({ error: endScope.error }, 403);
 			const agentId = endScope.agentId;
 			body.agentId = agentId;
+			const project = resolveScopedProject(c, parseOptionalString(body.cwd));
+			if (project.error) return c.json({ error: project.error }, 403);
+			body.cwd = project.project;
 			const bindingError = await validateSessionControl(c, sessionKey, agentId, {
 				context: "sessionKey",
 			});
