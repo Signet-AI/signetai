@@ -2,6 +2,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { packagesFromMetafile, recordShippedPackages } from "./shipped-packages";
 
 const root = join(import.meta.dir, "..");
 const outfile = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
@@ -29,6 +30,7 @@ const result = await Bun.build({
 		entry: "mcp-stdio.js",
 		asset: "[name].[ext]",
 	},
+	metafile: true,
 });
 
 if (!result.success) {
@@ -42,6 +44,8 @@ if (!existsSync(outfile)) {
 	console.error(`build-signet-mcp: expected ${outfile} was not produced`);
 	process.exit(1);
 }
+
+recordShippedPackages("signet-mcp", packagesFromMetafile(result.metafile, process.cwd()));
 
 const mb = (statSync(outfile).size / 1024 / 1024).toFixed(1);
 console.log(`Built signet-mcp stdio bundle: ${outfile} (${mb} MB)`);

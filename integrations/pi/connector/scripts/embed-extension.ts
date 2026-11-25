@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordEmbeddedBundle } from "../../../../scripts/shipped-packages";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const packageRoot = join(__dirname, "..");
@@ -29,4 +30,5 @@ export const EXTENSION_BUNDLE = \`${escaped}\`;
 `;
 
 writeFileSync(bundleSourcePath, output);
+recordEmbeddedBundle(packageRoot, bundleSourcePath, [extensionDistPath]);
 console.log(`[embed-extension] Embedded ${extensionDistPath} → src/extension-bundle.ts`);

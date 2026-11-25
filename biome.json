@@ -5,6 +5,7 @@
 			"**",
 			"!**/references",
 			"!**/dist",
+			"!**/.bundle-inputs",
 			"!**/node_modules",
 			"!**/.svelte-kit",
 			"!**/.astro",

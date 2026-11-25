@@ -15,6 +15,7 @@
     "dist/tiktoken_bg.wasm",
     "runtime",
     "native-manifest.json",
+    "sbom.cdx.json",
     "scripts",
     "README.md",
     "LICENSE"

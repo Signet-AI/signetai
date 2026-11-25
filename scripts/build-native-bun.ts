@@ -15,6 +15,13 @@ import {
 import { createRequire } from "node:module";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
+import {
+	type ShippedPackage,
+	packagesFromMetafile,
+	packagesInlinedBy,
+	readPackage,
+	recordShippedPackages,
+} from "./shipped-packages";
 
 const root = join(import.meta.dir, "..");
 const outDir = join(root, "dist", "native");
@@ -42,8 +49,12 @@ for (const name of nativeBinaryNames) rmSync(join(outDir, name), { force: true }
 rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(workerDir, { recursive: true });
 
+const shipped: ShippedPackage[] = [];
+let bunBuilds = 0;
+
 function runBunBuild(args: readonly string[]): void {
-	const result = spawnSync(process.execPath, ["build", ...args], {
+	const metafile = join(buildDir, `metafile-${bunBuilds++}.json`);
+	const result = spawnSync(process.execPath, ["build", `--metafile=${metafile}`, ...args], {
 		cwd: root,
 		stdio: "inherit",
 		windowsHide: true,
@@ -51,6 +62,7 @@ function runBunBuild(args: readonly string[]): void {
 	if (result.status !== 0) {
 		process.exit(result.status ?? 1);
 	}
+	shipped.push(...packagesFromMetafile(readFileSync(metafile, "utf8"), root));
 }
 
 function assertNoUnbundledRelativeRequires(path: string, worker: string): void {
@@ -161,6 +173,7 @@ const nativeAddonAssets = (() => {
 		const keyringRequire = createRequire(keyringPackageJson);
 		const platformPackageJson = keyringRequire.resolve(`${platformPackageName}/package.json`);
 		const nodeFile = join(dirname(platformPackageJson), `keyring.${packageSuffix}.node`);
+		shipped.push(readPackage(dirname(platformPackageJson)));
 		if (!existsSync(nodeFile)) {
 			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
 		}
@@ -199,7 +212,9 @@ function sqliteVecFileName(): string {
 
 function sqliteVecAsset(): { readonly name: string; readonly contentBase64: string } {
 	const packageName = `sqlite-vec-${platformKey.replace(/^win32-/, "windows-")}`;
-	const extension = join(dirname(coreRequire.resolve(`${packageName}/package.json`)), sqliteVecFileName());
+	const packageDir = dirname(coreRequire.resolve(`${packageName}/package.json`));
+	shipped.push(readPackage(packageDir));
+	const extension = join(packageDir, sqliteVecFileName());
 	if (!existsSync(extension)) {
 		throw new Error(`Required sqlite-vec extension is missing for ${platformKey}: ${extension}`);
 	}
@@ -249,6 +264,7 @@ const workerAssets: { name: string; contentBase64: string }[] = [
 ];
 const transformersPackageJson = daemonRequire.resolve("@huggingface/transformers/package.json");
 const transformersDir = dirname(transformersPackageJson);
+shipped.push(readPackage(transformersDir));
 const transformersRequire = createRequire(transformersPackageJson);
 const onnxRuntimeWebPackageJson = transformersRequire.resolve("onnxruntime-web/package.json");
 const onnxRuntimeWebDir = dirname(onnxRuntimeWebPackageJson);
@@ -258,6 +274,11 @@ const onnxRuntimeCommonPackageJson = onnxRuntimeWebRequire.resolve("onnxruntime-
 const onnxRuntimeCommonEsmPath = join(dirname(onnxRuntimeCommonPackageJson), "dist", "esm", "index.js");
 const transformersWebRuntimePath = join(transformersDir, "dist", "transformers.web.js");
 let patchedTransformersWebRuntimeSource = readFileSync(transformersWebRuntimePath, "utf8");
+const transformersInlined = packagesInlinedBy(patchedTransformersWebRuntimeSource);
+if (transformersInlined.length === 0) {
+	throw new Error("Unsupported @huggingface/transformers web runtime: inlined package paths changed");
+}
+shipped.push(...transformersInlined);
 for (const [specifier, resolved] of [
 	["onnxruntime-common", onnxRuntimeCommonEsmPath],
 	["onnxruntime-web/webgpu", onnxRuntimeWebWasmPath],
@@ -676,6 +697,7 @@ runBunBuild([
 	".native-build/cli-native.ts",
 ]);
 
+recordShippedPackages("native", shipped);
 console.log(`Built native Bun executable: ${outfile}`);
 
 if (!process.env.SIGNET_NATIVE_PLATFORM) {

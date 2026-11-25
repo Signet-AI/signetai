@@ -13,6 +13,12 @@ Be sure to provide as much information as possible and if found also reproductio
 - **Remediation:** For valid reports, we will work on a fix and prepare a release or patch. Timelines depend on the complexity and impact of the issue.
 - **Communication:** We will keep you reasonably informed of our progress and may request additional information if needed.
 
+## Bundled Dependencies
+
+The `signetai` npm package and the native binaries bundle their JavaScript dependencies, so the package declares none and `npm audit` cannot see them. Each release lists the bundled third-party packages in a CycloneDX SBOM: `sbom.cdx.json` inside the npm package, and `signetai-sbom.cdx.json` on the GitHub release. Point any CycloneDX-aware scanner at that file. The SBOM covers the npm package, the daemon runtime, the dashboard, and the linux-x64 native binary. Other native binaries share that JavaScript but carry their own platform builds of the keyring and sqlite-vec addons, which it does not list. The desktop app and the Docker image are not covered.
+
+A release cannot publish while that SBOM contains a package with a high or critical advisory, and a weekly job re-audits the published `latest` and `next` SBOMs against new advisories.
+
 ## Disclosure & Advisories
 
 We prefer **coordinated disclosure**. Once a fix is available, we will agree with you on a reasonable disclosure timeline that minimizes risk for users while recognizing your contribution.

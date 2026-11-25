@@ -476,6 +476,17 @@ metadata omits the prerelease hyphen in `pkgver` (for example, `1.0.1next.42`)
 because Arch forbids hyphens there; download URLs keep the exact SemVer version.
 Desktop auto-update from a development build is untested.
 
+The linux-x64 native job also gates on shipped dependencies. Every bundler that
+produces a release artifact records the third-party packages it bundled in
+`dist/shipped-packages/`; `bun scripts/sbom.ts generate` turns those records
+into the release SBOM and `bun scripts/sbom.ts audit` fails on any high or
+critical npm advisory. A workspace bundle that another artifact imports from
+`dist/` must build with `--metafile=.bundle-inputs/<name>.json` so its inlined
+packages carry through; the SBOM step refuses an unrecorded one. Fix a failure
+by updating the package, not by pinning:
+root `overrides` are floors such as `^3.1.9`, used only when a parent's range
+excludes the fixed version, because an exact pin keeps every later advisory.
+
 ### Cut a stable release
 
 1. Start a PR branch from current `main`, with release tags fetched.

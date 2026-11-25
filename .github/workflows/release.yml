@@ -115,6 +115,12 @@ jobs:
           SIGNET_REQUIRE_NATIVE_ADDON: "1"
         run: bun run build:native-bun
 
+      - name: Audit shipped dependencies
+        if: matrix.platform == 'linux-x64'
+        run: |
+          bun scripts/sbom.ts generate dist/native/signetai-sbom.cdx.json
+          bun scripts/sbom.ts audit dist/native/signetai-sbom.cdx.json
+
       - name: Sign and verify macOS native binary with Developer ID
         if: startsWith(matrix.platform, 'darwin-')
         shell: bash
@@ -178,6 +184,9 @@ jobs:
           scripts/require-draft-release.sh "v${RELEASE_VERSION}"
           gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}" --clobber
           gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}.sha256" --clobber
+          if [ "$SIGNET_NATIVE_PLATFORM" = linux-x64 ]; then
+            gh release upload "v${RELEASE_VERSION}" dist/native/signetai-sbom.cdx.json --clobber
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -237,6 +246,7 @@ jobs:
         run: |
           mkdir -p dist/native
           gh release download "v${NEW_VERSION}" --pattern "signet-*" --dir dist/native --clobber --repo "$GITHUB_REPOSITORY"
+          gh release download "v${NEW_VERSION}" --pattern signetai-sbom.cdx.json --output dist/signetai/sbom.cdx.json --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -251,6 +261,9 @@ jobs:
           gh release upload "v${NEW_VERSION}" dist/native/native-manifest.json --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify shipped dependencies match the audited SBOM
+        run: bun scripts/sbom.ts verify dist/signetai/sbom.cdx.json daemon dashboard signet-mcp daemon-js-vendor
 
       - name: Verify all release assets
         shell: bash
@@ -271,6 +284,7 @@ jobs:
             signet-connectors-${NEW_VERSION}.tar.gz
             signet-daemon-js-${NEW_VERSION}.tar.gz
             native-manifest.json
+            signetai-sbom.cdx.json
             "Signet-${NEW_VERSION}-linux-amd64.deb"
             "Signet-${NEW_VERSION}-linux-x86_64.AppImage"
             "Signet-${NEW_VERSION}-mac-arm64.dmg"

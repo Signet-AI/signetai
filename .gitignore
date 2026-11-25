@@ -34,6 +34,9 @@ Thumbs.db
 coverage/
 dogfood-output/
 dist/native/
+dist/shipped-packages/
+.bundle-inputs/
+dist/signetai/sbom.cdx.json
 email*
 node_modules/
 npm-debug.log*
