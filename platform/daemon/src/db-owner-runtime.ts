@@ -239,6 +239,18 @@ async function executeInlineOwnerRequest(
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
 		});
+	if (request.kind === "reflection_list") {
+		const { readReflectionsInOwner } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readReflectionsInOwner(db, request.scope, request.input),
+		);
+	}
+	if (request.kind === "reflection_get") {
+		const { readReflectionInOwner } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readReflectionInOwner(db, request.scope, request.id),
+		);
+	}
 	if (request.kind === "reflection_answer")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			if (!("exec" in db)) throw new Error("Reflection requires writer");
@@ -707,6 +719,26 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
+export async function dbOwnerReflectionList(
+	scope: import("./read-scope").ReadScope,
+	input: import("./reflection-owner").ReflectionListInput,
+): Promise<readonly import("./reflection-owner").ReflectionRow[]> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "reflection_list", scope, input },
+		{ operation: "reflection.list", lane: "read", deadlineMs: 3000 },
+	);
+}
+export async function dbOwnerReflectionGet(
+	scope: import("./read-scope").ReadScope,
+	id: string,
+): Promise<import("./reflection-owner").ReflectionRow | null> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "reflection_get", scope, id },
+		{ operation: "reflection.get", lane: "read", deadlineMs: 3000 },
+	);
+}
 export async function dbOwnerReflectionAnswer(input: ReflectionAnswerInput, accessor: DbAccessor): Promise<boolean> {
 	return submitWithAdmission(
 		await getDbOwnerForAccessor(accessor),

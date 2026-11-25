@@ -1,8 +1,7 @@
 import type { WriteAuthor } from "./auth/audit-owner";
-import type { WriteDb } from "./db-accessor";
-import { getDbAccessorPath } from "./db-accessor";
-import { getDbOwner } from "./db-owner-runtime";
-import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
+import { z } from "zod";
+import type { ReadDb, WriteDb } from "./db-accessor";
+import { dbOwnerReflectionGet, dbOwnerReflectionList } from "./db-owner-runtime";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { txIngestEnvelope } from "./transactions";
 
@@ -22,10 +21,41 @@ export interface ReflectionRow {
 	answered_at: string | null;
 }
 
-export async function readReflections(
+const reflectionRowSchema = z.object({
+	id: z.string(),
+	agent_id: z.string(),
+	date: z.string(),
+	summary: z.string(),
+	patterns: z.string(),
+	question: z.string().nullable(),
+	answer: z.string().nullable(),
+	answer_memory_id: z.string().nullable(),
+	memory_ids: z.string(),
+	summary_ids: z.string(),
+	model: z.string().nullable(),
+	created_at: z.string(),
+	answered_at: z.string().nullable(),
+});
+
+export interface ReflectionListInput {
+	readonly date?: string;
+	readonly ids?: readonly string[];
+	readonly limit: number;
+}
+
+export function readReflections(scope: ReadScope, input: ReflectionListInput): Promise<readonly ReflectionRow[]> {
+	return dbOwnerReflectionList(scope, input);
+}
+
+export function readReflection(scope: ReadScope, id: string): Promise<ReflectionRow | null> {
+	return dbOwnerReflectionGet(scope, id);
+}
+
+export function readReflectionsInOwner(
+	db: ReadDb,
 	scope: ReadScope,
-	input: { readonly date?: string; readonly ids?: readonly string[]; readonly limit: number },
-): Promise<readonly ReflectionRow[]> {
+	input: ReflectionListInput,
+): readonly ReflectionRow[] {
 	const predicate = reflectionPredicate(scope);
 	const filters = ["1=1", predicate.sql];
 	const params = [...predicate.args];
@@ -35,26 +65,30 @@ export async function readReflections(
 	}
 	if (input.ids !== undefined) {
 		if (input.ids.length === 0) return [];
+		if (input.ids.length > 100) throw new Error("reflection_id_limit");
 		filters.push(`AND r.id IN (${input.ids.map(() => "?").join(",")})`);
 		params.push(...input.ids);
 	}
 	params.push(Math.min(100, Math.max(1, input.limit)));
-	return ownerReadAll<ReflectionRow>(
-		await getDbOwner(getDbAccessorPath()),
-		`SELECT r.* FROM daily_reflections r WHERE ${filters.join(" ")} ORDER BY r.created_at DESC, r.id LIMIT ?`,
-		params,
-		{ operation: "reflection.list", deadlineMs: 3000 },
-	);
+	return z
+		.array(reflectionRowSchema)
+		.parse(
+			db
+				.prepare(
+					`SELECT r.* FROM daily_reflections r WHERE ${filters.join(" ")} ORDER BY r.created_at DESC,r.id LIMIT ?`,
+				)
+				.all(...params),
+		);
 }
 
-export async function readReflection(scope: ReadScope, id: string): Promise<ReflectionRow | null> {
+export function readReflectionInOwner(db: ReadDb, scope: ReadScope, id: string): ReflectionRow | null {
 	const predicate = reflectionPredicate(scope);
-	return ownerReadOne<ReflectionRow>(
-		await getDbOwner(getDbAccessorPath()),
-		`SELECT r.* FROM daily_reflections r WHERE r.id=? ${predicate.sql}`,
-		[id, ...predicate.args],
-		{ operation: "reflection.get", deadlineMs: 3000 },
-	);
+	return reflectionRowSchema
+		.nullable()
+		.parse(
+			db.prepare(`SELECT r.* FROM daily_reflections r WHERE r.id=? ${predicate.sql}`).get(id, ...predicate.args) ??
+				null,
+		);
 }
 
 function reflectionPredicate(scope: ReadScope): ReturnType<typeof readScopeSql> {

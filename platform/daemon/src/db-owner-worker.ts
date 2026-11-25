@@ -1301,6 +1301,14 @@ export function runDbOwnerWorker(): void {
 				throw error;
 			}
 		}
+		if (job.request.kind === "reflection_list") {
+			const { readReflectionsInOwner } = await import("./reflection-owner");
+			return readReflectionsInOwner(db, job.request.scope, job.request.input);
+		}
+		if (job.request.kind === "reflection_get") {
+			const { readReflectionInOwner } = await import("./reflection-owner");
+			return readReflectionInOwner(db, job.request.scope, job.request.id);
+		}
 		if (job.request.kind === "reflection_answer") {
 			const { txAnswerReflection } = await import("./reflection-owner");
 			const input = job.request.input;

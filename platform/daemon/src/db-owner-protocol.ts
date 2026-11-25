@@ -392,6 +392,12 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
+	| {
+			readonly kind: "reflection_list";
+			readonly scope: import("./read-scope").ReadScope;
+			readonly input: import("./reflection-owner").ReflectionListInput;
+	  }
+	| { readonly kind: "reflection_get"; readonly scope: import("./read-scope").ReadScope; readonly id: string }
 	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
 	| {
 			readonly kind: "organization_memory_purge";
