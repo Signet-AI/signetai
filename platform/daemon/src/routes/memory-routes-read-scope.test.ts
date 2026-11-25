@@ -173,11 +173,12 @@ describe("GET /api/memories agent scope", () => {
 
 		const shared = await list(app, "?agentId=gamma");
 		expect(ids(shared.body)).toEqual(["alpha-global", "beta-global", "team-b-global"]);
-		expect(shared.body.stats).toEqual({ total: 3, withEmbeddings: 2, critical: 2 });
+		expect(shared.body.stats).toEqual({ total: 3, withEmbeddings: 0, critical: 2 });
 
 		const group = await list(app, "?agentId=team-a");
 		expect(ids(group.body)).toEqual(["team-b-global"]);
 		expect(group.body.memories[0]?.agent_id).toBe("team-b");
+		expect(group.body.stats.withEmbeddings).toBe(0);
 	});
 
 	it("counts a memory that shares a same-agent embedding by content hash as embedded", async () => {
@@ -213,7 +214,7 @@ describe("GET /api/memories agent scope", () => {
 
 		const { body } = await list(app, "");
 		expect(ids(body)).toEqual(["alpha-global", "beta-global", "default-private", "team-b-global"]);
-		expect(body.stats).toEqual({ total: 4, withEmbeddings: 2, critical: 2 });
+		expect(body.stats).toEqual({ total: 4, withEmbeddings: 0, critical: 2 });
 
 		const page = await list(app, "?type=fact&limit=2&offset=3");
 		expect(page.body.memories).toHaveLength(1);

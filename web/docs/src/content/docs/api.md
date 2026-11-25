@@ -38,6 +38,11 @@ authority over that agent. Classifications, including overlapping audiences,
 still apply to administrators. An unreadable item returns the same response as a
 missing item. List totals and pagination describe only readable items.
 
+Local shared and group policies do not widen derived tables that lack a
+visibility column: those reads stay within the selected agent. Duplicate lookups
+also require the prospective row's inherited classifications, not just matching
+content or an idempotency key.
+
 Memory, document, artifact, and transcript responses expose `authorUserId`.
 Transcripts also expose `speakerUserId`. These identify the original contributor,
 not the current owner of the agent.

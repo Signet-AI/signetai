@@ -434,6 +434,22 @@ describe("organization memory read routes", () => {
 		).toEqual(["hidden", "visible"]);
 	});
 
+	test("embedding-derived list statistics ignore hidden embeddings on readable parents", async () => {
+		seed("statistics-parent", null);
+		const before = await request("/api/memories");
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO embeddings(id,source_type,source_id,content_hash,chunk_text,vector,dimensions,created_at,agent_id,compartment_id) VALUES ('statistics-hidden','memory','statistics-parent','statistics-hidden','hidden',?,2,?,'beta',?)",
+				)
+				.run(Buffer.from(new Float32Array([0, 1]).buffer), at, compartment),
+		);
+		expect(await request("/api/memories")).toEqual(before);
+		const positive = JSON.parse((await request("/api/memories", "carol")).body);
+		expect(positive.stats.withEmbeddings).toBeGreaterThan(JSON.parse(before.body).stats.withEmbeddings);
+		getDbAccessor().withWriteTx((db) => db.prepare("DELETE FROM embeddings WHERE id='statistics-hidden'").run());
+	});
+
 	test("embedding pages, projection geometry, and similar top-k ignore hidden vectors", async () => {
 		seed("neighbor", null);
 		getDbAccessor().withWriteTx((db) => {

@@ -314,7 +314,7 @@ function chunkGroupIdForIdempotencyKey(baseKey: string | undefined, input: Remem
 		.update(input.scope ?? "__NULL__")
 		.update("\0")
 		.update(baseKey)
-		.update(input.compartment.key ? `compartment:${input.compartment.key}` : "")
+		.update(input.compartment.key ? `${String.fromCharCode(0)}compartment:${input.compartment.key}` : "")
 		.digest("hex")
 		.slice(0, 32);
 	return `chunk-group:${hash}`;
@@ -1036,23 +1036,33 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				{ operation: "memory.list", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
 			);
 			const ownerAccess = readScopeSql("owner", scope.readScope);
+			const embeddingAccess = readScopeSql(
+				"e",
+				{ ...scope.readScope, projects: null },
+				{ visibility: null, memory: "source_id", session: null, source: null },
+			);
+			const embeddingArgs = embeddingAccess.args.map((value) => {
+				if (typeof value !== "string" && typeof value !== "number")
+					throw new Error("Invalid embedding scope parameter");
+				return value;
+			});
 			const stats = await dbOwnerQuery<{ total: number; critical: number; with_embeddings: number } | undefined>(
 				{
 					sql: `SELECT COUNT(*) AS total,
 					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
 					        COALESCE(SUM(CASE WHEN
-					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
+					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id${embeddingAccess.sql})
 					          OR (m.content_hash IS NOT NULL AND EXISTS (
 					            SELECT 1 FROM embeddings e
 					            JOIN memories owner ON owner.id = e.source_id
 					            WHERE e.source_type = 'memory'
 					              AND e.content_hash = m.content_hash
-					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')${ownerAccess.sql}
+					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')${ownerAccess.sql}${embeddingAccess.sql}
 					          ))
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,
-					params: [...scope.args, ...whereArgs],
+					params: [...embeddingArgs, ...scope.args, ...embeddingArgs, ...whereArgs],
 					result: "get",
 				},
 				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
