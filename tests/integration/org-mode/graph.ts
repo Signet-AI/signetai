@@ -2,25 +2,28 @@ import assert from "node:assert/strict";
 import type { Fixture } from "./fixture";
 import { record, request, success, text } from "./http";
 
+type GraphFixture = Pick<Fixture, "daemon" | "admin"> & Partial<Pick<Fixture, "users">>;
+
 export interface Evidence {
 	source_ref: string;
 	quote: string;
 }
 export async function dreamOperation(
-	fixture: Pick<Fixture, "daemon" | "admin">,
+	fixture: GraphFixture,
 	agentId: string,
 	operation: string,
 	payload: object,
 	evidence: Evidence[],
 ): Promise<Record<string, unknown>> {
 	const endpoint = "/api/dream/tools/apply_ontology_ops";
-	const body = success(
-		await request(fixture.daemon.origin, endpoint, fixture.admin, "POST", {
-			agentId,
-			input: { agentId, operations: [{ operation, payload, evidence }] },
-		}),
-		`POST ${endpoint}: ${operation}`,
-	);
+	const owner = [...(fixture.users?.values() ?? [])].find((user) => user.agentId === agentId);
+	const credential = agentId === "default" ? fixture.admin : (owner?.session ?? fixture.admin);
+	const reply = await request(fixture.daemon.origin, endpoint, credential, "POST", {
+		agentId,
+		input: { agentId, operations: [{ operation, payload, evidence }] },
+	});
+	assert.equal(reply.status, 200, `POST ${endpoint}: ${operation}: ${JSON.stringify(reply.body)}`);
+	const body = success(reply, `POST ${endpoint}: ${operation}`);
 	assert.equal(body.ok, true, `${endpoint}: ${operation} failed`);
 	assert(Array.isArray(body.items) && body.items.length === 1, `${endpoint}: expected exactly one operation result`);
 	const item = record(body.items[0]);
@@ -28,7 +31,7 @@ export async function dreamOperation(
 	return record(item.result);
 }
 export async function deriveClaim(
-	fixture: Pick<Fixture, "daemon" | "admin">,
+	fixture: GraphFixture,
 	agentId: string,
 	memoryId: string,
 	quote: string,
