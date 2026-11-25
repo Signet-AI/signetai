@@ -2,7 +2,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { type ProxyOptions, defineConfig } from "vite";
+import { type Plugin, type ProxyOptions, defineConfig } from "vite";
+import { packagesFromFiles, recordShippedPackages } from "../../scripts/shipped-packages";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? "http://127.0.0.1:3850";
@@ -19,11 +20,22 @@ const daemonProxy: ProxyOptions = {
 		});
 	},
 };
+const recordBundledPackages: Plugin = {
+	name: "signet-record-shipped-packages",
+	apply: "build",
+	generateBundle(_, bundle) {
+		const modules = Object.values(bundle).flatMap((output) =>
+			output.type === "chunk" ? Object.keys(output.modules) : [],
+		);
+		recordShippedPackages("dashboard", packagesFromFiles(modules, __dirname));
+	},
+};
+
 export default defineConfig(({ command, mode }) => ({
 	define: {
 		"import.meta.env.VITE_ONBOARDING_PREVIEW": JSON.stringify(command === "serve" && mode === "onboarding"),
 	},
-	plugins: [react(), tailwindcss()],
+	plugins: [react(), tailwindcss(), recordBundledPackages],
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "./src"),

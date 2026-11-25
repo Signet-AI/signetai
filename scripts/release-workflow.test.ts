@@ -139,6 +139,28 @@ test("publication stages npm behind all builds and assets before finalizing then
 	expect(advance).not.toContain("dist-tag rm");
 });
 
+test("a release with high or critical advisories in shipped bundles cannot publish", () => {
+	const steps = release.jobs["build-native"].steps;
+	const names = steps.map((step: { name?: string }) => step.name);
+	const audit = steps.find((step: { name?: string }) => step.name === "Audit shipped dependencies");
+	expect(audit.if).toBe("matrix.platform == 'linux-x64'");
+	expect(audit.run).toContain("bun scripts/sbom.ts generate dist/native/signetai-sbom.cdx.json");
+	expect(audit.run).toContain("bun scripts/sbom.ts audit dist/native/signetai-sbom.cdx.json");
+	expect(names.indexOf("Audit shipped dependencies")).toBeGreaterThan(names.indexOf("Build native Signet binary"));
+	expect(names.indexOf("Audit shipped dependencies")).toBeLessThan(names.indexOf("Upload to release"));
+	expect(release.jobs.publish.needs).toContain("build-native");
+	const download = release.jobs.publish.steps.find(
+		(step: { name?: string }) => step.name === "Download native release assets",
+	).run;
+	expect(download).toContain("--pattern signetai-sbom.cdx.json --output dist/signetai/sbom.cdx.json");
+	const verify = release.jobs.publish.steps.find(
+		(step: { name?: string }) => step.name === "Verify all release assets",
+	).run;
+	expect(verify).toContain("signetai-sbom.cdx.json");
+	const wrapper = JSON.parse(readFileSync(join(root, "dist/signetai/package.json"), "utf8"));
+	expect(wrapper.files).toContain("sbom.cdx.json");
+});
+
 test("Docker publishes from the finalized tag through Release, not a tag push", () => {
 	const text = readFileSync(join(root, ".github/workflows/docker-image.yml"), "utf8");
 	const docker = parse(text);

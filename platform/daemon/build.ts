@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { type ShippedPackage, packagesFromMetafile, recordShippedPackages } from "../../scripts/shipped-packages";
 import { EXTERNAL_BUN, EXTERNAL_NODE } from "./build-externals";
 
 const ALIAS: Record<string, string> = {
@@ -33,6 +34,7 @@ if (!profileBuild) {
 }
 const isBun = typeof Bun !== "undefined" && !forceNodeBuild;
 let ok = true;
+const shipped: ShippedPackage[] = [];
 
 if (isBun) {
 	for (const { entrypoint, outfile } of targets) {
@@ -48,6 +50,7 @@ if (isBun) {
 			external: EXTERNAL_BUN,
 			alias: ALIAS,
 			sourcemap: profileBuild ? "external" : "none",
+			metafile: true,
 		});
 
 		if (!result.success) {
@@ -57,6 +60,7 @@ if (isBun) {
 			}
 			ok = false;
 		} else {
+			shipped.push(...packagesFromMetafile(result.metafile, process.cwd()));
 			const size = result.outputs[0]?.size ?? 0;
 			const mb = (size / 1024 / 1024).toFixed(1);
 			console.log(`  ${outfile}  ${mb} MB`);
@@ -67,7 +71,7 @@ if (isBun) {
 
 	for (const { entrypoint, outfile } of targets) {
 		try {
-			await build({
+			const result = await build({
 				entryPoints: [entrypoint],
 				bundle: true,
 				outfile,
@@ -83,7 +87,9 @@ if (isBun) {
 					js: 'import { createRequire as __createRequire } from "module"; const require = __createRequire(import.meta.url);',
 				},
 				logLevel: "warning",
+				metafile: true,
 			});
+			shipped.push(...packagesFromMetafile(result.metafile, process.cwd()));
 
 			const { statSync } = await import("node:fs");
 			const size = statSync(outfile).size;
@@ -98,3 +104,4 @@ if (isBun) {
 }
 
 if (!ok) process.exit(1);
+recordShippedPackages("daemon", shipped);

@@ -1,0 +1,50 @@
+name: Shipped Dependency Audit
+
+on:
+  schedule:
+    - cron: "23 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Audit published SBOMs
+        shell: bash
+        run: |
+          set -uo pipefail
+          versions=$(npm view signetai dist-tags --json | bun -e 'const tags = JSON.parse(await Bun.stdin.text()); console.log([...new Set([tags.latest, tags.next].filter(Boolean))].join(" "))')
+          test -n "${versions}" || { echo "::error::Could not read signetai dist-tags"; exit 1; }
+          status=0
+          for version in ${versions}; do
+            work="${RUNNER_TEMP}/signetai-${version}"
+            mkdir -p "${work}"
+            if ! npm pack "signetai@${version}" --pack-destination "${work}" --silent > /dev/null; then
+              echo "::error::Could not download signetai@${version}"
+              status=1
+              continue
+            fi
+            tar -xzf "${work}/signetai-${version}.tgz" -C "${work}"
+            if [ ! -s "${work}/package/sbom.cdx.json" ]; then
+              echo "::error::signetai@${version} was published without sbom.cdx.json, so its bundled dependencies cannot be audited"
+              status=1
+              continue
+            fi
+            echo "signetai@${version}"
+            if ! bun scripts/sbom.ts audit "${work}/package/sbom.cdx.json"; then
+              echo "::error::signetai@${version} ships dependencies with high or critical advisories"
+              status=1
+            fi
+          done
+          exit "${status}"

@@ -13,6 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { packagesInTree, recordShippedPackages } from "./shipped-packages";
 
 const root = join(import.meta.dir, "..");
 const daemonRoot = join(root, "platform", "daemon");
@@ -77,6 +78,7 @@ if (!existsSync(tiktokenWasm) || !statSync(tiktokenWasm).isFile()) {
 mkdirSync(join(output, "vendor"), { recursive: true });
 cpSync(tiktokenWasm, join(output, "vendor", "tiktoken_bg.wasm"));
 stageFirecrawlDependencies(output);
+recordShippedPackages("daemon-js-vendor", packagesInTree(join(output, "vendor")));
 
 writeFileSync(
 	join(output, "runtime-manifest.json"),
