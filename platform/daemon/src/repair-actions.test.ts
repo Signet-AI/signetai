@@ -1781,7 +1781,13 @@ describe("reembedMissingMemories", () => {
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
-		expect(result.details?.crossAgentHashConflicts).toBe(0);
+		expect(
+			migrationDb
+				.prepare(
+					"SELECT source_id,agent_id FROM embeddings WHERE source_type='memory' AND source_id='migration-agent-a' AND agent_id='agent-a'",
+				)
+				.get(),
+		).toEqual({ source_id: "migration-agent-a", agent_id: "agent-a" });
 		expect(migrationDb.prepare("SELECT embedding_model FROM memories WHERE id = 'migration-agent-a'").get()).toEqual({
 			embedding_model: "model-b",
 		});
