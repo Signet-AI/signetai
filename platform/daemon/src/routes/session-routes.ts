@@ -1,3 +1,4 @@
+import { readPointerMiddleware } from "../read-pointers";
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
@@ -90,6 +91,7 @@ export interface SessionRoutesDeps {
 }
 
 export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void {
+	app.use("*", readPointerMiddleware);
 	const { gitConfig: gc, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync } = deps;
 	app.use("/api/sessions/summaries", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);

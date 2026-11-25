@@ -451,6 +451,31 @@ test("A15 serialized content has no internal columns and export redacts credenti
 	}
 });
 
+test("A15 hidden superseders leave live lists unchanged and never leak through lineage or history", async () => {
+	seed("a15-old", null);
+	seed("a15-secret", compartment);
+	const before = await request("/api/memories");
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			"UPDATE memories SET superseded_by='a15-secret',superseded_at=?,superseded_reason='private replacement' WHERE id='a15-old'",
+		).run(at);
+		db.prepare(
+			"INSERT INTO memory_history(id,memory_id,event,changed_by,metadata,created_at) VALUES ('a15-history','a15-old','superseded','fixture',?,?)",
+		).run(JSON.stringify({ supersededBy: "a15-secret" }), at);
+	});
+	expect(await request("/api/memories")).toEqual(before);
+	for (const suffix of ["", "/lineage", "/history"]) {
+		const response = await request(`/api/memory/a15-old${suffix}`);
+		expect(response.status).toBe(200);
+		expect(response.body).not.toContain("a15-secret");
+	}
+	expect((await request("/api/memory/a15-old/lineage", "carol")).body).toContain("a15-secret");
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("DELETE FROM memory_history WHERE id='a15-history'").run();
+		db.prepare("DELETE FROM memories WHERE id IN ('a15-old','a15-secret')").run();
+	});
+});
+
 describe("organization memory read routes", () => {
 	test("organization and another personal agent read org-visible private content with authorship", async () => {
 		for (const query of ["", "?agentId=beta"]) {
@@ -608,4 +633,31 @@ describe("organization memory read routes", () => {
 		expect(self.status).toBe(200);
 		expect(self.body).toBe("");
 	});
+});
+
+test("A15 indexed live lists remain responsive on 20000 memories", async () => {
+	getDbAccessor().withWriteTx((db) => {
+		const insert = db.prepare(
+			"INSERT INTO memories(id,agent_id,type,content,visibility,created_at,updated_at,updated_by) VALUES (?,'beta','fact','benchmark memory','global',?,?,'test')",
+		);
+		for (let index = 0; index < 20000; index++) insert.run(`a15-bench-${index}`, at, at);
+	});
+	await request("/api/memories?limit=100");
+	const timings: number[] = [];
+	for (let n = 0; n < 12; n++) {
+		const started = performance.now();
+		const result = await request("/api/memories?limit=100");
+		expect(result.status).toBe(200);
+		timings.push(performance.now() - started);
+	}
+	timings.sort((a, b) => a - b);
+	console.log(
+		"A15_LIST_BENCH",
+		JSON.stringify({
+			rows: 20000,
+			medianMs: timings[Math.floor(timings.length / 2)],
+			maxMs: timings[timings.length - 1],
+		}),
+	);
+	expect(timings[Math.floor(timings.length / 2)]).toBeLessThan(200);
 });

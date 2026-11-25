@@ -6,6 +6,14 @@ import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
 export type ContentReadRequest =
 	| {
+			readonly op: "readable_pointers";
+			readonly scope: ReadScope;
+			readonly references: readonly {
+				readonly kind: "memory" | "session" | "summary" | "artifact" | "document";
+				readonly id: string;
+			}[];
+	  }
+	| {
 			readonly op: "continuity";
 			readonly scope: ReadScope;
 			readonly latest: boolean;

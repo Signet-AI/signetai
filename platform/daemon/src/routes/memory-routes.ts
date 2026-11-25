@@ -1,3 +1,5 @@
+import { readPointerMiddleware } from "../read-pointers";
+import { redactReadPointers } from "../read-pointers";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -592,7 +594,7 @@ function isFtsQuerySyntaxError(error: unknown): boolean {
 
 async function resolveMemoryReadScope(
 	c: Context,
-	options: { readonly allowAllAgents?: boolean; readonly agentId?: string } = {},
+	options: { readonly allowAllAgents?: boolean; readonly agentId?: string; readonly current?: boolean } = {},
 ): Promise<MemoryReadScope | Response> {
 	const resolved = await resolveRouteReadScope(c, {
 		...options,
@@ -600,7 +602,7 @@ async function resolveMemoryReadScope(
 		allowAllAgents: options.allowAllAgents || Boolean(c.get("organization")),
 	});
 	if (resolved instanceof Response) return resolved;
-	const access = readScopeSql("m", resolved.scope);
+	const access = readScopeSql("m", resolved.scope, { current: options.current });
 	const reach = resolved.scope.reach;
 	return {
 		readScope: resolved.scope,
@@ -793,6 +795,7 @@ export function createMemoryCaptureAdmissionMiddleware(admission: ConcurrencyAdm
 }
 
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
+	app.use("*", readPointerMiddleware);
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
 	const recallOwner = deps.recallOwner;
@@ -1028,9 +1031,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const limit = parseBoundedInt(c.req.query("limit"), 100, 1, MEMORY_LIST_MAX_LIMIT);
 			const offset = parseBoundedInt(c.req.query("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
 			const type = parseOptionalString(c.req.query("type"));
-			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true, current: true });
 			if (scope instanceof Response) return scope;
-			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}${type ? " AND m.type = ?" : ""}`;
+			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 ${scope.sql}${type ? " AND m.type = ?" : ""}`;
 			const whereArgs = [...scope.args, ...(type ? [type] : [])];
 
 			const memories = await dbOwnerQuery<Array<{ content: string; project: string | null }>>(
@@ -1062,7 +1065,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,
-					params: [...scope.args, ...whereArgs],
+					params: [...scope.args.slice(0, ownerAccess.args.length), ...whereArgs],
 					result: "get",
 				},
 				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
@@ -1093,7 +1096,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const raw = Number.parseInt(c.req.query("limit") || "6", 10);
 			const limit = Number.isNaN(raw) || raw < 1 ? 6 : Math.min(raw, 200);
-			const scope = await resolveMemoryReadScope(c);
+			const scope = await resolveMemoryReadScope(c, { current: true });
 			if (scope instanceof Response) return scope;
 			const rows = await dbOwnerQuery<Array<{ id: string; content: string }>>(
 				{
@@ -1101,7 +1104,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					 FROM memories m
 					 WHERE m.access_count > 0
 					   AND COALESCE(m.is_deleted, 0) = 0
-					   AND m.superseded_by IS NULL${scope.sql}
+					   ${scope.sql}
 					 ORDER BY m.access_count DESC, m.importance DESC,m.id
 					 LIMIT ?`,
 					params: [...scope.args, limit],
@@ -1123,7 +1126,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const minSessions = Math.max(1, Math.min(100, Number.parseInt(c.req.query("minSessions") || "3", 10) || 3));
 			const limit = Math.max(1, Math.min(500, Number.parseInt(c.req.query("limit") || "100", 10) || 100));
-			const scope = await resolveMemoryReadScope(c);
+			const scope = await resolveMemoryReadScope(c, { current: true });
 			if (scope instanceof Response) return scope;
 			const agentId = scope.agentId;
 			const slice = async <Row extends { content: string }>(
@@ -1145,7 +1148,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				 WHERE ${scope.readScope.reach.kind === "all" ? "? IS NOT NULL" : "sm.agent_id = ?"}
 				   AND sm.was_injected = 1
 				   AND COALESCE(m.is_deleted, 0) = 0
-				   AND m.superseded_by IS NULL${scope.sql}
+				   ${scope.sql}
 				 GROUP BY m.id, m.content
 				 HAVING sessions >= ?
 				    AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
@@ -1160,7 +1163,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				 JOIN memories m ON m.id = sm.memory_id
 				 WHERE ${scope.readScope.reach.kind === "all" ? "? IS NOT NULL" : "sm.agent_id = ?"}
 				   AND COALESCE(m.is_deleted, 0) = 0
-				   AND m.superseded_by IS NULL${scope.sql}
+				   ${scope.sql}
 				   AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
 				 GROUP BY m.id, m.content
 				 ORDER BY contradicted_count DESC,m.id
@@ -1174,7 +1177,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				 JOIN memories m ON m.id = sm.memory_id
 				 WHERE ${scope.readScope.reach.kind === "all" ? "? IS NOT NULL" : "sm.agent_id = ?"}
 				   AND COALESCE(m.is_deleted, 0) = 0
-				   AND m.superseded_by IS NULL${scope.sql}
+				   ${scope.sql}
 				   AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
 				 GROUP BY m.id, m.content
 				 ORDER BY used_count DESC,m.id
@@ -1249,9 +1252,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const query = (c.req.query("q") ?? "").trim();
 		const distinct = c.req.query("distinct");
 		const limitParam = c.req.query("limit");
-		const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+		const scope = await resolveMemoryReadScope(c, { allowAllAgents: true, current: true });
 		if (scope instanceof Response) return scope;
-		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}`;
+		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 ${scope.sql}`;
 		if (distinct === "who") {
 			try {
 				const rows = await dbOwnerQuery<{ who: string }[]>(
@@ -2239,12 +2242,17 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? row.source_id
 				: undefined;
 
-		return c.json({
-			...row,
-			sourcePath: row.source_path,
-			runtimePath: row.runtime_path,
-			sessionId,
-		});
+		return c.json(
+			await redactReadPointers(
+				{
+					...row,
+					sourcePath: row.source_path,
+					runtimePath: row.runtime_path,
+					sessionId,
+				},
+				scope.readScope,
+			),
+		);
 	});
 	app.get("/api/memory/:id/history", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
@@ -2296,33 +2304,38 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			{ operation: "memory.history", lane: "read", deadlineMs: 5_000 },
 		);
 
-		return c.json({
-			memoryId,
-			count: history.length,
-			history: history.map((row) => {
-				let metadata: unknown = row.metadata;
-				if (row.metadata) {
-					try {
-						metadata = JSON.parse(row.metadata);
-					} catch {
-						metadata = row.metadata;
-					}
-				}
-				return {
-					id: row.id,
-					event: row.event,
-					oldContent: row.old_content,
-					newContent: row.new_content,
-					changedBy: row.changed_by,
-					actorType: row.actor_type ?? undefined,
-					reason: row.reason,
-					metadata,
-					createdAt: row.created_at,
-					sessionId: row.session_id ?? undefined,
-					requestId: row.request_id ?? undefined,
-				};
-			}),
-		});
+		return c.json(
+			await redactReadPointers(
+				{
+					memoryId,
+					count: history.length,
+					history: history.map((row) => {
+						let metadata: unknown = row.metadata;
+						if (row.metadata) {
+							try {
+								metadata = JSON.parse(row.metadata);
+							} catch {
+								metadata = row.metadata;
+							}
+						}
+						return {
+							id: row.id,
+							event: row.event,
+							oldContent: row.old_content,
+							newContent: row.new_content,
+							changedBy: row.changed_by,
+							actorType: row.actor_type ?? undefined,
+							reason: row.reason,
+							metadata,
+							createdAt: row.created_at,
+							sessionId: row.session_id ?? undefined,
+							requestId: row.request_id ?? undefined,
+						};
+					}),
+				},
+				scope.readScope,
+			),
+		);
 	});
 	app.get("/api/memory/:id/lineage", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
@@ -2399,23 +2412,28 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			);
 		}
 
-		return c.json({
-			memoryId,
-			count: rows.length,
-			lineage: rows.map((row) => ({
-				id: row.id,
-				content: redactCredentials(row.content),
-				type: row.type,
-				importance: row.importance,
-				version: row.version,
-				createdAt: row.created_at,
-				updatedAt: row.updated_at,
-				supersededBy: row.superseded_by,
-				supersededAt: row.superseded_at,
-				supersededReason: row.superseded_reason,
-				authorUserId: row.authorUserId,
-			})),
-		});
+		return c.json(
+			await redactReadPointers(
+				{
+					memoryId,
+					count: rows.length,
+					lineage: rows.map((row) => ({
+						id: row.id,
+						content: redactCredentials(row.content),
+						type: row.type,
+						importance: row.importance,
+						version: row.version,
+						createdAt: row.created_at,
+						updatedAt: row.updated_at,
+						supersededBy: row.superseded_by,
+						supersededAt: row.superseded_at,
+						supersededReason: row.superseded_reason,
+						authorUserId: row.authorUserId,
+					})),
+				},
+				scope.readScope,
+			),
+		);
 	});
 	app.get("/api/memory/jobs/:id", async (c) => {
 		const jobId = c.req.param("id")?.trim();

@@ -235,7 +235,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:repair.dead-memories.read` (withReadDb)
 - `routes/skill-analytics.ts:121` (withReadDb)
 - `db:diagnostics.cached.read` (withReadDb)
-- `routes/telemetry-routes.ts:202` (withReadDb)
+- `routes/telemetry-routes.ts:204` (withReadDb)
 - `session-checkpoints.ts:69` (withWriteTxAsync)
 - `session-checkpoints.ts:139` (withWriteTx)
 - `session-checkpoints.ts:247` (withReadDb)

@@ -1,3 +1,4 @@
+import { readPointerMiddleware } from "../read-pointers";
 import { contentRead } from "../content-read";
 import { type ReadScope, audienceSubjectFromPrincipal } from "../read-scope";
 import { resolveRouteReadScope } from "./read-scope";
@@ -233,6 +234,7 @@ async function sourceReadQuery<T>(
 }
 
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
+	app.use("*", readPointerMiddleware);
 	const agentsDir = deps.agentsDir ?? resolveDefaultBasePath();
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;

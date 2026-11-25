@@ -1,3 +1,4 @@
+import { readPointerMiddleware } from "../read-pointers";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { AccountingSummaryProvenance } from "@signet/core";
@@ -155,6 +156,7 @@ function boundedTelemetryLimit(raw: string | undefined, fallback: number, maximu
 }
 
 export function registerTelemetryRoutes(app: Hono): void {
+	app.use("*", readPointerMiddleware);
 	app.use("/api/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});

@@ -365,8 +365,8 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 		typeof query.limit === "number" && Number.isFinite(query.limit) ? Math.max(1, Math.trunc(query.limit)) : null;
 
 	const filter = buildProjectionWhere(query.filters);
-	const access = query.scope ? readScopeSql("m", query.scope) : { sql: "", args: [] };
-	const clause = `${filter.clause}${access.sql}${query.scope ? " AND COALESCE(m.is_deleted,0)=0 AND m.superseded_by IS NULL" : ""}`;
+	const access = query.scope ? readScopeSql("m", query.scope, { current: true }) : { sql: "", args: [] };
+	const clause = `${filter.clause}${access.sql}${query.scope ? " AND COALESCE(m.is_deleted,0)=0" : ""}`;
 	const params = [...filter.params, ...access.args];
 
 	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC,m.id`;

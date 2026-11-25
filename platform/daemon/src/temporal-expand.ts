@@ -204,14 +204,14 @@ export function expandTemporalNodeInDb(
 	const memories = db
 		.prepare(
 			`SELECT ssm.memory_id AS id,
-				        COALESCE(m.content, '[deleted memory]') AS content,
+				        CASE WHEN m.id IS NULL OR COALESCE(m.is_deleted,0)=1 THEN '[deleted memory]' ELSE m.content END AS content,
 				        COALESCE(m.type, 'unknown') AS type,
 				        COALESCE(m.created_at, ss.created_at) AS created_at,
 				        CASE WHEN m.id IS NULL OR COALESCE(m.is_deleted, 0) = 1 THEN 1 ELSE 0 END AS is_deleted
 				 FROM session_summary_memories ssm
 				 JOIN session_summaries ss ON ss.id = ssm.summary_id
-				 ${opts?.scope ? "JOIN" : "LEFT JOIN"} memories m ON m.id = ssm.memory_id
-				 WHERE ssm.summary_id = ?${summaryScope.sql}${memoryScope.sql}${
+				 LEFT JOIN memories m ON m.id = ssm.memory_id
+				 WHERE ssm.summary_id = ?${summaryScope.sql} AND (m.id IS NULL OR (1=1${memoryScope.sql}))${
 						opts?.project ? " AND ss.project = ? AND (m.id IS NULL OR COALESCE(m.project, ss.project) = ?)" : ""
 }
 				 ORDER BY created_at DESC

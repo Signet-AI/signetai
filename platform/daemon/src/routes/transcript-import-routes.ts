@@ -1,3 +1,4 @@
+import { readPointerMiddleware } from "../read-pointers";
 import { contentRead } from "../content-read";
 import { type ReadScope, readScopeSql, audienceSubjectFromPrincipal } from "../read-scope";
 import { resolveRouteReadScope } from "./read-scope";
@@ -152,6 +153,7 @@ function permission(name: "modify" | "recall" | "admin") {
 
 export function registerTranscriptImportRoutes(parent: Hono): void {
 	const app = new Hono();
+	app.use("*", readPointerMiddleware);
 	app.onError((error, c) => {
 		const code = error instanceof DbOwnerError ? String(error.code) : "transcript_import_conflict";
 		const status =

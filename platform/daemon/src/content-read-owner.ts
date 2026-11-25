@@ -145,6 +145,35 @@ function scopedContentDb(
 }
 
 export function executeContentRead(db: MigrationDb & ReadDb, request: ContentReadRequest): unknown {
+	if (request.op === "readable_pointers") {
+		if (request.references.length > 2000) throw new Error("Pointer admission limit exceeded");
+		return request.references.flatMap((ref) => {
+			const table =
+				ref.kind === "memory"
+					? "memories"
+					: ref.kind === "session"
+						? "session_transcripts"
+						: ref.kind === "summary"
+							? "session_summaries"
+							: ref.kind === "artifact"
+								? "memory_artifacts"
+								: "documents";
+			const key = ref.kind === "session" ? "session_key" : ref.kind === "artifact" ? "source_path" : "id";
+			const scope = readScopeSql("target", request.scope, {
+				visibility: ref.kind === "memory" ? "visibility" : null,
+				memory: ref.kind === "memory" ? "id" : null,
+				session: ref.kind === "memory" ? "source_id" : ref.kind === "document" ? null : "session_key",
+				source: ref.kind === "summary" ? null : ref.kind === "document" ? "id" : "source_id",
+			});
+			const id = ref.kind === "session" ? ref.id.replace(/^session:/, "") : ref.id;
+			const row = db
+				.prepare(
+					`SELECT 1 FROM ${table} target WHERE target.${key} IN (?,?)${scope.sql}${ref.kind === "memory" ? " AND COALESCE(target.is_deleted,0)=0" : ""} LIMIT 1`,
+				)
+				.get(id, ref.id, ...scope.args);
+			return row ? [`${ref.kind}:${ref.id}`] : [];
+		});
+	}
 	if (request.op === "continuity") {
 		const access = readScopeSql("t", request.scope, {
 			visibility: null,
@@ -348,8 +377,8 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 			limit: Math.min(request.query.limit ?? 5000, 5000),
 		});
 	if (request.op === "embeddings" || request.op === "similar") {
-		const predicate = readScopeSql("m", request.scope);
-		const live = `e.source_type='memory' AND COALESCE(m.is_deleted,0)=0 AND m.superseded_by IS NULL${predicate.sql}`;
+		const predicate = readScopeSql("m", request.scope, { current: true });
+		const live = `e.source_type='memory' AND COALESCE(m.is_deleted,0)=0${predicate.sql}`;
 		const args = [...predicate.args];
 		if (request.op === "embeddings") {
 			const count = db

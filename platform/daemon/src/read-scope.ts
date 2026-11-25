@@ -48,6 +48,7 @@ export function readScopeSql(
 		project?: string;
 		visibility?: string | null;
 		checkpoint?: boolean;
+		current?: boolean;
 		memory?: string | null;
 		session?: string | null;
 		source?: string | null;
@@ -117,6 +118,13 @@ export function readScopeSql(
 			`NOT EXISTS(SELECT 1 FROM org_jobs ${j} WHERE ${inFlightClassificationSql(j)} AND ${matchesAgent} AND (${kind}='agent' OR (${kind}='memory' AND ${target}=${memory}) OR (${kind}='session' AND (${target}=${session} OR 'session:'||${target}=${session} OR ${target}='session:'||${session})) OR (${kind}='source' AND (${target}=${source} OR substr(${source},1,length(${target})+1)=${target}||':'))))`,
 		);
 		args.push(scope.inFlightUserId, scope.inFlightUserId);
+	}
+	if (cols?.current) {
+		const target = readScopeSql("_readable_superseder", scope);
+		clauses.push(
+			`(${col("superseded_by")} IS NULL OR NOT EXISTS(SELECT 1 FROM memories _readable_superseder WHERE _readable_superseder.id=${col("superseded_by")} AND COALESCE(_readable_superseder.is_deleted,0)=0${target.sql}))`,
+		);
+		args.push(...target.args);
 	}
 	return { sql: clauses.map((c) => ` AND ${c}`).join(""), args };
 }

@@ -61,6 +61,7 @@ export async function resolveRouteReadScope(
 				: { kind: "own" as const, agentId };
 		const scope = await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal));
 		c.set("readAuditAgent", agentId);
+		c.set("readResponseScope", scope);
 		return { agentId, scope };
 	}
 	const policy = await getAgentScope(agentId);
@@ -72,5 +73,7 @@ export async function resolveRouteReadScope(
 				: options.memory && policy.readPolicy === "group" && policy.policyGroup
 					? { kind: "group" as const, agentId, group: policy.policyGroup }
 					: { kind: "own" as const, agentId };
-	return { agentId, scope: await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] }) };
+	const scope = await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] });
+	c.set("readResponseScope", scope);
+	return { agentId, scope };
 }
