@@ -10,10 +10,14 @@ import { deriveClaim } from "./graph";
 import { record, request, success, until } from "./http";
 import { assertUnchanged, checkNoninterference, normalize } from "./noninterference";
 
-async function withFixture(run: (fixture: Fixture) => Promise<void>, model: "personal" | "single" = "personal") {
+async function withFixture(
+	run: (fixture: Fixture) => Promise<void>,
+	model: "personal" | "single" = "personal",
+	seedEvidence = true,
+) {
 	const daemon = await OrgDaemon.create();
 	try {
-		await run(await Fixture.create(daemon, model));
+		await run(await Fixture.create(daemon, model, seedEvidence));
 	} finally {
 		await daemon.dispose();
 	}
@@ -195,47 +199,51 @@ test(
 test(
 	"AC6 native Dreaming write rejects a cross-agent citation before side effects",
 	() =>
-		withFixture(async (fixture) => {
-			const quote = "cross-agent-evidence-quokka owns the payroll endpoint.";
-			const source = await fixture.remember(fixture.user("alice"), quote);
-			const target = fixture.user("bob").agentId;
-			const before = normalize(
-				(await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${target}`, fixture.admin)).body,
-			);
-			const result = await request(
-				fixture.daemon.origin,
-				"/api/dream/tools/apply_ontology_ops",
-				fixture.user("bob").session,
-				"POST",
-				{
-					agentId: target,
-					input: {
-						agentId: target,
-						operations: [
-							{
-								operation: "create_entity",
-								payload: { name: "forbidden-cross-agent-quokka", type: "project" },
-								evidence: [{ source_ref: `memory:${source}`, quote }],
-							},
-						],
-					},
-				},
-			);
-			assert.equal(result.status, 400, "AC6 valid native operation with foreign evidence must be rejected");
-			assert.match(
-				JSON.stringify(result.body),
-				/belongs to scope.*targets|cross_agent|scope_mismatch|(?:another|different|cross).*?(?:agent|scope)|(?:agent|scope).*?(?:mismatch|another|different)/i,
-				"AC6 must fail specifically for the foreign citation, not schema/auth/provider errors",
-			);
-			assertUnchanged(
-				before,
-				normalize(
+		withFixture(
+			async (fixture) => {
+				const quote = "cross-agent-evidence-quokka owns the payroll endpoint.";
+				const source = await fixture.remember(fixture.user("alice"), quote);
+				const target = fixture.user("bob").agentId;
+				const before = normalize(
 					(await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${target}`, fixture.admin)).body,
-				),
-				"AC6 rejected citation must not create graph nodes",
-			);
-			await deriveClaim(fixture, fixture.user("alice").agentId, source, quote, "allowed-same-agent-quokka");
-		}),
+				);
+				const result = await request(
+					fixture.daemon.origin,
+					"/api/dream/tools/apply_ontology_ops",
+					fixture.user("bob").session,
+					"POST",
+					{
+						agentId: target,
+						input: {
+							agentId: target,
+							operations: [
+								{
+									operation: "create_entity",
+									payload: { name: "forbidden-cross-agent-quokka", type: "project" },
+									evidence: [{ source_ref: `memory:${source}`, quote }],
+								},
+							],
+						},
+					},
+				);
+				assert.equal(result.status, 400, "AC6 valid native operation with foreign evidence must be rejected");
+				assert.match(
+					JSON.stringify(result.body),
+					/belongs to scope.*targets|cross_agent|scope_mismatch|(?:another|different|cross).*?(?:agent|scope)|(?:agent|scope).*?(?:mismatch|another|different)/i,
+					"AC6 must fail specifically for the foreign citation, not schema/auth/provider errors",
+				);
+				assertUnchanged(
+					before,
+					normalize(
+						(await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${target}`, fixture.admin)).body,
+					),
+					"AC6 rejected citation must not create graph nodes",
+				);
+				await deriveClaim(fixture, fixture.user("alice").agentId, source, quote, "allowed-same-agent-quokka");
+			},
+			"personal",
+			false,
+		),
 	180_000,
 );
 test("AC7 unnamed speakers in one shared agent have distinct person entities", () => withFixture(attribution), 180_000);

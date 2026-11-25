@@ -23,6 +23,7 @@ import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
 import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
+import { audienceSubjectFromPrincipal, readableCompartments } from "../read-scope";
 import {
 	getActiveDreamingPasses,
 	getDreamingAttention,
@@ -596,7 +597,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:599",
+				"routes/pipeline-routes.ts:600",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -947,7 +948,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:950",
+						"routes/pipeline-routes.ts:951",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -1100,6 +1101,18 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "No inference provider is connected" }, 503);
 		}
 
+		let compartmentId: number | null = null;
+		if (body.compartmentId !== undefined && body.compartmentId !== null) {
+			if (typeof body.compartmentId !== "number" || !Number.isSafeInteger(body.compartmentId) || body.compartmentId < 1)
+				return c.json({ error: "compartmentId must be a positive integer or null" }, 400);
+			const principal = c.get("principal");
+			if (!principal) return c.json({ error: "unauthorized" }, 403);
+			if (principal.allowedProjects !== null) return c.json({ error: "project_not_permitted" }, 403);
+			const readable = await readableCompartments(audienceSubjectFromPrincipal(principal));
+			if (readable !== "all" && !readable.includes(body.compartmentId))
+				return c.json({ error: "classification_not_permitted" }, 403);
+			compartmentId = body.compartmentId;
+		}
 		let userRequest: { sourceRef: string; content: string } | undefined;
 		if (body.instructionSourceRef !== undefined) {
 			if (typeof body.instructionSourceRef !== "string" || body.instructionSourceRef.length > 200)
@@ -1132,7 +1145,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 		let passId: string;
 		try {
-			passId = await worker.triggerAsync(mode, agentId, userRequest, c.get("author"));
+			passId = await worker.triggerAsync(mode, agentId, userRequest, c.get("author"), compartmentId);
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 			const msg = e instanceof Error ? e.message : String(e);

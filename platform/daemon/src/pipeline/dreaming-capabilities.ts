@@ -784,7 +784,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							},
 							{
 								operation: "dreaming.capabilities.search-evidence",
-								lane: "read",
+								lane: input.passId === undefined ? "read" : "write",
 								workloadClass: "foreground",
 								deadlineMs: 30_000,
 								estimatedWorkUnits: 200,

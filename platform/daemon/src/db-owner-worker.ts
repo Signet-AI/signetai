@@ -627,9 +627,10 @@ export function runDbOwnerWorker(): void {
 
 	async function executeDreamingEvidenceSearch(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_search" }>,
+		context: JobExecutionContext,
 	): Promise<unknown> {
 		const { searchDreamingEvidenceInDb } = await import("./pipeline/dreaming-capabilities");
-		return withBusyRetry(() => searchDreamingEvidenceInDb(db as never, request.input));
+		return withBusyRetry(() => searchDreamingEvidenceInDb(db as never, request.input), context);
 	}
 
 	async function executeDreamingEvidenceSource(
@@ -1270,7 +1271,8 @@ export function runDbOwnerWorker(): void {
 			const { readDreamingGraphInDb } = await import("./pipeline/dreaming-capabilities");
 			return readDreamingGraphInDb(db, job.request.input);
 		}
-		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
+		if (job.request.kind === "dreaming_evidence_search")
+			return await executeDreamingEvidenceSearch(job.request, context);
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
 		if (job.request.kind === "dreaming_evidence_review") return await executeDreamingEvidenceReview(job.request);
 		if (job.request.kind === "dreaming_pass_finalize") return executeDreamingPassFinalize(job.request, context);

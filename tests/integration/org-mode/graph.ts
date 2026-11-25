@@ -7,7 +7,7 @@ export interface Evidence {
 	quote: string;
 }
 export async function dreamOperation(
-	fixture: Pick<Fixture, "daemon" | "admin" | "users" | "engAgent">,
+	fixture: Pick<Fixture, "daemon" | "admin"> & Partial<Pick<Fixture, "users" | "engAgent">>,
 	agentId: string,
 	operation: string,
 	payload: object,
@@ -15,10 +15,13 @@ export async function dreamOperation(
 ): Promise<Record<string, unknown>> {
 	const endpoint = "/api/dream/tools/apply_ontology_ops";
 	const user =
-		[...fixture.users.values()].find((user) => user.agentId === agentId) ??
-		(agentId === fixture.engAgent ? fixture.users.get("alice") : undefined);
-	assert(user, "Dreaming fixture must use an actor permitted to act as the target agent");
-	const reply = await request(fixture.daemon.origin, endpoint, user.session, "POST", {
+		[...(fixture.users?.values() ?? [])].find((user) => user.agentId === agentId) ??
+		(agentId === fixture.engAgent ? fixture.users?.get("alice") : undefined);
+	assert(
+		fixture.users === undefined || user,
+		"Dreaming fixture must use an actor permitted to act as the target agent",
+	);
+	const reply = await request(fixture.daemon.origin, endpoint, user?.session ?? fixture.admin, "POST", {
 		agentId,
 		input: { agentId, operations: [{ operation, payload, evidence }] },
 	});
@@ -31,7 +34,7 @@ export async function dreamOperation(
 	return record(item.result);
 }
 export async function deriveClaim(
-	fixture: Pick<Fixture, "daemon" | "admin" | "users" | "engAgent">,
+	fixture: Pick<Fixture, "daemon" | "admin"> & Partial<Pick<Fixture, "users" | "engAgent">>,
 	agentId: string,
 	memoryId: string,
 	quote: string,

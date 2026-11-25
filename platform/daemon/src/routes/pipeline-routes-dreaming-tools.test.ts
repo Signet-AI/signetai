@@ -36,13 +36,19 @@ describe("POST /api/dream/tools/apply_ontology_ops", () => {
 		});
 		const enqueue = accessor.withWriteTxAsync;
 		if (!enqueue) throw new Error("async write API is unavailable");
-		let transactions = 0;
 		const injectable = accessor as {
 			withWriteTxAsync: <T>(fn: (db: WriteDb) => T) => Promise<T>;
 		};
 		injectable.withWriteTxAsync = (fn) => {
-			transactions += 1;
-			if (transactions === 3) return Promise.reject(new Error("injected route writer rejection"));
+			const progress = accessor.withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM entities WHERE agent_id='agent-a' AND name LIKE 'Route retry entity %'",
+					)
+					.get(),
+			);
+			if (typeof progress === "object" && progress !== null && "count" in progress && progress.count === 20)
+				return Promise.reject(new Error("injected route writer rejection"));
 			return enqueue(fn);
 		};
 		const app = new Hono();

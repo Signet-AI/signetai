@@ -1124,6 +1124,10 @@ pass sees fewer scope sets: compaction does not merge for a share.
 ### POST /api/dream/trigger
 
 Manually trigger a dreaming pass. Requires `admin` permission.
+An optional `compartmentId` selects its classification partition; omitting it or
+passing `null` selects unclassified evidence. A classified trigger requires the
+caller to belong to the entire partition audience and to have unrestricted project
+access. A partition outside the caller's audience is rejected before a pass is admitted.
 Returns `202 Accepted` immediately and runs the pass in the background
 (passes can take up to several minutes on large graphs).
 The daemon keeps the worker available for manual triggers when automatic
