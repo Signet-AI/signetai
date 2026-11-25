@@ -61,7 +61,10 @@ export function readScopeSql(
 	const visibility = cols?.visibility === null ? null : col(cols?.visibility ?? "visibility");
 	const args: unknown[] = [];
 	const clauses: string[] = [];
-	const reach = scope.reach;
+	const reach =
+		!visibility && (scope.reach.kind === "shared" || scope.reach.kind === "group")
+			? { kind: "own" as const, agentId: scope.reach.agentId }
+			: scope.reach;
 	if (reach.kind === "all") {
 		const active = `${agent} IN (SELECT id FROM agents WHERE archived_at IS NULL)`;
 		clauses.push(
