@@ -177,6 +177,8 @@ import { up as sessionTranscriptDeletions } from "./174-session-transcript-delet
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
 import { up as organizationIdentity, artifacts as organizationIdentityArtifacts } from "./176-organization-identity";
 import { up as classifications } from "./177-classifications";
+import { up as writeInheritance, artifacts as writeInheritanceArtifacts } from "./178-write-inheritance";
+import { up as dreamingEvidenceLeases } from "./179-dreaming-evidence-leases";
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
@@ -1646,6 +1648,39 @@ export const MIGRATIONS: readonly Migration[] = [
 				"classification_access_version",
 			],
 			columns: [{ table: "memories", column: "compartment_id" }],
+		},
+	},
+	{ version: 178, name: "write-inheritance", up: writeInheritance, artifacts: writeInheritanceArtifacts },
+	{
+		version: 179,
+		name: "dreaming-evidence-leases",
+		up: dreamingEvidenceLeases,
+		artifacts: {
+			tables: ["dreaming_evidence_leases", "dreaming_classification_epoch"],
+			indexes: [
+				"idx_dreaming_evidence_lease_partition",
+				"idx_dreaming_evidence_leases_pass",
+				"idx_dreaming_history_nodes_partition",
+				"idx_dreaming_history_nodes_pass",
+				"idx_dreaming_state_partition",
+				"idx_memory_artifacts_dreaming_partition_path",
+				"idx_memory_head_revisions_partition",
+				"idx_memory_head_revision_entries_partition",
+				"idx_memory_head_publications_partition",
+			],
+			columns: [
+				{ table: "dreaming_passes", column: "classification_epoch" },
+				{ table: "ontology_proposals", column: "dreaming_pass_id" },
+				{ table: "entities", column: "dreaming_pass_id" },
+				{ table: "dreaming_attention", column: "dreaming_pass_id" },
+				{ table: "dreaming_state", column: "compartment_id" },
+				{ table: "memory_head_revisions", column: "is_current" },
+				{ table: "memory_head_entries", column: "pass_id" },
+				{ table: "memory_head_revision_entries", column: "pass_id" },
+				{ table: "memory_head_revision_entries", column: "revision_id" },
+				{ table: "memory_head_revisions", column: "compartment_id" },
+				{ table: "memory_head_publications", column: "compartment_id" },
+			],
 		},
 	},
 ];

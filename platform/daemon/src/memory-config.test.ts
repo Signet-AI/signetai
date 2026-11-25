@@ -31,6 +31,17 @@ afterEach(() => {
 });
 
 describe("loadDreamingConfig", () => {
+	it("bounds concurrent passes within one scope independently", () => {
+		expect(loadDreamingConfig({}).maxPassesPerScope).toBe(1);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassesPerScope: 3.9 } } }).maxPassesPerScope).toBe(3);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassesPerScope: 0 } } }).maxPassesPerScope).toBe(1);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassesPerScope: 99 } } }).maxPassesPerScope).toBe(16);
+		expect(
+			loadDreamingConfig({ memory: { dreaming: { maxPassesPerScope: Number.POSITIVE_INFINITY } } }).maxPassesPerScope,
+		).toBe(1);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassesPerScope: Number.NaN } } }).maxPassesPerScope).toBe(1);
+	});
+
 	it("uses the built-in policy for every pass type that is not configured", () => {
 		expect(loadDreamingConfig({}).policies).toEqual(DEFAULT_DREAMING_POLICIES);
 		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).policies).toEqual(DEFAULT_DREAMING_POLICIES);
