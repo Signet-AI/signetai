@@ -1469,7 +1469,7 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(0);
 	});
 
-	it("selects a missing agent memory but reports a cross-agent hash conflict", async () => {
+	it("repairs equal-hash memories without probing another agent parent", async () => {
 		ensureVecTable(db);
 		const sharedHash = "cross-agent-shared-hash";
 		insertMemory(db, "mem-a", "agent-a", sharedHash);
@@ -1503,23 +1503,21 @@ describe("reembedMissingMemories", () => {
 			false,
 		);
 
-		expect(selected).toEqual(["content for mem-b-unique"]);
-		expect(result.success).toBe(false);
-		expect(result.affected).toBe(1);
-		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 1 });
-		expect(result.message).toContain("1 selected memory(s) could not be persisted");
-		expect(result.message).toContain("current global uniqueness constraint");
+		expect(selected.sort()).toEqual(["content for mem-b", "content for mem-b-unique"]);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(2);
+		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 0 });
 		expect(result.message).not.toContain("embedding provider returned no vectors");
-		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
-			{ source_id: "mem-a" },
-		]);
+		expect(
+			db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ? ORDER BY source_id").all(sharedHash),
+		).toEqual([{ source_id: "mem-a" }, { source_id: "mem-b" }]);
 		const after = db
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-a'")
 			.get();
 		expect(after).toEqual(before);
 	});
 
-	it("does not let a known conflict starve later repairable memories during a full sweep", async () => {
+	it("resumes parent-scoped equal-hash repairs without starving later memories", async () => {
 		ensureVecTable(db);
 		const sharedHash = "starving-cross-agent-hash";
 		insertMemory(db, "mem-owner", "agent-a", sharedHash);
@@ -1558,7 +1556,7 @@ describe("reembedMissingMemories", () => {
 			true,
 		);
 
-		expect(providerInputs).toEqual(["content for mem-repairable"]);
+		expect(providerInputs).toEqual(["content for mem-conflict"]);
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
 		expect(result.details).toMatchObject({
@@ -1586,21 +1584,20 @@ describe("reembedMissingMemories", () => {
 			operationId as string,
 		);
 
-		expect(conflict.success).toBe(false);
-		expect(conflict.affected).toBe(0);
+		expect(conflict.success).toBe(true);
+		expect(conflict.affected).toBe(1);
 		expect(conflict.details).toMatchObject({
 			selected: 1,
 			failed: 0,
 			stale: 0,
-			crossAgentHashConflicts: 1,
-			status: "failed",
+			crossAgentHashConflicts: 0,
+			status: "complete",
 		});
-		expect(conflict.message).toContain("1 selected memory(s) could not be persisted");
 		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-repairable'").get()).toBeTruthy();
-		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-conflict'").get()).toBeNull();
-		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
-			{ source_id: "mem-owner" },
-		]);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-conflict'").get()).toBeTruthy();
+		expect(
+			db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ? ORDER BY source_id").all(sharedHash),
+		).toEqual([{ source_id: "mem-conflict" }, { source_id: "mem-owner" }]);
 		const afterOwner = db
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-owner'")
 			.get();
@@ -1745,7 +1742,7 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT agent_id FROM embeddings WHERE source_id = ?").get("mem-empty-agent")).toBeNull();
 	});
 
-	it("does not overwrite another agent's embedding on migration hash conflict", async () => {
+	it("migrates an owned parent without overwriting another agent hash cache", async () => {
 		const migrationDb = new Database(":memory:");
 		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
 		ensureVecTable(migrationDb);
@@ -1782,11 +1779,11 @@ describe("reembedMissingMemories", () => {
 			10,
 		);
 
-		expect(result.success).toBe(false);
-		expect(result.affected).toBe(0);
-		expect(result.message).toMatch(/cross-agent hash conflict/);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.details?.crossAgentHashConflicts).toBe(0);
 		expect(migrationDb.prepare("SELECT embedding_model FROM memories WHERE id = 'migration-agent-a'").get()).toEqual({
-			embedding_model: "model-a",
+			embedding_model: "model-b",
 		});
 		expect(
 			migrationDb
@@ -2018,7 +2015,7 @@ describe("reembedMissingMemories", () => {
 		expect(dupe.content_hash).toBeNull();
 	});
 
-	it("syncs vec row using canonical embedding id on hash conflict", async () => {
+	it("keeps independent evidence-parent vectors on equal content hashes", async () => {
 		ensureVecTable(db);
 		const now = new Date().toISOString();
 		const hash = normalizeAndHashContent("duplicate content").contentHash;
@@ -2038,6 +2035,7 @@ describe("reembedMissingMemories", () => {
 			sourceId: "mem-existing",
 			vector: [0.9, 0.9, 0.9],
 		});
+		db.prepare("INSERT INTO vec_embeddings(id,embedding) VALUES('emb-existing',?)").run(vectorBlob([0.9, 0.9, 0.9]));
 
 		const limiter = createRateLimiter();
 		const result = await reembedMissingMemories(
@@ -2054,13 +2052,16 @@ describe("reembedMissingMemories", () => {
 
 		expect(result.success).toBe(true);
 
-		const vecIds = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
-		expect(vecIds.map((row) => row.id)).toEqual(["emb-existing"]);
-		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(hash) as Array<{
-			source_id: string;
-		}>;
-		expect(rows).toHaveLength(1);
-		expect(rows[0]?.source_id).toBe("mem-existing");
+		expect(
+			db
+				.prepare(
+					"SELECT e.source_id FROM embeddings e JOIN vec_embeddings v ON v.id=e.id WHERE e.content_hash=? ORDER BY e.source_id",
+				)
+				.all(hash),
+		).toEqual([{ source_id: "mem-existing" }, { source_id: "mem-target" }]);
+		expect(db.prepare("SELECT vector FROM embeddings WHERE id='emb-existing'").get()).toEqual({
+			vector: vectorBlob([0.9, 0.9, 0.9]),
+		});
 	});
 
 	it("does not cycle-embed duplicate-hash memories — both report as embedded after one pass", async () => {
@@ -2097,8 +2098,7 @@ describe("reembedMissingMemories", () => {
 		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all("hash-dup") as Array<{
 			source_id: string;
 		}>;
-		expect(rows).toHaveLength(1);
-		expect(rows[0]?.source_id).toBe("mem-dup-a");
+		expect(rows.map((row) => row.source_id).sort()).toEqual(["mem-dup-a", "mem-dup-b"]);
 		const limiter2 = createRateLimiter();
 		const secondPass = await reembedMissingMemories(
 			accessor,
@@ -2892,7 +2892,7 @@ describe("cleanOrphanedEmbeddings", () => {
 		db.close();
 	});
 
-	it("keeps hash-covered embeddings even when the original source row is deleted", async () => {
+	it("does not count a retained foreign-parent hash cache as an owned embedding", async () => {
 		const now = new Date().toISOString();
 
 		db.prepare(
@@ -2920,7 +2920,7 @@ describe("cleanOrphanedEmbeddings", () => {
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(0);
-		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(1);
 
 		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
 		expect(rows).toHaveLength(1);

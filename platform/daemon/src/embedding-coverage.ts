@@ -89,19 +89,6 @@ function count(db: ReadDb, sql: string, ...args: readonly unknown[]): number {
 	return row?.n ?? 0;
 }
 
-const sameAgentHashOwner = `
-			   AND EXISTS (
-			     SELECT 1 FROM memories owner
-			     WHERE owner.id = e.source_id
-			       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-			   )`;
-
-const crossAgentHashConflict = `EXISTS (
-			 SELECT 1 FROM embeddings e
-			 WHERE e.source_type = 'memory'
-			   AND e.content_hash = m.content_hash
-			   AND COALESCE(NULLIF(e.agent_id, ''), 'default') <> COALESCE(NULLIF(m.agent_id, ''), 'default')
-		   )`;
 function embeddingRepairBackoffFilter(
 	model: string | undefined,
 	now: string,
@@ -128,12 +115,6 @@ export function countUnembeddedMemories(db: ReadDb, agentId: string): number {
 		   AND NOT EXISTS (
 		     SELECT 1 FROM embeddings e
 		     WHERE e.source_type = 'memory' AND e.source_id = m.id
-		   )
-		   AND NOT EXISTS (
-		     SELECT 1 FROM embeddings e
-		     WHERE e.source_type = 'memory'${sameAgentHashOwner}
-		       AND m.content_hash IS NOT NULL
-		       AND e.content_hash = m.content_hash
 		   )`,
 		agentId,
 	);
@@ -150,7 +131,7 @@ export function listUnembeddedMemories(
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
-				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
+				0 AS knownCrossAgentHashConflict
 			 FROM memories m
 			 WHERE m.is_deleted = 0
 			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
@@ -159,13 +140,7 @@ export function listUnembeddedMemories(
 			     SELECT 1 FROM embeddings e
 			     WHERE e.source_type = 'memory' AND e.source_id = m.id
 			   )
-			   AND NOT EXISTS (
-			     SELECT 1 FROM embeddings e
-			     WHERE e.source_type = 'memory'${sameAgentHashOwner}
-			       AND m.content_hash IS NOT NULL
-			       AND e.content_hash = m.content_hash
-			   )
-			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
+			 ORDER BY m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
 		.all(agentId, ...backoff.params, limit) as UnembeddedRow[];
@@ -179,12 +154,6 @@ export function countAllUnembeddedMemories(db: ReadDb): number {
 		   AND NOT EXISTS (
 		     SELECT 1 FROM embeddings e
 		     WHERE e.source_type = 'memory' AND e.source_id = m.id
-		   )
-		   AND NOT EXISTS (
-		     SELECT 1 FROM embeddings e
-		     WHERE e.source_type = 'memory'${sameAgentHashOwner}
-		       AND m.content_hash IS NOT NULL
-		       AND e.content_hash = m.content_hash
 		   )`,
 	);
 }
@@ -199,7 +168,7 @@ export function listAllUnembeddedMemories(
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
-				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
+				0 AS knownCrossAgentHashConflict
 			 FROM memories m
 			 WHERE m.is_deleted = 0
 			   ${backoff.clause}
@@ -207,13 +176,7 @@ export function listAllUnembeddedMemories(
 			     SELECT 1 FROM embeddings e
 			     WHERE e.source_type = 'memory' AND e.source_id = m.id
 			   )
-			   AND NOT EXISTS (
-			     SELECT 1 FROM embeddings e
-			     WHERE e.source_type = 'memory'${sameAgentHashOwner}
-			       AND m.content_hash IS NOT NULL
-			       AND e.content_hash = m.content_hash
-			   )
-			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
+			 ORDER BY m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
 		.all(...backoff.params, limit) as UnembeddedRow[];

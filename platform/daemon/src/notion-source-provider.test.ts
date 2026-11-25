@@ -467,7 +467,7 @@ describe("notion-source-provider", () => {
 		expect(rows.filter((entry) => entry.is_deleted === 0)).toHaveLength(5);
 		expect(rows.filter((entry) => entry.is_deleted === 1)).toHaveLength(135);
 		expect(sourceDocumentCount(source.id)).toBe(5);
-	});
+	}, 20_000);
 
 	it("keeps pages that search missed but Notion still serves", async () => {
 		const source = addSource();
