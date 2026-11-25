@@ -78,30 +78,23 @@ test("real daemon diagnostics preserve hidden-row isolation across restarts", as
 			return bodies;
 		};
 		const countPaths = ["/api/embeddings/status", "/api/embeddings/health"];
-		const globalCounts = async () =>
+		const embeddingStatus = async () =>
 			Promise.all(
 				countPaths.map(async (path) => {
 					const response = await request(daemon.origin, path, admin);
 					expect(response.status).toBe(200);
-					const body = record(response.body);
-					expect(Object.keys(body).sort()).toEqual(["counts", "scope", "status"]);
-					expect(body.status).toBe("global_counts");
-					expect(body.scope).toBe("workspace");
-					return record(body.counts);
+					expect(response.body).toEqual({ status: "unavailable", reason: "scoped_embedding_diagnostics" });
+					return response.body;
 				}),
 			);
-		const countBefore = await globalCounts();
+		const countBefore = await embeddingStatus();
 		const before = await snapshot();
 
 		await daemon.stop();
 		seed(daemon, true);
 		await daemon.start();
 		expect(await snapshot()).toEqual(before);
-		const countAfter = await globalCounts();
-		for (let index = 0; index < countPaths.length; index++) {
-			expect(countAfter[index]?.embeddings).toBe(Number(countBefore[index]?.embeddings) + 1);
-			expect(countAfter[index]?.memories).toBe(Number(countBefore[index]?.memories) + 1);
-		}
+		expect(await embeddingStatus()).toEqual(countBefore);
 		await daemon.stop();
 		const db = new Database(join(daemon.workspace, "data/signet.db"));
 		try {

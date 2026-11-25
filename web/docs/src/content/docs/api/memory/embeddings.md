@@ -4,12 +4,10 @@ description: "Inspect embedding status, health, vectors, and projection data."
 ---
 
 In organization mode, `GET /api/embeddings/status` and
-`GET /api/embeddings/health` require `admin` permission and return only
-`{ status: "global_counts", scope: "workspace", counts: { embeddings, memories,
-pendingJobs } }`. These are explicitly workspace-global counts: all stored
-embeddings, nondeleted memories, and pending or leased embedding jobs. They are
-not audience-scoped. No row IDs, content, error text, index fingerprints, or
-shared tracker details are returned. Local-mode provider diagnostics below are unchanged.
+`GET /api/embeddings/health` return
+`{ status: "unavailable", reason: "scoped_embedding_diagnostics" }`.
+Workspace-wide counts and provider diagnostics are not exposed, including to
+administrators. Local-mode diagnostics below are unchanged.
 
 ### GET /api/embeddings
 

@@ -1,4 +1,3 @@
-import { dbOwnerEmbeddingDiagnosticsCounts } from "../db-owner-runtime";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -3576,9 +3575,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	});
 	app.get("/api/embeddings/status", async (c) => {
 		if (c.get("organization")) {
-			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
-			if (denied) return denied;
-			return c.json(await dbOwnerEmbeddingDiagnosticsCounts());
+			return c.json({ status: "unavailable", reason: "scoped_embedding_diagnostics" });
 		}
 		const config = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const status = await checkEmbeddingProvider(config.embedding);
@@ -3596,9 +3593,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	});
 	app.get("/api/embeddings/health", async (c) => {
 		if (c.get("organization")) {
-			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
-			if (denied) return denied;
-			return c.json(await dbOwnerEmbeddingDiagnosticsCounts());
+			return c.json({ status: "unavailable", reason: "scoped_embedding_diagnostics" });
 		}
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);

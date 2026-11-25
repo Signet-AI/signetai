@@ -193,7 +193,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:connectors.health.documents` (withReadDb)
 - `db:hooks.session-transcript.project.read` (withReadDb)
 - `db:hooks.compaction.transcript-state.delete` (withWriteTx)
-- `routes/memory-routes.ts:128` (withReadDbAsync)
+- `routes/memory-routes.ts:127` (withReadDbAsync)
 - `db:memory.timeline.read` (withReadDbAsync)
 - `db:memory.capture.base-idempotency.read` (withReadDbAsync)
 - `db:memory.capture.chunk-idempotency.read` (withReadDbAsync)

@@ -1,5 +1,3 @@
-import { z } from "zod";
-import type { ReadDb } from "./db-accessor";
 import { syncEmbeddingCompartment, resetCompartmentVectorShards, type MigrationDb } from "@signet/core";
 import type { EmbeddingProjectionRequest } from "./embedding-projection";
 
@@ -39,17 +37,4 @@ export function executeEmbeddingProjectionInTx(
 	}
 	for (const id of ids) syncEmbeddingCompartment(db, request.store, id, request.projection);
 	return { updated: ids.size };
-}
-
-export function readEmbeddingDiagnosticsCountsInOwner(db: ReadDb) {
-	const counts = z
-		.object({ embeddings: z.number(), memories: z.number(), pendingJobs: z.number() })
-		.parse(
-			db
-				.prepare(
-					"SELECT (SELECT COUNT(*) FROM embeddings) AS embeddings,(SELECT COUNT(*) FROM memories WHERE COALESCE(is_deleted,0)=0) AS memories,(SELECT COUNT(*) FROM memory_jobs WHERE job_type='embed' AND status IN ('pending','leased')) AS pendingJobs",
-				)
-				.get(),
-		);
-	return { status: "global_counts" as const, scope: "workspace" as const, counts };
 }
