@@ -1,0 +1,599 @@
+import type { Hono } from "hono";
+import { resolveAgentId } from "../../agents/identity/agent-id.js";
+import { requirePermission, requirePermissionWithRateLimit } from "../../auth";
+import { buildBlackBoxSession, listBlackBoxSessions } from "../../telemetry/diagnostics/black-box.js";
+import {
+	getAgentPresenceForSessionAgent,
+	listAgentPresence,
+	touchAgentPresence,
+} from "../../agents/cross-agent/messages.js";
+import { getDbAccessor } from "../../db/owner/accessor.js";
+import {
+	bypassSession,
+	getActiveSessions,
+	isSessionBypassed,
+	normalizeSessionKey,
+	renewSession,
+	unbypassSession,
+} from "../../sessions/tracker.js";
+import { deleteSessionTranscript } from "../../transcripts/store/lifecycle";
+import {
+	getSessionTranscriptContent,
+	getStoredSessionTranscriptInfo,
+} from "../../transcripts/store/session-transcripts.js";
+import { searchSessionTranscripts } from "../../agents/cross-agent/subagent-context.js";
+import { expandTemporalNode } from "../../recall/temporal/expand.js";
+import { clampGitSyncIntervalSeconds } from "./git-config.js";
+import { authConfig, authForgetLimiter, authAdminLimiter } from "./state.js";
+import {
+	parseOptionalString,
+	readOptionalJsonObject,
+	resolveScopedAgentId,
+	resolveScopedProject,
+	validateSessionControl,
+} from "./utils.js";
+
+function listLiveSessions(agentId: string): Array<{
+	key: string;
+	runtimePath: string;
+	claimedAt: string;
+	expiresAt: string | null;
+	bypassed: boolean;
+}> {
+	const byKey = new Map<
+		string,
+		{ key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }
+	>(
+		getActiveSessions()
+			.filter((s) => s.agentId === agentId)
+			.map((session) => [session.key, session] as const),
+	);
+
+	for (const presence of listAgentPresence({ limit: Number.MAX_SAFE_INTEGER })) {
+		if (presence.agentId !== agentId) continue;
+		if (!presence.sessionKey) continue;
+		const key = normalizeSessionKey(presence.sessionKey);
+		if (byKey.has(key)) continue;
+		byKey.set(key, {
+			key,
+			runtimePath: presence.runtimePath ?? "unknown",
+			claimedAt: presence.startedAt,
+			expiresAt: null,
+			bypassed: isSessionBypassed(key, agentId),
+		});
+	}
+	return [...byKey.values()].sort((a, b) => b.claimedAt.localeCompare(a.claimedAt));
+}
+
+export interface GitConfig {
+	enabled: boolean;
+	autoCommit: boolean;
+	autoSync: boolean;
+	syncInterval: number;
+	remote: string;
+	branch: string;
+}
+
+export function applyGitConfigPatch(gc: GitConfig, body: Partial<GitConfig>): void {
+	if (body.autoCommit !== undefined && typeof body.autoCommit === "boolean") gc.autoCommit = body.autoCommit;
+	if (body.autoSync !== undefined && typeof body.autoSync === "boolean") gc.autoSync = body.autoSync;
+	if (body.syncInterval !== undefined) {
+		gc.syncInterval = clampGitSyncIntervalSeconds(body.syncInterval) ?? gc.syncInterval;
+	}
+	if (typeof body.remote === "string" && body.remote.length > 0) gc.remote = body.remote;
+	if (typeof body.branch === "string" && body.branch.length > 0) gc.branch = body.branch;
+}
+
+export interface SessionRoutesDeps {
+	gitConfig: GitConfig;
+	stopGitSyncTimer: () => Promise<void>;
+	startGitSyncTimer: () => void;
+	getGitStatus: () => Promise<Record<string, unknown>>;
+	gitPull: () => Promise<Record<string, unknown>>;
+	gitPush: () => Promise<Record<string, unknown>>;
+	gitSync: () => Promise<Record<string, unknown>>;
+}
+
+export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void {
+	const { gitConfig: gc, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync } = deps;
+	app.use("/api/sessions/summaries", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/search", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/blackbox", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/blackbox", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
+		if (c.req.method === "DELETE") {
+			if (c.req.query("purge") === "hard")
+				return requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
+			return requirePermissionWithRateLimit("forget", "forget", authForgetLimiter, authConfig)(c, next);
+		}
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/renew", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/git/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
+	app.get("/api/sessions", (c) => {
+		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const sessions = listLiveSessions(scopedAgent.agentId);
+		return c.json({ sessions, count: sessions.length });
+	});
+
+	app.get("/api/sessions/blackbox", (c) => {
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			parseOptionalString(c.req.query("agent_id")) ?? parseOptionalString(c.req.query("agentId")),
+			"default",
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, limitRaw)) : 50;
+		const sessions = listBlackBoxSessions(getDbAccessor(), {
+			agentId: scopedAgent.agentId,
+			project: scopedProject.project,
+			limit,
+		});
+		return c.json({ agentId: scopedAgent.agentId, project: scopedProject.project, sessions, count: sessions.length });
+	});
+
+	app.post("/api/sessions/search", async (c) => {
+		const body = await readOptionalJsonObject(c);
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const query = typeof body.query === "string" ? body.query.trim() : "";
+		if (query.length === 0) return c.json({ error: "query is required" }, 400);
+
+		const rawAgentId =
+			(typeof body.agentId === "string" ? body.agentId : undefined) ??
+			(typeof body.agent_id === "string" ? body.agent_id : undefined) ??
+			c.req.query("agent_id");
+		const rawCurrentSessionKey =
+			(typeof body.currentSessionKey === "string" ? body.currentSessionKey : undefined) ??
+			(typeof body.current_session_key === "string" ? body.current_session_key : undefined);
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: rawAgentId,
+				sessionKey: rawCurrentSessionKey ?? (typeof body.sessionKey === "string" ? body.sessionKey : undefined),
+			}),
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(
+			c,
+			(typeof body.project === "string" ? body.project : undefined) ?? c.req.query("project"),
+		);
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+
+		const limitRaw = typeof body.limit === "number" ? body.limit : Number(c.req.query("limit") ?? 10);
+		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.trunc(limitRaw))) : 10;
+		const sessionKey =
+			(typeof body.sessionKey === "string" ? body.sessionKey : undefined) ??
+			(typeof body.session_key === "string" ? body.session_key : undefined);
+
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const hits = getDbAccessor().withReadDb(
+			(db: import("../../db/owner/accessor").ReadDb) =>
+				searchSessionTranscripts({
+					db,
+					query,
+					agentId: scopedAgent.agentId,
+					sessionKey,
+					currentSessionKey: rawCurrentSessionKey,
+					project: scopedProject.project,
+					limit,
+				}),
+			"http/routes/session-routes.ts:189",
+		);
+		return c.json({ query, hits, count: hits.length });
+	});
+
+	app.delete("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c) => {
+		const requestedGeneration = c.req.query("generation");
+		const generation = requestedGeneration === undefined ? undefined : Number(requestedGeneration);
+		if (
+			requestedGeneration !== undefined &&
+			(!/^[1-9][0-9]*$/.test(requestedGeneration) || !Number.isSafeInteger(generation))
+		)
+			return c.json({ error: "generation must be a positive safe integer" }, 400);
+		const purge = c.req.query("purge");
+		if (purge !== undefined && purge !== "hard") return c.json({ error: "purge must be hard or omitted" }, 400);
+		if (purge === "hard") {
+			if (authConfig.mode !== "local" && c.get("auth")?.claims?.role !== "admin")
+				return c.json({ error: "Admin credential required for hard purge" }, 403);
+		}
+		const aliases = [c.req.query("agent_id"), c.req.query("agentId"), c.req.header("x-signet-agent-id")].filter(
+			(value) => value !== undefined,
+		);
+		if (aliases.some((value) => !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) || new Set(aliases).size > 1)
+			return c.json({ error: "Invalid agent identity" }, 400);
+		const requested = aliases[0] ?? c.get("auth")?.claims?.scope?.agent;
+		if (requested !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(requested))
+			return c.json({ error: "Invalid agent identity" }, 400);
+		if (!requested && authConfig.mode !== "local") return c.json({ error: "Explicit agent identity is required" }, 400);
+		const agent = resolveScopedAgentId(c, requested, "default");
+		const project = resolveScopedProject(c, c.req.query("project"));
+		if (agent.error || project.error) return c.json({ error: "Transcript not found" }, 404);
+		const key = normalizeSessionKey(c.req.param("key"));
+		if (!key || key.length > 512) return c.json({ error: "Invalid session key" }, 400);
+		const presence = getAgentPresenceForSessionAgent(key, agent.agentId);
+		const result = await deleteSessionTranscript(
+			{
+				sessionKey: key,
+				generation,
+				agentId: agent.agentId,
+				project: project.project,
+				hard: purge === "hard",
+				changedBy: c.get("auth")?.claims?.sub ?? "local",
+				...(presence ? { live: { harness: presence.harness, project: presence.project ?? null } } : {}),
+			},
+			c.req.raw.signal,
+		);
+		if (result.status === "not_found") return c.json({ error: "Transcript not found" }, 404);
+		if (result.status === "conflict")
+			return c.json({ error: "Transcript generation changed", generation: result.generation }, 409);
+		return c.json(result);
+	});
+
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", (c) => {
+		const key = normalizeSessionKey(c.req.param("key"));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: key,
+			}),
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const content = getSessionTranscriptContent(key, scopedAgent.agentId, scopedProject.project);
+		if (!content) return c.json({ error: "Transcript not found" }, 404);
+		return c.json({ sessionKey: key, agentId: scopedAgent.agentId, content });
+	});
+
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/blackbox", (c) => {
+		const key = c.req.param("key").trim();
+		const requestedAgentId =
+			parseOptionalString(c.req.query("agent_id")) ??
+			parseOptionalString(c.req.query("agentId")) ??
+			parseOptionalString(c.req.header("x-signet-agent-id"));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			requestedAgentId ?? (key.startsWith("agent:") ? resolveAgentId({ sessionKey: key }) : undefined),
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const atRaw = parseOptionalString(c.req.query("at"));
+		let at: string | undefined;
+		if (atRaw) {
+			const parsed = new Date(atRaw);
+			if (Number.isNaN(parsed.getTime())) return c.json({ error: "at must be an ISO timestamp" }, 400);
+			at = parsed.toISOString();
+		}
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "500", 10);
+		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 500;
+		return c.json(
+			buildBlackBoxSession(getDbAccessor(), {
+				agentId: scopedAgent.agentId,
+				sessionKey: key,
+				project: scopedProject.project,
+				at,
+				limit,
+			}),
+		);
+	});
+
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
+		const key = normalizeSessionKey(c.req.param("key"));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: key,
+			}),
+			"default",
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const stored = getStoredSessionTranscriptInfo(key, scopedAgent.agentId);
+		if (scopedProject.project !== undefined && (stored?.project ?? "") !== scopedProject.project) {
+			return c.json({ error: "Session not found" }, 404);
+		}
+		const session = listLiveSessions(scopedAgent.agentId).find((s) => s.key === key);
+		if (session) return c.json(session);
+		if (!stored) return c.json({ error: "Session not found" }, 404);
+		return c.json({
+			key: `session:${stored.sessionKey}`,
+			sessionKey: stored.sessionKey,
+			agentId: stored.agentId,
+			harness: stored.harness,
+			project: stored.project,
+			runtimePath: "transcript",
+			provider: "session_transcripts",
+			startedAt: stored.createdAt,
+			lastSeenAt: stored.updatedAt ?? stored.createdAt,
+			status: "stored",
+		});
+	});
+
+	app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
+		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const key = normalizeSessionKey(c.req.param("key"));
+		const sessions = listLiveSessions(scopedAgent.agentId);
+		const session = sessions.find((s) => s.key === key);
+		if (!session) {
+			return c.json({ error: "Session not found" }, 404);
+		}
+		const bindingError = await validateSessionControl(c, key, scopedAgent.agentId, {
+			context: "session",
+		});
+		if (bindingError) return c.json({ error: bindingError }, 403);
+
+		const body = await readOptionalJsonObject(c);
+		if (!body || typeof body.enabled !== "boolean") {
+			return c.json({ error: "enabled (boolean) is required" }, 400);
+		}
+		const enabled = body.enabled === true;
+
+		if (enabled) {
+			const ok = bypassSession(key, { allowUnknown: session.expiresAt === null }, scopedAgent.agentId);
+			if (!ok) {
+				return c.json({ error: "Session not found or already released" }, 404);
+			}
+		} else {
+			unbypassSession(key, scopedAgent.agentId);
+			if (isSessionBypassed(key, scopedAgent.agentId))
+				return c.json({ error: "Deleted transcript capture stays bypassed until session end" }, 409);
+		}
+		return c.json({ key, bypassed: enabled });
+	});
+
+	app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", async (c) => {
+		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const key = normalizeSessionKey(c.req.param("key"));
+		const session = listLiveSessions(scopedAgent.agentId).find((s) => s.key === key);
+		if (!session) {
+			return c.json({ error: "Session not found" }, 404);
+		}
+		const bindingError = await validateSessionControl(c, key, scopedAgent.agentId, {
+			context: "session",
+		});
+		if (bindingError) return c.json({ error: bindingError }, 403);
+		if (session.expiresAt === null) {
+			touchAgentPresence(key, scopedAgent.agentId);
+			return c.json({ key, renewed: true });
+		}
+		const expiresAt = renewSession(key, scopedAgent.agentId);
+		if (!expiresAt) {
+			return c.json({ error: "Session not found or expired" }, 404);
+		}
+		return c.json({ key, renewed: true, expiresAt });
+	});
+
+	app.get("/api/sessions/summaries", (c) => {
+		const accessor = getDbAccessor();
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId:
+					parseOptionalString(c.req.query("agent_id")) ??
+					parseOptionalString(c.req.query("agentId")) ??
+					parseOptionalString(c.req.header("x-signet-agent-id")),
+				sessionKey:
+					parseOptionalString(c.req.query("session_key")) ??
+					parseOptionalString(c.req.query("sessionKey")) ??
+					parseOptionalString(c.req.header("x-signet-session-key")),
+			}),
+		);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) {
+			return c.json({ error: scopedProject.error }, 403);
+		}
+		const agentId = scopedAgent.agentId;
+		const project = scopedProject.project;
+		const summarySessionKey =
+			parseOptionalString(c.req.query("session_key")) ?? parseOptionalString(c.req.query("sessionKey"));
+		const depthRaw = c.req.query("depth");
+		const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
+		if (
+			depthNum !== undefined &&
+			(Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")
+		) {
+			return c.json({ error: "depth must be a non-negative integer" }, 400);
+		}
+		const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const offsetParsed = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const limit = Number.isFinite(limitParsed) ? Math.min(Math.max(limitParsed, 0), 200) : 50;
+		const offset = Number.isFinite(offsetParsed) ? Math.max(offsetParsed, 0) : 0;
+
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const tableExists = accessor.withReadDb(
+			(db: import("../../db/owner/accessor").ReadDb) =>
+				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
+			"http/routes/session-routes.ts:432",
+		);
+		if (!tableExists) {
+			return c.json({ summaries: [], total: 0 });
+		}
+
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return accessor.withReadDb((db: import("../../db/owner/accessor").ReadDb) => {
+			let where = "WHERE agent_id = ?";
+			const params: unknown[] = [agentId];
+
+			if (project) {
+				where += " AND project = ?";
+				params.push(project);
+			}
+			if (depthNum !== undefined) {
+				where += " AND depth = ?";
+				params.push(depthNum);
+			}
+			if (summarySessionKey) {
+				where += " AND session_key = ?";
+				params.push(summarySessionKey);
+			}
+
+			const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM session_summaries ${where}`).get(...params) as
+				| { cnt: number }
+				| undefined;
+
+			const summaries = db
+				.prepare(
+					`SELECT id, project, depth, kind, content, token_count,
+					        earliest_at, latest_at, session_key, harness, agent_id,
+					        source_type, source_ref, meta_json, created_at
+					 FROM session_summaries
+					 ${where}
+					 ORDER BY latest_at DESC
+					 LIMIT ? OFFSET ?`,
+				)
+				.all(...params, limit, offset) as Array<Record<string, unknown>>;
+
+			const childCountStmt = db.prepare("SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?");
+
+			const enriched = summaries.map((s) => {
+				const childRow = childCountStmt.get(s.id) as { cnt: number } | undefined;
+				return { ...s, childCount: childRow?.cnt ?? 0 };
+			});
+
+			return c.json({
+				summaries: enriched,
+				total: countRow?.cnt ?? 0,
+			});
+		}, "http/routes/session-routes.ts:442");
+	});
+
+	app.post("/api/sessions/summaries/expand", async (c) => {
+		const body = await c.req.json().catch(() => ({}));
+		const id = typeof body.id === "string" ? body.id.trim() : "";
+		if (!id) {
+			return c.json({ error: "id is required" }, 400);
+		}
+
+		const includeTranscript = typeof body.includeTranscript === "boolean" ? body.includeTranscript : true;
+		const transcriptCharLimit =
+			typeof body.transcriptCharLimit === "number" && Number.isFinite(body.transcriptCharLimit)
+				? Math.max(200, Math.min(12000, Math.trunc(body.transcriptCharLimit)))
+				: undefined;
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
+				sessionKey: typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
+			}),
+		);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const scopedProject = resolveScopedProject(c, undefined);
+		if (scopedProject.error) {
+			return c.json({ error: scopedProject.error }, 403);
+		}
+
+		const result = expandTemporalNode(id, scopedAgent.agentId, {
+			includeTranscript,
+			project: scopedProject.project,
+			transcriptCharLimit,
+		});
+		if (!result) {
+			return c.json({ error: "summary node not found" }, 404);
+		}
+		return c.json(result);
+	});
+
+	app.get("/api/git/status", async (c) => {
+		try {
+			const status = await getGitStatus();
+			return c.json(status);
+		} catch (error) {
+			return c.json(
+				{
+					isRepo: false,
+					hasCredentials: false,
+					autoSync: gc.autoSync,
+					degraded: true,
+					degradedReason: `Git status unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				},
+				200,
+			);
+		}
+	});
+
+	app.post("/api/git/pull", async (c) => {
+		try {
+			const result = await gitPull();
+			return c.json(result);
+		} catch (error) {
+			return c.json({
+				success: false,
+				message: `Git pull unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
+	});
+
+	app.post("/api/git/push", async (c) => {
+		try {
+			const result = await gitPush();
+			return c.json(result);
+		} catch (error) {
+			return c.json({
+				success: false,
+				message: `Git push unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
+	});
+
+	app.post("/api/git/sync", async (c) => {
+		try {
+			const result = await gitSync();
+			return c.json(result);
+		} catch (error) {
+			return c.json({
+				success: false,
+				message: `Git sync unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
+	});
+
+	app.get("/api/git/config", (c) => {
+		return c.json(gc);
+	});
+
+	app.post("/api/git/config", async (c) => {
+		const body = (await c.req.json()) as Partial<GitConfig>;
+
+		applyGitConfigPatch(gc, body);
+
+		if (typeof body.autoSync === "boolean" || body.syncInterval !== undefined) {
+			await stopGitSyncTimer();
+			if (gc.autoSync) {
+				startGitSyncTimer();
+			}
+		}
+
+		return c.json({ success: true, config: gc });
+	});
+}

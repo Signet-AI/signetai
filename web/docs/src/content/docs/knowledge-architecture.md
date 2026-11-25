@@ -187,7 +187,7 @@ The architecture should stay small enough to inspect and strict enough to trust:
 - explicit local operations can apply immediately with provenance.
 
 When this document and [KNOWLEDGE-GRAPH.md](/knowledge-graph/) disagree, the
-code in `platform/core/src/migrations/`, `platform/daemon/src/knowledge-graph.ts`,
-`platform/daemon/src/routes/knowledge-routes.ts`,
-`platform/daemon/src/routes/ontology-routes.ts`, and
-`platform/daemon/src/pipeline/graph-traversal.ts` is the source of truth.
+code in `platform/core/src/migrations/`, `platform/daemon/src/ontology/graph/knowledge-graph.ts`,
+`platform/daemon/src/http/routes/knowledge-routes.ts`,
+`platform/daemon/src/http/routes/ontology-routes.ts`, and
+`platform/daemon/src/recall/graph/traversal.ts` is the source of truth.

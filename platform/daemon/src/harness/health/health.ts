@@ -1,0 +1,170 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnHidden as spawn } from "@signet/core";
+import { HARNESS_INSTALLERS, getHarnessLoader, type HarnessConnectorStatus } from "../install/registry";
+import { hasNativeRuntimeAssets } from "../../runtime/update/native-runtime-assets";
+
+export interface HarnessHealthRequest {
+	readonly id: string;
+	readonly configured: boolean;
+	readonly lastSeen: string | null;
+}
+
+interface ActiveInspection {
+	readonly cancel: () => void;
+	readonly closed: Promise<HarnessConnectorStatus>;
+	finished: boolean;
+	waiters: number;
+}
+
+const active = new Map<string, ActiveInspection>();
+let stopping = false;
+
+function workerPath(): string {
+	const directory = dirname(fileURLToPath(import.meta.url));
+	const built = join(directory, "harness-health-worker.js");
+	return existsSync(built) ? built : join(directory, "harness-health-worker.ts");
+}
+
+function failed(request: HarnessHealthRequest, message: string): HarnessConnectorStatus {
+	return {
+		id: request.id,
+		displayName: request.id,
+		kind: "harness",
+		description: "Harness connector",
+		icon: null,
+		available: false,
+		configured: request.configured,
+		detected: false,
+		installed: false,
+		relevant: request.configured || request.lastSeen !== null,
+		configPath: null,
+		lastSeen: request.lastSeen,
+		capabilities: { repair: false, reinitialize: false, reinitializeRequiresConfirmation: false },
+		inspectionStatus: "unavailable",
+		health: { status: "unknown", message, checkedAt: new Date().toISOString() },
+	};
+}
+export async function runHarnessInspection(
+	request: HarnessHealthRequest,
+	options: { signal?: AbortSignal; timeoutMs?: number; entrypoint?: string } = {},
+): Promise<HarnessConnectorStatus> {
+	let running = active.get(request.id);
+	while (running?.finished) {
+		await running.closed;
+		running = active.get(request.id);
+	}
+	if (stopping || options.signal?.aborted) return failed(request, "Health inspection cancelled.");
+	return waitForInspection(request, running ?? startInspection(request, options), options.signal);
+}
+
+function startInspection(
+	request: HarnessHealthRequest,
+	options: { timeoutMs?: number; entrypoint?: string },
+): ActiveInspection {
+	let cancel = () => {};
+	const closed = new Promise<HarnessConnectorStatus>((resolve) => {
+		const child = spawn(
+			process.execPath,
+			hasNativeRuntimeAssets() && !options.entrypoint ? [] : [options.entrypoint ?? workerPath()],
+			{
+				env: { ...process.env, SIGNET_HEALTH_INSPECTION: JSON.stringify(request) },
+				stdio: ["ignore", "pipe", "ignore"],
+			},
+		);
+		let result: HarnessConnectorStatus | undefined;
+		const finish = (status: HarnessConnectorStatus) => {
+			if (result) return;
+			result = status;
+			inspection.finished = true;
+			clearTimeout(timer);
+			child.kill("SIGKILL");
+		};
+		cancel = () => finish(failed(request, "Health inspection cancelled."));
+		const timer = setTimeout(() => finish(failed(request, "Health inspection timed out.")), options.timeoutMs ?? 5000);
+		let output = "";
+		child.stdout?.setEncoding("utf8");
+		child.stdout?.on("data", (chunk: string) => {
+			output += chunk;
+			if (output.length > 65536) return finish(failed(request, "Health inspection response exceeded its limit."));
+			const prefix = "SIGNET_HEALTH_RESULT ";
+			const start = output.indexOf(prefix);
+			const end = output.indexOf("\n", start);
+			if (start < 0 || end < 0) return;
+			try {
+				finish(JSON.parse(output.slice(start + prefix.length, end)) as HarnessConnectorStatus);
+			} catch {
+				finish(failed(request, "Health inspection returned an invalid response."));
+			}
+		});
+		child.once("error", (error: Error) => finish(failed(request, `Health inspection failed: ${error.message}`)));
+		child.once("close", (code) => {
+			clearTimeout(timer);
+			if (active.get(request.id) === inspection) active.delete(request.id);
+			resolve(result ?? failed(request, `Health process exited before reporting a result (${code}).`));
+		});
+	});
+	const inspection: ActiveInspection = { cancel, closed, finished: false, waiters: 0 };
+	active.set(request.id, inspection);
+	return inspection;
+}
+
+function waitForInspection(
+	request: HarnessHealthRequest,
+	inspection: ActiveInspection,
+	signal: AbortSignal | undefined,
+): Promise<HarnessConnectorStatus> {
+	inspection.waiters += 1;
+	return new Promise((resolve) => {
+		let settled = false;
+		const settle = (status: HarnessConnectorStatus) => {
+			if (settled) return;
+			settled = true;
+			inspection.waiters -= 1;
+			signal?.removeEventListener("abort", abort);
+			resolve(status);
+		};
+		const abort = () => {
+			settle(failed(request, "Health inspection cancelled."));
+			if (inspection.waiters === 0) inspection.cancel();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		void inspection.closed.then(settle);
+	});
+}
+
+export async function stopHarnessHealth(): Promise<void> {
+	stopping = true;
+	const pending = [...active.values()];
+	for (const work of pending) work.cancel();
+	await Promise.all(pending.map((work) => work.closed));
+}
+
+export async function inspectHarnessConnector(
+	id: string,
+	configuredHarnesses: readonly string[],
+	lastSeen: ReadonlyMap<string, string> = new Map(),
+	signal?: AbortSignal,
+): Promise<HarnessConnectorStatus | null> {
+	if (!getHarnessLoader(id)) return null;
+	return runHarnessInspection(
+		{ id, configured: configuredHarnesses.includes(id), lastSeen: lastSeen.get(id) ?? null },
+		{ signal },
+	);
+}
+
+export async function enumerateHarnessConnectors(
+	configuredHarnesses: readonly string[],
+	lastSeen: ReadonlyMap<string, string> = new Map(),
+	signal?: AbortSignal,
+): Promise<readonly HarnessConnectorStatus[]> {
+	return Promise.all(
+		Object.keys(HARNESS_INSTALLERS).map((id) =>
+			runHarnessInspection(
+				{ id, configured: configuredHarnesses.includes(id), lastSeen: lastSeen.get(id) ?? null },
+				{ signal },
+			),
+		),
+	);
+}

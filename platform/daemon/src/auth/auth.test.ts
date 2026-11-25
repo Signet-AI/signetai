@@ -722,7 +722,7 @@ describe("auth routes - password dashboard login", () => {
 		const tmpDir = mkdtempSync(join(tmpdir(), "signet-auth-login-test-"));
 		const prevUsername = process.env.SIGNET_ADMIN_USERNAME;
 		const prevPassword = process.env.SIGNET_ADMIN_PASSWORD;
-		const state = await import("../routes/state.js");
+		const state = await import("../http/routes/state.js");
 		try {
 			mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
 			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: team\n  sessionTokenTtlSeconds: 60\n");
@@ -732,7 +732,7 @@ describe("auth routes - password dashboard login", () => {
 			state.reloadAuthState(tmpDir);
 			if (!state.authSecret) throw new Error("expected auth secret");
 
-			const { registerAuthRoutes } = await import("../routes/auth-routes.js");
+			const { registerAuthRoutes } = await import("../http/routes/auth-routes.js");
 			const app = new Hono();
 			app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
 			registerAuthRoutes(app);

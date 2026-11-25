@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { workspaceLayoutStartup } from "./workspace-layout-startup";
-import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
-import { requestMemoryHead } from "./memory-head";
+import { workspaceLayoutStartup } from "./workspace/layout-startup";
+import { stopPiAgentWorkers } from "./inference/providers/pi-agent-client";
+import { requestMemoryHead } from "./dreaming/head/head";
 
-import "./bun-socket-polyfill";
+import "./http/server/bun-socket-polyfill";
 import { spawnHidden as spawn } from "@signet/core";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -37,10 +37,10 @@ import {
 } from "@signet/core";
 import { watch } from "chokidar";
 import { Hono } from "hono";
-import { resolveDaemonAgentId } from "./agent-id";
-import { yieldEvery } from "./async-yield";
+import { resolveDaemonAgentId } from "./agents/identity/agent-id";
+import { yieldEvery } from "./runtime/concurrency/async-yield";
 import { createToken, requirePermission } from "./auth";
-import { bindWithRetry } from "./bind-with-retry";
+import { bindWithRetry } from "./http/server/bind-with-retry";
 import {
 	migrateConfig,
 	migrateEmbeddingBaseUrl,
@@ -49,27 +49,27 @@ import {
 	migrateRetiredExtractionWriterConfig,
 	migrateRetiredMemoryPipelineRoutingV9,
 	migrateSessionSynthesisRoute,
-} from "./config-migration";
+} from "./config/migration";
 import { findSqliteVecExtension } from "@signet/core";
-import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
+import { clearAllPresence, reconcileAcpDeliveries } from "./agents/cross-agent/messages";
 import {
 	MIGRATION_VERIFY_FAILED_STATUS,
 	MIGRATION_VERIFY_PARKED_STATUS,
 	nextIncrementalIntegrityRetryDelay,
 	readMigrationVerifyCheckpoint,
 	runIncrementalDatabaseIntegrityCheck,
-} from "./incremental-database-integrity";
+} from "./db/integrity/incremental";
 import {
 	createMigrationVerifySetupRetry,
 	migrationVerifyCheckpointKey,
 	runMigrationIntegrityVerifyGate,
-} from "./migration-integrity-verify";
-import { readRetainedMigrationVerifyStatus } from "./daemon-migration-startup";
+} from "./db/integrity/migration-verify";
+import { readRetainedMigrationVerifyStatus } from "./db/integrity/migration-startup";
 import {
 	getDatabaseIntegrityStatus,
 	publishDatabaseIntegrityStatus,
 	resetGlobalIntegrityLatch,
-} from "./database-integrity";
+} from "./db/integrity/integrity";
 import {
 	closeDbAccessor,
 	DatabaseIntegrityCorruptError,
@@ -83,16 +83,16 @@ import {
 	pruneMigrationBackupsAfterIntegrity,
 	resolveSqliteRuntimeConfig,
 	setDatabaseIntegrityWritesBlocked,
-} from "./db-accessor";
-import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
+} from "./db/owner/accessor";
+import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db/maintenance/vacuum-worker";
 import {
 	createDbOwnerClient,
 	DB_OWNER_SURVIVABLE_CODES,
 	type DbOwnerClient,
 	type DbOwnerClientOptions,
 	DbOwnerError,
-} from "./db-owner-client";
-import type { DbOwnerParameter } from "./db-owner-protocol";
+} from "./db/owner/client";
+import type { DbOwnerParameter } from "./db/owner/protocol";
 import {
 	type DbOwnerMaintenance,
 	closeRegisteredDbOwnerMaintenance,
@@ -102,40 +102,40 @@ import {
 	ownerRunStatement,
 	ownerTransaction,
 	registerDbOwnerMaintenance,
-} from "./db-owner-maintenance";
+} from "./db/maintenance/maintenance";
 import {
 	createDeferredRuntimeGate,
 	createDeferredRuntimeScheduler,
 	releaseDeferredRuntimeGateIfSafe,
-} from "./deferred-runtime-gate";
+} from "./runtime/startup/deferred-runtime-gate";
 import {
 	closeDbOwnerDuringShutdown,
 	createShutdownRequestGate,
 	forceExitDuringShutdownFlush,
 	runShutdownCleanup,
-} from "./daemon-shutdown";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
-import { ownerReadOne } from "./db-owner-sql";
-import type { QueuePressureSnapshot } from "./diagnostics-queue";
-import { fetchEmbedding } from "./embedding-fetch";
-import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
+} from "./runtime/shutdown/shutdown";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db/owner/runtime";
+import { ownerReadOne } from "./db/owner/sql";
+import type { QueuePressureSnapshot } from "./telemetry/diagnostics/queue";
+import { fetchEmbedding } from "./inference/embeddings/fetch";
+import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embeddings/index/migration";
 import {
 	type EmbeddingIndexStateRow,
 	parseEmbeddingIndexStateRow,
 	resolveActiveEmbeddingConfigFromState,
-} from "./embedding-index-state";
-import { completeFtsStartupRecovery } from "./fts-startup-recovery";
-import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
-import { initFeatureFlags } from "./feature-flags";
-import { writeFileIfChangedAsync } from "./file-sync";
-import { createSignetHttpServer } from "./http-server";
-import { syncAgentWorkspaces } from "./identity-sync";
+} from "./embeddings/index/state";
+import { completeFtsStartupRecovery } from "./db/integrity/fts-startup-recovery";
+import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embeddings/index/tracker";
+import { initFeatureFlags } from "./config/feature-flags";
+import { writeFileIfChangedAsync } from "./sources/providers/filesystem/file-sync";
+import { createSignetHttpServer } from "./http/server/server";
+import { syncAgentWorkspaces } from "./harness/identity/sync";
 import {
 	type InferenceStatusSummary,
 	getOrCreateInferenceRouter,
 	isInferenceRouterConfigPath,
-} from "./inference-router.js";
-import { fetchInternal } from "./internal-fetch";
+} from "./inference/router/router.js";
+import { fetchInternal } from "./http/server/internal-fetch";
 import {
 	type DaemonLifecycle,
 	classifyPreviousDaemonExit,
@@ -143,24 +143,24 @@ import {
 	readDaemonLifecycle,
 	terminalLifecycleFields,
 	writeDaemonLifecycle,
-} from "./lifecycle";
-import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
-import { logger } from "./logger";
+} from "./runtime/service/lifecycle";
+import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./inference/router/llm";
+import { logger } from "./runtime/logging/logger";
 import {
 	type ResolvedMemoryConfig,
 	graphWriteCaps,
 	loadMemoryConfig,
 	readRuntimeConfig,
 	retiredDreamingIdentityFiles,
-} from "./memory-config";
-import { registerGlobalMiddleware } from "./middleware";
+} from "./config/memory-config";
+import { registerGlobalMiddleware } from "./http/server/middleware";
 import {
 	type NativeMemoryBridgeHandle,
 	configuredNativeMemorySources,
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
-} from "./native-memory-sources";
-import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+} from "./sources/providers/native-memory/provider";
+import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./runtime/update/native-runtime-assets";
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
@@ -168,27 +168,27 @@ import {
 	setDreamingWorker,
 	startPipeline,
 	stopPipeline,
-} from "./pipeline";
+} from "./workers";
 import { randomUUID } from "node:crypto";
-import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
-import { importedSourceAttentionUpsert } from "./pipeline/dreaming-evidence-consumption";
-import { dbOwnerTransaction } from "./db-owner-runtime";
-import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
-import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
-import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
-import { invalidateTraversalCache } from "./pipeline/graph-traversal";
-import { stopModelRegistry } from "./pipeline/model-registry";
-import { configureLlmConcurrency } from "./pipeline/provider";
-import { type ReflectionWorkerHandle, startReflectionWorker } from "./pipeline/reflection-worker";
-import { startReconciler } from "./pipeline/skill-reconciler";
+import { recordDreamingPassTelemetry } from "./dreaming/passes/dreaming";
+import { importedSourceAttentionUpsert } from "./dreaming/evidence/consumption";
+import { dbOwnerTransaction } from "./db/owner/runtime";
+import { startDeferredRuntimeAfterDreaming } from "./dreaming/passes/startup";
+import { type DreamingWorkerHandle, startDreamingWorker } from "./dreaming/passes/worker";
+import { retireLegacyExtractionJobsAsync } from "./ontology/extraction/fallback";
+import { invalidateTraversalCache } from "./recall/graph/traversal";
+import { stopModelRegistry } from "./inference/router/model-registry";
+import { configureLlmConcurrency } from "./inference/router/provider";
+import { type ReflectionWorkerHandle, startReflectionWorker } from "./workers/reflection";
+import { startReconciler } from "./workers/skills/reconciler";
 import {
 	getResourceSnapshot,
 	logFdSnapshot,
 	startEventLoopMonitor,
 	startFdPollMonitor,
 	stopResourceMonitors,
-} from "./resource-monitor";
-import { buildResourceUtilizationTelemetry } from "./resource-telemetry";
+} from "./telemetry/pressure/resource-monitor";
+import { buildResourceUtilizationTelemetry } from "./telemetry/pressure/resource-telemetry";
 import {
 	AGENTS_DIR,
 	BIND_HOST,
@@ -219,16 +219,16 @@ import {
 	setTelemetryRef,
 	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	shuttingDown,
-} from "./routes/state.js";
+} from "./http/routes/state.js";
 import {
 	type PressureRecoveryOutcome,
 	buildRuntimePressureEnvelope,
 	countActiveWorkers,
 	setRuntimePressureEnvelope,
-} from "./runtime-pressure";
-import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpointsAsync } from "./session-checkpoints";
-import { createSessionClaimStore } from "./session-claims";
-import { restoreTranscriptBypasses } from "./session-transcript-lifecycle";
+} from "./telemetry/pressure/runtime-pressure";
+import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpointsAsync } from "./sessions/checkpoints";
+import { createSessionClaimStore } from "./sessions/claims";
+import { restoreTranscriptBypasses } from "./transcripts/store/lifecycle";
 import {
 	releaseAllSessions,
 	restorePersistedSessionsAsync,
@@ -236,10 +236,10 @@ import {
 	setSessionEvictionHandler,
 	startSessionCleanup,
 	stopSessionCleanup,
-} from "./session-tracker";
-import { createTtlEvictionHandler } from "./session-ttl-finalizer";
-import { createSingleFlightRunner } from "./single-flight-runner";
-import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance-lock";
+} from "./sessions/tracker";
+import { createTtlEvictionHandler } from "./sessions/ttl-finalizer";
+import { createSingleFlightRunner } from "./runtime/concurrency/single-flight-runner";
+import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./runtime/service/single-instance-lock";
 import {
 	beginSourceIndexJob,
 	clearSourceIndexInFlight,
@@ -252,16 +252,20 @@ import {
 	trackSourceIndexRun,
 	updateSourceIndexJobProgress,
 	waitForSourceIndexRuns,
-} from "./source-index-progress";
+} from "./sources/lifecycle/index-progress";
 import {
 	flushPendingSourceLifecycleTelemetry,
 	recordSourceConnected,
 	recordSourceIndexOperation,
 	sourceFailureClass,
 	trackSourceLifecycleWrite,
-} from "./source-lifecycle-telemetry";
-import { getStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
-import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
+} from "./telemetry/search/source-lifecycle";
+import { getStartupRecoveryCompletion, runStartupRecovery } from "./db/integrity/startup-recovery";
+import {
+	getPressureRecoveryOutcome,
+	getSystemPressure,
+	reportStartupGrace,
+} from "./telemetry/pressure/system-pressure";
 import {
 	type TelemetryCollector,
 	type TelemetryConfigSnapshot,
@@ -272,32 +276,39 @@ import {
 	setActiveTelemetry,
 	stopActiveTelemetry,
 	telemetryDisabledByEnv,
-} from "./telemetry";
-import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
-import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
-import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
-import { MigrationControlBoundary } from "./workspace-writer-barrier";
-import { createOwnerTranscriptImportStore } from "./transcript-import-store";
-import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
-import { admitImport } from "./import-inbox";
-import { startManualInboxWorker, type ManualInboxAdmission, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
-import { importDocument } from "./document-import-service";
-import { stageTranscriptImport } from "./transcript-import-admission";
+} from "./telemetry/usage/telemetry";
+import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcripts/capture/worker";
+import {
+	type TranscriptRecoveryWorkerHandle,
+	startTranscriptRecoveryWorker,
+} from "./transcripts/recovery/transcript-recovery-worker";
+import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcripts/import/worker";
+import { MigrationControlBoundary } from "./db/maintenance/workspace-writer-barrier";
+import { createOwnerTranscriptImportStore } from "./transcripts/import/store";
+import { DbOwnedImportAdmissionLedger } from "./sources/imports/admission-ledger";
+import { admitImport } from "./sources/imports/inbox";
+import {
+	startManualInboxWorker,
+	type ManualInboxAdmission,
+	type ManualInboxWorkerHandle,
+} from "./sources/imports/manual-inbox-worker";
+import { importDocument } from "./sources/imports/document-import-service";
+import { stageTranscriptImport } from "./transcripts/import/admission";
 
-import { resolveDaemonRestartMode } from "./daemon-restart";
+import { resolveDaemonRestartMode } from "./runtime/shutdown/restart";
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
 	setSynthesisWorker as setSynthesisRenderWorker,
 	sweepStaleSessions,
-} from "./hooks";
-import { mountMcpRoute } from "./mcp";
-import { registerAuthRoutes } from "./routes/auth-routes.js";
-import { mountChangelogRoutes } from "./routes/changelog.js";
-import { stopHarnessHealth } from "./harness-health";
-import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
-import { registerConnectorRoutes } from "./routes/connectors-routes.js";
-import { setupDashboardRoutes } from "./routes/dashboard.js";
-import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
+} from "./http/hooks/hooks";
+import { mountMcpRoute } from "./http/mcp";
+import { registerAuthRoutes } from "./http/routes/auth-routes.js";
+import { mountChangelogRoutes } from "./http/routes/changelog.js";
+import { stopHarnessHealth } from "./harness/health/health";
+import { registerHarnessInstallRoutes, stopHarnessInstall } from "./http/routes/harness-install";
+import { registerConnectorRoutes } from "./http/routes/connectors-routes.js";
+import { setupDashboardRoutes } from "./http/routes/dashboard.js";
+import { registerDatabaseDiagnosticsRoutes } from "./http/routes/database-diagnostics.js";
 import {
 	ensureWorkspaceGitignore,
 	getGitStatus,
@@ -309,40 +320,40 @@ import {
 	startGitSyncTimer,
 	stopGitSyncTimer,
 	setGitMigrationControl,
-} from "./routes/git-sync.js";
-import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
-import { mountHealthRoutes } from "./routes/health.js";
-import { mountProtectionRoutes } from "./protection.js";
-import { registerHooksRoutes } from "./routes/hooks-routes.js";
-import { registerBoardRoutes } from "./routes/board-routes.js";
-import { registerImportRoutes } from "./routes/import-routes.js";
-import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
-import { mountInferenceRoutes } from "./routes/inference.js";
-import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
-import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
-import { registerMemoryRoutes } from "./routes/memory-routes.js";
-import { registerMiscRoutes } from "./routes/misc-routes.js";
-import { registerOntologyRoutes } from "./routes/ontology-routes.js";
-import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
-import { registerPluginRoutes } from "./routes/plugins-routes.js";
-import { registerQueueDiagnosticsRoutes } from "./routes/queue-diagnostics.js";
-import { registerReflectionRoutes } from "./routes/reflection-routes.js";
-import { registerRepairRoutes } from "./routes/repair-routes.js";
-import { registerSecretRoutes } from "./routes/secrets-routes.js";
-import { registerSessionRoutes } from "./routes/session-routes.js";
-import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
-import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
+} from "./http/routes/git-sync.js";
+import { registerGraphiqRoutes } from "./http/routes/graphiq-routes.js";
+import { mountHealthRoutes } from "./http/routes/health.js";
+import { mountProtectionRoutes } from "./workspace/protection.js";
+import { registerHooksRoutes } from "./http/routes/hooks-routes.js";
+import { registerBoardRoutes } from "./http/routes/board-routes.js";
+import { registerImportRoutes } from "./http/routes/import-routes.js";
+import { registerTranscriptImportRoutes } from "./http/routes/transcript-import-routes.js";
+import { mountInferenceRoutes } from "./http/routes/inference.js";
+import { registerKnowledgeRoutes } from "./http/routes/knowledge-routes.js";
+import { mountMarketplaceReviewsRoutes } from "./http/routes/marketplace-reviews.js";
+import { registerMemoryRoutes } from "./http/routes/memory-routes.js";
+import { registerMiscRoutes } from "./http/routes/misc-routes.js";
+import { registerOntologyRoutes } from "./http/routes/ontology-routes.js";
+import { registerPipelineRoutes } from "./http/routes/pipeline-routes.js";
+import { registerPluginRoutes } from "./http/routes/plugins-routes.js";
+import { registerQueueDiagnosticsRoutes } from "./http/routes/queue-diagnostics.js";
+import { registerReflectionRoutes } from "./http/routes/reflection-routes.js";
+import { registerRepairRoutes } from "./http/routes/repair-routes.js";
+import { registerSecretRoutes } from "./http/routes/secrets-routes.js";
+import { registerSessionRoutes } from "./http/routes/session-routes.js";
+import { mountSkillAnalyticsRoutes } from "./http/routes/skill-analytics.js";
+import { mountSkillsRoutes, setFetchEmbedding } from "./http/routes/skills.js";
 import {
 	cleanupSourceDeletionTombstones,
 	finalizeCancelledSourceIndexJob,
 	registerSourcesRoutes,
 	stopSourceIndexJobs,
-} from "./routes/sources-routes.js";
-import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
-import { checkEmbeddingProvider } from "./routes/utils.js";
-import { isReadyResponse } from "./synthesis-worker-protocol";
-import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
-import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
+} from "./http/routes/sources-routes.js";
+import { registerTelemetryRoutes } from "./http/routes/telemetry-routes.js";
+import { checkEmbeddingProvider } from "./http/routes/utils.js";
+import { isReadyResponse } from "./workers/synthesis/protocol";
+import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./runtime/update/system";
+import { createAgentsWatcherIgnoreMatcher } from "./sources/providers/filesystem/watcher-ignore";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -2060,7 +2071,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			dbOwnerMaintenanceHandle ?? undefined,
 		);
 		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
-			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
+			const { configureNativeEmbeddingAssets } = await import("./inference/embeddings/native");
 			configureNativeEmbeddingAssets({
 				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
 				wasmAssetDir: materializeEmbeddedWasmAssets(),
@@ -2245,11 +2256,11 @@ async function cleanup() {
 	}
 
 	try {
-		const { shutdownNativeProvider } = await import("./native-embedding");
+		const { shutdownNativeProvider } = await import("./inference/embeddings/native");
 		await shutdownNativeProvider();
 	} catch {}
 	try {
-		const { shutdownNativeReranker } = await import("./native-rerank");
+		const { shutdownNativeReranker } = await import("./inference/rerank/native");
 		await shutdownNativeReranker();
 	} catch {}
 
@@ -2615,7 +2626,8 @@ async function main() {
 	const bundled = join(__dirname, "synthesis-render-worker.js");
 	const workerPath = existsSync(bundled)
 		? bundled
-		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
+		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ??
+			join(__dirname, "workers/synthesis/synthesis-render-worker.ts"));
 	let synthWorker: Worker | null = null;
 	if (!migrationIntegrityWritesBlocked) {
 		try {

@@ -74,7 +74,7 @@ agent's memories. The stdio server (`signet mcp`) does not read
 
 ## Tool Reference
 
-All tools are defined in `platform/daemon/src/mcp/tools.ts`. Tool handlers
+All tools are defined in `platform/daemon/src/http/mcp/tools.ts`. Tool handlers
 call the daemon's HTTP API internally and use the shared recall/remember
 surface helpers from `@signet/core` so MCP, CLI, and harness integrations do
 not drift into separate request shapes or result formatting.

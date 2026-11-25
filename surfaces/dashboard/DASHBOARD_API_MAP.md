@@ -296,7 +296,7 @@ Restoring 317 inert files risks confusion about which dashboard is active.
 ## 6. Backend integration gaps — where the mockup needs daemon work
 
 This section corrects and supersedes the "Open clarifications" note in §4.
-Audited against the **actual daemon route files** in `platform/daemon/src/routes/`
+Audited against the **actual daemon route files** in `platform/daemon/src/http/routes/`
 (cross-referenced with the running daemon). The surprise: most of what the
 mockup stages is **already backed by real endpoints** the Svelte client never
 wired up. The genuine gaps are narrow and listed at the end.

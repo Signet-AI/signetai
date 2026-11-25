@@ -54,6 +54,14 @@ function audit(root: string, ...args: readonly string[]): { readonly code: numbe
 	return { code: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
 }
 
+const QUERIES = [
+	'export const a = "SELECT id FROM memories";',
+	'export const b = "DELETE FROM memories";',
+	'export const c = "UPDATE memories SET content = ?";',
+	"export const value = 1;",
+].join("\n");
+const OWNER = "platform/daemon/src/db/owner/accessor.ts";
+
 afterEach(() => {
 	for (const repo of repos.splice(0)) rmSync(repo, { recursive: true, force: true });
 });
@@ -114,6 +122,41 @@ for (const { category, violation } of cases) {
 		expect(result.output).toContain(`${target}\t${category}\t0 -> 1`);
 	});
 }
+
+test("a renamed SQL owner is counted under the base revision's owner list", () => {
+	const source = "platform/daemon/src/old-owner.ts";
+	const root = fixture({ "scripts/sql-owners.json": JSON.stringify([source]), [source]: QUERIES });
+	mkdirSync(dirname(join(root, OWNER)), { recursive: true });
+	git(root, "mv", source, OWNER);
+	write(root, OWNER, `${QUERIES}\nownerRun(client, a);`);
+	commit(root);
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain(`${OWNER}\traw-sql\t0 -> 1`);
+});
+
+test("an unreadable base owner list fails instead of falling back", () => {
+	for (const list of ['{"owners": []}', "[1]", "["]) {
+		const root = fixture({ "scripts/sql-owners.json": list, [FILE]: "export const value = 1;" });
+		expect(audit(root).code).toBe(1);
+	}
+});
+
+test("copying non-owner SQL into an owner keeps the non-owner baseline", () => {
+	const root = fixture({ "scripts/sql-owners.json": "[]", [FILE]: QUERIES });
+	write(root, "platform/core/src/database.ts", QUERIES);
+	commit(root);
+	expect(audit(root).code).toBe(0);
+});
+
+test("dropping a file from the owner list cannot grandfather its SQL", () => {
+	const root = fixture({ "scripts/sql-owners.json": JSON.stringify([FILE]), [FILE]: QUERIES });
+	write(root, "scripts/sql-owners.json", "[]");
+	commit(root);
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain(`${FILE}\traw-sql\t0 -> 3`);
+});
 
 test("raw SQL reports all text, transport, accessor and marker forms", () => {
 	const root = fixture({ "README.md": "base" });
@@ -247,7 +290,7 @@ test("only the expected-miss helpers' own catches are exempt", async () => {
 });
 
 test("owner SQL is exempt but casts and swallowed errors are not", () => {
-	const path = "platform/daemon/src/db-owner-worker.ts";
+	const path = "platform/daemon/src/db/owner/db-owner-worker.ts";
 	const root = fixture({ "README.md": "base" });
 	write(
 		root,
@@ -263,7 +306,7 @@ test("owner SQL is exempt but casts and swallowed errors are not", () => {
 });
 
 test("owner files still ratchet raw owner-protocol and legacy accessor bypasses", () => {
-	const path = "platform/daemon/src/memory-search.ts";
+	const path = "platform/daemon/src/recall/search/memory-search.ts";
 	const root = fixture({ [path]: 'export const sql = "SELECT id FROM memories";' });
 	write(
 		root,
@@ -380,7 +423,7 @@ test("all production roots and TSX files are audited", () => {
 });
 
 test("moving SQL out of the owner closure cannot carry its exemption", () => {
-	const source = "platform/daemon/src/db-owner-worker.ts";
+	const source = "platform/daemon/src/db/owner/db-owner-worker.ts";
 	const root = fixture({ [source]: cases[0].violation });
 	mkdirSync(dirname(join(root, FILE)), { recursive: true });
 	git(root, "mv", source, FILE);
@@ -393,15 +436,15 @@ test("moving SQL out of the owner closure cannot carry its exemption", () => {
 test("named owner handlers retain their SQL authority without exempting transports", () => {
 	const root = fixture({ "README.md": "base" });
 	for (const path of [
-		"platform/daemon/src/memory-search.ts",
-		"platform/daemon/src/pipeline/dreaming-capabilities.ts",
-		"platform/daemon/src/session-transcripts.ts",
+		"platform/daemon/src/recall/search/memory-search.ts",
+		"platform/daemon/src/dreaming/operations/capabilities.ts",
+		"platform/daemon/src/transcripts/store/session-transcripts.ts",
 	]) {
 		write(root, path, cases[0].violation);
 	}
 	commit(root);
 	expect(audit(root).code).toBe(0);
-	const transport = "platform/daemon/src/db-owner-sql.ts";
+	const transport = "platform/daemon/src/db/owner/sql.ts";
 	write(root, transport, cases[0].violation);
 	commit(root);
 	const result = audit(root);

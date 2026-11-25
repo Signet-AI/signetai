@@ -9,9 +9,9 @@ import {
 	createAgentMessage,
 	resetCrossAgentStateForTest,
 	upsertAgentPresence,
-} from "../../platform/daemon/src/cross-agent";
-import { closeDbAccessor, initDbAccessor } from "../../platform/daemon/src/db-accessor";
-import { collectCrossAgentNotifications } from "../../platform/daemon/src/notifications/cross-agent-notifications";
+} from "../../platform/daemon/src/agents/cross-agent/messages";
+import { closeDbAccessor, initDbAccessor } from "../../platform/daemon/src/db/owner/accessor";
+import { collectCrossAgentNotifications } from "../../platform/daemon/src/agents/cross-agent/notifications";
 
 const SAMPLE_COUNT = 25;
 const MAX_P95_MS = 250;

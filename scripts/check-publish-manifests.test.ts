@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXTERNAL_NODE } from "../platform/daemon/build-externals";
-import { NATIVE_BINARY_MAX_BYTES, NATIVE_DAEMON_JS_MAX_BYTES } from "../platform/daemon/src/native-release-limits";
+import {
+	NATIVE_BINARY_MAX_BYTES,
+	NATIVE_DAEMON_JS_MAX_BYTES,
+} from "../platform/daemon/src/runtime/update/native-release-limits";
 
 import {
 	collectManifestIssues,
@@ -95,8 +98,11 @@ describe("check-publish-manifests", () => {
 
 	test("keeps runtime split SQLite loader ESM-safe", () => {
 		const root = join(import.meta.dir, "..");
-		const dbSource = readFileSync(join(root, "platform", "daemon", "src", "db.ts"), "utf-8");
-		const dbAccessorSource = readFileSync(join(root, "platform", "daemon", "src", "db-accessor.ts"), "utf-8");
+		const dbSource = readFileSync(join(root, "platform", "daemon", "src", "db", "owner", "db.ts"), "utf-8");
+		const dbAccessorSource = readFileSync(
+			join(root, "platform", "daemon", "src", "db", "owner", "accessor.ts"),
+			"utf-8",
+		);
 
 		for (const source of [dbSource, dbAccessorSource]) {
 			expect(source).toContain('import { createRequire } from "node:module";');
@@ -159,7 +165,7 @@ describe("check-publish-manifests", () => {
 	test("trims native Signet version overrides before package metadata fallback", () => {
 		const root = join(import.meta.dir, "..");
 		const cliSource = readFileSync(join(root, "surfaces", "cli", "src", "cli.ts"), "utf-8");
-		const stateSource = readFileSync(join(root, "platform", "daemon", "src", "routes", "state.ts"), "utf-8");
+		const stateSource = readFileSync(join(root, "platform", "daemon", "src", "http", "routes", "state.ts"), "utf-8");
 
 		expect(cliSource).toContain("process.env.SIGNET_VERSION?.trim()");
 		expect(cliSource).not.toContain("return process.env.SIGNET_VERSION;");
@@ -431,7 +437,9 @@ describe("check-publish-manifests", () => {
 		const buildScript = readFileSync(join(root, "scripts", "build-signet-mcp.ts"), "utf-8");
 
 		expect(wrapper.scripts?.prebuild).toContain("scripts/build-signet-mcp.ts");
-		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"platform"\s*,\s*"daemon"\s*,\s*"src"\s*,\s*"mcp-stdio\.ts"\s*\)/);
+		expect(buildScript).toMatch(
+			/join\(\s*root\s*,\s*"platform"\s*,\s*"daemon"\s*,\s*"src"\s*,\s*"http"\s*,\s*"mcp"\s*,\s*"mcp-stdio\.ts"\s*\)/,
+		);
 		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"dist"\s*,\s*"signetai"\s*,\s*"dist"\s*,\s*"mcp-stdio\.js"\s*\)/);
 	});
 

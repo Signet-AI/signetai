@@ -1,0 +1,351 @@
+import { preflightWorkspace } from "@signet/core";
+import type { Hono } from "hono";
+import { getDatabaseIntegrityStatus } from "../../db/integrity/integrity";
+import { type ReadPressure, type WritePressure, getDbAccessor } from "../../db/owner/accessor";
+import type { DbOwnerHealth } from "../../db/owner/client";
+import {
+	getDbOwnerMaintenanceState,
+	ownerQueryOne,
+	withRegisteredDbOwnerMaintenance,
+} from "../../db/maintenance/maintenance";
+import { getDbRuntimeMetrics, getEventLoopLiveness } from "../../db/observability/observability";
+import {
+	QUEUE_MAX_DEAD_RATE,
+	QUEUE_MAX_DEPTH,
+	QUEUE_MAX_OLDEST_AGE_SEC,
+	type QueueHealth,
+} from "../../telemetry/diagnostics/diagnostics";
+import { getAllFeatureFlags } from "../../config/feature-flags";
+import { loadMemoryConfig } from "../../config/memory-config";
+import { getCachedResourceSnapshot } from "../../telemetry/pressure/resource-monitor";
+import { getUpdateState } from "../../runtime/update/system";
+import type { readEmbeddingIndexMigrationProgress } from "../../embeddings/index/state";
+import {
+	AGENTS_DIR,
+	CURRENT_VERSION,
+	DAEMON_RUNTIME,
+	PORT,
+	authConfig,
+	getCurrentAgentsDir,
+	getExtractionWorkloadState,
+	shuttingDown,
+} from "./state.js";
+import { checkEmbeddingProvider } from "./utils";
+const EMBEDDING_CHECK_TIMEOUT_MS = 2000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: Error): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(timeoutError), ms);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
+interface EmbeddingCheck {
+	readonly provider: string;
+	readonly available: boolean;
+	readonly note?: string;
+	readonly error?: string;
+	readonly checkedAt?: string;
+	readonly migration?: ReturnType<typeof readEmbeddingIndexMigrationProgress>;
+}
+async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; reason: string | null }> {
+	let cfg: ReturnType<typeof loadMemoryConfig>["embedding"];
+	try {
+		cfg = loadMemoryConfig(getCurrentAgentsDir()).embedding;
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			detail: { provider: "unknown", available: false, error: msg },
+			reason: `embedding config unavailable: ${msg}`,
+		};
+	}
+	let migration: ReturnType<typeof readEmbeddingIndexMigrationProgress> = null;
+	try {
+		migration =
+			(await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
+				ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
+			)) ?? null;
+	} catch {}
+	const migrationDetail = migration === null ? {} : { migration };
+
+	if (cfg.provider === "none") {
+		return {
+			ok: true,
+			detail: { provider: "none", available: true, note: "disabled", ...migrationDetail },
+			reason: null,
+		};
+	}
+
+	try {
+		const status = await withTimeout(
+			checkEmbeddingProvider(cfg),
+			EMBEDDING_CHECK_TIMEOUT_MS,
+			new Error("embedding check timed out"),
+		);
+		if (status.available) {
+			return {
+				ok: true,
+				detail: { provider: status.provider, available: true, checkedAt: status.checkedAt, ...migrationDetail },
+				reason: null,
+			};
+		}
+		const err = status.error ?? "provider unreachable";
+		return {
+			ok: false,
+			detail: {
+				provider: status.provider,
+				available: false,
+				error: err,
+				checkedAt: status.checkedAt,
+				...migrationDetail,
+			},
+			reason: `embedding provider ${status.provider} unavailable: ${err}`,
+		};
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			detail: { provider: cfg.provider, available: false, error: msg, ...migrationDetail },
+			reason: msg === "embedding check timed out" ? msg : `embedding provider ${cfg.provider} unavailable: ${msg}`,
+		};
+	}
+}
+
+interface InferenceCheck {
+	readonly status: string;
+	readonly configured: string | null;
+	readonly effective: string;
+	readonly reason: string | null;
+}
+function checkInference(): { ok: boolean; detail: InferenceCheck; reason: string | null } {
+	let cfg: ReturnType<typeof loadMemoryConfig>;
+	try {
+		cfg = loadMemoryConfig(getCurrentAgentsDir());
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			detail: { status: "unknown", configured: null, effective: "none", reason: msg },
+			reason: `inference config unavailable: ${msg}`,
+		};
+	}
+	const extraction = getExtractionWorkloadState({
+		enabled: false,
+		paused: cfg.pipelineV2.paused,
+	});
+	const detail: InferenceCheck = {
+		status: extraction.status,
+		configured: extraction.configured,
+		effective: extraction.effective,
+		reason: extraction.reason,
+	};
+	if (extraction.status === "blocked") {
+		return {
+			ok: false,
+			detail,
+			reason: `inference route blocked: ${extraction.reason ?? "no available extraction provider"}`,
+		};
+	}
+	return { ok: true, detail, reason: null };
+}
+
+export function mountHealthRoutes(app: Hono): void {
+	app.get("/health", async (c) => {
+		const us = getUpdateState();
+		const workspace = preflightWorkspace();
+		let dbOk = false;
+		let dbWriter: WritePressure | null = null;
+		let dbReader: ReadPressure | null = null;
+		let dbRuntime = getDbRuntimeMetrics();
+		let dbOwner: DbOwnerHealth | null = null;
+		try {
+			const accessor = getDbAccessor();
+			try {
+				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
+					try {
+						await ownerQueryOne(ownerMaintenance.owner, "http/routes/health.ts:174", "SELECT 1", [], {
+							deadlineMs: 500,
+						});
+						dbOk = true;
+					} catch {}
+					return ownerMaintenance.health();
+				});
+				if (ownerHealth !== undefined) {
+					dbOwner = ownerHealth;
+				}
+			} catch {}
+			dbWriter = accessor.getWritePressure?.() ?? null;
+			dbReader = accessor.getReadPressure?.() ?? null;
+			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
+		} catch {}
+
+		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
+		const eventLoop = getEventLoopLiveness();
+		const ownerState = getDbOwnerMaintenanceState();
+		return c.json({
+			status: shuttingDown
+				? "shutting_down"
+				: ownerState === "closing"
+					? "degraded"
+					: !dbOk
+						? "degraded"
+						: workspace.status === "missing" || workspace.status === "incomplete"
+							? "degraded"
+							: databaseIntegrity.state === "corrupt" ||
+									databaseIntegrity.state === "unavailable" ||
+									databaseIntegrity.state === "degraded"
+								? "degraded"
+								: "healthy",
+			uptime: process.uptime(),
+			pid: process.pid,
+			version: CURRENT_VERSION,
+			runtime: DAEMON_RUNTIME,
+			port: PORT,
+			agentsDir: AGENTS_DIR,
+			workspace: {
+				status: workspace.status,
+				path: workspace.path,
+				source: workspace.source,
+				reasons: workspace.reasons,
+			},
+			db: dbOk,
+			dbWriter,
+			dbReader,
+			dbRuntime,
+			dbOwner,
+			databaseIntegrity,
+			eventLoop,
+			shuttingDown,
+			updateAvailable: us.lastCheck?.updateAvailable ?? false,
+			pendingRestart: us.pendingRestartVersion !== null,
+			resources: getCachedResourceSnapshot(),
+		});
+	});
+	app.get("/health/live", (c) => {
+		return c.json({
+			status: shuttingDown ? "shutting_down" : "healthy",
+			uptime: process.uptime(),
+			pid: process.pid,
+			version: CURRENT_VERSION,
+			runtime: DAEMON_RUNTIME,
+			port: PORT,
+			shuttingDown,
+			eventLoop: getEventLoopLiveness(),
+		});
+	});
+	app.get("/health/ready", async (c) => {
+		const workspace = preflightWorkspace();
+		const reasons: string[] = [];
+		if (workspace.status === "missing" || workspace.status === "incomplete") {
+			reasons.push(...workspace.reasons);
+		}
+		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
+		let dbReader: ReadPressure | null = null;
+		let dbRuntime = getDbRuntimeMetrics();
+		let dbOwner: DbOwnerHealth | null = null;
+		try {
+			const accessor = getDbAccessor();
+			const ownerResult = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => ({
+				result: await ownerMaintenance.healthReady(),
+				health: ownerMaintenance.health(),
+			}));
+			if (ownerResult !== undefined) {
+				dbResult = ownerResult.result;
+				dbOwner = ownerResult.health;
+			} else {
+				reasons.push(
+					getDbOwnerMaintenanceState() === "closing"
+						? "database owner maintenance is closing"
+						: "database owner maintenance is unavailable",
+				);
+			}
+			dbReader = accessor.getReadPressure?.() ?? null;
+			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
+		} catch (err) {
+			reasons.push(`database unavailable: ${err instanceof Error ? err.message : String(err)}`);
+			try {
+				const accessor = getDbAccessor();
+				dbReader = accessor.getReadPressure?.() ?? null;
+				dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
+			} catch {}
+		}
+		const dbOk = dbResult !== null;
+		const migrationsOk = dbResult?.migrationsOk ?? false;
+		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
+		if (databaseIntegrity.state === "corrupt" || databaseIntegrity.state === "unavailable") {
+			reasons.push(
+				databaseIntegrity.repairGuidance ??
+					`database integrity ${databaseIntegrity.state}; stop the daemon, back up the database, and run the operator integrity repair flow`,
+			);
+		}
+		if (dbOk && !migrationsOk) {
+			reasons.push("pending migrations");
+		}
+		const queueHealth = dbResult?.queueHealth ?? null;
+		if (queueHealth !== null) {
+			if (queueHealth.depth > QUEUE_MAX_DEPTH) {
+				reasons.push(`queue backlog depth ${queueHealth.depth} exceeds ${QUEUE_MAX_DEPTH}`);
+			}
+			if (queueHealth.deadRate > QUEUE_MAX_DEAD_RATE) {
+				reasons.push(`queue dead-letter rate ${queueHealth.deadRate.toFixed(4)} exceeds ${QUEUE_MAX_DEAD_RATE}`);
+			}
+			if (queueHealth.oldestAgeSec > QUEUE_MAX_OLDEST_AGE_SEC) {
+				reasons.push(
+					`queue oldest pending job age ${Math.round(queueHealth.oldestAgeSec)}s exceeds ${QUEUE_MAX_OLDEST_AGE_SEC}s`,
+				);
+			}
+		}
+		const queue: QueueHealth | { readonly error: string } = queueHealth ?? { error: "database unavailable" };
+
+		const embedding = await checkEmbedding();
+		if (embedding.reason !== null) reasons.push(embedding.reason);
+
+		const inference = checkInference();
+		if (inference.reason !== null) reasons.push(inference.reason);
+
+		if (shuttingDown) reasons.push("shutting_down");
+
+		const ready = reasons.length === 0;
+		return c.json(
+			{
+				status: ready ? "ready" : "not_ready",
+				version: CURRENT_VERSION,
+				runtime: DAEMON_RUNTIME,
+				shuttingDown,
+				checks: {
+					workspace: {
+						status: workspace.status,
+						path: workspace.path,
+						source: workspace.source,
+						reasons: workspace.reasons,
+					},
+					db: dbOk,
+					dbReader,
+					dbRuntime,
+					migrations: migrationsOk,
+					databaseIntegrity,
+					embedding: embedding.detail,
+					inference: inference.detail,
+					queue,
+				},
+				reasons,
+			},
+			ready ? 200 : 503,
+		);
+	});
+
+	app.get("/api/features", (c) => {
+		return c.json(getAllFeatureFlags());
+	});
+	app.get("/api/mode", (c) => {
+		return c.json({ mode: authConfig.mode, requiresAuth: authConfig.mode !== "local" });
+	});
+}

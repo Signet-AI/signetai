@@ -1,0 +1,632 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
+import { getDbAccessor } from "../../db/owner/accessor";
+import { logger } from "../../runtime/logging/logger";
+import { handleSynthesisRequest } from "./request";
+import { activeSessionCount } from "../../sessions/tracker";
+import { emitLifecycleObservation, emitLifecycleShutdown } from "@signet/lifecycle-proof";
+
+type SynthesisDeps = {
+	readonly getDbAccessor: typeof getDbAccessor;
+	readonly handleSynthesisRequest: typeof handleSynthesisRequest;
+	readonly logger: typeof logger;
+	readonly activeSessionCount: typeof activeSessionCount;
+};
+
+const DEFAULT_DEPS: SynthesisDeps = {
+	getDbAccessor,
+	handleSynthesisRequest,
+	logger,
+	activeSessionCount,
+};
+
+function getRuntimeDir(): string {
+	return resolveWorkspaceLayout(resolveDefaultBasePath()).runtime;
+}
+
+function normalizeAgentId(agentId?: string): string {
+	const next = agentId?.trim();
+	return next && next.length > 0 ? next : "default";
+}
+const CHECK_INTERVAL_MS = 60_000;
+const MIN_INTERVAL_MS = 60 * 60 * 1000;
+const STARTUP_DELAY_MS = 60_000;
+const FORCE_RETRY_MS = 5_000;
+const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
+
+function getLastSynthesisPath(agentId?: string): string {
+	const key = normalizeAgentId(agentId);
+	const file = key === "default" ? "last-synthesis.json" : `last-synthesis.${encodeURIComponent(key)}.json`;
+	return join(getRuntimeDir(), file);
+}
+
+export function readLastSynthesisTime(agentId?: string): number {
+	try {
+		const path = getLastSynthesisPath(agentId);
+		if (!existsSync(path)) return 0;
+		const data = JSON.parse(readFileSync(path, "utf-8"));
+		return typeof data.lastRunAt === "number" ? data.lastRunAt : 0;
+	} catch {
+		return 0;
+	}
+}
+
+function writeLastSynthesisTime(deps: SynthesisDeps, timestamp: number, agentId?: string): void {
+	try {
+		const path = getLastSynthesisPath(agentId);
+		mkdirSync(getRuntimeDir(), { recursive: true });
+		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
+	} catch (e) {
+		deps.logger.warn("synthesis", "Failed to persist synthesis timestamp", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+}
+function parseLastEndTimestamp(row: unknown): number {
+	if (typeof row !== "object" || row === null || !("last_end" in row)) {
+		return 0;
+	}
+	const value = row.last_end;
+	if (typeof value !== "string" || value.length === 0) {
+		return 0;
+	}
+	const ts = Date.parse(value);
+	return Number.isNaN(ts) ? 0 : ts;
+}
+
+function isExpectedSessionActivityLookupError(error: unknown, table: string): boolean {
+	if (!(error instanceof Error)) return false;
+	const message = error.message.toLowerCase();
+	return (
+		message.includes(`no such table: ${table}`) ||
+		message.includes("dbaccessor not initialised") ||
+		message.includes("dbaccessor is closed")
+	);
+}
+
+function getLastSessionEndTime(deps: SynthesisDeps): number {
+	try {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const checkpointRow = deps.getDbAccessor().withReadDb((db: import("../../db/owner/accessor").ReadDb) => {
+			return db
+				.prepare(`
+				SELECT MAX(created_at) as last_end
+				FROM session_checkpoints
+				WHERE trigger = 'session_end'
+			`)
+				.get();
+		}, "workers/synthesis/worker.ts:91");
+		const checkpointTs = parseLastEndTimestamp(checkpointRow);
+		if (checkpointTs > 0) {
+			return checkpointTs;
+		}
+	} catch (error) {
+		if (!isExpectedSessionActivityLookupError(error, "session_checkpoints")) {
+			deps.logger.error(
+				"synthesis",
+				"Failed to query session_checkpoints for synthesis scheduling",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			throw error;
+		}
+	}
+
+	try {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const transcriptRow = deps.getDbAccessor().withReadDb((db: import("../../db/owner/accessor").ReadDb) => {
+			return db
+				.prepare(`
+					SELECT MAX(completed_at) as last_end
+					FROM session_transcripts
+					WHERE completed_at IS NOT NULL
+				`)
+				.get();
+		}, "workers/synthesis/worker.ts:117");
+		return parseLastEndTimestamp(transcriptRow);
+	} catch (error) {
+		if (!isExpectedSessionActivityLookupError(error, "session_transcripts")) {
+			deps.logger.error(
+				"synthesis",
+				"Failed to query session_transcripts for synthesis scheduling",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			throw error;
+		}
+		return 0;
+	}
+}
+
+type SynthesisResult = "ok" | "empty" | "failed" | "busy";
+export type SynthesisDrainResult = "completed" | "timeout";
+type SynthesisRunOptions = {
+	readonly canWrite?: () => boolean;
+};
+
+export interface SynthesisWorkerConfig {
+	readonly timeout: number;
+	readonly maxTokens: number;
+	readonly idleGapMinutes: number;
+}
+
+export const DEFAULT_SYNTHESIS_WORKER_CONFIG: SynthesisWorkerConfig = {
+	timeout: 120000,
+	maxTokens: 8000,
+	idleGapMinutes: 15,
+};
+
+function shouldRecordSuccess(result: SynthesisResult): boolean {
+	return result === "ok" || result === "empty";
+}
+
+async function runSynthesisWithDeps(
+	deps: SynthesisDeps,
+	config: SynthesisWorkerConfig,
+	agentId?: string,
+	options: SynthesisRunOptions = {},
+): Promise<SynthesisResult> {
+	const scopeAgentId = normalizeAgentId(agentId);
+	deps.logger.info("synthesis", "Starting scheduled synthesis", {
+		agentId: scopeAgentId,
+	});
+
+	try {
+		const synthesisData = await deps.handleSynthesisRequest(
+			{ trigger: "scheduled" },
+			{
+				maxTokens: config.maxTokens,
+				agentId: scopeAgentId,
+			},
+		);
+
+		if (options.canWrite && !options.canWrite()) {
+			deps.logger.warn("synthesis", "Discarding synthesis result after shutdown abandoned the run");
+			return "failed";
+		}
+
+		if (synthesisData.fileCount === 0) {
+			deps.logger.info("synthesis", "No synthesis sources available, skipping");
+			return "empty";
+		}
+
+		if (!synthesisData.prompt || synthesisData.prompt.trim().length === 0) {
+			deps.logger.warn("synthesis", "Renderer returned empty MEMORY.md projection");
+			return "failed";
+		}
+		const finalText = synthesisData.prompt.trimEnd();
+		if (options.canWrite && !options.canWrite()) {
+			deps.logger.warn("synthesis", "Discarding synthesis result after shutdown abandoned the run");
+			return "failed";
+		}
+		deps.logger.info("synthesis", "Skipped retired idle-gap MEMORY.md publication", {
+			agentId: scopeAgentId,
+			sourceItems: synthesisData.fileCount,
+			outputLength: finalText.length,
+			reason: "dreaming-is-memory-head-authority",
+		});
+
+		return "ok";
+	} catch (e) {
+		deps.logger.error("synthesis", "Synthesis failed", e instanceof Error ? e : new Error(String(e)));
+		return "failed";
+	}
+}
+
+export interface SynthesisWorkerHandle {
+	stop(): void;
+	drain(): Promise<SynthesisDrainResult>;
+	acquireWriteLock(): number | null;
+	releaseWriteLock(token: number): void;
+	readonly running: boolean;
+	readonly isSynthesizing: boolean;
+	readonly pendingForceCount: number;
+	triggerNow(opts?: { readonly force?: boolean; readonly source?: string; readonly agentId?: string }): Promise<{
+		success: boolean;
+		skipped: boolean;
+		reason?: string;
+	}>;
+	readonly lastRunAt: number;
+}
+
+export function startSynthesisWorker(
+	config: SynthesisWorkerConfig = DEFAULT_SYNTHESIS_WORKER_CONFIG,
+	deps: SynthesisDeps = DEFAULT_DEPS,
+): SynthesisWorkerHandle {
+	type PendingForce = {
+		source: string;
+		readonly agentId: string;
+		count: number;
+	};
+
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let stopped = false;
+	let isSynthesizing = false;
+	let currentRunPromise: Promise<SynthesisResult> | null = null;
+	let nextLockToken = 1;
+	let activeLockToken: number | null = null;
+	let lockReleasedResolver: (() => void) | null = null;
+	let lockReleasedPromise: Promise<void> = Promise.resolve();
+	let activeWorkId: string | null = null;
+	let activeRunState: { abandoned: boolean } | null = null;
+	type ActiveWorkOutcome = "completed" | "abandoned";
+	let activeWorkOutcome: ActiveWorkOutcome | null = null;
+	const pendingQueue: PendingForce[] = [];
+	const idleGapMs = config.idleGapMinutes * 60 * 1000;
+
+	function acquireWriteLock(): number | null {
+		if (stopped || isSynthesizing) return null;
+		isSynthesizing = true;
+		activeLockToken = nextLockToken++;
+		lockReleasedPromise = new Promise<void>((resolve) => {
+			lockReleasedResolver = resolve;
+		});
+		return activeLockToken;
+	}
+
+	function releaseWriteLock(token: number): void {
+		if (activeLockToken !== token) return;
+		activeLockToken = null;
+		isSynthesizing = false;
+		lockReleasedResolver?.();
+		lockReleasedResolver = null;
+	}
+
+	function enqueuePendingForce(source: string, agentId?: string): void {
+		const key = normalizeAgentId(agentId);
+		const existing = pendingQueue.find((entry) => entry.agentId === key);
+		if (existing) {
+			existing.count += 1;
+			existing.source = source;
+			return;
+		}
+		pendingQueue.push({ source, agentId: key, count: 1 });
+	}
+
+	function abandonPendingForceWork(): number {
+		let abandonedWork = 0;
+		for (const entry of pendingQueue) {
+			for (let count = 0; count < entry.count; count += 1) {
+				emitLifecycleObservation({
+					stage: "restart",
+					workId: `synthesis:${entry.agentId}`,
+					state: "abandoned",
+					sourceSessionId: "daemon",
+					targetSessionId: "daemon",
+				});
+				abandonedWork += 1;
+			}
+		}
+		pendingQueue.length = 0;
+		return abandonedWork;
+	}
+
+	function clearPendingForceFor(agentId?: string): void {
+		const key = normalizeAgentId(agentId);
+		let idx = pendingQueue.findIndex((entry) => entry.agentId === key);
+		while (idx !== -1) {
+			pendingQueue.splice(idx, 1);
+			idx = pendingQueue.findIndex((entry) => entry.agentId === key);
+		}
+	}
+
+	function emitActiveWorkOutcome(outcome: ActiveWorkOutcome): void {
+		if (activeWorkOutcome !== null) return;
+		activeWorkOutcome = outcome;
+		if (!activeWorkId) return;
+		emitLifecycleObservation({
+			stage: "restart",
+			workId: activeWorkId,
+			state: outcome,
+			sourceSessionId: "daemon",
+			targetSessionId: "daemon",
+		});
+	}
+
+	async function runForcedDrainAttempt(entry: PendingForce): Promise<"completed" | "retry"> {
+		const lockToken = acquireWriteLock();
+		if (lockToken === null) {
+			return "retry";
+		}
+
+		try {
+			activeWorkId = `synthesis:${entry.agentId}`;
+			activeWorkOutcome = null;
+			const runState = { abandoned: false };
+			activeRunState = runState;
+			currentRunPromise = runSynthesisWithDeps(deps, config, entry.agentId, {
+				canWrite: () => !runState.abandoned,
+			});
+			const result = await currentRunPromise;
+			emitActiveWorkOutcome(shouldRecordSuccess(result) ? "completed" : "abandoned");
+			if (result === "busy" || result === "failed") {
+				deps.logger.info("synthesis", "Retrying forced synthesis after busy head", {
+					source: entry.source,
+					agentId: entry.agentId,
+					result,
+				});
+				return "retry";
+			}
+			if (shouldRecordSuccess(result) && !runState.abandoned) {
+				writeLastSynthesisTime(deps, Date.now(), entry.agentId);
+			}
+			return "completed";
+		} finally {
+			currentRunPromise = null;
+			activeRunState = null;
+			activeWorkId = null;
+			releaseWriteLock(lockToken);
+		}
+	}
+
+	async function tick(): Promise<void> {
+		if (stopped) return;
+
+		try {
+			const pending = pendingQueue[0];
+			if (pending) {
+				const state = await runForcedDrainAttempt(pending);
+				if (state === "completed") {
+					if (pending.count <= 1) {
+						pendingQueue.shift();
+					} else {
+						pending.count -= 1;
+					}
+					scheduleTick(pendingQueue.length > 0 ? FORCE_RETRY_MS : CHECK_INTERVAL_MS);
+					return;
+				}
+				if (pendingQueue.length > 1) {
+					const head = pendingQueue.shift();
+					if (head) pendingQueue.push(head);
+				}
+				scheduleTick(FORCE_RETRY_MS);
+				return;
+			}
+
+			if (isSynthesizing) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+			if (deps.activeSessionCount() > 0) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+			const lastSessionEnd = getLastSessionEndTime(deps);
+			if (lastSessionEnd === 0) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+
+			const idleSince = Date.now() - lastSessionEnd;
+			if (idleSince < idleGapMs) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+			const lastRun = readLastSynthesisTime();
+			if (lastRun >= lastSessionEnd) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+			const elapsed = Date.now() - lastRun;
+			if (elapsed < MIN_INTERVAL_MS) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+
+			const lockToken = acquireWriteLock();
+			if (lockToken === null) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+
+			try {
+				activeWorkId = "synthesis:default";
+				activeWorkOutcome = null;
+				const runState = { abandoned: false };
+				activeRunState = runState;
+				currentRunPromise = runSynthesisWithDeps(deps, config, undefined, {
+					canWrite: () => !runState.abandoned,
+				});
+				const result = await currentRunPromise;
+				if (shouldRecordSuccess(result) && !runState.abandoned) {
+					writeLastSynthesisTime(deps, Date.now());
+				}
+			} finally {
+				currentRunPromise = null;
+				activeRunState = null;
+				activeWorkId = null;
+				releaseWriteLock(lockToken);
+			}
+		} catch (e) {
+			deps.logger.error("synthesis", "Unhandled tick error", e instanceof Error ? e : new Error(String(e)));
+		}
+
+		scheduleTick(CHECK_INTERVAL_MS);
+	}
+
+	function scheduleTick(delay: number): void {
+		if (stopped) return;
+		if (timer) clearTimeout(timer);
+		timer = setTimeout(() => {
+			timer = null;
+			tick().catch((err) => {
+				deps.logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
+			});
+		}, delay);
+	}
+	scheduleTick(STARTUP_DELAY_MS);
+	emitLifecycleObservation({ stage: "startup" });
+
+	deps.logger.info("synthesis", "Synthesis worker started", {
+		idleGapMinutes: config.idleGapMinutes,
+	});
+
+	return {
+		stop() {
+			stopped = true;
+			if (timer) clearTimeout(timer);
+			deps.logger.info("synthesis", "Synthesis worker stopped");
+		},
+		async drain() {
+			const startedAtMs = Date.now();
+			const workIdAtShutdown = activeWorkId;
+			if (timer) {
+				clearTimeout(timer);
+				timer = null;
+			}
+			if (!isSynthesizing) {
+				const abandonedWork = abandonPendingForceWork();
+				if (abandonedWork === 0) return "completed";
+				const completedAtMs = Date.now();
+				emitLifecycleShutdown({
+					startedAtMs,
+					completedAtMs,
+					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
+					startedWork: abandonedWork,
+					pendingWork: 0,
+					completedWork: 0,
+					abandonedWork,
+				});
+				return "completed";
+			}
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			let timedOut = false;
+			try {
+				await Promise.race([
+					Promise.all([currentRunPromise ?? Promise.resolve(), lockReleasedPromise]).then(() => undefined),
+					new Promise<void>((resolve) => {
+						timeoutId = setTimeout(() => {
+							timedOut = true;
+							deps.logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
+							resolve();
+						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
+					}),
+				]);
+				if (timedOut && activeRunState) activeRunState.abandoned = true;
+				const abandonedPendingWork = abandonPendingForceWork();
+				const completedAtMs = Date.now();
+				const workId = workIdAtShutdown;
+				if (workId && activeWorkOutcome === null) {
+					emitActiveWorkOutcome(timedOut ? "abandoned" : "completed");
+				}
+				emitLifecycleShutdown({
+					startedAtMs,
+					completedAtMs,
+					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
+					startedWork: (workId ? 1 : 0) + abandonedPendingWork,
+					pendingWork: 0,
+					completedWork: workId && activeWorkOutcome === "completed" ? 1 : 0,
+					abandonedWork: (workId && activeWorkOutcome === "abandoned" ? 1 : 0) + abandonedPendingWork,
+				});
+				return timedOut ? "timeout" : "completed";
+			} finally {
+				if (timeoutId !== null) clearTimeout(timeoutId);
+			}
+		},
+		acquireWriteLock,
+		releaseWriteLock,
+		get running() {
+			return !stopped;
+		},
+		get isSynthesizing() {
+			return isSynthesizing;
+		},
+		get pendingForceCount() {
+			return pendingQueue.reduce((sum, entry) => sum + entry.count, 0);
+		},
+		get lastRunAt() {
+			return readLastSynthesisTime();
+		},
+		async triggerNow(opts) {
+			if (stopped) {
+				return { success: false, skipped: true, reason: "Synthesis worker stopped" };
+			}
+			const lockToken = acquireWriteLock();
+			if (lockToken === null) {
+				if (opts?.force) {
+					const key = normalizeAgentId(opts.agentId);
+					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
+					emitLifecycleObservation({
+						stage: "restart",
+						workId: `synthesis:${key}`,
+						state: "queued",
+						sourceSessionId: "daemon",
+						targetSessionId: "daemon",
+					});
+					scheduleTick(FORCE_RETRY_MS);
+					return {
+						success: false,
+						skipped: true,
+						reason: "Synthesis already in progress (queued forced retry)",
+					};
+				}
+				return {
+					success: false,
+					skipped: true,
+					reason: "Synthesis already in progress",
+				};
+			}
+
+			try {
+				const key = normalizeAgentId(opts?.agentId);
+				const lastRun = readLastSynthesisTime(key);
+				const elapsed = Date.now() - lastRun;
+
+				if (opts?.force) {
+					emitLifecycleObservation({
+						stage: "restart",
+						workId: `synthesis:${key}`,
+						state: "queued",
+						sourceSessionId: "daemon",
+						targetSessionId: "daemon",
+					});
+				}
+
+				if (!opts?.force && elapsed < MIN_INTERVAL_MS) {
+					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
+					deps.logger.info("synthesis", "Skipping manual trigger", {
+						reason,
+						source: opts?.source ?? "manual",
+					});
+					return { success: false, skipped: true, reason };
+				}
+
+				activeWorkId = `synthesis:${key}`;
+				const runState = { abandoned: false };
+				activeRunState = runState;
+				activeWorkOutcome = null;
+				currentRunPromise = runSynthesisWithDeps(deps, config, opts?.agentId, {
+					canWrite: () => !runState.abandoned,
+				});
+				const result = await currentRunPromise;
+				if (opts?.force) {
+					emitActiveWorkOutcome(shouldRecordSuccess(result) ? "completed" : "abandoned");
+				}
+				if ((result === "busy" || result === "failed") && opts?.force) {
+					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
+					scheduleTick(FORCE_RETRY_MS);
+				}
+				if (shouldRecordSuccess(result) && !runState.abandoned) {
+					writeLastSynthesisTime(deps, Date.now(), key);
+					clearPendingForceFor(opts?.agentId);
+				}
+				return {
+					success: result === "ok",
+					skipped: result === "empty" || result === "busy",
+					reason:
+						result === "empty"
+							? "No session summaries to synthesize"
+							: result === "busy" && opts?.force
+								? "MEMORY.md head busy (queued forced retry)"
+								: result === "busy"
+									? "MEMORY.md head busy"
+									: undefined,
+				};
+			} finally {
+				currentRunPromise = null;
+				activeRunState = null;
+				activeWorkId = null;
+				releaseWriteLock(lockToken);
+			}
+		},
+	};
+}

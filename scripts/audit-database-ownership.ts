@@ -31,11 +31,11 @@ const DATABASE_OWNERS = new Set([
 	"memorybench/src/server/db/index.ts",
 	"platform/core/src/database.ts",
 	"platform/core/src/signet.ts",
-	"platform/daemon/src/database-integrity-worker.ts",
-	"platform/daemon/src/database-integrity.ts",
-	"platform/daemon/src/db-accessor.ts",
-	"platform/daemon/src/db-owner-worker.ts",
-	"platform/daemon/src/db.ts",
+	"platform/daemon/src/db/integrity/database-integrity-worker.ts",
+	"platform/daemon/src/db/integrity/integrity.ts",
+	"platform/daemon/src/db/owner/accessor.ts",
+	"platform/daemon/src/db/owner/db-owner-worker.ts",
+	"platform/daemon/src/db/owner/db.ts",
 	"surfaces/cli/src/sqlite.ts",
 ]);
 

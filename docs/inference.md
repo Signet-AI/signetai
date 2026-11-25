@@ -6,7 +6,7 @@ Once a streaming response has emitted output, the router does not switch to anot
 
 Why: a second backend would continue text it did not write, and the caller has already consumed the first part.
 
-Owner: `platform/daemon/src/inference-router.ts`.
+Owner: `platform/daemon/src/inference/router/router.ts`.
 
 ## Only sterile ACPX targets retry empty responses
 
@@ -14,4 +14,4 @@ ACPX agents sometimes finish with `end_turn` and no assistant message. Signet re
 
 Why: a target that can act may already have caused side effects, and a retry would repeat them.
 
-Owner: `platform/daemon/src/pipeline/provider.ts`.
+Owner: `platform/daemon/src/inference/router/provider.ts`.

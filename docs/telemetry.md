@@ -6,13 +6,13 @@
 
 Trap: every automated daemon boot with an opted-in config counts as an install. CI shows up as `daemon.started` with no matching `install.ping`. Workflows set `SIGNET_TELEMETRY_OPTOUT=1`, and operator-owned development checkouts set `SIGNET_TELEMETRY_ENV=dev`.
 
-Owner: `dist/signetai/scripts/install-native.js`, `platform/daemon/src/telemetry.ts`.
+Owner: `dist/signetai/scripts/install-native.js`, `platform/daemon/src/telemetry/usage/telemetry.ts`.
 
 ## Turns and session ends are different events
 
 `session.turn` counts persisted turns. `session.end` fires only when a session really terminates, and its token and cost totals cover the matching usage events.
 
-Owner: `platform/daemon/src/hooks.ts`.
+Owner: `platform/daemon/src/http/hooks/hooks.ts`.
 
 ## Sent does not mean ingested
 

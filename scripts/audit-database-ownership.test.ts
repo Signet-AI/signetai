@@ -57,7 +57,7 @@ describe("database owner audit", () => {
 
 	test("accepts existing exact runtime owners without exempting sibling files", () => {
 		const violations = auditDatabaseOwnership([
-			source("platform/daemon/src/db-owner-worker.ts", 'const sqlite = require("bun:sqlite");'),
+			source("platform/daemon/src/db/owner/db-owner-worker.ts", 'const sqlite = require("bun:sqlite");'),
 			source("platform/core/src/database.ts", 'const sqlite = await import("better-sqlite3");'),
 			source("memorybench/src/server/db/index.ts", 'import { Database } from "bun:sqlite";'),
 			source("platform/daemon/src/db-owner-helper.ts", 'const sqlite = require("bun:sqlite");'),

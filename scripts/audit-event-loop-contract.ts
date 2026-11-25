@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
-import { isSemanticSyncDbSiteToken } from "../platform/daemon/src/sync-db-site-token";
+import { isSemanticSyncDbSiteToken } from "../platform/daemon/src/db/observability/sync-site-token";
 export const SYNC_APIS = [
 	"withWriteTx",
 	"withReadDb",
@@ -172,7 +172,7 @@ const DEFAULT_COUNT_BASELINE = "scripts/legacy-sync-db-baseline.json";
 const DEFAULT_REPORT = "scripts/event-loop-contract-audit.md";
 const SYNC_COMPAT_MODULE = "db-accessor-sync";
 const SOURCE_MODULE_EXTENSIONS = [".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".jsx", ".tsx"] as const;
-const OFF_PARENT_ENTRYPOINTS = new Set(["db-owner-worker.ts"]);
+const OFF_PARENT_ENTRYPOINTS = new Set(["db/owner/db-owner-worker.ts"]);
 const LEGACY_MARKER = /@ts-expect-error LEGACY_SYNC_DB_ACCESS: (withReadDb|withWriteTx)/g;
 const MARKER_LINE = /LEGACY_SYNC_DB_ACCESS/;
 /**
