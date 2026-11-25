@@ -11,6 +11,13 @@ import {
 
 function makeApp(): Hono {
 	const app = new Hono();
+	app.all("/api/*", async (c) =>
+		globalThis.fetch(c.req.url, {
+			method: c.req.method,
+			headers: c.req.raw.headers,
+			body: ["GET", "HEAD"].includes(c.req.method) ? undefined : await c.req.text(),
+		}),
+	);
 	mountMcpRoute(app);
 	return app;
 }
@@ -43,6 +50,23 @@ describe("MCP route", () => {
 		globalThis.fetch = originalFetch;
 		__setMcpAdmissionForTests(null);
 		__setMcpRequestGateForTests(null);
+	});
+
+	it("dispatches MCP tools through the mounted daemon rather than a default loopback port", async () => {
+		const app = new Hono();
+		app.get("/api/memories", (c) => c.json({ memories: [{ id: "same-daemon" }], stats: {} }));
+		mountMcpRoute(app);
+		const response = await app.request("/mcp", {
+			method: "POST",
+			headers: streamableHeaders,
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: { name: "memory_list", arguments: {} },
+			}),
+		});
+		expect(JSON.stringify(await response.json())).toContain("same-daemon");
 	});
 
 	it("keeps cookie-authenticated MCP calls on the caller credential without actor impersonation", async () => {

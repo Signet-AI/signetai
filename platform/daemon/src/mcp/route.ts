@@ -93,6 +93,7 @@ export function mountMcpRoute(app: Hono): void {
 			server = await createMcpServer({
 				authorizationHeader: c.req.header("authorization"),
 				allowEnvironmentAuth: false,
+				request: async (url, init) => app.request(new Request(url, init)),
 				forwardedHeaders: {
 					...(cookie ? { cookie } : {}),
 					...(csrf ? { "x-signet-csrf": csrf } : {}),
