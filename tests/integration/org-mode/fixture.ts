@@ -124,7 +124,12 @@ export class Fixture {
 		assert(user, `Missing fixture user ${name}`);
 		return user;
 	}
-	async setup(): Promise<void> {
+	static async createIdentity(daemon: OrgDaemon): Promise<Fixture> {
+		const fixture = new Fixture(daemon, "personal");
+		await fixture.setupIdentity();
+		return fixture;
+	}
+	async setupIdentity(): Promise<void> {
 		const claim = await request(this.daemon.origin, "/api/org/claim", {}, "POST", {
 			setupToken: await this.daemon.setupToken(),
 			organizationName: "Org acceptance",
@@ -155,6 +160,9 @@ export class Fixture {
 				name === "carol" ? [this.hrGroupId] : name === "alice" || name === "bob" ? [this.engId] : [],
 			);
 		await this.invite("audra", [this.hrGroupId], "admin");
+	}
+	async setup(): Promise<void> {
+		await this.setupIdentity();
 		success(
 			await request(this.daemon.origin, `/api/org/users/${this.user("cora").id}`, this.admin, "PATCH", {
 				compliance: true,

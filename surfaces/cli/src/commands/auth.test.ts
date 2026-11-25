@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Command } from "commander";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LoginStore } from "../../../../libs/sdk/src/node.js";
@@ -66,6 +66,9 @@ test("device login stores credentials and logout revokes before clearing", async
 		expect(opened).toBe("https://example.invalid/approve");
 		expect(output.join("\n")).toContain("ABCD-EFGH");
 		expect(output.join("\n")).not.toContain("private-");
+		await writeFile(`${store.path}.state`, JSON.stringify({ state: "dead", reason: "revoked" }), { mode: 0o600 });
+		await program.parseAsync(["login"], { from: "user" });
+		expect((await store.load())?.credential.refreshToken).toBe("private-refresh");
 		await program.parseAsync(["logout"], { from: "user" });
 		expect(await store.load()).toBeNull();
 		expect(calls).toContain("/api/auth/logout");

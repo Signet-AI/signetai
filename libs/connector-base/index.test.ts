@@ -36,6 +36,28 @@ import {
 } from "./src/index";
 import { parseLenientJsonObject } from "./src/lenient-json";
 
+describe("registry-owned credentials", () => {
+	it("never offers an inline credential to installers", async () => {
+		const previous = process.env.SIGNET_API_KEY;
+		process.env.SIGNET_API_KEY = `sig_sk_${crypto.randomUUID()}`;
+		try {
+			expect((await resolveInstallApiKey()).apiKey).toBeUndefined();
+			expect(buildSignetRuntimeEnv({ apiKey: process.env.SIGNET_API_KEY })).not.toHaveProperty("SIGNET_API_KEY");
+			expect(
+				buildManagedExtensionEnvBootstrap({
+					signetPath: join(homedir(), ".agents"),
+					daemonUrl: "http://127.0.0.1:3850",
+					agentId: "default",
+					apiKey: process.env.SIGNET_API_KEY,
+				}),
+			).not.toContain(process.env.SIGNET_API_KEY);
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_API_KEY;
+			else process.env.SIGNET_API_KEY = previous;
+		}
+	});
+});
+
 class TestConnector extends BaseConnector {
 	readonly name = "Test";
 	readonly harnessId = "test";
@@ -365,31 +387,6 @@ describe("parseLenientJsonObject", () => {
 	});
 });
 
-describe("install-time auth probing", () => {
-	it.each(["timeout", "invalid"])("omits credentials and explains an undetermined mode: %s", async (failure) => {
-		const server = Bun.serve({
-			port: 0,
-			fetch: (): Response | Promise<Response> =>
-				failure === "timeout" ? new Promise<Response>(() => {}) : Response.json({ requiresAuth: "false" }),
-		});
-		const key = process.env.SIGNET_API_KEY;
-		try {
-			process.env.SIGNET_DAEMON_URL = server.url.origin;
-			process.env.SIGNET_API_KEY = "sig_sk_probe_fixture_not_a_secret";
-			const start = performance.now();
-			const auth = await resolveInstallApiKey();
-			expect(auth.apiKey).toBeUndefined();
-			expect(auth.warning).toContain("SIGNET_API_KEY was omitted");
-			expect(auth.warning).toContain("rerun signet sync");
-			expect(performance.now() - start).toBeLessThan(2500);
-		} finally {
-			server.stop(true);
-			if (key === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
-			if (key !== undefined) process.env.SIGNET_API_KEY = key;
-		}
-	});
-});
-
 describe("resolveSignetDaemonUrl", () => {
 	it("uses a valid explicit daemon URL override", () => {
 		process.env.SIGNET_DAEMON_URL = " https://example.test/ ";
@@ -535,8 +532,8 @@ describe("buildManagedExtensionEnvBootstrap", () => {
 		});
 
 		expect(bootstrap).not.toContain("SIGNET_PATH");
-		expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
-		expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
+		expect(bootstrap).not.toContain("SIGNET_DAEMON_URL");
+		expect(bootstrap).not.toContain("SIGNET_AGENT_ID");
 	});
 
 	it("bakes the literal SIGNET_PATH for an explicitly configured, existing workspace", () => {
@@ -550,7 +547,7 @@ describe("buildManagedExtensionEnvBootstrap", () => {
 		});
 
 		expect(bootstrap).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(custom)})`);
-		expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+		expect(bootstrap).not.toContain("SIGNET_DAEMON_URL");
 	});
 
 	it("omits a stale (non-existent) workspace path instead of baking it, and warns (issue #1016)", () => {
@@ -565,7 +562,7 @@ describe("buildManagedExtensionEnvBootstrap", () => {
 			});
 
 			expect(bootstrap).not.toContain("SIGNET_PATH");
-			expect(bootstrap).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+			expect(bootstrap).not.toContain("SIGNET_DAEMON_URL");
 		} finally {
 			console.warn = originalWarn;
 		}
@@ -642,7 +639,6 @@ describe("shared connector helpers (#957)", () => {
 		expect(content).toContain("@signet/test-extension");
 		expect(content).toContain("dist/test.mjs");
 		expect(content).toContain("BUNDLE_BODY");
-		expect(content.indexOf("BUNDLE_BODY")).toBeGreaterThan(content.indexOf("SIGNET_DAEMON_URL"));
 	});
 
 	it("throws when the bundled extension content is empty", () => {
@@ -690,40 +686,12 @@ describe("buildSignetRuntimeEnv", () => {
 		expect(buildSignetRuntimeEnv()).not.toHaveProperty("SIGNET_PATH");
 	});
 
-	it("prefers SIGNET_API_KEY over SIGNET_TOKEN", () => {
+	it("leaves target and identity authority in the registry", () => {
 		process.env.SIGNET_API_KEY = "api-key";
 		process.env.SIGNET_TOKEN = "token";
-		process.env.SIGNET_DAEMON_URL = "http://127.0.0.1:3850";
-		expect(buildSignetRuntimeEnv()).toMatchObject({ SIGNET_API_KEY: "api-key" });
-		expect(buildSignetRuntimeEnv()).not.toHaveProperty("SIGNET_TOKEN");
-	});
-
-	it("falls back to SIGNET_TOKEN when the API key is absent", () => {
-		process.env.SIGNET_TOKEN = "token";
-		expect(buildSignetRuntimeEnv()).toEqual({ SIGNET_API_KEY: "token" });
-	});
-
-	it("strips embedded CR/LF from auth values before building the runtime env", () => {
-		process.env.SIGNET_API_KEY = " api\r\nkey ";
-		process.env.SIGNET_TOKEN = "token";
-		expect(buildSignetRuntimeEnv()).toEqual({ SIGNET_API_KEY: "apikey" });
-	});
-
-	it("omits the daemon URL unless explicitly set", () => {
-		expect(buildSignetRuntimeEnv()).not.toHaveProperty("SIGNET_DAEMON_URL");
-		process.env.SIGNET_DAEMON_URL = "http://daemon.local:3850";
-		expect(buildSignetRuntimeEnv()).toMatchObject({ SIGNET_DAEMON_URL: "http://daemon.local:3850" });
-	});
-
-	it("normalizes the daemon URL when explicitly set", () => {
-		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:3850/";
-		expect(buildSignetRuntimeEnv()).toMatchObject({ SIGNET_DAEMON_URL: "https://daemon.example.test:3850" });
-	});
-
-	it("includes SIGNET_AGENT_ID only when present", () => {
-		expect(buildSignetRuntimeEnv()).not.toHaveProperty("SIGNET_AGENT_ID");
-		process.env.SIGNET_AGENT_ID = "worker-1";
-		expect(buildSignetRuntimeEnv()).toEqual({ SIGNET_AGENT_ID: "worker-1" });
+		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test";
+		process.env.SIGNET_AGENT_ID = "alice";
+		expect(buildSignetRuntimeEnv({ basePath: "/tmp/agents" })).toEqual({ SIGNET_PATH: "/tmp/agents" });
 	});
 });
 

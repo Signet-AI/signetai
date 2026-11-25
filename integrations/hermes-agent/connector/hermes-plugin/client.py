@@ -15,12 +15,15 @@ import json
 import logging
 import math
 import os
-import ipaddress
-import http.client
-import urllib.error
+import threading
 import urllib.parse
-import urllib.request
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+
+if __package__:
+    from .signet_transport import ConnectorRegistry, NodeTransport, resolve_target, SignetApiError, SignetUnauthorizedError, SignetNetworkError
+else:
+    from signet_transport import ConnectorRegistry, NodeTransport, resolve_target, SignetApiError, SignetUnauthorizedError, SignetNetworkError
 
 logger = logging.getLogger(__name__)
 
@@ -96,94 +99,6 @@ def _build_recall_request_body(
     return body
 
 
-def _normalize_loopback_host(host: str) -> str:
-    """Use the daemon's IPv4 listener for IPv6-first local aliases."""
-    normalized = host.strip().lower().strip("[]")
-    if normalized in ("localhost", "::1", "0:0:0:0:0:0:0:1"):
-        return _DEFAULT_HOST
-    return host
-
-
-def _format_host(host: str) -> str:
-    """Format a hostname or IPv6 literal for an HTTP origin."""
-    return host if host.startswith("[") or ":" not in host else f"[{host}]"
-
-
-def _normalize_base_url(raw: str, source: str) -> str:
-    """Normalize a daemon URL to an origin string."""
-    parsed = urllib.parse.urlparse(raw)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError(f"{source} must be an http(s) URL")
-    if parsed.username or parsed.password:
-        raise ValueError(f"{source} must not include username or password")
-    if parsed.query or parsed.fragment:
-        raise ValueError(f"{source} must not include query strings or fragments")
-    if parsed.path not in ("", "/"):
-        raise ValueError(f"{source} must point at the daemon origin, not a path")
-    try:
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError as error:
-        raise ValueError(f"{source} must be a valid HTTP origin") from error
-    if not hostname:
-        raise ValueError(f"{source} must include a hostname")
-    normalized_host = _normalize_loopback_host(hostname)
-    authority = _format_host(normalized_host)
-    if port is not None:
-        authority = f"{authority}:{port}"
-    return urllib.parse.urlunparse((parsed.scheme, authority, "", "", "", ""))
-
-
-def _resolve_base_url() -> str:
-    """Resolve the Signet daemon base URL using the canonical loopback policy."""
-    explicit = _sanitize(os.environ.get("SIGNET_DAEMON_URL", ""))
-    if explicit:
-        return _normalize_base_url(explicit, "SIGNET_DAEMON_URL")
-    host = _normalize_loopback_host(_sanitize(os.environ.get("SIGNET_HOST", _DEFAULT_HOST)))
-    port = _sanitize(os.environ.get("SIGNET_PORT", str(_DEFAULT_PORT)))
-    return _normalize_base_url(f"http://{_format_host(host)}:{port}", "SIGNET_HOST/SIGNET_PORT")
-
-
-def _is_loopback_host(host: str) -> bool:
-    """Return true for localhost and loopback IP literals."""
-    if host.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _trusted_daemon_origins() -> List[str]:
-    """Read the exact remote daemon origins trusted to receive SIGNET_TOKEN."""
-    raw = _sanitize(os.environ.get(_TRUSTED_ORIGINS_ENV, ""))
-    origins: List[str] = []
-    for part in raw.split(","):
-        candidate = part.strip()
-        if not candidate:
-            continue
-        try:
-            origins.append(_normalize_base_url(candidate, _TRUSTED_ORIGINS_ENV))
-        except ValueError:
-            continue
-    return origins
-
-
-def _should_send_auth_token(base_url: str) -> bool:
-    """Only send bearer tokens to loopback or explicitly trusted daemon origins."""
-    parsed = urllib.parse.urlparse(base_url)
-    host = parsed.hostname or ""
-    return _is_loopback_host(host) or base_url in _trusted_daemon_origins()
-
-
-def _read_json_response(resp) -> Dict[str, Any]:
-    """Read a daemon response, treating empty successful bodies as an empty object."""
-    body = resp.read()
-    if not body:
-        return {}
-    return json.loads(body.decode("utf-8"))
-
-
 def _safe_score(value: Any) -> float:
     """Coerce daemon result scores without failing recall on malformed rows."""
     try:
@@ -195,28 +110,22 @@ def _safe_score(value: Any) -> float:
 class SignetClient:
     """HTTP client for the Signet daemon API."""
 
-    def __init__(self, agent_id: str = "", harness: str = "hermes-agent"):
-        self._base_url = _resolve_base_url()
-        self._agent_id = agent_id
+    def __init__(self, agent_id: str = "", harness: str = "hermes-agent", *, env=None):
+        self._env = dict(env) if env is not None else {key: os.environ[key] for key in ("HOME", "APPDATA") if key in os.environ}
+        target = resolve_target(harness=harness, env=self._env)
+        entry = ConnectorRegistry(env=self._env).read().get(harness, {})
+        self._base_url = target.url
+        self._agent_id = entry.get("agentId") or agent_id
         self._harness = harness
+        self._transport = NodeTransport(target, env=self._env, headers={"x-signet-runtime-path": "plugin"}, delivery_paths=("/api/hooks/stop",))
+
+    @property
+    def agent_id(self) -> str:
+        return self._agent_id
 
     @property
     def base_url(self) -> str:
         return self._base_url
-
-    def _headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        h: Dict[str, str] = {
-            "Content-Type": "application/json",
-            "x-signet-runtime-path": "plugin",
-            "x-signet-agent-id": self._agent_id,
-            "x-signet-actor": "hermes-memory-plugin",
-        }
-        token = _sanitize(os.environ.get("SIGNET_API_KEY", "")) or _sanitize(os.environ.get("SIGNET_TOKEN", ""))
-        if token and _should_send_auth_token(self._base_url):
-            h["Authorization"] = f"Bearer {token}"
-        if extra:
-            h.update(extra)
-        return h
 
     @staticmethod
     def _mutation_context_headers(
@@ -234,114 +143,37 @@ class SignetClient:
             headers["x-signet-request-id"] = clean_request_id
         return headers or None
 
-    def _post(
-        self,
-        path: str,
-        body: Dict[str, Any],
-        *,
-        timeout: float = _TIMEOUT_SECS,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """POST JSON to the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        data = json.dumps(body).encode("utf-8")
-        headers = self._headers(extra_headers)
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    def _call(self, method, path, body=None, *, timeout=_TIMEOUT_SECS, extra_headers=None):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except urllib.error.HTTPError as e:
-            body_text = ""
-            try:
-                body_text = e.read().decode("utf-8", errors="replace")[:200]
-            except Exception as read_err:
-                logger.debug("Signet POST %s: failed to read error body: %s", path, read_err)
-            logger.debug("Signet POST %s returned %d: %s", path, e.code, body_text)
+            return self._transport.request(method, path, body, timeout=timeout, headers=extra_headers or {})
+        except SignetUnauthorizedError:
+            logger.warning("Signet session expired, run `signet login`")
             return None
-        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet POST %s failed: %s", path, e)
+        except (SignetApiError, SignetNetworkError, OSError, ValueError) as error:
+            logger.warning("Signet %s %s failed: %s", method, path, type(error).__name__)
             return None
 
-    def _get(
-        self,
-        path: str,
-        *,
-        timeout: float = _TIMEOUT_SECS,
-    ) -> Optional[Dict[str, Any]]:
-        """GET from the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, headers=self._headers(), method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet GET %s failed: %s", path, e)
-            return None
+    def _post(self, path, body, *, timeout=_TIMEOUT_SECS, extra_headers=None):
+        return self._call("POST", path, body, timeout=timeout, extra_headers=extra_headers)
 
-    def _patch(
-        self,
-        path: str,
-        body: Dict[str, Any],
-        *,
-        timeout: float = _TIMEOUT_SECS,
-    ) -> Optional[Dict[str, Any]]:
-        """PATCH JSON to the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method="PATCH")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet PATCH %s failed: %s", path, e)
-            return None
+    def _get(self, path, *, timeout=_TIMEOUT_SECS):
+        return self._call("GET", path, timeout=timeout)
 
-    def request_result(
-        self,
-        method: str,
-        path: str,
-        body: Optional[Dict[str, Any]] = None,
-        *,
-        timeout: float = _TIMEOUT_SECS,
-    ) -> Dict[str, Any]:
-        """Call the daemon and keep the failure reason: {ok, data} or {ok: False, status, error}."""
-        url = f"{self._base_url}{path}"
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                try:
-                    return {"ok": True, "data": _read_json_response(resp)}
-                except ValueError as e:
-                    return {"ok": False, "status": resp.status, "error": f"daemon returned invalid JSON: {e}"}
-        except urllib.error.HTTPError as e:
-            detail = ""
-            try:
-                raw = e.read().decode("utf-8", errors="replace")
-                parsed = json.loads(raw) if raw else {}
-                detail = str(parsed.get("error") or raw) if isinstance(parsed, dict) else raw
-            except Exception as read_err:
-                detail = f"unreadable error body: {read_err}"
-            return {"ok": False, "status": e.code, "error": detail[:300] or f"HTTP {e.code}"}
-        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            return {"ok": False, "status": None, "error": f"daemon unreachable: {e}"}
+    def _patch(self, path, body, *, timeout=_TIMEOUT_SECS):
+        return self._call("PATCH", path, body, timeout=timeout)
 
-    def _delete(
-        self,
-        path: str,
-        *,
-        timeout: float = _TIMEOUT_SECS,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """DELETE from the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, headers=self._headers(extra_headers), method="DELETE")
+    def request_result(self, method, path, body=None, *, timeout=_TIMEOUT_SECS):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet DELETE %s failed: %s", path, e)
-            return None
+            return {"ok": True, "data": self._transport.request(method, path, body, timeout=timeout)}
+        except SignetApiError as error:
+            if error.status == 401:
+                logger.warning("Signet session expired, run `signet login`")
+            return {"ok": False, "status": error.status, "reason": getattr(error, "reason", None), "error": str(error)}
+        except (SignetNetworkError, OSError, ValueError) as error:
+            return {"ok": False, "status": None, "error": type(error).__name__}
+
+    def _delete(self, path, *, timeout=_TIMEOUT_SECS, extra_headers=None):
+        return self._call("DELETE", path, timeout=timeout, extra_headers=extra_headers)
 
     def is_available(self) -> bool:
         """Check if the Signet daemon is reachable. No credentials needed."""
@@ -451,43 +283,23 @@ class SignetClient:
         context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Long-poll the direct-message wake endpoint; None on transport failure."""
-        parsed = urllib.parse.urlparse(self._base_url)
-        host = parsed.hostname or _DEFAULT_HOST
-        timeout = wait_ms / 1000 + 10
-        factory = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        conn = factory(host, parsed.port, timeout=timeout)
+        cancel = threading.Event()
         if on_connection:
-            on_connection(conn)
-        wake_body: Dict[str, Any] = {
-            "harness": self._harness,
-            "sessionKey": session_key,
-            "agentId": self._agent_id,
-            "project": project,
-            "waitMs": wait_ms,
-        }
+            on_connection(SimpleNamespace(close=cancel.set))
+        body = {"harness": self._harness, "sessionKey": session_key, "agentId": self._agent_id, "project": project, "waitMs": wait_ms}
         if context:
-            wake_body["context"] = context
-        body = json.dumps(wake_body)
+            body["context"] = context
         try:
-            conn.request("POST", "/api/cross-agent/wake", body=body, headers=self._headers())
-            resp = conn.getresponse()
-            raw = resp.read()
-            data = json.loads(raw.decode("utf-8")) if raw else {}
-            if not isinstance(data, dict):
-                return None
-            if resp.status != 200 and "error" not in data:
-                data["error"] = f"http {resp.status}"
-            return data
-        except (OSError, ValueError, http.client.HTTPException) as e:
-            logger.debug("Signet wake failed: %s", e)
+            return self._transport.request("POST", "/api/cross-agent/wake", body, timeout=wait_ms / 1000 + 10, cancel=cancel)
+        except SignetUnauthorizedError:
+            logger.warning("Signet session expired, run `signet login`")
+            return None
+        except (SignetApiError, SignetNetworkError, OSError, ValueError) as error:
+            logger.warning("Signet wake failed: %s", type(error).__name__)
             return None
         finally:
             if on_connection:
                 on_connection(None)
-            try:
-                conn.close()
-            except OSError:
-                pass
 
     def release_wake(self, session_key: str, message_ids: List[str]) -> Optional[Dict[str, Any]]:
         """Return claimed wakes to the daemon after the host refused delivery."""

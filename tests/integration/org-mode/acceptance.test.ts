@@ -327,8 +327,11 @@ test(
 		}, "single"),
 	420_000,
 );
-test(
-	"AC10 connect every supported harness without secrets in configs or process argv",
-	() => withFixture(connectorSecrets),
-	600_000,
-);
+test("AC10 connect every supported harness without secrets in configs or process argv", async () => {
+	const daemon = await OrgDaemon.create();
+	try {
+		await connectorSecrets(await Fixture.createIdentity(daemon));
+	} finally {
+		await daemon.dispose();
+	}
+}, 600_000);

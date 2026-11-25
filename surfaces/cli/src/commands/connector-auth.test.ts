@@ -19,6 +19,8 @@ test("connect provisions a session-bound key without putting it in installer env
 		port: 0,
 		async fetch(request) {
 			if (!new URL(request.url).pathname.startsWith("/api/auth/")) return Response.json({});
+			if (request.method === "GET" && request.headers.get("authorization") === `Bearer ${secret}`)
+				return Response.json({ mode: "team", credential: { kind: "api_key" } });
 			expect(request.headers.get("authorization")).toBe("Bearer user-session");
 			if (request.method === "GET")
 				return Response.json({ mode: "team", credential: { kind: "session", deviceId: "device" } });
@@ -42,16 +44,7 @@ test("connect provisions a session-bound key without putting it in installer env
 		refreshExpiresAt: new Date(Date.now() + 120000).toISOString(),
 	});
 	const program = new Command();
-	let installed = false;
-	registerConnectorCommands(program, {
-		agentsDir: home,
-		env,
-		keyring,
-		configureHarnessHooks: async () => {
-			expect(process.env.SIGNET_API_KEY).not.toBe(secret);
-			installed = true;
-		},
-	});
+	registerConnectorCommands(program, { agentsDir: home, env, keyring });
 	try {
 		await program.parseAsync(["connect", "codex", "--url", server.url.origin, "--agent", "alice"], { from: "user" });
 		expect(process.env.SIGNET_API_KEY).not.toBe(secret);

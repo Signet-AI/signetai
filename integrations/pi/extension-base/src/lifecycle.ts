@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readStaticIdentity } from "@signet/core";
+import { resolveTarget } from "@signet/sdk/node";
 import { emitLifecycleObservation } from "@signet/lifecycle-proof";
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
@@ -192,7 +193,9 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensio
 
 	const fallbackContext = result.ok
 		? ""
-		: deps.config.staticFallback(result.reason === "timeout" ? "timeout" : "offline");
+		: (await resolveTarget({ harness: deps.config.harness })).remote || result.status === 401 || result.status === 403
+			? ""
+			: deps.config.staticFallback(result.reason === "timeout" ? "timeout" : "offline");
 	const stableSystemPrompt = result.ok ? readTrimmedString(result.data.stableSystemPrompt) : undefined;
 	const dynamicContext = result.ok
 		? (readTrimmedString(result.data.dynamicContext) ??

@@ -24,13 +24,15 @@ describe("createDaemonClient (extension-base)", () => {
 		globalThis.fetch = Object.assign(
 			async (_input: RequestInfo | URL, init?: RequestInit) => {
 				authorization = new Headers(init?.headers).get("authorization") ?? "";
+				expect(new Headers(init?.headers).has("x-signet-actor")).toBe(false);
+				expect(new Headers(init?.headers).has("x-signet-actor-type")).toBe(false);
 				return Response.json({ ok: true });
 			},
 			{ preconnect: originalFetch.preconnect },
 		);
 
 		const client = createDaemonClient("http://daemon.test", testConfig);
-		await client.postResult("/api/hooks/session-start", {});
+		expect((await client.postResult("/api/hooks/session-start", {})).ok).toBe(true);
 		expect(authorization).toBe("Bearer sig_sk_extension_secret");
 	});
 

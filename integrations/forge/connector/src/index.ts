@@ -26,6 +26,7 @@ import {
 	readMcpLauncher,
 	type ResolvedCommand,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
@@ -68,14 +69,7 @@ function readMcpServers(config: JsonObject): JsonObject {
 }
 
 function buildMcpServer(basePath: string, apiKey: string | undefined, existing?: ResolvedCommand): ForgeMcpServer {
-	const remoteDaemonUrl = resolveRemoteDaemonUrl();
-	if (remoteDaemonUrl) {
-		return {
-			url: `${remoteDaemonUrl}/mcp`,
-			...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
-		};
-	}
-	const mcp = resolveSignetMcpCommand(existing);
+	const mcp = resolveHarnessMcpCommand("forge", existing);
 	return {
 		command: mcp.command,
 		...(mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {}),

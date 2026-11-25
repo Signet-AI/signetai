@@ -12,6 +12,7 @@ import {
 	isSignetGeneratedFile,
 	resolveRemoteDaemonUrl,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 	resolveInstallApiKey,
 	readMcpLauncher,
 } from "@signet/connector-base";
@@ -330,23 +331,12 @@ export class OpenCodeConnector extends BaseConnector {
 		const entry = isJsonObject(servers.signet) ? servers.signet : {};
 		const command = Array.isArray(entry.command) ? entry.command : [];
 		const existing = readMcpLauncher({ command: command[0], args: command.slice(1), env: entry.environment });
-		const resolvedMcp = resolveSignetMcpCommand(existing);
+		const resolvedMcp = resolveHarnessMcpCommand("opencode", existing);
 		this.removeMcpServer(opencodePath);
-
-		if (daemonUrl) {
-			writeConfigValue(configPath, ["mcp", "signet"], {
-				type: "remote",
-				url: `${daemonUrl}/mcp`,
-				...(apiKeyFile ? { headers: { Authorization: `Bearer {file:${apiKeyFile}}` } } : {}),
-				oauth: false,
-				enabled: true,
-			});
-			return;
-		}
 
 		const mcpCommand = [resolvedMcp.command, ...resolvedMcp.args];
 		const environment: Record<string, string> = { ...buildSignetRuntimeEnv({ apiKey: null }), ...resolvedMcp.env };
-		if (apiKeyFile) environment.SIGNET_API_KEY = `{file:${apiKeyFile}}`;
+
 		writeConfigValue(configPath, ["mcp", "signet"], {
 			type: "local",
 			command: mcpCommand,

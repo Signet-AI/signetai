@@ -24,6 +24,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@signet/sdk": "workspace:*",
 		"@signet/connector-base": "1.0.1",
 		"@signet/core": "1.0.1"
 	},

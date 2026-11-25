@@ -46,7 +46,7 @@ function getPluginSourceDir(): string {
 	throw new Error("Cannot find hermes-plugin directory in connector package");
 }
 
-const PLUGIN_FILES = ["__init__.py", "client.py", "plugin.yaml", "README.md"] as const;
+const PLUGIN_FILES = ["__init__.py", "client.py", "signet_transport.py", "plugin.yaml", "README.md"] as const;
 const INSTALL_MARKER_FILE = "signet.install.json";
 const PROVIDER_BACKUP_FILE = "signet.provider.backup.json";
 const REQUIRED_TOOL_NAMES = [
@@ -1705,30 +1705,7 @@ export class HermesAgentConnector extends BaseConnector {
 					signetVars.SIGNET_AGENT_WORKSPACE = agentWorkspace;
 				}
 			}
-			const authToken = auth.apiKey;
-			if (!authToken) envContent = envContent.replace(/^(?:SIGNET_API_KEY|SIGNET_TOKEN)=.*(?:\r?\n|$)/gm, "");
-			if (authToken) {
-				signetVars.SIGNET_API_KEY = authToken;
-				signetVars.SIGNET_TOKEN = authToken;
-				if (process.env.SIGNET_DAEMON_URL && !signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS) {
-					const trustedOrigin = trustedOriginForDaemonUrl(configuredDaemonUrl);
-					if (trustedOrigin) {
-						signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS = trustedOrigin;
-					} else {
-						warnings.push(
-							`Could not derive trusted daemon origin from SIGNET_DAEMON_URL='${configuredDaemonUrl}'. Set SIGNET_TRUSTED_DAEMON_ORIGINS explicitly if Hermes must send SIGNET_API_KEY to this daemon.`,
-						);
-					}
-				}
-			} else if (
-				process.env.SIGNET_DAEMON_URL &&
-				!process.env.SIGNET_DAEMON_URL.includes("localhost") &&
-				!process.env.SIGNET_DAEMON_URL.includes("127.0.0.1")
-			) {
-				warnings.push(
-					`SIGNET_API_KEY is not set. The Signet daemon at ${process.env.SIGNET_DAEMON_URL} may require authentication. Set SIGNET_API_KEY in your environment before starting Hermes.`,
-				);
-			}
+			envContent = envContent.replace(/^(?:SIGNET_API_KEY|SIGNET_TOKEN)=.*(?:\r?\n|$)/gm, "");
 
 			let changed = false;
 			for (const [key, value] of Object.entries(signetVars)) {

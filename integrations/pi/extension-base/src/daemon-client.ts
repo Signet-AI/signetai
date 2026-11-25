@@ -1,4 +1,5 @@
-import { readTrimmedRuntimeEnv } from "./helpers.js";
+import { SignetApiError, SignetUnauthorizedError, SignetTimeoutError, SignetResponseError } from "@signet/sdk";
+import { resolveTarget, NodeTransport } from "@signet/sdk/node";
 
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
@@ -19,93 +20,8 @@ export interface DaemonClientConfig {
 	readonly logFailures?: boolean;
 }
 
-function readAuthToken(): string | undefined {
-	return readTrimmedRuntimeEnv("SIGNET_API_KEY") ?? readTrimmedRuntimeEnv("SIGNET_TOKEN");
-}
-
-function buildHeaders(config: DaemonClientConfig): Record<string, string> {
-	const headers: Record<string, string> = {
-		"Content-Type": "application/json",
-		"x-signet-runtime-path": config.runtimePath,
-		"x-signet-actor": config.actorName,
-		"x-signet-actor-type": "harness",
-	};
-	const token = readAuthToken();
-	if (token) headers.Authorization = `Bearer ${token}`;
-	return headers;
-}
-
-function errorName(err: unknown): string {
-	if (typeof err !== "object" || err === null) return "";
-	const name = Reflect.get(err, "name");
-	return typeof name === "string" ? name : "";
-}
-
-function isTimeoutError(err: unknown): boolean {
-	const name = errorName(err);
-	if (name === "AbortError" || name === "TimeoutError") return true;
-	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
-	return code === "ABORT_ERR";
-}
-
-function logWarning(config: DaemonClientConfig, message: string): void {
-	if (config.logFailures === false) return;
-	console.warn(message);
-}
-
-async function cancelResponseBody(response: Response): Promise<void> {
-	try {
-		await response.body?.cancel();
-	} catch {}
-}
-
-const MAX_ERROR_BODY_BYTES = 4_096;
-
-async function readBoundedText(response: Response): Promise<string | undefined> {
-	const reader = response.body?.getReader();
-	if (!reader) return undefined;
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	try {
-		while (total < MAX_ERROR_BODY_BYTES) {
-			const { done, value } = await reader.read();
-			if (done || !value) break;
-			chunks.push(value);
-			total += value.byteLength;
-		}
-	} finally {
-		await reader.cancel().catch(() => undefined);
-	}
-	const bytes = new Uint8Array(Math.min(total, MAX_ERROR_BODY_BYTES));
-	let offset = 0;
-	for (const chunk of chunks) {
-		const slice = chunk.subarray(0, bytes.length - offset);
-		bytes.set(slice, offset);
-		offset += slice.byteLength;
-		if (offset >= bytes.length) break;
-	}
-	return new TextDecoder().decode(bytes);
-}
-
-async function readErrorDetail(response: Response): Promise<string | undefined> {
-	if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
-		await cancelResponseBody(response);
-		return undefined;
-	}
-	try {
-		const text = await readBoundedText(response);
-		if (!text) return undefined;
-		const parsed: unknown = JSON.parse(text);
-		if (typeof parsed !== "object" || parsed === null || !("error" in parsed)) return undefined;
-		const error = (parsed as { readonly error?: unknown }).error;
-		return typeof error === "string" && error.trim() ? error.trim().slice(0, 300) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 async function daemonFetchResult<T>(
-	daemonUrl: string,
+	transport: () => Promise<NodeTransport>,
 	path: string,
 	config: DaemonClientConfig,
 	options: {
@@ -116,65 +32,41 @@ async function daemonFetchResult<T>(
 		readonly signal?: AbortSignal;
 	} = {},
 ): Promise<DaemonFetchResult<T>> {
-	const { method = "POST", body, timeout = config.defaultTimeout, parseJson = true, signal } = options;
-
 	try {
-		const init: RequestInit = {
-			method,
-			headers: buildHeaders(config),
-			signal: signal ? AbortSignal.any([AbortSignal.timeout(timeout), signal]) : AbortSignal.timeout(timeout),
-		};
-
-		if (body !== undefined) {
-			init.body = JSON.stringify(body);
-		}
-
-		const response = await fetch(`${daemonUrl}${path}`, init);
-		if (!response.ok) {
-			const detail = await readErrorDetail(response);
-			logWarning(config, `[${config.logPrefix}] ${method} ${path} failed: ${response.status}`);
-			return detail
-				? { ok: false, reason: "http", status: response.status, detail }
-				: { ok: false, reason: "http", status: response.status };
-		}
-
-		if (!parseJson) {
-			await cancelResponseBody(response);
-			return { ok: true, data: undefined as T };
-		}
-
-		try {
-			const text = await response.text();
-			try {
-				const data = JSON.parse(text) as T;
-				return { ok: true, data };
-			} catch {
-				logWarning(
-					config,
-					`[${config.logPrefix}] ${method} ${path} returned invalid JSON (${text.length} chars${text.length === 0 ? ", empty body" : ""})`,
+		const data = await (await transport()).request<T>(options.method ?? "POST", path, {
+			body: options.body,
+			timeoutMs: options.timeout ?? config.defaultTimeout,
+			signal: options.signal,
+		});
+		if (options.parseJson !== false && (data === undefined || typeof data === "string")) {
+			if (config.logFailures !== false)
+				console.warn(
+					`[${config.logPrefix}] ${path} returned invalid JSON (${typeof data === "string" ? `${data.length} chars` : "0 chars, empty body"})`,
 				);
-				return { ok: false, reason: "invalid-json", status: response.status };
-			}
-		} catch (e) {
-			await cancelResponseBody(response);
-			if (isTimeoutError(e)) {
-				logWarning(config, `[${config.logPrefix}] ${method} ${path} body read timed out after ${timeout}ms`);
-				return { ok: false, reason: "timeout" };
-			}
-			logWarning(
-				config,
-				`[${config.logPrefix}] ${method} ${path} body read failed: ${errorName(e) || "unknown error"}`,
-			);
-			return { ok: false, reason: "body-read" };
+			return { ok: false, reason: "invalid-json", status: 200 };
 		}
+		return { ok: true, data };
 	} catch (error) {
-		if (isTimeoutError(error)) {
-			logWarning(config, `[${config.logPrefix}] ${method} ${path} timed out after ${timeout}ms`);
-			return { ok: false, reason: "timeout" };
+		if (error instanceof SignetUnauthorizedError) console.warn("Signet session expired, run `signet login`");
+		if (error instanceof SignetApiError) {
+			const detail =
+				typeof error.body === "object" &&
+				error.body !== null &&
+				"error" in error.body &&
+				typeof error.body.error === "string"
+					? error.body.error.slice(0, 300)
+					: undefined;
+			return { ok: false, reason: "http", status: error.status, ...(detail ? { detail } : {}) };
 		}
-
-		logWarning(config, `[${config.logPrefix}] ${method} ${path} error: ${errorName(error) || "request failed"}`);
-		return { ok: false, reason: "offline" };
+		return {
+			ok: false,
+			reason:
+				error instanceof SignetTimeoutError
+					? "timeout"
+					: error instanceof SignetResponseError
+						? "body-read"
+						: "offline",
+		};
 	}
 }
 
@@ -196,9 +88,26 @@ export function createDaemonClient(
 	daemonUrl: string,
 	config: DaemonClientConfig,
 ): DaemonStatusClient & DaemonRequestClient {
+	const env = { ...process.env };
+	let pending: Promise<NodeTransport> | undefined;
+	const transport = () => {
+		pending ??= resolveTarget({
+			harness: config.actorName.startsWith("oh-my-pi") ? "oh-my-pi" : "pi",
+			configUrl: daemonUrl,
+			env,
+		}).then(
+			(target) =>
+				new NodeTransport(target, {
+					env,
+					headers: { "x-signet-runtime-path": config.runtimePath },
+					deliveryPaths: ["/api/hooks/stop"],
+				}),
+		);
+		return pending;
+	};
 	return {
 		getResult<T>(path: string, timeout = config.defaultTimeout, signal?: AbortSignal): Promise<DaemonFetchResult<T>> {
-			return daemonFetchResult<T>(daemonUrl, path, config, { method: "GET", timeout, signal });
+			return daemonFetchResult<T>(transport, path, config, { method: "GET", timeout, signal });
 		},
 		patchResult<T>(
 			path: string,
@@ -206,7 +115,7 @@ export function createDaemonClient(
 			timeout = config.defaultTimeout,
 			signal?: AbortSignal,
 		): Promise<DaemonFetchResult<T>> {
-			return daemonFetchResult<T>(daemonUrl, path, config, { method: "PATCH", body, timeout, signal });
+			return daemonFetchResult<T>(transport, path, config, { method: "PATCH", body, timeout, signal });
 		},
 		async post<T>(
 			path: string,
@@ -214,7 +123,7 @@ export function createDaemonClient(
 			timeout = config.defaultTimeout,
 			signal?: AbortSignal,
 		): Promise<T | null> {
-			const result = await daemonFetchResult<T>(daemonUrl, path, config, {
+			const result = await daemonFetchResult<T>(transport, path, config, {
 				method: "POST",
 				body,
 				timeout,
@@ -229,7 +138,7 @@ export function createDaemonClient(
 			timeout = config.defaultTimeout,
 			signal?: AbortSignal,
 		): Promise<DaemonFetchResult<T>> {
-			return daemonFetchResult<T>(daemonUrl, path, config, {
+			return daemonFetchResult<T>(transport, path, config, {
 				method: "POST",
 				body,
 				timeout,
@@ -237,7 +146,7 @@ export function createDaemonClient(
 			});
 		},
 		postStatus(path: string, body: unknown, timeout = config.defaultTimeout): Promise<DaemonFetchResult<void>> {
-			return daemonFetchResult<void>(daemonUrl, path, config, {
+			return daemonFetchResult<void>(transport, path, config, {
 				method: "POST",
 				body,
 				timeout,

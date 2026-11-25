@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile, realpath, readlink, cp } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
 import { repo, terminateOwnedGroup } from "./daemon";
-import { connector, type Fixture } from "./fixture";
+import type { Fixture } from "./fixture";
+import { ConnectorRegistry, readKeyFile } from "../../../libs/sdk/src/node";
 
 export const harnesses = [
 	"claude-code",
@@ -19,14 +20,22 @@ export const harnesses = [
 	"oh-my-pi",
 	"pi",
 ] as const;
-async function files(root: string): Promise<Map<string, Buffer>> {
+async function files(root: string, allowedRoot: string): Promise<Map<string, Buffer>> {
 	const found = new Map<string, Buffer>();
 	async function walk(path: string): Promise<void> {
 		for (const entry of await readdir(path, { withFileTypes: true })) {
 			const target = join(path, entry.name);
 			if (entry.isDirectory()) await walk(target);
 			else if (entry.isFile()) found.set(relative(root, target), await readFile(target));
-			else assert(!entry.isSymbolicLink(), `Connector wrote an unverified symlink: ${relative(root, target)}`);
+			else if (entry.isSymbolicLink()) {
+				const resolved = await realpath(target);
+				const within = relative(allowedRoot, resolved);
+				assert(
+					within !== ".." && !within.startsWith("../") && !within.startsWith("/"),
+					`Connector link escapes disposable fixture: ${relative(root, target)}`,
+				);
+				found.set(relative(root, target), Buffer.from(await readlink(target)));
+			}
 		}
 	}
 	await walk(root);
@@ -41,7 +50,7 @@ async function seedHarnessHomes(root: string): Promise<void> {
 		["home/.kimi/config.toml", ""],
 		["home/.config/opencode/opencode.jsonc", "{}"],
 		["home/.openclaw/openclaw.json", "{}"],
-		["xdg-config/muse/settings.json", "{}"],
+		["xdg-config/muse/settings.json", '{"schema_version":1}'],
 		["home/.hermes/config.yaml", "memory:\n  provider: builtin\n"],
 		["home/.hermes/profiles/acceptance/config.yaml", "memory:\n  provider: builtin\n"],
 	] as const) {
@@ -69,25 +78,24 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 			SIGNET_DAEMON_URL: fixture.daemon.origin,
 			SIGNET_PATH: fixture.daemon.workspace,
 			npm_config_prefix: join(root, "npm-global"),
+			SIGNET_CONNECTOR_ASSETS_DIR: join(root, "assets"),
 		};
 		await seedHarnessHomes(root);
-		const before = await files(root);
-		const user = fixture.user("alice");
-		const provisioned = await connector(
-			fixture.daemon,
-			user.session,
-			user.deviceId,
-			user.agentId,
-			harness === "hermes" ? "hermes-agent" : harness,
+		await cp(
+			join(repo, "integrations/hermes-agent/connector/hermes-plugin"),
+			join(root, "assets/hermes-agent/hermes-plugin"),
+			{ recursive: true },
 		);
-		const secret = provisioned.credential.bearer;
-		assert(secret);
+		const before = await files(root, fixture.daemon.root);
+		const user = fixture.user("alice");
+		const session = user.session.bearer;
+		assert(session);
+		const samples: string[] = [];
 		const child = Bun.spawn(
 			[
 				"setsid",
 				process.execPath,
 				join(repo, "surfaces/cli/dist/cli.js"),
-				"--non-interactive",
 				"connect",
 				harness,
 				"--api-key-stdin",
@@ -102,7 +110,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 		let argvLeak = false;
 		let processSamples = 0;
 		try {
-			child.stdin.write(`${secret}\n`);
+			child.stdin.write(`${session}\n`);
 			child.stdin.end();
 			const deadline = Date.now() + 30_000;
 			do {
@@ -110,7 +118,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 				const sample = await new Response(ps.stdout).text();
 				assert.equal(await ps.exited, 0);
 				processSamples++;
-				argvLeak ||= sample.includes(secret) || sample.includes(provisioned.prefix);
+				samples.push(sample);
 				await Bun.sleep(20);
 			} while (child.exitCode === null && Date.now() < deadline);
 			if (child.exitCode === null) failures.push(`${harness}: CLI connect exceeded 30s`);
@@ -118,14 +126,26 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 			await terminateOwnedGroup(child.pid);
 		}
 		const exit = await child.exited;
-		await Promise.all([stdout, stderr]);
+		const [out, err] = await Promise.all([stdout, stderr]);
 		assert(processSamples > 0, `${harness}: no process command lines were sampled`);
-		assert(!argvLeak, `${harness}: key secret/prefix leaked into process argv`);
+
 		if (exit !== 0) {
-			failures.push(`${harness}: signet connect --api-key-stdin exited ${exit}`);
+			failures.push(
+				`${harness}: signet connect --api-key-stdin exited ${exit}: ${`${out}\n${err}`
+					.replaceAll(session, "[redacted]")
+					.replace(/sig_sk_\S+/g, "[redacted]")
+					.slice(0, 2000)}`,
+			);
 			continue;
 		}
-		const after = await files(root);
+		const entry = (await new ConnectorRegistry({ env }).read())[harness === "hermes" ? "hermes-agent" : harness];
+		assert(entry?.keyFile, `${harness}: no registry key file`);
+		const secret = await readKeyFile(entry.keyFile);
+		const prefix = secret.slice("sig_sk_".length).split("_")[0];
+		assert(prefix && prefix.length >= 12, `${harness}: invalid issued key format`);
+		argvLeak = samples.some((sample) => [secret, prefix, session].some((needle) => sample.includes(needle)));
+		assert(!argvLeak, `${harness}: credential secret/prefix leaked into process argv`);
+		const after = await files(root, fixture.daemon.root);
 		const changed = [...after].filter(([path, content]) => !before.get(path)?.equals(content));
 		assert(
 			changed.some(([path]) =>
@@ -139,7 +159,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 				assert.equal((await stat(join(root, path))).mode & 0o777, 0o600, `${harness}: key/credential file permissions`);
 				continue;
 			}
-			for (const needle of [secret, provisioned.prefix])
+			for (const needle of [secret, prefix, session])
 				assert(!content.includes(needle), `${harness}: key secret/prefix leaked into ${path}`);
 		}
 	}

@@ -13,12 +13,15 @@ import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { PiConnector } from "@signet/connector-pi";
 import {
 	ConnectorRegistry,
+	DurableOutbox,
 	NodeTransport,
 	resolveTarget,
 	writeKeyFile,
 	readKeyFile,
 } from "../../../../libs/sdk/src/node.js";
 import { SignetUnauthorizedError } from "../../../../libs/sdk/src/index.js";
+import { runConnectorMcp } from "../lib/connector-mcp.js";
+import { inspectConnectorFiles } from "../lib/connector-doctor.js";
 import { reportAuthError, type AuthCommandDeps } from "./auth.js";
 
 interface ConnectorInstallOptions {
@@ -34,7 +37,6 @@ interface ConnectorInstallOptions {
 }
 interface ConnectorDeps extends AuthCommandDeps {
 	readonly agentsDir: string;
-	readonly configureHarnessHooks: (harness: string, basePath: string) => Promise<void>;
 }
 export const supportedHarnesses = [
 	"claude-code",
@@ -82,7 +84,7 @@ function canonical(harness: string): string {
 }
 interface Identity {
 	mode: string;
-	credential?: { kind?: string; deviceId?: string };
+	credential?: { kind?: string; deviceId?: string; expiresAt?: string };
 }
 interface IssuedKey {
 	key: { id: string; agentId?: string; deviceId?: string; expiresAt: string };
@@ -97,7 +99,7 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 	const registry = new ConnectorRegistry(deps);
 	const previous = (await registry.read())[harness];
 	let issued: IssuedKey | undefined;
-	if (target.remote || identity.mode === "team") {
+	if (identity.mode !== "local" && (target.remote || identity.mode === "team")) {
 		if (identity.credential?.kind !== "session" || !identity.credential.deviceId)
 			throw new SignetUnauthorizedError("missing_credential");
 		issued = await transport.post<IssuedKey>("/api/auth/connector-keys", {
@@ -107,15 +109,35 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 		});
 	}
 	const keyFile = issued ? await writeKeyFile(target.origin, harness, issued.secret, deps) : undefined;
-	const agentId = issued?.key.agentId ?? options.agent ?? options.agentId;
+	const agentId =
+		issued?.key.agentId ??
+		options.agent ??
+		options.agentId ??
+		(harness === "hermes-agent" ? options.profile : undefined);
 	await registry.set(harness, {
 		url: target.url,
 		...(keyFile ? { keyFile } : {}),
 		...(agentId ? { agentId } : {}),
 		...(issued ? { keyId: issued.key.id, deviceId: issued.key.deviceId ?? identity.credential?.deviceId } : {}),
 	});
-	const result = await installer.install(options.path ?? deps.agentsDir);
-	if (!result.success) throw new Error(result.message);
+	const previousUrl = process.env.SIGNET_DAEMON_URL;
+	process.env.SIGNET_DAEMON_URL = target.url;
+	let result: Awaited<ReturnType<typeof installer.install>>;
+	try {
+		const path = options.path ?? deps.agentsDir;
+		result =
+			installer instanceof HermesAgentConnector && identity.mode === "local"
+				? await installer.install(path, {
+						agentId: options.agent ?? options.profile,
+						memoryPolicy: options.memory,
+						policyGroup: options.group,
+					})
+				: await installer.install(path);
+	} finally {
+		if (previousUrl === undefined) delete process.env.SIGNET_DAEMON_URL;
+		else process.env.SIGNET_DAEMON_URL = previousUrl;
+	}
+	if (!result.success) throw new Error(`${result.message}: ${(result.warnings ?? []).join("; ")}`);
 	if (previous?.keyId) {
 		const oldTarget = await resolveTarget({ ...deps, flagUrl: previous.url });
 		await new NodeTransport(oldTarget, { env: deps.env }).request(
@@ -124,7 +146,17 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 		);
 	}
 	if (previous?.keyFile && previous.keyFile !== keyFile) await rm(previous.keyFile);
-	await new NodeTransport(await resolveTarget({ ...deps, harness }), { env: deps.env }).flush();
+	const registered = (await registry.read())[harness];
+	if (registered?.url !== target.url || registered.keyId !== issued?.key.id)
+		throw new Error("Connector registry readback failed");
+	const connected = new NodeTransport(
+		keyFile
+			? { ...target, harness, credential: { source: "key-file", get: () => readKeyFile(keyFile) } }
+			: { ...target, harness },
+		{ env: deps.env },
+	);
+	await connected.get("/api/auth/whoami");
+	await connected.flush();
 	console.log(
 		JSON.stringify(
 			{
@@ -189,6 +221,16 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 			}
 		};
 	const connector = program.command("connector").description("Manage harness credentials and integrations");
+	connector
+		.command("mcp <harness>")
+		.description("Proxy MCP using the harness registry credential")
+		.action(async (harness: string) => {
+			try {
+				await runConnectorMcp(canonical(harness), deps);
+			} catch (error) {
+				reportAuthError(error);
+			}
+		});
 	addOptions(program.command("connect <harness>")).action(action(installConnector));
 	addOptions(connector.command("install <harness>")).action(action(installConnector));
 	addOptions(connector.command("rotate <harness>")).action(
@@ -204,7 +246,34 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 		.option("--json")
 		.action(async (opts: ConnectorInstallOptions) => {
 			try {
-				console.log(JSON.stringify(await new ConnectorRegistry(deps).read(), null, opts.json ? undefined : 2));
+				const entries = await new ConnectorRegistry(deps).read();
+				const rows = [];
+				for (const [harness, entry] of Object.entries(entries)) {
+					try {
+						const identity = await new NodeTransport(await resolveTarget({ ...deps, harness }), {
+							env: deps.env,
+						}).get<Identity>("/api/auth/whoami");
+						const expiry = identity.credential?.expiresAt;
+						const status =
+							identity.mode === "local"
+								? "local"
+								: expiry && Date.parse(expiry) - Date.now() < 3 * 86400000
+									? "expiring"
+									: "valid";
+						rows.push({ harness, ...entry, status, expiresAt: expiry ?? null, lastUsedAt: null });
+					} catch (error) {
+						rows.push({
+							harness,
+							...entry,
+							status:
+								error instanceof SignetUnauthorizedError && ["expired", "revoked"].includes(error.reason)
+									? error.reason
+									: "unavailable",
+							lastUsedAt: null,
+						});
+					}
+				}
+				console.log(JSON.stringify(rows, null, opts.json ? undefined : 2));
 			} catch (error) {
 				reportAuthError(error, opts.json);
 			}
@@ -215,28 +284,68 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 		.action(async (opts: ConnectorInstallOptions) => {
 			try {
 				const results = [];
+				const inline = [];
+				for (const harness of supportedHarnesses) {
+					const files = await inspectConnectorFiles(connectorFor(harness).getConfigPath());
+					if (files.inlineKeyFiles.length || files.scanIncomplete) inline.push({ harness, ...files });
+				}
 				for (const [harness, entry] of Object.entries(await new ConnectorRegistry(deps).read())) {
+					const outbox = new DurableOutbox(entry.url, { env: deps.env, harness });
 					try {
 						if (entry.keyFile) await readKeyFile(entry.keyFile);
 						const transport = new NodeTransport(await resolveTarget({ ...deps, harness }), { env: deps.env });
 						const identity = await transport.get<Identity>("/api/auth/whoami");
 						await transport.flush();
+						const state = await outbox.status();
 						results.push({
 							harness,
 							url: entry.url,
-							healthy: true,
+							healthy: state.pending === 0 && state.quarantined === 0,
 							mode: identity.mode,
-							outbox: await transport.outbox.status(),
+							outbox: state,
 						});
 					} catch (error) {
 						results.push({
 							harness,
 							healthy: false,
-							error: error instanceof Error ? error.message : "Inspection failed",
+							reason:
+								error instanceof SignetUnauthorizedError
+									? error.reason
+									: error instanceof Error
+										? error.name
+										: "inspection_failed",
+							outbox: await outbox.status(),
 						});
 					}
 				}
-				console.log(JSON.stringify(results, null, opts.json ? undefined : 2));
+				let legacy: { status: string; unassigned?: number } = { status: "unavailable" };
+				try {
+					const response = await new NodeTransport(await resolveTarget(deps), { env: deps.env }).get<unknown>(
+						"/api/org/keys",
+						{ legacy: "1" },
+					);
+					const keys =
+						typeof response === "object" && response !== null && "keys" in response && Array.isArray(response.keys)
+							? response.keys
+							: null;
+					if (keys)
+						legacy = {
+							status: "checked",
+							unassigned: keys.filter(
+								(key: unknown) => typeof key === "object" && key !== null && "userId" in key && key.userId === null,
+							).length,
+						};
+				} catch (error) {
+					legacy = { status: error instanceof SignetUnauthorizedError ? "login_required" : "unavailable" };
+				}
+				if (inline.length || results.some((result) => !result.healthy) || legacy.unassigned) process.exitCode = 1;
+				console.log(
+					JSON.stringify(
+						{ connectors: results, inlineKeys: inline, legacyKeys: legacy },
+						null,
+						opts.json ? undefined : 2,
+					),
+				);
 			} catch (error) {
 				reportAuthError(error, opts.json);
 			}

@@ -1,3 +1,4 @@
+import { resolveTarget } from "@signet/sdk/node";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
@@ -121,12 +122,14 @@ function resolveRuntimeWorkspace(): string {
 		env: (runtimeEnv && typeof runtimeEnv === "object" ? runtimeEnv : {}) as NodeJS.ProcessEnv,
 	}).path;
 }
-function staticFallback(): string {
+async function staticFallback(): Promise<string> {
+	if ((await resolveTarget({ harness: "opencode" })).remote) return "";
 	const dir = readRuntimeEnv("SIGNET_PATH") ?? resolveRuntimeWorkspace();
 	return readStaticIdentity(dir) ?? "";
 }
 
-function sessionStartFallback(reason: "offline" | "timeout"): string {
+async function sessionStartFallback(reason: "offline" | "timeout"): Promise<string> {
+	if ((await resolveTarget({ harness: "opencode" })).remote) return "";
 	const dir = readRuntimeEnv("SIGNET_PATH") ?? resolveRuntimeWorkspace();
 	if (reason === "timeout") {
 		return readStaticIdentity(dir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS) ?? "";
@@ -229,9 +232,9 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			readContextString(start.data.inject) ||
 			readContextString(start.data.recentContext);
 	} else if (start.reason === "timeout") {
-		sessionContext = sessionStartFallback("timeout");
+		sessionContext = await sessionStartFallback("timeout");
 	} else {
-		sessionContext = staticFallback();
+		sessionContext = await staticFallback();
 	}
 
 	async function ensureSessionStarted(sessionID: string): Promise<string> {

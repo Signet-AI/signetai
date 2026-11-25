@@ -17,7 +17,9 @@ import {
 	wrapMemoryContext,
 } from "@signet/core";
 import type { RecallPayload, RecallRow } from "@signet/core";
-import { SignetClient } from "@signet/sdk";
+import { SignetApiError, SignetUnauthorizedError, SignetTimeoutError, SignetResponseError } from "@signet/sdk";
+import { resolveTarget, NodeTransport } from "@signet/sdk/node";
+import { captureRemoteSessionEnd } from "@signet/connector-base";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi, OpenClawToolResult } from "./openclaw-types.js";
 
@@ -257,15 +259,6 @@ interface MemoryRecord {
 	updated_at: string;
 }
 
-function pluginHeaders(): Record<string, string> {
-	return {
-		"Content-Type": "application/json",
-		"x-signet-runtime-path": RUNTIME_PATH,
-		"x-signet-actor": "openclaw-plugin",
-		"x-signet-actor-type": "harness",
-	};
-}
-
 async function daemonFetch<T>(
 	daemonUrl: string,
 	path: string,
@@ -283,89 +276,43 @@ async function daemonFetch<T>(
 async function daemonFetchResult<T>(
 	daemonUrl: string,
 	path: string,
-	options: {
-		method?: string;
-		body?: unknown;
-		timeout?: number;
-	} = {},
+	options: { method?: string; body?: unknown; timeout?: number } = {},
 ): Promise<DaemonFetchResult<T>> {
-	const { method = "GET", body, timeout = READ_TIMEOUT } = options;
-
 	try {
-		const init: RequestInit = {
-			method,
-			headers: pluginHeaders(),
-			signal: AbortSignal.timeout(timeout),
+		const target = await resolveTarget({ harness: "openclaw", configUrl: daemonUrl });
+		const transport = new NodeTransport(target, {
+			headers: { "x-signet-runtime-path": RUNTIME_PATH },
+			deliveryPaths: ["/api/hooks/stop"],
+		});
+		const body =
+			target.remote && path === "/api/hooks/session-end" ? await captureRemoteSessionEnd(options.body) : options.body;
+		const data = await transport.request<T>(options.method ?? "GET", path, {
+			body,
+			timeoutMs: options.timeout ?? READ_TIMEOUT,
+		});
+		if (data === undefined || typeof data === "string") return { ok: false, reason: "invalid-json", status: 200 };
+		return { ok: true, data };
+	} catch (error) {
+		if (error instanceof SignetUnauthorizedError) console.warn("Signet session expired, run `signet login`");
+		if (error instanceof SignetApiError) return { ok: false, reason: "http", status: error.status };
+		return {
+			ok: false,
+			reason:
+				error instanceof SignetTimeoutError
+					? "timeout"
+					: error instanceof SignetResponseError
+						? "body-read"
+						: "offline",
 		};
-
-		if (body !== undefined) {
-			init.body = JSON.stringify(body);
-		}
-
-		const res = await fetch(`${daemonUrl}${path}`, init);
-
-		if (!res.ok) {
-			console.warn(`[signet] ${method} ${path} failed:`, res.status);
-			return { ok: false, reason: "http", status: res.status };
-		}
-
-		try {
-			const text = await res.text();
-			try {
-				const data = JSON.parse(text) as T;
-				return { ok: true, data };
-			} catch {
-				console.warn(
-					`[signet] ${method} ${path} returned invalid JSON (${text.length} chars${text.length === 0 ? ", empty body" : ""})`,
-				);
-				return { ok: false, reason: "invalid-json", status: res.status };
-			}
-		} catch (e) {
-			if (isTimeoutError(e)) {
-				console.warn(`[signet] ${method} ${path} body read timed out after ${timeout}ms`);
-				return { ok: false, reason: "timeout" };
-			}
-			console.warn(`[signet] ${method} ${path} body read failed:`, errorName(e) || e);
-			return { ok: false, reason: "body-read" };
-		}
-	} catch (e) {
-		if (isTimeoutError(e)) {
-			console.warn(`[signet] ${method} ${path} timed out after ${timeout}ms`);
-			return { ok: false, reason: "timeout" };
-		}
-		const cause: unknown = e instanceof TypeError ? e.cause : e;
-		const isConnRefused =
-			typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ECONNREFUSED";
-		if (isConnRefused) {
-			console.warn(`[signet] daemon unreachable at ${daemonUrl} — is the Signet daemon running? (${method} ${path})`);
-		} else {
-			console.warn(`[signet] ${method} ${path} error:`, e);
-		}
-		return { ok: false, reason: "offline" };
 	}
 }
 
 export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<boolean> {
-	try {
-		const res = await fetch(`${daemonUrl}/health`, {
-			signal: AbortSignal.timeout(1000),
-		});
-		return res.ok;
-	} catch {
-		return false;
-	}
+	return (await daemonFetchResult(daemonUrl, "/health", { timeout: 1000 })).ok;
 }
 async function getDaemonPid(daemonUrl: string): Promise<number | null> {
-	try {
-		const res = await fetch(`${daemonUrl}/health`, {
-			signal: AbortSignal.timeout(1000),
-		});
-		if (!res.ok) return null;
-		const body = (await res.json()) as { pid?: number };
-		return typeof body.pid === "number" ? body.pid : null;
-	} catch {
-		return null;
-	}
+	const result = await daemonFetchResult<{ pid?: number }>(daemonUrl, "/health", { timeout: 1000 });
+	return result.ok && typeof result.data.pid === "number" ? result.data.pid : null;
 }
 function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
 	const dir = process.env.SIGNET_PATH ?? resolveWorkspacePath().path;
@@ -402,6 +349,12 @@ export async function onSessionStart(
 		},
 	);
 	if (result.ok) return result.data;
+	if (
+		(await resolveTarget({ harness: "openclaw", configUrl: options.daemonUrl })).remote ||
+		result.status === 401 ||
+		result.status === 403
+	)
+		return null;
 	if (result.reason === "timeout") return staticFallback("timeout");
 	return staticFallback();
 }
@@ -520,23 +473,11 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	new SignetClient({
-		daemonUrl: options.daemonUrl || DEFAULT_DAEMON_URL,
-		retries: 0,
-		timeoutMs: WRITE_TIMEOUT,
-	}).sessionEndFireAndForget({
-		harness,
-		agentId: options.agentId,
-		transcriptPath: options.transcriptPath,
-		...(options.transcript && { transcript: options.transcript }),
-		sessionKey: options.sessionKey,
-		sessionId: options.sessionId,
-		cwd: options.cwd,
-		reason: options.reason,
-		runtimePath: RUNTIME_PATH,
+	return daemonFetch<SessionEndResult>(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
+		method: "POST",
+		timeout: WRITE_TIMEOUT,
+		body: { harness, ...options, runtimePath: RUNTIME_PATH },
 	});
-
-	return null;
 }
 
 export async function memoryRecall(

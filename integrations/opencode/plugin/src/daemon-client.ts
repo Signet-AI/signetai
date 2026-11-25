@@ -1,4 +1,6 @@
 import { READ_TIMEOUT, RUNTIME_PATH, WRITE_TIMEOUT } from "./types.js";
+import { SignetApiError, SignetUnauthorizedError, SignetTimeoutError, SignetResponseError } from "@signet/sdk";
+import { resolveTarget, NodeTransport } from "@signet/sdk/node";
 
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
@@ -10,95 +12,39 @@ export type DaemonFetchResult<T> =
 			readonly status?: number;
 	  };
 
-function readRuntimeEnv(name: string): string | undefined {
-	const value = process.env[name];
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readAuthToken(): string | undefined {
-	return readRuntimeEnv("SIGNET_API_KEY") ?? readRuntimeEnv("SIGNET_TOKEN");
-}
-
-function pluginHeaders(): Record<string, string> {
-	const headers: Record<string, string> = {
-		"Content-Type": "application/json",
-		"x-signet-runtime-path": RUNTIME_PATH,
-		"x-signet-actor": "opencode-plugin",
-		"x-signet-actor-type": "harness",
-	};
-	const token = readAuthToken();
-	if (token) headers.Authorization = `Bearer ${token}`;
-	return headers;
-}
-
-function errorName(err: unknown): string {
-	if (typeof err !== "object" || err === null) return "";
-	const name = Reflect.get(err, "name");
-	return typeof name === "string" ? name : "";
-}
-
-function isTimeoutError(err: unknown): boolean {
-	const name = errorName(err);
-	if (name === "AbortError" || name === "TimeoutError") return true;
-	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
-	return code === "ABORT_ERR";
-}
-
 async function daemonFetchResult<T>(
 	daemonUrl: string,
 	path: string,
-	options: {
-		readonly method?: string;
-		readonly body?: unknown;
-		readonly timeout?: number;
-	} = {},
+	options: { readonly method?: string; readonly body?: unknown; readonly timeout?: number } = {},
 ): Promise<DaemonFetchResult<T>> {
-	const { method = "GET", body, timeout = READ_TIMEOUT } = options;
-
 	try {
-		const init: RequestInit = {
-			method,
-			headers: pluginHeaders(),
-			signal: AbortSignal.timeout(timeout),
+		const transport = new NodeTransport(await resolveTarget({ harness: "opencode", configUrl: daemonUrl }), {
+			headers: { "x-signet-runtime-path": RUNTIME_PATH },
+			deliveryPaths: ["/api/hooks/stop"],
+		});
+		const data = await transport.request<T>(options.method ?? "GET", path, {
+			body: options.body,
+			timeoutMs: options.timeout ?? READ_TIMEOUT,
+		});
+		if (data === undefined || typeof data === "string") {
+			console.warn(
+				`[signet] ${path} returned invalid JSON (${typeof data === "string" ? `${data.length} chars` : "0 chars, empty body"})`,
+			);
+			return { ok: false, reason: "invalid-json", status: 200 };
+		}
+		return { ok: true, data };
+	} catch (error) {
+		if (error instanceof SignetUnauthorizedError) console.warn("Signet session expired, run `signet login`");
+		if (error instanceof SignetApiError) return { ok: false, reason: "http", status: error.status };
+		return {
+			ok: false,
+			reason:
+				error instanceof SignetTimeoutError
+					? "timeout"
+					: error instanceof SignetResponseError
+						? "body-read"
+						: "offline",
 		};
-
-		if (body !== undefined) {
-			init.body = JSON.stringify(body);
-		}
-
-		const res = await fetch(`${daemonUrl}${path}`, init);
-
-		if (!res.ok) {
-			console.warn(`[signet] ${method} ${path} failed:`, res.status);
-			return { ok: false, reason: "http", status: res.status };
-		}
-
-		try {
-			const text = await res.text();
-			try {
-				const data = JSON.parse(text) as T;
-				return { ok: true, data };
-			} catch {
-				console.warn(
-					`[signet] ${method} ${path} returned invalid JSON (${text.length} chars${text.length === 0 ? ", empty body" : ""})`,
-				);
-				return { ok: false, reason: "invalid-json", status: res.status };
-			}
-		} catch (e) {
-			if (isTimeoutError(e)) {
-				console.warn(`[signet] ${method} ${path} body read timed out after ${timeout}ms`);
-				return { ok: false, reason: "timeout" };
-			}
-			console.warn(`[signet] ${method} ${path} body read failed:`, errorName(e) || e);
-			return { ok: false, reason: "body-read" };
-		}
-	} catch (e) {
-		if (isTimeoutError(e)) {
-			console.warn(`[signet] ${method} ${path} timed out after ${timeout}ms`);
-			return { ok: false, reason: "timeout" };
-		}
-		console.warn(`[signet] ${method} ${path} error:`, e);
-		return { ok: false, reason: "offline" };
 	}
 }
 
@@ -117,15 +63,7 @@ async function daemonFetch<T>(
 }
 
 export async function isDaemonRunning(daemonUrl: string): Promise<boolean> {
-	try {
-		const res = await fetch(`${daemonUrl}/health`, {
-			headers: pluginHeaders(),
-			signal: AbortSignal.timeout(1000),
-		});
-		return res.ok;
-	} catch {
-		return false;
-	}
+	return (await daemonFetchResult(daemonUrl, "/health", { timeout: 1000 })).ok;
 }
 
 export interface DaemonClient {

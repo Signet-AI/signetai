@@ -1,19 +1,26 @@
+import { captureRemoteSessionEnd } from "@signet/connector-base";
 import { SignetApiError, SignetTimeoutError } from "../../../../libs/sdk/src/index.js";
 import { ConnectorRegistry, NodeTransport, resolveTarget } from "../../../../libs/sdk/src/node.js";
 import type { DaemonFetchResult } from "./daemon.js";
 
-export async function createHookFetch(
-	harness: string,
-): Promise<<T>(path: string, options?: RequestInit & { timeout?: number }) => Promise<DaemonFetchResult<T>>> {
+export type HookFetch = (<T>(
+	path: string,
+	options?: RequestInit & { timeout?: number },
+) => Promise<DaemonFetchResult<T>>) & { readonly remote: boolean };
+export async function createHookFetch(harness: string): Promise<HookFetch> {
 	const target = await resolveTarget({ harness });
 	const entry = (await new ConnectorRegistry().read())[harness];
 	const transport = new NodeTransport(target, {
 		headers: { "x-signet-runtime-path": "legacy", ...(entry?.agentId ? { "x-signet-agent-id": entry.agentId } : {}) },
 		deliveryPaths: ["/api/hooks/stop"],
 	});
-	return async <T>(path: string, options?: RequestInit & { timeout?: number }): Promise<DaemonFetchResult<T>> => {
+	const fetch = async <T>(
+		path: string,
+		options?: RequestInit & { timeout?: number },
+	): Promise<DaemonFetchResult<T>> => {
+		let body: unknown = typeof options?.body === "string" ? JSON.parse(options.body) : undefined;
+		if (target.remote && path === "/api/hooks/session-end") body = await captureRemoteSessionEnd(body);
 		try {
-			const body: unknown = typeof options?.body === "string" ? JSON.parse(options.body) : undefined;
 			const headers = new Headers(options?.headers);
 			headers.delete("content-type");
 			const data = await transport.request<T>(options?.method ?? "GET", path, {
@@ -29,4 +36,5 @@ export async function createHookFetch(
 			return { ok: false, reason: error instanceof SignetTimeoutError ? "timeout" : "offline" };
 		}
 	};
+	return Object.assign(fetch, { remote: target.remote });
 }

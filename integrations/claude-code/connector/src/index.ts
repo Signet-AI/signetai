@@ -1,15 +1,18 @@
-import { spawnHidden as spawn } from "@signet/core";
+import { NodeTransport, resolveTarget } from "@signet/sdk/node";
+import { SignetUnauthorizedError } from "@signet/sdk";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	BaseConnector,
+	captureRemoteSessionEnd,
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
 	isJsonObject,
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 	resolveSignetCliCommand,
 	parseHookLauncher,
 	isSignetCliLauncher,
@@ -150,44 +153,21 @@ export interface SessionEndFireAndForgetPayload {
 	transcriptPath?: string;
 }
 
-type DetachedSpawn = typeof spawn;
-
-const SESSION_END_FIRE_AND_FORGET_SCRIPT = `
-void (async () => {
-  const url = process.env.SIGNET_SESSION_END_URL;
-  const body = process.env.SIGNET_SESSION_END_BODY;
-  if (!url || !body) return;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch {}
-})();
-`;
-export function dispatchSessionEndFireAndForget(
+export async function dispatchSessionEndFireAndForget(
 	daemonUrl: string,
 	payload: SessionEndFireAndForgetPayload,
-	spawnImpl: DetachedSpawn = spawn,
-): boolean {
+): Promise<boolean> {
 	try {
-		const url = `${daemonUrl.replace(/\/$/, "")}/api/hooks/session-end`;
-		const body = JSON.stringify(payload);
-		const child = spawnImpl(process.execPath, ["--eval", SESSION_END_FIRE_AND_FORGET_SCRIPT], {
-			detached: true,
-			stdio: "ignore",
-			env: {
-				...process.env,
-				SIGNET_SESSION_END_URL: url,
-				SIGNET_SESSION_END_BODY: body,
-			},
-		});
-		child.unref();
+		const target = await resolveTarget({ harness: "claude-code", configUrl: daemonUrl });
+		const transport = new NodeTransport(target, { headers: { "x-signet-runtime-path": "legacy" } });
+		await transport.post("/api/hooks/session-end", target.remote ? await captureRemoteSessionEnd(payload) : payload);
 		return true;
 	} catch (error) {
-		console.warn("[signet] session-end fire-and-forget dispatch failed:", error);
+		console.warn(
+			error instanceof SignetUnauthorizedError
+				? "Signet session expired, run `signet login`"
+				: "[signet] session-end delivery failed; inspect the connector outbox",
+		);
 		return false;
 	}
 }
@@ -287,41 +267,35 @@ export class ClaudeCodeConnector extends BaseConnector {
 	}
 	async onSessionStart(ctx: SessionContext): Promise<SessionStartResult | null> {
 		try {
-			const res = await fetch(`${this.daemonUrl}/api/hooks/session-start`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					harness: "claude-code",
-					project: ctx.projectPath,
-					sessionKey: ctx.sessionId,
-				}),
-				signal: AbortSignal.timeout(5000),
+			const transport = new NodeTransport(await resolveTarget({ harness: "claude-code", configUrl: this.daemonUrl }), {
+				headers: { "x-signet-runtime-path": "legacy" },
 			});
-
-			if (!res.ok) {
-				console.warn("[signet] Session start hook failed:", res.status);
-				return null;
-			}
-
-			return (await res.json()) as SessionStartResult;
-		} catch (e) {
-			console.warn("[signet] Session start hook error:", e);
+			return await transport.post<SessionStartResult>(
+				"/api/hooks/session-start",
+				{ harness: "claude-code", project: ctx.projectPath, sessionKey: ctx.sessionId },
+				{ timeoutMs: 5000 },
+			);
+		} catch (error) {
+			console.warn(
+				error instanceof SignetUnauthorizedError
+					? "Signet session expired, run `signet login`"
+					: "[signet] Session start delivery failed",
+			);
 			return null;
 		}
 	}
-
-	protected dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
+	protected dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): Promise<boolean> {
 		return dispatchSessionEndFireAndForget(this.daemonUrl, payload);
 	}
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
-		const dispatched = this.dispatchSessionEnd({
+		const delivered = await this.dispatchSessionEnd({
 			harness: "claude-code",
 			sessionId: ctx.sessionId,
 			transcriptPath: ctx.transcriptPath,
 		});
-
-		return { success: dispatched, memoriesExtracted: 0 };
+		return { success: delivered, memoriesExtracted: 0 };
 	}
+
 	private configureHooks(
 		settingsPath: string,
 		settings: Record<string, unknown>,
@@ -448,7 +422,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		if (!config) return;
 		const claudeJsonPath = join(homedir(), ".claude.json");
 		const existingMcp = isJsonObject(config.mcpServers) ? config.mcpServers : {};
-		const mcp = resolveSignetMcpCommand(readMcpLauncher(existingMcp.signet) ?? mcpFromCli(launcher));
+		const mcp = resolveHarnessMcpCommand("claude-code", readMcpLauncher(existingMcp.signet) ?? mcpFromCli(launcher));
 		config.mcpServers = {
 			...existingMcp,
 			signet: {

@@ -33,6 +33,7 @@ import {
 	isExistingFile,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 	writeConfigText,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
@@ -92,17 +93,12 @@ function resolveSignetArgs(runtime: string | null = null, existing?: ResolvedCom
 	return [launcher.command, ...launcher.args];
 }
 
-function resolveSignetMcp(runtime: string | null = null, existing?: ResolvedCommand, apiKey?: string): SignetMcpConfig {
-	const remoteDaemonUrl = resolveRemoteDaemonUrl();
-	if (remoteDaemonUrl) {
-		return {
-			url: `${remoteDaemonUrl}/mcp`,
-			startupTimeoutSec: 10,
-			toolTimeoutSec: 30,
-			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
-		};
-	}
-	return resolveSignetMcpCommand(existing, runtime);
+function resolveSignetMcp(
+	runtime: string | null = null,
+	existing?: ResolvedCommand,
+	_apiKey?: string,
+): SignetMcpConfig {
+	return resolveHarnessMcpCommand("codex", existing, runtime);
 }
 
 const CODEX_RUNTIME_SCAN_DEPTH = 8;
@@ -643,19 +639,7 @@ function withRemoteDaemonEnv(
 	platform: NodeJS.Platform = process.platform,
 	apiKey?: string,
 ): string {
-	if (!remoteDaemonUrl && !apiKey) return command;
-	if (platform === "win32") {
-		const vars = [
-			...(remoteDaemonUrl ? [`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`] : []),
-			...(apiKey ? [`set "SIGNET_API_KEY=${cmdEnvQuote(apiKey)}"`] : []),
-		];
-		return `${vars.join(" && ")} && ${command}`;
-	}
-	return [
-		...(remoteDaemonUrl ? [`SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)}`] : []),
-		...(apiKey ? [`SIGNET_API_KEY=${shellQuote(apiKey)}`] : []),
-		command,
-	].join(" ");
+	return command;
 }
 
 function writeWindowsHookWrapper(
@@ -683,8 +667,7 @@ function writeWindowsHookWrapper(
 	} catch {}
 
 	const lines = ["@echo off", "setlocal"];
-	if (remoteDaemonUrl) lines.push(`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`);
-	if (apiKey) lines.push(`set "SIGNET_API_KEY=${cmdEnvQuote(apiKey)}"`);
+
 	const invocation = signetArgs.map(windowsBatchArg).join(" ");
 	lines.push(`${windowsBatchEntrypoint(signetArgs[0] ?? "")}${invocation} %*`);
 	lines.push("exit /b %ERRORLEVEL%", "");

@@ -998,7 +998,6 @@ registerAuthCommands(program, {
 registerConnectorCommands(program, {
 	configUrl: readDaemonUrlConfig(AGENTS_DIR),
 	agentsDir: AGENTS_DIR,
-	configureHarnessHooks,
 });
 
 registerGraphiqCommands(program, {

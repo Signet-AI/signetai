@@ -14,7 +14,9 @@ import { reportAuthError } from "./auth.js";
 import { apiError } from "../../../../libs/sdk/src/errors.js";
 
 interface HookDeps {
-	readonly createHookFetch?: (harness: string) => Promise<HookDeps["fetchDaemonResult"]>;
+	readonly createHookFetch?: (
+		harness: string,
+	) => Promise<HookDeps["fetchDaemonResult"] & { readonly remote?: boolean }>;
 	readonly AGENTS_DIR: string;
 	readonly fetchDaemonResult: <T>(
 		path: string,
@@ -387,14 +389,17 @@ async function fetchHookData<T>(
 }
 
 export function registerHookCommands(program: Command, deps: HookDeps): void {
-	const hookCmd = program.command("hook").description("Lifecycle hooks for harness integration");
+	const hookCmd = program
+		.command("hook")
+		.description("Lifecycle hooks for harness integration")
+		.option("--json", "Machine-readable failures");
 
 	hookCmd.hook("preAction", async (_command, action) => {
 		if (process.env.SIGNET_NO_HOOKS === "1" || process.env.SIGNET_BYPASS === "1") {
 			process.exit(0);
 		}
 		if (deps.createHookFetch) {
-			const options = action.opts();
+			const options = action.optsWithGlobals();
 			const harness = typeof options.harness === "string" ? options.harness : "cli";
 			const fetch = await deps.createHookFetch(harness);
 			deps = {
@@ -407,7 +412,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					}
 					return result;
 				},
-				readStaticIdentity: () => null,
+				readStaticIdentity: fetch.remote ? () => null : deps.readStaticIdentity,
 			};
 		}
 	});

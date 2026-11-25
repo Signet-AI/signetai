@@ -55,6 +55,7 @@
       "dependencies": {
         "@signet/connector-base": "1.0.1",
         "@signet/core": "1.0.1",
+        "@signet/sdk": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -186,6 +187,7 @@
       "dependencies": {
         "@signet/core": "workspace:*",
         "@signet/pi-extension-base": "workspace:*",
+        "@signet/sdk": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -215,6 +217,7 @@
         "@sinclair/typebox": "0.34.47",
       },
       "devDependencies": {
+        "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
         "@signet/sdk": "workspace:*",
         "@types/node": "^22.0.0",
@@ -248,6 +251,7 @@
       "version": "1.0.1",
       "dependencies": {
         "@signet/core": "workspace:*",
+        "@signet/sdk": "workspace:*",
       },
       "devDependencies": {
         "@opencode-ai/plugin": "^1.18.13",
@@ -281,6 +285,7 @@
       "dependencies": {
         "@signet/core": "workspace:*",
         "@signet/pi-extension-base": "workspace:*",
+        "@signet/sdk": "workspace:*",
         "@sinclair/typebox": "^0.34.0",
       },
       "devDependencies": {
@@ -296,6 +301,7 @@
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
         "@signet/lifecycle-proof": "workspace:*",
+        "@signet/sdk": "workspace:*",
       },
     },
     "integrations/unreal/plugin": {
@@ -468,6 +474,7 @@
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-tui": "1.5.2",
         "@inquirer/prompts": "^7.0.0",
+        "@modelcontextprotocol/sdk": "1.30.0",
         "@signet/connector-base": "workspace:*",
         "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-codex": "workspace:*",

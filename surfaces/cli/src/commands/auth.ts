@@ -1,3 +1,4 @@
+import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { hostname, platform } from "node:os";
 import type { Command } from "commander";
 import open from "open";
@@ -50,6 +51,14 @@ export function reportAuthError(error: unknown, json = false): void {
 export async function authTransport(options: AuthOptions, deps: AuthCommandDeps = {}): Promise<NodeTransport> {
 	return new NodeTransport(await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl }), { env: deps.env });
 }
+function loginTarget(options: AuthOptions, deps: AuthCommandDeps): { url: string; origin: string } {
+	const env = deps.env ?? process.env;
+	const url = resolveSignetDaemonUrl({
+		env: { ...env, SIGNET_DAEMON_URL: options.url ?? deps.flagUrl ?? env.SIGNET_DAEMON_URL },
+		configUrl: deps.configUrl,
+	});
+	return { url, origin: new URL(url).origin };
+}
 export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {}): void {
 	const print = deps.print ?? console.log;
 	const action = (run: (options: AuthOptions) => Promise<void>) => async (options: AuthOptions) => {
@@ -65,7 +74,7 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 		.option("--device-code", "Print the approval URL without opening a browser")
 		.action(
 			action(async (opts) => {
-				const target = await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl });
+				const target = loginTarget(opts, deps);
 				const transport = new SignetTransport({ baseUrl: target.url, retries: 0 });
 				const device = await transport.post<DeviceStart>("/api/auth/device/start", {
 					client: "cli",
@@ -127,9 +136,17 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 		.option("--all", "Revoke all your sessions")
 		.action(
 			action(async (opts) => {
-				const target = await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl });
-				await new NodeTransport(target, { env: deps.env }).post("/api/auth/logout", { all: opts.all === true });
-				await new LoginStore(target.origin, deps).clear();
+				const location = loginTarget(opts, deps);
+				const store = new LoginStore(location.origin, deps);
+				try {
+					const target = await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl });
+					await new NodeTransport(target, { env: deps.env }).post("/api/auth/logout", { all: opts.all === true });
+				} catch (error) {
+					if (!(error instanceof SignetUnauthorizedError)) throw error;
+					await store.clear();
+					if (opts.all) throw error;
+				}
+				await store.clear();
 				print(opts.json ? JSON.stringify({ authenticated: false }) : "Signed out");
 			}),
 		);
