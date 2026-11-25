@@ -105,10 +105,10 @@ async function revokeConnectorKey(
 	} catch (error) {
 		if (!(error instanceof SignetApiError) || error.status !== 404) throw error;
 	}
-	const response = await transport.get<{ keys: { id: string; revokedAt?: string | null }[] }>(
+	const response = await transport.get<{ keys: { id: string; revoked_at?: string | null }[] }>(
 		"/api/auth/connector-keys",
 	);
-	if (!Array.isArray(response.keys) || response.keys.some((key) => key.id === entry.keyId && !key.revokedAt))
+	if (!Array.isArray(response.keys) || response.keys.some((key) => key.id === entry.keyId && !key.revoked_at))
 		throw new Error("Connector revocation could not be verified; local state was retained");
 }
 async function installConnector(raw: string, options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
@@ -297,13 +297,13 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 								: await attemptAsync(async () => {
 										const sessionTarget = await resolveTarget({ ...deps, flagUrl: entry.url });
 										const response = await new NodeTransport(sessionTarget, { env: deps.env }).get<{
-											keys: { id: string; lastUsedAt?: string | null; expiresAt?: string | null }[];
+											keys: { id: string; last_used_at?: string | null; expires_at?: string | null }[];
 										}>("/api/auth/connector-keys");
 										return Array.isArray(response.keys)
 											? response.keys.find((key) => key.id === entry.keyId)
 											: undefined;
 									});
-						const expiry = metadata?.expiresAt ?? identity.credential?.expiresAt;
+						const expiry = metadata?.expires_at ?? identity.credential?.expiresAt;
 						const status =
 							identity.mode === "local"
 								? "local"
@@ -317,7 +317,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 							...entry,
 							status,
 							expiresAt: expiry ?? null,
-							lastUsedAt: metadata?.lastUsedAt ?? null,
+							lastUsedAt: metadata?.last_used_at ?? null,
 							metadataStatus: identity.mode === "local" ? "local" : metadata ? "available" : "unavailable",
 						});
 					} catch (error) {

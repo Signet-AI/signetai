@@ -75,8 +75,8 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 	let revoked = false;
 	const metadata = {
 		id: "previous",
-		lastUsedAt: "2026-11-25T12:00:00.000Z",
-		expiresAt: new Date(Date.now() + 86400000).toISOString(),
+		last_used_at: "2026-11-25T12:00:00.000Z",
+		expires_at: new Date(Date.now() + 86400000).toISOString(),
 	};
 	const keyring = {
 		get: async () => ({ state: "unsupported" as const }),
@@ -92,7 +92,7 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 				return Response.json({ reason: "not_found" }, { status: 404 });
 			}
 			if (path === "/api/auth/connector-keys" && request.method === "GET")
-				return Response.json({ keys: revoked ? [] : [metadata] });
+				return Response.json({ keys: [{ ...metadata, revoked_at: revoked ? "2026-11-25T12:01:00.000Z" : null }] });
 			if (path === "/api/org/keys") return Response.json({ keys: [{ userId: null }] });
 			if (path === "/api/auth/connector-keys" && request.method === "POST")
 				return Response.json(
@@ -227,8 +227,8 @@ test("connector list reports server last-use metadata without exposing credentia
 				agentId: "alice",
 				keyId: "previous",
 				status: "expiring",
-				lastUsedAt: fixture.metadata.lastUsedAt,
-				expiresAt: fixture.metadata.expiresAt,
+				lastUsedAt: fixture.metadata.last_used_at,
+				expiresAt: fixture.metadata.expires_at,
 				metadataStatus: "available",
 			}),
 		]);
