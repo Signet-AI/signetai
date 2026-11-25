@@ -9,7 +9,7 @@ import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { readScopedCheckpoints, readLegacyContinuity } from "../diagnostics.js";
 import { type LogCategory, logger } from "../logger.js";
-import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
+import { listMemorySearchTelemetry, streamMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { addResourceUtilizationSample, emptyResourceUtilizationStats } from "../resource-telemetry.js";
 import { redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
@@ -739,25 +739,30 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const project = resolveScopedProject(c, c.req.query("project"));
 		if (project.error) return c.json({ error: project.error }, 403);
 
-		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
 		const noHitsRaw = c.req.query("no_hits");
-		const items = await listMemorySearchTelemetry(getDbAccessor(), {
-			scope,
-			project: project.project,
-			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
-			route: c.req.query("route"),
-			since: c.req.query("since"),
-			until: c.req.query("until"),
-			noHits:
-				noHitsRaw === "1" || noHitsRaw === "true"
-					? true
-					: noHitsRaw === "0" || noHitsRaw === "false"
-						? false
-						: undefined,
-			limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10000) : 10000,
-			offset: 0,
-		});
-		return c.text(items.map((item) => JSON.stringify(item)).join("\n"), 200, {
+		const output = streamMemorySearchTelemetry(
+			getDbAccessor(),
+			{
+				scope,
+				project: project.project,
+				sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
+				route: c.req.query("route"),
+				since: c.req.query("since"),
+				until: c.req.query("until"),
+				noHits:
+					noHitsRaw === "1" || noHitsRaw === "true"
+						? true
+						: noHitsRaw === "0" || noHitsRaw === "false"
+							? false
+							: undefined,
+				limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10000) : undefined,
+				offset: 0,
+			},
+			c.req.raw.signal,
+			() => resolveRouteReadScope(c, c.req.query("agent_id") ?? c.req.query("agentId")),
+		);
+		return c.body(output, 200, {
 			"Content-Type": "application/x-ndjson",
 		});
 	});

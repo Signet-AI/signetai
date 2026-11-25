@@ -167,6 +167,9 @@ test("unlabelled telemetry is absent unless the reader has all agent and compart
 	await write("UPDATE memory_search_telemetry SET query='updated unknown snapshot' WHERE id='unknown-label'");
 	expect(await snapshot()).toEqual(before);
 	expect(await body("/api/telemetry/memory-search", true)).toMatchObject({ items: [{ id: "unknown-label" }] });
+	expect(
+		await (await app.request("/api/telemetry/memory-search/export", { headers: { "x-test-user": "audience" } })).text(),
+	).toContain("unknown-label");
 	const { readScopedSearchTelemetry } = await import("../diagnostics");
 	expect(
 		(await readScopedSearchTelemetry({ scope: { reach: { kind: "all" }, compartments: "all", projects: null } })).map(

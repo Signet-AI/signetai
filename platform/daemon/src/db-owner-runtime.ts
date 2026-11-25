@@ -253,6 +253,10 @@ async function executeInlineOwnerRequest(
 				request.scope,
 			),
 		);
+	if (request.kind === "search_telemetry_export_page")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readSearchTelemetryExportPage(request.query, request.cursor, db),
+		);
 	if (request.kind === "search_telemetry_read")
 		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
 			(await import("./diagnostics")).readScopedSearchTelemetry(request.query, db),
@@ -787,6 +791,18 @@ export async function dbOwnerSearchTelemetry(
 		{ operation: "telemetry.memory-search.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 	);
 }
+export async function dbOwnerSearchTelemetryExportPage(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readSearchTelemetryExportPage> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "search_telemetry_export_page", query, cursor },
+		{ operation: "telemetry.memory-search.export-page", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+
 export async function dbOwnerQueueDiagnostics(
 	scope: import("./read-scope").ReadScope,
 	accessor?: DbAccessor,

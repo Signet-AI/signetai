@@ -1209,11 +1209,32 @@ export async function readTableSampleAsync(
 	};
 }
 
-export async function readScopedSearchTelemetry(
+const telemetryRowsSchema = z.array(
+	z.object({
+		id: z.string(),
+		created_at: z.string(),
+		route: z.string(),
+		agent_id: z.string(),
+		session_key: z.string().nullable(),
+		project: z.string().nullable(),
+		query: z.string(),
+		keyword_query: z.string().nullable(),
+		filters_json: z.string(),
+		method: z.string(),
+		result_count: z.number(),
+		top_score: z.number().nullable(),
+		no_hits: z.number(),
+		duration_ms: z.number(),
+		timings_json: z.string(),
+		results_json: z.string(),
+		sources_json: z.string().nullable(),
+	}),
+);
+
+async function searchTelemetryStatement(
 	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
-	accessor?: DiagnosticsAccessor,
-): Promise<readonly import("./memory-search-telemetry").MemorySearchTelemetryRow[]> {
-	if (!accessor || !("prepare" in accessor)) return dbOwnerSearchTelemetry(query, accessor);
+	cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor,
+) {
 	const scope = query.scope;
 	if (!scope) throw new Error("telemetry_read_scope_required");
 	const readable = readScopeSql("t", scope, { visibility: null, memory: null, session: "session_key", source: null });
@@ -1243,31 +1264,74 @@ export async function readScopedSearchTelemetry(
 		sql += " AND t.no_hits=?";
 		args.push(query.noHits ? 1 : 0);
 	}
-	sql += " ORDER BY t.created_at DESC,t.id ASC LIMIT ? OFFSET ?";
-	args.push(query.limit ?? 100, query.offset ?? 0);
-	return z
-		.array(
-			z.object({
-				id: z.string(),
-				created_at: z.string(),
-				route: z.string(),
-				agent_id: z.string(),
-				session_key: z.string().nullable(),
-				project: z.string().nullable(),
-				query: z.string(),
-				keyword_query: z.string().nullable(),
-				filters_json: z.string(),
-				method: z.string(),
-				result_count: z.number(),
-				top_score: z.number().nullable(),
-				no_hits: z.number(),
-				duration_ms: z.number(),
-				timings_json: z.string(),
-				results_json: z.string(),
-				sources_json: z.string().nullable(),
-			}),
-		)
-		.parse(accessor.prepare(sql).all(...args));
+
+	if (cursor) {
+		sql += " AND (t.created_at < ? OR (t.created_at = ? AND t.id > ?))";
+		args.push(cursor.createdAt, cursor.createdAt, cursor.id);
+	}
+	return { sql, args };
+}
+
+export async function readScopedSearchTelemetry(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	accessor?: DiagnosticsAccessor,
+): Promise<readonly import("./memory-search-telemetry").MemorySearchTelemetryRow[]> {
+	if (!accessor || !("prepare" in accessor)) return dbOwnerSearchTelemetry(query, accessor);
+	const statement = await searchTelemetryStatement(query);
+	return telemetryRowsSchema.parse(
+		accessor
+			.prepare(statement.sql + " ORDER BY t.created_at DESC,t.id ASC LIMIT ? OFFSET ?")
+			.all(...statement.args, query.limit ?? 100, query.offset ?? 0),
+	);
+}
+
+export const SEARCH_TELEMETRY_EXPORT_BYTES = 4 * 1024 * 1024;
+
+export async function readSearchTelemetryExportPage(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor,
+	accessor?: DiagnosticsAccessor,
+): Promise<import("./memory-search-telemetry").MemorySearchTelemetryExportPage> {
+	if (!accessor || !("prepare" in accessor))
+		return (await import("./db-owner-runtime")).dbOwnerSearchTelemetryExportPage(query, cursor, accessor);
+	const statement = await searchTelemetryStatement(query, cursor);
+	const columns = [
+		"id",
+		"created_at",
+		"route",
+		"agent_id",
+		"session_key",
+		"project",
+		"query",
+		"keyword_query",
+		"filters_json",
+		"method",
+		"result_count",
+		"top_score",
+		"no_hits",
+		"duration_ms",
+		"timings_json",
+		"results_json",
+		"sources_json",
+	];
+	const rawBytes = columns.map((column) => `COALESCE(length(CAST(${column} AS BLOB)),0)`).join("+");
+	const object = `json_object(${columns.map((column) => `'${column}',${column}`).join(",")})`;
+	const limit = query.limit === undefined ? 33 : Math.min(33, Math.max(1, query.limit));
+	const budget = SEARCH_TELEMETRY_EXPORT_BYTES - 16384;
+	const result = z
+		.object({ rows_json: z.string(), has_more: z.number(), oversized: z.number() })
+		.parse(
+			accessor
+				.prepare(
+					`WITH candidates AS (${statement.sql} ORDER BY t.created_at DESC,t.id ASC LIMIT ?), encoded AS (SELECT id,created_at,CASE WHEN (${rawBytes})>? THEN NULL ELSE ${object} END AS row_json FROM candidates), measured AS (SELECT id,created_at,CASE WHEN length(CAST(row_json AS BLOB))<=? THEN row_json ELSE NULL END AS row_json FROM encoded), budgeted AS (SELECT row_json,ROW_NUMBER() OVER(ORDER BY created_at DESC,id ASC) AS position,SUM(COALESCE(length(CAST(row_json AS BLOB)),?)+1) OVER(ORDER BY created_at DESC,id ASC ROWS UNBOUNDED PRECEDING) AS running_bytes FROM measured) SELECT COALESCE(json_group_array(json(row_json)) FILTER(WHERE running_bytes<=? AND position<=32),'[]') AS rows_json,CASE WHEN COUNT(*)>COUNT(*) FILTER(WHERE running_bytes<=? AND position<=32) THEN 1 ELSE 0 END AS has_more,COALESCE(MAX(CASE WHEN position=1 AND row_json IS NULL THEN 1 ELSE 0 END),0) AS oversized FROM budgeted`,
+				)
+				.get(...statement.args, limit, budget, budget, budget + 1, budget, budget),
+		);
+	return {
+		rows: telemetryRowsSchema.parse(JSON.parse(result.rows_json)),
+		hasMore: result.has_more === 1,
+		oversized: result.oversized === 1,
+	};
 }
 
 export async function scopedCheckpointStatement(

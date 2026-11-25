@@ -413,6 +413,11 @@ export type DbOwnerRequest =
 			readonly scope?: import("./read-scope").ReadScope;
 	  }
 	| {
+			readonly kind: "search_telemetry_export_page";
+			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
+			readonly cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor;
+	  }
+	| {
 			readonly kind: "search_telemetry_read";
 			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
 	  }

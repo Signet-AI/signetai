@@ -1,4 +1,5 @@
-import { readScopedSearchTelemetry } from "./diagnostics";
+import { readScopedSearchTelemetry, readSearchTelemetryExportPage, SEARCH_TELEMETRY_EXPORT_BYTES } from "./diagnostics";
+import { attemptAsync } from "@signet/core";
 import type { ReadScope } from "./read-scope";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
@@ -25,6 +26,16 @@ export interface MemorySearchTelemetryQuery {
 	readonly noHits?: boolean;
 	readonly limit?: number;
 	readonly offset?: number;
+}
+
+export interface MemorySearchTelemetryCursor {
+	readonly createdAt: string;
+	readonly id: string;
+}
+export interface MemorySearchTelemetryExportPage {
+	readonly rows: readonly MemorySearchTelemetryRow[];
+	readonly hasMore: boolean;
+	readonly oversized: boolean;
 }
 
 export interface MemorySearchTelemetryResultSnapshot {
@@ -278,6 +289,89 @@ export async function recordMemorySearchTelemetry(
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
+}
+
+export function streamMemorySearchTelemetry(
+	db: DbAccessor,
+	query: MemorySearchTelemetryQuery,
+	signal?: AbortSignal,
+	refreshScope?: () => Promise<ReadScope>,
+): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+	let cancelled = false;
+	async function* records() {
+		let cursor: MemorySearchTelemetryCursor | undefined;
+		let remaining = query.limit;
+		const deadline = Date.now() + 120000;
+		for (;;) {
+			if (cancelled || signal?.aborted) return;
+			if (Date.now() >= deadline) {
+				yield encoder.encode(JSON.stringify({ kind: "error", error: "export_deadline" }) + "\n");
+				return;
+			}
+			const page = await attemptAsync(async () =>
+				readSearchTelemetryExportPage(
+					{
+						...query,
+						scope: cursor && refreshScope ? await refreshScope() : query.scope,
+						limit: remaining,
+						offset: undefined,
+					},
+					cursor,
+					db,
+				),
+			);
+			if (cancelled || signal?.aborted) return;
+			if (!page || page.oversized) {
+				yield encoder.encode(
+					JSON.stringify({ kind: "error", error: page?.oversized ? "export_row_too_large" : "export_failed" }) + "\n",
+				);
+				return;
+			}
+			for (const row of page.rows) {
+				if (cancelled || signal?.aborted) return;
+				if (Date.now() >= deadline) {
+					yield encoder.encode(JSON.stringify({ kind: "error", error: "export_deadline" }) + "\n");
+					return;
+				}
+				const line = encoder.encode(JSON.stringify(rowToItem(row)) + "\n");
+				if (line.byteLength > SEARCH_TELEMETRY_EXPORT_BYTES) {
+					yield encoder.encode(JSON.stringify({ kind: "error", error: "export_row_too_large" }) + "\n");
+					return;
+				}
+				yield line;
+				cursor = { createdAt: row.created_at, id: row.id };
+				if (remaining !== undefined && --remaining === 0) return;
+			}
+			if (!page.hasMore) return;
+			if (page.rows.length === 0) {
+				yield encoder.encode(JSON.stringify({ kind: "error", error: "export_failed" }) + "\n");
+				return;
+			}
+		}
+	}
+	const iterator = records();
+	return new ReadableStream({
+		async pull(controller) {
+			const next = await attemptAsync(() => iterator.next());
+			if (cancelled || signal?.aborted) {
+				await iterator.return();
+				if (!cancelled) controller.close();
+				return;
+			}
+			if (!next) {
+				controller.enqueue(encoder.encode(JSON.stringify({ kind: "error", error: "export_failed" }) + "\n"));
+				controller.close();
+				return;
+			}
+			if (next.done) controller.close();
+			else controller.enqueue(next.value);
+		},
+		async cancel() {
+			cancelled = true;
+			await iterator.return();
+		},
+	});
 }
 
 export async function listMemorySearchTelemetry(

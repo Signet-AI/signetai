@@ -106,7 +106,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:memory.projection.ledger` (withReadDbAsync)
 - `db:memory.session.paths` (withReadDbAsync)
 - `db:memory.noise.sessions` (withReadDbAsync)
-- `memory-search-telemetry.ts:247` (withWriteTxAsync)
+- `memory-search-telemetry.ts:258` (withWriteTxAsync)
 - `db:recall.temporal-topic.content` (withReadDbAsync)
 - `db:recall.facet-coverage.content` (withReadDbAsync)
 - `db:recall.reranker.content` (withReadDbAsync)

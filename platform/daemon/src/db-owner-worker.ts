@@ -1311,6 +1311,8 @@ export function runDbOwnerWorker(): void {
 				job.request.offset,
 				job.request.scope,
 			);
+		if (job.request.kind === "search_telemetry_export_page")
+			return (await import("./diagnostics")).readSearchTelemetryExportPage(job.request.query, job.request.cursor, db);
 		if (job.request.kind === "search_telemetry_read")
 			return (await import("./diagnostics")).readScopedSearchTelemetry(job.request.query, db);
 		if (job.request.kind === "queue_diagnostics_read")
