@@ -61,8 +61,8 @@ function transcript(sessionKey: string, content: string, minutesAgo: number, com
 
 function entity(id: string, name: string, type: string, compartment: number | null): void {
 	write(
-		`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, compartment_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 'default', 10, ?, ?, ?)`,
+		`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, compartment_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 'default', 10, 1, ?, ?, ?)`,
 		id,
 		name,
 		name.toLowerCase(),

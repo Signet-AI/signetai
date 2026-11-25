@@ -1,15 +1,16 @@
-import type { ReadDb } from "../db-accessor";
+import { cachedRecallShardNames } from "../recall-shard-catalogue";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
-import type { ReadScope } from "../read-scope";
+import { type ReadScope, readScopeSql } from "../read-scope";
 import {
 	type ScopeSql,
+	type TraversalReadDb,
 	derivedReadScopeSql,
 	entityFtsTablesFromDb,
 	entityFtsTablesFromNames,
-	localReadScope,
-	memoryReadScopeSql,
 	mergeEntityFtsRows,
+	rankedEntityCandidatesSql,
+	requireReadScope,
 } from "./graph-traversal";
 import { FTS_STOP } from "./stop-words";
 
@@ -55,21 +56,20 @@ function expansionStatement(
 	};
 }
 
-function graphScopes(agentId: string | undefined, readScope: ReadScope | undefined) {
-	const scope = readScope ?? localReadScope(agentId ?? "default");
+function graphScopes(readScope: ReadScope) {
+	const scope = requireReadScope(readScope);
 	const entity = derivedReadScopeSql("e", scope, { source: "source_id" });
-	return { scope, entity, memory: memoryReadScopeSql("m", readScope) };
+	return { scope, entity, memory: readScopeSql("m", scope) };
 }
 
-function entityLike(tokens: readonly string[], entity: ScopeSql): { readonly sql: string; readonly args: unknown[] } {
+function entityLike(tokens: readonly string[], entity: ScopeSql, scope: ReadScope): ScopeSql {
 	const likePatterns = tokens.map((token) => `%${token}%`);
-	return {
-		sql: `SELECT e.id FROM entities e
-			 WHERE (${likePatterns.map(() => "e.canonical_name LIKE ?").join(" OR ")})${entity.sql}
-			 ORDER BY e.mentions DESC, e.id
-			 LIMIT 20`,
-		args: [...likePatterns, ...entity.args],
-	};
+	return rankedEntityCandidatesSql(
+		{ sql: `(${likePatterns.map(() => "e.canonical_name LIKE ?").join(" OR ")})`, args: likePatterns },
+		entity,
+		scope,
+		20,
+	);
 }
 
 function entityFts(table: string, entity: ScopeSql): string {
@@ -82,10 +82,10 @@ function entityFts(table: string, entity: ScopeSql): string {
 
 export function getGraphBoostIds(
 	query: string,
-	db: ReadDb,
+	db: TraversalReadDb,
 	timeoutMs: number,
-	agentId?: string,
-	readScope?: ReadScope,
+	_agentId: string | undefined,
+	readScope: ReadScope,
 ): GraphBoostResult {
 	const empty: GraphBoostResult = {
 		graphLinkedIds: new Set(),
@@ -97,7 +97,7 @@ export function getGraphBoostIds(
 		const deadline = Date.now() + timeoutMs;
 		const tokens = tokenizeGraphQuery(query);
 		if (tokens.length === 0) return empty;
-		const { scope, entity, memory } = graphScopes(agentId, readScope);
+		const { scope, entity, memory } = graphScopes(readScope);
 		let entityIds: string[] = [];
 		try {
 			const fts = tokens.join(" OR ");
@@ -108,7 +108,7 @@ export function getGraphBoostIds(
 				20,
 			);
 		} catch {
-			const like = entityLike(tokens, entity);
+			const like = entityLike(tokens, entity, scope);
 			entityIds = (db.prepare(like.sql).all(...like.args) as Array<{ id: string }>).map((row) => row.id);
 		}
 
@@ -130,8 +130,8 @@ export async function getGraphBoostIdsViaOwner(
 	query: string,
 	owner: DbOwnerClient,
 	timeoutMs: number,
-	agentId?: string,
-	readScope?: ReadScope,
+	_agentId: string | undefined,
+	readScope: ReadScope,
 ): Promise<GraphBoostResult> {
 	const empty: GraphBoostResult = {
 		graphLinkedIds: new Set(),
@@ -143,7 +143,7 @@ export async function getGraphBoostIdsViaOwner(
 		const deadline = Date.now() + timeoutMs;
 		const tokens = tokenizeGraphQuery(query);
 		if (tokens.length === 0) return empty;
-		const { scope, entity, memory } = graphScopes(agentId, readScope);
+		const { scope, entity, memory } = graphScopes(readScope);
 		const remaining = () => Math.max(1, deadline - Date.now());
 		const options = (operation: string) => ({
 			operation,
@@ -155,18 +155,22 @@ export async function getGraphBoostIdsViaOwner(
 
 		let entityIds: string[] = [];
 		try {
-			const shards = await ownerReadAll<{ name: string }>(
-				owner,
-				"SELECT name FROM sqlite_master WHERE type = 'table' AND (name = 'entities_fts' OR name GLOB 'entities_fts__c[0-9]*')",
-				[],
-				options("memory-search.graph-boost.entity-shards"),
-			);
+			const shards =
+				scope.compartments !== "all" && scope.compartments.length === 0
+					? ["entities_fts"]
+					: await cachedRecallShardNames(async () =>
+							(
+								await ownerReadAll<{ name: string }>(
+									owner,
+									"SELECT name FROM sqlite_master WHERE type='table'",
+									[],
+									options("memory-search.graph-boost.entity-shards"),
+								)
+							).map((row) => row.name),
+						);
 			const fts = tokens.join(" OR ");
 			const rows: object[] = [];
-			const tables = entityFtsTablesFromNames(
-				shards.map((row) => row.name),
-				scope,
-			);
+			const tables = entityFtsTablesFromNames(shards, scope);
 			if (tables.length === 0) throw new Error("Entity FTS unavailable");
 			for (const table of tables) {
 				rows.push(
@@ -180,7 +184,7 @@ export async function getGraphBoostIdsViaOwner(
 			}
 			entityIds = mergeEntityFtsRows(rows, 20);
 		} catch {
-			const like = entityLike(tokens, entity);
+			const like = entityLike(tokens, entity, scope);
 			entityIds = (
 				await ownerReadAll<{ id: string }>(
 					owner,

@@ -1,3 +1,4 @@
+import { migrationFixtureDb } from "../test-support/migration-fixture-db";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ensureCompartmentShards } from "../../../core/src/compartment-shards";
@@ -14,7 +15,10 @@ import {
 	traverseKnowledgeGraphViaOwner,
 } from "./graph-traversal";
 
+const LOCAL: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null };
+
 const CONFIG = {
+	readScope: LOCAL,
 	maxAspectsPerEntity: 10,
 	maxAttributesPerAspect: 20,
 	maxDependencyHops: 10,
@@ -31,7 +35,7 @@ function seedGraph(db: Database): void {
 		CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT, agent_id TEXT, weight REAL, canonical_name TEXT);
 		CREATE TABLE entity_attributes (aspect_id TEXT, memory_id TEXT, agent_id TEXT, status TEXT, kind TEXT, content TEXT, importance REAL);
 		CREATE TABLE entity_dependencies (id TEXT PRIMARY KEY, source_entity_id TEXT, target_entity_id TEXT, agent_id TEXT, confidence REAL, strength REAL);
-		CREATE TABLE memories (id TEXT PRIMARY KEY, importance REAL, is_deleted INTEGER);
+		CREATE TABLE memories (id TEXT PRIMARY KEY, importance REAL, is_deleted INTEGER, agent_id TEXT DEFAULT 'default', visibility TEXT DEFAULT 'global');
 		CREATE TABLE memory_entity_mentions (memory_id TEXT, entity_id TEXT, confidence REAL);
 		CREATE INDEX idx_entity_aspects_entity ON entity_aspects (entity_id);
 		CREATE INDEX idx_entity_attributes_aspect ON entity_attributes (aspect_id);
@@ -49,11 +53,11 @@ function seedGraph(db: Database): void {
 			('a2', 'e2', 'default', 1.0, 'fact'),
 			('a3', 'e3', 'other', 1.0, 'fact')`,
 	);
-	db.exec(`INSERT INTO memories VALUES
-		('m1', 0.8, 0),
-		('m2', 0.6, 0),
-		('m3', 0.5, 0),
-		('m-other', 0.9, 0)`);
+	db.exec(`INSERT INTO memories (id, importance, is_deleted, agent_id) VALUES
+		('m1', 0.8, 0, 'default'),
+		('m2', 0.6, 0, 'default'),
+		('m3', 0.5, 0, 'default'),
+		('m-other', 0.9, 0, 'other')`);
 	db.exec(`INSERT INTO entity_attributes VALUES
 		('a1', 'm1', 'default', 'active', 'fact', 'alpha fact', 0.9),
 		('a1', 'm2', 'default', 'active', 'fact', 'alpha fact 2', 0.7),
@@ -107,7 +111,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		};
 		setImmediate(breathe);
 
-		const result = await traverseKnowledgeGraph(["e1"], db as unknown as ReadDb, "default", CONFIG);
+		const result = await traverseKnowledgeGraph(["e1"], db, "default", CONFIG);
 		done = true;
 		expect(loopBreaths).toBeGreaterThan(0);
 		expect(result.memoryIds.has("m1")).toBe(true);
@@ -126,8 +130,8 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		setImmediate(breathe);
 
 		const [first, second] = await Promise.all([
-			traverseKnowledgeGraph(["e1"], db as unknown as ReadDb, "default", CONFIG),
-			traverseKnowledgeGraph(["e2"], db as unknown as ReadDb, "default", CONFIG),
+			traverseKnowledgeGraph(["e1"], db, "default", CONFIG),
+			traverseKnowledgeGraph(["e2"], db, "default", CONFIG),
 		]);
 		done = true;
 
@@ -144,7 +148,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 			activeReads++;
 			maxActiveReads = Math.max(maxActiveReads, activeReads);
 			try {
-				const result = fn(db as unknown as ReadDb);
+				const result = fn(db);
 				setImmediate(() => {
 					activeAtYield = Math.max(activeAtYield, activeReads);
 				});
@@ -195,6 +199,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		const focal = await resolveFocalEntitiesViaOwner(owner, "default", {
 			checkpointEntityIds: ["e1"],
 			includePinned: false,
+			readScope: LOCAL,
 		});
 		const result = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, "default", CONFIG);
 
@@ -217,6 +222,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 			checkpointEntityIds: ["e1"],
 			includePinned: false,
 			deadlineAt,
+			readScope: LOCAL,
 		});
 		const result = await traverseKnowledgeGraphViaOwner(["e1"], owner, "default", {
 			...CONFIG,
@@ -257,6 +263,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		const focal = await resolveFocalEntitiesViaOwner(owner, "default", {
 			queryTokens: ["alpha"],
 			includePinned: false,
+			readScope: LOCAL,
 		});
 
 		expect(focal).toEqual({
@@ -273,9 +280,10 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		const focal = await resolveFocalEntitiesViaOwner(owner, "default", {
 			checkpointEntityIds: ["e3"],
 			includePinned: false,
+			readScope: LOCAL,
 		});
 
-		expect(focal.entityIds).toEqual(["e3"]);
+		expect(focal.entityIds).toEqual([]);
 		expect(focal.entityNames).toEqual([]);
 	});
 });
@@ -407,7 +415,7 @@ describe("graph traversal read scope", () => {
 
 	async function traverse(ids: string[], agentId: string, scope: ReadScope) {
 		const config = { ...CONFIG, readScope: scope };
-		const sync = snapshot(await traverseKnowledgeGraph(ids, db as unknown as ReadDb, agentId, config));
+		const sync = snapshot(await traverseKnowledgeGraph(ids, db, agentId, config));
 		const owned = snapshot(await traverseKnowledgeGraphViaOwner(ids, createTestOwner(db, []), agentId, config));
 		expect(owned).toEqual(sync);
 		return sync;
@@ -420,6 +428,82 @@ describe("graph traversal read scope", () => {
 		expect(before.constraints.map((row) => row.content)).toEqual(["content at-rule"]);
 		seedHidden();
 		expect(await traverse(["e-alpha"], "alice", org)).toEqual(before);
+	});
+
+	test("keeps focal LIKE cutoffs identical when hidden mentions bump the global counter", async () => {
+		db.exec(`DROP TRIGGER IF EXISTS entities_fts_ai; DROP TRIGGER IF EXISTS entities_fts_ad; DROP TRIGGER IF EXISTS entities_fts_au;
+			DROP TRIGGER IF EXISTS entities_fts__c1_ai; DROP TRIGGER IF EXISTS entities_fts__c1_ad; DROP TRIGGER IF EXISTS entities_fts__c1_au;
+			DROP TABLE entities_fts; DROP TABLE entities_fts__c1`);
+		for (let index = 0; index < 21; index += 1) {
+			const suffix = String(index).padStart(2, "0");
+			entity(`e-orbit-${suffix}`, `Orbit ${suffix}`, "alice", null);
+			memory(`m-orbit-${suffix}`, "alice", null);
+			mention(`m-orbit-${suffix}`, `e-orbit-${suffix}`);
+		}
+		const outsider: ReadScope = { reach: { kind: "own", agentId: "alice" }, compartments: [], projects: null };
+		const audience: ReadScope = { ...outsider, compartments: [1] };
+		const owner = createTestOwner(db, []);
+		const focal = async (scope: ReadScope, signals: { project?: string; queryTokens?: string[] }) => {
+			const input = { ...signals, includePinned: false, readScope: scope };
+			const sync = resolveFocalEntities(db, "alice", input);
+			expect(await resolveFocalEntitiesViaOwner(owner, "alice", input)).toEqual(sync);
+			return sync.entityIds;
+		};
+		const ids = (from: number, to: number) =>
+			Array.from({ length: to - from }, (_, index) => `e-orbit-${String(from + index).padStart(2, "0")}`);
+		const project = { project: "/work/orbit" };
+		const query = { queryTokens: ["orbit"] };
+		expect(await focal(outsider, project)).toEqual(ids(0, 5));
+		expect(await focal(outsider, query)).toEqual(ids(0, 20));
+		memory("m-hidden-orbit", "alice", 1);
+		mention("m-hidden-orbit", "e-orbit-20");
+		db.prepare("UPDATE entities SET mentions = mentions + 1 WHERE id = 'e-orbit-20'").run();
+		expect(await focal(outsider, project)).toEqual(ids(0, 5));
+		expect(await focal(outsider, query)).toEqual(ids(0, 20));
+		expect(await focal(audience, project)).toEqual(["e-orbit-20", ...ids(0, 4)]);
+		expect(await focal(audience, query)).toEqual(["e-orbit-20", ...ids(0, 19)]);
+	});
+
+	test("ranks focal LIKE candidates by readable mentions instead of a stale counter", async () => {
+		for (const suffix of ["a", "b", "c", "d", "e", "f"]) entity(`e-lane-${suffix}`, `Lane ${suffix}`, "alice", null);
+		db.prepare("UPDATE entities SET mentions = 50 WHERE id = 'e-lane-a'").run();
+		memory("m-lane-f", "alice", null);
+		mention("m-lane-f", "e-lane-f");
+		const local: ReadScope = { reach: { kind: "own", agentId: "alice" }, compartments: "all", projects: null };
+		const input = { project: "/work/lane", includePinned: false, readScope: local };
+		const sync = resolveFocalEntities(db, "alice", input);
+		expect(sync.entityIds).toEqual(["e-lane-f", "e-lane-a", "e-lane-b", "e-lane-c", "e-lane-d"]);
+		expect(await resolveFocalEntitiesViaOwner(createTestOwner(db, []), "alice", input)).toEqual(sync);
+		const all: ReadScope = { reach: { kind: "all" }, compartments: "all", projects: null };
+		expect(resolveFocalEntities(db, "alice", { ...input, readScope: all }).entityIds).toEqual([
+			"e-lane-a",
+			"e-lane-b",
+			"e-lane-c",
+			"e-lane-d",
+			"e-lane-e",
+		]);
+	});
+
+	test("fails closed when a caller omits the read scope", async () => {
+		seedVisible();
+		const focal = Reflect.apply(resolveFocalEntities, undefined, [db, "alice", { checkpointEntityIds: ["e-alpha"] }]);
+		expect(focal.entityIds).toEqual([]);
+		const owned = await Reflect.apply(resolveFocalEntitiesViaOwner, undefined, [
+			createTestOwner(db, []),
+			"alice",
+			{ checkpointEntityIds: ["e-alpha"] },
+		]);
+		expect(owned.entityIds).toEqual([]);
+		const unscoped = { ...CONFIG, readScope: undefined };
+		const traversal = await Reflect.apply(traverseKnowledgeGraph, undefined, [["e-alpha"], db, "alice", unscoped]);
+		expect(traversal.memoryIds.size).toBe(0);
+		const ownedTraversal = await Reflect.apply(traverseKnowledgeGraphViaOwner, undefined, [
+			["e-alpha"],
+			createTestOwner(db, []),
+			"alice",
+			unscoped,
+		]);
+		expect(ownedTraversal.memoryIds.size).toBe(0);
 	});
 
 	test("organization reach traverses every active agent without agent equality", async () => {
@@ -452,7 +536,7 @@ describe("graph traversal read scope", () => {
 			pinnedEntityIds: [],
 			source: "checkpoint",
 		});
-		const syncHidden = resolveFocalEntities(db as unknown as ReadDb, "alice", {
+		const syncHidden = resolveFocalEntities(db, "alice", {
 			checkpointEntityIds: ["e-hidden", "e-alpha"],
 			readScope: org,
 		});
@@ -465,7 +549,7 @@ describe("graph traversal read scope", () => {
 		});
 		expect(query.entityIds).toEqual(["e-shard"]);
 		expect(
-			resolveFocalEntities(db as unknown as ReadDb, "alice", {
+			resolveFocalEntities(db, "alice", {
 				queryTokens: ["shardproj"],
 				includePinned: false,
 				readScope: readable,

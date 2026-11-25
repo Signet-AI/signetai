@@ -3,6 +3,7 @@ import type { ReadScope } from "@signet/core";
 import { getDbOwner } from "./db-owner-runtime";
 import type { DbOwnerClient } from "./db-owner-client";
 import { cancellableOwner, ownerReadAll } from "./db-owner-sql";
+import { readableMentionCountSql, requireReadScope, usesGlobalMentionCounter } from "./pipeline/graph-traversal";
 import { derivedScopeSql } from "./read-scope-tables";
 
 export type PromptEntityMatch = {
@@ -209,17 +210,19 @@ const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
 		   AND LENGTH(CAST(e.id AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		   AND LENGTH(CAST(e.name AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}`;
 
-const PROMPT_ENTITY_COUNTS = `CAST(COALESCE(e.mentions, 0) AS INTEGER) AS mentions,
+const promptEntityCounts = (
+	global: boolean,
+) => `${global ? "CAST(COALESCE(e.mentions, 0) AS INTEGER)" : "0"} AS mentions,
 		   CAST(COALESCE(e.pinned, 0) AS INTEGER) AS pinned`;
 
-const promptEntityNames = (scope: string) => `SELECT
+const promptEntityNames = (scope: string, global: boolean) => `SELECT
 		   e.rowid AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
 		   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
 		   'name' AS match_source,
-		   ${PROMPT_ENTITY_COUNTS}
+		   ${promptEntityCounts(global)}
 		 FROM entities e
 		 WHERE e.rowid > ?${scope}
 		   AND ${PROMPT_ENTITY_ELIGIBLE}
@@ -228,14 +231,14 @@ const promptEntityNames = (scope: string) => `SELECT
 		 ORDER BY e.rowid
 		 LIMIT ?`;
 
-const promptEntityAliases = (scope: string) => `SELECT
+const promptEntityAliases = (scope: string, global: boolean) => `SELECT
 		   a.canonical_alias AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
 		   a.alias AS matched_text,
 		   'alias' AS match_source,
-		   ${PROMPT_ENTITY_COUNTS}
+		   ${promptEntityCounts(global)}
 		 FROM entity_aliases a
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 		 WHERE a.status = 'active'
@@ -275,13 +278,41 @@ async function readPromptEntityPages<Cursor extends number | string>(
 	}
 }
 
+async function readableMentionCounts(
+	owner: DbOwnerClient,
+	entityIds: readonly string[],
+	readScope: ReadScope,
+	entityScope: { readonly sql: string; readonly args: readonly unknown[] },
+): Promise<ReadonlyMap<string, number>> {
+	const counts = new Map<string, number>();
+	const rank = readableMentionCountSql("e", readScope);
+	for (let start = 0; start < entityIds.length; start += PROMPT_ENTITY_PAGE_ROWS) {
+		const ids = entityIds.slice(start, start + PROMPT_ENTITY_PAGE_ROWS);
+		const rows = await ownerReadAll<{ readonly entity_id: string; readonly mentions: number }>(
+			owner,
+			`SELECT e.id AS entity_id, ${rank.sql} AS mentions
+			 FROM entities e
+			 WHERE e.id IN (${ids.map(() => "?").join(", ")})${entityScope.sql}`,
+			[...rank.args, ...ids, ...entityScope.args],
+			{
+				operation: "user-prompt-submit.entity-mentions",
+				deadlineMs: 5_000,
+				estimatedWorkUnits: ids.length,
+			},
+		);
+		for (const row of rows) counts.set(row.entity_id, row.mentions);
+	}
+	return counts;
+}
+
 export async function matchPromptEntities(
 	memoryDbPath: string,
-	agentId: string,
+	_agentId: string,
 	userMessage: string,
-	signal?: AbortSignal,
-	readScope: ReadScope = { reach: { kind: "own", agentId }, compartments: "all", projects: null },
+	signal: AbortSignal | undefined,
+	readScope: ReadScope,
 ): Promise<readonly PromptEntityMatch[]> {
+	const scopeInput = requireReadScope(readScope);
 	if (!existsSync(memoryDbPath)) return [];
 	const owner = cancellableOwner(await getDbOwner(memoryDbPath), signal);
 	const tables = await ownerReadAll<{ readonly name: string }>(
@@ -296,12 +327,17 @@ export async function matchPromptEntities(
 	const promptTerms = promptEntityTerms(userMessage);
 	const candidates: PromptEntityRow[] = [];
 	const visit = (row: PromptEntityRow): void => {
-		if (promptPhraseSpan(promptTerms, row.matched_text)) candidates.push(row);
+		if (
+			promptPhraseSpan(promptTerms, row.matched_text) &&
+			(usesGlobalMentionCounter(scopeInput) || candidates.length < 200)
+		)
+			candidates.push(row);
 	};
-	const scope = derivedScopeSql("e", readScope, { memory: null, session: null, source: "source_id" });
+	const scope = derivedScopeSql("e", scopeInput, { memory: null, session: null, source: "source_id" });
+	const global = usesGlobalMentionCounter(scopeInput);
 	await readPromptEntityPages(
 		owner,
-		promptEntityNames(scope.sql),
+		promptEntityNames(scope.sql, global),
 		"user-prompt-submit.entity-names",
 		scope.args,
 		0,
@@ -309,11 +345,21 @@ export async function matchPromptEntities(
 	);
 	await readPromptEntityPages(
 		owner,
-		promptEntityAliases(scope.sql),
+		promptEntityAliases(scope.sql, global),
 		"user-prompt-submit.entity-aliases",
 		scope.args,
 		"",
 		visit,
 	);
-	return selectPromptEntityMatches(candidates, userMessage);
+	if (global || candidates.length === 0) return selectPromptEntityMatches(candidates, userMessage);
+	const counts = await readableMentionCounts(
+		owner,
+		[...new Set(candidates.map((row) => row.entity_id))],
+		scopeInput,
+		scope,
+	);
+	return selectPromptEntityMatches(
+		candidates.map((row) => ({ ...row, mentions: counts.get(row.entity_id) ?? 0 })),
+		userMessage,
+	);
 }
