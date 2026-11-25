@@ -1176,7 +1176,7 @@ export function runDbOwnerWorker(): void {
 			const { executeContentRead } = await import("./content-read-owner");
 			return executeContentRead(db, job.request.request, () => {
 				if (cancellationRequested(job.id)) throw new DbOwnerCancellationRequested();
-				if (Date.now() >= job.deadlineAt)
+				if (job.lane === "read" && Date.now() >= job.deadlineAt)
 					throw Object.assign(new Error("DB owner content read exceeded its deadline"), { code: "DB_OWNER_DEADLINE" });
 			});
 		}
