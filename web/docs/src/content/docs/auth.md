@@ -38,6 +38,7 @@ auth:
 ```
 
 When the socket peer is trusted, the daemon uses the rightmost untrusted `X-Forwarded-For` hop as the client address and honors `X-Forwarded-Proto` and `X-Forwarded-Host` for the browser-facing origin. Configure the proxy to replace client-supplied forwarding headers. Otherwise, forwarded headers do not change the client address or origin. Without a trusted-proxy entry, clients behind one proxy share its rate-limit bucket. Forwarding headers still disable hybrid loopback trust, even when the proxy is trusted.
+If every `X-Forwarded-For` hop is trusted, the client address is the proxy peer.
 
 Browser authentication writes accept the configured organization public URL or the request origin, including the origin supplied by a trusted proxy. Local and hybrid modes also accept the existing development dashboard origins, including `http://localhost:5173` and `http://127.0.0.1:5173`; team mode does not grant that development exception. Cookie-authenticated writes still require CSRF protection.
 

@@ -111,3 +111,14 @@ test("IPv6 proxy CIDRs are canonicalized once and bounded", async () => {
 		).status,
 	).toBe(200);
 });
+
+test("mapped IPv4 and IPv6 /64 addresses share rate limit buckets", async () => {
+	const server = app({ mode: "local", trustedProxies: ["127.0.0.1"] });
+	for (let i = 0; i < 20; i++)
+		expect((await request(server, "/api/auth/device/start", "127.0.0.1", "198.51.100.7")).status).toBe(200);
+	expect((await request(server, "/api/auth/device/start", "127.0.0.1", "::ffff:198.51.100.7")).status).toBe(429);
+	for (let i = 0; i < 20; i++)
+		expect((await request(server, "/api/auth/device/start", "127.0.0.1", `2001:db8:1:2::${i + 1}`)).status).toBe(200);
+	expect((await request(server, "/api/auth/device/start", "127.0.0.1", "2001:db8:1:2:abcd::1")).status).toBe(429);
+	expect((await request(server, "/api/auth/device/start", "127.0.0.1", "2001:db8:1:3::1")).status).toBe(200);
+});

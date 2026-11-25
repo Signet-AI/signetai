@@ -98,3 +98,23 @@ export function getRequestOrigin(c: Context): string {
 export function getClientAddress(c: Context): string | null {
 	return c.get("requestNetwork")?.client ?? getPeerAddress(c);
 }
+
+export function rateLimitClientAddress(c: Context): string | null {
+	const address = getClientAddress(c);
+	if (!address || isIP(address) !== 6) return address;
+	const canonical = new URL(`http://[${address.split("%")[0]}]`).hostname.slice(1, -1);
+	const halves = canonical.split("::");
+	const left = halves[0] ? halves[0].split(":") : [];
+	const right = halves[1] ? halves[1].split(":") : [];
+	const groups = halves.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
+	const words = groups.map((group) => Number.parseInt(group, 16));
+	if (words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff) {
+		const high = words[6] ?? 0,
+			low = words[7] ?? 0;
+		return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+	}
+	return `${words
+		.slice(0, 4)
+		.map((word) => word.toString(16))
+		.join(":")}::/64`;
+}

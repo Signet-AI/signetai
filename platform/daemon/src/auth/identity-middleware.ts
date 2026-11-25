@@ -30,7 +30,7 @@ import {
 import { acceptRequestOrigin } from "./origins";
 import { legacyPrincipal, localPrincipal, type Principal, rolePermissions } from "./principal";
 import { AuthRateLimiter } from "./rate-limiter";
-import { getClientAddress, resolveRequestNetwork } from "./request-network";
+import { rateLimitClientAddress, resolveRequestNetwork } from "./request-network";
 import { PERMISSIONS } from "./types";
 
 declare module "hono" {
@@ -71,7 +71,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 	return async (c, next) => {
 		c.set("organization", null);
 		resolveRequestNetwork(c, config);
-		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${getClientAddress(c) ?? "unknown"}`, c))
+		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${rateLimitClientAddress(c) ?? "unknown"}`, c))
 			return failure(c, new IdentityError(429, "rate_limit"));
 		try {
 			await prepareJsonBody(c);
@@ -86,7 +86,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				return failure(c, new IdentityError(400, "invalid_request"));
 			if (
 				typeof username === "string" &&
-				(!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), getClientAddress(c)]), c) ||
+				(!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), rateLimitClientAddress(c)]), c) ||
 					!admit(nameLimits, username.trim().toLowerCase(), c))
 			)
 				return failure(c, new IdentityError(429, "rate_limit"));

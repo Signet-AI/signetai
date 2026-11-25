@@ -256,6 +256,75 @@ describe("organization HTTP flows", () => {
 		).toEqual({ revoked_at: "2001-01-01T00:00:00.000Z", revoked_reason: "manual" });
 	});
 
+	test("session revocation and logout clear retry state", async () => {
+		const root = await claim();
+		const { issueSession, organizationWrite } = await import("./organization-store");
+		for (const action of ["revoke", "logout-all"]) {
+			const session = await issueSession(root.user.id, "cli");
+			await organizationWrite([
+				statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", session.sessionId]),
+			]);
+			const response =
+				action === "revoke"
+					? await call(`/api/auth/sessions/${session.sessionId}`, "DELETE")
+					: await call("/api/auth/logout", "POST", { all: true });
+			expect(response.status).toBe(200);
+			expect(
+				await organizationQuery(
+					statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [session.sessionId], "get"),
+				),
+			).toEqual({ refresh_retry_json: "[]" });
+		}
+	});
+	test("single-session logout clears retry state", async () => {
+		const root = await claim();
+		const { issueSession, organizationWrite, readOrganization, verifySession } = await import("./organization-store");
+		const { logout } = await import("./organization-operations");
+		const session = await issueSession(root.user.id, "cli");
+		const { principal } = await verifySession(session.accessToken, undefined, false, await readOrganization());
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", session.sessionId]),
+		]);
+		await logout(principal, {});
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [session.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+	});
+	test("device exchange and revocation clear retry state", async () => {
+		await claim();
+		const { organizationWrite } = await import("./organization-store");
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Laptop" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+		).toBe(200);
+		const pending = await organizationQuery<{ session_id: string }>(
+			statement("SELECT session_id FROM device_authorizations WHERE user_code = ?", [flow.userCode], "get"),
+		);
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", pending.session_id]),
+		]);
+		const response = await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "");
+		expect(response.status).toBe(200);
+		const cli = await response.json();
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [pending.session_id], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", cli.sessionId]),
+		]);
+		expect((await call(`/api/auth/devices/${cli.deviceId}`, "DELETE")).status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [cli.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
+	});
 	test("R10 concurrent claims have a conflict loser rather than a server error", async () => {
 		const payload = {
 			setupToken: setup,
@@ -428,6 +497,19 @@ describe("organization HTTP flows", () => {
 			expect(retry.status).toBe(200);
 			const same = await retry.json();
 			expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
+			const replayAudit = await organizationQuery(
+				statement(
+					"SELECT outcome,target_kind,target_id,detail_json FROM audit_events WHERE action = 'session.refresh_replayed' AND target_id = ?",
+					[session.sessionId],
+					"get",
+				),
+			);
+			expect(replayAudit).toEqual({
+				outcome: "ok",
+				target_kind: "session",
+				target_id: session.sessionId,
+				detail_json: "null",
+			});
 			expect((await call("/api/auth/sessions", "GET", undefined, first.accessToken)).status).toBe(200);
 			const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
 			expect(reuse.status).toBe(401);
@@ -451,6 +533,11 @@ describe("organization HTTP flows", () => {
 		const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
 		expect(reuse.status).toBe(401);
 		expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [session.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
 	});
 	test("A10 an unused rotation has a twenty-four-hour retry bound", async () => {
 		const root = await claim();
@@ -931,10 +1018,20 @@ describe("organization HTTP flows", () => {
 		expect(
 			await organizationQuery(statement("SELECT expires_at FROM api_keys WHERE id = ?", [key.key.id], "get")),
 		).toEqual({ expires_at: nearingExpiry });
+		const { issueSession } = await import("./organization-store");
+		const pendingSession = await issueSession(alice.user.id, "cli");
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET refresh_retry_json = ? WHERE id = ?", ["[1]", pendingSession.sessionId]),
+		]);
 		const plan = await call(`/api/org/users/${alice.user.id}/deactivate`, "POST", { mode: "keep" });
 		expect(plan.status).toBe(200);
 		const job = await call(`/api/org/users/${alice.user.id}/deactivate`, "POST", { mode: "keep", dryRun: false });
 		expect(job.status).toBe(202);
+		expect(
+			await organizationQuery(
+				statement("SELECT refresh_retry_json FROM auth_sessions WHERE id = ?", [pendingSession.sessionId], "get"),
+			),
+		).toEqual({ refresh_retry_json: "[]" });
 		const revoked = await call("/api/auth/connector-keys", "GET", undefined, key.secret);
 		expect(revoked.status).toBe(401);
 		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM audit_events", [], "get"))).toMatchObject({

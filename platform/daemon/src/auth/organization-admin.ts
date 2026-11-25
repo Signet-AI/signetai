@@ -583,7 +583,7 @@ export async function deactivate(p: Principal, userId: string, input: unknown, b
 			userId,
 		]),
 		statement(
-			"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'user_deactivated' WHERE user_id = ? AND revoked_at IS NULL",
+			"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'user_deactivated',refresh_retry_json = '[]' WHERE user_id = ? AND revoked_at IS NULL",
 			[now, userId],
 		),
 		statement("UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", [now, userId]),

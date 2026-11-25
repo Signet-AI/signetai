@@ -112,7 +112,7 @@ export async function logout(p: Principal, input: unknown) {
 	const data = z.object({ all: z.boolean().optional() }).parse(input);
 	await organizationWrite([
 		statement(
-			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
+			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout',refresh_retry_json = '[]' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
 			[new Date().toISOString(), data.all ? p.userId : p.sessionId],
 		),
 		auditStatement(p, "session.logout", "user", p.userId),
@@ -137,10 +137,10 @@ export async function revokeSession(p: Principal, sessionId: string) {
 	if (!row) throw new IdentityError(404, "not_found");
 	if (row.user_id !== p.userId) requireAdmin(p);
 	await organizationWrite([
-		statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'revoked' WHERE id = ?", [
-			new Date().toISOString(),
-			row.id,
-		]),
+		statement(
+			"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'revoked',refresh_retry_json = '[]' WHERE id = ?",
+			[new Date().toISOString(), row.id],
+		),
 		auditStatement(p, "session.revoked", "session", row.id),
 	]);
 	return { ok: true };
@@ -282,10 +282,10 @@ export async function deviceToken(input: unknown) {
 				]),
 				requireChanges: true,
 			},
-			statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_exchange' WHERE id = ?", [
-				new Date().toISOString(),
-				session.id,
-			]),
+			statement(
+				"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_exchange',refresh_retry_json = '[]' WHERE id = ?",
+				[new Date().toISOString(), session.id],
+			),
 			...material.statements,
 			auditStatement(null, "device.token_issued", "device", session.device_id),
 		],
@@ -316,10 +316,10 @@ export async function changeDevice(p: Principal, deviceId: string, input: unknow
 		input === null
 			? [
 					statement("UPDATE devices SET revoked_at = ? WHERE id = ?", [now, deviceId]),
-					statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_revoked' WHERE device_id = ?", [
-						now,
-						deviceId,
-					]),
+					statement(
+						"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'device_revoked',refresh_retry_json = '[]' WHERE device_id = ?",
+						[now, deviceId],
+					),
 					statement("UPDATE api_keys SET revoked_at = ? WHERE device_id = ?", [now, deviceId]),
 				]
 			: [statement("UPDATE devices SET name = ? WHERE id = ?", [z.object({ name: text }).parse(input).name, deviceId])];
