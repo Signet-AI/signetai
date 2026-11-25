@@ -41,9 +41,9 @@
 		"@earendil-works/pi-ai": "1.5.2",
 		"@earendil-works/pi-coding-agent": "1.5.2",
 		"@firecrawl/anydoc": "0.1.7",
-		"@hono/node-server": "^2.1.0",
+		"@hono/node-server": "^2.1.11",
 		"@huggingface/transformers": "^4.2.0",
-		"@modelcontextprotocol/sdk": "^1.30.0",
+		"@modelcontextprotocol/sdk": "^1.32.2",
 		"@signet/core": "workspace:*",
 		"@signet/connector-base": "workspace:*",
 		"@signet/lifecycle-proof": "workspace:*",
@@ -54,7 +54,7 @@
 		"graphology": "^0.26.0",
 		"graphology-communities-louvain": "^2.0.2",
 		"graphology-types": "^0.24.8",
-		"hono": "^4.13.0",
+		"hono": "^4.13.22",
 		"linkedom": "^0.18.13",
 		"tiktoken": "^1.0.22",
 		"onnxruntime-node": "1.27.0",
@@ -63,7 +63,7 @@
 		"umap-js": "^1.4.0",
 		"yaml": "^2.8.2",
 		"yauzl": "2.10.0",
-		"zod": "^4.3.6",
+		"zod": "^4.6.7",
 		"@signet/connector-claude-code": "workspace:*",
 		"@signet/connector-codex": "workspace:*",
 		"@signet/connector-hermes-agent": "workspace:*",
@@ -82,6 +82,6 @@
 	"devDependencies": {
 		"@types/better-sqlite3": "^7.6.0",
 		"@types/yauzl": "^2.10.3",
-		"esbuild": "^0.25.0"
+		"esbuild": "^0.28.1"
 	}
 }
