@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
 import type { ReadDb, WriteDb } from "./db-accessor";
@@ -465,6 +466,10 @@ function computeProjectionFromRows(rows: readonly EmbeddingRow[], nComponents: 2
 	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0, random });
 	const projected: number[][] = umap.fit(vectors);
 
+	return finishProjection(rows, projected, nComponents);
+}
+
+function finishProjection(rows: readonly EmbeddingRow[], projected: number[][], nComponents: 2 | 3): ProjectionResult {
 	let xs: number[];
 	let ys: number[];
 	let zs: number[] | null;
@@ -550,4 +555,108 @@ export function cacheProjection(
 
 export function invalidateProjectionCache(db: WriteDb): void {
 	db.prepare("DELETE FROM umap_cache").run();
+}
+
+export type ProjectionInputRow = Omit<EmbeddingRow, "vector"> & { readonly vectorHex: string };
+export interface ProjectionInput {
+	readonly rows: readonly ProjectionInputRow[];
+	readonly total: number;
+	readonly offset: number;
+	readonly limit: number;
+	readonly hasMore: boolean;
+	readonly agents: readonly string[];
+}
+export function gatherProjectionRows(db: ReadDb, query: ProjectionQuery): Omit<ProjectionInput, "agents"> {
+	const loaded = loadProjectionRows(db, query);
+	const rows = loaded.rows.map(({ vector, ...row }) => ({
+		...row,
+		dimensions: Math.min(row.dimensions ?? vector.byteLength / 4, UMAP_MAX_DIMENSIONS),
+		vectorHex: Buffer.from(vector.subarray(0, UMAP_MAX_DIMENSIONS * 4)).toString("hex"),
+	}));
+	return { ...loaded, rows };
+}
+const scopedProjectionCache = new Map<string, { readonly expiresAt: number; readonly value: ProjectionQueryResult }>();
+export async function projectVisibleMemories(
+	scope: ReadScope,
+	nComponents: 2 | 3,
+	query: ProjectionQuery,
+	signal?: AbortSignal,
+): Promise<ProjectionQueryResult> {
+	const { contentRead } = await import("./content-read");
+	const limit = Math.max(1, Math.min(query.limit ?? 5000, 5000)),
+		offset = Math.max(0, query.offset ?? 0);
+	const rows: ProjectionInputRow[] = [];
+	let total = 0,
+		bytes = 0;
+	let agents: readonly string[] = [];
+	while (rows.length < limit) {
+		signal?.throwIfAborted();
+		const page = await contentRead<ProjectionInput>(
+			{
+				op: "projection_rows",
+				scope,
+				query: { ...query, offset: offset + rows.length, limit: Math.min(100, limit - rows.length) },
+			},
+			signal,
+		);
+		if (page.agents.length > 10000) throw new Error("Projection agent admission limit exceeded");
+		agents = page.agents;
+		total = page.total;
+		if (!page.rows.length) break;
+		bytes += Buffer.byteLength(JSON.stringify(page.rows));
+		if (bytes > 16 * 1024 * 1024) throw new Error("Projection input byte admission limit exceeded");
+		rows.push(...page.rows);
+		if (!page.hasMore) break;
+	}
+	const key = createHash("sha256")
+		.update(
+			JSON.stringify({
+				scope: {
+					...scope,
+					compartments: scope.compartments === "all" ? "all" : [...scope.compartments].sort((a, b) => a - b),
+				},
+				agents,
+				nComponents,
+				query,
+				rows,
+			}),
+		)
+		.digest("hex");
+	const cached = scopedProjectionCache.get(key);
+	if (cached && cached.expiresAt > Date.now()) {
+		scopedProjectionCache.delete(key);
+		scopedProjectionCache.set(key, cached);
+		return cached.value;
+	}
+	const decoded = rows.map(({ vectorHex, ...row }) => ({ ...row, vector: Buffer.from(vectorHex, "hex") }));
+	let result: ProjectionResult;
+	if (decoded.length < 3) result = computeProjectionFromRows(decoded, nComponents);
+	else {
+		let seed = 42;
+		const random = () => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+			return seed / 4294967296;
+		};
+		const umap = new UMAP({
+			nComponents,
+			nNeighbors: Math.min(15, Math.max(2, decoded.length - 1)),
+			minDist: 0.1,
+			spread: 1,
+			random,
+		});
+		const coordinates = await umap.fitAsync(
+			decoded.map((row) => blobToVector(row.vector, row.dimensions)),
+			() => !signal?.aborted,
+		);
+		signal?.throwIfAborted();
+		result = finishProjection(decoded, coordinates, nComponents);
+	}
+	const value = { result, total, count: rows.length, limit, offset, hasMore: offset + rows.length < total };
+	scopedProjectionCache.set(key, { expiresAt: Date.now() + 30000, value });
+	while (scopedProjectionCache.size > 16) {
+		const oldest = scopedProjectionCache.keys().next().value;
+		if (oldest === undefined) break;
+		scopedProjectionCache.delete(oldest);
+	}
+	return value;
 }

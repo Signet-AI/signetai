@@ -1,4 +1,5 @@
 import { readPointerMiddleware } from "../read-pointers";
+import { projectVisibleMemories } from "../umap-projection";
 import { redactReadPointers } from "../read-pointers";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -3702,52 +3703,46 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			importanceMax !== undefined;
 		const resolved = await resolveRouteReadScope(c, { memory: true });
 		if (resolved instanceof Response) return resolved;
-		const useCachedProjection = false;
 
-		if (!useCachedProjection) {
-			try {
-				const projection = await contentRead<import("../umap-projection").ProjectionQueryResult>(
-					{
-						op: "projection",
-						scope: resolved.scope,
-						dimensions: nComponents,
-						query: {
-							limit,
-							offset,
-							filters: hasFilters
-								? {
-										query,
-										who: whoFilters,
-										types: typeFilters,
-										sourceTypes: sourceTypeFilters,
-										tags: tagFilters,
-										pinned,
-										since,
-										until,
-										importanceMin,
-										importanceMax,
-									}
-								: undefined,
-						},
-					},
-					c.req.raw.signal,
-				);
+		try {
+			const projection = await projectVisibleMemories(
+				resolved.scope,
+				nComponents,
+				{
+					limit,
+					offset,
+					filters: hasFilters
+						? {
+								query,
+								who: whoFilters,
+								types: typeFilters,
+								sourceTypes: sourceTypeFilters,
+								tags: tagFilters,
+								pinned,
+								since,
+								until,
+								importanceMin,
+								importanceMax,
+							}
+						: undefined,
+				},
+				c.req.raw.signal,
+			);
 
-				return c.json({
-					status: "ready",
-					dimensions: nComponents,
-					count: projection.count,
-					total: projection.total,
-					limit: projection.limit,
-					offset: projection.offset,
-					hasMore: projection.hasMore,
-					nodes: redactProjectionNodes(projection.result.nodes),
-					edges: projection.result.edges,
-				});
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return c.json({ status: "error", message }, 500);
-			}
+			return c.json({
+				status: "ready",
+				dimensions: nComponents,
+				count: projection.count,
+				total: projection.total,
+				limit: projection.limit,
+				offset: projection.offset,
+				hasMore: projection.hasMore,
+				nodes: redactProjectionNodes(projection.result.nodes),
+				edges: projection.result.edges,
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ status: "error", message }, 500);
 		}
 	});
 	app.post("/api/documents", async (c) => {

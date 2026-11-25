@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { ftsShardTables, vecShardTables, activeVectorProjectionTable } from "@signet/core";
 import type { MigrationDb } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
-import { computeProjectionForQuery } from "./umap-projection";
+import { gatherProjectionRows } from "./umap-projection";
 import type { ContentReadRequest } from "./content-read";
 import { readScopeSql } from "./read-scope";
 import { exportSourceSnapshotInDb } from "./source-snapshots";
@@ -144,7 +144,12 @@ function scopedContentDb(
 	};
 }
 
-export function executeContentRead(db: MigrationDb & ReadDb, request: ContentReadRequest): unknown {
+export function executeContentRead(
+	db: MigrationDb & ReadDb,
+	request: ContentReadRequest,
+	check: () => void = () => {},
+): unknown {
+	check();
 	if (request.op === "readable_pointers") {
 		if (request.references.length > 2000) throw new Error("Pointer admission limit exceeded");
 		return request.references.flatMap((ref) => {
@@ -370,12 +375,18 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 			sourceHasEligibleUnconsumedEvidence(scoped, agent.agent_id, request.sourceId, request.legacyRoot),
 		);
 	}
-	if (request.op === "projection")
-		return computeProjectionForQuery(db, request.dimensions, {
-			...request.query,
-			scope: request.scope,
-			limit: Math.min(request.query.limit ?? 5000, 5000),
-		});
+	if (request.op === "projection_rows")
+		return {
+			...gatherProjectionRows(db, {
+				...request.query,
+				scope: request.scope,
+				limit: Math.min(request.query.limit ?? 100, 100),
+			}),
+			agents: db
+				.prepare("SELECT id FROM agents WHERE archived_at IS NULL ORDER BY id LIMIT 10001")
+				.all()
+				.flatMap((row) => (typeof row.id === "string" ? [row.id] : [])),
+		};
 	if (request.op === "embeddings" || request.op === "similar") {
 		const predicate = readScopeSql("m", request.scope, { current: true });
 		const live = `e.source_type='memory' AND COALESCE(m.is_deleted,0)=0${predicate.sql}`;
@@ -624,9 +635,20 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 	let cursor = request.cursor,
 		bytes = 0;
 	for (let n = 0; n < Math.max(1, Math.min(request.limit, 200)); n++) {
+		check();
+		const meta = db
+			.prepare(
+				`SELECT length(CAST(r.content AS BLOB)) AS bytes FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+			)
+			.get(request.author, cursor, ...predicate.args);
+		if (typeof meta?.bytes === "number" && meta.bytes > 16 * 1024 * 1024)
+			throw new RangeError("Export record exceeds the 16 MiB byte admission limit");
 		const row = statement.get(request.author, cursor, ...predicate.args);
+		check();
 		if (!row) break;
 		const size = Buffer.byteLength(JSON.stringify(row));
+		check();
+		if (size > 16 * 1024 * 1024) throw new RangeError("Export record exceeds the 16 MiB byte admission limit");
 		if (rows.length && bytes + size > 4 * 1024 * 1024) break;
 		rows.push(row);
 		bytes += size;

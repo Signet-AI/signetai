@@ -636,11 +636,18 @@ describe("organization memory read routes", () => {
 });
 
 test("A15 indexed live lists remain responsive on 20000 memories", async () => {
+	seed("a15-bench-hidden", compartment);
 	getDbAccessor().withWriteTx((db) => {
 		const insert = db.prepare(
-			"INSERT INTO memories(id,agent_id,type,content,visibility,created_at,updated_at,updated_by) VALUES (?,'beta','fact','benchmark memory','global',?,?,'test')",
+			"INSERT INTO memories(id,agent_id,type,content,visibility,created_at,updated_at,updated_by,superseded_by) VALUES (?,'beta','fact','benchmark memory','global',?,?,'test',?)",
 		);
-		for (let index = 0; index < 20000; index++) insert.run(`a15-bench-${index}`, at, at);
+		for (let index = 0; index < 20000; index++)
+			insert.run(
+				`a15-bench-${index}`,
+				at,
+				at,
+				index % 10 === 0 ? "visible" : index % 10 === 1 ? "a15-bench-hidden" : null,
+			);
 	});
 	await request("/api/memories?limit=100");
 	const timings: number[] = [];
@@ -660,4 +667,110 @@ test("A15 indexed live lists remain responsive on 20000 memories", async () => {
 		}),
 	);
 	expect(timings[Math.floor(timings.length / 2)]).toBeLessThan(200);
+});
+
+test("A15 projection does not stall concurrent memory reads and caches only its scope", async () => {
+	getDbAccessor().withWriteTx((db) => {
+		const memory = db.prepare(
+			"INSERT INTO memories(id,agent_id,type,content,visibility,created_at,updated_at,updated_by) VALUES (?,'beta','fact','projection concurrency','global',?,?,'test')",
+		);
+		const embedding = db.prepare(
+			"INSERT INTO embeddings(id,source_type,source_id,content_hash,chunk_text,vector,dimensions,created_at,agent_id) VALUES (?,'memory',?,?,'projection',?,64,?,'beta')",
+		);
+		for (let index = 0; index < 2000; index++) {
+			const id = `a15-projection-${index}`;
+			memory.run(id, at, at);
+			embedding.run(
+				id,
+				id,
+				id,
+				Buffer.from(Float32Array.from({ length: 64 }, (_, n) => Math.sin(index + n)).buffer),
+				at,
+			);
+		}
+	});
+	const pending = request("/api/embeddings/projection?limit=2000");
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	const start = performance.now();
+	expect((await request("/api/memories?limit=1")).status).toBe(200);
+	const elapsed = performance.now() - start;
+	const projected = await pending;
+	expect(projected.status).toBe(200);
+	expect(elapsed).toBeLessThan(500);
+	expect(await request("/api/embeddings/projection?limit=2000")).toEqual(projected);
+	console.log("A15_PROJECTION_CONCURRENT_READ_MS", elapsed);
+});
+
+test("A15 metadata lists do not transfer transcript bodies", async () => {
+	getDbAccessor().withWriteTx((db) => {
+		const insert = db.prepare(
+			"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES (?,'beta',?,'test',?,?,'bob')",
+		);
+		for (let n = 0; n < 3; n++) insert.run(`a15-list-${n}`, "x".repeat(2 * 1024 * 1024), at, at);
+	});
+	const scope = await (await import("../read-scope")).resolveReadScope(
+		{ reach: { kind: "all" }, projects: null },
+		{ local: false, userId: "bob", groupIds: [] },
+	);
+	const rows = await contentRead<Array<Record<string, unknown>>>({
+		op: "transcripts",
+		mode: "list",
+		scope,
+		limit: 100,
+	});
+	expect(rows.every((row) => !("content" in row))).toBe(true);
+	getDbAccessor().withWriteTx((db) =>
+		db.prepare("DELETE FROM session_transcripts WHERE session_key LIKE 'a15-list-%'").run(),
+	);
+});
+test("A15 byte pages bound transcript export replies independently of row count", async () => {
+	getDbAccessor().withWriteTx((db) => {
+		const insert = db.prepare(
+			"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES (?,'beta',?,'test',?,?,'bob')",
+		);
+		for (let n = 0; n < 3; n++) insert.run(`a15-byte-${n}`, "x".repeat(2 * 1024 * 1024), at, at);
+	});
+	const scope = await (await import("../read-scope")).resolveReadScope(
+		{ reach: { kind: "all" }, projects: null },
+		{ local: false, userId: "bob", groupIds: [] },
+	);
+	const rows = await contentRead<Array<Record<string, unknown>>>({
+		op: "export",
+		table: "session_transcripts",
+		author: "bob",
+		scope,
+		cursor: 0,
+		limit: 200,
+	});
+	expect(rows.length).toBeGreaterThan(0);
+	expect(Buffer.byteLength(JSON.stringify(rows))).toBeLessThanOrEqual(4 * 1024 * 1024);
+	getDbAccessor().withWriteTx((db) =>
+		db.prepare("DELETE FROM session_transcripts WHERE session_key LIKE 'a15-byte-%'").run(),
+	);
+});
+test("A15 export failures after headers terminate with an error record", async () => {
+	const response = await app.request("http://localhost/api/org/export?author=bob", {
+		headers: { "x-test-user": "bob" },
+	});
+	expect(response.status).toBe(200);
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("Export body missing");
+	const first = await reader.read();
+	expect(first.done).toBe(false);
+	getDbAccessor().withWriteTx((db) => db.exec("ALTER TABLE memory_artifacts RENAME TO a15_unavailable_artifacts"));
+	try {
+		let text = new TextDecoder().decode(first.value);
+		for (;;) {
+			const part = await reader.read();
+			if (part.done) break;
+			text += new TextDecoder().decode(part.value);
+		}
+		const records = text
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(records[records.length - 1]).toMatchObject({ kind: "error" });
+	} finally {
+		getDbAccessor().withWriteTx((db) => db.exec("ALTER TABLE a15_unavailable_artifacts RENAME TO memory_artifacts"));
+	}
 });

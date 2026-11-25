@@ -1174,7 +1174,11 @@ export function runDbOwnerWorker(): void {
 		}
 		if (job.request.kind === "content_read") {
 			const { executeContentRead } = await import("./content-read-owner");
-			return executeContentRead(db, job.request.request);
+			return executeContentRead(db, job.request.request, () => {
+				if (cancellationRequested(job.id)) throw new DbOwnerCancellationRequested();
+				if (Date.now() >= job.deadlineAt)
+					throw Object.assign(new Error("DB owner content read exceeded its deadline"), { code: "DB_OWNER_DEADLINE" });
+			});
 		}
 		if (job.request.kind === "embedding_projection") {
 			const { executeEmbeddingProjection } = await import("./embedding-projection-owner");
@@ -1428,7 +1432,9 @@ export function runDbOwnerWorker(): void {
 					result(job.id, "timed_out");
 				} else {
 					const value = await execute(job, context);
-					if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
+					if (Date.now() >= job.deadlineAt && !context.committed)
+						result(job.id, "timed_out", undefined, { startedAt, finishedAt: Date.now() });
+					else if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
 					else
 						result(job.id, "completed", value, {
 							startedAt,

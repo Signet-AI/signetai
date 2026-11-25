@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setSystemTime } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -304,6 +304,23 @@ describe("DB owner client", () => {
 			else process.env.SIGNET_DB_OWNER_TEST_STARTUP_STARTED = previousStarted;
 			if (previousRelease === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_STARTUP_RELEASE");
 			else process.env.SIGNET_DB_OWNER_TEST_STARTUP_RELEASE = previousRelease;
+		}
+	});
+
+	test("A15 read results delivered past their deadline reject even when the timer has not run", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const handle = client.submit(
+			{ kind: "query", statement: { sql: "SELECT content FROM memories WHERE id='m1'", result: "get" } },
+			{ operation: "deadline-at-delivery", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+		);
+		try {
+			setSystemTime(new Date(handle.job.deadlineAt + 1));
+			await expect(handle.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		} finally {
+			setSystemTime();
 		}
 	});
 

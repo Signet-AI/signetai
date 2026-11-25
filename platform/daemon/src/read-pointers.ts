@@ -63,9 +63,18 @@ export async function redactReadPointers(value: unknown, scope: ReadScope): Prom
 		}
 	};
 	collect(value, 0);
-	const allowed = new Set(
-		refs.size ? await contentRead<string[]>({ op: "readable_pointers", scope, references: [...refs.values()] }) : [],
-	);
+	if (refs.size > 20000) throw new Error("Pointer admission limit exceeded");
+	const allowed = new Set<string>();
+	const references = [...refs.values()];
+	for (let offset = 0; offset < references.length; offset += 500) {
+		for (const key of await contentRead<string[]>({
+			op: "readable_pointers",
+			scope,
+			references: references.slice(offset, offset + 500),
+		}))
+			allowed.add(key);
+	}
+
 	const apply = (node: unknown): unknown => {
 		if (Array.isArray(node)) return node.map(apply);
 		if (node === null || typeof node !== "object") return node;

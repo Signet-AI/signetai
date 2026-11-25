@@ -94,9 +94,8 @@ export type ContentReadRequest =
 			readonly subject: import("./read-scope").AudienceSubject;
 	  }
 	| {
-			readonly op: "projection";
+			readonly op: "projection_rows";
 			readonly scope: ReadScope;
-			readonly dimensions: 2 | 3;
 			readonly query: import("./umap-projection").ProjectionQuery;
 	  }
 	| {
@@ -167,15 +166,41 @@ export type ContentReadRequest =
 			readonly limit: number;
 	  };
 
-export async function contentRead<Result>(request: ContentReadRequest, signal?: AbortSignal): Promise<Result> {
+function estimatedReadWork(request: ContentReadRequest): number {
+	switch (request.op) {
+		case "readable_pointers":
+			return request.references.length;
+		case "projection_rows":
+			return (request.query.limit ?? 100) + (request.query.offset ?? 0);
+		case "forget_candidates":
+			return Math.min(request.request.limit, 200);
+		case "documents":
+			return request.mode === "detail" ? 1 : request.mode === "chunks" ? 1000 : request.limit + request.offset;
+		case "transcripts":
+			return request.mode === "detail" ? 1 : request.limit;
+		case "export":
+			return Math.min(request.limit, 200);
+		default:
+			return "limit" in request && typeof request.limit === "number"
+				? request.limit + ("offset" in request && typeof request.offset === "number" ? request.offset : 0)
+				: request.op === "source_snapshot"
+					? 1000
+					: 1;
+	}
+}
+export async function contentRead<Result>(
+	request: ContentReadRequest,
+	signal?: AbortSignal,
+	options: { readonly deadlineMs?: number } = {},
+): Promise<Result> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
 	const handle = owner.submit<Result>(
 		{ kind: "content_read", request },
 		{
 			operation: `content.read.${request.op}`,
 			lane: "read",
-			deadlineMs: 5000,
-			estimatedWorkUnits: 500,
+			deadlineMs: options.deadlineMs ?? 5000,
+			estimatedWorkUnits: estimatedReadWork(request),
 		},
 	);
 	const abort = () => handle.cancel();
