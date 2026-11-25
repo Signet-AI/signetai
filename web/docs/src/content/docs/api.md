@@ -61,6 +61,11 @@ or running classification jobs become failed on restart.
 Audience members receive only assignments whose content is readable under their
 full scope. Memory items include `{ id, content }` in `memory`. Compliance
 outside the audience receives target identifiers only, never memory content.
+Credential agent and project bindings also restrict classification targets and
+item listings. Definition management and compliance-only mutations require the
+credential’s `classify` permission; an owner can apply an admitted classification
+without that compliance permission.
+
 Overlapping classifications require membership in every audience. Access and
 membership changes invalidate the owner-side readable-compartment cache in the
 same database transaction.

@@ -14,8 +14,10 @@ const principalSchema = z.object({
 	userId: z.string().nullable(),
 	groupIds: z.array(z.string()),
 	compliance: z.boolean(),
+	permissions: z.set(z.string()),
 	credential: z.object({ kind: z.string(), id: z.string() }),
 	allowedProjects: z.array(z.string()).nullable(),
+	boundAgentId: z.string().nullable(),
 });
 const person = z.object({ kind: z.enum(["user", "group"]), id: z.string().min(1).max(200) }).strict();
 const target = z
@@ -50,7 +52,9 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		if (status === 401) response.headers.set("WWW-Authenticate", "Bearer");
 		return response;
 	};
-	const actor = (c: Context): { actor: ClassificationActor; projects: readonly string[] | null } => {
+	const actor = (
+		c: Context,
+	): { actor: ClassificationActor; projects: readonly string[] | null; canClassify: boolean } => {
 		const result = principalSchema.safeParse(c.get("principal"));
 		if (
 			!result.success ||
@@ -65,16 +69,25 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				groupIds: p.groupIds,
 				local: p.kind === "local",
 				compliance: p.compliance,
+				boundAgentId: p.boundAgentId,
+				allowedProjects: p.allowedProjects,
 				credential: `${p.credential.kind}:${p.credential.id}`,
 			},
 			projects: p.allowedProjects,
+			canClassify: p.kind === "local" || p.permissions.has("classify"),
 		};
 	};
 	app.onError((error, _c) => {
 		const reason = error.message;
 		if (reason === "not_found") return reply({ error: "Not found" }, 404);
 		if (reason === "unauthorized") return reply({ error: "Unauthorized", reason: "missing_credential" }, 401);
-		if (reason === "permission" || reason === "not_owner") return reply({ error: "Forbidden", reason }, 403);
+		if (
+			reason === "permission" ||
+			reason === "not_owner" ||
+			reason === "agent_binding_conflict" ||
+			reason === "project_not_permitted"
+		)
+			return reply({ error: "Forbidden", reason }, 403);
 		if (error instanceof z.ZodError) return reply({ error: "Invalid request", reason: "invalid_request" }, 400);
 		if (reason === "archived_classification" || reason === "principal_not_found") return reply({ error: reason }, 409);
 		throw error;
@@ -84,7 +97,9 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		reply(await request({ op: "get", actor: actor(c).actor, id: c.req.param("id") })),
 	);
 	app.post("/api/classifications", async (c) => {
-		const a = actor(c).actor,
+		const principal = actor(c);
+		if (!principal.canClassify) throw new Error("permission");
+		const a = principal.actor,
 			body = create.parse(await c.req.json());
 		return reply(
 			await request({
@@ -100,13 +115,17 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		);
 	});
 	app.patch("/api/classifications/:id", async (c) => {
-		const a = actor(c).actor,
+		const principal = actor(c);
+		if (!principal.canClassify) throw new Error("permission");
+		const a = principal.actor,
 			body = update.parse(await c.req.json());
 		return reply(await request({ op: "update", actor: a, id: c.req.param("id"), ...body }));
 	});
 	for (const op of ["audience", "appliers"] as const)
 		app.put(`/api/classifications/:id/${op}`, async (c) => {
-			const a = actor(c).actor,
+			const principal = actor(c);
+			if (!principal.canClassify) throw new Error("permission");
+			const a = principal.actor,
 				principals = z
 					.array(person)
 					.max(1000)
@@ -119,16 +138,23 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				.object({ target })
 				.strict()
 				.parse(await c.req.json());
-		const scope = await resolveReadScope({ reach: { kind: "all" }, projects: a.projects }, a.actor, async (subject) =>
-			z
-				.union([z.literal("all"), z.array(z.number().int().positive())])
-				.parse(await request({ op: "readable", subject })),
+		const scope = await resolveReadScope(
+			{
+				reach: a.actor.boundAgentId ? { kind: "own", agentId: a.actor.boundAgentId } : { kind: "all" },
+				projects: a.projects,
+			},
+			a.actor,
+			async (subject) =>
+				z
+					.union([z.literal("all"), z.array(z.number().int().positive())])
+					.parse(await request({ op: "readable", subject })),
 		);
 		return reply(await request({ op: "preview", actor: a.actor, id: c.req.param("id"), target: body.target, scope }));
 	});
 	for (const op of ["apply", "remove"] as const)
 		app.post(`/api/classifications/:id/${op}`, async (c) => {
-			const a = actor(c).actor,
+			const principal = actor(c);
+			const a = { ...principal.actor, compliance: principal.actor.compliance && principal.canClassify },
 				body = z
 					.object({ target })
 					.strict()
@@ -148,10 +174,16 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		});
 	app.get("/api/classifications/:id/items", async (c) => {
 		const a = actor(c);
-		const scope = await resolveReadScope({ reach: { kind: "all" }, projects: a.projects }, a.actor, async (subject) =>
-			z
-				.union([z.literal("all"), z.array(z.number().int().positive())])
-				.parse(await request({ op: "readable", subject })),
+		const scope = await resolveReadScope(
+			{
+				reach: a.actor.boundAgentId ? { kind: "own", agentId: a.actor.boundAgentId } : { kind: "all" },
+				projects: a.projects,
+			},
+			a.actor,
+			async (subject) =>
+				z
+					.union([z.literal("all"), z.array(z.number().int().positive())])
+					.parse(await request({ op: "readable", subject })),
 		);
 		return reply(
 			await request({

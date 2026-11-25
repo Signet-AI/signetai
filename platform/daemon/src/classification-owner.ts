@@ -299,11 +299,24 @@ function authorize(
 	remove: boolean,
 	rows: readonly ContentRow[],
 ): void {
+	if (actor.boundAgentId !== null && actor.boundAgentId !== target.agentId) throw new Error("agent_binding_conflict");
+	if (actor.allowedProjects !== null) {
+		const projects = actor.allowedProjects;
+		const covered = rows.filter(
+			(r) => covers(target, r, rows) && ["memory", "transcript", "artifact", "summary"].includes(r.kind ?? ""),
+		);
+		if (
+			covered.length === 0 ||
+			covered.some((r) => typeof r.row.project !== "string" || !projects.includes(r.row.project))
+		)
+			throw new Error("project_not_permitted");
+	}
 	const def = db.prepare("SELECT * FROM classifications WHERE id=?").get(classification);
 	if (!def) throw new Error("not_found");
-	const targetAgent = db.prepare("SELECT id FROM agents WHERE id=? AND archived_at IS NULL").get(target.agentId);
+	const targetAgent = db.prepare("SELECT id,archived_at FROM agents WHERE id=?").get(target.agentId);
 	if (
 		!targetAgent ||
+		(!remove && targetAgent.archived_at !== null) ||
 		(target.kind === "agent" && target.id !== target.agentId) ||
 		(target.kind !== "agent" && !rows.some((r) => covers(target, r, rows)))
 	)
@@ -582,7 +595,8 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 		const predicate = readScopeSql("m", request.scope);
 		const args: unknown[] = [request.id];
 		let filter = "";
-		if (audience) {
+		if (audience || request.actor.boundAgentId !== null || request.scope.projects !== null) {
+			const itemScope: ReadScope = audience ? request.scope : { ...request.scope, compartments: "all" };
 			const checks: string[] = [];
 			for (const [kind, table, key] of [
 				["memory", "memories", "id"],
@@ -591,7 +605,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 				["agent", "memories", "agent_id"],
 			]) {
 				if (!kind || !table || !key) continue;
-				const clause = readScopeSql("r", request.scope, { visibility: table === "memories" ? "visibility" : null });
+				const clause = readScopeSql("r", itemScope, { visibility: table === "memories" ? "visibility" : null });
 				checks.push(
 					`(a.target_kind='${kind}' AND EXISTS(SELECT 1 FROM ${table} r WHERE r.${key}=a.target_id AND r.agent_id=a.agent_id ${clause.sql}))`,
 				);
@@ -736,6 +750,11 @@ function isEnqueued(value: unknown): value is Extract<ClassificationRequest, { o
 		typeof actor.local === "boolean" &&
 		"compliance" in actor &&
 		typeof actor.compliance === "boolean" &&
+		"boundAgentId" in actor &&
+		(actor.boundAgentId === null || typeof actor.boundAgentId === "string") &&
+		"allowedProjects" in actor &&
+		(actor.allowedProjects === null ||
+			(Array.isArray(actor.allowedProjects) && actor.allowedProjects.every((p) => typeof p === "string"))) &&
 		"credential" in actor &&
 		typeof actor.credential === "string" &&
 		"groupIds" in actor &&

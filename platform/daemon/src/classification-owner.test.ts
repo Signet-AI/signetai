@@ -9,6 +9,8 @@ const compliance: ClassificationActor = {
 	groupIds: [],
 	local: false,
 	compliance: true,
+	boundAgentId: null,
+	allowedProjects: null,
 	credential: "session:test",
 };
 const alice: ClassificationActor = {
@@ -16,6 +18,8 @@ const alice: ClassificationActor = {
 	groupIds: [],
 	local: false,
 	compliance: false,
+	boundAgentId: null,
+	allowedProjects: null,
 	credential: "session:alice",
 };
 const bob: ClassificationActor = { ...alice, userId: "bob" };
@@ -235,5 +239,50 @@ test("an execution admission failure leaves a failed tracked job rather than a s
 		error: "owner_admission_failed",
 	});
 	expect(db.prepare("SELECT count(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
+	db.close();
+});
+
+test("classification authority never overrides credential agent or project bindings", () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	expect(() =>
+		executeClassification(db, {
+			op: "enqueue",
+			actor: { ...compliance, boundAgentId: "other" },
+			id,
+			target,
+			remove: false,
+		}),
+	).toThrow("agent_binding_conflict");
+	expect(() =>
+		executeClassification(db, {
+			op: "enqueue",
+			actor: { ...compliance, allowedProjects: ["atlas"] },
+			id,
+			target,
+			remove: false,
+		}),
+	).toThrow("project_not_permitted");
+	db.exec("UPDATE memories SET project='atlas' WHERE id='m'");
+	executeClassification(db, { op: "appliers", actor: compliance, id, principals: [{ kind: "user", id: "bob" }] });
+	expect(() => executeClassification(db, { op: "enqueue", actor: alice, id, target, remove: false })).toThrow(
+		"permission",
+	);
+	const scoped = { ...compliance, boundAgentId: "default", allowedProjects: ["atlas"] };
+	const jobId = field(executeClassification(db, { op: "enqueue", actor: scoped, id, target, remove: false }), "jobId");
+	executeClassification(db, { op: "execute", jobId });
+	expect(
+		executeClassification(db, {
+			op: "items",
+			id,
+			actor: { ...compliance, boundAgentId: "other" },
+			cursor: null,
+			scope: { reach: { kind: "own", agentId: "other" }, projects: null, compartments: [] },
+		}),
+	).toEqual({ items: [], nextCursor: null });
+	db.exec("UPDATE agents SET archived_at='now' WHERE id='default'");
+	const removal = field(executeClassification(db, { op: "enqueue", actor: scoped, id, target, remove: true }), "jobId");
+	executeClassification(db, { op: "execute", jobId: removal });
+	expect(db.prepare("SELECT compartment_id FROM memories WHERE id='m'").get()).toEqual({ compartment_id: null });
 	db.close();
 });

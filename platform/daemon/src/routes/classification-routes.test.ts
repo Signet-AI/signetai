@@ -14,17 +14,21 @@ test("HTTP hides definitions, compliance classifies without content access and o
 			userId: user,
 			groupIds: [],
 			compliance: user === "carol",
+			permissions: new Set(c.req.header("x-test-classify") === "0" ? [] : user === "carol" ? ["classify"] : []),
 			credential: { kind: "session", id: user },
 			allowedProjects: null,
+			boundAgentId: null,
 		});
 		await next();
 	});
 	registerClassificationRoutes(app, { request: async (request) => executeClassification(db, request) });
-	const json = (user: string, body: unknown) => ({
+	const json = (user: string, body: unknown, canClassify = true) => ({
 		method: "POST",
-		headers: { "content-type": "application/json", "x-test-user": user },
+		headers: { "content-type": "application/json", "x-test-user": user, "x-test-classify": canClassify ? "1" : "0" },
 		body: JSON.stringify(body),
 	});
+	const deniedCreation = json("carol", { name: "Blocked", audience: [] }, false);
+	expect((await app.request("/api/classifications", deniedCreation)).status).toBe(403);
 	const created = await app.request(
 		"/api/classifications",
 		json("carol", { name: "HR", audience: [{ kind: "user", id: "alice" }] }),
@@ -40,6 +44,8 @@ test("HTTP hides definitions, compliance classifies without content access and o
 	expect(await hidden.text()).toBe(await missing.text());
 	expect(await (await app.request("/api/classifications")).json()).toEqual([]);
 	const target = { kind: "memory", id: "m", agentId: "default" };
+	const deniedApply = json("carol", { target }, false);
+	expect((await app.request(`/api/classifications/${id}/apply?wait=1`, deniedApply)).status).toBe(403);
 	expect((await app.request(`/api/classifications/${id}/apply?wait=1`, json("alice", { target }))).status).toBe(202);
 	const items = await app.request(`/api/classifications/${id}/items`, { headers: { "x-test-user": "carol" } });
 	expect(items.status).toBe(200);

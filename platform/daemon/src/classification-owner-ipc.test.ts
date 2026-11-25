@@ -18,6 +18,8 @@ test("real DB owner commits classifications and exposes terminal durable job sta
 		userId: "carol",
 		groupIds: [],
 		compliance: true,
+		boundAgentId: null,
+		allowedProjects: null,
 		credential: "session:test",
 	};
 	const request = (request: ClassificationRequest) =>

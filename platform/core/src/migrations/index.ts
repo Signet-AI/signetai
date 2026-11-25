@@ -1641,6 +1641,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				"compartment_members",
 				"classification_assignments",
 				"evidence_citations",
+				"classification_access_version",
 			],
 			columns: [{ table: "memories", column: "compartment_id" }],
 		},

@@ -18,6 +18,8 @@ test("new vectors inherit their memory label and profile rebuilds preserve shard
 		compliance: true,
 		local: false,
 		groupIds: [],
+		boundAgentId: null,
+		allowedProjects: null,
 		credential: "session:test",
 	};
 	const field = (value: unknown, name: string) => {

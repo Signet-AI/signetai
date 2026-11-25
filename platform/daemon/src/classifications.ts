@@ -4,6 +4,8 @@ import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
 export interface ClassificationActor extends AudienceSubject {
 	readonly compliance: boolean;
+	readonly boundAgentId: string | null;
+	readonly allowedProjects: readonly string[] | null;
 	readonly credential: string;
 }
 export interface ClassificationTarget {
