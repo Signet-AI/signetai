@@ -292,3 +292,25 @@ export function rebuildCompartmentFtsShards(db: MigrationDb): void {
 		}
 	}
 }
+
+export function vectorShardSwapStatements(names: readonly string[], active: string, staging: string): string[] {
+	if (
+		!["vec_embeddings", "vec_embeddings_staging"].includes(active) ||
+		!["vec_embeddings", "vec_embeddings_staging"].includes(staging) ||
+		active === staging
+	)
+		throw new Error("invalid_projection_slots");
+	const existing = new Set(names.filter((n) => /^vec_embeddings(?:_staging)?__c[1-9][0-9]*$/.test(n)));
+	const ids = [...new Set([...existing].map((n) => Number(n.split("__c")[1])))].sort((a, b) => a - b);
+	const statements: string[] = [];
+	for (const c of ids) {
+		const old = `${active}__c${c}`,
+			next = `${staging}__c${c}`,
+			temp = `vec_embeddings_swap__c${c}`;
+		if (existing.has(old)) statements.push(`ALTER TABLE ${old} RENAME TO ${temp}`);
+		if (existing.has(next) && next !== `vec_embeddings__c${c}`)
+			statements.push(`ALTER TABLE ${next} RENAME TO vec_embeddings__c${c}`);
+		if (existing.has(old)) statements.push(`ALTER TABLE ${temp} RENAME TO vec_embeddings_staging__c${c}`);
+	}
+	return statements;
+}

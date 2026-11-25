@@ -1,5 +1,5 @@
 import { projectEmbeddingRows } from "./embedding-projection";
-import { resetCompartmentVectorShards, syncEmbeddingCompartment } from "@signet/core";
+import { vectorShardSwapStatements, resetCompartmentVectorShards, syncEmbeddingCompartment } from "@signet/core";
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, DbWriteQueueFullError, type ReadDb, type WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -975,9 +975,9 @@ export async function stageEmbeddingBatch(input: {
 }
 
 async function promoteStagingIndexThroughOwner(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	owner: DbOwnerClient,
-	options?: { readonly vectorBatchSize?: number; readonly shouldContinue?: () => boolean },
+	_options?: { readonly vectorBatchSize?: number; readonly shouldContinue?: () => boolean },
 ): Promise<boolean> {
 	const state = await ownerReadState(owner);
 	if (state?.state !== "building" || !state.staging || state.staging.projectionRebuild) return false;
@@ -995,7 +995,12 @@ async function promoteStagingIndexThroughOwner(
 	const rebuildVectorIndex =
 		(await ownerIsVecVirtualTable(owner, activeVectorTable)) &&
 		(await ownerIsVecVirtualTable(owner, stagingVectorTable));
-	const nextProfile = { ...state.staging, projectionRebuild: true } as const;
+	const shards = await ownerReadAll<{ readonly name: string }>(
+		owner,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*__c[0-9]*'",
+		[],
+		ownerMaintenanceOptions("embedding-index.shards"),
+	);
 	const statements: Array<{
 		readonly sql: string;
 		readonly params?: readonly unknown[];
@@ -1003,7 +1008,7 @@ async function promoteStagingIndexThroughOwner(
 	}> = [
 		{
 			sql: `UPDATE embedding_index_state SET staging_profile_json = ?, state = 'building', last_error = NULL, updated_at = ? WHERE id = 1 AND state = 'building' AND staging_profile_json = ?`,
-			params: [JSON.stringify(nextProfile), new Date().toISOString(), JSON.stringify(state.staging)],
+			params: [JSON.stringify(state.staging), new Date().toISOString(), JSON.stringify(state.staging)],
 			requireChanges: true,
 		},
 		{ sql: "ALTER TABLE embeddings_staging RENAME TO embeddings_next" },
@@ -1011,6 +1016,16 @@ async function promoteStagingIndexThroughOwner(
 		{ sql: "ALTER TABLE embeddings_next RENAME TO embeddings" },
 	];
 	if (rebuildVectorIndex) {
+		statements.push(
+			{
+				sql: "UPDATE memories SET embedding_model=? WHERE id IN (SELECT source_id FROM embeddings WHERE source_type='memory')",
+				params: [state.staging.model],
+			},
+			{
+				sql: "UPDATE embedding_index_state SET active_profile_json=?,staging_profile_json=NULL,state='ready',last_error=NULL,updated_at=? WHERE id=1",
+				params: [JSON.stringify({ ...state.staging, projectionRebuild: undefined }), new Date().toISOString()],
+			},
+		);
 	} else {
 		statements.push(
 			{
@@ -1027,10 +1042,16 @@ async function promoteStagingIndexThroughOwner(
 			},
 		);
 	}
+	if (!rebuildVectorIndex)
+		statements.push(
+			...vectorShardSwapStatements(
+				shards.map((r) => r.name),
+				activeVectorTable,
+				stagingVectorTable,
+			).map((sql) => ({ sql })),
+		);
 	await ownerBatch(owner, statements, ownerMaintenanceOptions("embedding-index.promote", statements.length));
-	if (rebuildVectorIndex) {
-		await completeProjectionRebuild(accessor, nextProfile, options?.vectorBatchSize, options?.shouldContinue, owner);
-	}
+
 	await ownerRun(owner, "PRAGMA incremental_vacuum", [], ownerMaintenanceOptions("embedding-index.incremental-vacuum"));
 	return true;
 }
@@ -1148,6 +1169,7 @@ export async function promoteStagingIndex(
 		readonly owner?: DbOwnerClient;
 	},
 ): Promise<boolean> {
+	if (options?.shouldContinue && !options.shouldContinue()) return false;
 	if (options?.owner) return promoteStagingIndexThroughOwner(accessor, options.owner, options);
 	const plan = await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
@@ -1155,20 +1177,25 @@ export async function promoteStagingIndex(
 		if (state.staging.projectionRebuild) return null;
 		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return null;
 		if (!tableExists(db, vectorTableForSlot(state.staging.projectionSlot))) return null;
-		let rebuildVectorIndex = false;
-		const nextProfile = { ...state.staging, projectionRebuild: true } as const;
+		const shards = db
+			.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*__c[0-9]*'")
+			.all()
+			.flatMap((r) =>
+				typeof r === "object" && r !== null && "name" in r && typeof r.name === "string" ? [r.name] : [],
+			);
+
 		const stagingVectorTable = vectorTableForSlot(state.staging.projectionSlot);
 		const activeVectorTable = vectorTableForSlot(state.active.projectionSlot);
 		db.exec("ALTER TABLE embeddings_staging RENAME TO embeddings_next");
 		db.exec("ALTER TABLE embeddings RENAME TO embeddings_staging");
 		db.exec("ALTER TABLE embeddings_next RENAME TO embeddings");
 		if (isVecVirtualTable(db, activeVectorTable) && isVecVirtualTable(db, stagingVectorTable)) {
-			rebuildVectorIndex = true;
 			db.prepare(
-				`UPDATE embedding_index_state
-				 SET staging_profile_json = ?, state = 'building', last_error = NULL, updated_at = ?
-				 WHERE id = 1`,
-			).run(JSON.stringify(nextProfile), new Date().toISOString());
+				"UPDATE memories SET embedding_model=? WHERE id IN (SELECT source_id FROM embeddings WHERE source_type='memory')",
+			).run(state.staging.model);
+			db.prepare(
+				"UPDATE embedding_index_state SET active_profile_json=?,staging_profile_json=NULL,state='ready',last_error=NULL,updated_at=? WHERE id=1",
+			).run(JSON.stringify({ ...state.staging, projectionRebuild: undefined }), new Date().toISOString());
 		} else {
 			db.prepare(
 				`UPDATE memories SET embedding_model = ?
@@ -1184,13 +1211,12 @@ export async function promoteStagingIndex(
 				     state = 'ready', last_error = NULL, updated_at = ?
 				 WHERE id = 1`,
 			).run(JSON.stringify({ ...state.staging, projectionSlot: "active" }), new Date().toISOString());
+			for (const sql of vectorShardSwapStatements(shards, activeVectorTable, stagingVectorTable)) db.exec(sql);
 		}
-		return { dimensions: state.staging.dimensions, profile: nextProfile, rebuildVectorIndex };
+		return true;
 	});
 	if (plan === null) return false;
-	if (plan.rebuildVectorIndex) {
-		await completeProjectionRebuild(accessor, plan.profile, options?.vectorBatchSize, options?.shouldContinue);
-	}
+
 	if (accessor.incrementalVacuumAsync)
 		await accessor.incrementalVacuumAsync({ siteToken: "db:embedding.index.promote-incremental-vacuum" });
 	return true;

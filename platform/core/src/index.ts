@@ -729,6 +729,7 @@ export {
 	dropEmptyCompartmentShards,
 	ftsShardTables,
 	vecShardTables,
+	vectorShardSwapStatements,
 	syncEmbeddingCompartment,
 	resetCompartmentVectorShards,
 	rebuildCompartmentFtsShards,
