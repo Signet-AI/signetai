@@ -1,4 +1,17 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
+class FixtureDatabase extends Database {
+	readonly statements = new Set<{ finalize(): void; readonly isFinalized?: boolean }>();
+	override prepare<Row, Params extends SQLQueryBindings | SQLQueryBindings[]>(sql: string, params?: Params) {
+		const statement = super.prepare<Row, Params>(sql, params);
+		this.statements.add(statement);
+		return statement;
+	}
+	override close(strict?: boolean): void {
+		for (const statement of this.statements) if (!statement.isFinalized) statement.finalize();
+		this.statements.clear();
+		super.close(strict);
+	}
+}
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
@@ -59,6 +72,46 @@ function tmpDbPath(): string {
 
 describe("DbAccessor", () => {
 	const cleanupDirs: string[] = [];
+	test("read leases finalize statements before returning their connection to the pool", async () => {
+		const path = tmpDbPath();
+		cleanupDirs.push(join(path, ".."));
+		initDbAccessor(path);
+		const statement = await getDbAccessor().withReadDbAsync((db) => {
+			const query = db.prepare("SELECT 1 AS value");
+			query.get();
+			return query;
+		});
+		expect(() => statement.get()).toThrow();
+		expect(await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT 2 AS value").get())).toEqual({ value: 2 });
+	});
+	test("rolled-back writes release statements and leave the writer reusable", () => {
+		const path = tmpDbPath();
+		cleanupDirs.push(join(path, ".."));
+		initDbAccessor(path);
+		let statement: import("./db-accessor").SqliteStatement | undefined;
+		expect(() =>
+			getSyncDbAccessor().withWriteTx((db) => {
+				statement = db.prepare("SELECT 1");
+				statement.get();
+				throw new Error("rollback fixture");
+			}),
+		).toThrow("rollback fixture");
+		expect(() => statement?.get()).toThrow();
+		expect(getSyncDbAccessor().withWriteTx((db) => db.prepare("SELECT 2 AS value").get())).toEqual({ value: 2 });
+	});
+
+	test("strict close finalizes an uncached statement retained after its borrowing callback", async () => {
+		const path = tmpDbPath();
+		cleanupDirs.push(join(path, ".."));
+		initDbAccessor(path);
+		const borrowed = getSyncDbAccessor().withWriteTx((db) => {
+			const query = db.prepare("SELECT 1 AS value");
+			query.get();
+			return query;
+		});
+		await closeDbAccessor();
+		expect(() => borrowed.get()).toThrow();
+	});
 
 	afterEach(async () => {
 		await closeDbAccessor();
@@ -89,7 +142,7 @@ describe("DbAccessor", () => {
 		for (const name of readdirSync(join(dbPath, ".."))) {
 			if (name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json")) rmSync(join(dbPath, "..", name));
 		}
-		const fixture = new Database(dbPath);
+		const fixture = new FixtureDatabase(dbPath);
 		fixture.exec("CREATE TABLE migration_large_fixture (payload BLOB NOT NULL)");
 		fixture
 			.prepare("INSERT INTO migration_large_fixture (payload) VALUES (zeroblob(?))")
@@ -133,7 +186,7 @@ describe("DbAccessor", () => {
 		initDbAccessor(dbPath);
 		await closeDbAccessor();
 
-		const db = new Database(dbPath);
+		const db = new FixtureDatabase(dbPath);
 		const insert = db.prepare(
 			`INSERT INTO memories (
 				id, content, type, agent_id, visibility, created_at, updated_at, updated_by
@@ -178,7 +231,7 @@ describe("DbAccessor", () => {
 		});
 		closeDbAccessor();
 
-		const db = new Database(dbPath);
+		const db = new FixtureDatabase(dbPath);
 		db.exec("DELETE FROM memories_fts");
 		db.close(true);
 
@@ -192,7 +245,7 @@ describe("DbAccessor", () => {
 		initDbAccessor(dbPath);
 		closeDbAccessor();
 
-		const db = new Database(dbPath);
+		const db = new FixtureDatabase(dbPath);
 		try {
 			db.exec("DELETE FROM schema_migrations WHERE version = 128");
 			db.exec("DROP INDEX IF EXISTS idx_memory_jobs_diagnostics_status_created_at");
@@ -224,7 +277,7 @@ describe("DbAccessor", () => {
 		);
 		if (!initialBackup) throw new Error("initial migration backup was not created");
 
-		const db = new Database(dbPath);
+		const db = new FixtureDatabase(dbPath);
 		try {
 			db.exec("DELETE FROM schema_migrations WHERE version = 128");
 			db.exec("DROP INDEX IF EXISTS idx_memory_jobs_diagnostics_status_created_at");
@@ -344,7 +397,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:339" },
+				{ siteToken: "db-accessor.test.ts:392" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -373,7 +426,7 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:370");
+			}, "db-accessor.test.ts:423");
 		} finally {
 			Date.now = realNow;
 		}
@@ -403,7 +456,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:398" },
+				{ siteToken: "db-accessor.test.ts:451" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -1631,7 +1684,7 @@ describe("vec_embeddings schema repair", () => {
 	});
 
 	test("post-ready backfill budget leaves room for a real batch", () => {
-		const db = new Database(":memory:");
+		const db = new FixtureDatabase(":memory:");
 		db.exec(
 			"CREATE TABLE embeddings (id TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, vector BLOB NOT NULL); CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL); CREATE TABLE vec_embeddings_rowids (id TEXT PRIMARY KEY);",
 		);
@@ -1653,7 +1706,7 @@ describe("vec_embeddings schema repair", () => {
 	});
 
 	test("backfills missing embeddings in bounded keyset batches", () => {
-		const db = new Database(":memory:");
+		const db = new FixtureDatabase(":memory:");
 		db.exec(
 			"CREATE TABLE embeddings (id TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, vector BLOB NOT NULL); CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL); CREATE TABLE vec_embeddings_rowids (id TEXT PRIMARY KEY);",
 		);
@@ -1681,7 +1734,7 @@ describe("vec_embeddings schema repair", () => {
 	});
 
 	test("quarantines malformed rows and continues backfill around them", () => {
-		const db = new Database(":memory:");
+		const db = new FixtureDatabase(":memory:");
 		db.exec(
 			"CREATE TABLE embeddings (id TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, vector BLOB NOT NULL); CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL); CREATE TABLE vec_embeddings_rowids (id TEXT PRIMARY KEY);",
 		);
@@ -1721,7 +1774,7 @@ describe("vec_embeddings schema repair", () => {
 	});
 
 	test("quarantines NULL and non-blob legacy vectors and continues backfill", () => {
-		const db = new Database(":memory:");
+		const db = new FixtureDatabase(":memory:");
 		db.exec(
 			"CREATE TABLE embeddings (id TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, vector BLOB); CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL); CREATE TABLE vec_embeddings_rowids (id TEXT PRIMARY KEY);",
 		);
@@ -1748,7 +1801,7 @@ describe("vec_embeddings schema repair", () => {
 	});
 
 	test("rethrows operational vector insert failures instead of quarantining rows", () => {
-		const db = new Database(":memory:");
+		const db = new FixtureDatabase(":memory:");
 		db.exec(
 			"CREATE TABLE embeddings (id TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, vector BLOB NOT NULL); CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL); CREATE TABLE vec_embeddings_rowids (id TEXT PRIMARY KEY);",
 		);
@@ -1817,7 +1870,7 @@ db.exec("COMMIT");`,
 		const dbPath = tmpDbPath();
 		dir = join(dbPath, "..");
 		const releasePath = join(dir, "release-lock");
-		const seed = new Database(dbPath);
+		const seed = new FixtureDatabase(dbPath);
 		seed.exec("PRAGMA journal_mode = WAL");
 		seed.exec("CREATE TABLE probe (value INTEGER)");
 		seed.close();

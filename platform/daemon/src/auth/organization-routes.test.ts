@@ -57,7 +57,6 @@ beforeEach(async () => {
 });
 afterEach(async () => {
 	await (await import("../db-owner-runtime")).closeDbOwner();
-	Bun.gc(true);
 	await closeDbAccessor();
 	rmSync(dir, { recursive: true, force: true });
 	if (initialSignetPath === undefined) delete process.env.SIGNET_PATH;

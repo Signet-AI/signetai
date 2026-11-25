@@ -2278,7 +2278,6 @@ async function cleanup() {
 	await recallDbOwner?.close();
 	recallDbOwner = null;
 	await closeDbOwner();
-	if (typeof Bun !== "undefined") Bun.gc(true);
 	await closeDbAccessor();
 
 	if (watcher) {

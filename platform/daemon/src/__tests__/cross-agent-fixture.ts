@@ -4,8 +4,6 @@ import { closeDbAccessor, getDbAccessorPath } from "../db-accessor";
 import { agentMessageWriteStatements, AgentMessageCapacityError } from "../cross-agent-message-owner";
 export async function closeCrossAgentFixture() {
 	await (await import("../db-owner-runtime")).closeDbOwner();
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	Bun.gc(true);
 	await closeDbAccessor();
 }
 export function createAgentMessage(input: CreateAgentMessageInput) {
