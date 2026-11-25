@@ -54,14 +54,18 @@ beforeAll(async () => {
 			kind: "user" as const,
 			userId: c.req.header("x-test-user") ?? "alice",
 			role,
-			permissions: rolePermissions(role),
+			permissions: new Set(
+				[...rolePermissions(role)].filter(
+					(permission) => c.req.header("x-test-no-recall") !== "1" || permission !== "recall",
+				),
+			),
 		};
 		bindPrincipalAccess(principal, {
 			agentModel: "personal",
 			personalAgentsSelfService: true,
 			organizationAgentId: "default",
 			personalAgentId: principal.userId === "bob" ? "beta" : "alpha",
-			defaultReadAgentId: null,
+			defaultReadAgentId: c.req.header("x-test-personal-default") === "1" ? "alpha" : null,
 			agents: [
 				{ id: "default", kind: "organization", owner_user_id: null, owner_group_id: null, archived_at: null },
 				{ id: "alpha", kind: "personal", owner_user_id: "alice", owner_group_id: null, archived_at: null },
@@ -395,6 +399,58 @@ test("A14d document URL dedupe cannot reveal a hidden duplicate", async () => {
 	expect(body.deduplicated).not.toBe(true);
 });
 
+test("A15 export requires recall even for its author", async () => {
+	const response = await app.request("http://localhost/api/org/export?author=bob", {
+		headers: { "x-test-user": "bob", "x-test-no-recall": "1" },
+	});
+	expect(response.status).toBe(403);
+});
+test("A15 export is cross-agent by default but audience restricted and explicitly narrowable", async () => {
+	seed("export-classified-a15", compartment);
+	const exportAs = async (user: string, query = "") => {
+		const response = await app.request(`http://localhost/api/org/export?author=bob${query}`, {
+			headers: { "x-test-user": user, "x-test-admin": "1", "x-test-personal-default": "1" },
+		});
+		expect(response.status).toBe(200);
+		return response.text();
+	};
+	expect(await exportAs("carol")).toContain("export-classified-a15");
+	expect(await exportAs("alice")).not.toContain("export-classified-a15");
+	expect(await exportAs("carol", "&agentId=alpha")).not.toContain("export-classified-a15");
+	getDbAccessor().withWriteTx((db) => db.prepare("DELETE FROM memories WHERE id='export-classified-a15'").run());
+});
+test("A15 continuity hides scores of unreadable sessions before aggregates and latest", async () => {
+	const paths = ["/api/analytics/continuity", "/api/analytics/continuity/latest"];
+	const before = await Promise.all(paths.map((path) => request(path)));
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO session_scores(id,session_key,project,harness,score,reasoning,created_at) VALUES ('a15-score','private','atlas','test',0.7,'confidential score',?)",
+			)
+			.run(at),
+	);
+	expect(await Promise.all(paths.map((path) => request(path)))).toEqual(before);
+	expect((await request(paths[0], "carol")).body).toContain("confidential score");
+});
+test("A15 serialized content has no internal columns and export redacts credentials", async () => {
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES ('export-hygiene','beta','Authorization: Bearer sk-proj-a15secretcredentialabcdefghijklmnop','test',?,?,'bob')",
+			)
+			.run(at, at),
+	);
+	for (const path of ["/api/memory/visible", "/api/documents/hidden-document", "/api/org/export?author=bob"]) {
+		const response = await request(path, "carol", true);
+		if (response.status !== 200) continue;
+		expect(response.body).not.toMatch(
+			/"(?:compartment_id|content_hash|normalized_content|vector_clock|idempotency_key|rowid|speaker_user_id|author_user_id)"/,
+		);
+		expect(response.body).not.toContain("a15secretcredential");
+		expect(response.body).not.toContain('"kind":"error"');
+	}
+});
+
 describe("organization memory read routes", () => {
 	test("organization and another personal agent read org-visible private content with authorship", async () => {
 		for (const query of ["", "?agentId=beta"]) {
@@ -435,7 +491,7 @@ describe("organization memory read routes", () => {
 	});
 
 	test("embedding-derived list statistics ignore hidden embeddings on readable parents", async () => {
-		seed("statistics-parent", null);
+		seed("statistics-parent", compartment);
 		const before = await request("/api/memories");
 		getDbAccessor().withWriteTx((db) =>
 			db

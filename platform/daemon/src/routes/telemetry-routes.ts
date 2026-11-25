@@ -215,36 +215,16 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/analytics/continuity", (c) => {
+	app.get("/api/analytics/continuity", async (c) => {
 		const project = c.req.query("project");
 		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const scores: Array<Record<string, unknown>> = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-			if (project) {
-				return db
-					.prepare(
-						`SELECT id, session_key, project, harness, score,
-					        memories_recalled, memories_used, novel_context_count,
-					        reasoning, created_at
-					 FROM session_scores
-					 WHERE project = ?
-					 ORDER BY created_at DESC
-					 LIMIT ?`,
-					)
-					.all(project, limit) as Array<Record<string, unknown>>;
-			}
-			return db
-				.prepare(
-					`SELECT id, session_key, project, harness, score,
-					        memories_recalled, memories_used, novel_context_count,
-					        reasoning, created_at
-					 FROM session_scores
-					 ORDER BY created_at DESC
-					 LIMIT ?`,
-				)
-				.all(limit) as Array<Record<string, unknown>>;
-		}, "routes/telemetry-routes.ts:223");
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const scores = await contentRead<Array<Record<string, unknown>>>(
+			{ op: "continuity", scope: resolved.scope, latest: false, project, limit },
+			c.req.raw.signal,
+		);
 
 		const scoreValues = scores.map((s) => s.score as number).reverse();
 		const trend = scoreValues.length >= 2 ? scoreValues[scoreValues.length - 1] - scoreValues[0] : 0;
@@ -261,30 +241,13 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/analytics/continuity/latest", (c) => {
-		const scores: Array<Record<string, unknown>> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb(
-				(db: import("../db-accessor").ReadDb) =>
-					db
-						.prepare(
-							`SELECT project, score, created_at
-					 FROM session_scores
-					 WHERE id IN (
-					   SELECT id FROM session_scores s2
-					   WHERE s2.project = session_scores.project
-					   ORDER BY s2.created_at DESC
-					   LIMIT 1
-					 )
-					 ORDER BY created_at DESC`,
-						)
-						.all() as Array<{
-						project: string | null;
-						score: number;
-						created_at: string;
-					}>,
-				"routes/telemetry-routes.ts:267",
-			);
+	app.get("/api/analytics/continuity/latest", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const scores = await contentRead<Array<Record<string, unknown>>>(
+			{ op: "continuity", scope: resolved.scope, latest: true, limit: 500 },
+			c.req.raw.signal,
+		);
 
 		return c.json({ scores });
 	});

@@ -14,6 +14,7 @@ export async function resolveRouteReadScope(
 		readonly allowAllAgents?: boolean;
 		readonly memory?: boolean;
 		readonly localGlobal?: boolean;
+		readonly allReadable?: boolean;
 	} = {},
 ): Promise<{ readonly agentId: string; readonly scope: ReadScope } | Response> {
 	const requested =
@@ -53,7 +54,9 @@ export async function resolveRouteReadScope(
 		if (!principal) return c.json({ error: "unauthorized" }, 401);
 		const agent = principalAccess(principal)?.agents.find((entry) => entry.id === agentId);
 		const reach =
-			agentId === "all" || agent?.kind === "organization"
+			agentId === "all" ||
+			agent?.kind === "organization" ||
+			(options.allReadable && !requested && !principal.boundAgentId)
 				? { kind: "all" as const }
 				: { kind: "own" as const, agentId };
 		const scope = await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal));

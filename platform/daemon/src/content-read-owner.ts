@@ -145,6 +145,32 @@ function scopedContentDb(
 }
 
 export function executeContentRead(db: MigrationDb & ReadDb, request: ContentReadRequest): unknown {
+	if (request.op === "continuity") {
+		const access = readScopeSql("t", request.scope, {
+			visibility: null,
+			memory: null,
+			session: "session_key",
+			source: "source_id",
+		});
+		const subject = request.scope.inFlightUserId;
+		const claimAudience =
+			request.scope.compartments === "all"
+				? ""
+				: ` AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=c.agent_id AND (ca.target_kind='agent' OR (ca.target_kind='session' AND ca.target_id=c.session_key)) AND NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=ca.classification_id AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN(SELECT group_id FROM group_members WHERE user_id=?)))))`;
+		const cte = `WITH owners AS (SELECT session_key,agent_id,compartment_id,project,source_id FROM session_transcripts UNION ALL SELECT c.session_key,c.agent_id,NULL,NULL,NULL FROM session_claims c WHERE NOT EXISTS(SELECT 1 FROM session_transcripts transcript WHERE transcript.session_key=c.session_key)${claimAudience}),readable AS (SELECT t.session_key,t.agent_id FROM owners t WHERE 1=1${access.sql}),filtered AS (SELECT s.id,s.session_key,s.project,s.harness,s.score,s.memories_recalled,s.memories_used,s.novel_context_count,s.reasoning,s.created_at FROM session_scores s WHERE EXISTS(SELECT 1 FROM readable t WHERE t.session_key=s.session_key) AND NOT EXISTS(SELECT 1 FROM owners owner WHERE owner.session_key=s.session_key AND NOT EXISTS(SELECT 1 FROM readable r WHERE r.session_key=owner.session_key AND r.agent_id=owner.agent_id))${request.project ? " AND s.project=?" : ""})`;
+		const args = [
+			...(claimAudience ? [subject ?? null, subject ?? null] : []),
+			...access.args,
+			...(request.project ? [request.project] : []),
+		];
+		return db
+			.prepare(
+				request.latest
+					? `${cte} SELECT project,score,created_at FROM (SELECT project,score,created_at,ROW_NUMBER() OVER(PARTITION BY project ORDER BY created_at DESC,id) AS rank FROM filtered WHERE project IS NOT NULL) WHERE rank=1 ORDER BY created_at DESC LIMIT ?`
+					: `${cte} SELECT id,session_key,project,harness,score,memories_recalled,memories_used,novel_context_count,reasoning,created_at FROM filtered ORDER BY created_at DESC,id LIMIT ?`,
+			)
+			.all(...args, Math.max(1, Math.min(request.limit, 500)));
+	}
 	if (request.op === "dedupe_compartment") {
 		const key = classificationIdsForWrite(db, request.writeScope).join(",");
 		if (!key) return { exists: true, id: null, key };
@@ -323,13 +349,8 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 		});
 	if (request.op === "embeddings" || request.op === "similar") {
 		const predicate = readScopeSql("m", request.scope);
-		const embedding = readScopeSql(
-			"e",
-			{ ...request.scope, projects: null },
-			{ visibility: null, memory: "source_id", session: null, source: null },
-		);
-		const live = `e.source_type='memory' AND COALESCE(m.is_deleted,0)=0 AND m.superseded_by IS NULL${predicate.sql}${embedding.sql}`;
-		const args = [...predicate.args, ...embedding.args];
+		const live = `e.source_type='memory' AND COALESCE(m.is_deleted,0)=0 AND m.superseded_by IS NULL${predicate.sql}`;
+		const args = [...predicate.args];
 		if (request.op === "embeddings") {
 			const count = db
 				.prepare(`SELECT COUNT(*) AS total FROM embeddings e JOIN memories m ON m.id=e.source_id WHERE ${live}`)
@@ -438,7 +459,7 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 		}
 		const rows = db
 			.prepare(
-				`SELECT d.*, d.author_user_id AS authorUserId, (SELECT COUNT(*) FROM document_memories dm JOIN memories m ON m.id=dm.memory_id WHERE dm.document_id=d.id AND COALESCE(m.is_deleted,0)=0${memories.sql}) AS readable_memory_count FROM ${documentTable} d WHERE ${where} ORDER BY d.created_at DESC,d.id LIMIT ? OFFSET ?`,
+				`SELECT d.id,d.source_url,d.source_type,d.content_type,d.title,d.status,d.connector_id,d.chunk_count,d.memory_count,d.metadata_json,d.agent_id,d.project,d.created_at,d.updated_at,d.author_user_id AS authorUserId${request.mode === "detail" ? ",d.raw_content" : ""}, (SELECT COUNT(*) FROM document_memories dm JOIN memories m ON m.id=dm.memory_id WHERE dm.document_id=d.id AND COALESCE(m.is_deleted,0)=0${memories.sql}) AS readable_memory_count FROM ${documentTable} d WHERE ${where} ORDER BY d.created_at DESC,d.id LIMIT ? OFFSET ?`,
 			)
 			.all(
 				...memories.args,
@@ -468,7 +489,7 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 			? [request.excludeSessionKey, request.excludeSessionKey.replace(/^session:/, "")]
 			: [];
 		const columns =
-			"t.rowid AS id, t.session_key AS sessionKey, t.agent_id AS agentId, t.project, t.harness, t.created_at AS createdAt, t.updated_at AS updatedAt, t.completed_at AS completedAt, t.speaker_user_id AS authorUserId, t.speaker_user_id AS speakerUserId";
+			"t.session_key AS id, t.session_key AS sessionKey, t.agent_id AS agentId, t.project, t.harness, t.created_at AS createdAt, t.updated_at AS updatedAt, t.completed_at AS completedAt, t.speaker_user_id AS authorUserId, t.speaker_user_id AS speakerUserId";
 		if (request.mode === "search") {
 			const rawQuery = (request.query ?? "").trim();
 			const exact = db
@@ -504,7 +525,7 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 		}
 		const rows = db
 			.prepare(
-				`SELECT ${columns}, t.content FROM session_transcripts t WHERE 1=1${predicate.sql}${keySql} ORDER BY COALESCE(t.updated_at,t.created_at) DESC,t.rowid LIMIT ?`,
+				`SELECT ${columns}${request.mode === "detail" ? ",t.content" : ""} FROM session_transcripts t WHERE 1=1${predicate.sql}${keySql} ORDER BY COALESCE(t.updated_at,t.created_at) DESC,t.rowid LIMIT ?`,
 			)
 			.all(...predicate.args, ...keys, request.mode === "detail" ? 1 : Math.max(1, Math.min(request.limit, 500)));
 		return request.mode === "detail" ? (rows[0] ?? null) : rows;
@@ -531,7 +552,7 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 		const count = db.prepare(`SELECT COUNT(*) AS total FROM session_summaries s WHERE 1=1${filters}`).get(...args);
 		const summaries = db
 			.prepare(
-				`SELECT s.*, (SELECT COUNT(*) FROM session_summary_children rel JOIN session_summaries child ON child.id=rel.child_id WHERE rel.parent_id=s.id${child.sql}) AS childCount FROM session_summaries s WHERE 1=1${filters} ORDER BY s.latest_at DESC,s.id LIMIT ? OFFSET ?`,
+				`SELECT s.id,s.agent_id,s.project,s.depth,s.kind,s.token_count,s.earliest_at,s.latest_at,s.session_key,s.harness,s.source_type,s.source_ref,s.meta_json,s.created_at, (SELECT COUNT(*) FROM session_summary_children rel JOIN session_summaries child ON child.id=rel.child_id WHERE rel.parent_id=s.id${child.sql}) AS childCount FROM session_summaries s WHERE 1=1${filters} ORDER BY s.latest_at DESC,s.id LIMIT ? OFFSET ?`,
 			)
 			.all(...child.args, ...args, Math.max(0, Math.min(request.limit, 200)), Math.max(0, request.offset));
 		return { summaries, total: count?.total ?? 0 };
@@ -544,7 +565,7 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 		});
 		return db
 			.prepare(
-				`SELECT c.* FROM session_checkpoints c WHERE 1=1${predicate.sql}${request.sessionKey ? " AND c.session_key=?" : ""}${request.project ? " AND c.project_normalized=?" : ""} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
+				`SELECT c.id,c.agent_id,c.session_key,c.harness,c.project,c.project_normalized,c.trigger,c.digest,c.prompt_count,c.memory_queries,c.recent_remembers,c.created_at FROM session_checkpoints c WHERE 1=1${predicate.sql}${request.sessionKey ? " AND c.session_key=?" : ""}${request.project ? " AND c.project_normalized=?" : ""} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
 			)
 			.all(
 				...predicate.args,
@@ -562,9 +583,27 @@ export function executeContentRead(db: MigrationDb & ReadDb, request: ContentRea
 		source: "source_id",
 	});
 	const author = transcript ? "speaker_user_id" : "author_user_id";
-	return db
-		.prepare(
-			`SELECT r.*, r.rowid AS exportCursor, r.${author} AS authorUserId${transcript ? ", r.speaker_user_id AS speakerUserId" : ""} FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT ?`,
-		)
-		.all(request.author, request.cursor, ...predicate.args, Math.max(1, Math.min(request.limit, 200)));
+	const columns = memory
+		? "r.id,r.content,r.type,r.importance,r.tags,r.pinned,r.agent_id AS agentId,r.project,r.created_at AS createdAt,r.updated_at AS updatedAt"
+		: transcript
+			? "r.session_key AS sessionKey,r.agent_id AS agentId,r.project,r.harness,r.content,r.created_at AS createdAt,r.updated_at AS updatedAt"
+			: "r.agent_id AS agentId,r.source_kind AS sourceKind,r.source_path AS sourcePath,r.content,r.captured_at AS capturedAt,r.updated_at AS updatedAt";
+	const statement = db.prepare(
+		`SELECT ${columns},r.rowid AS exportCursor,r.${author} AS authorUserId FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+	);
+	const rows: Record<string, unknown>[] = [];
+	let cursor = request.cursor,
+		bytes = 0;
+	for (let n = 0; n < Math.max(1, Math.min(request.limit, 200)); n++) {
+		const row = statement.get(request.author, cursor, ...predicate.args);
+		if (!row) break;
+		const size = Buffer.byteLength(JSON.stringify(row));
+		if (rows.length && bytes + size > 4 * 1024 * 1024) break;
+		rows.push(row);
+		bytes += size;
+		if (typeof row.exportCursor !== "number") throw new Error("Invalid export cursor");
+		cursor = row.exportCursor;
+		if (bytes >= 4 * 1024 * 1024) break;
+	}
+	return rows;
 }

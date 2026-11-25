@@ -5,6 +5,13 @@ import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
 export type ContentReadRequest =
+	| {
+			readonly op: "continuity";
+			readonly scope: ReadScope;
+			readonly latest: boolean;
+			readonly project?: string;
+			readonly limit: number;
+	  }
 	| { readonly op: "dedupe_compartment"; readonly writeScope: import("@signet/core").CompartmentWriteScope }
 	| {
 			readonly op: "forget_candidates";

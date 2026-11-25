@@ -3518,7 +3518,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3615,
+      "line": 3614,
       "api": "withReadDbAsync",
       "source": "const index = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3526,7 +3526,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3629,
+      "line": 3628,
       "api": "withReadDbAsync",
       "source": "const report = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -4032,20 +4032,6 @@
       "line": 202,
       "api": "withReadDb",
       "source": "const mutationHealth = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/telemetry-routes.ts",
-      "line": 223,
-      "api": "withReadDb",
-      "source": "const scores: Array<Record<string, unknown>> = getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/telemetry-routes.ts",
-      "line": 267,
-      "api": "withReadDb",
-      "source": "getDbAccessor().withReadDb(",
       "category": "hot-path"
     },
     {

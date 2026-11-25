@@ -341,7 +341,7 @@ function scopedMemoryPredicate(input: RememberDedupeScope): {
 			AND COALESCE(project, '') = ?
 			AND COALESCE(visibility, 'global') = ?
 			AND COALESCE(scope, '__NULL__') = ?
- AND compartment_id IS ? AND ?${input.read.sql.replaceAll("m.", "memories.")}
+ AND compartment_id IS ? AND ?${readScopeSql("memories", input.read.readScope).sql}
 		`,
 		params: [
 			input.agentId || "default",
@@ -365,7 +365,7 @@ function scopedContentHashPredicate(input: RememberDedupeScope): {
 			AND COALESCE(project, '') = ?
 			AND COALESCE(scope, '__NULL__') = ?
 			AND COALESCE(visibility, 'global') = ?
- AND compartment_id IS ? AND ?${input.read.sql.replaceAll("m.", "memories.")}
+ AND compartment_id IS ? AND ?${readScopeSql("memories", input.read.readScope).sql}
 		`,
 		params: [
 			input.agentId || "default",
@@ -982,6 +982,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return next();
 	});
 	app.get("/api/org/export", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
 		const principal = c.get("principal");
 		const author = c.req.query("author");
 		if (!author || author.length > 128) return c.json({ error: "author is required" }, 400);
@@ -991,25 +993,33 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			(principal.userId !== author && (principal.role !== "admin" || !principal.permissions.has("admin")))
 		)
 			return c.json({ error: "not permitted", reason: "not_owner" }, 403);
-		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true, allReadable: true });
 		if (resolved instanceof Response) return resolved;
 		c.header("Content-Type", "application/x-ndjson");
 		c.header("Cache-Control", "no-store");
 		return stream(c, async (output) => {
-			for (const table of ["memories", "session_transcripts", "memory_artifacts"] as const) {
-				let cursor = 0;
-				while (!c.req.raw.signal.aborted) {
-					const rows = await contentRead<ReadonlyArray<Record<string, unknown>>>(
-						{ op: "export", table, author, scope: resolved.scope, cursor, limit: 100 },
-						c.req.raw.signal,
-					);
-					for (const { exportCursor: _cursor, ...row } of rows)
-						await output.write(`${JSON.stringify({ kind: table, ...row })}\n`);
-					if (rows.length < 100) break;
-					const next = rows.at(-1)?.exportCursor;
-					if (typeof next !== "number" || next <= cursor) throw new Error("Invalid export cursor");
-					cursor = next;
+			try {
+				for (const table of ["memories", "session_transcripts", "memory_artifacts"] as const) {
+					let cursor = 0;
+					while (!c.req.raw.signal.aborted) {
+						const rows = await contentRead<ReadonlyArray<Record<string, unknown>>>(
+							{ op: "export", table, author, scope: resolved.scope, cursor, limit: 100 },
+							c.req.raw.signal,
+						);
+						for (const { exportCursor: _cursor, ...row } of rows)
+							await output.write(
+								`${JSON.stringify({ kind: table, ...row, ...(typeof row.content === "string" ? { content: redactCredentials(row.content) } : {}) })}\n`,
+							);
+						if (rows.length === 0) break;
+						const next = rows.at(-1)?.exportCursor;
+						if (typeof next !== "number" || next <= cursor) throw new Error("Invalid export cursor");
+						cursor = next;
+					}
 				}
+			} catch (error) {
+				await output.write(
+					`${JSON.stringify({ kind: "error", error: "Export failed", reason: error instanceof Error && "code" in error ? error.code : "export_failed" })}\n`,
+				);
 			}
 		});
 	});
@@ -1036,33 +1046,23 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				{ operation: "memory.list", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
 			);
 			const ownerAccess = readScopeSql("owner", scope.readScope);
-			const embeddingAccess = readScopeSql(
-				"e",
-				{ ...scope.readScope, projects: null },
-				{ visibility: null, memory: "source_id", session: null, source: null },
-			);
-			const embeddingArgs = embeddingAccess.args.map((value) => {
-				if (typeof value !== "string" && typeof value !== "number")
-					throw new Error("Invalid embedding scope parameter");
-				return value;
-			});
 			const stats = await dbOwnerQuery<{ total: number; critical: number; with_embeddings: number } | undefined>(
 				{
 					sql: `SELECT COUNT(*) AS total,
 					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
 					        COALESCE(SUM(CASE WHEN
-					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id${embeddingAccess.sql})
+					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
 					          OR (m.content_hash IS NOT NULL AND EXISTS (
 					            SELECT 1 FROM embeddings e
 					            JOIN memories owner ON owner.id = e.source_id
 					            WHERE e.source_type = 'memory'
 					              AND e.content_hash = m.content_hash
-					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')${ownerAccess.sql}${embeddingAccess.sql}
+					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')${ownerAccess.sql}
 					          ))
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,
-					params: [...embeddingArgs, ...scope.args, ...embeddingArgs, ...whereArgs],
+					params: [...scope.args, ...whereArgs],
 					result: "get",
 				},
 				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
@@ -2217,7 +2217,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			{
 				sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.type, m.importance, m.tags, m.pinned, m.who, m.agent_id,
 				        m.source_id, m.source_type, m.source_path, m.runtime_path,
-				        m.idempotency_key, m.project, NULL AS session_id, m.confidence,
+				        m.project, NULL AS session_id, m.confidence,
 				        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
 				        m.extraction_status, m.embedding_model, m.version,
 				        m.memory_kind, m.created_at, m.updated_at, m.updated_by
@@ -2243,7 +2243,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			...row,
 			sourcePath: row.source_path,
 			runtimePath: row.runtime_path,
-			idempotencyKey: row.idempotency_key,
 			sessionId,
 		});
 	});
