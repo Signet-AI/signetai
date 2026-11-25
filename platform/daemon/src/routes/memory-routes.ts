@@ -1,3 +1,4 @@
+import { dbOwnerEmbeddingDiagnosticsCounts } from "../db-owner-runtime";
 import { getDbOwner } from "../db-owner-runtime";
 import { resolveRouteReadScope } from "./read-scope";
 import { loadProjectionRowsAsync } from "../embedding-projection-owner";
@@ -120,7 +121,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:122",
+			siteToken: "routes/memory-routes.ts:123",
 		}),
 	};
 }
@@ -3569,6 +3570,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 	});
 	app.get("/api/embeddings/status", async (c) => {
+		if (c.get("organization")) {
+			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+			return c.json(await dbOwnerEmbeddingDiagnosticsCounts());
+		}
 		const config = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const status = await checkEmbeddingProvider(config.embedding);
 		const tracker = embeddingTrackerHandle?.getStats() ?? null;
@@ -3584,6 +3590,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return c.json({ ...status, tracker, index });
 	});
 	app.get("/api/embeddings/health", async (c) => {
+		if (c.get("organization")) {
+			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+			return c.json(await dbOwnerEmbeddingDiagnosticsCounts());
+		}
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(

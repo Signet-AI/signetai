@@ -78,12 +78,31 @@ test("real daemon diagnostics and projection preserve hidden-row isolation acros
 			}
 			return bodies;
 		};
+		const countPaths = ["/api/embeddings/status", "/api/embeddings/health"];
+		const globalCounts = async () =>
+			Promise.all(
+				countPaths.map(async (path) => {
+					const response = await request(daemon.origin, path, admin);
+					expect(response.status).toBe(200);
+					const body = record(response.body);
+					expect(Object.keys(body).sort()).toEqual(["counts", "scope", "status"]);
+					expect(body.status).toBe("global_counts");
+					expect(body.scope).toBe("workspace");
+					return record(body.counts);
+				}),
+			);
+		const countBefore = await globalCounts();
 		const before = await snapshot();
 		expect(before[0]).toMatchObject({ count: 3, total: 3 });
 		await daemon.stop();
 		seed(daemon, true);
 		await daemon.start();
 		expect(await snapshot()).toEqual(before);
+		const countAfter = await globalCounts();
+		for (let index = 0; index < countPaths.length; index++) {
+			expect(countAfter[index]?.embeddings).toBe(Number(countBefore[index]?.embeddings) + 1);
+			expect(countAfter[index]?.memories).toBe(Number(countBefore[index]?.memories) + 1);
+		}
 		await daemon.stop();
 		const db = new Database(join(daemon.workspace, "data/signet.db"));
 		try {

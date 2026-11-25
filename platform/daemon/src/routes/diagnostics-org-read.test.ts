@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Principal } from "../auth/principal";
 
 const previousPath = process.env.SIGNET_PATH;
@@ -79,6 +80,36 @@ async function body(path: string, audience = false): Promise<Record<string, unkn
 	expect(response.status).toBe(200);
 	return response.json();
 }
+
+test("embedding status and health expose only documented global counts to administrators", async () => {
+	const paths = ["/api/embeddings/status", "/api/embeddings/health"];
+	const schema = z
+		.object({
+			status: z.literal("global_counts"),
+			scope: z.literal("workspace"),
+			counts: z.object({ embeddings: z.number(), memories: z.number(), pendingJobs: z.number() }).strict(),
+		})
+		.strict();
+	for (const path of paths)
+		expect((await app.request(path, { headers: { "x-test-empty-permissions": "1" } })).status).toBe(403);
+	const before = await Promise.all(paths.map(async (path) => schema.parse(await body(path))));
+	await write(
+		"INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('hidden-diagnostic-only','hidden diagnostic text','default',1,'2090','2090')",
+	);
+	await write(
+		"INSERT INTO embeddings(id,content_hash,chunk_text,source_type,source_id,vector,dimensions,created_at,agent_id,compartment_id) VALUES('hidden-diagnostic-e','hidden-diagnostic-h','hidden chunk','memory','hidden-diagnostic-only',?,2,'2090','default',1)",
+		[{ type: "bytes", base64: Buffer.from(new Float32Array([1, 0]).buffer).toString("base64") }],
+	);
+	const after = await Promise.all(paths.map(async (path) => schema.parse(await body(path))));
+	for (let index = 0; index < paths.length; index++) {
+		expect(after[index]?.counts.embeddings).toBe((before[index]?.counts.embeddings ?? 0) + 1);
+		expect(after[index]?.counts.memories).toBe((before[index]?.counts.memories ?? 0) + 1);
+	}
+	await write("UPDATE memories SET content='edited hidden diagnostic text' WHERE id='hidden-diagnostic-only'");
+	expect(await Promise.all(paths.map(async (path) => schema.parse(await body(path))))).toEqual(after);
+	await write("DELETE FROM embeddings WHERE id='hidden-diagnostic-e'");
+	await write("DELETE FROM memories WHERE id='hidden-diagnostic-only'");
+});
 
 test("unlabelled telemetry is absent unless the reader has all agent and compartment reach", async () => {
 	const paths = [

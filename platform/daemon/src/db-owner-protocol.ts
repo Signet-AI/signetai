@@ -403,6 +403,7 @@ export type DbOwnerRequest =
 			readonly scope?: import("./read-scope").ReadScope;
 	  }
 	| { readonly kind: "reflection_get"; readonly scope: import("./read-scope").ReadScope; readonly id: string }
+	| { readonly kind: "embedding_diagnostics_counts" }
 	| { readonly kind: "diagnostics_schema"; readonly scope?: import("./read-scope").ReadScope }
 	| {
 			readonly kind: "diagnostics_sample";

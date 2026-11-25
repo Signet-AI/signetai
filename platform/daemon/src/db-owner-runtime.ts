@@ -273,6 +273,10 @@ async function executeInlineOwnerRequest(
 				request.scope,
 			),
 		);
+	if (request.kind === "embedding_diagnostics_counts")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./embedding-projection-owner")).readEmbeddingDiagnosticsCountsInOwner(db),
+		);
 	if (request.kind === "reflection_list") {
 		const { readReflectionsInOwner } = await import("./reflection-owner");
 		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
@@ -805,6 +809,15 @@ export async function dbOwnerReviewedEvidence(
 		await getDbOwnerForAccessor(accessor),
 		{ kind: "dreaming_reviewed_read", agentId, scope },
 		{ operation: "dreaming.reviewed.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerEmbeddingDiagnosticsCounts(): Promise<
+	ReturnType<typeof import("./embedding-projection-owner").readEmbeddingDiagnosticsCountsInOwner>
+> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "embedding_diagnostics_counts" },
+		{ operation: "embeddings.diagnostics-counts", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 	);
 }
 export async function dbOwnerReflectionList(

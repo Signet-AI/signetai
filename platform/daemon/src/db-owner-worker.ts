@@ -1326,6 +1326,8 @@ export function runDbOwnerWorker(): void {
 				job.request.agentId,
 				job.request.scope,
 			);
+		if (job.request.kind === "embedding_diagnostics_counts")
+			return (await import("./embedding-projection-owner")).readEmbeddingDiagnosticsCountsInOwner(db);
 		if (job.request.kind === "reflection_list") {
 			const { readReflectionsInOwner } = await import("./reflection-owner");
 			return readReflectionsInOwner(db, job.request.scope, job.request.input);
