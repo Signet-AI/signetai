@@ -1,3 +1,4 @@
+import { compartmentForWrite } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
@@ -239,14 +240,16 @@ function invalidateDerivedMemoriesForMemoryInTx(
 	});
 }
 export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
+	if (!mem.agentId) throw new Error("agent_required");
+	const compartment = compartmentForWrite(db, { agentId: mem.agentId, memoryId: mem.id, sourceId: mem.sourceId });
 	db.prepare(
 		`INSERT INTO memories
 		 (id, content, normalized_content, content_hash, who, why, project,
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
 		  source_type, source_id, source_path, runtime_path, idempotency_key, scope, agent_id, visibility,
-		  memory_kind, evidence_meta, review_after)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  memory_kind, evidence_meta, review_after,compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -272,11 +275,12 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.runtimePath ?? null,
 		mem.idempotencyKey ?? null,
 		mem.scope ?? null,
-		mem.agentId ?? "default",
+		mem.agentId,
 		mem.visibility ?? "global",
 		mem.memoryKind ?? null,
 		mem.evidenceMeta ?? null,
 		mem.reviewAfter ?? null,
+		compartment,
 	);
 	return mem.id;
 }

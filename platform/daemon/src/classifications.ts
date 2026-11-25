@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { DbOwnerError } from "./db-owner-client";
 import type { AudienceSubject, ReadScope } from "./read-scope";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
@@ -67,8 +69,12 @@ export type ClassificationRequest =
 			readonly cursor: string | null;
 			readonly scope: ReadScope;
 	  }
-	| { readonly op: "rebuild"; readonly agentId?: string }
-	| { readonly op: "recover" };
+	| {
+			readonly op: "rebuild";
+			readonly agentId?: string;
+			readonly cursor?: { table: number; rowid: number; updated: number };
+	  }
+	| { readonly op: "recover"; readonly cursor?: string };
 export async function classificationRequest<Result>(request: ClassificationRequest): Promise<Result> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
 	return owner.submit<Result>(
@@ -82,8 +88,18 @@ export async function classificationRequest<Result>(request: ClassificationReque
 		},
 	).result;
 }
-export function rebuildCompartments(agentId?: string): Promise<{ updated: number }> {
-	return classificationRequest({ op: "rebuild", ...(agentId === undefined ? {} : { agentId }) });
+export async function rebuildCompartments(agentId?: string): Promise<{ updated: number }> {
+	let cursor: { table: number; rowid: number; updated: number } | undefined;
+	for (;;) {
+		const result = await classificationRequest<{ updated: number; cursor: typeof cursor | null }>({
+			op: "rebuild",
+			...(agentId === undefined ? {} : { agentId }),
+			...(cursor === undefined ? {} : { cursor }),
+		});
+		if (result.cursor === null) return { updated: result.updated };
+		cursor = result.cursor;
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	}
 }
 export async function classify(
 	target: ClassificationTarget,
@@ -113,10 +129,42 @@ export async function executeClassificationJob(
 	jobId: string,
 	request: (request: ClassificationRequest) => Promise<unknown> = classificationRequest,
 ): Promise<void> {
-	try {
-		await request({ op: "execute", jobId });
-	} catch (error) {
-		await request({ op: "fail", jobId, error: error instanceof Error ? error.message : "classification_failed" });
-		throw error;
+	let retries = 0;
+	for (;;) {
+		let value: unknown;
+		try {
+			value = await request({ op: "execute", jobId });
+			retries = 0;
+		} catch (error) {
+			if (
+				error instanceof DbOwnerError &&
+				(error.code === "DB_OWNER_DIED" ||
+					error.code === "DB_OWNER_DEADLINE" ||
+					error.code === "DB_OWNER_QUEUE_FULL") &&
+				retries < 5
+			) {
+				await new Promise<void>((resolve) => setTimeout(resolve, 100 * 2 ** retries));
+				retries++;
+				continue;
+			}
+			throw error;
+		}
+		const result = jobResult.parse(value);
+		if (result.status === "complete") return;
+		await new Promise<void>((resolve) => setTimeout(resolve, result.status === "pending" ? 50 : 0));
+	}
+}
+const jobResult = z.object({ status: z.enum(["pending", "running", "complete"]) });
+const recoveryResult = z.object({ jobs: z.array(z.string()), nextCursor: z.string().nullable() });
+export async function resumeClassificationJobs(
+	request: (request: ClassificationRequest) => Promise<unknown> = classificationRequest,
+): Promise<void> {
+	let cursor: string | undefined;
+	for (;;) {
+		const result = recoveryResult.parse(await request({ op: "recover", ...(cursor === undefined ? {} : { cursor }) }));
+		for (let start = 0; start < result.jobs.length; start += 4)
+			await Promise.all(result.jobs.slice(start, start + 4).map((id) => executeClassificationJob(id, request)));
+		if (result.nextCursor === null) return;
+		cursor = result.nextCursor;
 	}
 }

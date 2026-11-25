@@ -53,7 +53,7 @@ test("new vectors inherit their memory label and profile rebuilds preserve shard
 	);
 	executeClassification(db, { op: "execute", jobId });
 	db.prepare(
-		"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text) VALUES('emb','hash','memory','m',?,3,'now','default','chunk')",
+		"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text,compartment_id) VALUES('emb','hash','memory','m',?,3,'now','default','chunk',(SELECT compartment_id FROM memories WHERE id='m'))",
 	).run(new Float32Array([1, 0, 0]));
 	syncEmbeddingCompartment(db, "embeddings", "emb");
 	const c = db.prepare("SELECT compartment_id FROM embeddings WHERE id='emb'").get()?.compartment_id;

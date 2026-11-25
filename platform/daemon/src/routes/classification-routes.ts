@@ -89,7 +89,18 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		)
 			return reply({ error: "Forbidden", reason }, 403);
 		if (error instanceof z.ZodError) return reply({ error: "Invalid request", reason: "invalid_request" }, 400);
-		if (reason === "archived_classification" || reason === "principal_not_found") return reply({ error: reason }, 409);
+		if (["archived_classification", "principal_not_found", "name_conflict", "job_not_pending"].includes(reason))
+			return reply({ error: reason }, 409);
+		if (
+			["invalid_cursor", "invalid_job", "too_many_principals", "unsupported_classification_operation"].includes(
+				reason,
+			) ||
+			error instanceof SyntaxError
+		)
+			return reply(
+				{ error: "Invalid request", reason: error instanceof SyntaxError ? "invalid_request" : reason },
+				400,
+			);
 		throw error;
 	});
 	app.get("/api/classifications", async (c) => reply(await request({ op: "list", actor: actor(c).actor })));
@@ -154,6 +165,7 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 	for (const op of ["apply", "remove"] as const)
 		app.post(`/api/classifications/:id/${op}`, async (c) => {
 			const principal = actor(c);
+			if (principal.actor.compliance && !principal.canClassify) throw new Error("permission");
 			const a = { ...principal.actor, compliance: principal.actor.compliance && principal.canClassify },
 				body = z
 					.object({ target })

@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { deleteCompartmentVectors, syncEmbeddingCompartment, activeVectorProjectionTable } from "@signet/core";
+import { attempt, deleteCompartmentVectors, syncEmbeddingCompartment, activeVectorProjectionTable } from "@signet/core";
 import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
 let native: typeof import("@signet/native") | null = null;
 try {
@@ -49,8 +49,7 @@ export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly
 	invalidateUmapCache(db);
 	const table = activeVecTable(db);
 	if (table === null) return;
-	void vector;
-	syncEmbeddingCompartment(db, "embeddings", embeddingId, table);
+	attempt(() => syncEmbeddingCompartment(db, "embeddings", embeddingId, table, new Float32Array(vector)));
 }
 export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly string[]): boolean {
 	if (embeddingIds.length === 0) return true;

@@ -45,6 +45,7 @@ export function removeAgentInTx(db: WriteDb, input: AgentRemovalInput): AgentRem
 	const rows: Rows = {};
 	if (input.mode === "purge") purgeAgentRowsInTx(db, input, rows);
 	else archiveAgentRowsInTx(db, input, rows);
+	deleteCounted(db, rows, "classification_assignments", "agent_id = ?", [input.agentId]);
 	deleteCounted(db, rows, "agents", "id = ?", [input.agentId]);
 	return { status: "removed", mode: input.mode, rows };
 }

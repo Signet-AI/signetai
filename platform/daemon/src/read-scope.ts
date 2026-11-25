@@ -20,7 +20,7 @@ function identifier(value: string): string {
 export function readScopeSql(
 	alias: string,
 	scope: ReadScope,
-	cols?: { agent?: string; compartment?: string; project?: string; visibility?: string | null },
+	cols?: { agent?: string; compartment?: string; project?: string; visibility?: string | null; checkpoint?: boolean },
 ): { sql: string; args: unknown[] } {
 	const prefix = alias ? `${identifier(alias)}.` : "";
 	const col = (name: string) => `${prefix}${identifier(name)}`;
@@ -31,8 +31,14 @@ export function readScopeSql(
 	const args: unknown[] = [];
 	const clauses: string[] = [];
 	const reach = scope.reach;
-	if (reach.kind === "all") clauses.push(`${agent} IN (SELECT id FROM agents WHERE archived_at IS NULL)`);
-	else if (reach.kind === "shared") {
+	if (reach.kind === "all") {
+		const active = `${agent} IN (SELECT id FROM agents WHERE archived_at IS NULL)`;
+		clauses.push(
+			cols?.checkpoint
+				? `(${active} OR (${agent} IS NULL AND EXISTS(SELECT 1 FROM session_transcripts t WHERE t.session_key=${col("session_key")}) AND NOT EXISTS(SELECT 1 FROM (SELECT agent_id FROM session_transcripts WHERE session_key=${col("session_key")} UNION SELECT agent_id FROM session_claims WHERE session_key=${col("session_key")}) owners LEFT JOIN agents a ON a.id=owners.agent_id WHERE a.id IS NULL OR a.archived_at IS NOT NULL)))`
+				: active,
+		);
+	} else if (reach.kind === "shared") {
 		if (!visibility) throw new Error("shared reach requires visibility");
 		clauses.push(`(${visibility} = 'global' OR ${agent} = ?)`);
 		args.push(reach.agentId);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resumeClassificationJobs } from "./classifications";
 import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
@@ -2611,7 +2612,16 @@ async function main() {
 	startFdPollMonitor();
 
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+	if (!migrationIntegrityWritesBlocked) {
+		runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+		void resumeClassificationJobs().catch((error) =>
+			logger.error(
+				"startup-recovery",
+				"Classification recovery stopped; durable jobs remain resumable",
+				error instanceof Error ? error : new Error(String(error)),
+			),
+		);
+	}
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");

@@ -1,5 +1,10 @@
 import { projectEmbeddingRows } from "./embedding-projection";
-import { vectorShardSwapStatements, resetCompartmentVectorShards, syncEmbeddingCompartment } from "@signet/core";
+import {
+	compartmentForWrite,
+	vectorShardSwapStatements,
+	resetCompartmentVectorShards,
+	syncEmbeddingCompartment,
+} from "@signet/core";
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, DbWriteQueueFullError, type ReadDb, type WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -768,7 +773,7 @@ async function stageEmbeddingBatchThroughOwner(input: {
 			input.owner,
 			[
 				{
-					sql: `UPDATE embeddings_staging SET vector = ?, dimensions = ?, source_type = ?, source_id = ?, chunk_text = ?, created_at = datetime('now'), agent_id = ? WHERE content_hash = ? AND EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)`,
+					sql: `UPDATE embeddings_staging SET vector = ?, dimensions = ?, source_type = ?, source_id = ?, chunk_text = ?, created_at = datetime('now'), agent_id = ?,compartment_id=? WHERE content_hash = ? AND EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)`,
 					params: [
 						vectorToBlob(vector),
 						vector.length,
@@ -776,13 +781,18 @@ async function stageEmbeddingBatchThroughOwner(input: {
 						row.source_id,
 						row.chunk_text,
 						row.agent_id,
+						{
+							type: "compartment",
+							scope: { agentId: row.agent_id, sourceId: row.source_id },
+							...(row.source_type === "memory" ? { parentMemoryId: row.source_id } : {}),
+						},
 						row.content_hash,
 						row.content_hash,
 					],
 				},
 				{
-					sql: `INSERT INTO embeddings_staging (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-					SELECT ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?
+					sql: `INSERT INTO embeddings_staging (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+					SELECT ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?,?
 					WHERE EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)
 					AND NOT EXISTS (SELECT 1 FROM embeddings_staging WHERE content_hash = ?)`,
 					params: [
@@ -794,19 +804,26 @@ async function stageEmbeddingBatchThroughOwner(input: {
 						row.source_id,
 						row.chunk_text,
 						row.agent_id,
+						{
+							type: "compartment",
+							scope: { agentId: row.agent_id, sourceId: row.source_id },
+							...(row.source_type === "memory" ? { parentMemoryId: row.source_id } : {}),
+						},
 						row.content_hash,
 						row.content_hash,
 					],
 				},
 			],
-			ownerMaintenanceOptions("embedding-index.stage.write", 3),
+			{
+				...ownerMaintenanceOptions("embedding-index.stage.write", 3),
+				embeddingProjection: {
+					store: "embeddings_staging",
+					projection: vectorTable,
+					ids: [],
+					contentHashes: [row.content_hash],
+				},
+			},
 		);
-		await projectEmbeddingRows(input.owner, {
-			store: "embeddings_staging",
-			projection: vectorTable,
-			ids: [],
-			contentHashes: [row.content_hash],
-		});
 		if (results.some((result) => result.changes > 0)) staged++;
 	}
 	return { staged, coverage: await ownerStagingCoverage(input.owner, profile.dimensions, profile.fingerprint) };
@@ -940,15 +957,21 @@ export async function stageEmbeddingBatch(input: {
 			);
 		}
 		await withQueuedWrite(input.accessor, (db) => {
+			if (!row.agent_id) throw new Error("agent_required");
+			const c = compartmentForWrite(db, {
+				agentId: row.agent_id,
+				sourceId: row.source_id,
+				memoryId: row.source_type === "memory" ? row.source_id : undefined,
+			});
 			const id = randomUUID();
 			db.prepare(
 				`INSERT INTO embeddings_staging
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?,?)
 				 ON CONFLICT(content_hash) DO UPDATE SET
 				   vector = excluded.vector, dimensions = excluded.dimensions, source_type = excluded.source_type,
 				   source_id = excluded.source_id, chunk_text = excluded.chunk_text, created_at = excluded.created_at,
-				   agent_id = excluded.agent_id`,
+				   agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 			).run(
 				id,
 				row.content_hash,
@@ -958,6 +981,7 @@ export async function stageEmbeddingBatch(input: {
 				row.source_id,
 				row.chunk_text,
 				row.agent_id,
+				c,
 			);
 			const stored = db.prepare("SELECT id FROM embeddings_staging WHERE content_hash = ?").get(row.content_hash) as
 				| { id: string }

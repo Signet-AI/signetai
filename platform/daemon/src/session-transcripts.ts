@@ -1513,13 +1513,22 @@ export function writeSessionTranscriptRow(
 	const hasCompleted = cols.some((col) => col.name === "completed_at");
 	const hasHash = cols.some((col) => col.name === "content_hash");
 	const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
-	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
-	const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
+	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at", "compartment_id"];
+	const values: unknown[] = [
+		sessionKey,
+		retainedTranscript,
+		harness,
+		project,
+		agentId,
+		now,
+		compartmentForWrite(db, { agentId, sessionKey }),
+	];
 	const updates = [
 		"content = excluded.content",
 		"harness = excluded.harness",
 		"project = COALESCE(excluded.project, session_transcripts.project)",
 		"agent_id = excluded.agent_id",
+		"compartment_id = excluded.compartment_id",
 	];
 	const sameContent = hasHash
 		? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"

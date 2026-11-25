@@ -16,7 +16,17 @@ export const VECTOR_REPAIR_MAX_WORK_UNITS_PER_BATCH = 100;
 export type DbOwnerCancellation = "pending" | "requested" | "started";
 export type DbOwnerOutcome = "completed" | "cancelled" | "timed_out" | "failed" | "owner_died";
 
-export type DbOwnerParameter = string | number | boolean | null | { readonly type: "bytes"; readonly base64: string };
+export type DbOwnerParameter =
+	| string
+	| number
+	| boolean
+	| null
+	| { readonly type: "bytes"; readonly base64: string }
+	| {
+			readonly type: "compartment";
+			readonly scope: import("@signet/core").CompartmentWriteScope;
+			readonly parentMemoryId?: string;
+	  };
 
 export interface DbOwnerStatement {
 	readonly sql: string;
@@ -354,6 +364,7 @@ export type DbOwnerRequest =
 			readonly kind: "batch";
 			readonly statements: readonly DbOwnerStatement[];
 			readonly requireChanges?: boolean;
+			readonly embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest;
 	  }
 	| {
 			readonly kind: "recall";

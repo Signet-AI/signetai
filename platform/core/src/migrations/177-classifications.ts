@@ -176,6 +176,10 @@ function installWriteGuards(db: MigrationDb): void {
 		const required = [
 			`SELECT a.classification_id FROM classification_assignments a WHERE a.agent_id=new.agent_id AND (${match.join(" OR ")})`,
 		];
+		if (table === "session_checkpoints")
+			required.push(
+				`SELECT a.classification_id FROM classification_assignments a WHERE new.agent_id IS NULL AND a.agent_id IN (SELECT agent_id FROM session_transcripts WHERE session_key=new.session_key UNION SELECT agent_id FROM session_claims WHERE session_key=new.session_key) AND (a.target_kind='agent' OR (a.target_kind='session' AND a.target_id=new.session_key) OR (a.target_kind='source' AND a.target_id IN (SELECT source_id FROM session_transcripts WHERE session_key=new.session_key AND agent_id=a.agent_id)))`,
+			);
 		if (table === "memory_hints" || table.startsWith("embeddings"))
 			required.push(
 				`SELECT cm.classification_id FROM memories p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.agent_id=new.agent_id AND p.id=${memory}`,
@@ -261,6 +265,26 @@ export function up(db: MigrationDb): void {
 		)
 			db.exec(
 				`ALTER TABLE ${store} ADD COLUMN projection_compartment_id INTEGER;UPDATE ${store} SET projection_compartment_id=compartment_id`,
+			);
+	if (exists(db, "org_jobs"))
+		db.exec(
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_classification_job_agent ON org_jobs(CASE WHEN json_valid(params_json) THEN json_extract(params_json,'$.target.agentId') END) WHERE status='running' AND kind IN ('classify','unclassify')",
+		);
+	if (exists(db, "memory_head_revision_entries"))
+		db.exec(
+			"CREATE INDEX IF NOT EXISTS idx_head_revision_citation ON memory_head_revision_entries(agent_id,json_array(revision,entry_id))",
+		);
+	if (exists(db, "session_recall_events"))
+		db.exec(
+			"CREATE INDEX IF NOT EXISTS idx_session_recall_citation ON session_recall_events(agent_id,json_array(session_key,context_epoch,item_kind,item_id))",
+		);
+	for (const [table, kind, key] of [
+		["memories", "memory", "id"],
+		["session_transcripts", "session", "session_key"],
+	])
+		if (table && kind && key && exists(db, table))
+			db.exec(
+				`CREATE TRIGGER IF NOT EXISTS ${table}_classification_cascade AFTER DELETE ON ${table} BEGIN DELETE FROM classification_assignments WHERE target_kind='${kind}' AND target_id=old.${key} AND agent_id=old.agent_id;END`,
 			);
 	installWriteGuards(db);
 	backfillEvidenceCitations(db);
