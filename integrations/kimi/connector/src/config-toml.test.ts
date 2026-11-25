@@ -223,19 +223,15 @@ describe("KimiConnector.install — config.toml hook registration", () => {
 		expect(content.match(/\[\[hooks\]\]/g)?.length).toBe(4);
 	});
 
-	test("prefixes hook commands with remote daemon env when SIGNET_DAEMON_URL is configured", async () => {
+	test("keeps remote target selection out of hook commands", async () => {
 		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
 
 		await connector().install(tempHome);
 
 		const content = readFileSync(configPath, "utf-8");
-		expect(content).toContain(
-			"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-start -H kimi --kimi-json",
-		);
-		expect(content).toContain(
-			"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook user-prompt-submit -H kimi --kimi-json",
-		);
-		expect(content).toContain("SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-end -H kimi");
+		expect(content).toContain("signet hook session-start -H kimi --kimi-json");
+		expect(content).toContain("signet hook user-prompt-submit -H kimi --kimi-json");
+		expect(content).toContain("signet hook session-end -H kimi");
 	});
 });
 
@@ -245,7 +241,7 @@ describe("KimiConnector.install — mcp.json registration", () => {
 
 		expect(existsSync(mcpPath)).toBe(true);
 		const json = readMcpJson();
-		expect(json.mcpServers).toEqual({ signet: { command: "signet-mcp", args: [] } });
+		expect(json.mcpServers).toEqual({ signet: { command: "signet", args: ["connector", "mcp", "kimi"] } });
 	});
 
 	test("registers the running native Signet binary as the MCP worker", async () => {
@@ -260,7 +256,7 @@ describe("KimiConnector.install — mcp.json registration", () => {
 		}
 
 		expect(readMcpJson().mcpServers).toEqual({
-			signet: { command: nativeBinary, args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } },
+			signet: { command: nativeBinary, args: ["connector", "mcp", "kimi"] },
 		});
 	});
 
@@ -276,7 +272,7 @@ describe("KimiConnector.install — mcp.json registration", () => {
 		expect(json.theme).toBe("dark");
 		expect(json.mcpServers).toEqual({
 			other: { command: "other-mcp", args: ["--flag"] },
-			signet: { command: "signet-mcp", args: [] },
+			signet: { command: "signet", args: ["connector", "mcp", "kimi"] },
 		});
 	});
 

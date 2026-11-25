@@ -121,7 +121,7 @@ export function buildKimiHookEntries(
 		withRemoteDaemonEnv(
 			renderCommand({
 				command: signetArgs[0] ?? "signet",
-				args: [...signetArgs.slice(1), "hook", subcommand, "-H", "kimi"],
+				args: [...signetArgs.slice(1), "hook", subcommand, "-H", "kimi", ...(kimiJson ? ["--kimi-json"] : [])],
 			}),
 			remoteDaemonUrl,
 			apiKey,
