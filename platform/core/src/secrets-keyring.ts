@@ -68,6 +68,7 @@ const observations = new Map<string, SecretKeyringResult>();
 let adapterForTests: SecretKeyringAdapter | null = null;
 let helperForTests: SecretKeyringHelperOverride | null = null;
 let interactiveRequest = false;
+let activeHelpers = 0;
 let mutation: Promise<void> = Promise.resolve();
 
 function workspaceAccount(workspace: string): string {
@@ -153,6 +154,8 @@ async function invoke(
 	const interactive = process.platform === "darwin" && options.allowInteraction === true;
 	if (interactive && interactiveRequest)
 		return { state: "unavailable", message: "A keychain authorization request is already in progress" };
+	if (activeHelpers >= MAX_ACCOUNTS)
+		return { state: "unavailable", message: "Native keyring helper admission limit reached" };
 	const helper = helperCommand();
 	const child = spawnHidden(helper.command, helper.args, {
 		stdio: ["pipe", "pipe", "ignore"],
@@ -161,6 +164,7 @@ async function invoke(
 			...(process.env.SIGNET_COMPILED_NATIVE === "1" ? { SIGNET_KEYRING_HELPER: "1" } : {}),
 		},
 	});
+	activeHelpers++;
 	if (interactive) interactiveRequest = true;
 	const request = `${JSON.stringify({ op, service, account, ...(op === "set" ? { value } : {}), ...(interactive ? { allowInteraction: true } : {}) })}\n`;
 	return await new Promise<SecretKeyringResult>((resolve) => {
@@ -172,6 +176,7 @@ async function invoke(
 		const finish = (result: SecretKeyringResult): void => {
 			if (settled) return;
 			settled = true;
+			activeHelpers--;
 			options.signal?.removeEventListener("abort", cancel);
 			if (interactive) interactiveRequest = false;
 			resolve(result);
@@ -284,6 +289,13 @@ class NativeSecretKeyringAdapter implements SecretKeyringAdapter {
 		);
 		return result;
 	}
+}
+
+export function credentialKeyring(service: string, account: string): Pick<SecretKeyringAdapter, "get" | "set"> {
+	return {
+		get: (options = {}) => invoke("get", service, account, undefined, options),
+		set: (value) => invoke("set", service, account, value),
+	};
 }
 
 export function getSecretKeyring(workspace: string): SecretKeyringAdapter {
