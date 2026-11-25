@@ -306,3 +306,22 @@ describe("concurrency admission", () => {
 		expect(await (await app.request("/user")).text()).toBe("alice");
 	});
 });
+
+it("organization principals share a user bucket across credentials, ignoring legacy claims", async () => {
+	const app = new Hono();
+	app.use("*", async (c, next) => {
+		c.set("principal", {
+			kind: "user",
+			userId: "usr_alice",
+			credential: { kind: "api_key", id: c.req.header("x-credential") },
+		});
+		c.set("auth", {
+			authenticated: true,
+			claims: { sub: c.req.header("x-credential"), scope: { user: "spoofed-user" } },
+		});
+		await next();
+	});
+	app.get("/bucket", (c) => c.text(admissionKey(c)));
+	for (const key of ["key-one", "key-two"])
+		expect(await (await app.request("/bucket", { headers: { "x-credential": key } })).text()).toBe("usr_alice");
+});

@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import type { Principal } from "./auth/principal";
 
 export type Release = () => void;
 export interface Refusal {
@@ -22,6 +23,8 @@ interface Waiter {
 }
 
 export function admissionKey(c: Context): string {
+	const principal: Principal | undefined = c.get("principal");
+	if (principal?.kind === "user" && principal.userId) return principal.userId;
 	const auth = c.get("auth");
 	if (!auth?.authenticated) return "local";
 	return auth.claims?.scope.user ?? auth.claims?.sub ?? "anonymous-credential";

@@ -17,7 +17,14 @@ export function createAgentMessage(input: CreateAgentMessageInput) {
 			for (const statement of agentMessageWriteStatements(row, input.author)) {
 				const prepared = db.prepare(statement.sql);
 				try {
-					const result = prepared.run(...(statement.params ?? []));
+					const params = (statement.params ?? []).map((value) => {
+						if (value !== null && typeof value === "object") {
+							if (value.type === "bytes") return Buffer.from(value.base64, "base64");
+							throw new Error("Agent-message fixture does not support compartment parameters");
+						}
+						return value;
+					});
+					const result = prepared.run(...params);
 					if (statement.requireChanges && result.changes === 0) throw new AgentMessageCapacityError();
 				} finally {
 					prepared.finalize();

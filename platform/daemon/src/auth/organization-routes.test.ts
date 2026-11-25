@@ -1101,3 +1101,30 @@ describe("organization HTTP flows", () => {
 		).toBe(403);
 	});
 });
+
+test("effective access reports only the target user's direct and group classification audiences", async () => {
+	const root = await claim();
+	const { organizationWrite } = await import("./organization-store");
+	await organizationWrite([
+		statement("INSERT INTO groups(id,name) VALUES ('grp_access','Access')"),
+		statement("INSERT INTO group_members(group_id,user_id,role) VALUES ('grp_access',?,'member')", [root.user.id]),
+		statement(
+			"INSERT INTO classifications(id,name) VALUES ('cls_direct','Direct'),('cls_group','Group'),('cls_hidden','Hidden')",
+		),
+		statement(
+			"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES ('cls_direct','user',?),('cls_group','group','grp_access')",
+			[root.user.id],
+		),
+	]);
+	const response = await call(`/api/org/access/${root.user.id}`);
+	expect(response.status).toBe(200);
+	const result = await response.json();
+	expect(result.readableClassifications.map((item: { id: string }) => item.id).sort()).toEqual([
+		"cls_direct",
+		"cls_group",
+	]);
+	expect(result.readableClassifications.every((item: { why: string }) => item.why.length > 0)).toBe(true);
+	await organizationWrite([statement("DELETE FROM group_members WHERE group_id='grp_access'")]);
+	const revoked = await (await call(`/api/org/access/${root.user.id}`)).json();
+	expect(revoked.readableClassifications.map((item: { id: string }) => item.id)).toEqual(["cls_direct"]);
+});

@@ -1,7 +1,7 @@
 import { attemptAsync } from "@signet/core";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { resolveReadScope, readVisibilitySchema } from "../read-scope";
+import { resolveReadScope, readVisibilitySchema, audienceSubjectFromPrincipal } from "../read-scope";
 import {
 	classificationRequest,
 	executeClassificationJob,
@@ -65,9 +65,7 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		const p = result.data;
 		return {
 			actor: {
-				userId: p.userId,
-				groupIds: p.groupIds,
-				local: p.kind === "local",
+				...audienceSubjectFromPrincipal(p),
 				compliance: p.compliance,
 				boundAgentId: p.boundAgentId,
 				allowedProjects: p.allowedProjects,
@@ -140,8 +138,8 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 			body = update.parse(await c.req.json());
 		return reply(await request({ op: "update", actor: a, id: c.req.param("id"), ...body }));
 	});
-	for (const op of ["audience", "appliers"] as const)
-		app.put(`/api/classifications/:id/${op}`, async (c) => {
+	for (const audienceOp of ["audience", "appliers"] as const)
+		app.put(`/api/classifications/:id/${audienceOp}`, async (c) => {
 			const principal = actor(c);
 			if (!principal.canClassify) throw new Error("permission");
 			const a = principal.actor,
@@ -149,7 +147,7 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 					.array(person)
 					.max(1000)
 					.parse(await c.req.json());
-			return reply(await request({ op, actor: a, id: c.req.param("id"), principals }));
+			return reply(await request({ op: audienceOp, actor: a, id: c.req.param("id"), principals }));
 		});
 	app.post("/api/classifications/:id/preview", async (c) => {
 		const a = actor(c),

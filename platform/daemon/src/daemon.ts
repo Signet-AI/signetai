@@ -325,7 +325,7 @@ import {
 	sourceFailureClass,
 	trackSourceLifecycleWrite,
 } from "./source-lifecycle-telemetry";
-import { getStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
+import { getStartupRecoveryCompletion, observeStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
 import { isReadyResponse } from "./synthesis-worker-protocol";
 import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
 import {

@@ -37,7 +37,6 @@ import {
 	refreshMemoriesFtsState,
 	resolveSqliteJournalConfig,
 	resolveWorkspacePath,
-	activeVectorProjectionTable,
 	syncEmbeddingCompartment,
 	missingCompartmentVectorSql,
 	runMigrations,
