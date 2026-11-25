@@ -256,7 +256,21 @@ export function resolveHarnessMcpCommand(
 ): ResolvedCommand {
 	if (!/^[a-z][a-z0-9-]{0,63}$/.test(harness)) throw new Error("Invalid MCP harness");
 	const cli = resolveSignetCliCommand(cliFromMcp(existing), runtime);
-	return { command: cli.command, args: [...cli.args, "connector", "mcp", harness] };
+	const owned = new Set([
+		"SIGNET_API_KEY",
+		"SIGNET_TOKEN",
+		"SIGNET_API_KEY_FILE",
+		"SIGNET_DAEMON_URL",
+		"SIGNET_AGENT_ID",
+		"SIGNET_AGENT_WORKSPACE",
+		"SIGNET_MCP_STDIO_WORKER",
+	]);
+	const env = Object.fromEntries(Object.entries(existing?.env ?? {}).filter(([key]) => !owned.has(key)));
+	return {
+		command: cli.command,
+		args: [...cli.args, "connector", "mcp", harness],
+		...(Object.keys(env).length ? { env } : {}),
+	};
 }
 export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const MANAGED_AGENT_ID_DEFAULT = "default";

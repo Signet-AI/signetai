@@ -144,38 +144,56 @@ for other agents.
 
 ---
 
-## `signet connector`
-
-Install portable harness connectors. Use `signet connect <harness>` as a short
-alias for `signet connector install <harness>`. For a start-to-finish remote
-machine setup, see [Remote Harness Connectors](/remote-connectors/).
+## Login and session management
 
 ```bash
+signet login --url https://signet.example.com
+signet login --url https://signet.example.com --device-code
+signet whoami --json
+signet auth devices
+signet auth sessions
+signet auth devices revoke <id>
+signet auth sessions revoke <id>
+signet logout
+signet logout --all
+```
+
+Login opens a browser approval page and prints its user code. `--device-code`
+prints the URL without opening a browser. The login store saves the refresh
+credential privately; it is never printed. `whoami` reports identity, target URL,
+and credential source, not credential contents. Local mode needs no login.
+
+## `signet connect`, `signet disconnect`, and `signet connector`
+
+```bash
+signet connect codex --agent alice
 signet connector install pi
-signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
-signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-# For a Codex client scoped to one agent:
-signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
-signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connector list --json
+signet connector rotate codex
+signet connector doctor --json
+signet disconnect codex
+signet connect hermes-agent --profile work --agent alice
 ```
 
-Connector installers are also published as individual npm packages for machines
-where you only want to configure one harness:
+`connector install` is the compatibility spelling of `connect`. A team target
+requires your signed-in user session. Connect provisions a harness key, stores
+it in a private key file, and installs credential-free integration files.
+Disconnect revokes that key before removing local integration and registry
+state. An unreachable server leaves local state available for retry. Rotation
+revokes the previous key before provisioning a replacement; reconnect if the
+replacement could not be installed.
 
-```bash
-npx -y @signetai/connector-pi install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
-npx -y @signetai/connector-opencode install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id opencode-work-laptop
-npx -y @signetai/connector-codex install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-```
+Connect, install, rotate, and disconnect accept `--url`, `--agent`, `--profile`
+(for Hermes), and `--json`. `--agent-id` is a compatibility spelling of `--agent`.
+When automation supplies a credential, use `--api-key-stdin` with piped input,
+never an argv key. Team provisioning still requires a user session, not a
+connector key.
 
-For Codex, `@signetai/codex-plugin` is the native-plugin-oriented installer name.
-It writes the same generated Codex plugin marketplace bundle and compatibility
-hook/MCP config as `signet connect codex`:
-
-```bash
-npx -y @signetai/codex-plugin install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-# Use a key created with --agent-id <agent-name> to scope this Codex install to that agent.
-```
+List reports validity, expiry, and available last-used metadata. Doctor checks
+inline credentials, private-file permissions, credential validity, outbox
+pending/quarantine state, and unassigned legacy keys. Unknown or unavailable
+checks stay visible. See [Remote Harness Connectors](/remote-connectors/) for
+profile isolation, recovery, and the complete supported-harness list.
 
 ---
 

@@ -138,7 +138,9 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 			);
 			continue;
 		}
-		const entry = (await new ConnectorRegistry({ env }).read())[harness === "hermes" ? "hermes-agent" : harness];
+		const entries = Object.values(await new ConnectorRegistry({ env }).read());
+		assert.equal(entries.length, 1, `${harness}: unexpected registry partition count`);
+		const entry = entries[0];
 		assert(entry?.keyFile, `${harness}: no registry key file`);
 		const secret = await readKeyFile(entry.keyFile);
 		const prefix = secret.slice("sig_sk_".length).split("_")[0];

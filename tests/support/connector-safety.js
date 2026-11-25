@@ -15,6 +15,7 @@ export function guardedTestEnvironment(value = process.env) {
 	return {
 		...env,
 		SIGNET_TEST_BLOCKED_FETCHES: journal,
+		PYTHONDONTWRITEBYTECODE: "1",
 		BUN_OPTIONS: `--preload ${preload} ${env.BUN_OPTIONS ?? ""}`,
 		NODE_OPTIONS: `--require ${preload} ${env.NODE_OPTIONS ?? ""}`,
 		PYTHONPATH: `${python}${env.PYTHONPATH ? delimiter + env.PYTHONPATH : ""}`,

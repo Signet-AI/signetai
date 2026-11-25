@@ -12,6 +12,7 @@ Configuration resolution:
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -111,9 +112,14 @@ class SignetClient:
     """HTTP client for the Signet daemon API."""
 
     def __init__(self, agent_id: str = "", harness: str = "hermes-agent", *, env=None):
-        self._env = dict(env) if env is not None else {key: os.environ[key] for key in ("HOME", "APPDATA") if key in os.environ}
-        target = resolve_target(harness=harness, env=self._env)
-        entry = ConnectorRegistry(env=self._env).read().get(harness, {})
+        self._env = dict(env) if env is not None else {key: os.environ[key] for key in ("HOME", "APPDATA", "HERMES_HOME") if key in os.environ}
+        registry_harness = harness
+        profile_home = self._env.get("HERMES_HOME")
+        default_home = os.path.join(self._env.get("HOME") or os.path.expanduser("~"), ".hermes")
+        if harness == "hermes-agent" and profile_home and os.path.abspath(profile_home) != os.path.abspath(default_home):
+            registry_harness = harness + "." + hashlib.sha256(os.path.abspath(profile_home).encode()).hexdigest()[:16]
+        target = resolve_target(harness=registry_harness, env=self._env)
+        entry = ConnectorRegistry(env=self._env).read().get(registry_harness, {})
         self._base_url = target.url
         self._agent_id = entry.get("agentId") or agent_id
         self._harness = harness

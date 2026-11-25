@@ -34,7 +34,12 @@ export async function inspectConnectorFiles(
 				continue;
 			}
 			const content = await readFile(path, "utf8");
-			if (/sig_(?:sk|ses|ref)_[A-Za-z0-9_.-]{8,}/.test(content)) inlineKeyFiles.push(path);
+			if (
+				/sig_(?:sk|ses|ref)_[A-Za-z0-9_.-]{8,}/.test(content) ||
+				/(?:^|[\s"'])SIGNET_(?:API_KEY|TOKEN)\s*=\s*["']?[A-Za-z0-9_./+=:-]+/m.test(content) ||
+				/["']SIGNET_(?:API_KEY|TOKEN)["']\s*:\s*["'][^"'\s]+["']/.test(content)
+			)
+				inlineKeyFiles.push(path);
 		}
 	}
 	await walk(dirname(configPath), 3);

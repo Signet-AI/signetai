@@ -1,4 +1,7 @@
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import { dirname } from "node:path";
+import { connectorRegistryKey } from "../lib/connector-registry.js";
+import { attemptAsync } from "@signet/core";
 import type { Command } from "commander";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
@@ -19,7 +22,7 @@ import {
 	writeKeyFile,
 	readKeyFile,
 } from "../../../../libs/sdk/src/node.js";
-import { SignetUnauthorizedError } from "../../../../libs/sdk/src/index.js";
+import { SignetApiError, SignetUnauthorizedError } from "../../../../libs/sdk/src/index.js";
 import { runConnectorMcp } from "../lib/connector-mcp.js";
 import { inspectConnectorFiles } from "../lib/connector-doctor.js";
 import { reportAuthError, type AuthCommandDeps } from "./auth.js";
@@ -90,6 +93,24 @@ interface IssuedKey {
 	key: { id: string; agentId?: string; deviceId?: string; expiresAt: string };
 	secret: string;
 }
+async function revokeConnectorKey(
+	entry: { url: string; keyId?: string } | undefined,
+	deps: ConnectorDeps,
+): Promise<void> {
+	if (!entry?.keyId) return;
+	const target = await resolveTarget({ ...deps, flagUrl: entry.url });
+	const transport = new NodeTransport(target, { env: deps.env });
+	try {
+		await transport.request("DELETE", `/api/auth/connector-keys/${encodeURIComponent(entry.keyId)}`);
+	} catch (error) {
+		if (!(error instanceof SignetApiError) || error.status !== 404) throw error;
+	}
+	const response = await transport.get<{ keys: { id: string; revokedAt?: string | null }[] }>(
+		"/api/auth/connector-keys",
+	);
+	if (!Array.isArray(response.keys) || response.keys.some((key) => key.id === entry.keyId && !key.revokedAt))
+		throw new Error("Connector revocation could not be verified; local state was retained");
+}
 async function installConnector(raw: string, options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
 	const harness = canonical(raw);
 	const installer = connectorFor(harness, options.profile);
@@ -97,24 +118,31 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 	const transport = new NodeTransport(target, { env: deps.env });
 	const identity = await transport.get<Identity>("/api/auth/whoami");
 	const registry = new ConnectorRegistry(deps);
-	const previous = (await registry.read())[harness];
+	const registryKey = connectorRegistryKey(
+		harness,
+		harness === "hermes-agent" ? dirname(installer.getConfigPath()) : undefined,
+		deps.env,
+	);
+	const previous = (await registry.read())[registryKey];
+	const provision = identity.mode !== "local" && (target.remote || identity.mode === "team");
+	if (provision && (identity.credential?.kind !== "session" || !identity.credential.deviceId))
+		throw new SignetUnauthorizedError("missing_credential");
+	await revokeConnectorKey(previous, deps);
 	let issued: IssuedKey | undefined;
-	if (identity.mode !== "local" && (target.remote || identity.mode === "team")) {
-		if (identity.credential?.kind !== "session" || !identity.credential.deviceId)
-			throw new SignetUnauthorizedError("missing_credential");
+	if (provision) {
 		issued = await transport.post<IssuedKey>("/api/auth/connector-keys", {
 			harness,
-			deviceId: identity.credential.deviceId,
+			deviceId: identity.credential?.deviceId,
 			...((options.agent ?? options.agentId) ? { agentId: options.agent ?? options.agentId } : {}),
 		});
 	}
-	const keyFile = issued ? await writeKeyFile(target.origin, harness, issued.secret, deps) : undefined;
+	const keyFile = issued ? await writeKeyFile(target.origin, registryKey, issued.secret, deps) : undefined;
 	const agentId =
 		issued?.key.agentId ??
 		options.agent ??
 		options.agentId ??
 		(harness === "hermes-agent" ? options.profile : undefined);
-	await registry.set(harness, {
+	await registry.set(registryKey, {
 		url: target.url,
 		...(keyFile ? { keyFile } : {}),
 		...(agentId ? { agentId } : {}),
@@ -138,21 +166,14 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 		else process.env.SIGNET_DAEMON_URL = previousUrl;
 	}
 	if (!result.success) throw new Error(`${result.message}: ${(result.warnings ?? []).join("; ")}`);
-	if (previous?.keyId) {
-		const oldTarget = await resolveTarget({ ...deps, flagUrl: previous.url });
-		await new NodeTransport(oldTarget, { env: deps.env }).request(
-			"DELETE",
-			`/api/auth/connector-keys/${encodeURIComponent(previous.keyId)}`,
-		);
-	}
-	if (previous?.keyFile && previous.keyFile !== keyFile) await rm(previous.keyFile);
-	const registered = (await registry.read())[harness];
+	if (previous?.keyFile && previous.keyFile !== keyFile) await rm(previous.keyFile, { force: true });
+	const registered = (await registry.read())[registryKey];
 	if (registered?.url !== target.url || registered.keyId !== issued?.key.id)
 		throw new Error("Connector registry readback failed");
 	const connected = new NodeTransport(
 		keyFile
-			? { ...target, harness, credential: { source: "key-file", get: () => readKeyFile(keyFile) } }
-			: { ...target, harness },
+			? { ...target, harness: registryKey, credential: { source: "key-file", get: () => readKeyFile(keyFile) } }
+			: { ...target, harness: registryKey },
 		{ env: deps.env },
 	);
 	await connected.get("/api/auth/whoami");
@@ -176,17 +197,27 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 async function disconnect(raw: string, options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
 	const harness = canonical(raw);
 	const registry = new ConnectorRegistry(deps);
-	const entry = (await registry.read())[harness];
-	if (entry?.keyId) {
-		const target = await resolveTarget({ ...deps, flagUrl: entry.url });
-		await new NodeTransport(target, { env: deps.env }).request(
-			"DELETE",
-			`/api/auth/connector-keys/${encodeURIComponent(entry.keyId)}`,
-		);
+	const installer = connectorFor(harness, options.profile);
+	const registryKey = connectorRegistryKey(
+		harness,
+		harness === "hermes-agent" ? dirname(installer.getConfigPath()) : undefined,
+		deps.env,
+	);
+	const entry = (await registry.read())[registryKey];
+	await revokeConnectorKey(entry, deps);
+	const result = await installer.uninstall();
+	for (const path of result.filesRemoved) {
+		try {
+			await stat(path);
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+			throw error;
+		}
+		throw new Error("Harness integration removal could not be verified; registry state was retained");
 	}
-	await connectorFor(harness, options.profile).uninstall();
-	if (entry?.keyFile) await rm(entry.keyFile);
-	await registry.remove(harness);
+	if (entry?.keyFile) await rm(entry.keyFile, { force: true });
+	await registry.remove(registryKey);
+	if ((await registry.read())[registryKey]) throw new Error("Connector registry removal could not be verified");
 	console.log(JSON.stringify({ harness, disconnected: true }));
 }
 function addOptions(command: Command): Command {
@@ -226,7 +257,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 		.description("Proxy MCP using the harness registry credential")
 		.action(async (harness: string) => {
 			try {
-				await runConnectorMcp(canonical(harness), deps);
+				await runConnectorMcp(connectorRegistryKey(canonical(harness), undefined, deps.env), deps);
 			} catch (error) {
 				reportAuthError(error);
 			}
@@ -235,7 +266,14 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 	addOptions(connector.command("install <harness>")).action(action(installConnector));
 	addOptions(connector.command("rotate <harness>")).action(
 		action(async (harness, opts, ctx) => {
-			const entry = (await new ConnectorRegistry(ctx).read())[canonical(harness)];
+			const name = canonical(harness);
+			const installer = connectorFor(name, opts.profile);
+			const registryKey = connectorRegistryKey(
+				name,
+				name === "hermes-agent" ? dirname(installer.getConfigPath()) : undefined,
+				ctx.env,
+			);
+			const entry = (await new ConnectorRegistry(ctx).read())[registryKey];
 			if (!entry) throw new Error("Connector is not connected");
 			await installConnector(harness, { ...opts, url: entry.url, agent: opts.agent ?? entry.agentId }, ctx);
 		}),
@@ -253,14 +291,35 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 						const identity = await new NodeTransport(await resolveTarget({ ...deps, harness }), {
 							env: deps.env,
 						}).get<Identity>("/api/auth/whoami");
-						const expiry = identity.credential?.expiresAt;
+						const metadata =
+							identity.mode === "local"
+								? undefined
+								: await attemptAsync(async () => {
+										const sessionTarget = await resolveTarget({ ...deps, flagUrl: entry.url });
+										const response = await new NodeTransport(sessionTarget, { env: deps.env }).get<{
+											keys: { id: string; lastUsedAt?: string | null; expiresAt?: string | null }[];
+										}>("/api/auth/connector-keys");
+										return Array.isArray(response.keys)
+											? response.keys.find((key) => key.id === entry.keyId)
+											: undefined;
+									});
+						const expiry = metadata?.expiresAt ?? identity.credential?.expiresAt;
 						const status =
 							identity.mode === "local"
 								? "local"
-								: expiry && Date.parse(expiry) - Date.now() < 3 * 86400000
-									? "expiring"
-									: "valid";
-						rows.push({ harness, ...entry, status, expiresAt: expiry ?? null, lastUsedAt: null });
+								: expiry && Date.parse(expiry) <= Date.now()
+									? "expired"
+									: expiry && Date.parse(expiry) - Date.now() < 3 * 86400000
+										? "expiring"
+										: "valid";
+						rows.push({
+							harness,
+							...entry,
+							status,
+							expiresAt: expiry ?? null,
+							lastUsedAt: metadata?.lastUsedAt ?? null,
+							metadataStatus: identity.mode === "local" ? "local" : metadata ? "available" : "unavailable",
+						});
 					} catch (error) {
 						rows.push({
 							harness,
