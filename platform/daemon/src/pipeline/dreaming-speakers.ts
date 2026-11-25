@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prepareTypedStatement, type WriteDb } from "../db-accessor";
 import { type EpisodicSourceRecord, readEpisodicSource } from "../episodic-sources";
-import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "./dreaming-scope";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "../classification-owner";
 
 export function enrichDreamingSpeakersInTx(
 	db: WriteDb,

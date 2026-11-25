@@ -1,7 +1,7 @@
 import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
 import { ownerChanges, ownerRunStatement, ownerTransaction } from "../db-owner-maintenance";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
-import { dreamingPassPartitionInDb } from "./dreaming-scope";
+import { dreamingPassPartitionInDb } from "../classification-owner";
 
 const LIVE_LEASE = `julianday(l.expires_at) > julianday('now')
 	AND EXISTS (SELECT 1 FROM dreaming_passes p JOIN dreaming_classification_epoch e ON e.id = 1

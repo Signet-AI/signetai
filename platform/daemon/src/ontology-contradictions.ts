@@ -1,12 +1,12 @@
 import type { OntologyContradiction, OntologyContradictionStatus } from "@signet/core";
 import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
-import { evidenceCitationInDb, recordSemanticCitationsInTx } from "./pipeline/dreaming-scope";
+import { evidenceCitationInDb, recordSemanticCitationsInTx } from "./classification-owner";
 import {
 	assertDreamingMutationLabelInDb,
 	dreamingPassPartitionInDb,
 	dreamingReadScopeInDb,
 	type DreamingPartition,
-} from "./pipeline/dreaming-scope";
+} from "./classification-owner";
 import { readScopeSql } from "./read-scope";
 import { tableExists } from "./db-helpers";
 import { detectProspectiveContradictionRisk } from "./pipeline/antonyms";

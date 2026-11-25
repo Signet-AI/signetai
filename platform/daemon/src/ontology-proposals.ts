@@ -27,7 +27,7 @@ import {
 	dreamingReadScopeInDb,
 	type DreamingPartition,
 	type DreamingMutationTable,
-} from "./pipeline/dreaming-scope";
+} from "./classification-owner";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { classifyEntityQuality } from "./entity-quality";
 import { readEpisodicSource, resolveStrictEpisodicSourceRef } from "./episodic-sources";

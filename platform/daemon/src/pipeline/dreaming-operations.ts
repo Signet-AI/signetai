@@ -19,7 +19,7 @@ import {
 	dreamingPassPartitionInDb,
 	dreamingReadScopeInDb,
 	type DreamingPartition,
-} from "./dreaming-scope";
+} from "../classification-owner";
 import { findUnresolvedRelativeTime, findUntimedIsoDate } from "./claim-relative-time";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { createDreamingAgentEvidence, type DreamingAgentEvidence } from "./dreaming-evidence";

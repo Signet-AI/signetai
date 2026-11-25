@@ -1,5 +1,15 @@
 [
 	{
+		"path": "platform/daemon/src/pipeline/dreaming-scope.ts",
+		"reason": "Classification scope, pass fences and derivation labels belong to the existing classification owner.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/pipeline/dreaming-graph-owner.ts",
+		"reason": "Keep Dreaming graph SQL in its existing capability owner, not a separate ownership exception.",
+		"retiredIn": "2026-11-25"
+	},
+	{
 		"path": "libs/sdk/src/generated/client.ts",
 		"reason": "Remove the unused regex-generated SDK; the handwritten client uses the shared transport.",
 		"retiredIn": "2026-11-25"

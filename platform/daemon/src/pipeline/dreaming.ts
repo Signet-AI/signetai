@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { compartmentForWrite } from "@signet/core";
 import { readScopeSql, type ReadScope } from "../read-scope";
-import { dreamingPassPartitionInDb } from "./dreaming-scope";
+import { dreamingPassPartitionInDb } from "../classification-owner";
 import { evidenceLeasedByOtherPassesInScopes, releaseDreamingEvidenceLeasesInTx } from "./dreaming-evidence-leases";
 import { createHash, randomUUID } from "node:crypto";
 import type {

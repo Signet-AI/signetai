@@ -9,10 +9,10 @@ import type {
 } from "../db-owner-protocol";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { ReadScope } from "../read-scope";
-import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "./dreaming-scope";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "../classification-owner";
 import { enrichDreamingSpeakersInTx } from "./dreaming-speakers";
 import { evidenceLeasedByOtherPasses, leaseDreamingEvidenceInTx } from "./dreaming-evidence-leases";
-import { searchEntitiesInDb, entityDetailInDb, aspectClaimsInDb, validateProposalInDb } from "./dreaming-graph-owner";
+import { searchEntitiesInDb, entityDetailInDb, aspectClaimsInDb, validateProposalInDb } from "../classification-owner";
 
 import type { EpisodicSourceRecord } from "../episodic-sources";
 import { episodicQueryTerms, foldAsciiCase, readEpisodicSource, searchEpisodicSources } from "../episodic-sources";

@@ -8,7 +8,7 @@ import {
 	dreamingReadScopeInDb,
 	dreamingPassPartitionInDb,
 	type DreamingPartition,
-} from "./pipeline/dreaming-scope";
+} from "./classification-owner";
 
 const SEMANTIC_PREMISE_KIND = "ontology_claim";
 const EPISODIC_SOURCE_KINDS = new Set(["memory", "artifact", "transcript", "summary"]);

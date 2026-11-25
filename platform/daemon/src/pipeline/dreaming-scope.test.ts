@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { readScopeSql } from "../read-scope";
-import { dreamingPassPartitionInDb, dreamingReadScopeInDb, assertDreamingMutationLabelInDb } from "./dreaming-scope";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb, assertDreamingMutationLabelInDb } from "../classification-owner";
 
 const databases: Database[] = [];
 afterEach(() => {

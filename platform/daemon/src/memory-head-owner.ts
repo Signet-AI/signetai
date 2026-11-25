@@ -5,7 +5,7 @@ import { attempt, redactCredentials } from "@signet/core";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource, type EpisodicSourceRecord } from "./episodic-sources";
-import { dreamingPassPartitionInDb, dreamingReadScopeInDb, type DreamingPartition } from "./pipeline/dreaming-scope";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb, type DreamingPartition } from "./classification-owner";
 
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { countTokens } from "./pipeline/tokenizer";

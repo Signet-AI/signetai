@@ -1,7 +1,7 @@
 import type { DreamingConfig, DreamingPolicies } from "@signet/core";
 import type { WriteAuthor } from "../auth/audit-owner";
 import { prepareTypedStatement } from "../db-accessor";
-import type { DreamingPartition } from "./dreaming-scope";
+import type { DreamingPartition } from "../classification-owner";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
