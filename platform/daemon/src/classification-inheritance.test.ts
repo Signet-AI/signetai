@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { txIngestEnvelope } from "./transactions";
+import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
 import { upsertMemoryArtifactInTx } from "./memory-lineage";
 import { writeSessionTranscriptRow, commitCompactionSummaryInTx } from "./session-transcripts";
 
@@ -189,6 +190,44 @@ test("source artifact upserts inherit classified agents before their FTS trigger
 	).toMatchObject({ compartment_id: expect.any(Number) });
 	expect(
 		db.prepare("SELECT count(*) n FROM memory_artifacts_fts WHERE memory_artifacts_fts MATCH 'secret'").get(),
+	).toEqual({ n: 0 });
+	db.close();
+});
+
+test("transcript imports inherit source assignments and retain the admitted author", () => {
+	const db = classificationFixture();
+	db.exec(
+		"INSERT INTO classifications(id,name) VALUES('cls_source','Source'); INSERT INTO classification_assignments VALUES('source','src','default','cls_source','carol','now')",
+	);
+	const commit = {
+		author: { userId: "alice", credential: "session:alice" },
+		recordId: "record",
+		sourceId: "src",
+		sourceRecordId: "record",
+		agentId: "default",
+		harness: "test",
+		project: null,
+		sessionKey: "imported",
+		capturedAt: "2026-11-25T00:00:00.000Z",
+		messages: [{ role: "user", content: "importsecret" }] as const,
+		contentHash: "hash",
+		sourceMetaJson: null,
+		sourcePath: null,
+		externalIdentity: "external",
+		canonicalId: "canonical",
+		canonicalKey: "imported",
+	};
+	expect(db.transaction(() => commitCompletedTranscriptBatchInTx(db, [commit]))()).toMatchObject([
+		{ outcome: "imported" },
+	]);
+	const row = db
+		.prepare("SELECT compartment_id,speaker_user_id FROM session_transcripts WHERE session_key='imported'")
+		.get();
+	expect(row).toEqual({ compartment_id: expect.any(Number), speaker_user_id: "alice" });
+	expect(
+		db
+			.prepare("SELECT count(*) n FROM session_transcripts_fts WHERE session_transcripts_fts MATCH 'importsecret'")
+			.get(),
 	).toEqual({ n: 0 });
 	db.close();
 });

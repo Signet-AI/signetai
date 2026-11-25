@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compartmentForWrite } from "@signet/core";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
@@ -341,6 +342,12 @@ function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscri
 		commit.agentId,
 		commit.capturedAt,
 	];
+	if (names.has("compartment_id")) {
+		insertColumns.push("compartment_id");
+		values.push(
+			compartmentForWrite(db, { agentId: commit.agentId, sessionKey: commit.canonicalKey, sourceId: commit.sourceId }),
+		);
+	}
 	if (commit.author) {
 		if (!names.has("speaker_user_id")) throw new Error("Transcript author schema is missing");
 		insertColumns.push("speaker_user_id");
@@ -393,6 +400,11 @@ function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscri
 	add("completed_at", commit.capturedAt);
 	add("content_hash", commit.contentHash);
 	add("source_id", commit.sourceId);
+	if (names.has("compartment_id"))
+		add(
+			"compartment_id",
+			compartmentForWrite(db, { agentId: commit.agentId, sessionKey: commit.canonicalKey, sourceId: commit.sourceId }),
+		);
 	add("source_record_id", commit.sourceRecordId);
 	add("source_meta_json", commit.sourceMetaJson);
 	if (commit.author && names.has("speaker_user_id")) {
@@ -625,6 +637,10 @@ function updateSessionTranscriptSource(
 	if (names.has("source_id")) {
 		updates.push("source_id = ?");
 		values.push(sourceId);
+		if (names.has("compartment_id")) {
+			updates.push("compartment_id = ?");
+			values.push(compartmentForWrite(db, { agentId, sessionKey, sourceId }));
+		}
 	}
 	if (names.has("source_record_id")) {
 		updates.push("source_record_id = ?");
