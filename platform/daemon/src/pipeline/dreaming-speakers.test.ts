@@ -22,6 +22,39 @@ describe("Dreaming authenticated speakers", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("reports a missing structural identity without creating a substitute", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('usr_alice','alice','Alice','member'); INSERT INTO dreaming_passes(id,agent_id,status) VALUES('pass','shared','running'); INSERT INTO session_transcripts(agent_id,session_key,content,speaker_user_id,created_at,completed_at) VALUES('shared','missing','I prefer tea.','usr_alice','now','now')",
+			);
+			const sources = readRecentEpisodicSources(db, "shared", 10, ["transcript"]);
+			expect(() => enrichDreamingSpeakersInTx(db, "pass", sources)).toThrow("person_identity_missing");
+			expect(prepareTypedStatement<{ n: number }>(db, "SELECT COUNT(*) AS n FROM entities").get()).toEqual({ n: 0 });
+		});
+	});
+
+	it("reuses public structural identities in classified passes without touching or citing their columns", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('usr_alice','alice','Alice','member'); INSERT INTO classifications(id,name) VALUES('secret','Secret'); INSERT INTO compartments(id,key) VALUES(7,'secret'); INSERT INTO compartment_members(compartment_id,classification_id) VALUES(7,'secret'); INSERT INTO dreaming_passes(id,agent_id,status,compartment_id) VALUES('pass','shared','running',7); INSERT INTO session_transcripts(agent_id,session_key,content,speaker_user_id,compartment_id,created_at,completed_at) VALUES('shared','secret','I prefer tea.','usr_alice',7,'now','now'); INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,person_user_id,created_at,updated_at) VALUES('person','Alice (alice)','person:usr_alice','person','shared','usr_alice','now','now')",
+			);
+			const before = prepareTypedStatement<Record<string, unknown>>(db, "SELECT * FROM entities").all();
+			const source = readEpisodicSource(db, { agentId: "shared", from: "transcript:secret" });
+			if (!source) throw new Error("Fixture evidence missing");
+			expect(enrichDreamingSpeakersInTx(db, "pass", [source])[0]?.speaker).toMatchObject({
+				kind: "person",
+				personEntityId: "person",
+			});
+			expect(prepareTypedStatement<Record<string, unknown>>(db, "SELECT * FROM entities").all()).toEqual(before);
+			expect(
+				prepareTypedStatement<{ n: number }>(
+					db,
+					"SELECT COUNT(*) AS n FROM evidence_citations WHERE derived_kind='entity'",
+				).get(),
+			).toEqual({ n: 0 });
+		});
+	});
+
 	it("delivers trusted person metadata separately from immutable citation bytes", () => {
 		const speaker = {
 			kind: "person",
@@ -51,9 +84,12 @@ describe("Dreaming authenticated speakers", () => {
 		expect(delivered).toMatchObject([{ speaker, content: "User: I prefer tea." }]);
 	});
 
-	it("creates distinct same-name people, reuses identity and atomically records rebuildable citations", () => {
+	it("resolves identity-owned same-name people without deriving or modifying them", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE organization SET claimed_at = 'now', agent_model = 'single' WHERE id = 1").run();
+			db.exec(
+				"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('shared','Shared','organization','now','now')",
+			);
 			db.prepare(
 				"INSERT INTO dreaming_passes (id,agent_id,mode,status,created_at) VALUES ('pass','shared','incremental','running','now')",
 			).run();
@@ -88,18 +124,21 @@ describe("Dreaming authenticated speakers", () => {
 					db,
 					"SELECT COUNT(*) AS n FROM evidence_citations WHERE derived_kind = 'entity'",
 				).get(),
-			).toEqual({ n: 2 });
+			).toEqual({ n: 0 });
 			expect(
 				prepareTypedStatement<{ proposal_evidence: string }>(
 					db,
 					"SELECT proposal_evidence FROM entities WHERE person_user_id = 'usr_alice'",
 				).get()?.proposal_evidence,
-			).toContain("transcript:tea");
+			).toBe("[]");
 		});
 	});
 
-	it("rebuilds speaker citations from durable provenance after the citation index is lost", () => {
+	it("keeps structural people out of evidence-citation rebuilding", () => {
 		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('shared','Shared','organization','now','now')",
+			);
 			db.prepare(
 				"INSERT INTO users (id,username,display_name,role) VALUES ('usr_alice','alice','Alice','member')",
 			).run();
@@ -124,41 +163,30 @@ describe("Dreaming authenticated speakers", () => {
 					db,
 					"SELECT evidence_id FROM evidence_citations WHERE derived_kind='entity' ORDER BY evidence_id",
 				).all(),
-			).toEqual([{ evidence_id: "coffee" }, { evidence_id: "tea" }]);
+			).toEqual([]);
 			expect(
 				prepareTypedStatement<{ person_user_id: string }>(db, "SELECT person_user_id FROM entities").all(),
 			).toEqual([{ person_user_id: "usr_alice" }]);
 		});
 	});
 
-	it("rolls back person creation when the evidence citation cannot be committed", () => {
+	it("resolves existing identity on a reader even when citation writes would fail", () => {
 		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				"INSERT INTO users (id,username,display_name,role) VALUES ('usr_alice','alice','Alice','member')",
-			).run();
-			db.prepare(
-				"INSERT INTO dreaming_passes (id,agent_id,mode,status,created_at) VALUES ('pass','shared','incremental','running','now')",
-			).run();
-			db.prepare(
-				"INSERT INTO session_transcripts (agent_id,session_key,content,speaker_user_id,created_at,completed_at) VALUES ('shared','tea','I prefer tea.','usr_alice','now','now')",
-			).run();
 			db.exec(
-				"CREATE TRIGGER reject_speaker_citation BEFORE INSERT ON evidence_citations BEGIN SELECT RAISE(ABORT, 'citation_rejected'); END",
+				"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('shared','Shared','organization','now','now'); INSERT INTO users(id,username,display_name,role) VALUES('usr_alice','alice','Alice','member'); INSERT INTO dreaming_passes(id,agent_id,status) VALUES('pass','shared','running'); INSERT INTO session_transcripts(agent_id,session_key,content,speaker_user_id,created_at,completed_at) VALUES('shared','tea','I prefer tea.','usr_alice','now','now'); CREATE TRIGGER reject_speaker_citation BEFORE INSERT ON evidence_citations BEGIN SELECT RAISE(ABORT,'citation_rejected'); END",
 			);
 		});
-		expect(() =>
-			getDbAccessor().withWriteTx((db) =>
-				enrichDreamingSpeakersInTx(db, "pass", readRecentEpisodicSources(db, "shared", 10, ["transcript"])),
-			),
-		).toThrow("citation_rejected");
-		getDbAccessor().withReadDb((db) =>
+		getDbAccessor().withReadDb((db) => {
+			expect(
+				enrichDreamingSpeakersInTx(db, "pass", readRecentEpisodicSources(db, "shared", 10, ["transcript"]))[0]?.speaker,
+			).toMatchObject({ kind: "person", userId: "usr_alice" });
 			expect(
 				prepareTypedStatement<{ n: number }>(
 					db,
 					"SELECT COUNT(*) AS n FROM entities WHERE person_user_id IS NOT NULL",
 				).get(),
-			).toEqual({ n: 0 }),
-		);
+			).toEqual({ n: 1 });
+		});
 	});
 
 	it("preserves external authors and makes anonymous compatibility explicit", () => {
@@ -194,10 +222,12 @@ describe("Dreaming authenticated speakers", () => {
 				"INSERT INTO session_transcripts (agent_id,session_key,content,speaker_user_id,created_at,completed_at) VALUES ('shared','tea','I prefer tea.','usr_alice','now','now')",
 			).run();
 			const sources = readRecentEpisodicSources(db, "shared", 10, ["transcript"]);
-			db.prepare("UPDATE dreaming_classification_epoch SET epoch=epoch+1").run();
+			db.prepare(
+				"INSERT INTO dreaming_classification_epoch(agent_id,epoch) VALUES('shared',1) ON CONFLICT(agent_id) DO UPDATE SET epoch=epoch+1",
+			).run();
 			expect(() => enrichDreamingSpeakersInTx(db, "pass", sources)).toThrow("compartment_mismatch");
 			db.prepare(
-				"UPDATE dreaming_passes SET classification_epoch=(SELECT epoch FROM dreaming_classification_epoch)",
+				"UPDATE dreaming_pass_classification_epochs SET epoch=(SELECT epoch FROM dreaming_classification_epoch WHERE agent_id='shared')",
 			).run();
 			db.prepare("INSERT INTO compartments (id,key) VALUES (17,'secret')").run();
 			db.prepare("UPDATE session_transcripts SET compartment_id=17").run();
@@ -207,7 +237,7 @@ describe("Dreaming authenticated speakers", () => {
 			db.prepare(
 				"INSERT INTO entities (id,name,canonical_name,entity_type,agent_id,person_user_id,compartment_id,created_at,updated_at) VALUES ('other-label','Alice','alice','person','shared','usr_alice',17,'now','now')",
 			).run();
-			expect(() => enrichDreamingSpeakersInTx(db, "pass", sources)).toThrow("compartment_mismatch");
+			expect(() => enrichDreamingSpeakersInTx(db, "pass", sources)).toThrow("person_identity_missing");
 			expect(prepareTypedStatement<{ n: number }>(db, "SELECT COUNT(*) AS n FROM evidence_citations").get()).toEqual({
 				n: 0,
 			});

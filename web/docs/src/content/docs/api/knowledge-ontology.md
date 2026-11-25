@@ -1171,8 +1171,14 @@ write. In an organization using personal agents, the organization agent is a rea
 aggregator and does not Dream; with the single-agent model it Dreams normally.
 
 Connector-bound evidence identifies the human speaker and a person entity in the
-pass's agent. Self-disclosures are filed under that entity, even when a person never
-says their name. Imported documents and conversations retain their external authors.
+pass's agent. Account and grant management maintain one structural person entity
+per authorized human in that agent, with disambiguated names when needed. Dreaming
+never creates, renames, merges, or archives these identities. Self-disclosures are
+filed under the same person across classification partitions, even when a person
+never says their name. The identity remains unclassified; its claims, aliases, and
+other derived children retain their own pass label and audience. Missing identity
+state defers processing with `person_identity_missing`, rather than inventing a
+replacement person. Imported documents and conversations retain their external authors.
 History, tool traces, runbooks, and curated head streams retain their pass label.
 Only the unclassified curated head is projected to public `MEMORY.md`; a classified
 head remains in its scoped database stream.
