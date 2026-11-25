@@ -10,6 +10,7 @@ function seed(daemon: OrgDaemon, hidden: boolean): void {
 	try {
 		const id = hidden ? "hidden" : "public";
 		const compartment = hidden ? 1 : null;
+		if (!hidden) db.exec("INSERT INTO compartments(id,key) VALUES(2,'public-fixture')");
 		if (hidden)
 			db.exec(
 				"INSERT INTO classifications(id,name) VALUES('cls_diagnostic_secret','Secret'); INSERT INTO compartments(id,key) VALUES(1,'cls_diagnostic_secret'); INSERT INTO compartment_members VALUES(1,'cls_diagnostic_secret')",
@@ -25,7 +26,7 @@ function seed(daemon: OrgDaemon, hidden: boolean): void {
 		).run(`${id}-checkpoint`, `${id} digest`, compartment);
 		db.prepare(
 			"INSERT INTO memory_search_telemetry(id,created_at,route,agent_id,session_key,project,query,filters_json,method,result_count,no_hits,duration_ms,timings_json,results_json,compartment_id) VALUES(?,'2090','test','default','diagnostic-session','atlas',?,'{}','hybrid',1,0,1,'{}','[]',?)",
-		).run(`${id}-search`, `${id} query`, compartment);
+		).run(`${id}-search`, `${id} query`, hidden ? 1 : 2);
 		if (!hidden)
 			for (let index = 2; index <= 3; index++) {
 				const extra = `public-${index}`;

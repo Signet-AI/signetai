@@ -12,6 +12,11 @@ and log endpoints return `403` with `reason: "org_policy"`. These collectors do
 not carry content classifications, so an administrator's analytics permission
 cannot authorize their contents. Memory-search telemetry and its NDJSON export
 remain available through the caller's agent, project, and classification scope.
+Rows without a compartment label are omitted before pagination, export, and
+database-inspection counts unless the reader has all-agent reach and access to
+every existing compartment. An administrator role alone does not bypass this
+check. Producer labeling and historical snapshot backfill remain separate from
+this read policy.
 Checkpoint reads require `recall` permission and use the same scope before
 selecting or limiting results.
 

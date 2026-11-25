@@ -1301,6 +1301,31 @@ export function runDbOwnerWorker(): void {
 				throw error;
 			}
 		}
+		if (job.request.kind === "diagnostics_schema")
+			return (await import("./diagnostics")).readDatabaseSchemaAsync(db, job.request.scope);
+		if (job.request.kind === "diagnostics_sample")
+			return (await import("./diagnostics")).readTableSampleAsync(
+				db,
+				job.request.table,
+				job.request.limit,
+				job.request.offset,
+				job.request.scope,
+			);
+		if (job.request.kind === "search_telemetry_read")
+			return (await import("./diagnostics")).readScopedSearchTelemetry(job.request.query, db);
+		if (job.request.kind === "queue_diagnostics_read")
+			return (await import("./diagnostics-queue")).getQueueDiagnosticsSnapshot(db, {
+				scope: job.request.scope,
+				fresh: true,
+			});
+		if (job.request.kind === "projection_read")
+			return (await import("./embedding-projection-owner")).executeProjectionReadInOwner(db, job.request);
+		if (job.request.kind === "dreaming_reviewed_read")
+			return (await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
+				db,
+				job.request.agentId,
+				job.request.scope,
+			);
 		if (job.request.kind === "reflection_list") {
 			const { readReflectionsInOwner } = await import("./reflection-owner");
 			return readReflectionsInOwner(db, job.request.scope, job.request.input);

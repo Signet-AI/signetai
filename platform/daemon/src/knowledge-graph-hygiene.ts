@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import type { DbOwnerParameter } from "./db-owner-protocol";
 import { readScopeSql, type ReadScope } from "./read-scope";
@@ -641,7 +642,13 @@ export function scopedKnowledgeStatement<T extends { readonly sql: string; reado
 	statement: T,
 	readScope: ReadScope | undefined,
 ): T & { readonly params: readonly unknown[] } {
-	if (!readScope || (readScope.compartments === "all" && readScope.projects === null))
+	if (
+		!readScope ||
+		(readScope.compartments === "all" &&
+			readScope.projects === null &&
+			readScope.reach.kind !== "group" &&
+			readScope.reach.kind !== "shared")
+	)
 		return { ...statement, params: statement.params ?? [] };
 	const tables = new Set<string>();
 	for (const match of statement.sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)\b/gi)) {
@@ -804,22 +811,25 @@ export async function knowledgeReadOwner(
 	readScope: ReadScope,
 ): Promise<import("./db-owner-client").DbOwnerClient> {
 	const shards = await import("./db-owner-sql").then(({ ownerReadAll }) =>
-		ownerReadAll<{ readonly name: string }>(
+		ownerReadAll(
 			owner,
 			"SELECT name FROM sqlite_master WHERE type='table' AND (name='entities_fts' OR name GLOB 'entities_fts__c[0-9]*') ORDER BY name",
 			[],
 			{ operation: "knowledge.fts-shards", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 		),
 	);
-	const readableShards = shards.flatMap(({ name }) => {
-		if (name === "entities_fts") return [name];
-		if (!/^entities_fts__c[1-9][0-9]*$/.test(name)) return [];
-		const compartment = Number(name.slice("entities_fts__c".length));
-		return Number.isSafeInteger(compartment) &&
-			(readScope.compartments === "all" || readScope.compartments.includes(compartment))
-			? [name]
-			: [];
-	});
+	const readableShards = z
+		.array(z.object({ name: z.string() }))
+		.parse(shards)
+		.flatMap(({ name }) => {
+			if (name === "entities_fts") return [name];
+			if (!/^entities_fts__c[1-9][0-9]*$/.test(name)) return [];
+			const compartment = Number(name.slice("entities_fts__c".length));
+			return Number.isSafeInteger(compartment) &&
+				(readScope.compartments === "all" || readScope.compartments.includes(compartment))
+				? [name]
+				: [];
+		});
 	const restrictedRanking = readScope.compartments !== "all" || readScope.projects !== null;
 	const submit = <Result>(
 		request: import("./db-owner-protocol").DbOwnerRequest,
@@ -939,21 +949,27 @@ export async function readKnowledgeTraceSource(
 export async function getKnowledgeCommunities(agentId: string, readScope: ReadScope) {
 	const db = knowledgeReadDb(readScope);
 
-	return (await db
-		.prepare(
-			`SELECT id, name, cohesion, member_count, created_at, updated_at
+	return z
+		.array(
+			z.object({
+				id: z.string(),
+				name: z.string().nullable(),
+				cohesion: z.number(),
+				member_count: z.number(),
+				created_at: z.string().nullable(),
+				updated_at: z.string().nullable(),
+			}),
+		)
+		.parse(
+			await db
+				.prepare(
+					`SELECT id, name, cohesion, member_count, created_at, updated_at
 					 FROM entity_communities
 					 WHERE agent_id = ?
 					 ORDER BY member_count DESC`,
-		)
-		.all(agentId)) as ReadonlyArray<{
-		id: string;
-		name: string | null;
-		cohesion: number;
-		member_count: number;
-		created_at: string;
-		updated_at: string;
-	}>;
+				)
+				.all(agentId),
+		);
 }
 
 export async function expandKnowledgeSessions(
@@ -1004,9 +1020,21 @@ export async function expandKnowledgeSessions(
 		`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
 	const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
 	const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
-	const rows = (await db
-		.prepare(
-			`SELECT DISTINCT ss.id, ss.content, ss.session_key,
+	const rows = z
+		.array(
+			z.object({
+				id: z.string(),
+				content: z.string(),
+				session_key: z.string().nullable(),
+				harness: z.string().nullable(),
+				earliest_at: z.string(),
+				latest_at: z.string(),
+			}),
+		)
+		.parse(
+			await db
+				.prepare(
+					`SELECT DISTINCT ss.id, ss.content, ss.session_key,
 					        ss.harness, ss.earliest_at, ss.latest_at
 					 FROM session_summaries ss
 					 WHERE ${conditions.join(" AND ")}
@@ -1023,15 +1051,9 @@ export async function expandKnowledgeSessions(
 					   )
 					 ORDER BY ss.latest_at DESC
 					 LIMIT ?`,
-		)
-		.all(...args, entity.id, ...fallbackArgs, maxResults)) as Array<{
-		id: string;
-		content: string;
-		session_key: string | null;
-		harness: string | null;
-		earliest_at: string;
-		latest_at: string;
-	}>;
+				)
+				.all(...args, entity.id, ...fallbackArgs, maxResults),
+		);
 	return {
 		entityName: entity.name,
 		summaries: rows.map((row) => ({

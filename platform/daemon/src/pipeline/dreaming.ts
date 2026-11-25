@@ -1,3 +1,239 @@
+import { z } from "zod";
+function runbookRecord(value: unknown): Record<string, unknown> | null {
+	const parsed = z.record(z.string(), z.unknown()).safeParse(value);
+	return parsed.success ? parsed.data : null;
+}
+function parseRecord(value: string | null): Record<string, unknown> | null {
+	if (!value) return null;
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return runbookRecord(parsed);
+	} catch {
+		return null;
+	}
+}
+
+function parseTextList(value: unknown): readonly string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function parseDeferredEvidenceList(
+	value: unknown,
+): readonly import("./dreaming-runbook").DreamingDeferredEvidenceEntry[] {
+	if (!Array.isArray(value)) return [];
+	const entries: import("./dreaming-runbook").DreamingDeferredEvidenceEntry[] = [];
+	for (const item of value) {
+		if (typeof item === "string") {
+			entries.push(item);
+			continue;
+		}
+		if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+		const entry = runbookRecord(item);
+		if (!entry) continue;
+		if (typeof entry.agentId === "string" && typeof entry.sourceRef === "string") {
+			entries.push({ agentId: entry.agentId, sourceRef: entry.sourceRef });
+		}
+	}
+	return entries;
+}
+
+function parseReviewedExcludedEvidenceList(
+	value: unknown,
+): readonly import("./dreaming-evidence-reviews").DreamingReviewedExcludedEvidenceEntry[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item) => {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
+		const entry = runbookRecord(item);
+		if (!entry) return [];
+		if (typeof entry.agentId !== "string" || typeof entry.sourceRef !== "string" || typeof entry.reason !== "string")
+			return [];
+		const agentId = entry.agentId.trim();
+		const sourceRef = entry.sourceRef.trim();
+		const reason = entry.reason.trim();
+		if (!agentId || !sourceRef || !reason) return [];
+		return [
+			{
+				agentId,
+				sourceRef,
+				reason,
+			},
+		];
+	});
+}
+
+function parseRunbook(value: string | null): import("./dreaming-runbook").DreamingRunbookEntry | null {
+	const row = parseRecord(value);
+	if (!row || typeof row.summary !== "string") return null;
+	return {
+		summary: row.summary,
+		openQuestions: parseTextList(row.openQuestions),
+		deferred: parseTextList(row.deferred),
+		deferredEvidence: parseDeferredEvidenceList(row.deferredEvidence),
+		reviewedExcludedEvidence: parseReviewedExcludedEvidenceList(row.reviewedExcludedEvidence),
+	};
+}
+
+function parseEvidenceWindow(value: string | null): import("./dreaming-runbook").DreamingEvidenceWindow | null {
+	const row = parseRecord(value);
+	if (!row || typeof row.cursor !== "object" || row.cursor === null || Array.isArray(row.cursor)) return null;
+	const cursor = runbookRecord(row.cursor);
+	if (!cursor) return null;
+	if (typeof cursor.capturedAt !== "string" || typeof cursor.id !== "string") return null;
+	const sources = Array.isArray(row.sources)
+		? row.sources.flatMap((source) => {
+				if (typeof source !== "object" || source === null || Array.isArray(source)) return [];
+				const item = runbookRecord(source);
+				if (!item) return [];
+				if (
+					typeof item.sourceRef !== "string" ||
+					typeof item.sourceKind !== "string" ||
+					typeof item.sourceId !== "string"
+				)
+					return [];
+				return [
+					{
+						sourceRef: item.sourceRef,
+						sourceKind: item.sourceKind,
+						sourceId: item.sourceId,
+						sourcePath: typeof item.sourcePath === "string" ? item.sourcePath : null,
+						chars: typeof item.chars === "number" && Number.isFinite(item.chars) ? Math.max(0, item.chars) : 0,
+					},
+				];
+			})
+		: [];
+	return {
+		cursor: {
+			capturedAt: cursor.capturedAt,
+			kind: typeof cursor.kind === "string" ? cursor.kind : null,
+			id: cursor.id,
+			...(typeof cursor.fragmentOffset === "number" &&
+			Number.isSafeInteger(cursor.fragmentOffset) &&
+			cursor.fragmentOffset > 0
+				? { fragmentOffset: cursor.fragmentOffset }
+				: {}),
+		},
+		sources,
+	};
+}
+
+function operationResults(
+	inputJson: string,
+	outputJson: string,
+): readonly { readonly operation: string; readonly ok: boolean; readonly error: string | null }[] {
+	const input = parseRecord(inputJson);
+	const output = parseRecord(outputJson);
+	const operations = Array.isArray(input?.operations) ? input.operations : [];
+	const items = Array.isArray(output?.items) ? output.items : [];
+	const fallbackError = typeof output?.error === "string" ? output.error : null;
+	return operations.flatMap((operation, index) => {
+		if (typeof operation !== "object" || operation === null || Array.isArray(operation)) return [];
+		const name = runbookRecord(operation)?.operation;
+		if (typeof name !== "string") return [];
+		const item = items[index];
+		const result = runbookRecord(item);
+		return [
+			{
+				operation: name,
+				ok: result?.ok === true,
+				error: typeof result?.error === "string" ? result.error : fallbackError,
+			},
+		];
+	});
+}
+
+function summarizeOperations(
+	results: readonly { readonly operation: string; readonly ok: boolean; readonly error: string | null }[],
+): import("./dreaming-runbook").DreamingRunbookOperations {
+	const applied: Record<string, number> = {};
+	const failed = new Map<string, { operation: string; error: string | null; count: number }>();
+	for (const result of results) {
+		if (result.ok) {
+			applied[result.operation] = (applied[result.operation] ?? 0) + 1;
+			continue;
+		}
+		const key = `${result.operation}\u0000${result.error ?? ""}`;
+		const existing = failed.get(key);
+		if (existing === undefined) failed.set(key, { operation: result.operation, error: result.error, count: 1 });
+		else existing.count += 1;
+	}
+	return { applied, failed: [...failed.values()] };
+}
+
+export async function readDreamingPassRecord(
+	owner: import("../db-owner-client").DbOwnerClient,
+	agentId: string,
+	passId: string,
+	readScope?: ReadScope,
+): Promise<import("./dreaming-runbook").DreamingRunbookPass | null> {
+	const predicate = dreamingReadPredicate("", readScope);
+	const passPredicate = dreamingReadPredicate("p", readScope);
+	const raw = await ownerQueryOne<Record<string, unknown>>(
+		owner,
+		"dreaming.pass-record.read",
+		`SELECT agent_id AS agentId, id, mode, status, started_at AS startedAt, completed_at AS completedAt,
+		        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
+		        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
+		 FROM dreaming_passes WHERE ${readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql}`,
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+	if (raw === undefined) return null;
+	const row = z
+		.object({
+			id: z.string(),
+			agentId: z.string(),
+			mode: z.string(),
+			status: z.string(),
+			startedAt: z.string(),
+			completedAt: z.string().nullable(),
+			summary: z.string().nullable(),
+			error: z.string().nullable(),
+			mutationsApplied: z.number().nullable(),
+			mutationsFailed: z.number().nullable(),
+			evidenceWindowJson: z.string().nullable(),
+			runbookJson: z.string().nullable(),
+		})
+		.parse(raw);
+	const recordAgentId = row.agentId;
+	const [calls, quarantines] = await Promise.all([
+		ownerQueryAll<{ inputJson: string; outputJson: string }>(
+			owner,
+			"dreaming.pass-record.operations",
+			`SELECT input_json AS inputJson, output_json AS outputJson
+			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops' ${predicate.sql}
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_tool_calls.pass_id AND p.agent_id = dreaming_tool_calls.agent_id ${passPredicate.sql})` : ""}
+			 ORDER BY sequence ASC`,
+			[recordAgentId, passId, ...predicate.args, ...(readScope ? passPredicate.args : [])],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		),
+		ownerQueryAll<import("./dreaming-runbook").DreamingRunbookPass["quarantines"][number]>(
+			owner,
+			"dreaming.pass-record.quarantines",
+			`SELECT source_kind AS sourceKind, source_id AS sourceId, reason
+			 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND pass_id = ? AND resolved_at IS NULL
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_exclusions.pass_id AND p.agent_id = dreaming_evidence_exclusions.agent_id ${passPredicate.sql})` : ""}
+			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
+			[recordAgentId, passId, ...(readScope ? passPredicate.args : [])],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		),
+	]);
+	return {
+		passId: row.id,
+		mode: row.mode,
+		status: row.status,
+		startedAt: row.startedAt,
+		completedAt: row.completedAt ?? null,
+		summary: row.summary ?? null,
+		error: row.error ?? null,
+		mutationsApplied: typeof row.mutationsApplied === "number" ? row.mutationsApplied : null,
+		mutationsFailed: typeof row.mutationsFailed === "number" ? row.mutationsFailed : null,
+		operations: summarizeOperations(calls.flatMap((call) => operationResults(call.inputJson, call.outputJson))),
+		evidenceWindow: parseEvidenceWindow(row.evidenceWindowJson ?? null),
+		runbook: parseRunbook(row.runbookJson ?? null),
+		quarantines,
+	};
+}
+
 import type { ReadScope } from "../read-scope";
 import { dreamingReadPredicate } from "./dreaming-read-scope";
 import type { Database } from "bun:sqlite";

@@ -1,7 +1,9 @@
+import { z } from "zod";
+import type { ReadDb } from "./db-accessor";
 import { citedEvidenceReadScopeSql } from "./diagnostics";
 import { DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import type { DbOwnerClient } from "./db-owner-client";
-import { cancellableOwner, ownerReadAll, ownerReadOne } from "./db-owner-sql";
+import { cancellableOwner } from "./db-owner-sql";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { escapeLike } from "./sql-utils";
 import { toEmbeddingRow, type EmbeddingRow, type ProjectionFilters, type ProjectionQuery } from "./umap-projection";
@@ -231,12 +233,9 @@ export async function loadProjectionRowsAsync(
 			deadlineMs: Math.max(1, deadlineAt - Date.now()),
 			signal,
 		}) as const;
-	const total = await ownerReadOne<{ count: number }>(
-		client,
-		`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${plan.clause} AND typeof(e.vector) = 'blob'`,
-		plan.params,
-		options(),
-	);
+	const total = z
+		.object({ count: z.number() })
+		.parse(await client.submit({ kind: "projection_read", op: "count", query }, options()).result);
 	if (!total) throw new Error("projection_count_unavailable");
 	const rawRows: Record<string, unknown>[] = [];
 	const target = (plan.requestedLimit ?? 5000) + 1;
@@ -244,14 +243,36 @@ export async function loadProjectionRowsAsync(
 		signal?.throwIfAborted();
 		if (Date.now() >= deadlineAt) throw new Error("projection_read_deadline");
 		const take = Math.min(100, target - rawRows.length);
-		const batch = await ownerReadAll<Record<string, unknown>>(
-			client,
-			plan.sql,
-			[...plan.rowParams.slice(0, -2), take, plan.offset + rawRows.length],
-			options(),
-		);
+		const batch = z
+			.array(z.record(z.string(), z.unknown()))
+			.parse(
+				await client.submit(
+					{ kind: "projection_read", op: "rows", query, offset: plan.offset + rawRows.length, limit: take },
+					options(),
+				).result,
+			);
 		rawRows.push(...batch);
 		if (batch.length < take) break;
 	}
 	return projectionRowsResult(rawRows, plan.requestedLimit, plan.offset, total);
+}
+
+export function executeProjectionReadInOwner(
+	db: ReadDb,
+	request: Extract<import("./db-owner-protocol").DbOwnerRequest, { kind: "projection_read" }>,
+): unknown {
+	const plan = projectionStatements({ ...request.query, limit: Math.min(request.query.limit ?? 5000, 5000) });
+	if (request.op === "count")
+		return db
+			.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${plan.clause} AND typeof(e.vector)='blob'`)
+			.get(...plan.params);
+	if (
+		!Number.isSafeInteger(request.limit) ||
+		request.limit < 1 ||
+		request.limit > 100 ||
+		!Number.isSafeInteger(request.offset) ||
+		request.offset < 0
+	)
+		throw new Error("projection_batch_limit");
+	return db.prepare(plan.sql).all(...plan.rowParams.slice(0, -2), request.limit, request.offset);
 }

@@ -14,7 +14,7 @@ describe("memory search telemetry", () => {
 	let dir = "";
 	let prevSignetPath: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-memory-search-telemetry-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		writeFileSync(
@@ -28,6 +28,9 @@ describe("memory search telemetry", () => {
 		prevSignetPath = process.env.SIGNET_PATH;
 		process.env.SIGNET_PATH = dir;
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec("INSERT INTO compartments(id,key) VALUES(1,'telemetry-fixture')"),
+		);
 	});
 
 	afterEach(async () => {
@@ -91,6 +94,7 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
+		await getDbAccessor().withWriteTxAsync((db) => db.exec("UPDATE memory_search_telemetry SET compartment_id=1"));
 		const items = await listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant", scope });
 
 		expect(items).toHaveLength(1);
@@ -132,6 +136,7 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
+		await getDbAccessor().withWriteTxAsync((db) => db.exec("UPDATE memory_search_telemetry SET compartment_id=1"));
 		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: true, scope })).toHaveLength(1);
 		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: false, scope })).toHaveLength(0);
 	});

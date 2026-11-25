@@ -1,8 +1,6 @@
 import { citedEvidenceReadScopeSql } from "./diagnostics";
-import { z } from "zod";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import type { DbAccessor, ReadDb } from "./db-accessor";
-import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import { tableExists } from "./db-helpers";
 
 export interface QueueCounts {
@@ -417,71 +415,6 @@ export async function getQueueDiagnosticsSnapshotAsync(
 	scope: ReadScope,
 	accessor?: DbAccessor,
 ): Promise<QueueDiagnosticsSnapshot> {
-	const { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } = await import("./db-owner-runtime");
-	const readable = readableJobPredicate(scope);
-	const owner = accessor ? await getDbOwnerForAccessor(accessor) : undefined;
-	async function query<Row>(
-		statement: import("./db-owner-protocol").DbOwnerStatement,
-		options: import("./db-owner-runtime").DbOwnerSqlOptions,
-	): Promise<Row> {
-		if (!owner) return dbOwnerQuery<Row>(statement, options);
-		return owner.submit<Row>(
-			{ kind: "query", statement },
-			{ operation: options.operation, lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
-		).result;
-	}
-
-	const options = { operation: "diagnostics.queue.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS } as const;
-	const counts = { pending: 0, leased: 0, completed: 0, failed: 0, dead: 0 };
-	let truncated = false;
-	for (const status of ["pending", "leased", "completed", "failed", "dead"] as const) {
-		const rows = await query<readonly { status: string }[]>(
-			{
-				sql: `SELECT status FROM memory_jobs WHERE status=? AND job_type<>'extract'${readable.sql} LIMIT ?`,
-				params: z
-					.array(z.union([z.string(), z.number()]))
-					.parse([status, ...readable.args, QUEUE_DIAGNOSTICS_COUNT_LIMIT + 1]),
-				result: "all",
-			},
-			options,
-		);
-		counts[status] = Math.min(rows.length, QUEUE_DIAGNOSTICS_COUNT_LIMIT);
-		truncated ||= rows.length > QUEUE_DIAGNOSTICS_COUNT_LIMIT;
-	}
-	const oldest = await query<{ created_at: string } | null>(
-		{
-			sql: `SELECT created_at FROM memory_jobs WHERE status IN ('pending','leased') AND job_type<>'extract'${readable.sql} ORDER BY created_at ASC LIMIT 1`,
-			params: z.array(z.union([z.string(), z.number()])).parse(readable.args),
-			result: "get",
-		},
-		options,
-	);
-	const oldestDeadMemoryJob = await query<OldestDeadJob | null>(
-		{
-			sql: `SELECT id,job_type harness,memory_id sessionKey,created_at createdAt,attempts,error FROM memory_jobs WHERE status='dead' AND job_type<>'extract'${readable.sql} ORDER BY created_at ASC LIMIT 1`,
-			params: z.array(z.union([z.string(), z.number()])).parse(readable.args),
-			result: "get",
-		},
-		options,
-	);
-	const error = await query<{ error: string } | null>(
-		{
-			sql: `SELECT error FROM memory_jobs WHERE status IN ('pending','leased','dead') AND error IS NOT NULL AND job_type<>'extract'${readable.sql} ORDER BY updated_at DESC LIMIT 1`,
-			params: z.array(z.union([z.string(), z.number()])).parse(readable.args),
-			result: "get",
-		},
-		options,
-	);
-	return {
-		memory: {
-			...counts,
-			oldestAgeSec: ageSec(oldest?.created_at ?? null),
-			oldestDeadAgeSec: ageSec(oldestDeadMemoryJob?.createdAt ?? null),
-			lastError: error?.error ?? null,
-			completeness: truncated ? "truncated" : "exact",
-		},
-		summary: EMPTY_QUEUE_COUNTS,
-		oldestDeadSummaryJob: null,
-		oldestDeadMemoryJob,
-	};
+	const { dbOwnerQueueDiagnostics } = await import("./db-owner-runtime");
+	return dbOwnerQueueDiagnostics(scope, accessor);
 }

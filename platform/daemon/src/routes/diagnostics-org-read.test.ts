@@ -26,7 +26,7 @@ beforeAll(async () => {
 		"INSERT INTO users(id,username,display_name,role) VALUES('reader','reader','Reader','admin'),('audience','audience','Audience','admin')",
 		"INSERT INTO classifications(id,name) VALUES('cls_secret','Secret')",
 		"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES('cls_secret','user','audience')",
-		"INSERT INTO compartments(id,key) VALUES(1,'cls_secret')",
+		"INSERT INTO compartments(id,key) VALUES(1,'cls_secret'),(2,'public-fixture')",
 		"INSERT INTO compartment_members(compartment_id,classification_id) VALUES(1,'cls_secret')",
 		"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('visible','readable','default','2026-01-01','2026-01-01')",
 	])
@@ -79,6 +79,41 @@ async function body(path: string, audience = false): Promise<Record<string, unkn
 	expect(response.status).toBe(200);
 	return response.json();
 }
+
+test("unlabelled telemetry is absent unless the reader has all agent and compartment reach", async () => {
+	const paths = [
+		"/api/telemetry/memory-search?limit=1",
+		"/api/telemetry/memory-search/export?limit=1",
+		"/api/diagnostics/database/tables/memory_search_telemetry/sample?limit=1",
+	];
+	const snapshot = () =>
+		Promise.all(
+			paths.map(async (path) => {
+				const res = await app.request(path);
+				expect(res.status).toBe(200);
+				return res.text();
+			}),
+		);
+	const before = await snapshot();
+	await write(
+		"INSERT INTO memory_search_telemetry(id,created_at,route,agent_id,query,filters_json,method,result_count,no_hits,duration_ms,timings_json,results_json) VALUES('unknown-label','9999','test','default','unknown snapshot','{}','hybrid',1,0,1,'{}','[]')",
+	);
+	expect(await snapshot()).toEqual(before);
+	await write("UPDATE memory_search_telemetry SET query='updated unknown snapshot' WHERE id='unknown-label'");
+	expect(await snapshot()).toEqual(before);
+	const { readScopedSearchTelemetry } = await import("../diagnostics");
+	expect(
+		(await readScopedSearchTelemetry({ scope: { reach: { kind: "all" }, compartments: "all", projects: null } })).map(
+			(row) => row.id,
+		),
+	).toContain("unknown-label");
+	expect(
+		await readScopedSearchTelemetry({
+			scope: { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null },
+		}),
+	).toEqual([]);
+	await write("DELETE FROM memory_search_telemetry WHERE id='unknown-label'");
+});
 
 test("admin diagnostics exclude hidden inserts and edits, audience reads them, and reclassification hides them", async () => {
 	await write(
@@ -146,7 +181,7 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 	);
 	expect(await body("/api/diagnostics/queue")).toMatchObject({ oldestDeadMemoryJob: { id: "copied-job" } });
 	await write(
-		"INSERT INTO memory_search_telemetry(id,created_at,route,agent_id,query,filters_json,method,result_count,no_hits,duration_ms,timings_json,results_json) VALUES('copied-search','2090','copy','default','copied visible','{}','hybrid',1,0,1,'{}','[]')",
+		"INSERT INTO memory_search_telemetry(id,created_at,route,agent_id,query,filters_json,method,result_count,no_hits,duration_ms,timings_json,results_json,compartment_id) VALUES('copied-search','2090','copy','default','copied visible','{}','hybrid',1,0,1,'{}','[]',2)",
 	);
 	await write("INSERT INTO evidence_citations VALUES('telemetry','copied-search','default','memory','copied')");
 	expect(await body("/api/embeddings/projection")).toMatchObject({ count: 2, total: 2 });

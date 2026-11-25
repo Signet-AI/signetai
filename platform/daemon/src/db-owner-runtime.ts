@@ -239,6 +239,40 @@ async function executeInlineOwnerRequest(
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
 		});
+	if (request.kind === "diagnostics_schema")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readDatabaseSchemaAsync(db, request.scope),
+		);
+	if (request.kind === "diagnostics_sample")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readTableSampleAsync(
+				db,
+				request.table,
+				request.limit,
+				request.offset,
+				request.scope,
+			),
+		);
+	if (request.kind === "search_telemetry_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readScopedSearchTelemetry(request.query, db),
+		);
+	if (request.kind === "queue_diagnostics_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics-queue")).getQueueDiagnosticsSnapshot(db, { scope: request.scope, fresh: true }),
+		);
+	if (request.kind === "projection_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./embedding-projection-owner")).executeProjectionReadInOwner(db, request),
+		);
+	if (request.kind === "dreaming_reviewed_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
+				db,
+				request.agentId,
+				request.scope,
+			),
+		);
 	if (request.kind === "reflection_list") {
 		const { readReflectionsInOwner } = await import("./reflection-owner");
 		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
@@ -719,6 +753,60 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
+export async function dbOwnerDiagnosticSchema(
+	scope?: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): Promise<import("./diagnostics").DatabaseSchemaResponse> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "diagnostics_schema", scope },
+		{ operation: "diagnostics.schema", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerDiagnosticSample(
+	table: string,
+	limit: number,
+	offset: number,
+	scope?: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readTableSampleAsync> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "diagnostics_sample", scope, table, limit, offset },
+		{ operation: "diagnostics.sample", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerSearchTelemetry(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readScopedSearchTelemetry> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "search_telemetry_read", query },
+		{ operation: "telemetry.memory-search.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerQueueDiagnostics(
+	scope: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): Promise<import("./diagnostics-queue").QueueDiagnosticsSnapshot> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "queue_diagnostics_read", scope },
+		{ operation: "diagnostics.queue.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerReviewedEvidence(
+	accessor: DbAccessor,
+	agentId: string,
+	scope?: import("./read-scope").ReadScope,
+): Promise<readonly import("./pipeline/dreaming-evidence-reviews").DreamingReviewedEvidence[]> {
+	return submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "dreaming_reviewed_read", agentId, scope },
+		{ operation: "dreaming.reviewed.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
 export async function dbOwnerReflectionList(
 	scope: import("./read-scope").ReadScope,
 	input: import("./reflection-owner").ReflectionListInput,

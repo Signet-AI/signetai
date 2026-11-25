@@ -35,7 +35,9 @@ from tables that do not carry a project label.
 
 Constellation and traversal metadata from unscoped background caches is `null` in
 organization mode; it is not a count of hidden work. Local metadata behavior is
-unchanged.
+unchanged. Local `shared` and `group` policies do not widen graph or other
+derived tables that lack a visibility field: those rows remain own-agent only.
+Organization all-agent reach still crosses active agents.
 
 ### GET /api/knowledge/navigation/entities
 

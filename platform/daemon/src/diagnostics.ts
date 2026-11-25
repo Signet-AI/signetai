@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { DbAccessor } from "./db-accessor";
-import { ownerReadAll } from "./db-owner-sql";
-import { getDbOwnerForAccessor } from "./db-owner-runtime";
+
+import { dbOwnerDiagnosticSchema, dbOwnerDiagnosticSample, dbOwnerSearchTelemetry } from "./db-owner-runtime";
 import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { readMemoriesFtsIndexRowCount } from "@signet/core";
@@ -829,7 +829,7 @@ interface SqliteMasterRow {
 	readonly sql: string | null;
 }
 
-type DiagnosticsAccessor = DbAccessor;
+type DiagnosticsAccessor = DbAccessor | ReadDb;
 type DiagnosticRow = Record<string, unknown>;
 
 async function databaseDiagnosticRows(
@@ -837,21 +837,8 @@ async function databaseDiagnosticRows(
 	sql: string,
 	params: readonly unknown[] = [],
 ): Promise<DiagnosticRow[]> {
-	if (accessor)
-		return [
-			...(await ownerReadAll<DiagnosticRow>(await getDbOwnerForAccessor(accessor), sql, params, {
-				operation: "diagnostics.database.read",
-				deadlineMs: DB_OWNER_READ_DEADLINE_MS,
-			})),
-		];
-	return dbOwnerQuery<DiagnosticRow[]>(
-		{ sql, params: z.array(z.union([z.string(), z.number(), z.null()])).parse(params), result: "all" },
-		{
-			operation: "diagnostics.database.read",
-			lane: "read",
-			deadlineMs: DB_OWNER_READ_DEADLINE_MS,
-		},
-	);
+	if (!accessor || !("prepare" in accessor)) throw new Error("diagnostics_requires_owner");
+	return z.array(z.record(z.string(), z.unknown())).parse(accessor.prepare(sql).all(...params));
 }
 
 async function diagnosticTables(
@@ -986,6 +973,16 @@ export function citedEvidenceReadScopeSql(
 	};
 }
 
+export function telemetryLabelReadScopeSql(alias: string, scope: ReadScope): { sql: string; args: unknown[] } {
+	if (!/^[a-z_][a-z0-9_]*$/i.test(alias)) throw new Error("invalid_telemetry_identifier");
+	if (scope.reach.kind !== "all") return { sql: ` AND ${alias}.compartment_id IS NOT NULL`, args: [] };
+	if (scope.compartments === "all") return { sql: "", args: [] };
+	return {
+		sql: ` AND (${alias}.compartment_id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM compartments unreadable${scope.compartments.length ? ` WHERE unreadable.id NOT IN (${scope.compartments.map(() => "?").join(",")})` : ""}))`,
+		args: [...scope.compartments],
+	};
+}
+
 function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo[], scope?: ReadScope) {
 	if (!scope) return { sql: "", args: [] };
 	const names = new Set(columns.map((column) => column.name));
@@ -1015,7 +1012,11 @@ function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo
 				table === "memory_head_revision_entries" ? ["revision", "entry_id"] : names.has("id") ? ["id"] : ["entry_id"],
 			)
 		: { sql: "", args: [] };
-	return { sql: readable.sql + cited.sql, args: [...readable.args, ...cited.args] };
+	const label =
+		table === "memory_search_telemetry" || table === "session_recall_events"
+			? telemetryLabelReadScopeSql("d", scope)
+			: { sql: "", args: [] };
+	return { sql: readable.sql + cited.sql + label.sql, args: [...readable.args, ...cited.args, ...label.args] };
 }
 
 async function diagnosticCount(
@@ -1036,6 +1037,7 @@ export async function readDatabaseSchemaAsync(
 	accessor?: DiagnosticsAccessor,
 	scope?: ReadScope,
 ): Promise<DatabaseSchemaResponse> {
+	if (!accessor || !("prepare" in accessor)) return dbOwnerDiagnosticSchema(scope, accessor);
 	const tables: DatabaseTableInfo[] = [];
 	for (const row of await diagnosticTables(accessor, scope)) {
 		const columns = await diagnosticColumns(accessor, row.name);
@@ -1096,6 +1098,7 @@ export async function readTableSampleAsync(
 	offset: number,
 	scope?: ReadScope,
 ): Promise<DatabaseTableSampleResponse | { readonly error: string; readonly status: 400 | 404 }> {
+	if (!accessor || !("prepare" in accessor)) return dbOwnerDiagnosticSample(table, limit, offset, scope, accessor);
 	const match = (await diagnosticTables(accessor, scope)).find((row) => row.name === table);
 	if (!match) return { error: "unknown table", status: 404 };
 	const columns = await diagnosticColumns(accessor, table);
@@ -1120,14 +1123,16 @@ export async function readTableSampleAsync(
 
 export async function readScopedSearchTelemetry(
 	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
-	accessor?: DbAccessor,
+	accessor?: DiagnosticsAccessor,
 ): Promise<readonly import("./memory-search-telemetry").MemorySearchTelemetryRow[]> {
+	if (!accessor || !("prepare" in accessor)) return dbOwnerSearchTelemetry(query, accessor);
 	const scope = query.scope;
 	if (!scope) throw new Error("telemetry_read_scope_required");
 	const readable = readScopeSql("t", scope, { visibility: null, memory: null, session: "session_key", source: null });
 	const copied = citedEvidenceReadScopeSql("t", scope, "telemetry");
-	let sql = `SELECT t.* FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}`;
-	const args = [...readable.args, ...copied.args];
+	const label = telemetryLabelReadScopeSql("t", scope);
+	let sql = `SELECT t.* FROM memory_search_telemetry t WHERE 1=1${readable.sql}${copied.sql}${label.sql}`;
+	const args = [...readable.args, ...copied.args, ...label.args];
 	for (const [column, value, operator] of [
 		["agent_id", query.agentId, "="],
 		["session_key", query.sessionKey, "="],
@@ -1147,24 +1152,29 @@ export async function readScopedSearchTelemetry(
 	}
 	sql += " ORDER BY t.created_at DESC,t.id ASC LIMIT ? OFFSET ?";
 	args.push(query.limit ?? 100, query.offset ?? 0);
-	if (accessor)
-		return ownerReadAll<import("./memory-search-telemetry").MemorySearchTelemetryRow>(
-			await getDbOwnerForAccessor(accessor),
-			sql,
-			args,
-			{
-				operation: "telemetry.memory-search.read",
-				deadlineMs: DB_OWNER_READ_DEADLINE_MS,
-			},
-		);
-	return dbOwnerQuery(
-		{ sql, params: z.array(z.union([z.string(), z.number()])).parse(args), result: "all" },
-		{
-			operation: "telemetry.memory-search.read",
-			lane: "read",
-			deadlineMs: DB_OWNER_READ_DEADLINE_MS,
-		},
-	);
+	return z
+		.array(
+			z.object({
+				id: z.string(),
+				created_at: z.string(),
+				route: z.string(),
+				agent_id: z.string(),
+				session_key: z.string().nullable(),
+				project: z.string().nullable(),
+				query: z.string(),
+				keyword_query: z.string().nullable(),
+				filters_json: z.string(),
+				method: z.string(),
+				result_count: z.number(),
+				top_score: z.number().nullable(),
+				no_hits: z.number(),
+				duration_ms: z.number(),
+				timings_json: z.string(),
+				results_json: z.string(),
+				sources_json: z.string().nullable(),
+			}),
+		)
+		.parse(accessor.prepare(sql).all(...args));
 }
 
 export function scopedCheckpointStatement(
