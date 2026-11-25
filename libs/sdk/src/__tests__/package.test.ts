@@ -1,6 +1,6 @@
 import "../../../../tests/support/connector-safety.js";
 import { expect, test } from "bun:test";
-import { mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,6 +61,32 @@ try { await client.whoami(); process.exitCode=2; } catch (error) { if (!(error i
 		expect(stdout).toContain("node-auth-typed");
 	} finally {
 		server.stop(true);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("guarded Bun package scripts produce fresh build artifacts", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "sdk-guarded-build-"));
+	try {
+		await writeFile(
+			join(directory, "package.json"),
+			JSON.stringify({ scripts: { build: "bun build probe.ts --outdir dist" } }),
+		);
+		await writeFile(join(directory, "probe.ts"), "export const built = true;");
+		const child = Bun.spawn([process.execPath, "run", "build"], {
+			cwd: directory,
+			env: { ...process.env, HOME: directory },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(code, stderr).toBe(0);
+		expect(await Bun.file(join(directory, "dist/probe.js")).exists(), stdout + stderr).toBe(true);
+	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
