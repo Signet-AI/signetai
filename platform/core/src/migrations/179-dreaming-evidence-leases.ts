@@ -245,10 +245,15 @@ function partitionDreamingState(db: MigrationDb): void {
 
 function extendDreamingCitations(db: MigrationDb): void {
 	const definition = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='evidence_citations'").get();
-	if (typeof definition?.sql === "string" && definition.sql.includes("'attention'")) return;
+	if (
+		typeof definition?.sql === "string" &&
+		definition.sql.includes("'attention'") &&
+		definition.sql.includes("'community'")
+	)
+		return;
 	db.exec(`
 		CREATE TABLE evidence_citations_v179 (
-			derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection','contradiction','head_revision','proposal','telemetry','temporal_edge','attention')),
+			derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection','contradiction','head_revision','proposal','telemetry','temporal_edge','attention','community')),
 			derived_id TEXT NOT NULL, agent_id TEXT NOT NULL,
 			evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('memory','transcript','artifact','summary','attribute')),
 			evidence_id TEXT NOT NULL,

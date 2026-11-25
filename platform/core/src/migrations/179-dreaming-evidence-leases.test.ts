@@ -9,6 +9,34 @@ function upgraded(): Database {
 }
 
 describe("Dreaming lease migration", () => {
+	it("preserves community evidence citations introduced by migration 178", () => {
+		const db = new Database(":memory:");
+		try {
+			for (const migration of MIGRATIONS.filter((migration) => migration.version < 179)) migration.up(db);
+			db.exec(
+				"INSERT INTO entity_communities(id,agent_id,name) VALUES('community-before','default','Community before upgrade')",
+			);
+			db.exec(
+				"INSERT INTO memories(id,agent_id,content,created_at,updated_at) VALUES('source-before','default','Community evidence',datetime('now'),datetime('now'))",
+			);
+			db.exec(
+				"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('community','community-before','default','memory','source-before')",
+			);
+			const migration = MIGRATIONS.find((migration) => migration.version === 179);
+			if (!migration) throw new Error("migration missing");
+			migration.up(db);
+			migration.up(db);
+			expect(
+				db
+					.query(
+						"SELECT derived_kind,derived_id,evidence_id FROM evidence_citations WHERE derived_id='community-before'",
+					)
+					.get(),
+			).toEqual({ derived_kind: "community", derived_id: "community-before", evidence_id: "source-before" });
+		} finally {
+			db.close();
+		}
+	});
 	it("snapshots classification epochs and preserves them across idempotent upgrades", () => {
 		const db = upgraded();
 		try {

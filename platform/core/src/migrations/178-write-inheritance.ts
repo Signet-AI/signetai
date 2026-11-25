@@ -11,9 +11,16 @@ export const artifacts: MigrationArtifacts = {
 	indexes: ["idx_session_checkpoints_author", "idx_cross_agent_messages_compartment"],
 };
 export function up(db: MigrationDb): void {
-	for (const table of ["embeddings", "embeddings_staging"]) {
+	for (const table of ["embeddings", "embeddings_staging", "evidence_citations"]) {
 		const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql;
-		if (typeof schema !== "string" || !/content_hash\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(schema)) continue;
+		if (typeof schema !== "string") continue;
+		const rewritten =
+			table === "evidence_citations"
+				? schema.includes("'community'")
+					? schema
+					: schema.replace("'telemetry'", "'telemetry','community'")
+				: schema.replace(/(content_hash\s+TEXT\s+NOT NULL)\s+UNIQUE/i, "$1");
+		if (rewritten === schema) continue;
 		const objects = db
 			.prepare(
 				"SELECT type,name,sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
@@ -21,9 +28,7 @@ export function up(db: MigrationDb): void {
 			.all(table);
 		const temporary = `${table}_write_inheritance`;
 		db.exec(
-			schema
-				.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"[^"]+"|[^\s(]+)/i, `CREATE TABLE ${temporary}`)
-				.replace(/(content_hash\s+TEXT\s+NOT NULL)\s+UNIQUE/i, "$1"),
+			rewritten.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"[^"]+"|[^\s(]+)/i, `CREATE TABLE ${temporary}`),
 		);
 		const names = db
 			.prepare(`PRAGMA table_info(${table})`)
@@ -37,17 +42,34 @@ export function up(db: MigrationDb): void {
 			if (typeof object.sql !== "string" || object.name === "idx_embeddings_content_hash_unique") continue;
 			db.exec(object.sql);
 		}
-		db.exec(
-			`CREATE UNIQUE INDEX ${table}_parent_content_hash ON ${table}(agent_id,source_type,source_id,content_hash)`,
-		);
+		if (table !== "evidence_citations")
+			db.exec(
+				`CREATE UNIQUE INDEX ${table}_parent_content_hash ON ${table}(agent_id,source_type,source_id,content_hash)`,
+			);
 	}
 
+	db.exec("DROP INDEX IF EXISTS idx_embeddings_content_hash_unique");
+	for (const table of ["embeddings", "embeddings_staging"])
+		if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))
+			db.exec(
+				`CREATE UNIQUE INDEX IF NOT EXISTS ${table}_parent_content_hash ON ${table}(agent_id,source_type,source_id,content_hash)`,
+			);
+	if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_jobs'").get())
+		db.exec(
+			"CREATE INDEX IF NOT EXISTS idx_pending_classification_write_scope ON org_jobs(kind,status,json_extract(params_json,'$.target.agentId')) WHERE json_valid(params_json)",
+		);
 	for (const name of ["idx_memories_content_hash_unique", "idx_memories_idempotency_key"]) {
 		const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(name)?.sql;
-		if (typeof sql === "string" && /CREATE\s+UNIQUE\s+INDEX/i.test(sql)) {
-			db.exec(`DROP INDEX ${name}`);
-			db.exec(sql.replace(/CREATE\s+UNIQUE\s+INDEX/i, "CREATE INDEX"));
-		}
+		if (typeof sql !== "string" || /COALESCE\s*\(\s*compartment_id\s*,\s*0\s*\)/i.test(sql)) continue;
+		const where = sql.toUpperCase().lastIndexOf("WHERE");
+		const end = sql.lastIndexOf(")", where < 0 ? sql.length : where);
+		if (end < 0) throw new Error("Invalid memory dedupe index schema");
+		const scoped = `${sql.slice(0, end)},COALESCE(compartment_id,0)${sql.slice(end)}`.replace(
+			/^CREATE\s+(?:UNIQUE\s+)?INDEX/i,
+			"CREATE UNIQUE INDEX",
+		);
+		db.exec(`DROP INDEX ${name}`);
+		db.exec(scoped);
 	}
 
 	for (const [table, fields] of Object.entries(columns)) {
