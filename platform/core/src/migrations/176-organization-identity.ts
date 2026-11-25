@@ -26,6 +26,8 @@ const addedColumns = {
 	entities: { person_user_id: "TEXT" },
 };
 
+const authorScopes = ["memories", "documents", "memory_artifacts", "session_summaries", "session_transcripts"] as const;
+const authorColumn = (table: string) => (table === "session_transcripts" ? "speaker_user_id" : "author_user_id");
 export const artifacts: MigrationArtifacts = {
 	tables: [
 		"organization",
@@ -43,6 +45,7 @@ export const artifacts: MigrationArtifacts = {
 		Object.keys(columns).map((column) => ({ table, column })),
 	),
 	indexes: [
+		...authorScopes.map((table) => `idx_${table}_${authorColumn(table)}`),
 		"idx_agents_kind_user",
 		"idx_agents_kind_group",
 		"idx_device_authorizations_status_expiry",
@@ -125,6 +128,8 @@ export function up(db: MigrationDb): void {
 			if (table === "api_keys" && column === "legacy") db.exec("UPDATE api_keys SET legacy = 1");
 		}
 	}
+	for (const table of authorScopes)
+		db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_${authorColumn(table)} ON ${table}(${authorColumn(table)})`);
 	db.exec("CREATE INDEX IF NOT EXISTS idx_agents_kind_user ON agents(kind,owner_user_id)");
 	db.exec("CREATE INDEX IF NOT EXISTS idx_agents_kind_group ON agents(kind,owner_group_id)");
 	db.exec(

@@ -641,96 +641,99 @@ describe("organization HTTP flows", () => {
 			),
 		).toEqual(expect.arrayContaining([{ target_id: "purge-target" }, { target_id: "purge-derived" }]));
 	});
-	test("R3 pinned evidence reports incomplete and residual instead of success", async () => {
-		const root = await claim();
-		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
-		const accepted = await call(
-			"/api/auth/invites/accept",
-			"POST",
-			{
-				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
-				username: "departing",
-				displayName: "Departing",
-				password: "test",
-			},
-			"",
-		);
-		const departing = await accepted.json();
-		const { getDbAccessor, runWriteTxAsync } = await import("../db-accessor");
-		const { txIngestEnvelope } = await import("../transactions");
-		const { organizationWrite } = await import("./organization-store");
-		await runWriteTxAsync(getDbAccessor(), (db) => {
-			for (const [memoryId, owner] of [
-				["purge-target", departing.user.id],
-				["keep-other", root.user.id],
-				["purge-derived", root.user.id],
-			])
-				txIngestEnvelope(db, {
-					id: memoryId,
-					content: memoryId,
-					contentHash: memoryId,
-					who: "fixture",
-					why: null,
-					project: null,
-					importance: 0.5,
-					type: "fact",
-					tags: null,
-					pinned: memoryId === "purge-target" ? 1 : 0,
-					sourceType: "manual",
-					sourceId: null,
-					agentId: `personal-${owner.slice(4)}`,
-					createdAt: new Date().toISOString(),
-					author: { userId: owner, credential: "session:fixture" },
-				});
-		});
-		await organizationWrite([
-			statement(
-				"INSERT INTO session_transcripts (agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'User: disposable test','test',?,?)",
-				[`personal-${departing.user.id.slice(4)}`, "departing-session", new Date().toISOString(), departing.user.id],
-			),
-		]);
-		await organizationWrite([
-			statement(
-				"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-derived','memory','purge-target',?)",
-				[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
-			),
-			statement(
-				"INSERT INTO documents (id,source_type,raw_content,created_at,updated_at,author_user_id) VALUES ('purge-doc','text','private',?,?,?)",
-				[new Date().toISOString(), new Date().toISOString(), departing.user.id],
-			),
-			statement(
-				"INSERT INTO memory_artifacts (agent_id,source_path,source_sha256,source_kind,session_id,session_token,captured_at,updated_at,author_user_id) VALUES (?,'purge-artifact','hash','summary','unbound','unbound',?,?,?)",
-				[
-					`personal-${departing.user.id.slice(4)}`,
-					new Date().toISOString(),
-					new Date().toISOString(),
-					departing.user.id,
-				],
-			),
-			statement(
-				"INSERT INTO session_claims (agent_id,session_key,claimed_at,expires_at) VALUES (?,'departing-session',?,?)",
-				[
-					`personal-${departing.user.id.slice(4)}`,
-					new Date().toISOString(),
-					new Date(Date.now() + 60000).toISOString(),
-				],
-			),
-		]);
-		const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
-			mode: "purge",
-			dryRun: false,
-		});
-		expect(started.status).toBe(202);
-		const job = await started.json();
-		let status = await (await call(`/api/org/jobs/${job.jobId}`)).json();
-		const deadline = Date.now() + 10_000;
-		while (status.status === "running" && Date.now() < deadline) {
-			await Bun.sleep(50);
-			status = await (await call(`/api/org/jobs/${job.jobId}`)).json();
-		}
-		expect(status.status).toBe("incomplete");
-		expect(JSON.parse(status.progress_json).residual.memories).toBe(1);
-	});
+	test.each([true, false])(
+		"R3 pinned evidence reports incomplete and residual instead of success (authored=%s)",
+		async (owned: boolean) => {
+			const root = await claim();
+			const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+			const accepted = await call(
+				"/api/auth/invites/accept",
+				"POST",
+				{
+					token: new URL(invite.inviteUrl).pathname.split("/").pop(),
+					username: "departing",
+					displayName: "Departing",
+					password: "test",
+				},
+				"",
+			);
+			const departing = await accepted.json();
+			const { getDbAccessor, runWriteTxAsync } = await import("../db-accessor");
+			const { txIngestEnvelope } = await import("../transactions");
+			const { organizationWrite } = await import("./organization-store");
+			await runWriteTxAsync(getDbAccessor(), (db) => {
+				for (const [memoryId, owner] of [
+					["purge-target", departing.user.id],
+					["keep-other", root.user.id],
+					["purge-derived", root.user.id],
+				])
+					txIngestEnvelope(db, {
+						id: memoryId,
+						content: memoryId,
+						contentHash: memoryId,
+						who: "fixture",
+						why: null,
+						project: null,
+						importance: 0.5,
+						type: "fact",
+						tags: null,
+						pinned: memoryId === "purge-target" ? 1 : 0,
+						sourceType: !owned && memoryId === "purge-target" ? "session" : "manual",
+						sourceId: !owned && memoryId === "purge-target" ? "departing-session" : null,
+						agentId: `personal-${owner.slice(4)}`,
+						createdAt: new Date().toISOString(),
+						author: { userId: !owned && memoryId === "purge-target" ? null : owner, credential: "system" },
+					});
+			});
+			await organizationWrite([
+				statement(
+					"INSERT INTO session_transcripts (agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'User: disposable test','test',?,?)",
+					[`personal-${departing.user.id.slice(4)}`, "departing-session", new Date().toISOString(), departing.user.id],
+				),
+			]);
+			await organizationWrite([
+				statement(
+					"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-derived','memory','purge-target',?)",
+					[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
+				),
+				statement(
+					"INSERT INTO documents (id,source_type,raw_content,created_at,updated_at,author_user_id) VALUES ('purge-doc','text','private',?,?,?)",
+					[new Date().toISOString(), new Date().toISOString(), departing.user.id],
+				),
+				statement(
+					"INSERT INTO memory_artifacts (agent_id,source_path,source_sha256,source_kind,session_id,session_token,captured_at,updated_at,author_user_id) VALUES (?,'purge-artifact','hash','summary','unbound','unbound',?,?,?)",
+					[
+						`personal-${departing.user.id.slice(4)}`,
+						new Date().toISOString(),
+						new Date().toISOString(),
+						departing.user.id,
+					],
+				),
+				statement(
+					"INSERT INTO session_claims (agent_id,session_key,claimed_at,expires_at) VALUES (?,'departing-session',?,?)",
+					[
+						`personal-${departing.user.id.slice(4)}`,
+						new Date().toISOString(),
+						new Date(Date.now() + 60000).toISOString(),
+					],
+				),
+			]);
+			const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
+				mode: "purge",
+				dryRun: false,
+			});
+			expect(started.status).toBe(202);
+			const job = await started.json();
+			let status = await (await call(`/api/org/jobs/${job.jobId}`)).json();
+			const deadline = Date.now() + 10_000;
+			while (status.status === "running" && Date.now() < deadline) {
+				await Bun.sleep(50);
+				status = await (await call(`/api/org/jobs/${job.jobId}`)).json();
+			}
+			expect(status.status).toBe("incomplete");
+			expect(JSON.parse(status.progress_json).residual.memories).toBe(1);
+		},
+	);
 	test("browser login exposes CSRF and expiry but keeps the access secret in HttpOnly cookies", async () => {
 		await claim();
 		const response = await call("/api/auth/login", "POST", { username: "admin", password: "test password" }, "");

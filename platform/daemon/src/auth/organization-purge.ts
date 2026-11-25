@@ -117,7 +117,7 @@ export function purgeAuthoredMemoryBatchInTx(db: WriteDb, userId: string, author
 	);
 	return { removed: counts.memories ?? 0, remaining, counts, blocked };
 }
-async function purgeResidual(userId: string): Promise<Record<string, number>> {
+async function purgeResidual(userId: string, jobId: string): Promise<Record<string, number>> {
 	const residual: Record<string, number> = {};
 	for (const [table, column] of [
 		["memories", "author_user_id"],
@@ -133,21 +133,28 @@ async function purgeResidual(userId: string): Promise<Record<string, number>> {
 	for (const table of ["session_summaries", "session_claims", "memory_thread_heads", "session_memories"]) {
 		const row = await organizationQuery<{ n: number }>(
 			statement(
-				`SELECT COUNT(*) AS n FROM ${table} s WHERE ${table === "session_summaries" ? "s.author_user_id=? OR " : ""}EXISTS (SELECT 1 FROM audit_events a WHERE a.target_kind='session' AND a.action='session.purged' AND a.agent_id=s.agent_id AND s.session_key IN (a.target_id,'session:'||a.target_id) AND json_extract(a.detail_json,'$.offboardUserId')=?)`,
-				table === "session_summaries" ? [userId, userId] : [userId],
+				`SELECT COUNT(*) AS n FROM ${table} s WHERE ${table === "session_summaries" ? "s.author_user_id=? OR " : ""}EXISTS (SELECT 1 FROM audit_events a WHERE a.target_kind='session' AND a.action='session.purged' AND a.agent_id=s.agent_id AND s.session_key IN (a.target_id,'session:'||a.target_id) AND json_extract(a.detail_json,'$.offboardUserId')=? AND json_extract(a.detail_json,'$.jobId')=?)`,
+				table === "session_summaries" ? [userId, userId, jobId] : [userId, jobId],
 				"get",
 			),
 		);
 		residual[table] = row.n;
 	}
-	const derived = await organizationQuery<{ n: number }>(
+	const retained = `SELECT DISTINCT m.id FROM memories m JOIN session_transcript_deleted_sources d ON d.kind='memory' AND d.id=m.id AND d.agent_id=m.agent_id JOIN audit_events a ON a.action='session.purged' AND a.target_kind='session' AND a.target_id=d.session_key AND a.agent_id=d.agent_id AND json_extract(a.detail_json,'$.generation')=d.generation WHERE json_extract(a.detail_json,'$.offboardUserId')=? AND json_extract(a.detail_json,'$.jobId')=?`;
+	const derived = `SELECT DISTINCT m.id FROM memories m JOIN derived_memory_sources d ON d.derived_memory_id=m.id WHERE EXISTS (SELECT 1 FROM audit_events a WHERE a.target_kind=d.source_kind AND a.target_id=d.source_id AND a.agent_id=d.agent_id AND a.action IN ('memory.purged','artifact.purged','summary.purged') AND json_extract(a.detail_json,'$.offboardUserId')=?)`;
+	const row = await organizationQuery<{ n: number }>(
+		statement(`SELECT COUNT(*) AS n FROM (${derived} UNION ${retained})`, [userId, userId, jobId], "get"),
+	);
+	residual.derived_memories = row.n;
+	const memories = await organizationQuery<{ n: number }>(
 		statement(
-			`SELECT COUNT(DISTINCT m.id) AS n FROM memories m JOIN derived_memory_sources d ON d.derived_memory_id=m.id WHERE EXISTS (SELECT 1 FROM audit_events a WHERE a.target_kind=d.source_kind AND a.target_id=d.source_id AND a.agent_id=d.agent_id AND a.action IN ('memory.purged','artifact.purged','summary.purged') AND json_extract(a.detail_json,'$.offboardUserId')=?)`,
-			[userId],
+			`SELECT COUNT(*) AS n FROM memories WHERE author_user_id=? OR id IN (${derived} UNION ${retained})`,
+			[userId, userId, userId, jobId],
 			"get",
 		),
 	);
-	residual.derived_memories = derived.n;
+	residual.memories = memories.n;
+
 	return residual;
 }
 export async function runOffboardPurge(p: Principal, jobId: string, userId: string, basePath: string): Promise<void> {
@@ -229,7 +236,7 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 						author.credential,
 						row.session_key,
 						row.agent_id,
-						JSON.stringify({ offboardUserId: userId }),
+						JSON.stringify({ offboardUserId: userId, jobId, generation: result.generation }),
 					],
 					result: "run",
 				},
@@ -245,7 +252,7 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 		]);
 		if (!batch.remaining || batch.blocked || !Object.values(batch.counts).some((n) => n > 0)) break;
 	}
-	const residual = await purgeResidual(userId);
+	const residual = await purgeResidual(userId, jobId);
 	const status = Object.values(residual).some((n) => n > 0) ? "incomplete" : "complete";
 	await organizationWrite([
 		statement("UPDATE org_jobs SET status=?,progress_json=?,finished_at=? WHERE id=?", [
