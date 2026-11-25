@@ -7,7 +7,7 @@ test("checkpoint migration resolves unique transcript owners and preserves ambig
 	const db = new Database(":memory:");
 	for (const migration of MIGRATIONS) if (migration.version < 177) migration.up(db);
 	db.exec(
-		"INSERT INTO agents(id,name) VALUES('other','Other');INSERT INTO session_transcripts(session_key,content,agent_id,created_at) VALUES('one','x','default','now'),('shared','x','default','now'),('shared','y','other','now');INSERT INTO session_checkpoints(id,session_key,harness,trigger,digest,prompt_count,created_at) VALUES('a','one','test','test','x',1,'now'),('b','shared','test','test','y',1,'now')",
+		"INSERT INTO agents(id,name,created_at,updated_at) VALUES('other','Other','now','now');INSERT INTO session_transcripts(session_key,content,agent_id,created_at) VALUES('one','x','default','now'),('shared','x','default','now'),('shared','y','other','now');INSERT INTO session_checkpoints(id,session_key,harness,trigger,digest,prompt_count,created_at) VALUES('a','one','test','test','x',1,'now'),('b','shared','test','test','y',1,'now')",
 	);
 	up(db);
 	expect(db.prepare("SELECT id,agent_id FROM session_checkpoints ORDER BY id").all()).toEqual([

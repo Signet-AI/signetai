@@ -1,7 +1,7 @@
 import { attemptAsync } from "@signet/core";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { resolveReadScope } from "../read-scope";
+import { resolveReadScope, readVisibilitySchema } from "../read-scope";
 import {
 	classificationRequest,
 	executeClassificationJob,
@@ -89,7 +89,26 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 		)
 			return reply({ error: "Forbidden", reason }, 403);
 		if (error instanceof z.ZodError) return reply({ error: "Invalid request", reason: "invalid_request" }, 400);
-		if (reason === "archived_classification" || reason === "principal_not_found") return reply({ error: reason }, 409);
+		if (
+			[
+				"archived_classification",
+				"principal_not_found",
+				"name_conflict",
+				"job_not_pending",
+				"classification_pending_timeout",
+			].includes(reason)
+		)
+			return reply({ error: reason }, 409);
+		if (
+			["invalid_cursor", "invalid_job", "too_many_principals", "unsupported_classification_operation"].includes(
+				reason,
+			) ||
+			error instanceof SyntaxError
+		)
+			return reply(
+				{ error: "Invalid request", reason: error instanceof SyntaxError ? "invalid_request" : reason },
+				400,
+			);
 		throw error;
 	});
 	app.get("/api/classifications", async (c) => reply(await request({ op: "list", actor: actor(c).actor })));
@@ -144,16 +163,14 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				projects: a.projects,
 			},
 			a.actor,
-			async (subject) =>
-				z
-					.union([z.literal("all"), z.array(z.number().int().positive())])
-					.parse(await request({ op: "readable", subject })),
+			async (subject) => readVisibilitySchema.parse(await request({ op: "visibility", subject })),
 		);
 		return reply(await request({ op: "preview", actor: a.actor, id: c.req.param("id"), target: body.target, scope }));
 	});
 	for (const op of ["apply", "remove"] as const)
 		app.post(`/api/classifications/:id/${op}`, async (c) => {
 			const principal = actor(c);
+			if (principal.actor.compliance && !principal.canClassify) throw new Error("permission");
 			const a = { ...principal.actor, compliance: principal.actor.compliance && principal.canClassify },
 				body = z
 					.object({ target })
@@ -180,10 +197,7 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				projects: a.projects,
 			},
 			a.actor,
-			async (subject) =>
-				z
-					.union([z.literal("all"), z.array(z.number().int().positive())])
-					.parse(await request({ op: "readable", subject })),
+			async (subject) => readVisibilitySchema.parse(await request({ op: "visibility", subject })),
 		);
 		return reply(
 			await request({

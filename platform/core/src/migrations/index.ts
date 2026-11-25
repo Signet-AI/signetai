@@ -1,3 +1,5 @@
+import { rebuildBaseCompartmentFts, rebuildCompartmentFtsShards } from "../compartment-shards";
+import { createMemoriesFts } from "../fts-schema";
 import { up as baseline } from "./001-baseline";
 import { up as pipelineV2 } from "./002-pipeline-v2";
 import { up as uniqueContentHash } from "./003-unique-content-hash";
@@ -1827,6 +1829,12 @@ export function runMigrations(db: MigrationDb): void {
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
 			migration.up(db);
+			if (applied.has(177) && migration.version < 177) {
+				rebuildBaseCompartmentFts(db);
+				rebuildCompartmentFtsShards(db);
+				createMemoriesFts(db);
+			}
+
 			verifyArtifacts(db, migration);
 
 			db.prepare(

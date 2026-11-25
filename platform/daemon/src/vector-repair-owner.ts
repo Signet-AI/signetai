@@ -449,8 +449,7 @@ function processMissingVectors(
 
 		try {
 			guard(options);
-			syncEmbeddingCompartment(db, "embeddings", candidate.id, activeVectorProjectionTable(db));
-			const changed = 1;
+			const changed = syncEmbeddingCompartment(db, "embeddings", candidate.id, activeVectorProjectionTable(db));
 			cursor = candidate.id;
 			counters.batchRows += 1;
 			counters.batchProcessed += 1;

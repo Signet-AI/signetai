@@ -1,3 +1,4 @@
+import { attemptAsync } from "@signet/core";
 import type { DatabaseIntegrityStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -68,7 +69,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch, { siteToken: "startup-recovery.ts:71" });
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "db:startup.recovery.write-batch" });
 }
 async function drainBatchesAsync<Item>(
 	accessor: DbAccessor,
@@ -82,7 +83,7 @@ async function drainBatchesAsync<Item>(
 	while (processed < maxTotal) {
 		const limit = Math.min(BATCH_SIZE, maxTotal - processed);
 		const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), {
-			siteToken: "startup-recovery.ts:84",
+			siteToken: "db:startup.recovery.fetch-batch",
 		});
 		if (!batch || batch.length === 0) return processed;
 		await writeBatch(accessor, (db) => processBatch(db, batch));
@@ -405,8 +406,25 @@ export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
 	return Promise.resolve(lastCompletedRecovery ?? pendingReport());
 }
 
+export async function observeStartupRecoveryCompletion(
+	observer: (report: StartupRecoveryReport) => void,
+): Promise<void> {
+	await attemptAsync(async () => {
+		try {
+			observer(await getStartupRecoveryCompletion());
+		} catch (error) {
+			logger.warn("startup-recovery", "Startup recovery observer failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
+	});
+}
 async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerClient): Promise<StartupRecoveryReport> {
-	if (owner !== undefined) return await runOwnerStartupRecovery(owner);
+	if (owner !== undefined) {
+		const report = await runOwnerStartupRecovery(owner);
+		return report;
+	}
 	const startedAt = Date.now();
 	const recoveryStartedAt = new Date(Math.floor(Date.now() / 1_000) * 1_000).toISOString();
 	logger.info("startup-recovery", "Running startup recovery asynchronously");
@@ -497,7 +515,7 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 					| undefined;
 				return state?.state === "building";
 			},
-			{ siteToken: "startup-recovery.ts:489" },
+			{ siteToken: "db:startup.recovery.embedding-state" },
 		);
 
 		if (migrationInProgress) {

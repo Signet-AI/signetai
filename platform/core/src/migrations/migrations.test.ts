@@ -1,3 +1,4 @@
+import { compartmentFor } from "../compartment-shards";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -1815,10 +1816,10 @@ describe("migration framework", () => {
 
 	test("migration 003 deduplicates existing content hashes", () => {
 		db = createFreshDb();
-		runMigrations(db);
-		db.prepare("DELETE FROM schema_migrations WHERE version >= 3").run();
-		db.run("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
-		db.run("CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)");
+		for (const migration of MIGRATIONS) {
+			if (migration.version > 2) break;
+			migration.up(db);
+		}
 
 		const now = new Date().toISOString();
 		const older = "2020-01-01T00:00:00.000Z";
@@ -2509,21 +2510,42 @@ describe("migration framework", () => {
 		).toThrow();
 	});
 
-	test("migration 063 limits memories_fts updates to content changes", () => {
+	test("phantom FTS migration repair preserves classified transcript isolation", () => {
 		db = createFreshDb();
 		runMigrations(db);
-
-		const trigger = db
-			.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'memories_au'")
-			.get();
-		expect(trigger?.sql).toContain("AFTER UPDATE OF content ON memories");
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_repair','Repair')");
+		const c = compartmentFor(db, ["cls_repair"]);
+		db.prepare(
+			"INSERT INTO session_transcripts(session_key,content,agent_id,created_at,compartment_id) VALUES('hidden','classifiedquartz','default','now',?)",
+		).run(c);
+		db.exec("DROP TABLE session_transcripts_fts");
+		runMigrations(db);
+		expect(
+			db
+				.query("SELECT count(*) n FROM session_transcripts_fts WHERE session_transcripts_fts MATCH 'classifiedquartz'")
+				.get(),
+		).toEqual({ n: 0 });
+		expect(
+			db
+				.query(
+					`SELECT count(*) n FROM session_transcripts_fts__c${c} WHERE session_transcripts_fts__c${c} MATCH 'classifiedquartz'`,
+				)
+				.get(),
+		).toEqual({ n: 1 });
+	});
+	test("migration 063/177 updates FTS on content edits and compartment moves only", () => {
+		db = createFreshDb();
+		runMigrations(db);
 
 		db.exec(`
 			INSERT INTO memories (id, content, type, confidence, access_count, created_at, updated_at, updated_by)
 			VALUES ('mem-fts-access', 'recall access tracking should stay searchable', 'fact', 0.9, 0, datetime('now'), datetime('now'), 'test')
 		`);
 
+		const ftsData = () => db.query("SELECT id,hex(block) block FROM memories_fts_data ORDER BY id").all();
+		const beforeMetadata = ftsData();
 		db.prepare("UPDATE memories SET access_count = access_count + 1 WHERE id = ?").run("mem-fts-access");
+		expect(ftsData()).toEqual(beforeMetadata);
 		expect(
 			db
 				.query<{ id: string }, [string]>(
@@ -2551,6 +2573,23 @@ describe("migration framework", () => {
 				.all("refresh")
 				.map((row) => row.id),
 		).toContain("mem-fts-access");
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_move','Move')");
+		const c = compartmentFor(db, ["cls_move"]);
+		if (c === null) throw new Error("compartment missing");
+		db.prepare("UPDATE memories SET compartment_id=? WHERE id='mem-fts-access'").run(c);
+		expect(db.query("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'refresh'").get()).toEqual({ n: 0 });
+		expect(
+			db.query(`SELECT count(*) n FROM memories_fts__c${c} WHERE memories_fts__c${c} MATCH 'refresh'`).get(),
+		).toEqual({ n: 1 });
+		const shardData = () => db.query(`SELECT id,hex(block) block FROM memories_fts__c${c}_data ORDER BY id`).all();
+		const beforeShardMetadata = shardData();
+		db.prepare("UPDATE memories SET access_count=access_count+1 WHERE id='mem-fts-access'").run();
+		expect(shardData()).toEqual(beforeShardMetadata);
+		db.prepare("UPDATE memories SET compartment_id=NULL WHERE id='mem-fts-access'").run();
+		expect(db.query("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'refresh'").get()).toEqual({ n: 1 });
+		expect(
+			db.query(`SELECT count(*) n FROM memories_fts__c${c} WHERE memories_fts__c${c} MATCH 'refresh'`).get(),
+		).toEqual({ n: 0 });
 	});
 
 	test("migration 094 adds memory_kind and backfills episodic evidence via exclusion", () => {

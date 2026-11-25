@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ensureFtsTable } from "./db-accessor";
 import { compartmentFor } from "@signet/core";
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { createDbOwnerClient } from "./db-owner-client";
@@ -72,3 +73,21 @@ test("FTS maintenance ensure preserves base partition through a classified updat
 	partitionedMaintenance(false));
 test("FTS owner rebuild preserves base partition and reconstructs classified shards", () =>
 	partitionedMaintenance(true));
+
+test("startup reconstruction of a missing FTS table excludes classified rows", () => {
+	const db = classificationFixture();
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')");
+	const c = compartmentFor(db, ["cls_hr"]);
+	db.prepare(
+		"INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('hidden','classifiedquartz','default',?,'now','now')",
+	).run(c);
+	db.exec("DROP TABLE memories_fts");
+	ensureFtsTable(db);
+	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'classifiedquartz'").get()).toEqual({
+		n: 0,
+	});
+	expect(
+		db.prepare(`SELECT count(*) n FROM memories_fts__c${c} WHERE memories_fts__c${c} MATCH 'classifiedquartz'`).get(),
+	).toEqual({ n: 1 });
+	db.close();
+});

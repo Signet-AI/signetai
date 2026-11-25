@@ -66,7 +66,7 @@ export function installCompartmentFts(db: MigrationDb, base: FtsBase, c: number 
  INSERT INTO ${name}(rowid, ${names}) VALUES(new.rowid, ${values("new")}); END;
  CREATE TRIGGER ${name}_ad AFTER DELETE ON ${table} WHEN ${condition("old")} BEGIN
  INSERT INTO ${name}(${name}, rowid, ${names}) VALUES('delete', old.rowid, ${values("old")}); END;
- CREATE TRIGGER ${name}_au AFTER UPDATE ON ${table} BEGIN
+ CREATE TRIGGER ${name}_au AFTER UPDATE OF ${names},compartment_id ON ${table} BEGIN
  INSERT INTO ${name}(${name}, rowid, ${names}) SELECT 'delete', old.rowid, ${values("old")} WHERE ${condition("old")};
  INSERT INTO ${name}(rowid, ${names}) SELECT new.rowid, ${values("new")} WHERE ${condition("new")}; END;
  `);
@@ -164,6 +164,21 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				.all(input.agentId, session, session, session, source, source, memory),
 		);
 	assignments(input.sessionKey ?? null, input.sourceId ?? null, input.memoryId ?? null);
+	if (input.memoryId && shardSchema(db).tables.has("memories")) {
+		const columns = tableColumns(db, "memories");
+		const parent = db
+			.prepare(
+				`SELECT compartment_id,${columns.has("source_id") ? "source_id" : "NULL AS source_id"} FROM memories WHERE id=? AND agent_id=?`,
+			)
+			.get(input.memoryId, input.agentId);
+		if (typeof parent?.compartment_id === "number")
+			add(
+				db
+					.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
+					.all(parent.compartment_id),
+			);
+		if (parent) assignments(parent.source_id, parent.source_id, input.memoryId);
+	}
 	if (input.sourceId)
 		for (const [table, key] of [
 			["memory_artifacts", "source_path"],
@@ -234,11 +249,22 @@ export function syncEmbeddingCompartment(
 	let schema = shardSchema(db);
 	if (projection === undefined && schema.tables.has("embedding_index_state")) {
 		const profile = store === "embeddings" ? "active_profile_json" : "staging_profile_json";
+		const fallback =
+			store === "embeddings_staging"
+				? "CASE WHEN json_valid(active_profile_json) AND json_extract(active_profile_json,'$.projectionSlot')='staging' THEN 'active' ELSE 'staging' END"
+				: "'active'";
 		const state = db
 			.prepare(
-				`SELECT CASE WHEN json_valid(${profile}) THEN json_extract(${profile},'$.projectionSlot') END slot FROM embedding_index_state WHERE id=1`,
+				`SELECT COALESCE(CASE WHEN json_valid(${profile}) THEN json_extract(${profile},'$.projectionSlot') END,${fallback}) slot,CASE WHEN json_valid(${profile}) THEN json_extract(${profile},'$.dimensions') END dimensions FROM embedding_index_state WHERE id=1`,
 			)
 			.get();
+		if (
+			store === "embeddings_staging" &&
+			typeof state?.dimensions === "number" &&
+			row &&
+			row.dimensions !== state.dimensions
+		)
+			return 0;
 		if (state?.slot === "staging") base = "vec_embeddings_staging";
 		else if (state?.slot === "active") base = "vec_embeddings";
 	}

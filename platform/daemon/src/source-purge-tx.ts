@@ -131,6 +131,24 @@ const SOURCE_OWNED_GRAPH_TABLES = [
 export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRowsInput): number {
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
+	const agents =
+		input.agentId === undefined
+			? db
+					.prepare(
+						"SELECT DISTINCT agent_id FROM classification_assignments WHERE target_kind='source' AND target_id=?",
+					)
+					.all(sourceId)
+					.flatMap((row) =>
+						typeof row === "object" && row !== null && "agent_id" in row && typeof row.agent_id === "string"
+							? [row.agent_id]
+							: [],
+					)
+			: [input.agentId];
+	for (const agent of agents)
+		db.prepare("DELETE FROM classification_assignments WHERE target_kind='source' AND target_id=? AND agent_id=?").run(
+			sourceId,
+			agent,
+		);
 	const embeddingPrefix = `${sourceId}:`;
 	const agentWhere = input.agentId !== undefined ? "agent_id = ? AND " : "";
 	const embeddingRows = db

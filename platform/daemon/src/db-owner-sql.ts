@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerWorkloadClass } from "./db-owner-protocol";
 
@@ -12,9 +13,23 @@ export interface DbOwnerSqlOptions {
 	readonly workloadClass?: DbOwnerWorkloadClass;
 	readonly deadlineMs?: number;
 	readonly estimatedWorkUnits?: number;
+	readonly embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest;
 }
 
+const compartmentParameter = z.object({
+	type: z.literal("compartment"),
+	scope: z.object({
+		agentId: z.string().min(1),
+		sessionKey: z.string().nullable().optional(),
+		sourceId: z.string().nullable().optional(),
+		memoryId: z.string().nullable().optional(),
+		parentCompartment: z.number().int().positive().nullable().optional(),
+	}),
+	parentMemoryId: z.string().optional(),
+});
 function parameter(value: unknown): DbOwnerParameter {
+	const scope = compartmentParameter.safeParse(value);
+	if (scope.success) return scope.data;
 	if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
 		return { type: "bytes", base64: Buffer.from(value).toString("base64") };
 	}
@@ -124,6 +139,7 @@ export function ownerBatch(
 			requireChanges: statement.requireChanges,
 		})),
 		requireChanges: options.requireChanges,
+		embeddingProjection: options.embeddingProjection,
 	};
 	return submit<readonly DbOwnerRunResult[]>(client, request, options);
 }

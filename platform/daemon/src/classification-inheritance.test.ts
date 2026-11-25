@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
 import { classificationFixture } from "./test-support/classification-fixture.test";
-import { commitCompactionSummaryInTx } from "./session-transcripts";
+import { txIngestEnvelope } from "./transactions";
+import { upsertMemoryArtifactInTx } from "./memory-lineage";
+import { writeSessionTranscriptRow, commitCompactionSummaryInTx } from "./session-transcripts";
 
 function assigned() {
 	const db = classificationFixture();
@@ -19,7 +21,7 @@ test("pending assignment guards reject evidence and child writes that forget com
 			)
 			.run(),
 	).toThrow("compartment_required");
-	expect(() => db.prepare("UPDATE memories SET content='forgot label' WHERE id='m'").run()).toThrow(
+	expect(() => db.prepare("UPDATE memories SET source_id='forgot label' WHERE id='m'").run()).toThrow(
 		"compartment_required",
 	);
 	expect(() =>
@@ -54,6 +56,7 @@ test("write helper unions pending scope assignments and parent labels before ind
 				classification_id,
 			})),
 		);
+		expect(shards.compartmentForWrite(db, { agentId: "default", memoryId: "new" })).toBe(c);
 	})();
 	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'hidden'").get()).toEqual({ n: 0 });
 	db.close();
@@ -79,5 +82,111 @@ test("compaction summaries inherit their session classification on insert and re
 		db.prepare("SELECT count(*) n FROM memories WHERE id LIKE 'summary-%' AND compartment_id IS NOT NULL").get(),
 	).toEqual({ n: 2 });
 	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'summary'").get()).toEqual({ n: 0 });
+	db.close();
+});
+
+test("canonical memory ingestion inherits an already classified agent", () => {
+	const db = assigned();
+	db.transaction(() =>
+		txIngestEnvelope(db, {
+			id: "ingested",
+			content: "new secret",
+			contentHash: "new-hash",
+			who: "test",
+			why: null,
+			project: null,
+			importance: 0.5,
+			type: "fact",
+			tags: null,
+			pinned: 0,
+			sourceType: "user",
+			sourceId: null,
+			agentId: "default",
+			createdAt: "now",
+		}),
+	)();
+	expect(db.prepare("SELECT compartment_id FROM memories WHERE id='ingested'").get()).toMatchObject({
+		compartment_id: expect.any(Number),
+	});
+	db.close();
+});
+test("live transcripts inherit classified agents before their FTS triggers execute", () => {
+	const db = assigned();
+	db.transaction(() =>
+		writeSessionTranscriptRow(db, {
+			sessionKey: "live",
+			transcript: "new secret",
+			harness: "test",
+			project: null,
+			agentId: "default",
+			capturedAt: "now",
+		}),
+	)();
+	expect(db.prepare("SELECT compartment_id FROM session_transcripts WHERE session_key='live'").get()).toMatchObject({
+		compartment_id: expect.any(Number),
+	});
+	expect(
+		db.prepare("SELECT count(*) n FROM session_transcripts_fts WHERE session_transcripts_fts MATCH 'secret'").get(),
+	).toEqual({ n: 0 });
+	db.close();
+});
+test("scope guards seek complete assignment keys instead of scanning an agent", () => {
+	const db = classificationFixture();
+	const plan = db.prepare("EXPLAIN UPDATE memories SET source_id='other' WHERE id='m'").all();
+	expect(plan.some((row) => row.opcode === "SeekGE" && row.p4 === "3")).toBe(true);
+	db.close();
+});
+test("NULL-agent embeddings cannot bypass their parent memory compartment", () => {
+	const db = assigned();
+	const c = shards.compartmentForWrite(db, { agentId: "default", memoryId: "m" });
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(c);
+	const insert = db.prepare(
+		"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id,compartment_id) VALUES('legacy','legacy',X'0000803f0000000000000000',3,'memory','m','secret','now',NULL,?)",
+	);
+	expect(() => insert.run(null)).toThrow("compartment_required");
+	insert.run(c);
+	shards.inheritEmbeddingCompartment(db, "embeddings", "legacy");
+	expect(db.prepare("SELECT agent_id,compartment_id FROM embeddings WHERE id='legacy'").get()).toEqual({
+		agent_id: "default",
+		compartment_id: c,
+	});
+	db.close();
+});
+test("source artifact upserts inherit classified agents before their FTS triggers execute", () => {
+	const db = assigned();
+	db.transaction(() =>
+		upsertMemoryArtifactInTx(db, {
+			agentId: "default",
+			sourcePath: "notes/private",
+			sourceSha256: "hash",
+			sourceKind: "source",
+			sessionId: "source",
+			sessionKey: null,
+			sessionToken: "token",
+			project: null,
+			harness: null,
+			capturedAt: "now",
+			startedAt: null,
+			endedAt: null,
+			manifestPath: null,
+			sourceNodeId: null,
+			memorySentence: null,
+			memorySentenceQuality: null,
+			content: "new secret",
+			updatedAt: "now",
+			sourceMtimeMs: null,
+			sourceId: "src",
+			sourceRoot: null,
+			sourceExternalId: null,
+			sourceParentPath: null,
+			sourceMetaJson: null,
+		}),
+	)();
+	expect(
+		db.prepare("SELECT compartment_id FROM memory_artifacts WHERE source_path='notes/private'").get(),
+	).toMatchObject({ compartment_id: expect.any(Number) });
+	expect(
+		db.prepare("SELECT count(*) n FROM memory_artifacts_fts WHERE memory_artifacts_fts MATCH 'secret'").get(),
+	).toEqual({ n: 0 });
 	db.close();
 });

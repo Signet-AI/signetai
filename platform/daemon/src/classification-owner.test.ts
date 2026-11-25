@@ -1,4 +1,5 @@
-import { executeClassificationJob } from "./classifications";
+import { compartmentFor } from "@signet/core";
+import { executeClassificationJob, resumeClassificationJobs } from "./classifications";
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { expect, test } from "bun:test";
 import { executeClassification } from "./classification-owner";
@@ -221,7 +222,7 @@ test("direct attributes, their materialized memories, hints and vectors move wit
 	db.close();
 });
 
-test("an execution admission failure leaves a failed tracked job rather than a stranded pending job", async () => {
+test("an execution admission failure preserves a pending job for startup resumption", async () => {
 	const db = classificationFixture(),
 		id = classification(db);
 	const jobId = field(
@@ -235,10 +236,15 @@ test("an execution admission failure leaves a failed tracked job rather than a s
 		}),
 	).rejects.toThrow("owner_admission_failed");
 	expect(db.prepare("SELECT status,error FROM org_jobs WHERE id=?").get(jobId)).toEqual({
-		status: "failed",
+		status: "pending",
 		error: "owner_admission_failed",
 	});
 	expect(db.prepare("SELECT count(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
+	await resumeClassificationJobs(async (request) => executeClassification(db, request));
+	expect(db.prepare("SELECT status,error FROM org_jobs WHERE id=?").get(jobId)).toEqual({
+		status: "complete",
+		error: null,
+	});
 	db.close();
 });
 
@@ -295,5 +301,36 @@ test("routine user activity leaves the audience generation unchanged", () => {
 	expect(version()).toEqual(before);
 	db.prepare("UPDATE users SET role='admin' WHERE id='alice'").run();
 	expect(version()).not.toEqual(before);
+	db.close();
+});
+
+test("hidden definitions and unreadable targets cannot be distinguished by apply or remove", () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	for (const remove of [false, true])
+		expect(() => executeClassification(db, { op: "enqueue", actor: bob, id, target, remove })).toThrow("not_found");
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_other','Other')");
+	const c = compartmentFor(db, ["cls_other"]);
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(c);
+	expect(() => executeClassification(db, { op: "enqueue", actor: alice, id, target, remove: false })).toThrow(
+		"not_found",
+	);
+	db.close();
+});
+test("preview requires acting authority on the target agent even when its content is readable", () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	db.exec(
+		"INSERT INTO agents(id,name,kind,owner_user_id,created_at,updated_at) VALUES('foreign','Foreign','personal','bob','now','now');INSERT INTO memories(id,content,agent_id,author_user_id,created_at,updated_at) VALUES('foreign-memory','readable','foreign','alice','now','now')",
+	);
+	expect(() =>
+		executeClassification(db, {
+			op: "preview",
+			actor: alice,
+			id,
+			target: { kind: "memory", id: "foreign-memory", agentId: "foreign" },
+			scope: { reach: { kind: "all" }, compartments: [], projects: null },
+		}),
+	).toThrow("not_found");
 	db.close();
 });

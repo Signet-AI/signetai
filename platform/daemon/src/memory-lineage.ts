@@ -1,3 +1,4 @@
+import { compartmentForWrite, type MigrationDb } from "@signet/core";
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -14,7 +15,8 @@ import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import type { WriteAuthor } from "./auth/audit-owner";
 import type { WriteDb } from "./db-accessor";
-import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
+import { prepareTypedStatement, runWriteTxAsync } from "./db-accessor";
+import { getDbAccessor } from "./db-accessor";
 import {
 	dbOwnerBatch,
 	dbOwnerQuery,
@@ -553,8 +555,8 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		started_at, ended_at, manifest_path, source_node_id,
 		memory_sentence, memory_sentence_quality, content, updated_at,
 		source_mtime_ms, source_id, source_root, source_external_id,
-		source_parent_path, source_meta_json, author_user_id
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_parent_path, source_meta_json, author_user_id, compartment_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(agent_id, source_path) DO UPDATE SET
 		source_sha256 = excluded.source_sha256,
 		source_kind = excluded.source_kind,
@@ -579,8 +581,20 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		source_parent_path = excluded.source_parent_path,
 		source_meta_json = excluded.source_meta_json,
 		author_user_id = COALESCE(memory_artifacts.author_user_id, excluded.author_user_id),
+		compartment_id=excluded.compartment_id,
 		is_deleted = 0,
 		deleted_at = NULL`;
+const artifactCompartmentDbs = new WeakMap<Database, MigrationDb>();
+function artifactCompartmentDb(db: Database): MigrationDb {
+	const cached = artifactCompartmentDbs.get(db);
+	if (cached) return cached;
+	const adapter: MigrationDb = {
+		exec: (sql) => db.exec(sql),
+		prepare: (sql) => prepareTypedStatement<Record<string, unknown>>(db, sql),
+	};
+	artifactCompartmentDbs.set(db, adapter);
+	return adapter;
+}
 export function upsertMemoryArtifactInTx(
 	db: Database,
 	fields: MemoryArtifactUpsertFields,
@@ -633,6 +647,11 @@ export function upsertMemoryArtifactInTx(
 		fields.sourceParentPath,
 		fields.sourceMetaJson,
 		author?.userId ?? null,
+		compartmentForWrite(artifactCompartmentDb(db), {
+			agentId: fields.agentId,
+			sessionKey: fields.sessionKey,
+			sourceId: fields.sourceId,
+		}),
 	);
 	return true;
 }

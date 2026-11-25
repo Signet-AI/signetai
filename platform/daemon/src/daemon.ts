@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import type { Server } from "node:net";
 import { SYSTEM_AUTHOR } from "./auth/audit-owner";
+import { startClassificationRecovery } from "./classifications";
 import { requestMemoryHead } from "./memory-head";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { workspaceLayoutStartup } from "./workspace-layout-startup";
@@ -2614,7 +2615,10 @@ async function main() {
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	if (authConfig.mode === "team" && !migrationIntegrityWritesBlocked)
 		await startOrganizationRuntime(`http://127.0.0.1:${PORT}`);
-	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+	if (!migrationIntegrityWritesBlocked) {
+		runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+		void startClassificationRecovery(dbOwnerClient);
+	}
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
@@ -2716,7 +2720,7 @@ async function main() {
 			platform: process.platform,
 			uptimeMs: 0,
 		});
-		void getStartupRecoveryCompletion().then((recovery) => {
+		void observeStartupRecoveryCompletion((recovery) => {
 			if (recovery.recoveryPhase !== "complete") return;
 			for (let index = 0; index < Math.min(recovery.orphanedPassesSwept, 100); index++) {
 				recordDreamingPassTelemetry({

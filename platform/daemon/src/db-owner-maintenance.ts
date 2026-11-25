@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { MEMORIES_FTS_TOKENIZER } from "@signet/core";
 import {
 	DbOwnerAdmissionError,
 	DbOwnerDeadlineError,

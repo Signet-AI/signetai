@@ -8,7 +8,7 @@ import { createDbOwnerClient } from "./db-owner-client";
 import { initDbAccessorLite, getDbAccessor, closeDbAccessor } from "./db-accessor";
 import { promoteStagingIndex } from "./embedding-index-migration";
 
-async function promotion(virtual: boolean): Promise<void> {
+async function promotion(virtual: boolean, fault = false): Promise<void> {
 	const directory = mkdtempSync(join(tmpdir(), "classified-promotion-")),
 		path = join(directory, "memory.db"),
 		db = classificationFixture();
@@ -34,9 +34,18 @@ async function promotion(virtual: boolean): Promise<void> {
 		["embeddings", "old", new Float32Array([1, 0, 0]), 3, "vec_embeddings"],
 		["embeddings_staging", "new", new Float32Array([0, 1, 0, 0]), 4, "vec_embeddings_staging"],
 	] as const) {
+		if (
+			!db
+				.prepare(`PRAGMA table_info(${store})`)
+				.all()
+				.some(
+					(row) => typeof row === "object" && row !== null && "name" in row && row.name === "projection_compartment_id",
+				)
+		)
+			db.exec(`ALTER TABLE ${store} ADD COLUMN projection_compartment_id INTEGER`);
 		db.prepare(
-			`INSERT INTO ${store}(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id,compartment_id) VALUES (?,'hash',?,?,'memory','m','claim','now','default',?)`,
-		).run(id, vector, dims, c);
+			`INSERT INTO ${store}(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id,compartment_id,projection_compartment_id) VALUES (?,'hash',?,?,'memory','m','claim','now','default',?,?)`,
+		).run(id, vector, dims, c, c);
 		db.prepare(`INSERT INTO ${projection}__c${c}(id,embedding) VALUES(?,?)`).run(id, vector);
 	}
 	const active = {
@@ -64,6 +73,28 @@ async function promotion(virtual: boolean): Promise<void> {
 				{ operation: "test.cancelled-state", lane: "read", deadlineMs: 5000 },
 			).result;
 			expect(old).toEqual([{ id: "old", dimensions: 3 }]);
+		}
+		if (fault) {
+			await owner.submit(
+				{
+					kind: "query",
+					statement: {
+						sql: "CREATE TRIGGER crash_promotion BEFORE UPDATE ON embedding_index_state WHEN new.state='ready' BEGIN SELECT RAISE(ABORT,'promotion crash');END",
+						result: "run",
+					},
+				},
+				{ operation: "test.promotion-fault", lane: "maintenance", deadlineMs: 5000 },
+			).result;
+			await expect(promoteStagingIndex(getDbAccessor(), { owner })).rejects.toThrow("promotion crash");
+			const before = await owner.submit(
+				{ kind: "query", statement: { sql: `SELECT id FROM vec_embeddings__c${c}`, result: "all" } },
+				{ operation: "test.rolled-back-generation", lane: "read", deadlineMs: 5000 },
+			).result;
+			expect(before).toEqual([{ id: "old" }]);
+			await owner.submit(
+				{ kind: "query", statement: { sql: "DROP TRIGGER crash_promotion", result: "run" } },
+				{ operation: "test.promotion-retry", lane: "maintenance", deadlineMs: 5000 },
+			).result;
 		}
 		expect(await promoteStagingIndex(getDbAccessor(), { owner })).toBe(true);
 		const state = await owner.submit(
@@ -100,6 +131,35 @@ async function promotion(virtual: boolean): Promise<void> {
 		).result;
 		expect(result).toEqual([{ id: "new" }]);
 		expect(state).toMatchObject({ dimensions: 4, state: "ready" });
+		const job = await owner.submit(
+			{
+				kind: "classification",
+				request: {
+					op: "enqueue",
+					id: "cls_hr",
+					actor: {
+						userId: "carol",
+						groupIds: [],
+						local: false,
+						compliance: true,
+						boundAgentId: null,
+						allowedProjects: null,
+						credential: "session:test",
+					},
+					target: { kind: "memory", id: "m", agentId: "default" },
+					remove: false,
+				},
+			},
+			{ operation: "test.reclassify-promoted", lane: "maintenance", deadlineMs: 10000 },
+		).result;
+		if (typeof job !== "object" || job === null || !("jobId" in job) || typeof job.jobId !== "string")
+			throw new Error("missing job");
+		expect(
+			await owner.submit(
+				{ kind: "classification", request: { op: "execute", jobId: job.jobId } },
+				{ operation: "test.move-both-generations", lane: "maintenance", deadlineMs: 10000 },
+			).result,
+		).toMatchObject({ status: "complete" });
 	} finally {
 		await closeDbAccessor();
 		await owner.close();
@@ -107,4 +167,5 @@ async function promotion(virtual: boolean): Promise<void> {
 	}
 }
 test("ordinary vector promotion swaps classified shards atomically", () => promotion(false), 20000);
+test("failed vector publication rolls back every generation and retries cleanly", () => promotion(true, true), 20000);
 test("sqlite vec dimension promotion publishes the classified generation atomically", () => promotion(true), 20000);

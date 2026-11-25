@@ -1,9 +1,13 @@
+import { executeEmbeddingProjectionInTx } from "./embedding-projection-owner";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import {
+	compartmentForWrite,
+	syncEmbeddingCompartment,
+	deleteCompartmentVectors,
 	activeVectorProjectionTable,
 	findSqliteVecExtension,
 	resolveWorkspaceLayout,
@@ -285,7 +289,23 @@ export function runDbOwnerWorker(): void {
 		return undefined;
 	}
 
-	function bindParameter(value: DbOwnerParameter): unknown {
+	function bindParameter(value: DbOwnerParameter, writeBatch = false): unknown {
+		if (typeof value === "object" && value !== null && value.type === "compartment") {
+			if (!writeBatch) throw new Error("compartment_parameter_requires_batch");
+			const parent =
+				value.parentMemoryId === undefined
+					? undefined
+					: db
+							.prepare("SELECT compartment_id FROM memories WHERE id=? AND agent_id=?")
+							.get(value.parentMemoryId, value.scope.agentId);
+			if (value.parentMemoryId !== undefined && !parent) throw new Error("parent_not_found");
+			return compartmentForWrite(db, {
+				...value.scope,
+				...(parent
+					? { parentCompartment: typeof parent.compartment_id === "number" ? parent.compartment_id : null }
+					: {}),
+			});
+		}
 		if (typeof value === "object" && value !== null && value.type === "bytes") {
 			return Buffer.from(value.base64, "base64");
 		}
@@ -318,7 +338,7 @@ export function runDbOwnerWorker(): void {
 	}
 
 	function executeStatement(statement: DbOwnerStatement, context?: JobExecutionContext): unknown {
-		const params = (statement.params ?? []).map(bindParameter);
+		const params = (statement.params ?? []).map((value) => bindParameter(value));
 		const prepared = db.prepare(statement.sql);
 		if (statement.result === "all" && statement.readonly !== false)
 			return enforceResultLimit(statement, prepared.all(...params));
@@ -344,7 +364,7 @@ export function runDbOwnerWorker(): void {
 		if (statement.result === "run") throw new Error("DB owner readonly statements must return rows");
 		const readonlyDb = new Database(ownerDbPath, { readonly: true });
 		try {
-			const params = (statement.params ?? []).map(bindParameter);
+			const params = (statement.params ?? []).map((value) => bindParameter(value));
 			const prepared = readonlyDb.prepare(statement.sql);
 			try {
 				return statement.result === "all"
@@ -388,6 +408,7 @@ export function runDbOwnerWorker(): void {
 		statements: readonly DbOwnerStatement[],
 		requireChanges: boolean,
 		context?: JobExecutionContext,
+		embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest,
 	): readonly unknown[] {
 		if (statements.length === 0) throw new Error("DB owner batch must contain at least one statement");
 		db.exec("BEGIN IMMEDIATE");
@@ -403,6 +424,7 @@ export function runDbOwnerWorker(): void {
 				}
 				results.push(result);
 			}
+			if (embeddingProjection) executeEmbeddingProjectionInTx(db, embeddingProjection);
 			commit(context);
 			return enforceResultLimit({ sql: "db-owner-batch", result: "all" }, results) as readonly unknown[];
 		} catch (error) {
@@ -414,7 +436,7 @@ export function runDbOwnerWorker(): void {
 	}
 
 	function executeStatementWithoutTransaction(statement: DbOwnerStatement): SqliteRunResult {
-		const params = (statement.params ?? []).map(bindParameter);
+		const params = (statement.params ?? []).map((value) => bindParameter(value, true));
 		return db.prepare(statement.sql).run(...params);
 	}
 
@@ -860,33 +882,43 @@ export function runDbOwnerWorker(): void {
 				skipped++;
 				continue;
 			}
-			if (existing !== null) {
-				if (vecAvailable) database.prepare(`DELETE FROM ${vecTable} WHERE id = ?`).run(existing.id);
-				database.prepare("DELETE FROM embeddings WHERE id = ?").run(existing.id);
-			}
-			database
-				.prepare(
-					`INSERT INTO embeddings
-					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			database.exec("BEGIN IMMEDIATE");
+			try {
+				if (existing !== null) {
+					if (vecAvailable) deleteCompartmentVectors(database, [existing.id]);
+					database.prepare("DELETE FROM embeddings WHERE id = ?").run(existing.id);
+				}
+				database
+					.prepare(
+						`INSERT INTO embeddings
+					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
 					 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
 					 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
-					 created_at = excluded.created_at, agent_id = excluded.agent_id`,
-				)
-				.run(
-					embeddingId,
-					contentHash,
-					vectorToBlob(vector),
-					vector.length,
-					"source_chunk",
-					chunk.id,
-					chunk.chunkText,
-					new Date().toISOString(),
-					input.agentId,
-				);
-			if (vecAvailable && vecDimensions === String(vector.length)) {
-				const { syncEmbeddingCompartment } = await import("@signet/core");
-				syncEmbeddingCompartment(database, "embeddings", embeddingId, vecTable);
+					 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
+					)
+					.run(
+						embeddingId,
+						contentHash,
+						vectorToBlob(vector),
+						vector.length,
+						"source_chunk",
+						chunk.id,
+						chunk.chunkText,
+						new Date().toISOString(),
+						input.agentId,
+						compartmentForWrite(database, { agentId: input.agentId, sourceId: chunk.id }),
+					);
+				if (vecAvailable && vecDimensions === String(vector.length)) {
+					for (const stored of database.prepare("SELECT id FROM embeddings WHERE content_hash=?").all(contentHash))
+						if (typeof stored === "object" && stored !== null && "id" in stored && typeof stored.id === "string")
+							syncEmbeddingCompartment(database, "embeddings", stored.id, vecTable);
+				}
+				database.exec("COMMIT");
+				if (context) context.committed = true;
+			} catch (error) {
+				database.exec("ROLLBACK");
+				throw error;
 			}
 			embedded++;
 		}
@@ -1115,10 +1147,6 @@ export function runDbOwnerWorker(): void {
 		}
 		const { initDbAccessorAsync } = await import("./db-accessor");
 		const initialization = await initDbAccessorAsync(ownerDbPath, { agentsDir, deadlineAt: context?.deadlineAt });
-		if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='org_jobs'").get()) {
-			const { executeClassification } = await import("./classification-owner");
-			executeClassification(db, { op: "recover" });
-		}
 		recallAccessorReady = true;
 		try {
 			const { refreshQueryPlannerStatisticsOnOpen } = await import("./query-planner-statistics");
@@ -1177,7 +1205,12 @@ export function runDbOwnerWorker(): void {
 		}
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements, context);
 		if (job.request.kind === "batch")
-			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
+			return executeBatch(
+				job.request.statements,
+				job.request.requireChanges === true,
+				context,
+				job.request.embeddingProjection,
+			);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
 		if (job.request.kind === "vector_repair") return executeVectorRepair(job.request, context);
 		if (job.request.kind === "session_transcript_lifecycle") {

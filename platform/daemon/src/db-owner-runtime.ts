@@ -81,6 +81,7 @@ function invokeAccessorAsync<Result>(
 
 function inlineParameter(value: DbOwnerParameter): string | number | boolean | null | Uint8Array {
 	if (typeof value !== "object" || value === null) return value;
+	if (value.type !== "bytes") throw new Error("compartment_parameter_requires_owner");
 	return Uint8Array.from(Buffer.from(value.base64, "base64"));
 }
 
@@ -501,6 +502,7 @@ export async function getDbOwnerForAccessor(accessor: DbAccessor): Promise<DbOwn
 }
 
 export interface DbOwnerSqlOptions {
+	readonly embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest;
 	readonly operation: string;
 	readonly lane?: "read" | "write" | "maintenance";
 	readonly workloadClass?: DbOwnerWorkloadClass;
@@ -609,7 +611,11 @@ export async function dbOwnerBatch(
 	options: DbOwnerSqlOptions,
 ): Promise<readonly unknown[]> {
 	const owner = await getDbOwner();
-	return await submitWithAdmission<readonly unknown[]>(owner, { kind: "batch", statements }, options);
+	return await submitWithAdmission<readonly unknown[]>(
+		owner,
+		{ kind: "batch", statements, embeddingProjection: options.embeddingProjection },
+		options,
+	);
 }
 
 export async function dbOwnerVacuumConversion(

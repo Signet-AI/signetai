@@ -30,9 +30,19 @@ not the source text or the claim's meaning.
 Preview the transition before applying it. Preview counts include only rows you
 can read. Applying or removing a classification returns a tracked job. A `202`
 response means the job was accepted, not that the transition finished. Add
-`?wait=1` to wait for completion. Classification changes, index moves, and the
-audit event commit together; a failed transition cannot leave half the evidence
-classified. Interrupted jobs are marked failed when the daemon restarts.
+`?wait=1` to wait for completion. Large transitions commit bounded batches, with
+each evidence row and its directly derived copies moving together. Other reads
+can run between batches. A failed batch rolls back its moves and cursor without
+undoing earlier committed batches. Pending and running jobs resume from their
+durable cursor after a daemon restart; jobs for the same agent never run concurrently.
+After five consecutive batch failures, a job fails with a recorded error and audit
+event, allowing queued jobs to proceed. Its applied restriction remains in place;
+retry the classification or have a compliance officer remove it.
+
+Matching content hides as soon as apply is accepted, before the batches finish.
+Search rankings and result counts can still be affected by those newly hidden
+rows until they move into separate indexes. That ranking-statistics window
+closes when the job completes.
 
 ## Multiple classifications
 

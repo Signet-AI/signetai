@@ -1754,15 +1754,8 @@ export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBack
 
 	if (sql === null) {
 		console.error("[db-accessor] memories_fts missing — recreating FTS5 table");
-		createMemoriesFts(db);
-		if (options.deferBackfill !== true) {
-			const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
-			if (backfilled.n > 0) {
-				db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
-				console.error(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
-			}
-		}
-		if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
+		if (options.deferBackfill === true) createMemoriesFts(db);
+		else recreateMemoriesFts(db);
 		return;
 	}
 

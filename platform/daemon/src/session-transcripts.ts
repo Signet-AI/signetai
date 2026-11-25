@@ -1523,13 +1523,22 @@ export function writeSessionTranscriptRow(
 		).get(agentId, sessionKey);
 		if (previous?.speaker_user_id && previous.speaker_user_id !== input.author.userId) return "conflict";
 	}
-	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
-	const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
+	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at", "compartment_id"];
+	const values: unknown[] = [
+		sessionKey,
+		retainedTranscript,
+		harness,
+		project,
+		agentId,
+		now,
+		compartmentForWrite(db, { agentId, sessionKey }),
+	];
 	const updates = [
 		"content = excluded.content",
 		"harness = excluded.harness",
 		"project = COALESCE(excluded.project, session_transcripts.project)",
 		"agent_id = excluded.agent_id",
+		"compartment_id = excluded.compartment_id",
 	];
 	if (input.author) {
 		insertColumns.push("speaker_user_id");
