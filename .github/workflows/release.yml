@@ -263,7 +263,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify shipped dependencies match the audited SBOM
-        run: bun scripts/sbom.ts verify dist/signetai/sbom.cdx.json
+        run: bun scripts/sbom.ts verify dist/signetai/sbom.cdx.json daemon dashboard signet-mcp daemon-js-vendor
 
       - name: Verify all release assets
         shell: bash

@@ -34,6 +34,9 @@ const collectBundledModules = (): Plugin => ({
 const recordBundledPackages: Plugin = {
 	...collectBundledModules(),
 	name: "signet-record-shipped-packages",
+	buildStart() {
+		bundledModules.clear();
+	},
 	closeBundle() {
 		recordShippedPackages("dashboard", packagesFromFiles(bundledModules, __dirname));
 	},

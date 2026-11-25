@@ -292,7 +292,11 @@ describe("sbom verify", () => {
 			],
 			publish,
 		);
-		expect(sbomMismatches(sbom, publish)).toEqual([]);
+		const rebuilt = ["signet-mcp", "daemon-js-vendor"];
+		expect(sbomMismatches(sbom, publish, rebuilt)).toEqual([]);
+		expect(() => sbomMismatches(sbom, publish, [...rebuilt, "dashboard"])).toThrow("wrote no dashboard record");
+		expect(() => sbomMismatches(sbom, publish, ["desktop"])).toThrow("Unknown artifact desktop");
+		expect(() => sbomMismatches(sbom, publish, [])).toThrow("Name the artifacts");
 
 		recordShippedPackages(
 			"daemon-js-vendor",
@@ -302,11 +306,10 @@ describe("sbom verify", () => {
 			],
 			publish,
 		);
-		expect(sbomMismatches(sbom, publish)).toEqual([
+		expect(sbomMismatches(sbom, publish, rebuilt)).toEqual([
 			"daemon-js-vendor: pkg:npm/anydoc-darwin-arm64@0.4.0 was built but not audited",
 			"daemon-js-vendor: pkg:npm/anydoc-linux-x64-gnu@0.4.0 was audited but not built",
 		]);
-		expect(() => sbomMismatches(sbom, scratch())).toThrow("No shipped package records");
 	});
 });
 

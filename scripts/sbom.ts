@@ -183,13 +183,16 @@ function artifactsOf(component: unknown): string[] {
 	);
 }
 
-export function sbomMismatches(sbom: unknown, dir: string): string[] {
+export function sbomMismatches(sbom: unknown, dir: string, artifacts: readonly string[]): string[] {
 	if (typeof sbom !== "object" || sbom === null) throw new Error("SBOM is not an object");
 	const components = field(sbom, "components");
 	if (!Array.isArray(components)) throw new Error("SBOM has no components");
-	const present = shippedArtifacts.filter((artifact) => existsSync(join(dir, `${artifact}.json`)));
-	if (present.length === 0) throw new Error(`No shipped package records in ${dir} to compare with the SBOM`);
-	return present.flatMap((artifact) => {
+	if (artifacts.length === 0) throw new Error("Name the artifacts this build must match");
+	for (const artifact of artifacts) {
+		if (!shippedArtifacts.some((known) => known === artifact)) throw new Error(`Unknown artifact ${artifact}`);
+		if (!existsSync(join(dir, `${artifact}.json`))) throw new Error(`This build wrote no ${artifact} record in ${dir}`);
+	}
+	return artifacts.flatMap((artifact) => {
 		const built = new Set(parsePackages(join(dir, `${artifact}.json`)).map(purl));
 		const audited = new Set(
 			components.flatMap((component: unknown) => {
@@ -234,13 +237,13 @@ if (import.meta.main) {
 		if (!isSeverity(failOn)) throw new Error(`--fail-on must be one of ${severities.join(", ")}`);
 		process.exit(await audit(path, failOn));
 	} else if (command === "verify" && path !== undefined) {
-		const mismatches = sbomMismatches(JSON.parse(readFileSync(path, "utf8")), shippedPackagesDir);
+		const mismatches = sbomMismatches(JSON.parse(readFileSync(path, "utf8")), shippedPackagesDir, rest);
 		for (const mismatch of mismatches) console.error(mismatch);
 		if (mismatches.length > 0) process.exit(1);
 		console.log(`This build matches ${path}`);
 	} else {
 		console.error(
-			"usage: bun scripts/sbom.ts generate <out.cdx.json> | audit <sbom.cdx.json> [--fail-on <severity>] | verify <sbom.cdx.json>",
+			"usage: bun scripts/sbom.ts generate <out.cdx.json> | audit <sbom.cdx.json> [--fail-on <severity>] | verify <sbom.cdx.json> <artifact>...",
 		);
 		process.exit(2);
 	}
