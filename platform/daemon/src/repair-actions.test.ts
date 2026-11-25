@@ -3118,6 +3118,13 @@ describe("deduplicateMemories", () => {
 			.prepare("SELECT id FROM memories WHERE content_hash = 'hash-dup' AND is_deleted = 1")
 			.all() as Array<{ id: string }>;
 		expect(deleted).toHaveLength(2);
+		const loserReason = db
+			.query<{ reason: string; metadata: string }, []>(
+				"SELECT reason,metadata FROM memory_history WHERE event='deleted' LIMIT 1",
+			)
+			.get();
+		expect(loserReason?.reason).not.toContain("high-importance");
+		expect(loserReason?.metadata).toContain('"duplicateOf":"high-importance"');
 	});
 
 	it("merges tags from all duplicates into the keeper", async () => {

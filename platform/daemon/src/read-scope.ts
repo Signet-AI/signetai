@@ -122,7 +122,7 @@ export function readScopeSql(
 	if (cols?.current) {
 		const target = readScopeSql("_readable_superseder", scope);
 		clauses.push(
-			`(${col("superseded_by")} IS NULL OR NOT EXISTS(SELECT 1 FROM memories _readable_superseder WHERE _readable_superseder.id=${col("superseded_by")} AND COALESCE(_readable_superseder.is_deleted,0)=0${target.sql}))`,
+			`(${col("superseded_by")} IS NULL OR NOT EXISTS(SELECT 1 FROM memories _readable_superseder WHERE _readable_superseder.id=${col("superseded_by")}${target.sql}))`,
 		);
 		args.push(...target.args);
 	}

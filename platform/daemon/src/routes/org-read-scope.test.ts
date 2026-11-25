@@ -879,7 +879,13 @@ test("B2 own identities and foreign session links survive without transcripts in
 	).toEqual({ sessionId: "b2-claim", source_type: "session", source_id: "b2-nox" });
 	expect(
 		await redactReadPointers(
-			{ agent_id: "beta", source_path: "artifact", source_id: "not-a-memory", source_type: "memory" },
+			{
+				agent_id: "beta",
+				source_kind: "transcript",
+				source_path: "artifact",
+				source_id: "not-a-memory",
+				source_type: "memory",
+			},
 			scope,
 		),
 	).toMatchObject({ source_id: "not-a-memory" });
@@ -893,4 +899,37 @@ test("B2 own identities and foreign session links survive without transcripts in
 	expect(
 		await redactReadPointers({ sessionId: "b2-claim", source_type: "session", source_id: "b2-nox" }, scope),
 	).toEqual({ sessionId: null, source_type: "session", source_id: null });
+});
+
+test("B3 history redacts previous and replacement pointers and their legacy reason", async () => {
+	seed("b3-old", null);
+	seed("b3-hidden", compartment);
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO memory_history(id,memory_id,event,changed_by,reason,metadata,created_at) VALUES ('b3-history','b3-old','superseded','fixture','previous b3-hidden',?,?)",
+			)
+			.run(JSON.stringify({ previousSupersededBy: "b3-hidden", duplicateOf: "b3-hidden" }), at),
+	);
+	const response = await request("/api/memory/b3-old/history");
+	expect(response.status).toBe(200);
+	expect(response.body).not.toContain("b3-hidden");
+	expect(response.body).toContain('"reason":null');
+});
+test("B6 readable deleted superseders remain superseding in every mode", async () => {
+	seed("b6-old", null);
+	seed("b6-new", null);
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("UPDATE memories SET type='b6probe',visibility='global' WHERE id IN ('b6-old','b6-new')").run();
+		db.prepare("UPDATE memories SET is_deleted=1 WHERE id='b6-new'").run();
+		db.prepare("UPDATE memories SET superseded_by='b6-new' WHERE id='b6-old'").run();
+	});
+	for (const local of [false, true]) {
+		const headers = { "x-test-user": "bob", "x-test-local": local ? "1" : "0" };
+		const list = await app.request("http://localhost/api/memories?agent_id=beta&type=b6probe", { headers });
+		expect(list.status).toBe(200);
+		expect(await list.text()).not.toContain('"id":"b6-old"');
+		const detail = await app.request("http://localhost/api/memory/b6-old?agent_id=beta", { headers });
+		expect(detail.status).toBe(200);
+	}
 });

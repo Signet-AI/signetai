@@ -159,9 +159,7 @@ export function executeContentRead(
 			});
 			const id = ref.id;
 			const row = db
-				.prepare(
-					`SELECT 1 FROM ${table} target WHERE target.${key} IN (?,?)${scope.sql}${ref.kind === "memory" ? " AND COALESCE(target.is_deleted,0)=0" : ""} LIMIT 1`,
-				)
+				.prepare(`SELECT 1 FROM ${table} target WHERE target.${key} IN (?,?)${scope.sql} LIMIT 1`)
 				.get(id, ref.id, ...scope.args);
 			return row ? [`${ref.kind}:${ref.id}`] : [];
 		});

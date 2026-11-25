@@ -11,6 +11,8 @@ declare module "hono" {
 type Reference = { kind: "memory" | "session" | "summary" | "artifact" | "document"; id: string };
 const memoryKeys = new Set([
 	"supersededBy",
+	"previousSupersededBy",
+	"duplicateOf",
 	"superseded_by",
 	"supersedes",
 	"memoryId",
@@ -31,7 +33,7 @@ const memoryKeys = new Set([
 const sessionKeys = new Set(["sessionId", "session_id", "sessionKey", "session_key"]);
 function reference(key: string, value: unknown, record: Record<string, unknown>): Reference | null {
 	if (typeof value !== "string" || !value) return null;
-	if ((key === "source_id" || key === "sourceId") && ("source_path" in record || "sourcePath" in record)) return null;
+	if ((key === "source_id" || key === "sourceId") && ("source_kind" in record || "sourceKind" in record)) return null;
 	if (
 		sessionKeys.has(key) &&
 		("agent_id" in record || "agentId" in record) &&
@@ -86,40 +88,50 @@ export async function redactReadPointers(value: unknown, scope: ReadScope): Prom
 			allowed.add(key);
 	}
 
-	const apply = (node: unknown): unknown => {
-		if (Array.isArray(node)) return node.map(apply);
-		if (node === null || typeof node !== "object") return node;
+	const apply = (node: unknown): { value: unknown; redacted: boolean } => {
+		if (Array.isArray(node)) {
+			const children = node.map(apply);
+			return { value: children.map((child) => child.value), redacted: children.some((child) => child.redacted) };
+		}
+		if (node === null || typeof node !== "object") return { value: node, redacted: false };
 		const record = Object.fromEntries(Object.entries(node));
-		const result = Object.fromEntries(
-			Object.entries(record)
-				.filter(
-					([key]) =>
-						![
-							"compartment_id",
-							"content_hash",
-							"normalized_content",
-							"vector_clock",
-							"idempotency_key",
-							"idempotencyKey",
-							"rowid",
-							"author_user_id",
-							"speaker_user_id",
-						].includes(key),
-				)
-				.map(([key, item]) => {
-					const ref = reference(key, item, record);
-					return [key, ref && !allowed.has(`${ref.kind}:${ref.id}`) ? null : apply(item)];
-				}),
-		);
+		let redacted = false;
+		const result: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(record)) {
+			if (
+				[
+					"compartment_id",
+					"content_hash",
+					"normalized_content",
+					"vector_clock",
+					"idempotency_key",
+					"idempotencyKey",
+					"rowid",
+					"author_user_id",
+					"speaker_user_id",
+				].includes(key)
+			)
+				continue;
+			const ref = reference(key, item, record);
+			if (ref && !allowed.has(`${ref.kind}:${ref.id}`)) {
+				result[key] = null;
+				redacted = true;
+			} else {
+				const child = apply(item);
+				result[key] = child.value;
+				redacted ||= child.redacted;
+			}
+		}
+		if (redacted && "reason" in result) result.reason = null;
 		if (
 			("superseded_by" in result && result.superseded_by === null) ||
 			("supersededBy" in result && result.supersededBy === null)
 		)
 			for (const key of ["superseded_at", "superseded_reason", "supersededAt", "supersededReason"])
 				if (key in result) result[key] = null;
-		return result;
+		return { value: result, redacted };
 	};
-	return apply(value);
+	return apply(value).value;
 }
 
 export const readPointerMiddleware: MiddlewareHandler = async (c, next) => {

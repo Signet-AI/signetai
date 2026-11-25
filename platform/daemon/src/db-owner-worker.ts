@@ -1432,7 +1432,7 @@ export function runDbOwnerWorker(): void {
 					result(job.id, "timed_out");
 				} else {
 					const value = await execute(job, context);
-					if (Date.now() >= job.deadlineAt && !context.committed)
+					if (job.lane === "read" && Date.now() >= job.deadlineAt && !context.committed)
 						result(job.id, "timed_out", undefined, { startedAt, finishedAt: Date.now() });
 					else if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
 					else
