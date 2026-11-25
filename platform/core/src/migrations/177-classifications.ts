@@ -163,11 +163,15 @@ export function up(db: MigrationDb): void {
 		"groups",
 	]) {
 		if (!exists(db, table)) continue;
-		for (const event of ["INSERT", "UPDATE", "DELETE"])
+		for (const event of table === "users" ? ["INSERT", "DELETE"] : ["INSERT", "UPDATE", "DELETE"])
 			db.exec(
 				`CREATE TRIGGER IF NOT EXISTS ${table}_classification_access_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN UPDATE classification_access_version SET version=version+1 WHERE id=1; END`,
 			);
 	}
+	if (exists(db, "users"))
+		db.exec(
+			`DROP TRIGGER IF EXISTS users_classification_access_update;CREATE TRIGGER users_classification_access_update AFTER UPDATE OF role,status,compliance ON users WHEN old.role IS NOT new.role OR old.status IS NOT new.status OR old.compliance IS NOT new.compliance BEGIN UPDATE classification_access_version SET version=version+1 WHERE id=1; END`,
+		);
 	backfillEvidenceCitations(db);
 	rebuildBaseCompartmentFts(db);
 	if (exists(db, "memories_fts")) createMemoriesFts(db);

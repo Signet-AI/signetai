@@ -75,10 +75,10 @@ export async function classificationRequest<Result>(request: ClassificationReque
 		{ kind: "classification", request },
 		{
 			operation: `classification.${request.op}`,
-			lane: "maintenance",
-			workloadClass: "maintenance",
-			deadlineMs: 15 * 60_000,
-			estimatedWorkUnits: 10000,
+			lane: request.op === "readable" ? "read" : "maintenance",
+			workloadClass: request.op === "readable" ? "foreground" : "maintenance",
+			deadlineMs: request.op === "readable" ? 5000 : 15 * 60_000,
+			estimatedWorkUnits: request.op === "readable" ? 1 : 10000,
 		},
 	).result;
 }

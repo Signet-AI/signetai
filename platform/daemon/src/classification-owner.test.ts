@@ -286,3 +286,14 @@ test("classification authority never overrides credential agent or project bindi
 	expect(db.prepare("SELECT compartment_id FROM memories WHERE id='m'").get()).toEqual({ compartment_id: null });
 	db.close();
 });
+
+test("routine user activity leaves the audience generation unchanged", () => {
+	const db = classificationFixture();
+	const version = () => db.prepare("SELECT version FROM classification_access_version WHERE id=1").get();
+	const before = version();
+	db.prepare("UPDATE users SET last_active_at='later',display_name='Alice A' WHERE id='alice'").run();
+	expect(version()).toEqual(before);
+	db.prepare("UPDATE users SET role='admin' WHERE id='alice'").run();
+	expect(version()).not.toEqual(before);
+	db.close();
+});

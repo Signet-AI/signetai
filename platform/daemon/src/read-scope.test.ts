@@ -51,3 +51,13 @@ test("an unresolved audience identity cannot construct a public organization rea
 		resolveReadScope({ reach: { kind: "all" }, projects: null }, { local: false, userId: null, groupIds: [] }),
 	).rejects.toThrow("unauthorized");
 });
+
+test("shared reach rejects absent visibility instead of widening the reader", () => {
+	expect(() =>
+		readScopeSql(
+			"r",
+			{ reach: { kind: "shared", agentId: "a" }, compartments: [], projects: null },
+			{ visibility: null },
+		),
+	).toThrow("visibility");
+});

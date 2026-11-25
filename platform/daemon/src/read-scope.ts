@@ -33,10 +33,9 @@ export function readScopeSql(
 	const reach = scope.reach;
 	if (reach.kind === "all") clauses.push(`${agent} IN (SELECT id FROM agents WHERE archived_at IS NULL)`);
 	else if (reach.kind === "shared") {
-		if (visibility) {
-			clauses.push(`(${visibility} = 'global' OR ${agent} = ?)`);
-			args.push(reach.agentId);
-		}
+		if (!visibility) throw new Error("shared reach requires visibility");
+		clauses.push(`(${visibility} = 'global' OR ${agent} = ?)`);
+		args.push(reach.agentId);
 	} else if (reach.kind === "group") {
 		clauses.push(
 			visibility
