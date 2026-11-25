@@ -1,7 +1,13 @@
+import { attemptAsync } from "@signet/core";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { resolveReadScope } from "../read-scope";
-import { classificationRequest, type ClassificationRequest, type ClassificationActor } from "../classifications";
+import {
+	classificationRequest,
+	executeClassificationJob,
+	type ClassificationRequest,
+	type ClassificationActor,
+} from "../classifications";
 
 const principalSchema = z.object({
 	kind: z.enum(["local", "user", "legacy"]),
@@ -136,12 +142,8 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 					remove: op === "remove",
 				}),
 			);
-			const execution = request({ op: "execute", jobId: job.jobId });
-			if (c.req.query("wait") === "1") await execution;
-			else
-				void execution.catch((error) =>
-					console.error("Classification job failed", job.jobId, error instanceof Error ? error.message : "failed"),
-				);
+			if (c.req.query("wait") === "1") await executeClassificationJob(job.jobId, request);
+			else void attemptAsync(() => executeClassificationJob(job.jobId, request));
 			return reply(job, 202);
 		});
 	app.get("/api/classifications/:id/items", async (c) => {

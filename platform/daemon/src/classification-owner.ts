@@ -510,6 +510,12 @@ function preview(
 }
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
 	if (request.op === "readable") return request.subject.local ? "all" : readable(db, request.subject);
+	if (request.op === "fail") {
+		db.prepare(
+			"UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=? AND kind IN ('classify','unclassify') AND status IN ('pending','running')",
+		).run(request.error.slice(0, 1000), new Date().toISOString(), request.jobId);
+		return { ok: true };
+	}
 	if (request.op === "recover") {
 		db.prepare(
 			"UPDATE org_jobs SET status='failed',error='interrupted_by_restart',finished_at=? WHERE kind IN ('classify','unclassify') AND status IN ('running','pending')",

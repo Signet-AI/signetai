@@ -23,7 +23,7 @@ import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
-import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
+import { LATEST_SCHEMA_VERSION, MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(175);
+			expect(applied.version).toBe(LATEST_SCHEMA_VERSION);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });

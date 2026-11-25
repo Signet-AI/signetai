@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { runMigrations } from "./index";
+import { LATEST_SCHEMA_VERSION, runMigrations } from "./index";
 import { up } from "./175-memory-artifact-manifest-path-repair";
 
 test("clears non-manifest manifest_path values idempotently and keeps manifest refs", () => {
@@ -25,7 +25,9 @@ test("clears non-manifest manifest_path values idempotently and keeps manifest r
 			{ session_id: "s3", manifest_path: null },
 			{ session_id: "s4", manifest_path: null },
 		]);
-		expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 175 });
+		expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
+			version: LATEST_SCHEMA_VERSION,
+		});
 	} finally {
 		db.close();
 	}

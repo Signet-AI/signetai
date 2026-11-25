@@ -16,6 +16,7 @@ export interface ClassificationPrincipal {
 	readonly id: string;
 }
 export type ClassificationRequest =
+	| { readonly op: "fail"; readonly jobId: string; readonly error: string }
 	| { readonly op: "readable"; readonly subject: AudienceSubject }
 	| { readonly op: "list" | "get"; readonly actor: ClassificationActor; readonly id?: string }
 	| {
@@ -95,7 +96,7 @@ export async function classify(
 		target,
 		remove,
 	});
-	await classificationRequest({ op: "execute", jobId: job.jobId });
+	await executeClassificationJob(job.jobId);
 	return job;
 }
 export function unclassify(
@@ -104,4 +105,16 @@ export function unclassify(
 	actor: ClassificationActor,
 ): Promise<{ jobId: string }> {
 	return classify(target, classificationId, actor, true);
+}
+
+export async function executeClassificationJob(
+	jobId: string,
+	request: (request: ClassificationRequest) => Promise<unknown> = classificationRequest,
+): Promise<void> {
+	try {
+		await request({ op: "execute", jobId });
+	} catch (error) {
+		await request({ op: "fail", jobId, error: error instanceof Error ? error.message : "classification_failed" });
+		throw error;
+	}
 }

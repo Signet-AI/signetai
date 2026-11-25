@@ -1,3 +1,4 @@
+import { executeClassificationJob } from "./classifications";
 import { classificationFixture } from "./test-support/classification-fixture.test";
 import { expect, test } from "bun:test";
 import { executeClassification } from "./classification-owner";
@@ -213,5 +214,26 @@ test("direct attributes, their materialized memories, hints and vectors move wit
 			scope: { reach: { kind: "all" }, projects: null, compartments: [] },
 		}),
 	).toEqual({ evidence: 0, derived: 0 });
+	db.close();
+});
+
+test("an execution admission failure leaves a failed tracked job rather than a stranded pending job", async () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	const jobId = field(
+		executeClassification(db, { op: "enqueue", actor: compliance, id, target, remove: false }),
+		"jobId",
+	);
+	await expect(
+		executeClassificationJob(jobId, async (request) => {
+			if (request.op === "execute") throw new Error("owner_admission_failed");
+			return executeClassification(db, request);
+		}),
+	).rejects.toThrow("owner_admission_failed");
+	expect(db.prepare("SELECT status,error FROM org_jobs WHERE id=?").get(jobId)).toEqual({
+		status: "failed",
+		error: "owner_admission_failed",
+	});
+	expect(db.prepare("SELECT count(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
 	db.close();
 });
