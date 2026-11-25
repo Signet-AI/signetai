@@ -5,6 +5,7 @@ import {
 	SignetApiError,
 	SignetNetworkError,
 	SignetTimeoutError,
+	SignetResponseError,
 } from "./errors.js";
 
 export type CredentialProvider = () => Promise<string | null>;
@@ -223,7 +224,43 @@ export class SignetTransport {
 
 async function parseResponseBody(response: Response) {
 	if (response.status === 204 || response.status === 205) return undefined;
-	const text = await response.text();
+	let text: string;
+	try {
+		if (response.ok) text = await response.text();
+		else {
+			const reader = response.body?.getReader();
+			const chunks: Uint8Array[] = [];
+			let bytes = 0;
+			if (reader) {
+				try {
+					while (bytes < 4096) {
+						const chunk = await reader.read();
+						if (chunk.done) break;
+						const bounded = chunk.value.subarray(0, 4096 - bytes);
+						chunks.push(bounded);
+						bytes += bounded.byteLength;
+						if (!(response.headers.get("content-type") ?? "").includes("json")) break;
+					}
+				} finally {
+					await reader.cancel();
+				}
+			}
+			const combined = new Uint8Array(bytes);
+			let offset = 0;
+			for (const chunk of chunks) {
+				combined.set(chunk, offset);
+				offset += chunk.byteLength;
+			}
+			text = new TextDecoder().decode(combined);
+		}
+	} catch (error) {
+		await response.body?.cancel().catch(() => undefined);
+		if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) throw error;
+		throw new SignetResponseError(
+			"Response body read failed",
+			error instanceof Error ? error : new Error("Response read failed"),
+		);
+	}
 	if (!text) return undefined;
 	const contentType = response.headers.get("content-type") ?? "";
 	if (contentType.includes("application/json") || contentType.includes("+json")) {

@@ -83,6 +83,8 @@ export class SignetNetworkError extends SignetError {
 	}
 }
 
+export class SignetResponseError extends SignetNetworkError {}
+
 export class SignetTimeoutError extends SignetNetworkError {
 	constructor(timeoutMs: number) {
 		super(`Request timed out after ${timeoutMs}ms`, new Error("timeout"));
