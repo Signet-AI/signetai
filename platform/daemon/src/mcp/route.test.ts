@@ -46,15 +46,16 @@ describe("MCP route", () => {
 	});
 
 	it("rejects requests when the in-flight admission cap is saturated", async () => {
-		const admission = createConcurrencyAdmission(1);
-		expect(admission.acquire()).toBe(true);
+		const admission = createConcurrencyAdmission(1, { maxWaiters: 0 });
+		const release = await admission.acquire("local");
+		if (typeof release !== "function") throw new Error("expected grant");
 		__setMcpAdmissionForTests(admission);
 		try {
 			const res = await makeApp().request("/mcp", { method: "GET" });
 			expect(res.status).toBe(503);
 			expect((await res.json()).error.message).toContain("Too many concurrent MCP requests");
 		} finally {
-			admission.release();
+			release();
 			__setMcpAdmissionForTests(null);
 		}
 	});

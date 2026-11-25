@@ -29,23 +29,24 @@ function captureTelemetry(): { readonly collector: TelemetryCollector; readonly 
 afterEach(() => setActiveTelemetry(undefined));
 
 describe("memory capture admission (#1342)", () => {
-	it("rejects saturated captures with 503 and releases completed captures", async () => {
+	it("waits for saturated captures and releases completed captures", async () => {
 		const app = new Hono();
 		const admission = createConcurrencyAdmission(1);
 		const middleware = createMemoryCaptureAdmissionMiddleware(admission, 1);
 		app.use("/capture", middleware);
 		app.post("/capture", (c) => c.json({ ok: true }));
 
-		expect(admission.acquire()).toBe(true);
-		const rejected = await app.request("/capture", { method: "POST" });
-		expect(rejected.status).toBe(503);
-		expect(await rejected.json()).toEqual({
-			error: "Too many concurrent memory captures (max 1); retry shortly",
+		const release = await admission.acquire("local");
+		if (typeof release !== "function") throw new Error("expected grant");
+		let settled = false;
+		const request = Promise.resolve(app.request("/capture", { method: "POST" })).then((response) => {
+			settled = true;
+			return response;
 		});
-		expect(admission.inFlight()).toBe(1);
-
-		admission.release();
-		const completed = await app.request("/capture", { method: "POST" });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(settled).toBe(false);
+		release();
+		const completed = await request;
 		expect(completed.status).toBe(200);
 		expect(await completed.json()).toEqual({ ok: true });
 		expect(admission.inFlight()).toBe(0);
@@ -60,6 +61,8 @@ describe("memory capture admission (#1342)", () => {
 		const response = await app.request("/api/memory/remember", { method: "POST", body: "{}" });
 
 		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("1");
+		expect(await response.json()).toMatchObject({ reason: "admission" });
 		expect(telemetry.events).toContainEqual(
 			expect.objectContaining({
 				event: "pipeline.operation",

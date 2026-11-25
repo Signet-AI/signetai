@@ -612,9 +612,12 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 	async function tick(): Promise<void> {
 		if (!running) return;
 		if (isSystemPressureHigh()) return;
-		if (!admission.acquire()) return;
+		if (admission.inFlight() >= admission.maxInFlight) return;
+		const release = await admission.acquire("local");
+		if (typeof release !== "function") return;
 
 		try {
+			if (!running) return;
 			const leasedAt = Date.now();
 			const job = await writeTx(deps.accessor, (db) => leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries));
 
@@ -664,7 +667,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 				}
 			}
 		} finally {
-			admission.release();
+			release();
 		}
 	}
 

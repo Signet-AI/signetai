@@ -88,6 +88,21 @@ Rate-limit rejections return `429`. Auth failures return `401`. Permission
 violations return `403`. Version conflicts and state violations return `409`.
 Mutations blocked by the kill switch return `503`.
 
+Prompt submission (`/api/hooks/user-prompt-submit`), memory capture
+(`/api/memory/remember`), and stop hooks (`/api/hooks/stop`) each allow eight
+in-flight requests. At capacity, up to 64 requests wait for at most two seconds.
+Waiting requests rotate across authenticated principals rather than sharing one
+FIFO queue. While competing principals wait, a principal cannot receive another
+slot at or above half the capacity (rounded up); existing work is not interrupted.
+Local requests share the `local` principal. Cancelled requests leave the wait queue
+immediately.
+
+When admission cannot grant a slot, these routes return `503` with
+`{ "error": "...", "reason": "admission" }` and a `Retry-After` header in seconds.
+The retry interval is at least one second and reflects recent slot hold time.
+A refusal does not mean the requested capture or hook completed; retry explicitly
+if delivery is required.
+
 ## Transcript deletion
 
 `DELETE /api/sessions/:key/transcript` removes an owning agent's transcript

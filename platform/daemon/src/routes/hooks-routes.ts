@@ -11,7 +11,7 @@ import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
-import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
+import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import {
 	type AcpDeliveryAttempt,
 	type AgentMessage,
@@ -659,10 +659,13 @@ function registerUserPromptSubmit(app: Hono): void {
 				return c.json({ inject: "", dynamicContext: "", memoryCount: 0, bypassed: true });
 			}
 
-			if (!promptSubmitAdmission.acquire()) {
+			const release = await promptSubmitAdmission.acquire(admissionKey(c), c.req.raw.signal);
+			if (typeof release !== "function") {
+				c.header("Retry-After", String(release.retryAfter));
 				return c.json(
 					{
-						error: `Too many concurrent prompt submissions (max ${PROMPT_SUBMIT_MAX_IN_FLIGHT}); retry shortly`,
+						error: `Too many concurrent prompt submissions (max ${promptSubmitAdmission.maxInFlight}); retry shortly`,
+						reason: release.reason,
 					},
 					503,
 				);
@@ -673,7 +676,7 @@ function registerUserPromptSubmit(app: Hono): void {
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
 				});
 			} finally {
-				promptSubmitAdmission.release();
+				release();
 			}
 			return c.json(
 				await withCrossAgentNotifications(
@@ -863,14 +866,21 @@ function registerStop(app: Hono): void {
 	app.post(
 		"/api/hooks/stop",
 		async (c, next) => {
-			if (!stopAdmission.acquire()) {
-				c.header("Retry-After", "1");
-				return c.json({ error: `Too many concurrent stop hooks (max ${STOP_MAX_IN_FLIGHT}); retry shortly` }, 503);
+			const release = await stopAdmission.acquire(admissionKey(c), c.req.raw.signal);
+			if (typeof release !== "function") {
+				c.header("Retry-After", String(release.retryAfter));
+				return c.json(
+					{
+						error: `Too many concurrent stop hooks (max ${stopAdmission.maxInFlight}); retry shortly`,
+						reason: release.reason,
+					},
+					503,
+				);
 			}
 			try {
 				await next();
 			} finally {
-				stopAdmission.release();
+				release();
 			}
 		},
 		bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) }),
