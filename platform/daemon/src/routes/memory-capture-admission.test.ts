@@ -32,7 +32,7 @@ describe("memory capture admission (#1342)", () => {
 	it("waits for saturated captures and releases completed captures", async () => {
 		const app = new Hono();
 		const admission = createConcurrencyAdmission(1);
-		const middleware = createMemoryCaptureAdmissionMiddleware(admission, 1);
+		const middleware = createMemoryCaptureAdmissionMiddleware(admission);
 		app.use("/capture", middleware);
 		app.post("/capture", (c) => c.json({ ok: true }));
 
@@ -50,6 +50,40 @@ describe("memory capture admission (#1342)", () => {
 		expect(completed.status).toBe(200);
 		expect(await completed.json()).toEqual({ ok: true });
 		expect(admission.inFlight()).toBe(0);
+	});
+
+	it("releases a granted slot and skips captures aborted before their continuation", async () => {
+		for (const queued of [false, true]) {
+			const app = new Hono();
+			const admission = createConcurrencyAdmission(1);
+			app.use("/capture", createMemoryCaptureAdmissionMiddleware(admission));
+			let captures = 0;
+			app.post("/capture", (c) => {
+				captures++;
+				return c.json({ ok: true });
+			});
+			const held = queued ? await admission.acquire("local") : undefined;
+			const controller = new AbortController();
+			const request = app.request("/capture", { method: "POST", signal: controller.signal });
+			if (queued) await new Promise((resolve) => setTimeout(resolve, 10));
+			if (typeof held === "function") held();
+			controller.abort();
+			const response = await request;
+			expect(response.status).toBe(503);
+			expect(await response.json()).toMatchObject({ reason: "admission" });
+			expect(captures).toBe(0);
+			expect(admission.inFlight()).toBe(0);
+		}
+	});
+
+	it("reports the actual configured capture capacity", async () => {
+		const app = new Hono();
+		registerMemoryRoutes(app, { memoryCaptureAdmission: createConcurrencyAdmission(0) });
+		const response = await app.request("/api/memory/remember", { method: "POST", body: "{}" });
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			error: "Too many concurrent memory captures (max 0); retry shortly",
+		});
 	});
 
 	it("records direct admission rejections as failed memory captures", async () => {

@@ -1,5 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { Hono } from "hono";
+import { parseAuthConfig } from "./auth/config";
+import { createAuthMiddleware } from "./auth/middleware";
+import { createToken, generateSecret } from "./auth/tokens";
 import { admissionKey, createConcurrencyAdmission } from "./concurrency-admission";
 
 describe("concurrency admission", () => {
@@ -162,6 +165,39 @@ describe("concurrency admission", () => {
 		expect(admission.inFlight()).toBe(0);
 	});
 
+	it("estimates Retry-After from queue position and clamps it to 1..30 seconds", async () => {
+		let now = 0;
+		const clock = spyOn(performance, "now").mockImplementation(() => now);
+		try {
+			for (const [maxWaiters, expected] of [
+				[0, 6],
+				[1, 12],
+				[8, 30],
+			]) {
+				if (maxWaiters === undefined || expected === undefined) throw new Error("invalid case");
+				const admission = createConcurrencyAdmission(2, { maxWaiters });
+				const sample = await admission.acquire("a");
+				if (typeof sample !== "function") throw new Error("expected grant");
+				now += 12_000;
+				sample();
+				const held = await Promise.all([admission.acquire("a"), admission.acquire("a")]);
+				const controller = new AbortController();
+				const pending = Array.from({ length: maxWaiters }, () => admission.acquire("a", controller.signal));
+				try {
+					expect(await admission.acquire("b")).toEqual({ reason: "admission", retryAfter: expected });
+				} finally {
+					controller.abort();
+					await Promise.all(pending);
+					for (const release of held) if (typeof release === "function") release();
+				}
+			}
+		} finally {
+			clock.mockRestore();
+		}
+		const cold = createConcurrencyAdmission(0);
+		expect(await cold.acquire("a")).toEqual({ reason: "admission", retryAfter: 1 });
+	});
+
 	it("bases Retry-After on recent slot hold duration", async () => {
 		const admission = createConcurrencyAdmission(1, { maxWaiters: 0 });
 		const release = await admission.acquire("a");
@@ -172,6 +208,27 @@ describe("concurrency admission", () => {
 		if (typeof next !== "function") throw new Error("expected grant");
 		expect(await admission.acquire("b")).toEqual({ reason: "admission", retryAfter: 2 });
 		next();
+	});
+
+	it("tries immediate admission without queuing or bypassing waiting requests", async () => {
+		const admission = createConcurrencyAdmission(1);
+		const first = admission.tryAcquire("worker");
+		if (!first) throw new Error("expected immediate grant");
+		expect(admission.tryAcquire("worker")).toBeNull();
+		const waiting = admission.acquire("request");
+		expect(admission.tryAcquire("worker")).toBeNull();
+		first();
+		const next = await waiting;
+		if (typeof next !== "function") throw new Error("expected queued grant");
+		expect(admission.tryAcquire("worker")).toBeNull();
+		next();
+		expect(admission.inFlight()).toBe(0);
+		const last = admission.tryAcquire("worker");
+		if (!last) throw new Error("failed tryAcquire queued hidden work");
+		last();
+		last();
+		expect(admission.inFlight()).toBe(0);
+		expect(createConcurrencyAdmission(0).tryAcquire("worker")).toBeNull();
 	});
 
 	it("supports a disabled capacity and rejects invalid limits", async () => {
@@ -203,6 +260,36 @@ describe("concurrency admission", () => {
 			child.once("exit", resolve);
 		});
 		expect(code).toBe(0);
+	});
+
+	it("groups two credential subjects by their shared user scope", async () => {
+		const app = new Hono();
+		const secret = generateSecret();
+		app.use("*", createAuthMiddleware(parseAuthConfig({ mode: "team" }, process.env.HOME ?? "."), secret));
+		app.get("/bucket", (c) => c.text(admissionKey(c)));
+		const keys = await Promise.all(
+			["token-one", "token-two"].map(async (sub) => {
+				const token = createToken(secret, { sub, scope: { user: "alice" }, role: "agent" }, 60);
+				const response = await app.request("/bucket", { headers: { authorization: `Bearer ${token}` } });
+				expect(response.status).toBe(200);
+				return response.text();
+			}),
+		);
+		expect(keys).toEqual(["alice", "alice"]);
+	});
+
+	it("never mixes an unidentified authenticated credential into the local bucket", async () => {
+		const app = new Hono();
+		app.get("/authenticated", (c) => {
+			c.set("auth", { authenticated: true, claims: null });
+			return c.text(admissionKey(c));
+		});
+		app.get("/loopback", (c) => {
+			c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
+			return c.text(admissionKey(c));
+		});
+		expect(await (await app.request("/authenticated")).text()).toBe("anonymous-credential");
+		expect(await (await app.request("/loopback")).text()).toBe("local");
 	});
 
 	it("uses authenticated subjects, not request headers or agent scope, as keys", async () => {

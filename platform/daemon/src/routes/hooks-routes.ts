@@ -660,12 +660,13 @@ function registerUserPromptSubmit(app: Hono): void {
 			}
 
 			const release = await promptSubmitAdmission.acquire(admissionKey(c), c.req.raw.signal);
-			if (typeof release !== "function") {
-				c.header("Retry-After", String(release.retryAfter));
+			if (typeof release !== "function" || c.req.raw.signal.aborted) {
+				if (typeof release === "function") release();
+				c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
 				return c.json(
 					{
 						error: `Too many concurrent prompt submissions (max ${promptSubmitAdmission.maxInFlight}); retry shortly`,
-						reason: release.reason,
+						reason: "admission",
 					},
 					503,
 				);
@@ -867,12 +868,13 @@ function registerStop(app: Hono): void {
 		"/api/hooks/stop",
 		async (c, next) => {
 			const release = await stopAdmission.acquire(admissionKey(c), c.req.raw.signal);
-			if (typeof release !== "function") {
-				c.header("Retry-After", String(release.retryAfter));
+			if (typeof release !== "function" || c.req.raw.signal.aborted) {
+				if (typeof release === "function") release();
+				c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
 				return c.json(
 					{
 						error: `Too many concurrent stop hooks (max ${stopAdmission.maxInFlight}); retry shortly`,
-						reason: release.reason,
+						reason: "admission",
 					},
 					503,
 				);

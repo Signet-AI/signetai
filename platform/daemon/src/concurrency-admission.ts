@@ -7,6 +7,7 @@ export interface Refusal {
 }
 export interface ConcurrencyAdmission {
 	acquire(key: string, signal?: AbortSignal): Promise<Release | Refusal>;
+	tryAcquire(key: string): Release | null;
 	inFlight(): number;
 	readonly maxInFlight: number;
 }
@@ -21,7 +22,9 @@ interface Waiter {
 }
 
 export function admissionKey(c: Context): string {
-	return c.get("auth")?.claims?.sub ?? "local";
+	const auth = c.get("auth");
+	if (!auth?.authenticated) return "local";
+	return auth.claims?.scope.user ?? auth.claims?.sub ?? "anonymous-credential";
 }
 
 export function createConcurrencyAdmission(maxInFlight: number, options: AdmissionOptions = {}): ConcurrencyAdmission {
@@ -36,7 +39,10 @@ export function createConcurrencyAdmission(maxInFlight: number, options: Admissi
 	let lastGranted: string | undefined;
 	const held = new Map<string, number>();
 	const queues = new Map<string, Set<Waiter>>();
-	const refusal = (): Refusal => ({ reason: "admission", retryAfter: Math.max(1, Math.ceil(meanHoldMs / 1_000)) });
+	const refusal = (): Refusal => ({
+		reason: "admission",
+		retryAfter: Math.max(1, Math.min(30, Math.ceil(((queued + 1) * meanHoldMs) / Math.max(1, maxInFlight) / 1_000))),
+	});
 
 	function grant(key: string): Release {
 		active++;
@@ -55,6 +61,10 @@ export function createConcurrencyAdmission(maxInFlight: number, options: Admissi
 			else held.set(key, remaining);
 			drain();
 		};
+	}
+
+	function tryAcquire(key: string): Release | null {
+		return queued === 0 && active < maxInFlight ? grant(key) : null;
 	}
 
 	function remove(key: string, waiter: Waiter): void {
@@ -94,9 +104,11 @@ export function createConcurrencyAdmission(maxInFlight: number, options: Admissi
 	return {
 		maxInFlight,
 		inFlight: () => active,
+		tryAcquire,
 		async acquire(key, signal) {
 			if (signal?.aborted || maxInFlight === 0) return refusal();
-			if (queued === 0 && active < maxInFlight) return grant(key);
+			const release = tryAcquire(key);
+			if (release) return release;
 			if (queued >= maxWaiters || maxWaitMs === 0) return refusal();
 			return new Promise<Release | Refusal>((resolve) => {
 				const cancel = () => {

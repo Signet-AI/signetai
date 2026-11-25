@@ -53,11 +53,27 @@ describe("MCP route", () => {
 		try {
 			const res = await makeApp().request("/mcp", { method: "GET" });
 			expect(res.status).toBe(503);
-			expect((await res.json()).error.message).toContain("Too many concurrent MCP requests");
+			expect((await res.json()).error.message).toBe("Too many concurrent MCP requests (max 1); retry shortly");
 		} finally {
 			release();
 			__setMcpAdmissionForTests(null);
 		}
+	});
+
+	it("releases a grant cancelled before MCP work starts", async () => {
+		const admission = createConcurrencyAdmission(1);
+		__setMcpAdmissionForTests(admission);
+		let work = 0;
+		__setMcpRequestGateForTests(async () => {
+			work++;
+		});
+		const controller = new AbortController();
+		const request = makeApp().request("/mcp", { method: "GET", signal: controller.signal });
+		controller.abort();
+		const response = await request;
+		expect(response.status).toBe(503);
+		expect(work).toBe(0);
+		expect(admission.inFlight()).toBe(0);
 	});
 
 	it("passes parsed Bun/Hono JSON bodies to the streamable HTTP transport", async () => {

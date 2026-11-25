@@ -764,22 +764,20 @@ async function responseOperationSummary(
 	}
 }
 
-export function createMemoryCaptureAdmissionMiddleware(
-	admission: ConcurrencyAdmission,
-	maxInFlight = MEMORY_CAPTURE_MAX_IN_FLIGHT,
-): MiddlewareHandler {
+export function createMemoryCaptureAdmissionMiddleware(admission: ConcurrencyAdmission): MiddlewareHandler {
 	return async (c, next) => {
 		const release = await admission.acquire(admissionKey(c), c.req.raw.signal);
-		if (typeof release !== "function") {
-			c.header("Retry-After", String(release.retryAfter));
+		if (typeof release !== "function" || c.req.raw.signal.aborted) {
+			if (typeof release === "function") release();
+			c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
 			logger.warn("memory", "Memory capture admission limit reached", {
-				maxInFlight,
+				maxInFlight: admission.maxInFlight,
 				inFlight: admission.inFlight(),
 			});
 			return c.json(
 				{
-					error: `Too many concurrent memory captures (max ${maxInFlight}); retry shortly`,
-					reason: release.reason,
+					error: `Too many concurrent memory captures (max ${admission.maxInFlight}); retry shortly`,
+					reason: "admission",
 				},
 				503,
 			);

@@ -1610,6 +1610,41 @@ memory:
 			}
 		});
 
+		it("skips prompt and stop work when cancellation races a queued grant", async () => {
+			for (const [path, body, setAdmission] of [
+				[
+					"/api/hooks/user-prompt-submit",
+					{ harness: "codex", userMessage: "hello" },
+					__setPromptSubmitAdmissionForTests,
+				],
+				["/api/hooks/stop", { harness: "codex", sessionKey: crypto.randomUUID() }, __setStopAdmissionForTests],
+			] as const) {
+				const admission = createConcurrencyAdmission(1);
+				const release = await admission.acquire("local");
+				if (typeof release !== "function") throw new Error("expected grant");
+				setAdmission(admission);
+				const controller = new AbortController();
+				try {
+					const request = app.request(path, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(body),
+						signal: controller.signal,
+					});
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					release();
+					controller.abort();
+					const response = await request;
+					expect(response.status).toBe(503);
+					expect(await response.json()).toMatchObject({ reason: "admission" });
+					expect(admission.inFlight()).toBe(0);
+				} finally {
+					release();
+					setAdmission(null);
+				}
+			}
+		});
+
 		it("waits for prompt capacity then succeeds", async () => {
 			const admission = createPromptSubmitAdmission(1);
 			const release = await admission.acquire("local");
