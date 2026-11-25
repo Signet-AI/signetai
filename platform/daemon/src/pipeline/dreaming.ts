@@ -1,16 +1,12 @@
 import { z } from "zod";
+import { attempt as attemptRunbookJson } from "@signet/core";
 function runbookRecord(value: unknown): Record<string, unknown> | null {
 	const parsed = z.record(z.string(), z.unknown()).safeParse(value);
 	return parsed.success ? parsed.data : null;
 }
 function parseRecord(value: string | null): Record<string, unknown> | null {
 	if (!value) return null;
-	try {
-		const parsed: unknown = JSON.parse(value);
-		return runbookRecord(parsed);
-	} catch {
-		return null;
-	}
+	return runbookRecord(attemptRunbookJson(() => JSON.parse(value)));
 }
 
 function parseTextList(value: unknown): readonly string[] {
