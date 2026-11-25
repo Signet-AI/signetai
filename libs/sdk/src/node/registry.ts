@@ -76,7 +76,7 @@ export async function writeKeyFile(
 	return path;
 }
 export async function readKeyFile(path: string): Promise<string> {
-	const value = await readPrivate(path, 64 * 1024);
+	const value = await readPrivate(path, 64 * 1024, true);
 	if (value === null) throw new Error(`Credential key file is missing: ${path}`);
 	const trimmed = value.trim();
 	if (!trimmed || /[\r\n]/.test(trimmed)) throw new Error("Invalid credential key file");

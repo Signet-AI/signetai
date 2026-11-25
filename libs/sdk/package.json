@@ -32,7 +32,7 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "bun build ./src/index.ts ./src/node.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --splitting --external react --external zod --external '@signet/core/*' && bun run build:types",
+		"build": "bun build.ts && bun run build:types",
 		"build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"dev": "bun --watch src/index.ts",

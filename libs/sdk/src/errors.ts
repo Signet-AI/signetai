@@ -24,7 +24,7 @@ export class SignetApiError extends SignetError {
 export class SignetOutboxAdmissionError extends SignetError {
 	override readonly cause: unknown;
 	constructor(cause: unknown) {
-		super("Delivery was not admitted to the durable outbox; no request was sent", "outbox_admission_failed");
+		super("Delivery did not reach foreground dispatch; inspect the outbox before retrying", "outbox_admission_failed");
 		this.name = "SignetOutboxAdmissionError";
 		this.cause = cause;
 	}
@@ -104,4 +104,21 @@ export function apiError(status: number, body: unknown): SignetApiError {
 		return new SignetForbiddenError(reason, required, body);
 	}
 	return new SignetApiError(status, body);
+}
+
+export class SignetCredentialError extends SignetError {
+	override readonly cause: unknown;
+	constructor(
+		cause: unknown,
+		readonly reason = "credential_provider_error",
+	) {
+		super(
+			reason === "refresh_in_doubt"
+				? "Signet refresh succeeded but local credential persistence is in doubt"
+				: "Signet credential provider failed",
+			reason,
+		);
+		this.name = "SignetCredentialError";
+		this.cause = cause;
+	}
 }

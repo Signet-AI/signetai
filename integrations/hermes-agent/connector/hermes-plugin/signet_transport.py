@@ -1,5 +1,7 @@
 import contextlib
+import errno
 from collections.abc import Callable
+from typing import Literal, TypedDict
 import dataclasses
 import datetime
 import hashlib
@@ -13,7 +15,9 @@ import random
 import queue
 import re
 import socket
+import shutil
 import stat
+import sys
 import subprocess
 import time
 import threading
@@ -60,7 +64,14 @@ class SignetOutboxAdmissionError(Exception):
 
     def __init__(self, cause):
         self.__cause__ = cause
-        super().__init__("Delivery was not admitted to the durable outbox; no request was sent")
+        super().__init__("Delivery did not reach foreground dispatch; inspect the outbox before retrying")
+
+
+class SignetCredentialError(Exception):
+    def __init__(self, cause, reason="credential_provider_error"):
+        super().__init__("Signet refresh persistence is in doubt" if reason == "refresh_in_doubt" else "Signet credential provider failed")
+        self.code = self.reason = reason
+        self.__cause__ = cause
 
 
 class SignetNetworkError(Exception):
@@ -174,16 +185,186 @@ def _identifier(value):
     return value
 
 
-def _protect(path, directory=False):
+_WINDOWS = os.name == "nt"
+_ACL_CACHE = {}
+
+
+def _security_change_time(path, info):
     if os.name != "nt":
-        os.chmod(path, 0o700 if directory else 0o600)
+        return info.st_ctime_ns
+    import ctypes
+    from ctypes import wintypes
+    class BasicInfo(ctypes.Structure):
+        _fields_ = [("creation",ctypes.c_longlong),("access",ctypes.c_longlong),("write",ctypes.c_longlong),("change",ctypes.c_longlong),("attributes",wintypes.DWORD)]
+    kernel = ctypes.WinDLL("kernel32",use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
+    kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(path),0x80,7,None,3,0x02000000,None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        value = BasicInfo()
+        if not kernel.GetFileInformationByHandleEx(handle,0,ctypes.byref(value),ctypes.sizeof(value)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return value.change
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _fingerprint(path):
+    info = Path(path).stat()
+    return info.st_dev,info.st_ino,_security_change_time(path,info) if _WINDOWS else info.st_ctime_ns,info.st_mtime_ns,info.st_size
+
+
+def _remember_private(path):
+    _ACL_CACHE.pop(str(path), None)
+
+
+def _remember_directory_mutation(path):
+    _remember_private(path)
+
+
+class _PrivateStateChangedError(OSError):
+    pass
+
+
+def _is_link(info):
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+_ACL_SCRIPT = """[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $ErrorActionPreference='Stop'; while($null -ne ($line=[Console]::ReadLine())){try{$v=$line|ConvertFrom-Json; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $item=Get-Item -LiteralPath $v.path -Force; if(($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and -not $v.allowSymlink){throw 'link'}; $p=$item.FullName; for($i=0;($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and $i -lt 32;$i++){$p=$item.Target[0]; if(-not [System.IO.Path]::IsPathRooted($p)){$p=Join-Path $item.DirectoryName $p}; $item=Get-Item -LiteralPath $p -Force}; if($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint){throw 'link'}; if($v.write){if($v.directory){$acl=[System.Security.AccessControl.DirectorySecurity]::new(); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')}else{$acl=[System.Security.AccessControl.FileSecurity]::new(); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow')}; $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl}; $acl=Get-Acl -LiteralPath $p; if($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){throw 'owner'}; foreach($r in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow' -and $r.IdentityReference.Value -ne $sid.Value){throw 'acl'}}; if($v.directory -and -not $acl.AreAccessRulesProtected){throw 'inheritance'}; [Console]::WriteLine('{"ok":true}')}catch{[Console]::WriteLine('{"ok":false}')}; [Console]::Out.Flush()}"""
+
+
+class _AclWorker:
+    def __init__(self):
+        self.requests = queue.Queue(maxsize=1)
+        self.process = None
+        self.closed = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.closed.set()
+        process = self.process
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+    def _run(self):
+        try:
+            while not self.closed.is_set():
+                try:
+                    value, response = self.requests.get(timeout=_ACL_IDLE_SECONDS)
+                except queue.Empty:
+                    return
+                try:
+                    if self.closed.is_set():
+                        raise OSError()
+                    if self.process is None:
+                        self.process = subprocess.Popen(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _ACL_SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1)
+                    if self.closed.is_set():
+                        raise OSError()
+                    stdin, stdout = self.process.stdin, self.process.stdout
+                    if stdin is None or stdout is None:
+                        raise OSError("ACL worker pipes unavailable")
+                    stdin.write(_json_dump(value)+"\n")
+                    stdin.flush()
+                    line = stdout.readline(128)
+                    if len(line) >= 128 or not line.endswith("\n"):
+                        raise OSError()
+                    result = _json_load(line)
+                    if not isinstance(result, dict) or set(result) != {"ok"} or type(result["ok"]) is not bool:
+                        raise OSError()
+                    response.put_nowait(result["ok"])
+                except Exception:
+                    response.put_nowait(None)
+                    return
+        finally:
+            self.close()
+            if self.process is not None:
+                try:
+                    self.process.wait(timeout=0.1)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                for stream in (self.process.stdin, self.process.stdout):
+                    if stream:
+                        stream.close()
+
+
+_ACL_IDLE_SECONDS = 5
+_ACL_WORKER = None
+_ACL_WORKER_LOCK = threading.Lock()
+
+
+def _acl_operation(path, directory=False, write=False, allow_symlink=False):
+    global _ACL_WORKER
+    end = time.monotonic()+1
+    if not _ACL_WORKER_LOCK.acquire(timeout=1):
+        raise PermissionError("Signet ACL worker busy")
+    try:
+        if _ACL_WORKER is None or _ACL_WORKER.closed.is_set():
+            _ACL_WORKER = _AclWorker()
+        worker = _ACL_WORKER
+        response = queue.Queue(maxsize=1)
+        try:
+            worker.requests.put_nowait(({"path":str(path), "directory":directory, "write":write, "allowSymlink":allow_symlink},response))
+            result = response.get(timeout=max(0,end-time.monotonic()))
+        except (queue.Empty, queue.Full):
+            worker.close()
+            raise PermissionError("Signet ACL verification timed out") from None
+        if result is not True:
+            if result is None:
+                worker.close()
+            raise PermissionError("Unsafe permissions on Signet private state")
+    finally:
+        _ACL_WORKER_LOCK.release()
+
+
+def _windows_acl(path, directory=False, write=False, allow_symlink=False):
+    if not allow_symlink and _is_link(Path(path).lstat()):
+        raise ValueError("Invalid credential file type")
+    before = _fingerprint(path)
+    if not write and _ACL_CACHE.get(str(path)) == before:
+        return
+    _remember_private(path)
+    _acl_operation(path, directory, write, allow_symlink)
+    if not allow_symlink and _is_link(Path(path).lstat()):
+        raise ValueError("Invalid credential file type")
+    if before[:2] != _fingerprint(path)[:2]:
+        raise _PrivateStateChangedError("Credential changed during ACL verification")
+    if not write:
+        if before != _fingerprint(path):
+            raise _PrivateStateChangedError("Credential changed during ACL verification")
+        _ACL_CACHE[str(path)] = before
+        if len(_ACL_CACHE) > 512:
+            _ACL_CACHE.pop(next(iter(_ACL_CACHE)))
+
+
+def _protect(path, directory=False):
+    if not _WINDOWS:
+        os.chmod(path,0o700 if directory else 0o600)
     else:
-        script = "[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); $v=[Console]::In.ReadToEnd()|ConvertFrom-Json; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; if($v.directory){$acl=[System.Security.AccessControl.DirectorySecurity]::new(); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')}else{$acl=[System.Security.AccessControl.FileSecurity]::new(); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow')}; $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $v.path -AclObject $acl -ErrorAction Stop"
-        subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], input=_json_dump({"path": str(path), "directory": directory}), text=True, timeout=5, check=True, capture_output=True)
+        _windows_acl(path,directory,True)
+
+
+def _reject_directory_links(path):
+    path = Path(path).absolute()
+    for candidate in (path, *path.parents):
+        try:
+            if _is_link(candidate.lstat()):
+                raise ValueError("Private state directories cannot contain links")
+        except FileNotFoundError:
+            continue
 
 
 def _directory(path):
     path = Path(path)
+    _reject_directory_links(path)
     missing = []
     parent = path
     while not parent.exists():
@@ -192,55 +373,153 @@ def _directory(path):
     for parent in reversed(missing):
         parent.mkdir(mode=0o700, exist_ok=True)
         _protect(parent, True)
+        _remember_directory_mutation(parent.parent)
+    _reject_directory_links(path)
     _protect(path, True)
 
 
-def _read_private(path, maximum=1024 * 1024):
+def _read_private(path, maximum=1024 * 1024, allow_symlink=False):
+    if not allow_symlink:
+        _reject_directory_links(Path(path).parent)
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        before = Path(path).lstat()
+        if not allow_symlink and _is_link(before):
+            raise ValueError("Invalid credential file type")
+        fd=os.open(path,os.O_RDONLY|getattr(os,"O_NONBLOCK",0)|(0 if allow_symlink else getattr(os,"O_NOFOLLOW",0)))
     except FileNotFoundError:
         return None
-    with os.fdopen(fd, "r", encoding="utf8") as handle:
-        info = os.fstat(handle.fileno())
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ValueError("Invalid credential file type") from error
+        raise
+    try:
+        info=os.fstat(fd)
+        after = Path(path).lstat()
+        if not allow_symlink and _is_link(after):
+            raise ValueError("Invalid credential file type")
+        if not allow_symlink and ((before.st_dev,before.st_ino) != (info.st_dev,info.st_ino) or (after.st_dev,after.st_ino) != (info.st_dev,info.st_ino)):
+            raise _PrivateStateChangedError("Private state changed while opening")
         if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
             raise ValueError("Invalid credential file size or type")
-        if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.getuid()):
+        if not _WINDOWS and (stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()):
             raise PermissionError("Unsafe permissions on credential file: %s; require mode 0600 and current owner" % path)
-        return handle.read(maximum + 1)
+        if _WINDOWS:
+            _windows_acl(path, allow_symlink=allow_symlink)
+            if not allow_symlink and _is_link(Path(path).lstat()):
+                raise ValueError("Invalid credential file type")
+            current=Path(path).stat()
+            if (info.st_dev,info.st_ino,info.st_ctime_ns) != (current.st_dev,current.st_ino,current.st_ctime_ns):
+                raise _PrivateStateChangedError("Credential changed during ACL verification")
+        with os.fdopen(fd,"r",encoding="utf8",closefd=False) as handle:
+            return handle.read(maximum+1)
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(fd)
 
 
-def _atomic_write(path, value):
+def _sync_directory(path):
+    if os.name != "nt":
+        fd=os.open(path,os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _rename_private(source,target,durable=True):
+    source,target=Path(source),Path(target)
+    _reject_directory_links(source.parent)
+    _reject_directory_links(target.parent)
+    _remember_private(source)
+    _remember_private(target)
+    source.replace(target)
+    if durable:
+        _sync_directory(source.parent)
+    _remember_directory_mutation(source.parent)
+    if source.parent != target.parent:
+        if durable:
+            _sync_directory(target.parent)
+        _remember_directory_mutation(target.parent)
+
+
+def _remove_private(path,recursive=False,durable=True):
+    path=Path(path)
+    _reject_directory_links(path.parent)
+    _remember_private(path)
+    if recursive and path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+    if durable:
+        _sync_directory(path.parent)
+    _remember_directory_mutation(path.parent)
+
+
+def _atomic_write(path, value, durable=True):
     path = Path(path)
     _directory(path.parent)
     temporary = path.with_name(path.name + "." + str(uuid.uuid4()) + ".tmp")
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf8") as handle:
-            _protect(temporary)
+            if _WINDOWS:
+                _remember_directory_mutation(path.parent)
+                _protect(temporary)
+                opened = os.fstat(handle.fileno())
+                current = temporary.lstat()
+                if _is_link(current) or (opened.st_dev,opened.st_ino) != (current.st_dev,current.st_ino):
+                    raise PermissionError("Private file changed during ACL protection")
+            else:
+                _protect(temporary)
             handle.write(value)
             handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        if os.name != "nt":
-            fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            if durable:
+                os.fsync(handle.fileno())
+        _rename_private(temporary,path,durable)
+        _remember_directory_mutation(path.parent)
+        _remember_private(path)
     finally:
-        temporary.unlink(missing_ok=True)
+        _remove_private(temporary,durable=False)
 
 
-def _alive(pid):
-    if not isinstance(pid, int) or pid <= 0:
-        return False
+_PROCESS_IDENTITIES = {}
+
+
+def _process_start(pid):
+    cached = _PROCESS_IDENTITIES.get(pid)
+    if pid == os.getpid() and cached and cached[1] > time.time():
+        return cached[0]
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+        if sys.platform.startswith("linux"):
+            text = Path("/proc/%d/stat" % pid).read_text()
+            value = "linux:" + text.rsplit(")", 1)[1].split()[19]
+        elif sys.platform == "darwin":
+            value = "darwin:" + subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=1, check=True,env={**os.environ,"LC_ALL":"C","TZ":"UTC"}).stdout.strip()
+        elif os.name == "nt":
+            value = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=Get-Process -Id %d -ErrorAction SilentlyContinue; if($null -ne $p){$p.StartTime.ToUniversalTime().Ticks}" % pid], capture_output=True, text=True, timeout=1, check=True,env={**os.environ,"LC_ALL":"C","TZ":"UTC"}).stdout.strip()
+            value = "win32:"+value if value else None
+        else:
+            raise RuntimeError("Unsupported Signet lock platform")
+    except (OSError,subprocess.SubprocessError) as error:
+        if pid == os.getpid():
+            raise
+        if isinstance(error,FileNotFoundError) and sys.platform.startswith("linux"):
+            return None
+        if sys.platform == "darwin" and isinstance(error,subprocess.CalledProcessError) and error.returncode == 1 and not error.stdout.strip() and not error.stderr.strip():
+            return None
+        raise
+    if pid == os.getpid():
+        _PROCESS_IDENTITIES[pid] = (value,float("inf"))
+    return value
+
+
+def _owner(token=None):
+    return {"pid":os.getpid(), "token":token or str(uuid.uuid4()), "startTime":_process_start(os.getpid()), "createdAt":int(time.time()*1000)}
+
+
+def _owner_alive(value):
+    return isinstance(value, dict) and type(value.get("pid")) is int and value["pid"] > 0 and isinstance(value.get("startTime"), str) and type(value.get("createdAt")) in (int, float) and -1000 <= time.time()*1000-value["createdAt"] < 120000 and _process_start(value["pid"]) == value["startTime"]
 
 
 def _lock_record(text):
@@ -251,89 +530,83 @@ def _lock_record(text):
         return {}
 
 
-def _participants(directory, end, cancel):
+def _lock_text(path, retries=3):
+    try:
+        return _read_private(path,4096)
+    except _PrivateStateChangedError:
+        if retries > 0:
+            return _lock_text(path,retries-1)
+        raise
+
+
+def _participants(directory, end, cancel, legacy=False):
     paths = list(directory.iterdir())
-    if len(paths) > 256:
-        raise SignetNetworkError("Signet lock participant admission limit reached")
     result = []
     for path in paths:
         _check_control(end, cancel)
         if not re.fullmatch(r"[a-f0-9-]{36}\.json", path.name):
             continue
-        text = _read_private(path, 4096)
+        try:
+            text = _lock_text(path)
+        except (ValueError,PermissionError):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                _remove_private(path)
+            continue
         if text is None:
             continue
         value = _lock_record(text)
         if type(value.get("pid")) is not int or value["pid"] <= 0 or not isinstance(value.get("token"), str) or value["token"] + ".json" != path.name or not isinstance(value.get("choosing"), bool) or type(value.get("ticket")) is not int or not 0 <= value["ticket"] < 9007199254740991:
-            raise ValueError("Corrupt Signet lock participant")
-        try:
-            if time.time() - path.stat().st_mtime > 1 and not _alive(value["pid"]):
-                path.unlink(missing_ok=True)
-                continue
-        except FileNotFoundError:
+            _remove_private(path)
+            continue
+        legacy_alive = legacy and "startTime" not in value and type(value.get("createdAt")) in (int,float) and -1000 <= time.time()*1000-value["createdAt"] < 120000 and _process_start(value["pid"]) is not None
+        if not legacy_alive and not _owner_alive(value):
+            _remove_private(path)
             continue
         result.append(value)
+    if len(result)>256:
+        raise SignetNetworkError("Signet lock participant admission limit reached")
     return result
 
 
-def _legacy_lock_released(path):
-    text = _read_private(path, 4096)
-    if text is None:
-        return True
-    owner = _lock_record(text)
-    valid = type(owner.get("pid")) is int and owner["pid"] > 0 and isinstance(owner.get("token"), str)
-    try:
-        if time.time() - path.stat().st_mtime <= (1 if valid else 30) or valid and _alive(owner["pid"]):
-            return False
-        path.unlink(missing_ok=True)
-        return True
-    except FileNotFoundError:
-        return True
-
-
 @contextlib.contextmanager
-def _lock(path, deadline=None, cancel=None):
-    path = Path(path)
+def _lock(path,deadline=None,cancel=None,legacy=False):
+    path=Path(path)
+    _check_control(deadline,cancel)
     _directory(path.parent)
-    directory = Path(str(path) + ".tickets")
+    directory=Path(str(path)+".tickets")
     _directory(directory)
-    end = min(deadline or time.time() + 10, time.time() + 10)
-    token = str(uuid.uuid4())
-    participant = directory / (token + ".json")
-    acquired = False
+    end=min(deadline if deadline is not None else time.time()+10,time.time()+10)
+    owner=_owner()
+    participant=directory/(owner["token"]+".json")
     try:
-        _check_control(end, cancel)
-        owner = {"pid": os.getpid(), "token": token, "createdAt": int(time.time() * 1000)}
-        _atomic_write(participant, _json_dump({**owner, "choosing": True, "ticket": 0}))
-        ticket = max([0, *(value["ticket"] for value in _participants(directory, end, cancel))]) + 1
-        _atomic_write(participant, _json_dump({**owner, "choosing": False, "ticket": ticket}))
+        _check_control(end,cancel)
+        _atomic_write(participant,_json_dump({**owner,"choosing":True,"ticket":0}),durable=False)
+        ticket=max([0,*(value["ticket"] for value in _participants(directory,end,cancel,legacy))])+1
+        if ticket>=9007199254740991:
+            raise ValueError("Signet lock ticket limit reached")
+        _atomic_write(participant,_json_dump({**owner,"choosing":False,"ticket":ticket}),durable=False)
         while True:
-            _check_control(end, cancel)
-            participants = _participants(directory, end, cancel)
-            blocked = any(other["token"] != token and (other["choosing"] or (other["ticket"], other["token"]) < (ticket, token)) for other in participants)
-            if not blocked and _legacy_lock_released(Path(str(path) + ".reap")) and _legacy_lock_released(path):
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                acquired = True
-                with os.fdopen(fd, "w") as handle:
-                    json.dump(owner, handle)
-                _check_control(end, cancel)
+            _check_control(end,cancel)
+            participants=_participants(directory,end,cancel,legacy)
+            if not any(other["token"]==owner["token"] and other["ticket"]==ticket and not other["choosing"] for other in participants):
+                raise ValueError("Signet lock generation expired")
+            blocked=any(other["token"]!=owner["token"] and (other["choosing"] or (other["ticket"],other["token"])<(ticket,owner["token"])) for other in participants)
+            if not blocked:
                 yield
                 return
-            wait = min(0.015 + random.random() * 0.02, max(0, end - time.time()))
+            wait=min(0.015+random.random()*0.02,max(0,end-time.time()))
             if cancel:
                 cancel.wait(wait)
             else:
                 time.sleep(wait)
     finally:
-        try:
-            if acquired:
-                path.unlink(missing_ok=True)
-        finally:
-            participant.unlink(missing_ok=True)
+        _remove_private(participant,durable=False)
 
 
 def read_key_file(path):
-    value = _read_private(path, 64 * 1024)
+    value = _read_private(path, 64 * 1024, allow_symlink=True)
     if value is None:
         raise FileNotFoundError("Credential key file is missing: %s" % path)
     value = value.strip()
@@ -410,10 +683,18 @@ class LoginStore:
         self.keyring = keyring
         self.source = "none"
         self.reason = None
+        self.pending_rotation = None
+        self.pending_previous_refresh = None
 
     def load(self, deadline=None, cancel=None):
         end = deadline if deadline is not None else time.time() + 10
         _check_control(end, cancel)
+        dead_reason=None
+        marker = _read_private(str(self.path) + ".state")
+        if marker is not None:
+            dead_reason = _json_load(marker)["reason"]
+        if dead_reason:
+            raise SignetUnauthorizedError(dead_reason)
         self.source = "none"
         self.reason = None
         text = _read_private(self.path)
@@ -426,32 +707,39 @@ class LoginStore:
             return None
         credential = _login(_json_load(text))
         self.source = source
-        value = _json_load(text)
-        reason = value.get("fallbackReason", "")
-        self.reason = (reason if isinstance(reason, str) and re.fullmatch(r"keyring_(unchecked|missing|locked|unavailable|permission-denied|corrupt|unsupported)", reason) else "protected_login_file") if source == "login-file" else None
+        self.reason = "python_file_store" if source == "login-file" else None
         return {"source": source, "credential": credential}
 
     def _write(self, credential):
         encoded = _json_dump(credential)
         if self.keyring and self.keyring.set("signet-login", self.origin, encoded):
-            self.path.unlink(missing_ok=True)
+            _remove_private(self.path)
             self.source = "keychain" if credential is not None else "none"
+            self.reason=None
             return "keychain"
-        self.reason = "keyring_unavailable"
+        self.reason = "python_file_store"
         _atomic_write(self.path, _json_dump({**credential, "fallbackReason": self.reason}) if credential is not None else "null")
         self.source = "login-file" if credential is not None else "none"
         return "login-file"
 
     def save(self, credential):
         with _lock(str(self.path) + ".lock"):
-            return self._write(_login(credential))
+            result = self._write(_login(credential))
+            _remove_private(Path(str(self.path) + ".state"))
+            self.pending_rotation = None
+            return result
 
     def clear(self):
         with _lock(str(self.path) + ".lock"):
             self._write(None)
+            _atomic_write(self.path,"null")
+            _remove_private(Path(str(self.path)+".state"))
+            self.pending_rotation=self.pending_previous_refresh=None
 
     def get(self, deadline=None, cancel=None):
         end = deadline if deadline is not None else time.time() + 10
+        if self.pending_rotation:
+            return self.refresh(None, end, cancel)
         saved = self.load(end, cancel)
         _check_control(end, cancel)
         if not saved:
@@ -465,6 +753,10 @@ class LoginStore:
         end = deadline if deadline is not None else time.time() + 10
         _check_control(end, cancel)
         with _lock(str(self.path) + ".lock", end, cancel):
+            if self.pending_rotation:
+                persisted=self._persist_rotation(end,cancel)
+                if persisted is not None:
+                    return persisted
             saved = self.load(end, cancel)
             _check_control(end, cancel)
             if not saved:
@@ -476,12 +768,46 @@ class LoginStore:
                 raise SignetUnauthorizedError("expired")
             try:
                 value = SignetTransport(self.origin, retries=0).request("POST", "/api/auth/refresh", {"refreshToken": credential["refreshToken"]}, deadline=end * 1000, cancel=cancel)
-                self._write(_login(value))
-                return value["accessToken"]
-            except Exception as error:
-                body = error.body if isinstance(error, SignetApiError) else None
-                reason = error.reason if isinstance(error, SignetUnauthorizedError) else body.get("reason", "expired") if isinstance(body, dict) else "expired"
-                raise SignetUnauthorizedError(reason, body, cause=error) from error
+            except (SignetUnauthorizedError, SignetForbiddenError) as error:
+                if error.reason in ("revoked", "refresh_reuse", "user_deactivated"):
+                    _atomic_write(str(self.path) + ".state", _json_dump({"state":"dead", "reason":error.reason}))
+                raise
+            self.pending_rotation = _login(value)
+            self.pending_previous_refresh=credential["refreshToken"]
+            persisted = self._persist_rotation(end,cancel)
+            if persisted is None:
+                raise SignetCredentialError(RuntimeError("Credential changed during refresh"))
+            return persisted
+
+    def _persist_rotation(self,end,cancel):
+        rotated=self.pending_rotation
+        if not isinstance(rotated,dict):
+            raise RuntimeError("No refresh rotation pending")
+        try:
+            saved=self.load(end,cancel)
+        except SignetUnauthorizedError:
+            self.pending_rotation=self.pending_previous_refresh=None
+            raise
+        except Exception as error:
+            self.reason="refresh_in_doubt"
+            raise SignetCredentialError(error,"refresh_in_doubt") from error
+        if saved is None and self.reason is not None:
+            self.reason="refresh_in_doubt"
+            raise SignetCredentialError(RuntimeError("Cannot verify current login credential"),"refresh_in_doubt")
+        if saved is None and self.reason is None:
+            self.pending_rotation=self.pending_previous_refresh=None
+            raise SignetUnauthorizedError("missing_credential")
+        if saved and saved["credential"]["refreshToken"] not in (self.pending_previous_refresh,rotated["refreshToken"]):
+            self.pending_rotation=self.pending_previous_refresh=None
+            return saved["credential"]["accessToken"] if _timestamp(saved["credential"]["accessExpiresAt"])>time.time() else None
+        try:
+            self._write(rotated)
+        except Exception as error:
+            self.reason = "refresh_in_doubt"
+            raise SignetCredentialError(error, "refresh_in_doubt") from error
+        value = rotated["accessToken"]
+        self.pending_rotation = self.pending_previous_refresh = None
+        return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -520,11 +846,13 @@ class ResolvedTarget:
     origin: str
     credential: Credential
     remote: bool
+    harness: str = "cli"
 
 
 def resolve_target(*, harness=None, flag_url=None, flag_key=None, config_url=None, env=None, keyring=None, timeout: float = 10, deadline=None, cancel=None):
     end = _request_end(10, timeout, deadline)
     _check_control(end, cancel)
+    selected_harness=_identifier(harness if harness is not None else "cli")
     env = os.environ if env is None else env
     flag_url = flag_url.strip() if flag_url is not None else None
     if flag_url is not None and not flag_url:
@@ -561,7 +889,7 @@ def resolve_target(*, harness=None, flag_url=None, flag_key=None, config_url=Non
             saved = _bounded(lambda: store.load(end, cancel), end, cancel, workers=_CREDENTIAL_WORKERS)
             credential = Credential(saved["source"] if saved else "none", store.get, store.refresh, lambda: store.source, lambda: store.reason)
     _check_control(end, cancel)
-    return ResolvedTarget(url, url, credential, bool(explicit) or urllib.parse.urlsplit(url).hostname not in ("localhost", "127.0.0.1", "::1"))
+    return ResolvedTarget(url, url, credential, bool(explicit) or urllib.parse.urlsplit(url).hostname not in ("localhost", "127.0.0.1", "::1"), selected_harness)
 
 
 _CREDENTIAL_WORKERS = threading.BoundedSemaphore(4)
@@ -580,7 +908,7 @@ def _request_end(default_timeout, timeout=None, deadline=None):
 def _check_control(end, cancel):
     if cancel and cancel.is_set():
         raise SignetNetworkError("Request cancelled")
-    if time.time() >= end:
+    if end is not None and time.time() >= end:
         raise SignetTimeoutError("Request deadline exceeded")
 
 
@@ -697,17 +1025,29 @@ class SignetTransport:
                 else:
                     time.sleep(wait)
             _check_control(end, cancel)
+            fetching = False
             try:
                 if self.credential_provider:
-                    token = _bounded(self.credential_provider, end, cancel, workers=_CREDENTIAL_WORKERS)
+                    try:
+                        token = _bounded(self.credential_provider, end, cancel, workers=_CREDENTIAL_WORKERS)
+                    except (SignetApiError, SignetCredentialError, SignetNetworkError):
+                        raise
+                    except Exception as error:
+                        _check_control(end, cancel)
+                        raise SignetCredentialError(error) from error
+                    if token is not None and (not isinstance(token,str) or len(token)>65536 or any(ord(char)<33 or ord(char)>126 for char in token)):
+                        raise SignetCredentialError(ValueError("Credential provider returned an invalid bearer credential"))
                     if token:
                         headers["authorization"] = "Bearer " + token
                     else:
                         headers.pop("authorization", None)
+                fetching = True
                 return self._exchange(method, path, data, headers, end, cancel)
             except (socket.timeout, TimeoutError) as error:
                 raise SignetTimeoutError("Request deadline exceeded") from error
             except (OSError, http.client.HTTPException, SignetApiError, SignetNetworkError) as error:
+                if not fetching:
+                    raise
                 if isinstance(error, SignetApiError) and error.status not in (408, 429, 500, 502, 503, 504):
                     raise
                 if isinstance(error, SignetTimeoutError):
@@ -733,13 +1073,133 @@ def _delivery_path(path):
         raise ValueError("Outbox path must be daemon-relative without query or fragment")
 
 
+class FlushFailure(TypedDict):
+    code: str
+    status: int | None
+    reason: str | None
+
+
+class _FlushResult(TypedDict):
+    state: Literal["complete", "deferred", "failed"]
+    pending: int | None
+    sent: int
+    failure: FlushFailure | None
+
+
+class OutboxFlushResult(_FlushResult, total=False):
+    quarantined: int
+    dropped: int
+
+
+_CLAIM_RUNTIME = str(uuid.uuid4())
+_ACTIVE_CLAIMS = set()
+_ACTIVE_CLAIMS_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _claim_execution(owner):
+    try:
+        yield
+    finally:
+        with _ACTIVE_CLAIMS_LOCK:
+            _ACTIVE_CLAIMS.discard(owner["token"])
+
+
 class DurableOutbox:
     MAX_ENTRIES = 200
     MAX_BYTES = 64 * 1024 * 1024
 
-    def __init__(self, origin, *, env=None):
+    def __init__(self, origin, *, env=None, harness="cli"):
         self.origin = _url(origin)
-        self.directory = config_directory(env) / "outbox" / origin_hash(self.origin)
+        self.harness = _identifier(harness)
+        self.directory = config_directory(env) / "outbox" / origin_hash(self.origin) / self.harness
+
+    @contextlib.contextmanager
+    def _locked(self, deadline=None, cancel=None):
+        end = deadline if deadline is not None else time.time()+10
+        _check_control(end,cancel)
+        root = self.directory.parent
+        with _lock(self.directory/".lock",end,cancel):
+            with _lock(root/".lock",end,cancel,legacy=True):
+                self._migrate_legacy(end,cancel)
+                _check_control(end,cancel)
+                yield
+
+    def _legacy_pending(self):
+        for path in self._names(self.directory.parent):
+            if not path.name.endswith(".json"):
+                continue
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(info.st_mode) or _is_link(info):
+                return True
+        return False
+
+    def _migrate_legacy(self, end, cancel):
+        root = self.directory.parent
+        quarantine = root/".legacy-quarantine"
+        for path in self._names(root):
+            _check_control(end,cancel)
+            if not path.name.endswith(".json"):
+                continue
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISDIR(info.st_mode) and not _is_link(info):
+                continue
+            _directory(quarantine)
+            reason = "legacy_metadata" if path.name == ".status.json" else "legacy_unattributed"
+            target = quarantine/(path.name+"."+reason+"."+str(uuid.uuid4())+".json")
+            _check_control(end,cancel)
+            _rename_private(path,target)
+
+    def recover_legacy(self, file: str, harness: str):
+        if harness != self.harness or not isinstance(file,str) or Path(file).name != file or not file.endswith(".json") or file.startswith("."):
+            raise ValueError("Invalid legacy recovery selection")
+        with self._locked():
+            source = self.directory.parent/".legacy-quarantine"/file
+            text = _read_private(source,self.MAX_BYTES)
+            if text is None:
+                raise FileNotFoundError("Legacy record not found")
+            value = _json_load(text)
+            if not isinstance(value,dict):
+                raise ValueError("Invalid legacy record")
+            fields = {"origin","headers","id","idempotencyKey","method","path","body","createdAt","attempts","lastError"}
+            if "version" in value or "harness" in value:
+                if set(value) != fields|{"version","harness"} or type(value["version"]) is not int or value["version"] != 1 or value["harness"] != harness:
+                    raise ValueError("Legacy record belongs to another harness")
+            elif set(value) not in (fields,fields-{"headers"}):
+                raise ValueError("Invalid legacy record")
+            selected = {**value,"headers":value.get("headers",{}),"version":1,"harness":harness}
+            self._validate_entry(selected)
+            if selected["origin"] != self.origin:
+                raise ValueError("Legacy origin mismatch")
+            target = self._file(selected["id"])
+            if target.exists() or any(p.name.startswith(selected["id"]+".") for p in self._names(self.directory/".claims")):
+                raise ValueError("Legacy recovery collision")
+            entries = self._entries()
+            reserved = self._reserved()
+            encoded = _json_dump(selected,ensure_ascii=False)
+            total = reserved["bytes"]+sum(self._file(e["id"]).stat().st_size+512 for e in entries)-source.stat().st_size+len(encoded.encode())
+            if reserved["count"]+len(entries) > self.MAX_ENTRIES or total > self.MAX_BYTES:
+                raise ValueError("Legacy recovery exceeds outbox capacity")
+            _atomic_write(source,encoded)
+            _rename_private(source,target)
+            return selected
+
+    def _validate_entry(self, value):
+        fields = {"version","harness","origin","headers","id","idempotencyKey","method","path","body","createdAt","attempts","lastError"}
+        if not isinstance(value,dict) or set(value) != fields or type(value["version"]) is not int or value["version"] != 1 or not isinstance(value["origin"],str) or not isinstance(value["createdAt"],str) or not isinstance(value["id"],str) or not isinstance(value["idempotencyKey"],str) or not re.fullmatch(r"[\x21-\x7e]{1,512}",value["idempotencyKey"]) or value["method"] != "POST" or type(value["attempts"]) is not int or value["attempts"] < 0 or value["lastError"] is not None and not isinstance(value["lastError"],str):
+            raise ValueError("Corrupt Signet outbox entry")
+        self._file(value["id"])
+        _identifier(value["harness"])
+        if _url(value["origin"]) != value["origin"] or _delivery_headers(value["headers"]) != value["headers"]:
+            raise ValueError("Invalid outbox origin or scope")
+        _timestamp(value["createdAt"])
+        _delivery_path(value["path"])
 
     def _file(self, entry_id):
         if not re.fullmatch(r"[a-f0-9-]{36}", entry_id):
@@ -747,6 +1207,15 @@ class DurableOutbox:
         return self.directory / (entry_id + ".json")
 
     def _meta(self):
+        try:
+            return self._parse_meta()
+        except (ValueError,PermissionError):
+            self._quarantine(self.directory/".status.json","bad_status")
+            meta={"admitting":False,"evicted":0,"dropped":0,"lastDrop":None,"removing":[],"countersLost":True}
+            self._save_meta(meta)
+            return meta
+
+    def _parse_meta(self):
         text = _read_private(self.directory / ".status.json")
         value = _json_load(text) if text else {"evicted": 0, "dropped": 0, "lastDrop": None, "removing": []}
         if not isinstance(value, dict) or not all(isinstance(value.get(k), int) and value[k] >= 0 for k in ("evicted", "dropped")) or not isinstance(value.get("removing"), list):
@@ -762,17 +1231,23 @@ class DurableOutbox:
         _atomic_write(self.directory / ".status.json", _json_dump(value))
 
     def _recover(self, meta):
+        self._reap()
+        self._recover_claims()
         if meta["removing"]:
             for entry_id in meta["removing"]:
-                self._file(entry_id).unlink(missing_ok=True)
+                _remove_private(self._file(entry_id))
+                for path in self._names(self.directory/".claims"):
+                    if path.name.startswith(entry_id+"."):
+                        _remove_private(path,durable=not path.name.endswith(".owner"))
             meta["removing"] = []
             self._save_meta(meta)
         if not meta["admitting"]:
             return
         entries = self._entries()
-        total = sum(self._file(e["id"]).stat().st_size + 512 for e in entries)
+        reserved = self._reserved()
+        total = reserved["bytes"] + sum(self._file(e["id"]).stat().st_size + 512 for e in entries)
         evictions = []
-        while len(entries) > self.MAX_ENTRIES or total > self.MAX_BYTES:
+        while entries and (len(entries)+reserved["count"] > self.MAX_ENTRIES or total > self.MAX_BYTES):
             oldest = entries.pop(0)
             total -= self._file(oldest["id"]).stat().st_size + 512
             evictions.append(oldest["id"])
@@ -782,31 +1257,140 @@ class DurableOutbox:
         self._save_meta(meta)
         self._recover(meta)
 
-    def _entries(self):
-        paths = list(self.directory.iterdir())
-        if len(paths) > 1000:
-            raise ValueError("Signet outbox directory exceeds scan bound")
-        entries = []
-        for path in paths:
-            if not re.fullmatch(r"[a-f0-9-]{36}\.json", path.name):
+    def _names(self, directory=None):
+        try:
+            return list((directory or self.directory).iterdir())
+        except FileNotFoundError:
+            return []
+
+    def _quarantine(self, path, reason):
+        directory = self.directory / ".quarantine"
+        _directory(directory)
+        target = directory / (path.name+"."+reason+"."+str(uuid.uuid4())+".json")
+        try:
+            _rename_private(path,target)
+        except FileNotFoundError:
+            return
+        info = target.lstat()
+        if os.name != "nt" and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid():
+            target.chmod(0o600)
+
+    def _reap(self):
+        for directory in (self.directory, self.directory/".claims", self.directory/".quarantine", self.directory/".lock.tickets"):
+            for path in self._names(directory):
+                try:
+                    if path.name.endswith(".tmp") and time.time()-path.lstat().st_mtime > 300:
+                        _remove_private(path)
+                except FileNotFoundError:
+                    continue
+
+    def _recover_claims(self):
+        for path in self._names(self.directory/".claims"):
+            parts=re.fullmatch(r"([a-f0-9-]{36})\.([a-f0-9-]{36})\.json",path.name)
+            if parts is None:
+                if path.name.endswith(".json"):
+                    self._quarantine(path,"bad_claim")
                 continue
-            text = _read_private(path, self.MAX_BYTES)
-            if text is None:
-                raise ValueError("Outbox entry disappeared while locked")
-            value = _json_load(text)
-            if not isinstance(value, dict) or set(value) != {"origin", "headers", "id", "idempotencyKey", "method", "path", "body", "createdAt", "attempts", "lastError"} or self._file(value["id"]) != path or not isinstance(value["idempotencyKey"], str) or not re.fullmatch(r"[\x21-\x7e]{1,512}", value["idempotencyKey"]) or value["method"] != "POST" or not isinstance(value["attempts"], int) or value["attempts"] < 0 or value["lastError"] is not None and not isinstance(value["lastError"], str):
-                raise ValueError("Corrupt Signet outbox entry")
-            if _url(value["origin"]) != value["origin"] or _delivery_headers(value["headers"]) != value["headers"]:
-                raise ValueError("Invalid outbox origin or scope")
-            _timestamp(value["createdAt"])
-            _delivery_path(value["path"])
-            entries.append(value)
-        return sorted(entries, key=lambda entry: (entry["createdAt"], entry["id"]))
+            entry_id,generation=parts.groups()
+            try:
+                text = _read_private(str(path)+".owner", 4096)
+                owner = _lock_record(text) if text else None
+            except (ValueError, PermissionError):
+                owner = None
+            with _ACTIVE_CLAIMS_LOCK:
+                ended_here = owner and owner.get("runtime") == _CLAIM_RUNTIME and generation not in _ACTIVE_CLAIMS
+            if not owner or owner.get("token")!=generation or ended_here or not _owner_alive(owner):
+                _rename_private(path,self._file(entry_id))
+                _remove_private(Path(str(path)+".owner"))
+
+    def _reserved(self):
+        result = {"count":0, "bytes":0, "claimed":0, "quarantine":[]}
+        for directory in (".claims", ".quarantine", "legacy"):
+            for path in self._names(self.directory.parent/".legacy-quarantine" if directory == "legacy" else self.directory/directory):
+                if not path.name.endswith(".json"):
+                    continue
+                try:
+                    size = path.lstat().st_size
+                except FileNotFoundError:
+                    continue
+                metadata = directory == "legacy" and path.name.startswith(".status.json")
+                result["count"] += 0 if metadata else 1
+                result["bytes"] += size+(0 if metadata else 512)
+                if directory == ".claims":
+                    result["claimed"] += 1
+                else:
+                    result["quarantine"].append({"file":path.name,"reason":("legacy_metadata" if path.name.startswith(".status.json") else "legacy_unattributed") if directory == "legacy" else path.name.split(".")[-3]})
+        return result
+
+    def _entries(self):
+        entries = []
+        for path in self._names():
+            if path.name.startswith(".") or not path.name.endswith(".json"):
+                continue
+            try:
+                text = _read_private(path, self.MAX_BYTES)
+                if text is None:
+                    continue
+                value = _json_load(text)
+                self._validate_entry(value)
+                if self._file(value["id"]) != path:
+                    raise ValueError("Invalid outbox filename")
+                entries.append(value)
+            except (ValueError, TypeError, KeyError, PermissionError):
+                self._quarantine(path,"bad_file")
+        return sorted(entries,key=lambda entry:(entry["createdAt"],entry["id"]))
+
+    def _claim_locked(self, entry, force=False):
+        if entry["origin"] != self.origin or entry["harness"] != self.harness:
+            return None
+        path = self._file(entry["id"])
+        if entry["attempts"] >= 20 or time.time()-_timestamp(entry["createdAt"]) >= 7*86400:
+            self._quarantine(path,"poison_attempts" if entry["attempts"] >= 20 else "poison_age")
+            return None
+        if not force and entry["attempts"] and time.time()-path.stat().st_mtime < min(60,2**min(entry["attempts"],6)):
+            return None
+        entry = {**entry,"attempts":entry["attempts"]+1}
+        owner = {**_owner(), "runtime":_CLAIM_RUNTIME}
+        claimed = self.directory/".claims"/(entry["id"]+"."+owner["token"]+".json")
+        _directory(claimed.parent)
+        _atomic_write(path,_json_dump(entry,ensure_ascii=False))
+        _atomic_write(str(claimed)+".owner",_json_dump(owner),durable=False)
+        _rename_private(path,claimed)
+        with _ACTIVE_CLAIMS_LOCK:
+            _ACTIVE_CLAIMS.add(owner["token"])
+        return entry,owner
+
+    def _settle(self, claim, error=None, *, end=None, cancel=None):
+        entry,owner = claim
+        with self._locked(end,cancel):
+            _check_control(end,cancel)
+            path = self.directory/".claims"/(entry["id"]+"."+owner["token"]+".json")
+            text = _read_private(str(path)+".owner",4096)
+            if text is None or _lock_record(text).get("token") != owner["token"]:
+                return
+            _check_control(end,cancel)
+            marker = Path(str(path)+".owner")
+            if error is None:
+                _remove_private(path)
+                _remove_private(marker,durable=False)
+                return
+            status,reason = getattr(error,"status",None),getattr(error,"reason",None)
+            if status == 403 and reason in ("agent_not_permitted","agent_binding_conflict","actor_conflict","project_not_permitted","permission"):
+                self._quarantine(path,"scope_"+reason)
+                _remove_private(marker,durable=False)
+            elif entry["attempts"] >= 20:
+                self._quarantine(path,"poison_attempts")
+                _remove_private(marker,durable=False)
+            elif isinstance(status,int) and 400 <= status < 500 and status not in (401,408,429):
+                self._remove(self._meta(),entry,status)
+            else:
+                _rename_private(path,self._file(entry["id"]))
+                _remove_private(marker,durable=False)
+                _atomic_write(self._file(entry["id"]),_json_dump({**entry,"lastError":"http_%s" % status if status else getattr(error,"reason",None) or type(error).__name__},ensure_ascii=False))
 
     def _remove(self, meta, entry, disposition):
-        if isinstance(disposition, int):
-            meta["dropped"] += 1
-            meta["lastDrop"] = {"id": entry["id"], "status": disposition, "at": _iso(time.time())}
+        meta["dropped"] += 1
+        meta["lastDrop"] = {"id": entry["id"], "status": disposition, "at": _iso(time.time())}
         meta["removing"] = [entry["id"]]
         self._save_meta(meta)
         self._recover(meta)
@@ -820,13 +1404,16 @@ class DurableOutbox:
         self._recover(meta)
         entries = self._entries()
         created = max(time.time(), _timestamp(entries[-1]["createdAt"]) + 0.001 if entries else 0)
-        entry = {"origin": self.origin, "headers": headers, "id": str(uuid.uuid4()), "idempotencyKey": str(uuid.uuid4()) if idempotency_key is None else idempotency_key, "method": method, "path": path, "body": body, "createdAt": _iso(created), "attempts": 0, "lastError": None}
+        entry = {"version":1, "harness":self.harness, "origin": self.origin, "headers": headers, "id": str(uuid.uuid4()), "idempotencyKey": str(uuid.uuid4()) if idempotency_key is None else idempotency_key, "method": method, "path": path, "body": body, "createdAt": _iso(created), "attempts": 0, "lastError": None}
         encoded = _json_dump(entry, ensure_ascii=False)
         size = len(encoded.encode()) + 512
         if size > self.MAX_BYTES:
             raise ValueError("Outbox entry exceeds 64 MiB")
-        total = sum(self._file(e["id"]).stat().st_size + 512 for e in entries)
-        if len(entries) >= self.MAX_ENTRIES or total + size > self.MAX_BYTES:
+        reserved = self._reserved()
+        if reserved["count"] >= self.MAX_ENTRIES or reserved["bytes"]+size > self.MAX_BYTES:
+            raise ValueError("Outbox capacity reserved by claims or quarantined evidence")
+        total = reserved["bytes"]+sum(self._file(e["id"]).stat().st_size+512 for e in entries)
+        if len(entries)+reserved["count"] >= self.MAX_ENTRIES or total+size > self.MAX_BYTES:
             meta["admitting"] = True
             self._save_meta(meta)
         _atomic_write(self._file(entry["id"]), encoded)
@@ -837,90 +1424,127 @@ class DurableOutbox:
         body = _json_load(_json_dump(body, ensure_ascii=False))
         headers = _delivery_headers(headers or {})
         end = deadline / 1000 if deadline is not None else time.time() + 10
-        with _lock(self.directory / ".lock", end, cancel):
+        with self._locked(end,cancel):
             _check_control(end, cancel)
             return self._admit(method, path, body, idempotency_key, self._meta(), headers)
 
     def deliver(self, method, path, body, send, *, idempotency_key=None, deadline=None, cancel=None, headers=None):
-        end = deadline / 1000 if deadline is not None else time.time() + 10
-        admitted = False
-        committed = []
+        end = deadline/1000 if deadline is not None else time.time()+10
         try:
-            body = _json_load(_json_dump(body, ensure_ascii=False))
+            body = _json_load(_json_dump(body,ensure_ascii=False))
             headers = _delivery_headers(headers or {})
-            with _lock(self.directory / ".lock", end, cancel):
-                _check_control(end, cancel)
-                meta = self._meta()
-                entry = self._admit(method, path, body, idempotency_key, meta, headers)
-                admitted = True
-                try:
-                    value = send(entry, end * 1000)
-                except Exception as error:
-                    status = getattr(error, "status", None)
-                    if isinstance(status, int) and 400 <= status < 500 and status not in (401, 408, 429):
-                        self._remove(meta, entry, status)
-                    else:
-                        entry["lastError"] = "http_%s" % status if status else "network_or_deadline"
-                        _atomic_write(self._file(entry["id"]), _json_dump(entry, ensure_ascii=False))
-                    raise
-                committed.append(value)
-                self._remove(meta, entry, "delivered")
-            return value, None
+            with self._locked(end,cancel):
+                entry = self._admit(method,path,body,idempotency_key,self._meta(),headers)
+                claim = self._claim_locked(entry,True)
+                if claim is None:
+                    raise ValueError("Delivery was not claimed")
         except Exception as error:
-            if committed:
-                return committed[0], error
-            if not admitted:
-                raise SignetOutboxAdmissionError(error) from error
-            raise
+            raise SignetOutboxAdmissionError(error) from error
+        with _claim_execution(claim[1]):
+            try:
+                _check_control(end,cancel)
+                value = send(claim[0],end*1000)
+            except Exception as error:
+                if cancel is None or not cancel.is_set():
+                    if time.time() < end:
+                        try:
+                            self._settle(claim,error,end=end,cancel=cancel)
+                        except Exception as cleanup:
+                            raise error from cleanup
+                raise
+            try:
+                self._settle(claim,end=end,cancel=cancel)
+                return value,None
+            except Exception as error:
+                return value,error
 
-    def entries(self):
-        with _lock(self.directory / ".lock"):
+    def entries(self, *, end=None, cancel=None):
+        with self._locked(end,cancel):
             meta = self._meta()
             self._recover(meta)
             return self._entries()
 
     def status(self):
-        with _lock(self.directory / ".lock"):
+        with self._locked():
             meta = self._meta()
             self._recover(meta)
             entries = self._entries()
-            return {"pending": len(entries), "bytes": sum(self._file(e["id"]).stat().st_size for e in entries), "evicted": meta["evicted"], "dropped": meta["dropped"], "lastDrop": meta["lastDrop"]}
+            reserved = self._reserved()
+            return {"countersLost":meta.get("countersLost",False), "pending":len(entries)+reserved["claimed"], "claimed":reserved["claimed"], "quarantined":len(reserved["quarantine"]), "quarantine":reserved["quarantine"], "lastFlush":meta.get("lastFlush"), "bytes":reserved["bytes"]-reserved["count"]*512+sum(self._file(e["id"]).stat().st_size for e in entries), "evicted":meta["evicted"], "dropped":meta["dropped"], "lastDrop":meta["lastDrop"]}
 
-    def flush(self, send, *, timeout=5, deadline=None, force=False, cancel=None, origin=None):
-        end = _request_end(5, timeout, deadline)
-        with _lock(self.directory / ".lock", end, cancel):
-            meta = self._meta()
-            self._recover(meta)
-            entries = self._entries()
-            pending = len(entries)
-            for entry in entries:
-                if entry["origin"] != self.origin or origin is not None and entry["origin"] != origin:
+    def flush(self, send, *, timeout=5, deadline=None, force=False, cancel=None, origin=None, harness=None) -> OutboxFlushResult:
+        end = _request_end(5,timeout,deadline)
+        try:
+            _check_control(end,cancel)
+        except (SignetNetworkError,SignetTimeoutError) as error:
+            return {"state":"failed","pending":None,"sent":0,"failure":{"code":type(error).__name__,"status":None,"reason":None}}
+        if origin is not None and origin != self.origin or harness is not None and harness != self.harness:
+            return {"state":"deferred","pending":None,"sent":0,"failure":{"code":"partition_mismatch","status":None,"reason":None}}
+        legacy = self._legacy_pending()
+        if legacy:
+            try:
+                with self._locked(end,cancel):
+                    pass
+            except (SignetNetworkError,SignetTimeoutError) as error:
+                return {"state":"failed","pending":None,"sent":0,"failure":{"code":type(error).__name__,"status":None,"reason":None}}
+        if not any(not p.name.startswith(".") and p.name.endswith(".json") for p in self._names()) and not any(p.name.endswith(".json") for p in self._names(self.directory/".claims")):
+            quarantined=len(self._reserved()["quarantine"])
+            return {"state":"deferred" if quarantined else "complete","pending":0,"sent":0,"failure":None,"quarantined":quarantined}
+        sent=0
+        failure:FlushFailure|None=None
+        try:
+            ids = [entry["id"] for entry in self.entries(end=end,cancel=cancel)]
+            for entry_id in ids:
+                _check_control(end,cancel)
+                with self._locked(end,cancel):
+                    self._recover(self._meta())
+                    entry = next((entry for entry in self._entries() if entry["id"] == entry_id),None)
+                    claim = self._claim_locked(entry,force) if entry else None
+                if claim is None:
                     continue
-                _check_control(end, cancel)
-                path = self._file(entry["id"])
-                if not force and entry["attempts"] and time.time() - path.stat().st_mtime < min(60, 2 ** min(entry["attempts"], 6)):
-                    break
-                try:
-                    send(entry, end * 1000)
-                except (SignetApiError, SignetNetworkError) as error:
-                    status = getattr(error, "status", None)
-                    if status and 400 <= status < 500 and status not in (401, 408, 429):
-                        self._remove(meta, entry, status)
-                        pending -= 1
-                        continue
-                    entry["attempts"] += 1
-                    entry["lastError"] = "http_%s" % status if status else "network_or_deadline"
-                    _atomic_write(path, _json_dump(entry, ensure_ascii=False))
-                    raise
-                self._remove(meta, entry, "delivered")
-                pending -= 1
-            return {"pending": pending}
+                with _claim_execution(claim[1]):
+                    try:
+                        _check_control(end,cancel)
+                        send(claim[0],min(end,time.time()+60)*1000)
+                        self._settle(claim,end=end,cancel=cancel)
+                        sent += 1
+                    except Exception as error:
+                        if (cancel is None or not cancel.is_set()) and time.time() < end:
+                            try:
+                                self._settle(claim,error,end=end,cancel=cancel)
+                            except Exception as cleanup:
+                                raise error from cleanup
+                        status = getattr(error,"status",None)
+                        if isinstance(status,int) and 400 <= status < 500 and status not in (401,408,429):
+                            failure = {"code":type(error).__name__,"status":status,"reason":getattr(error,"reason",None)}
+                            continue
+                        raise
 
-    def purge(self):
-        with _lock(self.directory / ".lock"):
-            for entry in self._entries():
-                self._file(entry["id"]).unlink()
-            (self.directory / ".status.json").unlink(missing_ok=True)
+        except Exception as error:
+            failure = {"code":type(error).__name__,"status":getattr(error,"status",None),"reason":getattr(error,"reason",None)}
+        try:
+            with self._locked(end,cancel):
+                _check_control(end,cancel)
+                meta = self._meta()
+                self._recover(meta)
+                pending = len(self._entries())+self._reserved()["claimed"]
+                result:OutboxFlushResult = {"state":"failed" if failure else "deferred" if pending or self._reserved()["quarantine"] else "complete","pending":pending,"sent":sent,"failure":failure,"quarantined":len(self._reserved()["quarantine"]),"dropped":meta["dropped"]}
+                _check_control(end,cancel)
+                meta["lastFlush"] = result
+                self._save_meta(meta)
+                return result
+        except (SignetNetworkError,SignetTimeoutError) as error:
+            return {"state":"failed","pending":None,"sent":sent,"failure":failure or {"code":type(error).__name__,"status":None,"reason":None}}
+
+    def purge(self, include_legacy=False):
+        with self._locked():
+            if include_legacy:
+                _remove_private(self.directory.parent/".legacy-quarantine",recursive=True)
+            for path in self._names():
+                if path.name == ".lock.tickets":
+                    continue
+                _remove_private(path,recursive=True)
+
 
 
 def _iso(timestamp):
@@ -933,8 +1557,7 @@ class NodeTransport(SignetTransport):
         if _url(target.url) != _url(target.origin):
             raise ValueError("Target origin does not match URL")
         self.target = dataclasses.replace(target, url=_url(target.url), origin=_url(target.origin))
-        self.last_replay_error = None
-        self.outbox = DurableOutbox(target.origin, env=env)
+        self.outbox = DurableOutbox(target.origin, env=env, harness=target.harness)
         self.delivery_paths = {"/api/hooks/session-end", *delivery_paths}
         for path in self.delivery_paths:
             _delivery_path(path)
@@ -956,13 +1579,18 @@ class NodeTransport(SignetTransport):
             options["headers"] = {k: v for k, v in options.get("headers", {}).items() if k.lower() not in _DELIVERY_SCOPE_HEADERS}
         client = SignetTransport(self.target.url, credential_provider=credential, timeout=self.timeout, retries=self.retries, retry_delay=self.retry_delay, headers=fixed)
         try:
-            return client.request(method, path, body, **options), used[0] is not None
+            return client.request(method, path, body, **options)
         except SignetUnauthorizedError as error:
             if not acquired[0] or used[0] is None or error.reason != "expired" or not self.target.credential.refresh_provider:
                 raise
             end = deadline / 1000 if deadline is not None else time.time() + self.timeout
-            _bounded(lambda: self.target.credential.refresh(used[0], end, options.get("cancel")), end, options.get("cancel"), workers=_CREDENTIAL_WORKERS)
-            return client.request(method, path, body, **options), used[0] is not None
+            try:
+                _bounded(lambda: self.target.credential.refresh(used[0], end, options.get("cancel")), end, options.get("cancel"), workers=_CREDENTIAL_WORKERS)
+            except (SignetApiError,SignetNetworkError,SignetTimeoutError,SignetCredentialError):
+                raise
+            except Exception as failure:
+                raise SignetCredentialError(failure) from failure
+            return client.request(method, path, body, **options)
 
     def request(self, method, path, body=None, **options):
         deadline = _request_end(self.timeout, options.get("timeout"), options.get("deadline")) * 1000
@@ -976,26 +1604,17 @@ class NodeTransport(SignetTransport):
                 raise ValueError("Durable delivery scope and provenance must be in the JSON body or fixed transport headers")
             headers.setdefault("idempotency-key", str(uuid.uuid4()))
             result, cleanup_error = self.outbox.deliver("POST", path, body, lambda entry, end: self._send(method, path, entry["body"], headers=headers, captured_headers=entry["headers"], **options), idempotency_key=headers["idempotency-key"], deadline=deadline, cancel=options.get("cancel"), headers=_delivery_headers({**{k.lower(): v for k, v in self.headers.items()}, **headers}))
-            value, authenticated = result
+            value = result
             if cleanup_error:
-                self.last_replay_error = cleanup_error
                 return value
         else:
-            value, authenticated = self._send(method, path, body, headers=headers, **options)
-        if authenticated:
-            try:
-                self.flush(deadline=deadline, cancel=options.get("cancel"))
-            except Exception as error:
-                self.last_replay_error = error
+            value = self._send(method, path, body, headers=headers, **options)
+        if delivery:
+            self.flush(deadline=deadline,cancel=options.get("cancel"))
         return value
 
-    def flush(self, **options):
+    def flush(self, **options) -> OutboxFlushResult:
         try:
-            result = self.outbox.flush(lambda entry, deadline: self._send(entry["method"], entry["path"], entry["body"], headers={"Idempotency-Key": entry["idempotencyKey"]}, deadline=deadline, cancel=options.get("cancel"), captured_headers=entry["headers"]), **{**options, "origin": self.target.origin})
-            if result["pending"] == 0:
-                self.last_replay_error = None
-            return result
+            return self.outbox.flush(lambda entry, deadline: self._send(entry["method"],entry["path"],entry["body"],headers={"Idempotency-Key":entry["idempotencyKey"]},deadline=deadline,cancel=options.get("cancel"),captured_headers=entry["headers"]),**{**options,"origin":self.target.origin,"harness":self.target.harness})
         except Exception as error:
-            self.last_replay_error = error
-            raise
-
+            return {"state":"failed","pending":None,"sent":0,"failure":{"code":type(error).__name__,"status":getattr(error,"status",None),"reason":getattr(error,"reason",None)}}
