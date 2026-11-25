@@ -657,6 +657,41 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
+	it("preserves a required dependency reason through Dreaming translation", async () => {
+		insertEntity("reason-source", "Deployment A", "deployment a");
+		insertEntity("reason-target", "Deployment B", "deployment b");
+		insertEpisodicMemory("reason-evidence", "Both deployments use the same reviewed release process.");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "create_link",
+					payload: {
+						fromEntityId: "reason-source",
+						toEntityId: "reason-target",
+						linkType: "related_to",
+						reason: "Both deployments share the reviewed release process.",
+					},
+					evidence: [
+						{ source_ref: "memory:reason-evidence", quote: "Both deployments use the same reviewed release process." },
+					],
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT reason FROM entity_dependencies WHERE source_entity_id='reason-source' AND target_entity_id='reason-target'",
+					)
+					.get(),
+			),
+		).toEqual({ reason: "Both deployments share the reviewed release process." });
+	});
+
 	it("escalates review-required content operations without mutating the ontology", async () => {
 		insertEntity("e-source", "Local-first", "local-first");
 		insertEntity("e-target", "Hosted inference", "hosted inference");

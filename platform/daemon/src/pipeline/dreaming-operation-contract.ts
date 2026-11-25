@@ -95,7 +95,7 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 	rename_entity: payload({ entityId, newName: entityName }),
 	create_aspect: payload({ entityId, name: aspectName }),
 	rename_aspect: payload({ entityId, aspectId, newName: aspectName }),
-	create_link: payload({ fromEntityId: entityId, toEntityId: entityId, linkType }),
+	create_link: payload({ fromEntityId: entityId, toEntityId: entityId, linkType, ...reasonField }),
 	update_link: payload({
 		linkId: text.describe("The stable id of the dependency link."),
 		linkType: linkType.optional(),

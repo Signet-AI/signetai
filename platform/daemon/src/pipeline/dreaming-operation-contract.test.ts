@@ -1,5 +1,20 @@
 import { expect, test } from "bun:test";
-import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
+import { z } from "zod";
+import { DREAMING_ONTOLOGY_OPERATION_SCHEMA, DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS } from "./dreaming-operation-contract";
+
+test("Dreaming create_link exposes and validates its dependency reason", () => {
+	const payload = {
+		fromEntityId: "a",
+		toEntityId: "b",
+		linkType: "related_to",
+		reason: "They share a release process.",
+	};
+	expect(z.toJSONSchema(DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS.create_link)).toMatchObject({
+		properties: { reason: { type: "string" } },
+	});
+	expect(DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS.create_link.parse(payload)).toMatchObject({ reason: payload.reason });
+	expect(DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS.create_link.safeParse({ ...payload, reason: 7 }).success).toBe(false);
+});
 
 test("Dreaming claim operations accept id-based targets", () => {
 	const input = {

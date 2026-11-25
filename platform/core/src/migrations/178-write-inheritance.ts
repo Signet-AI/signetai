@@ -11,6 +11,45 @@ export const artifacts: MigrationArtifacts = {
 	indexes: ["idx_session_checkpoints_author", "idx_cross_agent_messages_compartment"],
 };
 export function up(db: MigrationDb): void {
+	for (const table of ["embeddings", "embeddings_staging"]) {
+		const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql;
+		if (typeof schema !== "string" || !/content_hash\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(schema)) continue;
+		const objects = db
+			.prepare(
+				"SELECT type,name,sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
+			)
+			.all(table);
+		const temporary = `${table}_write_inheritance`;
+		db.exec(
+			schema
+				.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"[^"]+"|[^\s(]+)/i, `CREATE TABLE ${temporary}`)
+				.replace(/(content_hash\s+TEXT\s+NOT NULL)\s+UNIQUE/i, "$1"),
+		);
+		const names = db
+			.prepare(`PRAGMA table_info(${table})`)
+			.all()
+			.map((row) => String(row.name))
+			.join(",");
+		db.exec(`INSERT INTO ${temporary}(${names}) SELECT ${names} FROM ${table}`);
+		db.exec(`DROP TABLE ${table}`);
+		db.exec(`ALTER TABLE ${temporary} RENAME TO ${table}`);
+		for (const object of objects) {
+			if (typeof object.sql !== "string" || object.name === "idx_embeddings_content_hash_unique") continue;
+			db.exec(object.sql);
+		}
+		db.exec(
+			`CREATE UNIQUE INDEX ${table}_parent_content_hash ON ${table}(agent_id,source_type,source_id,content_hash)`,
+		);
+	}
+
+	for (const name of ["idx_memories_content_hash_unique", "idx_memories_idempotency_key"]) {
+		const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(name)?.sql;
+		if (typeof sql === "string" && /CREATE\s+UNIQUE\s+INDEX/i.test(sql)) {
+			db.exec(`DROP INDEX ${name}`);
+			db.exec(sql.replace(/CREATE\s+UNIQUE\s+INDEX/i, "CREATE INDEX"));
+		}
+	}
+
 	for (const [table, fields] of Object.entries(columns)) {
 		if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) continue;
 		const present = new Set(
