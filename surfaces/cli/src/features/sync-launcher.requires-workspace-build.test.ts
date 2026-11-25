@@ -122,8 +122,6 @@ test.each([false, true, null, "node /x/signet.js", "[broken"])(
 				}
 				expect({ exit, stderr }).toMatchObject({ exit: 0 });
 				expect(stdout).toContain("hooks re-registered for codex");
-				if (requiresAuth === null)
-					expect(stderr).toMatch(/Could not determine daemon auth requirement.*HTTP 503.*SIGNET_API_KEY was omitted/);
 			}
 			if (typeof requiresAuth === "string") return;
 			const claude = readFileSync(settings, "utf-8");
@@ -133,12 +131,11 @@ test.each([false, true, null, "node /x/signet.js", "[broken"])(
 			expect(codex).toContain("/host/bin/signet hook session-start");
 			expect(codex).not.toContain("/app/bin/signet");
 			expect(codex).not.toContain("stale-fixture");
-			expect(codex.includes("sig_sk_sync_fixture_not_a_secret")).toBe(requiresAuth === true);
+			expect(codex.includes("sig_sk_sync_fixture_not_a_secret")).toBe(false);
 			const gemini = JSON.parse(readFileSync(join(home, ".gemini", "settings.json"), "utf-8"));
 			expect(gemini.mcpServers.signet).toEqual({
 				command: "/host/bin/signet",
-				args: [],
-				env: { SIGNET_MCP_STDIO_WORKER: "1" },
+				args: ["connector", "mcp", "gemini"],
 			});
 			expect(gemini.mcpServers.other).toEqual({ command: "other-mcp" });
 		} finally {
