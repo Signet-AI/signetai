@@ -1945,7 +1945,7 @@ describe("reembedMissingMemories", () => {
 
 	it("writes content_hash back to memories row when it was NULL -- null-hash memory does not reappear in subsequent backfill passes", async () => {
 		db.exec(
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+			`CREATE INDEX IF NOT EXISTS idx_memories_content_hash_unique
 			 ON memories(content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0`,
 		);
 		insertMemory(db, "mem-write-back");
@@ -1986,9 +1986,9 @@ describe("reembedMissingMemories", () => {
 		expect(second.message).toMatch(/no unembedded memories found/);
 	});
 
-	it("does not throw when a duplicate-content null-hash memory collides with an existing hashed memory", async () => {
+	it("repairs equal-content parents independently without merging their evidence", async () => {
 		db.exec(
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+			`CREATE INDEX IF NOT EXISTS idx_memories_content_hash_unique
 			 ON memories(content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0`,
 		);
 		const now = new Date().toISOString();
@@ -2018,7 +2018,11 @@ describe("reembedMissingMemories", () => {
 		const dupe = db.prepare("SELECT content_hash FROM memories WHERE id = 'mem-dupe'").get() as {
 			content_hash: string | null;
 		};
-		expect(dupe.content_hash).toBeNull();
+		expect(dupe.content_hash).toBe(hash);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash=? ORDER BY source_id").all(hash)).toEqual([
+			{ source_id: "mem-dupe" },
+			{ source_id: "mem-owner" },
+		]);
 	});
 
 	it("keeps independent evidence-parent vectors on equal content hashes", async () => {
@@ -2898,7 +2902,7 @@ describe("cleanOrphanedEmbeddings", () => {
 		db.close();
 	});
 
-	it("does not count a retained foreign-parent hash cache as an owned embedding", async () => {
+	it("purges a dead parent embedding even when a live parent shares its hash", async () => {
 		const now = new Date().toISOString();
 
 		db.prepare(
@@ -2925,18 +2929,19 @@ describe("cleanOrphanedEmbeddings", () => {
 		const result = await cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
-		expect(result.affected).toBe(0);
+		expect(result.affected).toBe(1);
 		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(1);
 
 		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
-		expect(rows).toHaveLength(1);
+		expect(rows).toHaveLength(0);
 		const vecRows = db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
-		expect(vecRows).toHaveLength(1);
+		expect(vecRows).toHaveLength(0);
 	});
 
 	it("removes embeddings with no source row and no active hash peer", async () => {
 		insertEmbedding(db, {
 			id: "emb-orphan",
+			agentId: "default",
 			contentHash: "hash-orphan",
 			sourceId: "mem-missing",
 			vector: [0.5, 0.6, 0.7],
@@ -3128,6 +3133,29 @@ describe("deduplicateMemories", () => {
 
 	afterEach(() => {
 		db.close();
+	});
+
+	it("keeps reviewer tags within agent project visibility and compartment partitions", async () => {
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_review','Review')");
+		const compartment = compartmentFor(db, ["cls_review"]);
+		for (const [id, agent, project, visibility, label] of [
+			["public", "default", "atlas", "private", null],
+			["reviewer", "default", "atlas", "private", compartment],
+			["other-agent", "other", "atlas", "private", null],
+			["other-project", "default", "other", "private", null],
+			["other-visibility", "default", "atlas", "shared", null],
+		] as const) {
+			db.prepare(
+				"INSERT INTO memories(id,content,content_hash,agent_id,project,visibility,compartment_id,tags,created_at,updated_at) VALUES(?,'equal','review-hash',?,?,?,?,?,'now','now')",
+			).run(id, agent, project, visibility, label, id);
+		}
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		expect(result.affected).toBe(0);
+		expect(
+			db.prepare("SELECT id,tags FROM memories WHERE content_hash='review-hash' AND is_deleted=0 ORDER BY id").all(),
+		).toEqual(
+			["other-agent", "other-project", "other-visibility", "public", "reviewer"].map((id) => ({ id, tags: id })),
+		);
 	});
 
 	it("removes exact duplicates and keeps the best keeper", async () => {
