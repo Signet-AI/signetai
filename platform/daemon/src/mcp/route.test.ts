@@ -46,17 +46,34 @@ describe("MCP route", () => {
 	});
 
 	it("rejects requests when the in-flight admission cap is saturated", async () => {
-		const admission = createConcurrencyAdmission(1);
-		expect(admission.acquire()).toBe(true);
+		const admission = createConcurrencyAdmission(1, { maxWaiters: 0 });
+		const release = await admission.acquire("local");
+		if (typeof release !== "function") throw new Error("expected grant");
 		__setMcpAdmissionForTests(admission);
 		try {
 			const res = await makeApp().request("/mcp", { method: "GET" });
 			expect(res.status).toBe(503);
-			expect((await res.json()).error.message).toContain("Too many concurrent MCP requests");
+			expect((await res.json()).error.message).toBe("Too many concurrent MCP requests (max 1); retry shortly");
 		} finally {
-			admission.release();
+			release();
 			__setMcpAdmissionForTests(null);
 		}
+	});
+
+	it("releases a grant cancelled before MCP work starts", async () => {
+		const admission = createConcurrencyAdmission(1);
+		__setMcpAdmissionForTests(admission);
+		let work = 0;
+		__setMcpRequestGateForTests(async () => {
+			work++;
+		});
+		const controller = new AbortController();
+		const request = makeApp().request("/mcp", { method: "GET", signal: controller.signal });
+		controller.abort();
+		const response = await request;
+		expect(response.status).toBe(503);
+		expect(work).toBe(0);
+		expect(admission.inFlight()).toBe(0);
 	});
 
 	it("passes parsed Bun/Hono JSON bodies to the streamable HTTP transport", async () => {

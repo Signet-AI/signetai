@@ -108,7 +108,7 @@ describe("document worker admission", () => {
 		const accessor = asAccessor(db);
 		insertDocumentJob(db, "doc-a", "agent-a", "slow");
 		insertDocumentJob(db, "doc-b", "agent-b", "other");
-		const admission = createConcurrencyAdmission(1);
+		const admission = createConcurrencyAdmission(1, { maxWaiters: 1 });
 		const started: string[] = [];
 		let unblock = (): void => {};
 		const blocked = new Promise<number[] | null>((resolve) => {
@@ -139,7 +139,11 @@ describe("document worker admission", () => {
 			expect(jobStatus(db, "doc-a-job")).toBe("leased");
 			expect(jobStatus(db, "doc-b-job")).toBe("pending");
 
+			const waitingRequest = admission.acquire("request");
 			unblock();
+			const release = await waitingRequest;
+			if (typeof release !== "function") throw new Error("skipped worker ticks occupied the wait queue");
+			release();
 			await waitFor(() => jobStatus(db, "doc-a-job") === "completed" && jobStatus(db, "doc-b-job") === "completed");
 		} finally {
 			unblock();

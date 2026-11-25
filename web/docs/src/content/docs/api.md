@@ -196,6 +196,34 @@ Rate-limit rejections return `429`. Auth failures return `401`. Permission
 violations return `403`. Version conflicts and state violations return `409`.
 Mutations blocked by the kill switch return `503`.
 
+Prompt submission (`/api/hooks/user-prompt-submit`), memory capture
+(`/api/memory/remember`), stop hooks (`/api/hooks/stop`), and MCP (`/mcp`) each
+have a separate eight-slot pool. At capacity, up to 64 requests wait for at most
+two seconds. Waiting requests rotate across authenticated principals rather than
+sharing one FIFO queue. The principal key is the token's `scope.user` when present,
+otherwise its credential subject (`sub`). An authenticated credential without either
+uses `anonymous-credential`; unauthenticated local and trusted loopback requests
+share `local`.
+
+Fairness applies to slots freed after a competing principal starts waiting. No
+running request is preempted. While competitors wait, a principal cannot receive
+another slot if it already holds half the capacity (rounded up). If all slots stay
+occupied longer than the wait limit, a waiting request can still be refused.
+Cancelled waiters leave the queue immediately. Cancellation detected immediately
+after a grant releases that slot without starting the admitted work.
+
+When admission cannot grant a slot, the hook and capture routes return `503` with
+`{ "error": "...", "reason": "admission" }`. MCP preserves its JSON-RPC error
+envelope and adds `reason: "admission"`. All include `Retry-After` in seconds,
+estimated from queue position times recent mean slot hold time divided by capacity,
+rounded up and clamped to 1–30 seconds. A refusal does not mean the requested
+capture or hook completed; retry explicitly if delivery is required.
+
+Background document ingestion uses a separate two-slot pool shared across its
+workers. Polling ticks use non-waiting admission: if no slot is available, they skip
+the tick rather than queue or reserve future capacity. Unleased durable jobs remain
+pending for a later poll; this background decision has no HTTP response.
+
 ## Transcript deletion
 
 `DELETE /api/sessions/:key/transcript` removes an owning agent's transcript

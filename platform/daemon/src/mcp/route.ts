@@ -1,7 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import type { Hono } from "hono";
-import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission.js";
+import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission.js";
 import { createMcpServer } from "./tools.js";
 
 interface ActiveMcpRequest {
@@ -55,13 +55,17 @@ function resolveMcpWorkloadAgentId(c: Context): string {
 
 export function mountMcpRoute(app: Hono): void {
 	app.all("/mcp", async (c) => {
-		if (!mcpAdmission.acquire()) {
+		const release = await mcpAdmission.acquire(admissionKey(c), c.req.raw.signal);
+		if (typeof release !== "function" || c.req.raw.signal.aborted) {
+			if (typeof release === "function") release();
+			c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
 			return c.json(
 				{
 					jsonrpc: "2.0",
+					reason: "admission",
 					error: {
 						code: -32000,
-						message: `Too many concurrent MCP requests (max ${MCP_MAX_IN_FLIGHT}); retry shortly`,
+						message: `Too many concurrent MCP requests (max ${mcpAdmission.maxInFlight}); retry shortly`,
 					},
 					id: null,
 				},
@@ -99,7 +103,7 @@ export function mountMcpRoute(app: Hono): void {
 					if (server) await server.close();
 				} finally {
 					if (requestId !== null) activeMcpRequests.delete(requestId);
-					mcpAdmission.release();
+					release();
 				}
 			}
 		}

@@ -1572,34 +1572,123 @@ memory:
 		expect(body.memories).toEqual(body.results);
 		expect(body.count).toBe(body.results.length);
 	});
-});
 
-describe("/api/hooks/user-prompt-submit admission cap (#1059)", () => {
-	it("acquires up to the cap, rejects past it, and re-acquires after release", () => {
-		const admission = createPromptSubmitAdmission(2);
-		expect(admission.acquire()).toBe(true);
-		expect(admission.acquire()).toBe(true);
-		expect(admission.acquire()).toBe(false);
-		expect(admission.inFlight()).toBe(2);
-		admission.release();
-		expect(admission.inFlight()).toBe(1);
-		expect(admission.acquire()).toBe(true);
-		expect(admission.inFlight()).toBe(2);
-	});
-
-	it("rejects with 503 while the cap is saturated and recovers after release", async () => {
-		__setPromptSubmitAdmissionForTests(createPromptSubmitAdmission(0));
-		try {
-			const resp = await app.request("/api/hooks/user-prompt-submit", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+	describe("/api/hooks/user-prompt-submit admission cap (#1059)", () => {
+		it("waits for remember capacity then durably captures the memory", async () => {
+			const { Hono } = await import("hono");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const admission = createConcurrencyAdmission(1);
+			const release = await admission.acquire("local");
+			if (typeof release !== "function") throw new Error("expected grant");
+			const routes = new Hono();
+			registerMemoryRoutes(routes, { memoryCaptureAdmission: admission, fetchEmbedding: async () => null });
+			let settled = false;
+			const content = `Remember admission durable receipt ${crypto.randomUUID()}`;
+			const request = Promise.resolve(
+				routes.request("/api/memory/remember", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ content, type: "fact" }),
+				}),
+			).then((response) => {
+				settled = true;
+				return response;
 			});
-			expect(resp.status).toBe(503);
-			const body = (await resp.json()) as { error?: string };
-			expect(body.error).toContain("concurrent prompt submissions");
-		} finally {
-			__setPromptSubmitAdmissionForTests(null);
-		}
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				expect(settled).toBe(false);
+				release();
+				const response = await request;
+				expect(response.status).toBe(200);
+				const row = await getDbAccessor?.().withReadDbAsync((db) =>
+					db.prepare("SELECT content FROM memories WHERE content = ?").get(content),
+				);
+				expect(row).toEqual({ content });
+				expect(admission.inFlight()).toBe(0);
+			} finally {
+				release();
+			}
+		});
+
+		it("skips prompt and stop work when cancellation races a queued grant", async () => {
+			for (const [path, body, setAdmission] of [
+				[
+					"/api/hooks/user-prompt-submit",
+					{ harness: "codex", userMessage: "hello" },
+					__setPromptSubmitAdmissionForTests,
+				],
+				["/api/hooks/stop", { harness: "codex", sessionKey: crypto.randomUUID() }, __setStopAdmissionForTests],
+			] as const) {
+				const admission = createConcurrencyAdmission(1);
+				const release = await admission.acquire("local");
+				if (typeof release !== "function") throw new Error("expected grant");
+				setAdmission(admission);
+				const controller = new AbortController();
+				try {
+					const request = app.request(path, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(body),
+						signal: controller.signal,
+					});
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					release();
+					controller.abort();
+					const response = await request;
+					expect(response.status).toBe(503);
+					expect(await response.json()).toMatchObject({ reason: "admission" });
+					expect(admission.inFlight()).toBe(0);
+				} finally {
+					release();
+					setAdmission(null);
+				}
+			}
+		});
+
+		it("waits for prompt capacity then succeeds", async () => {
+			const admission = createPromptSubmitAdmission(1);
+			const release = await admission.acquire("local");
+			if (typeof release !== "function") throw new Error("expected grant");
+			__setPromptSubmitAdmissionForTests(admission);
+			try {
+				let settled = false;
+				const request = Promise.resolve(
+					app.request("/api/hooks/user-prompt-submit", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+					}),
+				).then((response) => {
+					settled = true;
+					return response;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				expect(settled).toBe(false);
+				release();
+				expect((await request).status).toBe(200);
+				expect(admission.inFlight()).toBe(0);
+			} finally {
+				release();
+				__setPromptSubmitAdmissionForTests(null);
+			}
+		});
+
+		it("rejects with 503 while the cap is saturated and recovers after release", async () => {
+			__setPromptSubmitAdmissionForTests(createPromptSubmitAdmission(0));
+			try {
+				const resp = await app.request("/api/hooks/user-prompt-submit", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+				});
+				expect(resp.status).toBe(503);
+				const body = (await resp.json()) as { error?: string };
+				expect(body.error).toContain("concurrent prompt submissions");
+				expect(resp.headers.get("Retry-After")).toBe("1");
+				expect(body).toMatchObject({ reason: "admission" });
+			} finally {
+				__setPromptSubmitAdmissionForTests(null);
+			}
+		});
 	});
 });

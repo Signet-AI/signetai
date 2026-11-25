@@ -612,7 +612,8 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 	async function tick(): Promise<void> {
 		if (!running) return;
 		if (isSystemPressureHigh()) return;
-		if (!admission.acquire()) return;
+		const release = admission.tryAcquire("document-worker");
+		if (!release) return;
 
 		try {
 			const leasedAt = Date.now();
@@ -664,7 +665,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 				}
 			}
 		} finally {
-			admission.release();
+			release();
 		}
 	}
 

@@ -12,7 +12,7 @@ import type { Context, Hono, MiddlewareHandler } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
-import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
+import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { dbOwnerQuery } from "../db-owner-runtime";
@@ -770,19 +770,20 @@ async function responseOperationSummary(
 	}
 }
 
-export function createMemoryCaptureAdmissionMiddleware(
-	admission: ConcurrencyAdmission,
-	maxInFlight = MEMORY_CAPTURE_MAX_IN_FLIGHT,
-): MiddlewareHandler {
+export function createMemoryCaptureAdmissionMiddleware(admission: ConcurrencyAdmission): MiddlewareHandler {
 	return async (c, next) => {
-		if (!admission.acquire()) {
+		const release = await admission.acquire(admissionKey(c), c.req.raw.signal);
+		if (typeof release !== "function" || c.req.raw.signal.aborted) {
+			if (typeof release === "function") release();
+			c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
 			logger.warn("memory", "Memory capture admission limit reached", {
-				maxInFlight,
+				maxInFlight: admission.maxInFlight,
 				inFlight: admission.inFlight(),
 			});
 			return c.json(
 				{
-					error: `Too many concurrent memory captures (max ${maxInFlight}); retry shortly`,
+					error: `Too many concurrent memory captures (max ${admission.maxInFlight}); retry shortly`,
+					reason: "admission",
 				},
 				503,
 			);
@@ -792,7 +793,7 @@ export function createMemoryCaptureAdmissionMiddleware(
 		try {
 			return await next();
 		} finally {
-			admission.release();
+			release();
 			complete({ inFlight: admission.inFlight() });
 		}
 	};
@@ -1159,7 +1160,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (scope instanceof Response) return scope;
 			const timeline = await getDbAccessor().withReadDbAsync(
 				async (db) => buildMemoryTimeline(db, { tzOffsetMin, scope }),
-				{ siteToken: "routes/memory-routes.ts:1160" },
+				{ siteToken: "db:memory.timeline.read" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1523,7 +1524,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1524" },
+				{ siteToken: "db:memory.capture.base-idempotency.read" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1531,7 +1532,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1532" },
+				{ siteToken: "db:memory.capture.chunk-idempotency.read" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1564,7 +1565,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1565" },
+					{ siteToken: "db:memory.capture.chunk-hash.read" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1771,7 +1772,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1772" },
+						{ siteToken: "db:memory.capture.single-idempotency.read" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1912,7 +1913,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1909" },
+					{ siteToken: "db:memory.capture.conflict-dedupe.read" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -3399,7 +3400,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3401",
+							siteToken: "db:memory.similar.vector-search.read",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3527,7 +3528,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3490" },
+				{ siteToken: "db:memory.embeddings.list.read" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3575,7 +3576,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3571" },
+			{ siteToken: "db:memory.embeddings.index-status.read" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3584,7 +3585,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3585" },
+			{ siteToken: "db:memory.embeddings.health.read" },
 		);
 		return c.json(report);
 	});
@@ -3663,7 +3664,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3646" },
+					{ siteToken: "db:memory.projection.filtered.read" },
 				);
 
 				return c.json({
@@ -3693,7 +3694,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3686" },
+			{ siteToken: "db:memory.projection.cached.read" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3725,7 +3726,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3727",
+						siteToken: "db:memory.projection.compute.read",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3734,7 +3735,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3730" },
+						{ siteToken: "db:memory.projection.count.read" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {
