@@ -459,7 +459,13 @@ async function processDocument(
 						documentId: docId,
 					});
 				} else {
-					const embId = crypto.randomUUID();
+					const compartment = evidenceCompartmentInTx(db, documentScope.agentId, [{ kind: "memory", id: memId }]);
+					const previous = db
+						.prepare(
+							"SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND compartment_id IS ?",
+						)
+						.get(memId, documentScope.agentId, compartment);
+					const embId = typeof previous?.id === "string" ? previous.id : crypto.randomUUID();
 					const blob = vectorToBlob(vector);
 					const embeddingHash = `memory:${documentScope.agentId}:${memId}:${normalized.contentHash}`;
 					db.prepare(
@@ -467,22 +473,12 @@ async function processDocument(
 						 (id, content_hash, vector, dimensions, source_type,
 						  source_id, chunk_text, created_at, agent_id, compartment_id)
 						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
-						 ON CONFLICT DO UPDATE SET
+						 ON CONFLICT(id) DO UPDATE SET
 						   vector = excluded.vector,
 						   dimensions = excluded.dimensions,
 						   compartment_id = excluded.compartment_id`,
-					).run(
-						embId,
-						embeddingHash,
-						blob,
-						vector.length,
-						memId,
-						chunkText,
-						now,
-						documentScope.agentId,
-						evidenceCompartmentInTx(db, documentScope.agentId, [{ kind: "memory", id: memId }]),
-					);
-					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embeddingHash) as
+					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId, compartment);
+					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as
 						| { id: string }
 						| undefined;
 					if (actualEmbRow) {

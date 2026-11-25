@@ -1,4 +1,5 @@
 import type { MigrationDb } from "./migrations/contract";
+import { ClassifiedDestinationError, currentWritePrincipal } from "./write-principal";
 
 export const FTS_BASES = [
 	"memories_fts",
@@ -159,21 +160,52 @@ export function classificationsForWrite(
 				.all(input.parentCompartment),
 		);
 	const assignments = (session: unknown, source: unknown, memory: unknown) => {
+		const sessions =
+			typeof session === "string"
+				? [...new Set([session, `session:${session}`, ...(session.startsWith("session:") ? [session.slice(8)] : [])])]
+				: [];
+		const sources: string[] = [];
+		if (typeof source === "string") {
+			sources.push(source);
+			for (let i = source.indexOf(":"); i >= 0; i = source.indexOf(":", i + 1)) sources.push(source.slice(0, i));
+		}
 		add(
 			db
 				.prepare(
-					"SELECT classification_id FROM classification_assignments WHERE agent_id=? AND (target_kind='agent' OR (target_kind='session' AND (target_id=? OR target_id='session:'||? OR 'session:'||target_id=?)) OR (target_kind='source' AND (target_id=? OR substr(?,1,length(target_id)+1)=target_id||':')) OR (target_kind='memory' AND target_id=?))",
+					"SELECT classification_id FROM classification_assignments WHERE target_kind='agent' AND agent_id=? UNION ALL SELECT classification_id FROM classification_assignments WHERE target_kind='session' AND target_id IN (SELECT value FROM json_each(?)) AND agent_id=? UNION ALL SELECT classification_id FROM classification_assignments WHERE target_kind='source' AND target_id IN (SELECT value FROM json_each(?)) AND agent_id=? UNION ALL SELECT classification_id FROM classification_assignments WHERE target_kind='memory' AND target_id=? AND agent_id=?",
 				)
-				.all(input.agentId, session, session, session, source, source, memory),
+				.all(
+					input.agentId,
+					JSON.stringify(sessions),
+					input.agentId,
+					JSON.stringify(sources),
+					input.agentId,
+					memory,
+					input.agentId,
+				),
 		);
-		if (shardSchema(db).tables.has("org_jobs"))
-			add(
-				db
-					.prepare(
-						"SELECT json_extract(params_json,'$.id') AS classification_id FROM org_jobs WHERE kind='classify' AND status IN ('pending','running') AND json_valid(params_json) AND json_extract(params_json,'$.target.agentId')=? AND (json_extract(params_json,'$.target.kind')='agent' OR (json_extract(params_json,'$.target.kind')='session' AND (json_extract(params_json,'$.target.id')=? OR json_extract(params_json,'$.target.id')='session:'||? OR 'session:'||json_extract(params_json,'$.target.id')=?)) OR (json_extract(params_json,'$.target.kind')='source' AND (json_extract(params_json,'$.target.id')=? OR substr(?,1,length(json_extract(params_json,'$.target.id'))+1)=json_extract(params_json,'$.target.id')||':')) OR (json_extract(params_json,'$.target.kind')='memory' AND json_extract(params_json,'$.target.id')=?))",
-					)
-					.all(input.agentId, session, session, session, source, source, memory),
-			);
+		if (shardSchema(db).tables.has("org_jobs")) {
+			const targets = [
+				["agent", [input.agentId]],
+				["session", sessions],
+				["source", sources],
+				["memory", typeof memory === "string" ? [memory] : []],
+			] as const;
+			const arms: string[] = [];
+			const args: string[] = [];
+			for (const status of ["pending", "running"])
+				for (const [kind, ids] of targets) {
+					arms.push(
+						"SELECT json_extract(params_json,'$.id') AS classification_id FROM org_jobs WHERE json_valid(params_json) AND kind='classify' AND status=? AND json_extract(params_json,'$.target.agentId')=? AND json_extract(params_json,'$.target.kind')=? " +
+							(kind === "agent"
+								? ""
+								: " AND json_extract(params_json,'$.target.id') IN (SELECT value FROM json_each(?))"),
+					);
+					args.push(status, input.agentId, kind);
+					if (kind !== "agent") args.push(JSON.stringify(ids));
+				}
+			add(db.prepare(arms.join(" UNION ALL ")).all(...args));
+		}
 	};
 	assignments(input.sessionKey ?? null, input.sourceId ?? null, input.memoryId ?? null);
 	if (input.memoryId && shardSchema(db).tables.has("memories")) {
@@ -209,6 +241,17 @@ export function classificationsForWrite(
 				assignments(parent.session_key, parent.source_id, null);
 			}
 		}
+	const principal = currentWritePrincipal();
+	if (
+		principal &&
+		labels.size > 0 &&
+		db
+			.prepare(
+				"SELECT 1 FROM json_each(?) label WHERE NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=label.value AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?)))) LIMIT 1",
+			)
+			.get(JSON.stringify([...labels]), principal.userId, principal.userId)
+	)
+		throw new ClassifiedDestinationError();
 	return [...labels].sort();
 }
 export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {

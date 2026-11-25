@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { createConcurrencyAdmission } from "./concurrency-admission";
+import { legacyPrincipal } from "./auth/principal";
 import { setFtsIndexIncomplete } from "./fts-index-state";
 import {
 	__setPromptSubmitAdmissionForTests,
@@ -820,6 +821,14 @@ memory:
 		const { registerHooksRoutes } = await import("./routes/hooks-routes");
 		const { Hono } = await import("hono");
 		const routes = new Hono();
+		routes.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			if (claims) {
+				c.set("principal", legacyPrincipal(claims));
+				c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+			}
+			await next();
+		});
 		registerHooksRoutes(routes);
 		const sessionKey = `muse-unauthorized-${crypto.randomUUID()}`;
 		const previousMode = authConfig.mode;
@@ -836,7 +845,7 @@ memory:
 				}),
 			});
 
-			expect(resp.status).toBe(403);
+			expect(resp.status).toBe(401);
 			const row = getSyncDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?").get(sessionKey),
 			);
@@ -979,6 +988,14 @@ memory:
 					});
 					await next();
 				});
+				routes.use("*", async (c, next) => {
+					const claims = c.get("auth")?.claims;
+					if (claims) {
+						c.set("principal", legacyPrincipal(claims));
+						c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+					}
+					await next();
+				});
 				registerHooksRoutes(routes);
 				const sessionKey = `claude-stop-denied-${crypto.randomUUID()}`;
 				const resp = await postStop(
@@ -1009,6 +1026,14 @@ memory:
 				authenticated: true,
 				claims: { sub: "stop-admin", scope: { agent: "stop-admin-agent" }, role: "admin", iat: now, exp: now + 3600 },
 			});
+			await next();
+		});
+		routes.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			if (claims) {
+				c.set("principal", legacyPrincipal(claims));
+				c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+			}
 			await next();
 		});
 		registerHooksRoutes(routes);
@@ -1236,6 +1261,14 @@ memory:
 					exp: now + 3600,
 				},
 			});
+			await next();
+		});
+		routes.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			if (claims) {
+				c.set("principal", legacyPrincipal(claims));
+				c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+			}
 			await next();
 		});
 		registerHooksRoutes(routes);

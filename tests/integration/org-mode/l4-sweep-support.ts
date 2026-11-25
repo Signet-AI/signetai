@@ -82,6 +82,15 @@ export class WriteSweep {
 					new Date().toISOString(),
 				);
 			}
+			db.query("INSERT INTO classifications(id,name) VALUES('cls_forbidden','Forbidden destination')").run();
+			db.query(
+				"INSERT INTO classification_assignments VALUES('session','forbidden-session',?,'cls_forbidden',?,'now')",
+			).run(this.agentId, this.userId);
+			db.query("INSERT INTO classification_assignments VALUES('source',?,?,'cls_forbidden',?,'now')").run(
+				`obsidian:${createHash("sha256").update(join(this.daemon.root, "forbidden-vault")).digest("hex").slice(0, 16)}`,
+				this.agentId,
+				this.userId,
+			);
 			db.query("DELETE FROM embedding_index_state").run();
 		} finally {
 			db.close();
@@ -97,7 +106,7 @@ export class WriteSweep {
 				)
 				.replace(
 					"pipelineV2:\n    enabled: false",
-					"pipelineV2:\n    enabled: true\n    hints:\n      enabled: false\n    semanticContradictionEnabled: false",
+					"pipelineV2:\n    enabled: true\n    telemetry:\n      retentionDays: 1\n    hints:\n      enabled: false\n    semanticContradictionEnabled: false",
 				),
 		);
 		const { initDbAccessor, getDbAccessor, closeDbAccessor } = await import("../../../platform/daemon/src/db-accessor");
@@ -113,6 +122,17 @@ export class WriteSweep {
 					this.agentId,
 					this.userId,
 					new Date().toISOString(),
+				);
+				const agentCompartment = compartmentForWrite(db, { agentId: this.agentId });
+				db.prepare(
+					"INSERT INTO memories(id,agent_id,author_user_id,content,created_at,updated_at,compartment_id) VALUES('l4-retention-parent',?,?,'Telemetry evidence','now','now',?)",
+				).run(this.agentId, this.userId, agentCompartment);
+				db.prepare(
+					"INSERT INTO session_recall_events(session_key,agent_id,context_epoch,item_kind,item_id,surface,mode,created_at,compartment_id) VALUES('l4-expired-telemetry',?,0,'memory','l4-retention-parent','hook','automatic',?,?)",
+				).run(this.agentId, new Date(Date.now() - 10 * 86400000).toISOString(), agentCompartment);
+				db.prepare("INSERT INTO evidence_citations VALUES('telemetry',?,?, 'memory','l4-retention-parent')").run(
+					JSON.stringify(["l4-expired-telemetry", 0, "memory", "l4-retention-parent"]),
+					this.agentId,
 				);
 				const compartment = compartmentForWrite(db, { agentId: this.agentId, sessionKey: "l4-session" });
 				db.prepare(

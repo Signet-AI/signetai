@@ -3,10 +3,93 @@ import { test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { WriteSweep } from "./l4-sweep-support";
-import { record, text, until } from "./http";
+import { record, text, until, request } from "./http";
 
 const agentLabels = ["cls_l4_agent"];
 const sessionLabels = [...agentLabels, "cls_l4_session"];
+
+test("A16 actual HTTP writes reject classified destinations without persisted side effects", async () => {
+	const sweep = await WriteSweep.create();
+	try {
+		await sweep.seed();
+		const snapshot = () =>
+			sweep.read((db) =>
+				Object.fromEntries(
+					db
+						.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+						.all()
+						.map(({ name }) => {
+							assert(/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(name));
+							return [name, db.query<{ n: number }, []>(`SELECT count(*) n FROM ${name}`).get()?.n];
+						}),
+				),
+			);
+		const forbiddenRoot = join(sweep.daemon.root, "forbidden-vault");
+		await mkdir(forbiddenRoot);
+		const before = snapshot();
+		const sourceConfig = Bun.file(join(sweep.daemon.workspace, "sources.json"));
+		const configBefore = (await sourceConfig.exists()) ? await sourceConfig.text() : "";
+		const readd = await request(sweep.daemon.origin, "/api/sources/obsidian", sweep.credential, "POST", {
+			agentId: sweep.agentId,
+			root: forbiddenRoot,
+			name: "Forbidden source",
+		});
+		assert.equal(readd.status, 403, JSON.stringify(readd.body));
+		assert.equal(record(readd.body).reason, "classified_destination");
+		assert.equal((await sourceConfig.exists()) ? await sourceConfig.text() : "", configBefore);
+		assert.deepEqual(snapshot(), before, "source add wrote persisted state");
+		const common = {
+			agentId: sweep.agentId,
+			sessionKey: "forbidden-session",
+			harness: "codex",
+			content: "Forbidden evidence",
+			userMessage: "Forbidden prompt",
+			lastAssistantMessage: "Forbidden append",
+			summary: "Forbidden summary",
+			source_type: "text",
+			source_url: "text://forbidden",
+			type: "file",
+		};
+		for (const path of [
+			"/api/memory/remember",
+			"/api/memory/save",
+			"/api/hook/remember",
+			"/api/hooks/remember",
+			"/api/hooks/session-start",
+			"/api/hooks/user-prompt-submit",
+			"/api/hooks/stop",
+			"/api/hooks/pre-compaction",
+			"/api/hooks/compaction-complete",
+			"/api/hooks/session-end",
+			"/api/documents",
+			"/api/sources/imports",
+		]) {
+			const reply = await request(sweep.daemon.origin, path, sweep.credential, "POST", common, {
+				"x-signet-session-key": common.sessionKey,
+			});
+			assert.equal(reply.status, 403, `${path}: ${JSON.stringify(reply.body)}`);
+			assert.deepEqual(reply.body, { error: "classified destination", reason: "classified_destination" });
+			assert.deepEqual(snapshot(), before, `${path} wrote persisted state`);
+		}
+		const form = new FormData();
+		form.set("files", new File(["Forbidden file evidence"], "forbidden.md", { type: "text/markdown" }));
+		const headers = new Headers({
+			cookie: sweep.credential.cookie ?? "",
+			"x-signet-csrf": sweep.credential.csrf ?? "",
+		});
+		headers.set("x-signet-session-key", common.sessionKey);
+		const imported = await fetch(`${sweep.daemon.origin}/api/sources/import?agentId=${sweep.agentId}`, {
+			method: "POST",
+			headers,
+			body: form,
+		});
+		assert.equal(imported.status, 403);
+		assert.equal(record(await imported.json()).reason, "classified_destination");
+		assert.deepEqual(snapshot(), before, "file import wrote persisted state");
+	} finally {
+		await sweep.dispose();
+	}
+}, 180_000);
 
 test("L4 classified evidence HTTP write sweep preserves compartments and principal authors", async () => {
 	const sweep = await WriteSweep.create();
@@ -383,6 +466,24 @@ test("L4 classified evidence HTTP write sweep preserves compartments and princip
 				answer: "L4 reflection answer must inherit the classified reflection evidence.",
 			});
 			sweep.assertMemory(text(result.memoryId), sessionLabels);
+		});
+		await sweep.check("configured telemetry retention", async () => {
+			await sweep.post("/api/repair/retention-sweep", { agentId: sweep.agentId });
+			assert.equal(
+				sweep.read((db) =>
+					db.query("SELECT 1 FROM session_recall_events WHERE session_key='l4-expired-telemetry'").get(),
+				),
+				null,
+			);
+			assert.equal(
+				sweep.read((db) =>
+					db
+						.query("SELECT 1 FROM evidence_citations WHERE derived_kind='telemetry' AND derived_id=?")
+						.get(JSON.stringify(["l4-expired-telemetry", 0, "memory", "l4-retention-parent"])),
+				),
+				null,
+			);
+			assert(sweep.read((db) => db.query("SELECT 1 FROM memories WHERE id='l4-retention-parent'").get()));
 		});
 		await sweep.check("all persisted evidence children", async () => {
 			sweep.assertAllChildren();

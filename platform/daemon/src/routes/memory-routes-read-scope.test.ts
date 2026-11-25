@@ -13,7 +13,7 @@ let initDbAccessor: typeof import("../db-accessor").initDbAccessor;
 let closeDbAccessor: typeof import("../db-accessor").closeDbAccessor;
 let getDbAccessor: typeof import("../db-accessor").getDbAccessor;
 let invalidateAgentScopeCache: typeof import("../agent-id").invalidateAgentScopeCache;
-let createAuthMiddleware: typeof import("../auth").createAuthMiddleware;
+let createIdentityMiddleware: typeof import("../auth/identity-middleware").createIdentityMiddleware;
 let createToken: typeof import("../auth").createToken;
 let state: typeof import("./state.js");
 
@@ -36,10 +36,7 @@ async function makeApp(mode: "local" | "team"): Promise<Hono> {
 	writeAuthConfig(mode);
 	state.reloadAuthState(agentsDir);
 	const app = new appFactory();
-	if (mode === "team") {
-		if (!state.authSecret) throw new Error("expected auth secret in team mode");
-		app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
-	}
+	app.use("*", createIdentityMiddleware(state.authConfig, state.authSecret));
 	registerMemoryRoutes(app, { fetchEmbedding: async () => null });
 	return app;
 }
@@ -118,7 +115,8 @@ beforeAll(async () => {
 	({ initDbAccessor, closeDbAccessor, getDbAccessor } = await import("../db-accessor"));
 	({ invalidateAgentScopeCache } = await import("../agent-id"));
 	({ registerMemoryRoutes } = await import("./memory-routes"));
-	({ createAuthMiddleware, createToken } = await import("../auth"));
+	({ createToken } = await import("../auth"));
+	({ createIdentityMiddleware } = await import("../auth/identity-middleware"));
 	state = await import("./state.js");
 	initDbAccessor(join(agentsDir, "memory", "memories.db"));
 });
@@ -580,6 +578,15 @@ describe("memory routes keep a scoped credential to its own agent's memories by 
 		const own = await send(app, "PATCH", "/api/memory/alpha-global", headers, { importance: 0.4, reason: "x" });
 		expect(own.status).toBe(200);
 		expect(memoryRow("alpha-global").importance).toBe(0.4);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT actor_user_id, actor_credential FROM audit_events WHERE target_id = 'alpha-global' AND action = 'memory.updated' ORDER BY at DESC LIMIT 1",
+					)
+					.get(),
+			),
+		).toEqual({ actor_user_id: null, actor_credential: "token:memory-list-test" });
 	});
 
 	it("leaves another agent's memories out of batch modify and batch forget", async () => {
@@ -705,10 +712,19 @@ describe("scope boundaries around memory routes", () => {
 			expect(res.body.id).not.toBe(created.body.id);
 			expect(JSON.stringify(res.body)).not.toContain("Secret launch");
 		}
-		expect(byKey.status).toBe(409);
+		expect(bySource.status).toBe(200);
+		expect(byKey.status).toBe(200);
+		const retry = await send(app, "POST", "/api/memory/remember", allowed, {
+			content: "Another unrelated note.",
+			project: "allowed",
+			idempotencyKey: "shared-key",
+		});
+		expect(retry.status).toBe(200);
+		expect(retry.body.id).toBe(byKey.body.id);
+		expect(retry.body.deduped).toBe(true);
 	});
 
-	it("refuses a chunked idempotency key reused from another project", async () => {
+	it("keeps chunked idempotency retries inside each project", async () => {
 		const app = await makeApp("team");
 		const secret = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "secret" })}` };
 		const allowed = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "allowed" })}` };
@@ -728,13 +744,25 @@ describe("scope boundaries around memory routes", () => {
 			project: "allowed",
 			idempotencyKey: "chunk-key",
 		});
-		expect(reuse.status).toBe(409);
+		expect(first.status).toBe(200);
+		expect(reuse.status).toBe(200);
+		expect(reuse.body.ids).not.toEqual(first.body.ids);
+		const allowedRetry = await send(app, "POST", "/api/memory/remember", allowed, {
+			content,
+			project: "allowed",
+			idempotencyKey: "chunk-key",
+		});
+		expect(allowedRetry.status).toBe(200);
+		expect(allowedRetry.body.ids).toEqual(reuse.body.ids);
+		expect(allowedRetry.body.deduped).toBe(true);
 		const retry = await send(app, "POST", "/api/memory/remember", secret, {
 			content,
 			project: "secret",
 			idempotencyKey: "chunk-key",
 		});
 		expect(retry.status).toBe(200);
+		expect(retry.body.ids).toEqual(first.body.ids);
+		expect(retry.body.deduped).toBe(true);
 	});
 
 	it("requires admin to change or remove an agent, and limits registration to the credential's agent", async () => {

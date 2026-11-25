@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import type { Permission, TokenRole, TokenScope } from "../auth";
+import { legacyPrincipal } from "../auth/principal";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 let agentsDir: string;
@@ -31,6 +32,14 @@ function teamApp(): Hono {
 	if (!state.authSecret) throw new Error("expected auth secret in team mode");
 	const app = new appFactory();
 	app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
+	app.use("*", async (c, next) => {
+		const claims = c.get("auth")?.claims;
+		if (claims) {
+			c.set("principal", legacyPrincipal(claims));
+			c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+		}
+		await next();
+	});
 	registerSessionRoutes(app, {
 		gitConfig: {
 			enabled: false,
@@ -469,6 +478,7 @@ describe("session control permissions in team mode", () => {
 		await new Promise((resolve) => setTimeout(resolve, 2));
 		await updateTranscriptLifecycle({ agentId: "agent-a", sessionKey: "generation-retry", action: "start" });
 		await transcripts.appendSessionTranscriptAsync({
+			author: { userId: null, credential: "system" },
 			...sessionFixture("generation-retry"),
 			transcript: "User: current generation",
 		});

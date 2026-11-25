@@ -1,3 +1,4 @@
+import { executeClassification } from "./classification-owner";
 import { up as writeMigration } from "../../core/src/migrations/178-write-inheritance";
 import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
@@ -7,6 +8,27 @@ import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
 import { upsertMemoryArtifactInTx } from "./memory-lineage";
 import { writeSessionTranscriptRow, commitCompactionSummaryInTx } from "./session-transcripts";
 
+test("migration upgrades legacy message compartments and installs message guards", () => {
+	const db = classificationFixture();
+	db.exec(
+		"INSERT INTO cross_agent_messages(id,from_agent_id,from_session_key,content,message_type,broadcast,delivery_path,delivery_status,created_at,expires_at) VALUES('legacy-message','default','legacy-thread','Legacy evidence','info',1,'local','delivered','now','later'); INSERT INTO classifications(id,name) VALUES('cls_legacy','Legacy'); INSERT INTO classification_assignments VALUES('session','legacy-thread','default','cls_legacy','alice','now')",
+	);
+	writeMigration(db);
+	expect(
+		db
+			.prepare(
+				"SELECT cm.classification_id FROM cross_agent_messages m JOIN compartment_members cm ON cm.compartment_id=m.compartment_id WHERE m.id='legacy-message'",
+			)
+			.all(),
+	).toEqual([{ classification_id: "cls_legacy" }]);
+	expect(() =>
+		db.exec(
+			"INSERT INTO cross_agent_messages(id,from_agent_id,from_session_key,content,message_type,broadcast,delivery_path,delivery_status,created_at,expires_at) VALUES('unsafe-message','default','legacy-thread','New evidence','info',1,'local','delivered','now','later')",
+		),
+	).toThrow("compartment_required");
+	db.close();
+});
+
 function assigned() {
 	const db = classificationFixture();
 	db.exec(
@@ -14,7 +36,7 @@ function assigned() {
 	);
 	return db;
 }
-test("A14 memory hash and idempotency keys stay unique within a compartment", () => {
+test("A18 equal evidence survives convergence into the same compartment", () => {
 	const db = classificationFixture();
 	writeMigration(db);
 	db.exec("INSERT INTO classifications(id,name) VALUES('cls_unique','Unique')");
@@ -26,7 +48,11 @@ test("A14 memory hash and idempotency keys stay unique within a compartment", ()
 		"INSERT INTO memories(id,content,content_hash,idempotency_key,agent_id,created_at,updated_at) VALUES(?,'identical','same-content-key','same-write-key','default','now','now')",
 	);
 	insert.run("public-key");
-	expect(() => insert.run("same-compartment-retry")).toThrow("UNIQUE");
+	insert.run("same-compartment-retry");
+	db.prepare("UPDATE memories SET compartment_id=NULL WHERE id='m'").run();
+	expect(db.prepare("SELECT count(*) n FROM memories WHERE content_hash='same-content-key'").get()).toEqual({ n: 3 });
+	writeMigration(db);
+	expect(db.prepare("SELECT count(*) n FROM memories WHERE content_hash='same-content-key'").get()).toEqual({ n: 3 });
 	db.close();
 });
 
@@ -148,6 +174,7 @@ test("modifying a classified memory labels the replacement embedding before its 
 	expect(
 		db.transaction(() =>
 			txModifyMemory(db, {
+				ctx: { author: { userId: "alice", credential: "session:alice" } },
 				memoryId: "m",
 				patch: { content: "updated secret", contentHash: "updated-hash" },
 				reason: "edit",
@@ -387,5 +414,67 @@ test("transcript imports inherit source assignments and retain the admitted auth
 			.prepare("SELECT count(*) n FROM session_transcripts_fts WHERE session_transcripts_fts MATCH 'importsecret'")
 			.get(),
 	).toEqual({ n: 0 });
+	db.close();
+});
+
+test("A18 classification apply and unapply finish with equal evidence intact", () => {
+	const db = classificationFixture();
+	writeMigration(db);
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_equal','Equal')");
+	const compartment = shards.compartmentFor(db, ["cls_equal"]);
+	db.prepare(
+		"UPDATE memories SET content_hash='equal-hash',idempotency_key='equal-key',compartment_id=? WHERE id='m'",
+	).run(compartment);
+	db.exec(
+		"INSERT INTO memories(id,content,content_hash,idempotency_key,agent_id,created_at,updated_at) VALUES('equal-public','private secret','equal-hash','equal-key','default','now','now')",
+	);
+	for (const remove of [false, true]) {
+		const value = executeClassification(db, {
+			op: "enqueue",
+			id: "cls_equal",
+			remove,
+			target: { kind: "agent", id: "default", agentId: "default" },
+			actor: {
+				userId: "carol",
+				local: false,
+				compliance: true,
+				groupIds: [],
+				boundAgentId: null,
+				allowedProjects: null,
+				credential: "session:test",
+			},
+		});
+		if (typeof value !== "object" || value === null || !("jobId" in value) || typeof value.jobId !== "string")
+			throw new Error("job missing");
+		for (
+			let step = 0;
+			step < 20 && db.prepare("SELECT status FROM org_jobs WHERE id=?").get(value.jobId)?.status !== "complete";
+			step++
+		)
+			executeClassification(db, { op: "execute", jobId: value.jobId });
+		expect(db.prepare("SELECT status FROM org_jobs WHERE id=?").get(value.jobId)).toEqual({ status: "complete" });
+		expect(
+			db
+				.prepare(
+					"SELECT count(*) n FROM memories WHERE content_hash='equal-hash' AND is_deleted=0 AND compartment_id IS ?",
+				)
+				.get(remove ? null : compartment),
+		).toEqual({ n: 2 });
+	}
+	db.close();
+});
+
+test("A18 nonunique embedding stores preserve equal rows for the same parent", () => {
+	const db = classificationFixture();
+	writeMigration(db);
+	for (const table of ["embeddings", "embeddings_staging"]) {
+		for (const id of ["first", "second"])
+			db.prepare(
+				`INSERT INTO ${table}(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id) VALUES(?,'equal-vector',?,3,'memory','m','equal','now','default')`,
+			).run(id, new Uint8Array(12));
+	}
+	writeMigration(db);
+	for (const table of ["embeddings", "embeddings_staging"])
+		expect(db.prepare(`SELECT count(*) n FROM ${table} WHERE source_id='m'`).get()).toEqual({ n: 2 });
 	db.close();
 });

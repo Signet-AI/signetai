@@ -23,6 +23,11 @@ Use Sources when you want Signet to recall from:
 
 A source hit is marked as source-backed recall, not as a native saved memory. Obsidian recall results include a canonical `source_path` so agents and tools can inspect the original file directly.
 
+In an organization, Sources retain the agent and author admitted when they are
+connected. Older Sources without that identity require an administrator to sync
+or delete them. An administrator can reconnect the same Source to adopt an
+identity without creating a duplicate connection.
+
 ## Use the Dashboard
 
 Open the [Dashboard](/dashboard/) and select **Sources**. The current Sources surface starts with a two-step **Add a source** dialog. Choose **Import → Files** or **Import → Web page**, or choose **Connect → Obsidian**, **GitHub**, **Notion**, or **Discord**. Connected-source cards show artifact, chunk, and indexed counts plus source health; they also support re-indexing, snapshot download, and removal.

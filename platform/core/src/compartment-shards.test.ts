@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { findSqliteVecExtension } from "./database";
+import { up as writeMigration } from "./migrations/178-write-inheritance";
+import { classificationsForWrite } from "./compartment-shards";
 import {
 	compartmentFor,
 	deleteCompartmentVectors,
@@ -11,6 +13,45 @@ import {
 	syncEmbeddingCompartment,
 	vecShardTables,
 } from "./compartment-shards";
+
+test("write classification lookups search equality indexes for assignments and pending jobs", () => {
+	const db = new Database(":memory:");
+	db.exec(
+		"CREATE TABLE classification_assignments(target_kind TEXT,target_id TEXT,agent_id TEXT,classification_id TEXT,PRIMARY KEY(target_kind,target_id,agent_id,classification_id)); CREATE TABLE org_jobs(id TEXT PRIMARY KEY,kind TEXT,status TEXT,params_json TEXT)",
+	);
+	writeMigration(db);
+	db.exec(
+		"INSERT INTO classification_assignments VALUES('agent','default','default','cls_agent'),('session','session:thread','default','cls_session'),('source','vault','default','cls_source'); INSERT INTO org_jobs VALUES('pending','classify','running','{\"id\":\"cls_job\",\"target\":{\"kind\":\"session\",\"id\":\"thread\",\"agentId\":\"default\"}}')",
+	);
+	const statements: string[] = [];
+	const traced = new Proxy(db, {
+		get(target, key, receiver) {
+			if (key === "prepare")
+				return (sql: string) => {
+					statements.push(sql);
+					return target.prepare(sql);
+				};
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	expect(
+		classificationsForWrite(traced, { agentId: "default", sessionKey: "thread", sourceId: "vault:child" }),
+	).toEqual(["cls_agent", "cls_job", "cls_session", "cls_source"]);
+	const lookups = statements.filter((sql) => /FROM (classification_assignments|org_jobs)\b/.test(sql));
+	expect(lookups.length).toBeGreaterThanOrEqual(2);
+	for (const sql of lookups) {
+		const plan = db
+			.prepare<{ detail: string }, string[]>(`EXPLAIN QUERY PLAN ${sql}`)
+			.all(...Array.from({ length: sql.match(/\?/g)?.length ?? 0 }, () => "default"));
+		const details = plan.map((row) => (typeof row.detail === "string" ? row.detail : "")).join("\n");
+		console.log(JSON.stringify({ lookupPlan: details }));
+		expect(details).not.toMatch(/SCAN (classification_assignments|org_jobs)\b/);
+		expect(details).not.toMatch(/SEARCH classification_assignments [^\n]+\(target_kind=\?\)/);
+		if (sql.includes("FROM org_jobs")) expect(details).toContain("<expr>=? AND <expr>=? AND <expr>=?");
+		expect(details).toMatch(/SEARCH (classification_assignments|org_jobs) USING/);
+	}
+	db.close();
+});
 
 test("warm vector writes touch only the previous shard without catalog work", () => {
 	const db = new Database(":memory:");

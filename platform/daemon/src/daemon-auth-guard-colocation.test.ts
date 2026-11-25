@@ -206,6 +206,11 @@ inference:
 
 				const app = new Hono();
 				app.use("*", createAuthMiddleware(state.authConfig, secret));
+				app.use("*", async (c, next) => {
+					const claims = c.get("auth")?.claims;
+					if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+					await next();
+				});
 				registerMemoryRoutes(app, { recallOwner: rejectingRecallOwner(routedFailure) });
 				const response = await app.request("/api/memory/recall", {
 					method: "POST",
@@ -233,6 +238,11 @@ inference:
 			const token = createToken(secret, { sub: "internal-recall", role: "readonly", scope: {} }, 60);
 			const app = new Hono();
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				await next();
+			});
 			registerMemoryRoutes(app, { recallOwner: rejectingRecallOwner(new Error("database read failed")) });
 			const response = await app.request("/api/memory/recall", {
 				method: "POST",
@@ -278,6 +288,11 @@ inference:
 			try {
 				const app = new Hono();
 				app.use("*", createAuthMiddleware(state.authConfig, secret));
+				app.use("*", async (c, next) => {
+					const claims = c.get("auth")?.claims;
+					if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+					await next();
+				});
 				registerMemoryRoutes(app, { hybridRecall: hybridRecallMock, fetchEmbedding: async () => null });
 				const token = createToken(secret, { sub: "partial-recall", role: "readonly", scope: {} }, 60);
 				const response = await app.request("/api/memory/recall", {
@@ -338,6 +353,11 @@ inference:
 			try {
 				const app = new Hono();
 				app.use("*", createAuthMiddleware(state.authConfig, secret));
+				app.use("*", async (c, next) => {
+					const claims = c.get("auth")?.claims;
+					if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+					await next();
+				});
 				registerMemoryRoutes(app, {
 					aggregateRecall: aggregateRecallWithPartialHybrid,
 					getInferenceRouterOrNull: () => null,
@@ -366,11 +386,11 @@ inference:
 			}
 		});
 
-		it("POST /api/memory/remember returns 403 without auth", async () => {
+		it("POST /api/memory/remember returns 401 without an author", async () => {
 			const app = await makeApp();
 			const { registerMemoryRoutes } = await import("./routes/memory-routes");
 			registerMemoryRoutes(app);
-			expect(await status(app, "POST", "/api/memory/remember")).toBe(403);
+			expect(await status(app, "POST", "/api/memory/remember")).toBe(401);
 		});
 
 		it("POST /api/memory/remember rejects zero-length validity windows", async () => {
@@ -382,6 +402,14 @@ inference:
 			if (!secret) throw new Error("expected auth secret for team-mode remember test");
 
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+
+				await next();
+			});
 			registerMemoryRoutes(app);
 			const token = createToken(secret, { sub: "remember-operator", role: "operator", scope: {} }, 60);
 			const res = await app.request("/api/memory/remember", {
@@ -411,6 +439,14 @@ inference:
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+
+				await next();
+			});
 			registerMemoryRoutes(app);
 			const token = createToken(secret, { sub: "readonly-recall", role: "readonly", scope: {} }, 60);
 			const res = await app.request("/api/memory/recall", {
@@ -464,6 +500,14 @@ inference:
 			});
 
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+
+				await next();
+			});
 			registerMemoryRoutes(app, {
 				aggregateRecall: aggregateRecallMock,
 				getInferenceRouterOrNull: () => null,
@@ -511,6 +555,14 @@ inference:
 			});
 
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+
+				await next();
+			});
 			registerMemoryRoutes(app, {
 				aggregateRecall: aggregateRecallMock,
 				getInferenceRouterOrNull: () => null,
@@ -550,6 +602,14 @@ inference:
 			});
 
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+
+				await next();
+			});
 			registerMemoryRoutes(app, {
 				hybridRecall: hybridRecallMock,
 				fetchEmbedding: async () => null,
@@ -629,6 +689,11 @@ inference:
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode config test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				await next();
+			});
 			registerMiscRoutes(app);
 			const original = readFileSync(join(tmpDir, "agent.yaml"), "utf-8");
 			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
@@ -655,6 +720,11 @@ inference:
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode config test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				await next();
+			});
 			registerMiscRoutes(app);
 			const agentPath = join(state.AGENTS_DIR, "agent.yaml");
 			const configPath = join(state.AGENTS_DIR, "config.yaml");
@@ -700,6 +770,11 @@ inference:
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode agent test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				await next();
+			});
 			registerMiscRoutes(app);
 			const anonymous = await app.request("/api/agents", {
 				method: "POST",
@@ -843,6 +918,11 @@ inference:
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode Dreaming test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				await next();
+			});
 			registerPipelineRoutes(app);
 			const token = createToken(secret, { sub: "dreaming-agent-a", role: "agent", scope: { agent: "agent-a" } }, 60);
 			const res = await app.request("/api/dream/operations", {
@@ -949,6 +1029,14 @@ inference:
 			});
 
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
+
+			app.use("*", async (c, next) => {
+				const claims = c.get("auth")?.claims;
+
+				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+
+				await next();
+			});
 			registerTelemetryRoutes(app);
 			const token = createToken(
 				secret,

@@ -55,6 +55,31 @@ const {
 	queryAnchorsMissingFromRecall,
 	selectWithTokenBudget,
 } = hooks;
+
+test("l4-review-authors rejects missing hook authors before doing work", async () => {
+	const request = { harness: "hermes", sessionKey: "missing-author", agentId: "default" };
+	for (const handler of [handlePreCompaction, handleUserPromptSubmit, handleSessionEnd, handleCheckpointExtract]) {
+		await expect(Reflect.apply(handler, undefined, [request])).rejects.toThrow("explicit author");
+	}
+});
+
+for (const [name, handler] of [
+	["session-start", handleSessionStart],
+	["stop", handleStop],
+] as const) {
+	test(`l4-review-authors rejects missing ${name} authors before doing work`, async () => {
+		await expect(
+			Reflect.apply(handler, undefined, [
+				{
+					harness: "hermes",
+					sessionKey: "missing-author",
+					agentId: "default",
+					lastAssistantMessage: "reply",
+				},
+			]),
+		).rejects.toThrow("explicit author");
+	});
+}
 const {
 	deriveSessionToken,
 	ensureCanonicalManifest,
@@ -725,7 +750,7 @@ describe("handleSessionStart", () => {
 		db.prepare("UPDATE memories SET superseded_by = ? WHERE id = ?").run(currentId, oldId);
 		db.close();
 
-		const result = await handleSessionStart({ harness: "codex" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "codex" });
 		expect(result.inject).toContain("Project Marigold deploys on Thursdays.");
 		expect(result.inject).not.toContain("Project Marigold deploys on Tuesdays.");
 	});
@@ -751,7 +776,12 @@ describe("handleSessionStart", () => {
 		);
 		db.close();
 
-		const result = await handleSessionStart({ harness: "test", sessionKey: "new-session", project });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			sessionKey: "new-session",
+			project,
+		});
 
 		expect(result.inject).toContain(
 			"This is historical checkpoint context from an earlier session or point in this conversation",
@@ -761,7 +791,11 @@ describe("handleSessionStart", () => {
 	});
 
 	test.serial("tells tool-equipped harnesses about agent messaging and the board without peers present", async () => {
-		const claude = await handleSessionStart({ harness: "claude-code", sessionKey: "solo-session" });
+		const claude = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "claude-code",
+			sessionKey: "solo-session",
+		});
 		expect(claude.inject).toContain("## Agent Messaging");
 		expect(claude.inject).toContain("session `solo-session`");
 		expect(claude.inject).toContain(
@@ -769,15 +803,23 @@ describe("handleSessionStart", () => {
 		);
 		expect(claude.inject).toContain("`board_list`");
 
-		const hermes = await handleSessionStart({ harness: "hermes-agent", sessionKey: "hermes-session" });
+		const hermes = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "hermes-agent",
+			sessionKey: "hermes-session",
+		});
 		expect(hermes.inject).toContain("## Agent Messaging");
 
-		const openclaw = await handleSessionStart({ harness: "openclaw", sessionKey: "claw-session" });
+		const openclaw = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "openclaw",
+			sessionKey: "claw-session",
+		});
 		expect(openclaw.inject).not.toContain("## Agent Messaging");
 	});
 
 	test.serial("returns default identity when no config files exist", async () => {
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.identity.description).toBeUndefined();
@@ -794,7 +836,7 @@ describe("handleSessionStart", () => {
 `);
 		createMemoryDb([{ content: "This record must not bypass the aggregate budget.", importance: 0.9 }]);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.inject).toBe("");
 		expect(result.dynamicContext).toBe("");
@@ -811,7 +853,7 @@ describe("handleSessionStart", () => {
 			{ content: "A continuity record that should be omitted when the aggregate is tight.", importance: 0.9 },
 		]);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		const rawAggregate = [result.stableSystemPrompt, result.dynamicContext]
 			.filter((part) => part.trim().length > 0)
 			.join("\n");
@@ -827,13 +869,17 @@ describe("handleSessionStart", () => {
 		insertCompletedTranscript(db, { sessionKey: "cache-stable-session", content: "previous session" });
 		db.close();
 
-		const result = await handleSessionStart({ harness: "test", sessionKey: "cache-stable-session-2" });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			sessionKey: "cache-stable-session-2",
+		});
 		expect(result.inject).not.toContain("Current Date & Time");
 		expect(result.inject).not.toContain("last active");
 	});
 
 	test.serial("inject starts with memory status line", async () => {
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		expect(result.inject).toContain("[memory active");
 		expect(result.inject.startsWith("<signet-memory-context>\n")).toBe(true);
 		expect(result.inject.endsWith("\n</signet-memory-context>\n")).toBe(true);
@@ -842,8 +888,16 @@ describe("handleSessionStart", () => {
 	});
 
 	test.serial("separates stable system instructions from dynamic session context", async () => {
-		const first = await handleSessionStart({ harness: "test", sessionKey: "cache-stable-contract" });
-		const second = await handleSessionStart({ harness: "test", sessionKey: "cache-stable-contract-2" });
+		const first = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			sessionKey: "cache-stable-contract",
+		});
+		const second = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			sessionKey: "cache-stable-contract-2",
+		});
 
 		expect(first.stableSystemPrompt).toBe(second.stableSystemPrompt);
 		expect(first.stableSystemPrompt).not.toContain("Current Date & Time");
@@ -863,7 +917,7 @@ describe("handleSessionStart", () => {
 		);
 		resetTokenizerStats();
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 		expect(tokenizerStats.encodeCalls).toBeLessThanOrEqual(3);
 		expect(result.inject.length).toBeGreaterThan(0);
 	});
@@ -872,12 +926,25 @@ describe("handleSessionStart", () => {
 		createMemoryDb([{ content: "Large startup memory", importance: 0.9 }]);
 		const sessionKey = "codex-resume-dedup-session";
 
-		const first = await handleSessionStart({ harness: "codex", sessionKey });
+		const first = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+		});
 		expect(first.memories.length).toBe(1);
 		expect(first.inject).toContain("Large startup memory");
 
-		await handleSessionEnd({ harness: "codex", sessionKey, reason: "shutdown" });
-		const resumed = await handleSessionStart({ harness: "codex", sessionKey });
+		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+			reason: "shutdown",
+		});
+		const resumed = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+		});
 
 		expect(resumed.memories).toEqual([]);
 		expect(resumed.inject).toContain("[memory active");
@@ -888,9 +955,18 @@ describe("handleSessionStart", () => {
 		createMemoryDb([{ content: "Fresh startup memory", importance: 0.9 }]);
 		const sessionKey = "codex-clear-redo-session";
 
-		await handleSessionStart({ harness: "codex", sessionKey });
-		await handleSessionEnd({ harness: "codex", sessionKey, reason: "clear" });
-		const restarted = await handleSessionStart({ harness: "codex", sessionKey });
+		await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "codex", sessionKey });
+		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+			reason: "clear",
+		});
+		const restarted = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+		});
 
 		expect(restarted.memories.length).toBe(1);
 		expect(restarted.inject).toContain("Fresh startup memory");
@@ -900,16 +976,29 @@ describe("handleSessionStart", () => {
 		createMemoryDb([{ content: "Scoped startup memory", importance: 0.9 }]);
 		const sessionKey = "shared-session-key";
 
-		await handleSessionStart({ harness: "codex", sessionKey });
+		await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "codex", sessionKey });
 
-		const otherHarness = await handleSessionStart({ harness: "claude-code", sessionKey });
+		const otherHarness = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "claude-code",
+			sessionKey,
+		});
 		expect(otherHarness.memories.length).toBe(1);
 		expect(otherHarness.inject).toContain("Scoped startup memory");
 
-		const otherAgent = await handleSessionStart({ harness: "codex", sessionKey, agentId: "agent-b" });
+		const otherAgent = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+			agentId: "agent-b",
+		});
 		expect(otherAgent.inject).toContain("Signet Status");
 
-		const duplicate = await handleSessionStart({ harness: "codex", sessionKey });
+		const duplicate = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+		});
 		expect(duplicate.memories).toEqual([]);
 	});
 
@@ -920,7 +1009,7 @@ agent:
   description: A test agent
 `);
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		expect(result.identity.name).toBe("TestBot");
 		expect(result.identity.description).toBe("A test agent");
@@ -935,7 +1024,7 @@ name: MarkdownBot
 creature: digital assistant
 `);
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		expect(result.identity.name).toBe("MarkdownBot");
 		expect(result.identity.description).toBe("digital assistant");
@@ -947,7 +1036,7 @@ creature: digital assistant
 			{ content: "Project uses TypeScript", importance: 0.7 },
 		]);
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		expect(result.memories.length).toBe(2);
 		expect(result.memories.some((m) => m.content === "User prefers dark mode")).toBe(true);
@@ -981,7 +1070,11 @@ hooks:
 			.run("session_transcript", "transcript-source-123", "Important preview prefix.%");
 		metadataDb.close();
 
-		const result = await handleSessionStart({ harness: "test", sessionKey: "bounded-continuity-session" });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			sessionKey: "bounded-continuity-session",
+		});
 
 		expect(result.memories).toHaveLength(1);
 		const [memory] = result.memories;
@@ -1018,7 +1111,11 @@ hooks:
 		expect(before.access_count).toBe(0);
 		expect(before.last_accessed).toBeNull();
 
-		const result = await handleSessionStart({ harness: "claude-code", sessionKey: "access-tracking-971" });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "claude-code",
+			sessionKey: "access-tracking-971",
+		});
 		expect(result.memories.length).toBe(1);
 		expect(result.inject).toContain("Injected startup memory");
 
@@ -1060,14 +1157,17 @@ hooks:
 				],
 			}),
 		).toMatchObject({ ok: true });
-		expect((await handleSessionStart({ harness: "claude-code" })).recentContext).toContain("Tuesday");
+		expect(
+			(await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" }))
+				.recentContext,
+		).toContain("Tuesday");
 		await ownerRun(
 			owner,
 			"UPDATE memories SET content='Planning meeting is Thursday.' WHERE id='meeting-head-fixture'",
 			[],
 			options,
 		);
-		const after = await handleSessionStart({ harness: "claude-code" });
+		const after = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 		expect(after.inject).not.toContain("Tuesday");
 		expect(after.inject).toContain("Thursday");
 		mkdirSync(join(TEST_DIR, "agents", "default"), { recursive: true });
@@ -1083,7 +1183,9 @@ hooks:
   harnessProfiles:
     pi: coding
 `);
-			expect((await handleSessionStart({ harness: "pi" })).inject).not.toContain("Tuesday");
+			expect(
+				(await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "pi" })).inject,
+			).not.toContain("Tuesday");
 		}
 	});
 
@@ -1091,7 +1193,7 @@ hooks:
 		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nCurrently working on hooks migration.");
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		expect(result.recentContext).toContain("Working Memory");
 		expect(result.inject).toContain("## Working Memory");
@@ -1122,7 +1224,7 @@ hooks:
 			{ content: "Second profile memory", importance: 0.8 },
 		]);
 
-		const result = await handleSessionStart({ harness: "pi" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "pi" });
 
 		expect(result.memories).toHaveLength(1);
 		expect(result.inject).toContain("## Agent Instructions");
@@ -1147,7 +1249,7 @@ hooks:
 		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nKeep this recent context.");
 
-		const result = await handleSessionStart({ harness: "pi" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "pi" });
 
 		expect(result.inject).not.toContain("Do not include this identity file.");
 		expect(result.inject).toContain("Keep this recent context.");
@@ -1158,7 +1260,7 @@ hooks:
 		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nThis is working memory context.");
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		const agentsIndex = result.inject.indexOf("Follow AGENTS instructions first.");
 		const workingMemoryIndex = result.inject.indexOf("## Working Memory");
@@ -1176,7 +1278,7 @@ agent:
 `);
 		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
 
-		const result = await handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "claude-code" });
 
 		expect(result.inject).toContain("Operator policy from AGENTS.");
 		expect(result.inject).not.toContain("You are TestBot");
@@ -1193,7 +1295,7 @@ hooks:
 		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nMemory remains available.");
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.inject).not.toContain("HiddenBot");
@@ -1211,7 +1313,7 @@ agent:
 		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
 		writeFileSync(join(TEST_DIR, "SOUL.md"), "Soul should not inject.");
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.inject).toContain("[signet active]");
@@ -1238,7 +1340,7 @@ identity:
 		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
 		writeFileSync(join(TEST_DIR, "SOUL.md"), "Soul should not inject.");
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.inject).toContain("[signet active]");
 		expect(result.inject).toContain("Operator policy from AGENTS.");
@@ -1260,7 +1362,7 @@ identity:
       - path: MISSING.md
 `);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.inject).toContain("[signet active]");
 		expect(result.inject).not.toContain("HarnessOwnedBot");
@@ -1277,14 +1379,14 @@ identity:
 `);
 		writeAgentsMd(`${"a".repeat(5000)}AGENTS-END`);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.inject).toContain("AGENTS-END");
 		expect(result.inject).not.toContain("[truncated]");
 	});
 
 	test.serial("handles missing memory database gracefully", async () => {
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		expect(result.memories).toEqual([]);
 	});
 
@@ -1298,7 +1400,7 @@ identity:
 			},
 		]);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		expect(result.memories.length).toBe(0);
 	});
 
@@ -1313,7 +1415,7 @@ identity:
 			},
 		]);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.memories.length).toBe(1);
 		expect(result.memories[0].content).toBe("Critical pinned memory");
@@ -1334,6 +1436,7 @@ identity:
 		]);
 
 		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			project: "/home/user/myproject",
 		});
@@ -1363,6 +1466,7 @@ identity:
 			db.close();
 
 			const result = await handleSessionStart({
+				author: { userId: null, credential: "local" },
 				harness: "claude-code",
 				project: "/tmp/network",
 				sessionKey: "child-session",
@@ -1394,6 +1498,7 @@ identity:
 		db.close();
 
 		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "openclaw",
 			sessionKey: "agent:nicholai:subagent:abc123",
 		});
@@ -1427,6 +1532,7 @@ memory:
 		db.close();
 
 		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			project: "/tmp/disabled",
 			sessionKey: "child-disabled",
@@ -1455,6 +1561,7 @@ memory:
 		upsertAgent("agent-shared", "shared");
 
 		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			agentId: "agent-shared",
 		});
@@ -1468,8 +1575,18 @@ memory:
 			{ content: "Agent A release note", importance: 0.9, agent_id: "agent-a", visibility: "global" },
 			{ content: "Agent B dreaming note", importance: 0.9, agent_id: "agent-b", visibility: "global" },
 		]);
-		await handleSessionEnd({ harness: "test", agentId: "agent-a", reason: "clear" });
-		await handleSessionEnd({ harness: "test", agentId: "agent-b", reason: "clear" });
+		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			agentId: "agent-a",
+			reason: "clear",
+		});
+		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			agentId: "agent-b",
+			reason: "clear",
+		});
 
 		const db = openTestDb();
 		const policies = db
@@ -1481,13 +1598,15 @@ memory:
 			{ id: "agent-b", read_policy: "isolated" },
 		]);
 
-		const agentA = (await handleSessionStart({ harness: "test", agentId: "agent-a" })).memories.map(
-			(memory) => memory.content,
-		);
+		const agentA = (
+			await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test", agentId: "agent-a" })
+		).memories.map((memory) => memory.content);
 		expect(agentA).toContain("Agent A release note");
 		expect(agentA).not.toContain("Agent B dreaming note");
 
-		const fallback = (await handleSessionStart({ harness: "test" })).memories.map((memory) => memory.content);
+		const fallback = (
+			await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" })
+		).memories.map((memory) => memory.content);
 		expect(fallback).toContain("Agent A release note");
 		expect(fallback).toContain("Agent B dreaming note");
 	});
@@ -1495,7 +1614,7 @@ memory:
 
 describe("handlePreCompaction", () => {
 	test.serial("returns default guidelines when no config", async () => {
-		const result = await handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.guidelines).toContain("Key decisions made");
 		expect(result.guidelines).toContain("User preferences discovered");
@@ -1509,7 +1628,7 @@ hooks:
     summaryGuidelines: "Custom summary rules"
 `);
 
-		const result = await handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.guidelines).toBe("Custom summary rules");
 		expect(result.summaryPrompt).toContain("Custom summary rules");
@@ -1518,7 +1637,7 @@ hooks:
 	test.serial("includes recent memories in summary prompt", async () => {
 		createMemoryDb([{ content: "Important decision about auth", importance: 0.9 }]);
 
-		const result = await handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.summaryPrompt).toContain("Recent memories for reference");
 		expect(result.summaryPrompt).toContain("Important decision about auth");
@@ -1533,7 +1652,7 @@ hooks:
 
 		createMemoryDb([{ content: "Should not appear", importance: 0.9 }]);
 
-		const result = await handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.summaryPrompt).not.toContain("Should not appear");
 	});
@@ -1548,8 +1667,14 @@ describe("direct transcript regressions", () => {
 				8,
 			);
 
-		await handleSessionStart({ harness: "claude-code", sessionKey, project: "/home/user/signetai" });
+		await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "claude-code",
+			sessionKey,
+			project: "/home/user/signetai",
+		});
 		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey,
 			project: "/home/user/signetai",
@@ -1557,6 +1682,7 @@ describe("direct transcript regressions", () => {
 			transcript,
 		});
 		await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey: "claude-reset-after-clear-session",
 			project: "/home/user/signetai",
@@ -1614,7 +1740,12 @@ describe("direct transcript regressions", () => {
 		db.close();
 		upsertAgent("agent-shared", "shared");
 
-		const result = await handleSessionStart({ harness: "test", agentId: "agent-shared", project });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			agentId: "agent-shared",
+			project,
+		});
 		expect(result.memories.some((memory) => memory.content === "Shared shardaware rollout memory")).toBe(true);
 	});
 
@@ -1634,7 +1765,11 @@ describe("direct transcript regressions", () => {
 		});
 		db.close();
 
-		const result = await handleSessionStart({ harness: "test", project });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			project,
+		});
 		expect(result.memories.some((memory) => memory.content === "user path issue check this that with only")).toBe(
 			false,
 		);
@@ -1661,7 +1796,11 @@ describe("direct transcript regressions", () => {
 		});
 		db.close();
 
-		const result = await handleSessionStart({ harness: "test", project: projectA });
+		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
+			harness: "test",
+			project: projectA,
+		});
 		expect(result.memories.some((memory) => memory.content === "Project A shardaware rollout memory")).toBe(true);
 		expect(result.memories.some((memory) => memory.content === "Project B shardaware rollout memory")).toBe(false);
 	});
@@ -1672,6 +1811,7 @@ describe("direct transcript regressions", () => {
 		writeFileSync(transcriptPath, "User: this source must not be read by Stop\\n".repeat(10_000));
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "codex",
 			transcriptPath,
 			sessionKey: "ordinary-stop-session",
@@ -1692,6 +1832,7 @@ describe("direct transcript regressions", () => {
 		createMemoryDb([]);
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "muse-code",
 			sessionKey: "muse-stop-session",
 			sessionId: "muse-stop-session",
@@ -1699,6 +1840,7 @@ describe("direct transcript regressions", () => {
 			lastAssistantMessage: "The probe color is ultramarine.",
 		});
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "muse-code",
 			sessionKey: "muse-stop-session",
 			sessionId: "muse-stop-session",
@@ -1726,6 +1868,7 @@ describe("direct transcript regressions", () => {
 		writeFileSync(transcriptPath, "User: hi\nAssistant: from the source file\n");
 
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "codex",
 			transcriptPath,
 			sessionKey: "codex-stop-session",
@@ -1748,6 +1891,7 @@ describe("direct transcript regressions", () => {
 		createMemoryDb([]);
 
 		const result = await handleStop({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey: "claude-stop-session",
 			agentId: "default",
@@ -1783,6 +1927,7 @@ describe("direct transcript regressions", () => {
 		const project = "/source-project";
 		expect(
 			await handleStop({
+				author: { userId: null, credential: "local" },
 				harness: "claude-code",
 				sessionKey,
 				agentId: "default",
@@ -1836,6 +1981,7 @@ describe("direct transcript regressions", () => {
 		expect(canonicalSessionRecords("claude-code", sessionKey)).toEqual(matched);
 
 		await handleStop({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey,
 			agentId: "default",
@@ -1854,6 +2000,7 @@ describe("direct transcript regressions", () => {
 		createMemoryDb([]);
 
 		const result = await handleStop({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey: "claude-empty-stop-session",
 			agentId: "default",
@@ -1878,7 +2025,13 @@ describe("direct transcript regressions", () => {
 		createMemoryDb([]);
 		const sessionKey = "claude-repeated-stop-session";
 		const stop = (lastAssistantMessage: string) =>
-			handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage });
+			handleStop({
+				author: { userId: null, credential: "local" },
+				harness: "claude-code",
+				sessionKey,
+				agentId: "default",
+				lastAssistantMessage,
+			});
 
 		await stop("Done.");
 		const evidence = canonicalSessionRecords("claude-code", sessionKey);
@@ -1897,7 +2050,12 @@ describe("direct transcript regressions", () => {
 		expect(canonicalSessionRecords("claude-code", sessionKey)).toEqual(evidence);
 		expect(await read()).toEqual(projection);
 		await stop("Second reply.");
-		await handleUserPromptSubmit({ harness: "claude-code", sessionKey, userPrompt: "again please" });
+		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
+			harness: "claude-code",
+			sessionKey,
+			userPrompt: "again please",
+		});
 		await stop("Done.");
 
 		expect(canonicalSessionRecords("claude-code", sessionKey).map((record) => [record.role, record.content])).toEqual([
@@ -1922,7 +2080,13 @@ describe("direct transcript regressions", () => {
 		const sessionKey = "claude-stop-suffix-reply";
 		for (const lastAssistantMessage of ["Mention\nAssistant: done", "done"]) {
 			expect(
-				await handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage }),
+				await handleStop({
+					author: { userId: null, credential: "local" },
+					harness: "claude-code",
+					sessionKey,
+					agentId: "default",
+					lastAssistantMessage,
+				}),
 			).toEqual({ recorded: true });
 		}
 		expect(canonicalSessionRecords("claude-code", sessionKey).map((record) => [record.role, record.content])).toEqual([
@@ -1948,9 +2112,20 @@ describe("direct transcript regressions", () => {
 
 		await Promise.all([
 			...replies.map((lastAssistantMessage) =>
-				handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage }),
+				handleStop({
+					author: { userId: null, credential: "local" },
+					harness: "claude-code",
+					sessionKey,
+					agentId: "default",
+					lastAssistantMessage,
+				}),
 			),
-			handleUserPromptSubmit({ harness: "claude-code", sessionKey, userPrompt: "overlapping prompt" }),
+			handleUserPromptSubmit({
+				author: { userId: null, credential: "local" },
+				harness: "claude-code",
+				sessionKey,
+				userPrompt: "overlapping prompt",
+			}),
 		]);
 
 		const db = openTestDb();
@@ -1970,12 +2145,14 @@ describe("direct transcript regressions", () => {
 		createMemoryDb([]);
 
 		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey: "fresh-agent-prompt-session",
 			agentId: "fresh-prompt-agent",
 			userPrompt: "first prompt of a new agent",
 		});
 		await handleStop({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey: "fresh-agent-stop-session",
 			agentId: "fresh-stop-agent",
@@ -2021,6 +2198,7 @@ describe("direct transcript regressions", () => {
 		writeFileSync(transcriptPath, longTranscript);
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath,
 			sessionKey: "sess-long-retention",
@@ -2069,6 +2247,7 @@ describe("direct transcript regressions", () => {
 		);
 
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			transcriptPath: transcriptAPath,
 			sessionKey: "claude-resumed-session",
@@ -2077,6 +2256,7 @@ describe("direct transcript regressions", () => {
 			reason: "session_shutdown",
 		});
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			transcriptPath: transcriptBPath,
 			sessionKey: "claude-resumed-session",
@@ -2126,6 +2306,7 @@ describe("direct transcript regressions", () => {
 		);
 
 		const first = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath: transcriptAPath,
 			sessionKey: "agent:main:main",
@@ -2133,6 +2314,7 @@ describe("direct transcript regressions", () => {
 			reason: "session_shutdown",
 		});
 		const second = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath: transcriptBPath,
 			sessionKey: "agent:main:main",
@@ -2193,7 +2375,12 @@ describe("handleUserPromptSubmit", () => {
 		try {
 			const startedAtMs = Date.now();
 			const result = await handleUserPromptSubmit(
-				{ harness: "test", sessionKey: "slow-provider", userPrompt: "recall the slow provider test" },
+				{
+					author: { userId: null, credential: "local" },
+					harness: "test",
+					sessionKey: "slow-provider",
+					userPrompt: "recall the slow provider test",
+				},
 				{
 					loadMemoryConfig: () => timeoutConfig,
 					matchPromptEntities: async () => {
@@ -2224,6 +2411,7 @@ describe("handleUserPromptSubmit", () => {
 		createMemoryDb([{ content: "Use TypeScript as the preferred language for this project", importance: 0.8 }]);
 
 		const result = await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			userPrompt: "What TypeScript language should we use?",
 		});
@@ -2238,6 +2426,7 @@ describe("handleUserPromptSubmit", () => {
 		createMemoryDb([]);
 
 		const result = await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			userPrompt:
 				'Conversation info (untrusted metadata):\n{"conversation_label":"OpenClaw Session","message_id":"msg_123","sender_id":"user_456"}\n\nCan you reiterate the release checklist?',
@@ -2253,6 +2442,7 @@ describe("handleUserPromptSubmit", () => {
 		createMemoryDb([]);
 
 		const result = await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "openclaw",
 			userMessage: "Can you reiterate the release checklist?",
 			userPrompt:
@@ -2273,6 +2463,7 @@ describe("handleUserPromptSubmit", () => {
 		writeFileSync(transcriptPath, "User: review the release checklist\nAssistant: here's the checklist");
 
 		const result = await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			userPrompt: "review the release checklist",
 			sessionKey: "sess-prompt",
@@ -2293,6 +2484,7 @@ describe("handleUserPromptSubmit", () => {
 describe("handleSessionEnd", () => {
 	test.serial("skips on reason=clear", async () => {
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			reason: "clear",
 		});
@@ -2305,6 +2497,7 @@ describe("handleSessionEnd", () => {
 		writeFileSync(transcriptPath, "Hello world");
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath,
 		});
@@ -2314,6 +2507,7 @@ describe("handleSessionEnd", () => {
 
 	test.serial("skips on missing transcript path", async () => {
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath: "/nonexistent/path.txt",
 		});
@@ -2322,9 +2516,7 @@ describe("handleSessionEnd", () => {
 	});
 
 	test.serial("handles no transcriptPath gracefully", async () => {
-		const result = await handleSessionEnd({
-			harness: "test",
-		});
+		const result = await handleSessionEnd({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.memoriesSaved).toBe(0);
 	});
@@ -2337,6 +2529,7 @@ describe("handleSessionEnd", () => {
 
 			createMemoryDb([]);
 			const result = await handleSessionEnd({
+				author: { userId: null, credential: "local" },
 				harness: "test",
 				transcriptPath,
 			});
@@ -2356,6 +2549,7 @@ describe("handleSessionEnd", () => {
 		);
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath,
 			sessionKey: "sess-ledger",
@@ -2400,6 +2594,7 @@ describe("handleSessionEnd", () => {
 				8,
 			);
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
@@ -2419,6 +2614,7 @@ describe("handleSessionEnd", () => {
 		expect(first.content_hash).toEqual(expect.any(String));
 
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
@@ -2444,6 +2640,7 @@ describe("handleSessionEnd", () => {
 
 		const changedTranscript = `${firstTranscript}User: does the completion marker move?\nAssistant: the completion marker must move only for changed content.\n`;
 		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
@@ -2472,6 +2669,7 @@ describe("handleSessionEnd", () => {
 			);
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "memorybench",
 			transcript,
 			sessionKey: "memorybench:case-1:session-1",
@@ -2519,6 +2717,7 @@ describe("handleSessionEnd", () => {
 		const canonicalPath = join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl");
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath,
 			sessionKey: "sess-deferred-canonical",
@@ -2602,6 +2801,7 @@ memory:
 		}
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath,
 			sessionKey: "sess-pipeline-disabled",
@@ -2654,6 +2854,7 @@ memory:
 		}
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			transcriptPath: "/nonexistent/path.txt",
 			sessionKey: "sess-live-fallback",
@@ -2674,6 +2875,7 @@ memory:
 		createMemoryDb([]);
 
 		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "hermes-agent",
 			sessionKey: "sess-live-jsonl",
 			project: "/home/user/signetai",
@@ -2704,6 +2906,7 @@ memory:
 		const sessionKey = "sess-live-shorter-latest";
 
 		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey,
 			project: "/home/user/signetai",
@@ -2714,6 +2917,7 @@ memory:
 		});
 
 		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "claude-code",
 			sessionKey,
 			project: "/home/user/signetai",
@@ -2749,6 +2953,7 @@ memory:
 		);
 
 		const result = await handleSessionEnd({
+			author: { userId: null, credential: "local" },
 			harness: "codex",
 			transcriptPath,
 			sessionKey: "sess-audit",
@@ -2856,9 +3061,22 @@ memory:
 		const collector = createTelemetryCollector(getDbAccessor(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
 		setActiveTelemetry(collector);
 		try {
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-a" });
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-a" });
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-b", reason: "session.idle" });
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-turn-a",
+			});
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-turn-a",
+			});
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-turn-b",
+				reason: "session.idle",
+			});
 			await collector.flush();
 
 			const turns = (await collector.query()).filter((e) => e.event === "session.turn");
@@ -2889,9 +3107,19 @@ memory:
 			];
 			const inputs = [" SESSION.DELETED ", ...reasons.slice(1)];
 			for (const [index, reason] of inputs.entries()) {
-				await handleSessionEnd({ harness: "test", sessionKey: `sess-boundary-${index}`, reason });
+				await handleSessionEnd({
+					author: { userId: null, credential: "local" },
+					harness: "test",
+					sessionKey: `sess-boundary-${index}`,
+					reason,
+				});
 			}
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-boundary-0", reason: "session.deleted" });
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-boundary-0",
+				reason: "session.deleted",
+			});
 			await collector.flush();
 
 			const ends = (await collector.query()).filter((e) => e.event === "session.end");
@@ -2911,21 +3139,40 @@ memory:
 		const collector = createTelemetryCollector(getDbAccessor(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
 		setActiveTelemetry(collector);
 		try {
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-clear-a",
+				reason: "clear",
+			});
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-clear-a",
+				reason: "clear",
+			});
 			await collector.flush();
 
 			const ends = (await collector.query()).filter((e) => e.event === "session.end");
 			expect(ends).toHaveLength(1);
 			expect(ends[0]?.properties.reason).toBe("clear");
 			expect(ends[0]?.properties.harness).toBe("test");
-			await handleSessionStart({ harness: "test", sessionKey: "sess-clear-a" });
+			await handleSessionStart({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-clear-a",
+			});
 			await collector.flush();
 			const starts = (await collector.query()).filter((e) => e.event === "session.start");
 			expect(starts).toHaveLength(1);
 			expect(typeof starts[0]?.properties.sessionHash).toBe("string");
 
-			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
+			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
+				harness: "test",
+				sessionKey: "sess-clear-a",
+				reason: "clear",
+			});
 			await collector.flush();
 			expect((await collector.query()).filter((e) => e.event === "session.end")).toHaveLength(2);
 		} finally {
@@ -3106,6 +3353,7 @@ describe("handleSynthesisRequest", () => {
 			);
 
 			await handleSessionEnd({
+				author: { userId: null, credential: "local" },
 				harness: "test",
 				transcriptPath,
 				sessionKey: "sess-pr390",
@@ -3768,6 +4016,7 @@ describe("handleSessionStart multi-agent identity", () => {
 
 	it("loads agent-scoped identity files for session-start", async () => {
 		const result = await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "hermes-agent",
 			sessionKey: `dot-test-${Date.now()}`,
 			agentId: "dot",
@@ -3889,15 +4138,15 @@ describe("error handling", () => {
 	test.serial("rejects a corrupt agent.yaml with its path", async () => {
 		writeAgentYaml("{{{{invalid yaml content!!!!");
 
-		await expect(handleSessionStart({ harness: "test" })).rejects.toThrow(
-			`${join(TEST_DIR, "agent.yaml")}: invalid YAML syntax`,
-		);
+		await expect(
+			handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" }),
+		).rejects.toThrow(`${join(TEST_DIR, "agent.yaml")}: invalid YAML syntax`);
 	});
 
 	test.serial("handles empty IDENTITY.md gracefully", async () => {
 		writeIdentityMd("");
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		expect(result.identity.name).toBe("Agent");
 	});
 
@@ -3905,12 +4154,12 @@ describe("error handling", () => {
 		ensureDir(join(TEST_DIR, "memory"));
 		writeFileSync(join(TEST_DIR, "memory", "memories.db"), "not a sqlite database");
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		expect(result.memories).toEqual([]);
 	});
 
 	test.serial("handles missing MEMORY.md gracefully", async () => {
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 		expect(result.recentContext).toBeUndefined();
 	});
 });
@@ -3962,7 +4211,7 @@ agent:
 
 		writeMemoryMd("# Context\nSome context here.");
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.inject).toContain("[memory active");
 		expect(result.inject).toContain("IntegrationBot");
@@ -3979,7 +4228,7 @@ agent:
 			{ content: "Second fact", importance: 0.8 },
 		]);
 
-		const result = await handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		expect(result.inject).toContain("content:\n    First fact");
 		expect(result.inject).toContain("content:\n    Second fact");
@@ -4067,6 +4316,7 @@ describe("session memory recording integration", () => {
 		]);
 
 		await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "integration-session-001",
 		});
@@ -4095,9 +4345,7 @@ describe("session memory recording integration", () => {
 	test.serial("handleSessionStart does not record when sessionKey is missing", async () => {
 		createMemoryDb([{ content: "Some memory", importance: 0.9 }]);
 
-		await handleSessionStart({
-			harness: "test",
-		});
+		await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "test" });
 
 		const db = openTestDb();
 		const count = db.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
@@ -4114,11 +4362,13 @@ describe("session memory recording integration", () => {
 			},
 		]);
 		await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "fts-tracking-session",
 		});
 
 		await handleUserPromptSubmit({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "fts-tracking-session",
 			userPrompt: "What TypeScript language config should we use?",
@@ -4144,6 +4394,7 @@ describe("handleCheckpointExtract", () => {
 		createMemoryDb([]);
 
 		const result = await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "ckpt-no-transcript",
 		});
@@ -4156,6 +4407,7 @@ describe("handleCheckpointExtract", () => {
 		createMemoryDb([]);
 
 		const result = await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "ckpt-short",
 			transcript: "x".repeat(400),
@@ -4169,12 +4421,14 @@ describe("handleCheckpointExtract", () => {
 		createMemoryDb([]);
 		const full = "x".repeat(600);
 		await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "ckpt-truncation",
 			transcript: full,
 		});
 		const truncated = "x".repeat(200);
 		const result = await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "ckpt-truncation",
 			transcript: truncated,
@@ -4192,6 +4446,7 @@ describe("handleCheckpointExtract", () => {
 		createMemoryDb([]);
 
 		const result = await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "ckpt-nopath",
 			transcriptPath: "/nonexistent/path/transcript.jsonl",
@@ -4208,6 +4463,7 @@ describe("handleCheckpointExtract", () => {
 		createMemoryDb([]);
 
 		const result = await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			harness: "test",
 			sessionKey: "ckpt-both-disabled",
 			transcript: "x".repeat(600),

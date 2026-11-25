@@ -267,8 +267,13 @@ Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `schema_migrations_audit`. The latest migration is `178-write-inheritance.ts`.
 
 New evidence inherits its agent, session, and source classifications before
-indexing. Write deduplication only reuses readable evidence in the same
-compartment; identical hidden evidence does not prevent a fresh write.
+indexing. A principal must be able to read the destination compartment to write
+there. Write deduplication only reuses readable evidence in the same agent and
+compartment, inside the owner transaction. Content-key indexes are non-unique:
+classification changes can leave equal evidence coexisting without merging it.
+Purging evidence removes its citations atomically. Unsupported derived rows are
+removed; surviving derivatives are relabeled by a recoverable recompute job.
+Telemetry citations expire with their telemetry rows.
 
 ### Evidence and semantic state
 
@@ -277,8 +282,9 @@ source identity, agent/project scope, confidence, importance, tags, timestamps,
 provenance fields, and lifecycle state. Pipeline-era columns such as
 `content_hash`, `normalized_content`, `is_deleted`, `deleted_at`,
 `extraction_status`, embedding/extraction model metadata, and update counters
-remain part of the schema for compatibility and lifecycle management. A scoped
-partial uniqueness rule prevents duplicate non-deleted content hashes. The
+remain part of the schema for compatibility and lifecycle management. Scoped
+content-hash and idempotency indexes support transactional deduplication without
+preventing equal evidence from surviving reclassification. The
 `(agent_id, memory_kind)` index supports bounded episodic-source candidate scans.
 
 **`memory_history`** is the immutable audit trail for memory lifecycle events,
