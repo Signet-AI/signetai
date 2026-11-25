@@ -407,6 +407,7 @@ describe("source artifact graph structure", () => {
 				)
 				.run();
 			txIngestEnvelope(write, {
+				author: { userId: null, credential: "system" },
 				id: "derived-claim",
 				content: "dreaming-derived claim",
 				normalizedContent: "dreaming-derived claim",

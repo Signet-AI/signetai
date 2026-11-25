@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
@@ -130,10 +131,10 @@ export function registerMiscRoutes(app: Hono): void {
 
 	app.post("/api/config", async (c) => {
 		try {
-			const { file, content: rawContent } = await c.req.json();
+			const { file, content: rawContent } = await jsonBody(c)();
 			const content = rawContent;
 
-			if (!file || typeof content !== "string") {
+			if (typeof file !== "string" || !file || typeof content !== "string") {
 				return c.json({ error: "Invalid request" }, 400);
 			}
 
@@ -250,7 +251,7 @@ export function registerMiscRoutes(app: Hono): void {
 	app.post("/api/agents", async (c) => {
 		const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
-		const body = toRecord(await c.req.json().catch(() => null));
+		const body = toRecord(await jsonBody(c)().catch(() => null));
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const name = parseOptionalString(body.name);
 		if (!name) return c.json({ error: "name is required" }, 400);
@@ -311,7 +312,7 @@ export function registerMiscRoutes(app: Hono): void {
 		if (denied) return denied;
 		const name = c.req.param("name");
 		if (name === "default") return c.json({ error: "Cannot modify the default agent" }, 400);
-		const body = toRecord(await c.req.json().catch(() => null));
+		const body = toRecord(await jsonBody(c)().catch(() => null));
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const existing = await dbOwnerQuery<{ id: string; read_policy: string; policy_group: string | null } | undefined>(
 			{
@@ -443,7 +444,7 @@ export function registerMiscRoutes(app: Hono): void {
 			channel: string;
 		}>;
 
-		const body = (await c.req.json()) as UpdateConfigBody;
+		const body = (await jsonBody(c)()) as UpdateConfigBody;
 		const autoInstallRaw = body.autoInstall ?? body.auto_install;
 		const checkIntervalRaw = body.checkInterval ?? body.check_interval;
 		const channelRaw = body.channel;
@@ -505,7 +506,7 @@ export function registerMiscRoutes(app: Hono): void {
 		let targetVersion: string | undefined;
 
 		try {
-			const body = await c.req.json<{ targetVersion?: string }>();
+			const body = await jsonBody(c)<{ targetVersion?: string }>();
 			if (body.targetVersion && typeof body.targetVersion === "string") {
 				targetVersion = body.targetVersion;
 			}

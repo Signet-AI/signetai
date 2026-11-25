@@ -9,6 +9,18 @@ export class AuthRateLimiter {
 	private readonly windowMs: number;
 	private readonly maxRequests: number;
 	private readonly windows = new Map<string, WindowEntry>();
+	private cursor: MapIterator<[string, WindowEntry]> | null = null;
+	private prune(now: number): void {
+		this.cursor ??= this.windows.entries();
+		for (let i = 0; i < 128; i++) {
+			const item = this.cursor.next();
+			if (item.done) {
+				this.cursor = null;
+				break;
+			}
+			if (now - item.value[1].windowStart >= this.windowMs) this.windows.delete(item.value[0]);
+		}
+	}
 
 	constructor(windowMs: number, maxRequests: number) {
 		this.windowMs = windowMs;
@@ -17,8 +29,10 @@ export class AuthRateLimiter {
 
 	check(key: string): RateLimitCheck {
 		const now = Date.now();
+		this.prune(now);
 		const entry = this.windows.get(key);
 
+		if (!entry && this.windows.size >= 10000) return { allowed: false, remaining: 0, resetAt: now + this.windowMs };
 		if (!entry || now - entry.windowStart >= this.windowMs) {
 			return {
 				allowed: true,
@@ -37,10 +51,11 @@ export class AuthRateLimiter {
 
 	record(key: string): void {
 		const now = Date.now();
+		this.prune(now);
 		const entry = this.windows.get(key);
 
 		if (!entry || now - entry.windowStart >= this.windowMs) {
-			this.windows.set(key, { count: 1, windowStart: now });
+			if (this.windows.size < 10000 || entry) this.windows.set(key, { count: 1, windowStart: now });
 			return;
 		}
 
@@ -49,6 +64,7 @@ export class AuthRateLimiter {
 
 	reset(): void {
 		this.windows.clear();
+		this.cursor = null;
 	}
 }
 

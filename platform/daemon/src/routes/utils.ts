@@ -6,6 +6,7 @@ import {
 	organizationReadRequest,
 	checkPrincipalProject,
 } from "../auth/agent-access";
+import { jsonBody } from "../request-body";
 import type { Context } from "hono";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
@@ -210,10 +211,8 @@ export function toRecord(value: unknown): Record<string, unknown> | null {
 }
 
 export async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.text();
-	if (!raw.trim()) return {};
 	try {
-		return toRecord(JSON.parse(raw));
+		return toRecord(await jsonBody(c)());
 	} catch {
 		return null;
 	}
@@ -295,6 +294,7 @@ export function resolveScopedAgentId(
 			? resolveReadAgent(principal, requested)
 			: resolveWriteAgent(principal, requested, access);
 		if (!resolved.ok) return { agentId: "", error: resolved.error.reason };
+		if (organizationReadRequest(c.req.method, c.req.path)) c.set("readAuditAgent", resolved.value);
 		return { agentId: resolved.value };
 	}
 	return resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, requestedAgentId, fallbackAgentId);
@@ -392,6 +392,24 @@ export interface MutationActor {
 
 const ACTOR_TYPES = new Set(["operator", "pipeline", "harness", "sdk", "daemon"]);
 
+export function resolveOperationalActor(c: Context): { actor: string; actorType: "operator" | "agent" | "daemon" } {
+	const resolved = resolveMutationActor(c, "operator");
+	const principal = c.get("principal");
+	const type = c.req.header("x-signet-actor-type");
+	return {
+		actor: resolved.changedBy,
+		actorType:
+			c.get("organization") && principal
+				? principal.credential.kind === "api_key"
+					? "agent"
+					: "operator"
+				: type === "agent"
+					? "agent"
+					: type === "daemon"
+						? "daemon"
+						: "operator",
+	};
+}
 export function resolveMutationActor(c: Context, fallback?: string): MutationActor {
 	const principal = c.get("principal");
 	if (c.get("organization") && principal)

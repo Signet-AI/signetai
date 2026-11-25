@@ -11,6 +11,7 @@ async function closeTestDatabase(): Promise<void> {
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
 	ensureCanonicalManifest,
+	writeCompactionArtifact,
 	indexCanonicalTranscriptJsonl,
 	indexExternalMemoryArtifact,
 	purgeCanonicalNoiseSessions,
@@ -59,6 +60,33 @@ async function addSummary(input: {
 }
 
 describe("memory-lineage", () => {
+	it("R2 newly created compaction manifests and fragments keep the caller author", async () => {
+		const now = new Date().toISOString();
+		await writeCompactionArtifact({
+			author: { userId: "usr_artifact_owner", credential: "session:fixture" },
+			agentId: "default",
+			sessionId: "authored-compaction",
+			sessionKey: "authored-compaction",
+			project: null,
+			harness: "hermes-agent",
+			capturedAt: now,
+			startedAt: now,
+			endedAt: now,
+			summary: "Built a deterministic parser and verified the principal at its native write boundary.",
+		});
+		const rows = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare(
+					"SELECT source_kind,author_user_id FROM memory_artifacts WHERE session_key='authored-compaction' ORDER BY source_kind",
+				)
+				.all(),
+		);
+		expect(rows).toEqual([
+			{ source_kind: "compaction", author_user_id: "usr_artifact_owner" },
+			{ source_kind: "manifest", author_user_id: "usr_artifact_owner" },
+		]);
+	});
+
 	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
 		dir = createTestTempDir("signet-memory-lineage-");

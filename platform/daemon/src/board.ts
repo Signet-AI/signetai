@@ -1,5 +1,5 @@
-import { writeAttributionStatements, readWriteAttribution } from "./auth/write-attribution";
 import type { WriteAuthor } from "./auth/audit-owner";
+import { requireWriteAuthor } from "./auth/audit-owner";
 import { randomUUID } from "node:crypto";
 import type { AgentRosterReadPolicy } from "@signet/core";
 import { getAgentScope } from "./agent-id";
@@ -763,15 +763,20 @@ export async function createBoardThread(input: {
 			),
 			ownerStatement(
 				`INSERT INTO board_posts (
-					id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
-				) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, NULL, ?)`,
-				[postId, threadId, postAuthor.agentId, postAuthor.sessionKey ?? null, postAuthor.harness ?? null, body, now],
+					id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at,author_user_id,author_credential
+				) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, NULL, ?,?,?)`,
+				[
+					postId,
+					threadId,
+					postAuthor.agentId,
+					postAuthor.sessionKey ?? null,
+					postAuthor.harness ?? null,
+					body,
+					now,
+					requireWriteAuthor(input.author.principalAuthor).userId,
+					requireWriteAuthor(input.author.principalAuthor).credential,
+				],
 			),
-			...writeAttributionStatements(input.author.principalAuthor, {
-				kind: "board_post",
-				id: postId,
-				agentId: postAuthor.agentId,
-			}),
 		],
 		"board.thread.create",
 	);
@@ -828,8 +833,8 @@ export async function replyToBoardThread(input: {
 				},
 				ownerStatement(
 					`INSERT INTO board_posts (
-						id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
-					) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, ?, ?)`,
+						id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at,author_user_id,author_credential
+					) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, ?, ?,?,?)`,
 					[
 						postId,
 						thread.id,
@@ -839,13 +844,10 @@ export async function replyToBoardThread(input: {
 						body,
 						replyToPostId,
 						now,
+						requireWriteAuthor(input.author.principalAuthor).userId,
+						requireWriteAuthor(input.author.principalAuthor).credential,
 					],
 				),
-				...writeAttributionStatements(input.author.principalAuthor, {
-					kind: "board_post",
-					id: postId,
-					agentId: input.author.agentId,
-				}),
 			],
 			"board.post.create",
 		);
@@ -1080,7 +1082,14 @@ export async function projectBoardPost(postId: string): Promise<boolean> {
 	const post = await readPost(postId);
 	if (!post) return false;
 	const thread = await readVisibleThread(post.threadId, { kind: "operator" });
-	const author = await readWriteAttribution({ kind: "board_post", id: post.id, agentId: post.authorAgentId });
+	const author = (
+		await readAll<import("./auth/audit-owner").WriteAuthor>(
+			"SELECT author_user_id AS userId,author_credential AS credential FROM board_posts WHERE id = ?",
+			[post.id],
+			"board.projection.author",
+		)
+	)[0];
+	if (!author) throw new Error("Board post author is missing");
 	const participants = await readAll<{ readonly author_agent_id: string }>(
 		`SELECT DISTINCT author_agent_id FROM board_posts
 		 WHERE thread_id = ? AND created_at <= ?`,

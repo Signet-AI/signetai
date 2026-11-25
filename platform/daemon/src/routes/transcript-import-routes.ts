@@ -9,6 +9,7 @@ import {
 	resolveDefaultBasePath,
 } from "@signet/core";
 import { Hono, type Context } from "hono";
+import { jsonBody } from "../request-body";
 import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
 import { requirePermission, type AuthMode, type TokenClaims } from "../auth";
@@ -157,7 +158,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 		let body: unknown;
 		try {
-			body = JSON.parse((await boundedBody(c.req.raw, 64 * 1024)).toString("utf8"));
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}

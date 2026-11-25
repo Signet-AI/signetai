@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
@@ -47,7 +48,7 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.patch("/api/plugins/:id", async (c) => {
-		const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+		const body = await jsonBody(c)<Record<string, unknown>>().catch(() => null);
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const enabled = parseOptionalBoolean(body.enabled);
 		if (enabled === undefined) return c.json({ error: "enabled is required" }, 400);
@@ -55,18 +56,6 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		if (!plugin) return c.json({ error: "Plugin not found" }, 404);
 		return c.json({ plugin });
 	});
-}
-
-async function readJsonObject(req: Request): Promise<Record<string, unknown> | null> {
-	const raw = await req.text();
-	if (!raw.trim()) return {};
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (!isRecord(parsed)) return null;
-		return parsed;
-	} catch {
-		return null;
-	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

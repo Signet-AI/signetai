@@ -1,3 +1,4 @@
+import { SYSTEM_AUTHOR } from "../auth/audit-owner";
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
@@ -915,6 +916,7 @@ function applyValidatedOperationBody(
 		}
 		const created = createOntologyProposalsInTx(db, [
 			{
+				author: SYSTEM_AUTHOR,
 				agentId: params.agentId,
 				operation: entry.input.operation,
 				payload: entry.input.payload,
@@ -954,6 +956,7 @@ function applyValidatedOperationBody(
 	}
 
 	const batch = applyOntologyOperationBatchInTx(db, {
+		author: SYSTEM_AUTHOR,
 		agentId: params.agentId,
 		actor: params.actor,
 		operations: [entry.input],

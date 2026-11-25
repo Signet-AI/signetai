@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
@@ -2970,6 +2971,7 @@ async function main() {
 				dispatchTranscript: async (row) => {
 					if (!row.bytes) throw new Error("managed transcript original is unavailable");
 					const staged = await stageTranscriptImport({
+						author: SYSTEM_AUTHOR,
 						agentId,
 						fileName: row.fileName,
 						bytes: row.bytes,

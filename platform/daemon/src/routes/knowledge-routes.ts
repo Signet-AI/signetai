@@ -1,3 +1,5 @@
+import { resolveMutationActor } from "./utils";
+import { jsonBody } from "../request-body";
 import { redactCredentials } from "@signet/core";
 import type { Hono } from "hono";
 import { etag } from "hono/etag";
@@ -209,7 +211,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		try {
 			const { result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId,
-				actor: c.req.header("x-signet-actor") ?? "operator",
+				author: c.get("author"),
+				actor: resolveMutationActor(c, "operator").changedBy,
 				operation: "pin_entity",
 				payload: { id: c.req.param("id") },
 			});
@@ -230,7 +233,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		try {
 			await applyOntologyOperation(getDbAccessor(), {
 				agentId,
-				actor: c.req.header("x-signet-actor") ?? "operator",
+				author: c.get("author"),
+				actor: resolveMutationActor(c, "operator").changedBy,
 				operation: "unpin_entity",
 				payload: { id: c.req.param("id") },
 			});
@@ -369,7 +373,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:354" },
+			{ siteToken: "routes/knowledge-routes.ts:358" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -419,7 +423,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const scopedAgent = resolveScopedAgentId(c, undefined, "default");
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const body = await c.req.json().catch(() => ({}));
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const entityName = typeof body.entity === "string" ? body.entity.trim() : "";
 		const aspectFilter = typeof body.aspect === "string" ? body.aspect.trim() : undefined;
 		const maxTokens = typeof body.maxTokens === "number" ? Math.min(body.maxTokens, 10000) : 2000;
@@ -512,7 +516,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
 
-		const body = await c.req.json().catch(() => ({}));
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const entityName = typeof body.entityName === "string" ? body.entityName.trim() : "";
 		const scopedAgent = resolveScopedAgentId(
 			c,
@@ -544,7 +548,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:540" },
+			{ siteToken: "routes/knowledge-routes.ts:544" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -633,7 +637,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: rows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:557" },
+			{ siteToken: "routes/knowledge-routes.ts:561" },
 		);
 	});
 
@@ -641,7 +645,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
 
-		const body = await c.req.json().catch(() => ({}));
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const scopedAgent = resolveScopedAgentId(
 			c,
 			typeof body.agentId === "string" ? body.agentId : c.req.query("agent_id"),
@@ -658,7 +662,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:659" },
+			{ siteToken: "routes/knowledge-routes.ts:663" },
 		);
 		return c.json(result);
 	});

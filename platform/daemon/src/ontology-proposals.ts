@@ -13,7 +13,7 @@ import {
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
-import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { requireDependencyReason } from "./dependency-history";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { classifyEntityQuality } from "./entity-quality";
@@ -69,7 +69,7 @@ export interface CreateOntologyProposalInput {
 	readonly sourcePath?: string | null;
 	readonly sourceRoot?: string | null;
 	readonly createdBy?: string;
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 }
 
 export interface CreateOntologyProposalsResult {
@@ -193,7 +193,7 @@ export interface ApplyOntologyProposalParams {
 	readonly agentId: string;
 	readonly id: string;
 	readonly actor: string;
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly writeCaps?: GraphWriteCaps;
 }
 
@@ -206,7 +206,7 @@ export interface ProposeDuplicateEntityMergesParams {
 	readonly limit?: number;
 	readonly writeProposals?: boolean;
 	readonly createdBy?: string;
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 }
 
 export interface FindDuplicateEntityMergesParams {
@@ -230,7 +230,7 @@ export interface OntologyOperationInput {
 export interface ApplyOntologyOperationParams extends OntologyOperationInput {
 	readonly agentId: string;
 	readonly actor: string;
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly dryRun?: boolean;
 	readonly propose?: boolean;
 	readonly writeCaps?: GraphWriteCaps;
@@ -246,7 +246,7 @@ export interface ApplyOntologyOperationResult {
 export interface ApplyOntologyOperationBatchParams {
 	readonly agentId: string;
 	readonly actor: string;
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly operations: readonly OntologyOperationInput[];
 	readonly dryRun?: boolean;
 	readonly propose?: boolean;
@@ -295,13 +295,13 @@ export function applyOntologyOperationBatchInTx(
 				sourcePath: operation.sourcePath,
 				sourceRoot: operation.sourceRoot,
 				createdBy: params.actor,
-				author: params.author,
+				author: requireWriteAuthor(params.author),
 			},
 			now(),
 		);
 		const row = getProposalInTx(db, inserted.id, params.agentId);
 		if (row === null) throw new OntologyProposalError("Proposal not found", 404);
-		const result = applyOperation(db, row, params.actor, params.writeCaps);
+		const result = applyOperation(db, row, params.actor, params.author, params.writeCaps);
 		items.push({
 			proposal: markAppliedInTx(db, row, params.actor, result),
 			result,
@@ -916,6 +916,7 @@ function applyCreatePolicy(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
+	author: WriteAuthor,
 ): Readonly<Record<string, unknown>> {
 	const target = readPayloadSelector(payload, "target_entity", "entity", "entity_id");
 	const policyKind = readString(payload, "kind");
@@ -939,6 +940,7 @@ function applyCreatePolicy(
 			importance: readNumber(payload, "importance") ?? proposal.confidence,
 		},
 		actor,
+		author,
 	);
 	return { ...result, policyKind, policy: content };
 }
@@ -997,7 +999,7 @@ function materializeAttributeMemoryInTx(
 		readonly time: ClaimTime;
 		readonly proposal: ProposalRow;
 		readonly actor: string;
-		readonly author?: WriteAuthor;
+		readonly author: WriteAuthor;
 	},
 ): string {
 	const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(input.attributeId) as
@@ -1005,6 +1007,7 @@ function materializeAttributeMemoryInTx(
 		| undefined;
 	if (!existing) {
 		txIngestEnvelope(db, {
+			author: input.author,
 			id: input.attributeId,
 			content: input.content,
 			normalizedContent: input.normalizedContent,
@@ -1065,7 +1068,7 @@ function supersedeAttributeMemoryInTx(
 		readonly replacementMemoryId: string;
 		readonly proposal: ProposalRow;
 		readonly actor: string;
-		readonly author?: WriteAuthor;
+		readonly author: WriteAuthor;
 	},
 ): void {
 	if (!input.memoryId || input.memoryId === input.replacementMemoryId) return;
@@ -1148,6 +1151,7 @@ function applyAddClaimValue(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
+	author: WriteAuthor,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
 	const entity = readString(payload, "entity");
@@ -1252,6 +1256,7 @@ function applyAddClaimValue(
 		time.precision,
 	);
 	const memoryId = materializeAttributeMemoryInTx(db, {
+		author,
 		attributeId: id,
 		entityId,
 		agentId,
@@ -1279,6 +1284,7 @@ function applySetClaimValue(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
+	author: WriteAuthor,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
 	const entity = readString(payload, "entity");
@@ -1419,6 +1425,7 @@ function applySetClaimValue(
 		time.precision,
 	);
 	const memoryId = materializeAttributeMemoryInTx(db, {
+		author,
 		attributeId: id,
 		entityId,
 		agentId,
@@ -1432,6 +1439,7 @@ function applySetClaimValue(
 	});
 	if (newerActive !== undefined) {
 		supersedeAttributeMemoryInTx(db, {
+			author,
 			memoryId,
 			replacementMemoryId: newerActive.memory_id ?? newerActive.id,
 			proposal,
@@ -1467,6 +1475,7 @@ function applySetClaimValue(
 		).run(id, agentId, aspectId, kind, groupKey, claimKey, id);
 		for (const prior of active) {
 			supersedeAttributeMemoryInTx(db, {
+				author,
 				memoryId: prior.memory_id,
 				replacementMemoryId: memoryId,
 				proposal,
@@ -1495,6 +1504,7 @@ function applySupersedeClaimValue(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
+	author: WriteAuthor,
 ): Readonly<Record<string, unknown>> {
 	const entity = readString(payload, "entity");
 	const aspect = readString(payload, "aspect");
@@ -1561,6 +1571,7 @@ function applySupersedeClaimValue(
 				...claimTimeFields(payload),
 			},
 			actor,
+			author,
 		);
 		replacementId = typeof replacement.attributeId === "string" ? replacement.attributeId : null;
 		if (typeof replacement.supersededByNewerEvidence === "string") {
@@ -1599,7 +1610,7 @@ function applySupersedeClaimValue(
 		for (const row of rows) archiveAttributeMemoryInTx(db, row.memory_id, proposal, actor, false);
 	} else {
 		for (const row of rows) {
-			supersedeAttributeMemoryInTx(db, { memoryId: row.memory_id, replacementMemoryId, proposal, actor });
+			supersedeAttributeMemoryInTx(db, { author, memoryId: row.memory_id, replacementMemoryId, proposal, actor });
 		}
 	}
 
@@ -1833,6 +1844,7 @@ function applyArchiveClaimValue(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
+	author: WriteAuthor,
 ): Readonly<Record<string, unknown>> {
 	const attributeId = readString(payload, "attribute_id");
 	if (attributeId === null) throw new OntologyProposalError("payload.attribute_id is required", 400);
@@ -1866,6 +1878,7 @@ function applyRestoreClaimVersion(
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
+	author: WriteAuthor,
 ): Readonly<Record<string, unknown>> {
 	const attributeId = readString(payload, "attribute_id");
 	if (attributeId === null) throw new OntologyProposalError("payload.attribute_id is required", 400);
@@ -1900,6 +1913,7 @@ function applyRestoreClaimVersion(
 	restoreAttributeMemoryInTx(db, row.memory_id, proposal, actor);
 	for (const active of activeMemories) {
 		supersedeAttributeMemoryInTx(db, {
+			author,
 			memoryId: active.memory_id,
 			replacementMemoryId: attributeId,
 			proposal,
@@ -2466,6 +2480,7 @@ function applyOperation(
 	db: WriteDb,
 	proposal: ProposalRow,
 	actor: string,
+	author: WriteAuthor,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
 	try {
@@ -2481,24 +2496,24 @@ function applyOperation(
 		if (proposal.operation === "archive_aspect")
 			return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
 		if (proposal.operation === "add_claim_value")
-			return applyAddClaimValue(db, proposal.agent_id, proposal, payload, actor, writeCaps);
+			return applyAddClaimValue(db, proposal.agent_id, proposal, payload, actor, author, writeCaps);
 		if (proposal.operation === "set_claim_value")
-			return applySetClaimValue(db, proposal.agent_id, proposal, payload, actor, writeCaps);
+			return applySetClaimValue(db, proposal.agent_id, proposal, payload, actor, author, writeCaps);
 		if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, payload);
 		if (proposal.operation === "merge_aspects") return applyMergeAspects(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "supersede_claim_value") {
-			return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload, actor);
+			return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload, actor, author);
 		}
 		if (proposal.operation === "archive_claim_value")
-			return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor);
+			return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor, author);
 		if (proposal.operation === "restore_claim_version") {
-			return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload, actor);
+			return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload, actor, author);
 		}
 		if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
 		if (proposal.operation === "create_policy")
-			return applyCreatePolicy(db, proposal.agent_id, proposal, payload, actor);
+			return applyCreatePolicy(db, proposal.agent_id, proposal, payload, actor, author);
 		if (proposal.operation === "create_action_type")
 			return applyCreateActionType(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "create_interface")
@@ -2574,7 +2589,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2575" },
+		{ siteToken: "ontology-proposals.ts:2590" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2612,7 +2627,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2592" },
+		{ siteToken: "ontology-proposals.ts:2607" },
 	);
 }
 
@@ -2670,7 +2685,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2624" },
+		{ siteToken: "ontology-proposals.ts:2639" },
 	);
 }
 
@@ -2765,7 +2780,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2708" },
+		{ siteToken: "ontology-proposals.ts:2723" },
 	);
 }
 
@@ -3186,7 +3201,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3188",
+		siteToken: "ontology-proposals.ts:3203",
 	});
 }
 
@@ -3197,7 +3212,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3199",
+		siteToken: "ontology-proposals.ts:3214",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3228,7 +3243,7 @@ export async function proposeDuplicateEntityMerges(
 			sourceKind: "ontology_index",
 			sourceId: `entities:${item.canonicalName}`,
 			createdBy: params.createdBy?.trim() || "ontology-repair",
-			author: params.author,
+			author: requireWriteAuthor(params.author),
 		})),
 	);
 	return {
@@ -3249,7 +3264,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3250" },
+		{ siteToken: "ontology-proposals.ts:3265" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
@@ -3263,7 +3278,7 @@ export async function createEntityMergePlan(
 		sourceKind: "ontology_index",
 		sourceId: `entities:${plan.target.id}`,
 		createdBy: params.createdBy?.trim() || "ontology-merge-plan",
-		author: params.author,
+		author: requireWriteAuthor(params.author),
 	});
 	return { ...plan, dryRun: false, proposal };
 }
@@ -3280,7 +3295,7 @@ export async function applyOntologyProposal(
 				throw new OntologyProposalError(`Proposal is ${proposal.status}, not pending`, 409);
 			}
 
-			const result = applyOperation(db, proposal, params.actor, params.writeCaps);
+			const result = applyOperation(db, proposal, params.actor, params.author, params.writeCaps);
 			const ts = now();
 			db.prepare(
 				`UPDATE ontology_proposals
@@ -3315,6 +3330,7 @@ class DryRunRollback extends Error {
 
 function operationToProposalInput(params: ApplyOntologyOperationParams): CreateOntologyProposalInput {
 	return {
+		author: params.author,
 		agentId: params.agentId,
 		operation: params.operation,
 		payload: params.payload,
@@ -3365,7 +3381,7 @@ export async function applyOntologyOperation(
 			const inserted = insertProposalInTx(db, operationToProposalInput(params), now());
 			const row = getProposalInTx(db, inserted.id, params.agentId);
 			if (row === null) throw new OntologyProposalError("Proposal not found", 404);
-			const operationResult = applyOperation(db, row, params.actor, params.writeCaps);
+			const operationResult = applyOperation(db, row, params.actor, params.author, params.writeCaps);
 			const proposal = markAppliedInTx(db, row, params.actor, operationResult);
 			const item = { proposal, result: operationResult, dryRun: params.dryRun === true, proposed: false };
 			if (params.dryRun) {
@@ -3408,7 +3424,7 @@ export async function applyOntologyOperationBatch(
 				sourcePath: operation.sourcePath,
 				sourceRoot: operation.sourceRoot,
 				createdBy: params.actor,
-				author: params.author,
+				author: requireWriteAuthor(params.author),
 			})),
 		);
 		return {
@@ -3444,13 +3460,13 @@ export async function applyOntologyOperationBatch(
 							sourcePath: operation.sourcePath,
 							sourceRoot: operation.sourceRoot,
 							createdBy: params.actor,
-							author: params.author,
+							author: requireWriteAuthor(params.author),
 						},
 						now(),
 					);
 					const row = getProposalInTx(db, inserted.id, params.agentId);
 					if (row === null) throw new OntologyProposalError("Proposal not found", 404);
-					const operationResult = applyOperation(db, row, params.actor, params.writeCaps);
+					const operationResult = applyOperation(db, row, params.actor, params.author, params.writeCaps);
 					const proposal = markAppliedInTx(db, row, params.actor, operationResult);
 					items.push({ proposal, result: operationResult, dryRun: params.dryRun === true, proposed: false });
 				} catch (err) {

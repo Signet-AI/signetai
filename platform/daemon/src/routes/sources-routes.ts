@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import { execFileHidden as execFile } from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -253,7 +254,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/pick-directory", async (c) => {
 		let body: PickDirectoryBody = {};
 		try {
-			body = (await c.req.json().catch(() => ({}))) as PickDirectoryBody;
+			body = (await jsonBody(c)().catch((): Record<string, unknown> => ({}))) as PickDirectoryBody;
 		} catch {
 			body = {};
 		}
@@ -267,7 +268,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		if (!isLoopbackRequest(c)) return c.json({ error: "Native file picking is local-only" }, 400);
 		let body: PickDirectoryBody = {};
 		try {
-			body = (await c.req.json().catch(() => ({}))) as PickDirectoryBody;
+			body = (await jsonBody(c)().catch((): Record<string, unknown> => ({}))) as PickDirectoryBody;
 		} catch {
 			body = {};
 		}
@@ -280,7 +281,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/obsidian", async (c) => {
 		let body: AddObsidianSourceBody = {};
 		try {
-			body = (await c.req.json()) as AddObsidianSourceBody;
+			body = (await jsonBody(c)()) as AddObsidianSourceBody;
 		} catch {
 			recordSourceConnectionFailure("obsidian", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -325,7 +326,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/discord", async (c) => {
 		let body: AddDiscordSourceBody = {};
 		try {
-			body = (await c.req.json()) as AddDiscordSourceBody;
+			body = (await jsonBody(c)()) as AddDiscordSourceBody;
 		} catch {
 			recordSourceConnectionFailure("discord", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -438,7 +439,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		try {
 			let body: unknown;
 			try {
-				body = await c.req.json();
+				body = await jsonBody(c)();
 			} catch {
 				await recordSourceIndexOperation({
 					source,
@@ -497,7 +498,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/github", async (c) => {
 		let body: AddGitHubSourceBody = {};
 		try {
-			body = (await c.req.json()) as AddGitHubSourceBody;
+			body = (await jsonBody(c)()) as AddGitHubSourceBody;
 		} catch {
 			recordSourceConnectionFailure("github", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -552,7 +553,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/notion", async (c) => {
 		let parsed: unknown;
 		try {
-			parsed = await c.req.json();
+			parsed = await jsonBody(c)();
 		} catch {
 			recordSourceConnectionFailure("notion", "invalid configuration");
 			return c.json({ error: "Invalid JSON body" }, 400);
@@ -587,7 +588,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.post("/api/sources/web", async (c) => {
 		let body: AddWebSourceBody = {};
 		try {
-			const parsed = (await c.req.json()) as unknown;
+			const parsed = (await jsonBody(c)()) as unknown;
 			body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as AddWebSourceBody) : {};
 		} catch {
 			recordSourceConnectionFailure("web", "invalid configuration");

@@ -17,7 +17,7 @@ Setting up a daemon for several people? Start with [Organizations](/organization
 
 An unclaimed team daemon prints a one-time setup token. Claim it through `POST /api/org/claim`; the setup token is then consumed. Password sign-in creates a server-side browser session, not a stateless signed token. OIDC is available when configured through organization settings.
 
-Browser sessions use `signet_session` (HttpOnly, SameSite=Lax) and `signet_csrf`. Cookie-authenticated writes require `x-signet-csrf` containing the CSRF secret. Cookies are Secure over HTTPS or when the configured public URL is HTTPS. Bearer-authenticated clients do not need CSRF headers.
+Browser sessions use `signet_session` (HttpOnly, SameSite=Lax) and `signet_csrf`. Cookie-authenticated writes require `x-signet-csrf` containing the CSRF secret. Cookies are Secure over HTTPS or when the configured public URL is HTTPS. Secure cookies use the `__Host-` prefix (`__Host-signet_session` and `__Host-signet_csrf`); HTTP loopback keeps the plain names. Bearer-authenticated clients do not need CSRF headers.
 
 CLI and desktop sessions use the device-code flow and rotating refresh tokens. Retrying a refresh token rotated away less than 60 seconds ago returns the same current access/refresh pair, including after a daemon restart. Older reuse revokes the session with `refresh_reuse`. Session, device, and key revocations and user deactivation are checked against server records on every request. Logout leaves connector keys intact; revoke the key or device to stop a connector.
 

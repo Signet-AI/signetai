@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 793 sites
-- Synchronous `withWriteTx()` sites: 53
-- Synchronous `withReadDb()` sites: 86
+- Exact ledger inventory: 791 sites
+- Synchronous `withWriteTx()` sites: 52
+- Synchronous `withReadDb()` sites: 85
 - Async-named DB sites: 159
 - Async-named ON-PARENT DB sites: 157
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 495
-- Compile-visible legacy DB sites remaining: 139
-  - `withWriteTx`: 53
-  - `withReadDb`: 86
+- Compile-visible legacy DB sites remaining: 137
+  - `withWriteTx`: 52
+  - `withReadDb`: 85
 
-The 793-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 53 synchronous writes, 86 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 139 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 791-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 52 synchronous writes, 85 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 137 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 298
-- ON-PARENT callback execution: 296
+- Database accessor sites classified: 296
+- ON-PARENT callback execution: 294
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -28,9 +28,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 
 ### ON-PARENT sites
 
-- `aggregate-recall.ts:718` (withReadDbAsync)
-- `aggregate-recall.ts:724` (withWriteTxAsync)
-- `aggregate-recall.ts:985` (withWriteTxAsync)
+- `aggregate-recall.ts:719` (withReadDbAsync)
+- `aggregate-recall.ts:725` (withWriteTxAsync)
+- `aggregate-recall.ts:986` (withWriteTxAsync)
 - `auth/api-keys.ts:215` (withWriteTx)
 - `auth/api-keys.ts:259` (withReadDb)
 - `auth/api-keys.ts:278` (withWriteTx)
@@ -57,7 +57,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:database.integrity.write` (withWriteTxAsync)
 - `db:database.integrity.read-checks` (withReadDbAsync)
 - `db:database.integrity.verify` (withReadDbAsync)
-- `db-accessor.ts:2716` (withWriteTxAsync)
+- `db-accessor.ts:2751` (withWriteTxAsync)
 - `db-vacuum.ts:303` (withReadDb)
 - `db-vacuum.ts:309` (withReadDbAsync)
 - `db-vacuum.ts:315` (withWriteTxAsync)
@@ -135,18 +135,18 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `ontology-claim-trace.ts:1051` (withReadDb)
 - `ontology-contradictions.ts:526` (withReadDb)
 - `ontology-contradictions.ts:581` (withReadDb)
-- `ontology-extraction.ts:650` (withReadDb)
-- `ontology-extraction.ts:753` (withWriteTx)
+- `ontology-extraction.ts:651` (withReadDb)
+- `ontology-extraction.ts:754` (withWriteTx)
 - `ontology-link-evidence.ts:92` (withReadDbAsync)
 - `ontology-proposals.ts:602` (withReadDbAsync)
-- `ontology-proposals.ts:2575` (withReadDbAsync)
-- `ontology-proposals.ts:2592` (withReadDbAsync)
-- `ontology-proposals.ts:2624` (withReadDbAsync)
-- `ontology-proposals.ts:2708` (withReadDbAsync)
-- `ontology-proposals.ts:3188` (withReadDbAsync)
-- `ontology-proposals.ts:3199` (withReadDbAsync)
-- `ontology-proposals.ts:3250` (withReadDbAsync)
-- `path-feedback.ts:609` (withWriteTx)
+- `ontology-proposals.ts:2590` (withReadDbAsync)
+- `ontology-proposals.ts:2607` (withReadDbAsync)
+- `ontology-proposals.ts:2639` (withReadDbAsync)
+- `ontology-proposals.ts:2723` (withReadDbAsync)
+- `ontology-proposals.ts:3203` (withReadDbAsync)
+- `ontology-proposals.ts:3214` (withReadDbAsync)
+- `ontology-proposals.ts:3265` (withReadDbAsync)
+- `path-feedback.ts:613` (withWriteTx)
 - `pipeline/aspect-feedback.ts:79` (withWriteTx)
 - `pipeline/aspect-feedback.ts:165` (withWriteTx)
 - `pipeline/document-worker.ts:236` (withReadDbAsync)
@@ -212,32 +212,30 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/database-diagnostics.ts:305` (withReadDbAsync)
 - `db:hooks.session-transcript.project.read` (withReadDb)
 - `db:hooks.compaction.transcript-state.delete` (withWriteTx)
-- `routes/knowledge-routes.ts:354` (withReadDbAsync)
-- `routes/knowledge-routes.ts:540` (withReadDbAsync)
-- `routes/knowledge-routes.ts:557` (withReadDbAsync)
-- `routes/knowledge-routes.ts:659` (withReadDbAsync)
-- `routes/memory-routes.ts:125` (withReadDbAsync)
-- `routes/memory-routes.ts:1161` (withReadDbAsync)
-- `routes/memory-routes.ts:1525` (withReadDbAsync)
-- `routes/memory-routes.ts:1533` (withReadDbAsync)
-- `routes/memory-routes.ts:1566` (withReadDbAsync)
-- `routes/memory-routes.ts:1773` (withReadDbAsync)
-- `routes/memory-routes.ts:1910` (withReadDbAsync)
-- `routes/memory-routes.ts:3402` (withReadDbAsync)
-- `routes/memory-routes.ts:3491` (withReadDbAsync)
-- `routes/memory-routes.ts:3572` (withReadDbAsync)
-- `routes/memory-routes.ts:3586` (withReadDbAsync)
-- `routes/memory-routes.ts:3647` (withReadDbAsync)
-- `routes/memory-routes.ts:3687` (withReadDbAsync)
-- `routes/memory-routes.ts:3728` (withReadDbAsync)
-- `routes/memory-routes.ts:3731` (withReadDbAsync)
+- `routes/knowledge-routes.ts:358` (withReadDbAsync)
+- `routes/knowledge-routes.ts:544` (withReadDbAsync)
+- `routes/knowledge-routes.ts:561` (withReadDbAsync)
+- `routes/knowledge-routes.ts:663` (withReadDbAsync)
+- `routes/memory-routes.ts:127` (withReadDbAsync)
+- `routes/memory-routes.ts:1163` (withReadDbAsync)
+- `routes/memory-routes.ts:1530` (withReadDbAsync)
+- `routes/memory-routes.ts:1538` (withReadDbAsync)
+- `routes/memory-routes.ts:1571` (withReadDbAsync)
+- `routes/memory-routes.ts:1778` (withReadDbAsync)
+- `routes/memory-routes.ts:1915` (withReadDbAsync)
+- `routes/memory-routes.ts:3409` (withReadDbAsync)
+- `routes/memory-routes.ts:3498` (withReadDbAsync)
+- `routes/memory-routes.ts:3579` (withReadDbAsync)
+- `routes/memory-routes.ts:3593` (withReadDbAsync)
+- `routes/memory-routes.ts:3654` (withReadDbAsync)
+- `routes/memory-routes.ts:3694` (withReadDbAsync)
+- `routes/memory-routes.ts:3735` (withReadDbAsync)
+- `routes/memory-routes.ts:3738` (withReadDbAsync)
 - `db:pipeline.queue-diagnostics.snapshot.read` (withReadDb)
-- `routes/queue-diagnostics.ts:156` (withReadDb)
-- `routes/reflection-routes.ts:96` (withReadDb)
-- `routes/reflection-routes.ts:116` (withReadDb)
-- `routes/reflection-routes.ts:168` (withReadDb)
-- `routes/reflection-routes.ts:203` (withReadDb)
-- `routes/reflection-routes.ts:221` (withWriteTx)
+- `routes/queue-diagnostics.ts:157` (withReadDb)
+- `routes/reflection-routes.ts:100` (withReadDb)
+- `routes/reflection-routes.ts:122` (withReadDb)
+- `routes/reflection-routes.ts:176` (withReadDb)
 - `db:repair.cold-stats.read` (withReadDb)
 - `db:repair.cluster-entities.write` (withWriteTx)
 - `db:repair.relink-entities.select` (withReadDb)
@@ -248,9 +246,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:repair.backfill-hints.enqueue` (withWriteTx)
 - `db:repair.backfill-hints.remaining` (withReadDb)
 - `db:repair.dead-memories.read` (withReadDb)
-- `routes/session-routes.ts:182` (withReadDb)
-- `routes/session-routes.ts:425` (withReadDb)
-- `routes/session-routes.ts:435` (withReadDb)
+- `routes/session-routes.ts:184` (withReadDb)
+- `routes/session-routes.ts:428` (withReadDb)
+- `routes/session-routes.ts:438` (withReadDb)
 - `routes/skill-analytics.ts:121` (withReadDb)
 - `db:diagnostics.cached.read` (withReadDb)
 - `routes/telemetry-routes.ts:200` (withReadDb)
@@ -345,4 +343,4 @@ The converted async sites are distributed as follows: document-worker (18), drea
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 139 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 53 write and 86 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 137 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 52 write and 85 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.

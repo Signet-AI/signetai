@@ -226,11 +226,13 @@ describe("epistemic assertions", () => {
 		});
 
 		const extractedAnt = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "shared-conversation-ant",
 			writeAssertions: true,
 		});
 		const extractedDot = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "dot",
 			from: "shared-conversation-dot",
 			writeAssertions: true,

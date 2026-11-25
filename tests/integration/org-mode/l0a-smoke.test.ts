@@ -39,6 +39,9 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 	);
 	const db = new Database(join(workspace, "data", "signet.db"));
 	runMigrations(db);
+	db.prepare(
+		"INSERT INTO daily_reflections (id,agent_id,date,summary,question,created_at) VALUES ('smoke-reflection','default','2026-11-25','Fixture','What did you learn?',?)",
+	).run(new Date().toISOString());
 	db.close();
 	const port = await freePort();
 	const base = `http://127.0.0.1:${port}`;
@@ -213,6 +216,62 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		expect(cookieHook.status).toBe(200);
 		const hookMemory = z.object({ id: z.string() }).parse(await cookieHook.json());
 
+		const textBypass = await fetch(`${base}/api/memory/remember`, {
+			method: "POST",
+			headers: { "content-type": "text/plain", authorization: `Bearer ${key.secret}` },
+			body: JSON.stringify({ content: "forbidden smoke text", agentId: "default" }),
+		});
+		expect(textBypass.status).toBe(415);
+		await textBypass.text();
+		const reflected = await request(
+			"/api/reflections/smoke-reflection/answer",
+			"POST",
+			{ answer: "The reflected answer belongs to Alice." },
+			alice.accessToken,
+		);
+		if (reflected.status !== 200) throw new Error(`Reflection failed ${reflected.status}: ${await reflected.text()}`);
+		const reflection = z.object({ memoryId: z.string() }).parse(await reflected.json());
+		const compacted = await request(
+			"/api/hooks/compaction-complete",
+			"POST",
+			{
+				harness: "hermes-agent",
+				summary: "Alice built deterministic fixtures and checked their durable attribution.",
+				sessionKey: "smoke-compaction",
+				runtimePath: "plugin",
+			},
+			key.secret,
+		);
+		if (compacted.status !== 200) throw new Error(`Compaction failed ${compacted.status}: ${await compacted.text()}`);
+		await compacted.text();
+		const observer = new Database(join(workspace, "data", "signet.db"), { readonly: true });
+		try {
+			const copy = observer.prepare("VACUUM INTO ?");
+			copy.run(join(root, "before-purge.db"));
+			copy.finalize();
+		} finally {
+			observer.close();
+		}
+		const beforePurge = new Database(join(root, "before-purge.db"), { readonly: true });
+		try {
+			for (const id of [memory.id, hookMemory.id, reflection.memoryId])
+				expect(beforePurge.query("SELECT author_user_id,agent_id FROM memories WHERE id=?").get(id)).toEqual({
+					author_user_id: alice.user.id,
+					agent_id: key.key.agentId,
+				});
+			expect(
+				beforePurge.query("SELECT author_user_id FROM session_summaries WHERE session_key='smoke-compaction'").get(),
+			).toEqual({ author_user_id: alice.user.id });
+			expect(
+				beforePurge
+					.query(
+						"SELECT COUNT(*) AS n FROM memory_artifacts WHERE session_key='smoke-compaction' AND author_user_id IS NULL",
+					)
+					.get(),
+			).toEqual({ n: 0 });
+		} finally {
+			beforePurge.close();
+		}
 		const deactivated = await request(`/api/org/users/${alice.user.id}/deactivate`, "POST", {
 			mode: "keep",
 			dryRun: false,
@@ -220,6 +279,30 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		expect(deactivated.status).toBe(202);
 		const next = await request("/api/auth/connector-keys", "GET", undefined, key.secret);
 		expect(next.status).toBe(401);
+		await next.text();
+		const purged = await request(`/api/org/users/${alice.user.id}/deactivate`, "POST", {
+			mode: "purge",
+			dryRun: false,
+		});
+		expect(purged.status).toBe(202);
+		const purge = z.object({ jobId: z.string() }).parse(await purged.json());
+		let purgeStatus: unknown;
+		const purgeDeadline = Date.now() + 30000;
+		do {
+			const response = await request(`/api/org/jobs/${purge.jobId}`);
+			purgeStatus = await response.json();
+			if (z.object({ status: z.string() }).parse(purgeStatus).status !== "running") break;
+			await Bun.sleep(50);
+		} while (Date.now() < purgeDeadline);
+		const finalPurge = z
+			.object({ status: z.string(), progress_json: z.string(), error: z.string().nullable() })
+			.parse(purgeStatus);
+		if (finalPurge.status !== "complete") throw new Error(`Purge incomplete: ${JSON.stringify(finalPurge)}`);
+		const residual = z
+			.object({ residual: z.record(z.string(), z.number()) })
+			.parse(JSON.parse(finalPurge.progress_json)).residual;
+		expect(Object.values(residual).every((n) => n === 0)).toBe(true);
+
 		console.log(
 			JSON.stringify({
 				probe: "l0a",
@@ -231,6 +314,11 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 				hookRemember: cookieHook.status,
 				deactivate: deactivated.status,
 				nextRequest: next.status,
+				textBypass: textBypass.status,
+				reflection: reflected.status,
+				compaction: compacted.status,
+				purge: finalPurge.status,
+				residual,
 			}),
 		);
 		const auditedRead = await request("/api/auth/sessions");
@@ -292,13 +380,8 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			expect(snapshot.query("SELECT COUNT(*) AS n FROM memories WHERE content LIKE 'forbidden smoke%'").get()).toEqual({
 				n: 0,
 			});
-			expect(snapshot.query("SELECT author_user_id,agent_id FROM memories WHERE id = ?").get(hookMemory.id)).toEqual({
-				author_user_id: alice.user.id,
-				agent_id: key.key.agentId,
-			});
-			expect(snapshot.query("SELECT author_user_id,agent_id FROM memories WHERE id = ?").get(memory.id)).toEqual({
-				author_user_id: alice.user.id,
-				agent_id: key.key.agentId,
+			expect(snapshot.query("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?").get(alice.user.id)).toEqual({
+				n: 0,
 			});
 		} finally {
 			snapshot.close();

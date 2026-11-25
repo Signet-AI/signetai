@@ -66,6 +66,7 @@ describe("knowledge feedback", () => {
 		insertEntity("entity-project", "other-project", "project");
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "pin_entity",
@@ -87,6 +88,7 @@ describe("knowledge feedback", () => {
 		expect(resolved.source).toBe("project");
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "unpin_entity",
@@ -101,6 +103,7 @@ describe("knowledge feedback", () => {
 
 		insertEntity("entity-pinned", "Pinned Project", "project");
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "pin_entity",

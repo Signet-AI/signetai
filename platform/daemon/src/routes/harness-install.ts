@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -163,7 +164,7 @@ export function registerHarnessInstallRoutes(app: Hono): void {
 			if (action === "reinitialize" && capabilities.reinitializeRequiresConfirmation) {
 				let body: unknown = null;
 				try {
-					body = await c.req.json();
+					body = await jsonBody(c)();
 				} catch {}
 				if (typeof body !== "object" || body === null || Array.isArray(body) || Reflect.get(body, "confirm") !== true) {
 					return c.json(

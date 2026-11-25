@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import { spawnHidden as spawn } from "@signet/core";
 import {
 	cpSync,
@@ -1042,7 +1043,7 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 	app.post("/api/skills/install", async (c) => {
 		let body: { name?: string; source?: string } = {};
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}

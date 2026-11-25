@@ -1,3 +1,4 @@
+import { auditAuthoredWriteInTx } from "./auth/audit-owner";
 import { createHash } from "node:crypto";
 import { attempt } from "@signet/core";
 import { normalizeSessionTranscript } from "./transcript-normalization";
@@ -138,6 +139,7 @@ export async function commitCompactionSummary(accessor: DbAccessor, input: Compa
 }
 
 export interface CompactionSummaryInput {
+	readonly author: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly sessionKey: string | null;
 	readonly harness: string;
@@ -161,9 +163,9 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		`INSERT INTO memories (
 			id, content, type, importance, source_id, source_type,
 			who, tags, project, agent_id, created_at, updated_at, updated_by,
-			memory_kind
+			memory_kind,author_user_id
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		input.summaryId,
 		input.summary,
@@ -179,8 +181,10 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		input.now,
 		"system",
 		null,
+		input.author.userId,
 	);
 
+	auditAuthoredWriteInTx(db, input.author, "summary.created", "memory", input.summaryId, input.agentId);
 	const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
 	if (!table) return true;
 	const nodeId = input.sessionKey
@@ -190,8 +194,8 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		`INSERT OR REPLACE INTO session_summaries (
 			id, project, depth, kind, content, token_count,
 			earliest_at, latest_at, session_key, harness,
-			agent_id, source_type, source_ref, meta_json, created_at
-		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?)`,
+			agent_id, source_type, source_ref, meta_json, created_at,author_user_id
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?,?)`,
 	).run(
 		nodeId,
 		input.project,
@@ -205,6 +209,7 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		input.sessionKey,
 		JSON.stringify({ source: "compaction-complete" }),
 		input.now,
+		input.author.userId,
 	);
 	upsertThreadHead(db, {
 		agentId: input.agentId,

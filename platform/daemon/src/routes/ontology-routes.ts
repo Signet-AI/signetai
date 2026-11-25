@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
@@ -95,7 +96,7 @@ function readStringArray(record: Record<string, unknown>, key: string): readonly
 
 async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
 	try {
-		return asRecord(await c.req.json());
+		return asRecord(await jsonBody(c)());
 	} catch {
 		return {};
 	}
@@ -758,6 +759,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await applyOntologyOperationBatch(getDbAccessor(), {
+					author: c.get("author"),
 					agentId: scoped.agentId,
 					actor,
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
@@ -847,6 +849,7 @@ export function registerOntologyRoutes(app: Hono): void {
 						const operation = readString(proposal, "operation") ?? "";
 						const payload = asRecord(proposal.payload);
 						return {
+							author: c.get("author"),
 							agentId: scoped.agentId,
 							operation,
 							payload,
@@ -858,7 +861,9 @@ export function registerOntologyRoutes(app: Hono): void {
 							sourceId: readString(proposal, "source_id") ?? sourceId,
 							sourcePath: readString(proposal, "source_path") ?? sourcePath,
 							sourceRoot: readString(proposal, "source_root") ?? sourceRoot,
-							createdBy: readString(proposal, "created_by") ?? createdBy,
+							createdBy: c.get("organization")
+								? resolveMutationActor(c).changedBy
+								: (readString(proposal, "created_by") ?? createdBy),
 						};
 					}),
 				),

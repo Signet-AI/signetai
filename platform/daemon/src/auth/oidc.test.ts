@@ -38,18 +38,21 @@ describe("OIDC identity", () => {
 		let claimsGroups = ["engineering"];
 		let issuer = "";
 		let badNonce = false;
+		let discoveryRequests = 0;
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			async fetch(req) {
 				const url = new URL(req.url);
-				if (url.pathname === "/.well-known/openid-configuration")
+				if (url.pathname === "/.well-known/openid-configuration") {
+					discoveryRequests++;
 					return Response.json({
 						issuer,
 						authorization_endpoint: `${issuer}/authorize`,
 						token_endpoint: `${issuer}/token`,
 						jwks_uri: `${issuer}/jwks`,
 					});
+				}
 				if (url.pathname === "/jwks")
 					return Response.json({ keys: [{ ...jwk, kid: "test-key", alg: "RS256", use: "sig" }] });
 				if (url.pathname === "/token") {
@@ -92,6 +95,8 @@ describe("OIDC identity", () => {
 				),
 			]);
 			const start = await oidcStart("http://signet.test");
+			await oidcStart("http://signet.test");
+			expect(discoveryRequests).toBe(1);
 			const auth = new URL(start.url);
 			nonce = auth.searchParams.get("nonce") ?? "";
 			expect(auth.searchParams.get("code_challenge_method")).toBe("S256");

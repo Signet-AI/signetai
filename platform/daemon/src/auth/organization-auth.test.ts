@@ -46,6 +46,91 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("R2 attribution does not manufacture organization jobs", async () => {
+		const { createAgentMessageAsync } = await import("../cross-agent");
+		await createAgentMessageAsync({
+			fromAgentId: "default",
+			toAgentId: "default",
+			content: "Author context",
+			author: { userId, credential: "session:test" },
+		});
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM org_jobs WHERE kind='write_attribution'", [], "get"),
+			),
+		).toEqual({ n: 0 });
+	});
+
+	test("R16 workspace native notes require an administrator", async () => {
+		await organizationWrite([statement("UPDATE users SET role='member' WHERE id=?", [userId])]);
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		registerMemoryRoutes(app);
+		const response = await app.request("/api/memory/codex-native-note", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ content: "Workspace native note" }),
+		});
+		expect(response.status).toBe(403);
+	});
+
+	test("R2 reflection answers resolve the personal agent and principal author", async () => {
+		const { registerReflectionRoutes } = await import("../routes/reflection-routes");
+		registerReflectionRoutes(app, { agentsDir: dir });
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement(
+				"INSERT INTO daily_reflections(id,agent_id,date,question) VALUES ('review-reflection',?,date('now'),'What matters?')",
+				[agentId],
+			),
+		]);
+		const response = await app.request("/api/reflections/review-reflection/answer?agentId=default", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ answer: "An attributed reflection answer" }),
+		});
+		expect(response.status).toBe(200);
+		const result = await response.json();
+		expect(
+			await organizationQuery(
+				statement("SELECT agent_id,author_user_id FROM memories WHERE id=?", [result.memoryId], "get"),
+			),
+		).toEqual({ agent_id: agentId, author_user_id: userId });
+	});
+	test("R2 compaction summaries retain their explicit principal author", async () => {
+		const { commitCompactionSummary } = await import("../session-transcripts");
+		const { getDbAccessor } = await import("../db-accessor");
+		const agentId = `personal-${userId.slice(4)}`;
+		expect(
+			await commitCompactionSummary(getDbAccessor(), {
+				agentId,
+				author: { userId, credential: "session:review" },
+				sessionKey: null,
+				harness: "test",
+				project: null,
+				summary: "An attributed summary",
+				summaryId: "review-summary",
+				now: new Date().toISOString(),
+			}),
+		).toBe(true);
+		expect(
+			await organizationQuery(statement("SELECT author_user_id FROM memories WHERE id='review-summary'", [], "get")),
+		).toEqual({ author_user_id: userId });
+	});
+	test("R2 compaction binds the session speaker before the handler", async () => {
+		app.post("/api/hooks/compaction-complete", (c) => c.json({ ok: true }));
+		const response = await app.request("/api/hooks/compaction-complete", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ sessionKey: "review-compaction", harness: "test", summary: "Summary" }),
+		});
+		expect(response.status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement("SELECT speaker_user_id FROM session_transcripts WHERE session_key='review-compaction'", [], "get"),
+			),
+		).toEqual({ speaker_user_id: userId });
+	});
+
 	test("documents retain the resolved personal agent and principal author", async () => {
 		const { registerMemoryRoutes } = await import("../routes/memory-routes");
 		registerMemoryRoutes(app);
@@ -60,7 +145,7 @@ describe("organization credential boundary", () => {
 			await organizationQuery(
 				statement("SELECT author_user_id,agent_id FROM documents WHERE id = ?", [body.id], "get"),
 			),
-		).toEqual({ author_user_id: userId, agent_id: `personal-${userId}` });
+		).toEqual({ author_user_id: userId, agent_id: `personal-${userId.slice(4)}` });
 		expect(
 			await organizationQuery(
 				statement(
@@ -120,10 +205,15 @@ describe("organization credential boundary", () => {
 			content: "Owned message",
 			author,
 		});
-		const { readWriteAttribution } = await import("./write-attribution");
-		expect(await readWriteAttribution({ kind: "cross_agent_message", id: message.id, agentId: "default" })).toEqual(
-			author,
-		);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT actor_user_id AS userId,actor_credential AS credential FROM audit_events WHERE target_id=? AND action='message.created'",
+					[message.id],
+					"get",
+				),
+			),
+		).toEqual(author);
 	});
 	test("Dreaming pass admission records the initiating principal without changing claim authorship", async () => {
 		const { createDreamingPass } = await import("../pipeline/dreaming");
@@ -136,8 +226,15 @@ describe("organization credential boundary", () => {
 			{ text: "test policy", source: "custom" },
 			author,
 		);
-		const { readWriteAttribution } = await import("./write-attribution");
-		expect(await readWriteAttribution({ kind: "dreaming_pass", id: passId, agentId: "default" })).toEqual(author);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT actor_user_id AS userId,actor_credential AS credential FROM audit_events WHERE target_id=? AND action='dreaming.started'",
+					[passId],
+					"get",
+				),
+			),
+		).toEqual(author);
 	});
 	test("ontology proposal writes retain the explicit principal author", async () => {
 		const { createOntologyProposal } = await import("../ontology-proposals");
@@ -177,11 +274,20 @@ describe("organization credential boundary", () => {
 		const jobId = crypto.randomUUID();
 		const author = { userId, credential: "session:test" };
 		await createJob({ jobId, agentId: "default", author });
-		const { readWriteAttribution } = await import("./write-attribution");
-		expect(await readWriteAttribution({ kind: "transcript_import", id: jobId, agentId: "default" })).toEqual(author);
-		await expect(readWriteAttribution({ kind: "transcript_import", id: jobId, agentId: "different" })).rejects.toThrow(
-			"scope",
-		);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT author_user_id AS userId,author_credential AS credential FROM source_import_jobs WHERE id=? AND agent_id='default'",
+					[jobId],
+					"get",
+				),
+			),
+		).toEqual(author);
+		expect(
+			await organizationQuery(
+				statement("SELECT id FROM source_import_jobs WHERE id=? AND agent_id='different'", [jobId], "get"),
+			),
+		).toBeNull();
 		const { buildCompletedTranscriptCommit, commitCompletedTranscriptBatchInTx } = await import(
 			"../transcript-import-commit"
 		);
@@ -199,6 +305,7 @@ describe("organization credential boundary", () => {
 			messages: [{ role: "user", content: "Original named author remains in this evidence" }],
 		});
 		const commit = buildCompletedTranscriptCommit(record, {
+			author,
 			agentId: "default",
 			sourceId: "import-source",
 			sourceRecordId: "source-record",

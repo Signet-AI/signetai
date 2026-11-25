@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import { spawnHidden as spawn } from "@signet/core";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -141,7 +142,7 @@ export function registerConnectorRoutes(app: Hono): void {
 	app.post("/api/connectors", async (c) => {
 		let body: Record<string, unknown>;
 		try {
-			body = (await c.req.json()) as Record<string, unknown>;
+			body = (await jsonBody(c)()) as Record<string, unknown>;
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}

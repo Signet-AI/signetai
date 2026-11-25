@@ -58,6 +58,7 @@ function seedMemory(
 	const id = randomUUID();
 	getDbAccessor().withWriteTx((db) => {
 		txIngestEnvelope(db, {
+			author: { userId: null, credential: "system" },
 			id,
 			content: opts.content ?? "The reflection worker needs durable persistence.",
 			contentHash: opts.hash ?? `worker-test-${agentId}`,

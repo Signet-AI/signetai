@@ -1,9 +1,10 @@
+import { authCookies } from "../auth/cookies";
+import { jsonBody } from "../request-body";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { z } from "zod";
 import type { AuthConfig } from "../auth/config";
-import { hybridProxyDetected, getPeerAddress } from "../auth/middleware";
-import { AuthRateLimiter } from "../auth/rate-limiter";
+import { hybridProxyDetected } from "../auth/middleware";
 import { failure } from "../auth/identity-middleware";
 import {
 	claimOrganization,
@@ -17,7 +18,6 @@ import * as operations from "../auth/organization-operations";
 import * as admin from "../auth/organization-admin";
 import { oidcStart, oidcCallback } from "../auth/oidc";
 
-const limiter = new AuthRateLimiter(60_000, 20);
 function browserResult(result: Awaited<ReturnType<typeof operations.passwordLogin>>) {
 	return { user: result.user, expiresAt: result.accessExpiresAt, csrf: result.csrf };
 }
@@ -25,7 +25,7 @@ function origin(c: Context): string {
 	return new URL(c.req.url).origin;
 }
 async function body(c: Context): Promise<unknown> {
-	return c.req.json();
+	return jsonBody(c)();
 }
 function sessionCookies(
 	c: Context,
@@ -34,14 +34,14 @@ function sessionCookies(
 ) {
 	if (!result.accessToken || !result.csrf) return;
 	const secure = new URL(c.req.url).protocol === "https:" || org?.public_url?.startsWith("https:") === true;
-	setCookie(c, "signet_session", result.accessToken, {
+	setCookie(c, authCookies(c).session, result.accessToken, {
 		httpOnly: true,
 		sameSite: "Lax",
 		path: "/",
 		secure,
 		maxAge: org?.session_ttl_seconds ?? 604800,
 	});
-	setCookie(c, "signet_csrf", result.csrf, {
+	setCookie(c, authCookies(c).csrf, result.csrf, {
 		httpOnly: false,
 		sameSite: "Lax",
 		path: "/",
@@ -89,12 +89,6 @@ export function registerOrganizationRoutes(
 		"/api/org/claim",
 		endpoint(async (c) => {
 			if (getConfig().mode !== "team") throw new IdentityError(403, "org_policy");
-			const key = `claim:${getPeerAddress(c) ?? "unknown"}`;
-			if (!limiter.check(key).allowed) {
-				c.header("Retry-After", "60");
-				throw new IdentityError(429, "rate_limit");
-			}
-			limiter.record(key);
 			const result = await claimOrganization(claimSchema.parse(await body(c)));
 			sessionCookies(c, result, await readOrganization());
 			return c.json(browserResult(result));
@@ -120,12 +114,6 @@ export function registerOrganizationRoutes(
 	app.post(
 		"/api/auth/login",
 		active(async (c) => {
-			const key = `login:${getPeerAddress(c) ?? "unknown"}`;
-			if (!limiter.check(key).allowed) {
-				c.header("Retry-After", "60");
-				throw new IdentityError(429, "rate_limit");
-			}
-			limiter.record(key);
 			const result = await operations.passwordLogin(await body(c));
 			sessionCookies(c, result, c.get("organization"));
 			return c.json(browserResult(result));
@@ -135,10 +123,10 @@ export function registerOrganizationRoutes(
 		"/api/auth/sso/start",
 		active(async (c) => {
 			const result = await oidcStart(origin(c), c.req.query("invite"));
-			setCookie(c, "signet_oidc_state", result.state, {
+			setCookie(c, authCookies(c).state, result.state, {
 				httpOnly: true,
 				sameSite: "Lax",
-				path: "/api/auth/sso",
+				path: "/",
 				secure:
 					new URL(c.req.url).protocol === "https:" || c.get("organization")?.public_url?.startsWith("https:") === true,
 				maxAge: 600,
@@ -153,11 +141,11 @@ export function registerOrganizationRoutes(
 				{
 					state: c.req.query("state") ?? "",
 					code: c.req.query("code") ?? "",
-					cookieState: getCookie(c, "signet_oidc_state"),
+					cookieState: getCookie(c, authCookies(c).state),
 				},
 				origin(c),
 			);
-			deleteCookie(c, "signet_oidc_state", { path: "/api/auth/sso" });
+			deleteCookie(c, authCookies(c).state, { path: "/", secure: authCookies(c).secure });
 			sessionCookies(c, result, c.get("organization"));
 			return c.redirect("/");
 		}),
@@ -166,8 +154,8 @@ export function registerOrganizationRoutes(
 		"/api/auth/logout",
 		active(async (c) => {
 			const result = await operations.logout(user(c), await body(c));
-			deleteCookie(c, "signet_session", { path: "/" });
-			deleteCookie(c, "signet_csrf", { path: "/" });
+			deleteCookie(c, authCookies(c).session, { path: "/", secure: authCookies(c).secure });
+			deleteCookie(c, authCookies(c).csrf, { path: "/", secure: authCookies(c).secure });
 			return c.json(result);
 		}),
 	);
@@ -253,10 +241,12 @@ export function registerOrganizationRoutes(
 				throw new IdentityError(403, "org_policy");
 			}),
 		);
-	app.get(
-		"/api/auth/invites/:token",
+	app.post(
+		"/api/auth/invites/lookup",
 		active(async (c) => {
-			const invite = await operations.readInvite(c.req.param("token") ?? "");
+			const invite = await operations.readInvite(
+				z.object({ token: z.string().min(1).max(256) }).parse(await body(c)).token,
+			);
 			const org = await readOrganization();
 			return c.json({
 				organization: { name: org.name },

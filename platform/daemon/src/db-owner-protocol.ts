@@ -325,6 +325,7 @@ export type DbOwnerDreamingEvidenceCoverageResult =
 	  };
 
 export interface DbOwnerTranscriptBulkCommit {
+	readonly author: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly jobId: string;
 	readonly generation: number;
@@ -365,6 +366,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
+	| { readonly kind: "reflection_answer"; readonly input: import("./transactions").ReflectionAnswerInput }
 	| {
 			readonly kind: "organization_memory_purge";
 			readonly userId: string;

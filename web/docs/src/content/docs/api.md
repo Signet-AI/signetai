@@ -84,7 +84,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/api-keys` | Your keys; `?all=1` requires admin. |
 | DELETE | `/api/auth/api-keys/:id` | Revoke an owned key; admin may revoke any key. |
 | POST | `/api/org/claim` | `{ setupToken, organizationName, admin: { username, displayName, email?, password } }`; consumes setup token and creates the first admin/browser session. |
-| GET | `/api/auth/invites/:token` | Organization, role, and optional invite email; never exposes password or hash. |
+| POST | `/api/auth/invites/lookup` | JSON `{ token }`; returns organization, role, and optional invite email. Tokens never appear in API paths. |
 | POST | `/api/auth/invites/accept` | `{ token, username, displayName, password? }`; browser session or `ssoStartPath`. |
 | GET | `/api/org/users` | Admin; optional `status`, `role`, `group`, `q`. |
 | PATCH | `/api/org/users/:id` | Admin; `{ role?, compliance?, displayName? }`. |

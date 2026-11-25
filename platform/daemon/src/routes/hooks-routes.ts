@@ -1,3 +1,5 @@
+import { reportReadResult } from "../request-read";
+import { jsonBody } from "../request-body";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
@@ -459,7 +461,7 @@ function registerSessionStart(app: Hono): void {
 		let recallAttempted = false;
 		let recallOutcomeRecorded = false;
 		try {
-			const body = (await c.req.json()) as SessionStartRequest;
+			const body = (await jsonBody(c)()) as SessionStartRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -579,7 +581,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			return c.json({ inject: "", dynamicContext: "", memoryCount: 0 });
 		}
 		try {
-			const body = (await c.req.json()) as UserPromptSubmitRequest;
+			const body = (await jsonBody(c)()) as UserPromptSubmitRequest;
 
 			const hasUserMessage = typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
 			const hasUserPrompt = typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
@@ -870,7 +872,13 @@ function registerStop(app: Hono): void {
 				stopAdmission.release();
 			}
 		},
-		bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+		(c, next) =>
+			c.get("jsonBodyParsed")
+				? next()
+				: bodyLimit({ maxSize: 2 * 1_048_576, onError: (ctx) => ctx.json({ error: "payload too large" }, 413) })(
+						c,
+						next,
+					),
 		async (c) => {
 			if (isInternalCall(c)) return c.json({ recorded: false });
 			try {
@@ -967,7 +975,7 @@ function registerSessionEnd(app: Hono): void {
 		}
 		const requestStartedAt = performance.now();
 		try {
-			const body = (await c.req.json()) as SessionEndRequest;
+			const body = (await jsonBody(c)()) as SessionEndRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -1076,7 +1084,7 @@ function registerSkillInvocation(app: Hono): void {
 			return c.json({ recorded: false });
 		}
 		try {
-			const body = toRecord(await c.req.json()) ?? {};
+			const body = toRecord(await jsonBody(c)()) ?? {};
 			const harness = parseOptionalString(body.harness);
 			const skillName = parseOptionalString(body.skillName ?? body.skill);
 			if (!harness) return c.json({ error: "harness is required" }, 400);
@@ -1141,7 +1149,7 @@ function registerCheckpointExtract(app: Hono): void {
 			return c.json({ skipped: true });
 		}
 		try {
-			const body = (await c.req.json()) as CheckpointExtractRequest;
+			const body = (await jsonBody(c)()) as CheckpointExtractRequest;
 
 			if (!body.harness || !body.sessionKey) {
 				return c.json({ error: "harness and sessionKey are required" }, 400);
@@ -1194,7 +1202,7 @@ function registerRemember(app: Hono): void {
 			return c.json({ success: true, memories: [] });
 		}
 		try {
-			const body = (await c.req.json()) as RememberRequest;
+			const body = (await jsonBody(c)()) as RememberRequest;
 
 			if (!body.harness || !body.content) {
 				return c.json({ error: "harness and content are required" }, 400);
@@ -1243,7 +1251,7 @@ function registerRecall(app: Hono): void {
 		const recallSurface = "tool_call" as const;
 		return recordHookRecallOperation(async () => {
 			try {
-				const body = (await c.req.json()) as RecallRequest;
+				const body = (await jsonBody(c)()) as RecallRequest;
 
 				if (!body.harness || !body.query) {
 					return c.json({ error: "harness and query are required" }, 400);
@@ -1279,10 +1287,12 @@ function registerRecall(app: Hono): void {
 					if (denied) return denied;
 				}
 
-				const agentId = resolveAgentId({
-					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-					sessionKey: body.sessionKey,
-				});
+				const scopedRecall = resolveScopedAgentId(
+					c,
+					resolveAgentId({ agentId: body.agentId ?? c.req.header("x-signet-agent-id"), sessionKey: body.sessionKey }),
+				);
+				if (scopedRecall.error) return c.json({ error: scopedRecall.error }, 403);
+				const agentId = scopedRecall.agentId;
 				if (aggregateSaveRequested) {
 					const aggAuth = c.get("auth");
 					if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
@@ -1358,10 +1368,12 @@ function registerRecall(app: Hono): void {
 				const result =
 					body.aggregate === true
 						? await aggregateRecall(params, cfg, {
+								author: c.get("author"),
 								router: getInferenceRouterOrNull(),
 								embedFn,
 							})
 						: await hybridRecall(params, cfg, embedFn);
+				reportReadResult(c, agentId, result.results.length);
 				if (result.meta.partial === true || result.aggregate?.partial === true || embeddingDegraded) {
 					c.header("x-signet-operation-degraded", "1");
 					if (result.meta.partial === true) {
@@ -1394,7 +1406,7 @@ function registerRecall(app: Hono): void {
 function registerPreCompaction(app: Hono): void {
 	app.post("/api/hooks/pre-compaction", async (c) => {
 		try {
-			const rawBody = toRecord(await c.req.json()) ?? {};
+			const rawBody = toRecord(await jsonBody(c)()) ?? {};
 			const transcriptPath =
 				parseOptionalString(rawBody.transcriptPath) ?? parseOptionalString(rawBody.transcript_path);
 			const body = rawBody as unknown as PreCompactionRequest;
@@ -1457,7 +1469,7 @@ function registerPreCompaction(app: Hono): void {
 function registerCompactionComplete(app: Hono): void {
 	app.post("/api/hooks/compaction-complete", async (c) => {
 		try {
-			const body = (await c.req.json()) as {
+			const body = (await jsonBody(c)()) as {
 				harness: string;
 				summary: string;
 				sessionKey?: string;
@@ -1544,6 +1556,7 @@ function registerCompactionComplete(app: Hono): void {
 			const summaryId = noise ? null : crypto.randomUUID();
 			if (summaryId) {
 				const admitted = await commitCompactionSummary(getDbAccessor(), {
+					author: c.get("author"),
 					agentId,
 					sessionKey: body.sessionKey ?? null,
 					harness: body.harness,
@@ -1557,6 +1570,7 @@ function registerCompactionComplete(app: Hono): void {
 
 				try {
 					await writeCompactionArtifact({
+						author: c.get("author"),
 						agentId,
 						sessionId,
 						sessionKey: body.sessionKey ?? null,
@@ -2229,7 +2243,7 @@ function registerSynthesis(app: Hono): void {
 	});
 	app.post("/api/hooks/synthesis", async (c) => {
 		try {
-			const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
+			const body = (await jsonBody(c)()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
 			const scopedAgent = resolveScopedAgentId(
 				c,
 				resolveAgentId({

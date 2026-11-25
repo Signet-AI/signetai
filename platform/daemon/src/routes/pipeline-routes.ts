@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import { existsSync, readFileSync } from "node:fs";
 import { hybridProxyDetected } from "../auth/middleware";
 import { auditRuntimeStatus } from "../auth/organization-runtime";
@@ -530,7 +531,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
 		let body: unknown;
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON" }, 400);
 		}
@@ -595,7 +596,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:598",
+				"routes/pipeline-routes.ts:599",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -923,7 +924,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	app.post("/api/dream/exclusions/requeue", async (c) => {
-		const raw: unknown = await c.req.json().catch(() => null);
+		const raw: unknown = await jsonBody(c)().catch(() => null);
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
 		const sourceKind = readString(body, "sourceKind");
@@ -946,7 +947,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:949",
+						"routes/pipeline-routes.ts:950",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -993,7 +994,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 	app.post("/api/dream/operations", async (c) => {
-		const raw: unknown = await c.req.json().catch(() => null);
+		const raw: unknown = await jsonBody(c)().catch(() => null);
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
 		const operations = readArray(body, "operations");
@@ -1026,7 +1027,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 	app.get("/api/dream/tools", (c) => c.json({ items: getDreamingCapabilityManifest() }));
 	app.post("/api/dream/tools/:capability", async (c) => {
-		const raw: unknown = await c.req.json().catch(() => null);
+		const raw: unknown = await jsonBody(c)().catch(() => null);
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
 		const scopedAgent = resolveScopedDreamAgent(c, body);
@@ -1083,7 +1084,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		let mode: "compact" | "incremental" = "incremental";
 		let body: Record<string, unknown> = {};
 		if (contentType.includes("application/json")) {
-			const raw: unknown = await c.req.json().catch(() => null);
+			const raw: unknown = await jsonBody(c)().catch(() => null);
 			if (raw === null) {
 				return c.json({ error: "Malformed JSON body" }, 400);
 			}

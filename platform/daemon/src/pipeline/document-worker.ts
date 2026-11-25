@@ -399,7 +399,7 @@ async function processDocument(
 
 			if (!existingScopedMemory) {
 				txIngestEnvelope(db, {
-					author: doc.author_user_id ? { userId: doc.author_user_id, credential: `document:${doc.id}` } : undefined,
+					author: { userId: doc.author_user_id, credential: `document:${doc.id}` },
 					id: memId,
 					content: normalized.storageContent,
 					normalizedContent: normalized.normalizedContent,

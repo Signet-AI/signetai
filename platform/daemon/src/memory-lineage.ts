@@ -1,3 +1,4 @@
+import type { WriteAuthor } from "./auth/audit-owner";
 import type { Database } from "bun:sqlite";
 import { withSessionArtifactLease } from "./session-artifact-lease";
 import { admitSessionTranscriptInDb } from "./session-transcripts";
@@ -642,7 +643,11 @@ function artifactFieldsFromFrontmatter(
 	frontmatter: Record<string, unknown>,
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
-	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+	options: {
+		readonly trustSourcePath?: boolean;
+		readonly trustNativeMarker?: boolean;
+		readonly author?: WriteAuthor;
+	} = {},
 ): MemoryArtifactUpsertFields {
 	const agentId = typeof frontmatter.agent_id === "string" ? frontmatter.agent_id : "default";
 	const sourcePath =
@@ -660,6 +665,7 @@ function artifactFieldsFromFrontmatter(
 			: new Date().toISOString();
 	const rawSourceNodeId = typeof frontmatter.source_node_id === "string" ? frontmatter.source_node_id : null;
 	return {
+		author: options.author,
 		agentId,
 		sourcePath,
 		sourceSha256:
@@ -696,7 +702,11 @@ function upsertArtifactRowInTx(
 	frontmatter: Record<string, unknown>,
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
-	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+	options: {
+		readonly trustSourcePath?: boolean;
+		readonly trustNativeMarker?: boolean;
+		readonly author?: WriteAuthor;
+	} = {},
 ): boolean {
 	return upsertMemoryArtifactInTx(db, artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options), {
 		conflictGuardSourceId: false,
@@ -718,7 +728,11 @@ async function upsertArtifactRow(
 	frontmatter: Record<string, unknown>,
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
-	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+	options: {
+		readonly trustSourcePath?: boolean;
+		readonly trustNativeMarker?: boolean;
+		readonly author?: WriteAuthor;
+	} = {},
 ): Promise<void> {
 	const admitted = await runWriteTxAsync(getDbAccessor(), (db) =>
 		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options),
@@ -1267,6 +1281,7 @@ function isValidArtifact(path: string, frontmatter: Record<string, unknown>, bod
 }
 
 async function ensureManifestRecord(seed: {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -1310,7 +1325,7 @@ async function ensureManifestRecord(seed: {
 	if (!manifest) {
 		throw new Error(`Failed to create manifest ${path}`);
 	}
-	await upsertArtifactRow(path, manifest.frontmatter, manifest.body);
+	await upsertArtifactRow(path, manifest.frontmatter, manifest.body, undefined, { author: seed.author });
 	return manifest;
 }
 
@@ -1371,6 +1386,7 @@ function manifestValue(frontmatter: Record<string, unknown>, key: string): strin
 }
 
 export async function ensureCanonicalManifest(seed: {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -1696,6 +1712,7 @@ export async function writeSummaryArtifact(params: {
 }
 
 export async function writeCompactionArtifact(params: {
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -1731,7 +1748,9 @@ export async function writeCompactionArtifact(params: {
 			body,
 		});
 		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body), undefined, {
+			author: params.author,
+		});
 		await updateManifest(manifest.path, (frontmatter) => ({
 			...frontmatter,
 			compaction_path: relativePath(fullPath),

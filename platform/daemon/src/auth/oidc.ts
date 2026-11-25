@@ -82,13 +82,32 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
 	}
 	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
-async function discover(issuer: string) {
+async function fetchDiscovery(issuer: string) {
 	const result = discoverySchema.parse(
 		await fetchJson(`${issuer.replace(/\/$/, "")}/.well-known/openid-configuration`),
 	);
 	if (result.issuer !== issuer) throw new IdentityError(401, "invalid_credential", "OIDC discovery issuer mismatch");
 	for (const url of [result.authorization_endpoint, result.token_endpoint, result.jwks_uri]) permittedUrl(url);
 	return result;
+}
+const discoveryCache = new Map<string, { expiresAt: number; value: Promise<z.infer<typeof discoverySchema>> }>();
+async function discover(issuer: string) {
+	const now = Date.now();
+	for (const [key, entry] of discoveryCache) if (entry.expiresAt <= now) discoveryCache.delete(key);
+	const cached = discoveryCache.get(issuer);
+	if (cached) return cached.value;
+	if (discoveryCache.size >= 32) {
+		const oldest = discoveryCache.keys().next().value;
+		if (oldest !== undefined) discoveryCache.delete(oldest);
+	}
+	const value = fetchDiscovery(issuer);
+	discoveryCache.set(issuer, { expiresAt: now + 300_000, value });
+	try {
+		return await value;
+	} catch (error) {
+		if (discoveryCache.get(issuer)?.value === value) discoveryCache.delete(issuer);
+		throw error;
+	}
 }
 export async function oidcStart(origin: string, invite?: string) {
 	const { org, config } = await configuration();
@@ -212,7 +231,8 @@ export async function oidcCallback(
 				[userId, username, email, name, invite?.role ?? "member", config.issuer, claims.sub, now, now],
 			),
 		);
-		if (org.agent_model === "personal") writes.push(...personalAgentStatements(userId, `personal-${userId}`, name));
+		if (org.agent_model === "personal")
+			writes.push(...personalAgentStatements(userId, `personal-${userId.slice(4)}`, name));
 	} else if (user.status !== "active") throw new IdentityError(401, "user_deactivated");
 	if (invite) {
 		writes.push({

@@ -32,6 +32,8 @@ export interface TranscriptImportWorkerOptions {
 	readonly pollMs?: number;
 }
 interface Job {
+	readonly author_user_id: string | null;
+	readonly author_credential: string;
 	readonly id: string;
 	readonly generation: number;
 	readonly state: string;
@@ -75,6 +77,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		const leased = await store<Job | null>(job.id, "lease", { token: leaseToken, generation: job.generation });
 		if (!leased) return;
 		const generation = leased.generation;
+		const author = { userId: leased.author_user_id, credential: leased.author_credential };
 		const guard = async (): Promise<void> => {
 			if (!active) throw new Error("import worker stopped");
 			const current = (await store<Job[]>(job.id, "list", { view: "status" }))[0];
@@ -124,6 +127,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 							throw new RangeError("schema_invalid");
 						}
 						const commit = buildCompletedTranscriptCommit(value, {
+							author,
 							agentId: options.agentId,
 							sourceId: file.source_id,
 							sourceRecordId: row.id,
@@ -131,7 +135,13 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 						});
 						if (transcriptCommitBatchBytes([commit]) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
 							throw new RangeError("canonical_batch_too_large");
-						await store(job.id, "commit", { sourceId: file.source_id, commits: [commit], generation, leaseToken });
+						await store(job.id, "commit", {
+							author,
+							sourceId: file.source_id,
+							commits: [commit],
+							generation,
+							leaseToken,
+						});
 					} catch (error) {
 						if (!(error instanceof RangeError) && !(error instanceof SyntaxError)) throw error;
 						await store(job.id, "reject", {
@@ -168,6 +178,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					const flush = async (next: TranscriptCheckpoint, last: boolean): Promise<void> => {
 						await guard();
 						await store(job.id, "commit", {
+							author,
 							sourceId: file.source_id,
 							commits,
 							generation,
@@ -190,6 +201,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 							record.value === undefined
 								? undefined
 								: buildCompletedTranscriptCommit(record.value, {
+										author,
 										agentId: options.agentId,
 										sourceId: file.source_id,
 										sourceRecordId: `${job.id}:${file.id}:${record.ordinal}`,

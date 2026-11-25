@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import type { Context, Hono, Next } from "hono";
 import { registerOrganizationRoutes } from "./organization-routes";
 import { hybridProxyDetected } from "../auth/middleware";
@@ -157,7 +158,7 @@ export function registerAuthRoutes(app: Hono): void {
 			return c.json({ error: "auth secret not available" }, 400);
 		}
 
-		const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const payload = (await jsonBody(c)().catch(() => null)) as Record<string, unknown> | null;
 		if (!payload) return c.json({ error: "invalid request body" }, 400);
 
 		if (!isValidLoginString(payload.username, MAX_USERNAME_LENGTH)) {
@@ -222,7 +223,7 @@ export function registerAuthRoutes(app: Hono): void {
 			return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
 		}
 		authLoginLimiter.record(limitKey);
-		const payload: unknown = await c.req.json().catch(() => null);
+		const payload: unknown = await jsonBody(c)().catch(() => null);
 		const code =
 			typeof payload === "object" && payload !== null && !Array.isArray(payload)
 				? Reflect.get(payload, "code")
@@ -252,7 +253,7 @@ export function registerAuthRoutes(app: Hono): void {
 			return c.json({ error: "auth secret not available (local mode?)" }, 400);
 		}
 
-		const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const payload = (await jsonBody(c)().catch(() => null)) as Record<string, unknown> | null;
 		if (!payload) {
 			return c.json({ error: "invalid request body" }, 400);
 		}
@@ -279,7 +280,7 @@ export function registerAuthRoutes(app: Hono): void {
 	});
 
 	app.post("/api/auth/api-keys", async (c) => {
-		const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const payload = (await jsonBody(c)().catch(() => null)) as Record<string, unknown> | null;
 		if (!payload) return c.json({ error: "invalid request body" }, 400);
 		const name = typeof payload.name === "string" ? payload.name.trim() : "";
 		if (!name) return c.json({ error: "name is required" }, 400);

@@ -206,6 +206,7 @@ describe("aggregateRecall", () => {
 				} as unknown as RecallParams,
 				loadMemoryConfig(dir),
 				{
+					author: { userId: null, credential: "system" },
 					router: new StaticRouter(),
 					embedFn: async () => null,
 					logger: quietLogger(),
@@ -228,6 +229,7 @@ describe("aggregateRecall", () => {
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -347,6 +349,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -428,6 +431,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: directRouter,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -463,6 +467,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				embedFn: async () => null,
 				logger: quietLogger(),
 				hybridRecall: async (params: RecallParams) =>
@@ -492,6 +497,7 @@ memory:
 			{ query: "router unavailable", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: null,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -504,6 +510,7 @@ memory:
 			{ query: "complete aggregate", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -516,6 +523,7 @@ memory:
 			{ query: "no evidence", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -528,6 +536,7 @@ memory:
 			{ query: "synthesis failed", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new SynthesisFailingRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -547,6 +556,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new SynthesisFailingRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -577,6 +587,7 @@ memory:
 			readPolicy: "isolated",
 		};
 		const deps = {
+			author: { userId: null, credential: "system" },
 			router: new StaticRouter(),
 			embedFn: async () => null,
 			logger: quietLogger(),
@@ -610,6 +621,7 @@ memory:
 			readPolicy: "isolated",
 		};
 		const deps = {
+			author: { userId: null, credential: "system" },
 			embedFn: async () => null,
 			logger: quietLogger(),
 			now: () => new Date("2026-05-20T12:00:00.000Z"),
@@ -663,6 +675,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => {
@@ -692,6 +705,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				logger: log,
 				embedFn: async () => {
@@ -732,6 +746,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
@@ -801,6 +816,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => response(input.query, [ontologyRow]),
@@ -855,6 +871,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(
 					"There isn't enough evidence here to determine Nicholai's favorite food. The only explicit preference shown is earl grey tea.",
 				),
@@ -894,6 +911,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(
 					'Yes. The evidence says Nicholai ate two gas station danishes and called them "amazing".',
 				),
@@ -931,6 +949,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(
 					"Nicholai and Amari broke up on March 14, 2026, were still figuring things out on May 12, and by May 20 Nicholai felt ready to move on.",
 				),
@@ -962,6 +981,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -993,6 +1013,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1029,6 +1050,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1068,6 +1090,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1092,6 +1115,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1152,6 +1176,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-conflict",
@@ -1210,6 +1235,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-visible-conflict",
@@ -1285,6 +1311,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-idempotency-safe",
@@ -1328,6 +1355,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-loser",
@@ -1336,6 +1364,7 @@ memory:
 					if (!raced) {
 						raced = true;
 						txIngestEnvelope(db, {
+							author: { userId: null, credential: "system" },
 							...mem,
 							id: "aggregate-race-winner",
 						});
@@ -1378,6 +1407,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: null,
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => response(input.query, []),

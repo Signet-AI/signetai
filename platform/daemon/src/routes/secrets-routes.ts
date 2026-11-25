@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import {
@@ -367,7 +368,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
 		if (denied) return denied;
 		try {
-			const body = (await c.req.json()) as {
+			const body = (await jsonBody(c)()) as {
 				command?: string;
 				secrets?: Record<string, string>;
 				timeoutMs?: number;
@@ -415,7 +416,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
-			const body = (await c.req.json()) as {
+			const body = (await jsonBody(c)()) as {
 				command?: string;
 				secrets?: Record<string, string>;
 				timeoutMs?: number;
@@ -451,7 +452,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
-			const body = (await c.req.json()) as { value?: string; authorizeKeyring?: boolean };
+			const body = (await jsonBody(c)()) as { value?: string; authorizeKeyring?: boolean };
 			if (typeof body.value !== "string" || body.value.length === 0) {
 				return c.json({ error: "value is required" }, 400);
 			}

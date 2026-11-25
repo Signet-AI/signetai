@@ -1,4 +1,23 @@
 import { z } from "zod";
+export async function settleOffboardPurge(work: Promise<void>, jobId: string): Promise<void> {
+	await work
+		.catch(async (error: unknown) => {
+			await organizationWrite([
+				statement("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=?", [
+					error instanceof Error ? error.message : String(error),
+					new Date().toISOString(),
+					jobId,
+				]),
+			]);
+		})
+		.catch((error: unknown) => {
+			logger.error("auth", "Offboarding failure could not be persisted", error instanceof Error ? error : undefined, {
+				jobId,
+			});
+		});
+}
+
+import { logger } from "../logger";
 import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 import { canActAs, type AgentRecord } from "./agent-access";
@@ -295,7 +314,10 @@ const settingsSchema = z
 		connectorKeyTtlSeconds: z.number().int().min(60).max(31_536_000).optional(),
 		legacyKeyDeadline: z.iso.datetime().nullable().optional(),
 		auditRetentionDays: z.number().int().min(1).max(3650).optional(),
-		publicUrl: z.url().optional(),
+		publicUrl: z
+			.url()
+			.refine((value) => ["http:", "https:"].includes(new URL(value).protocol))
+			.optional(),
 		oidc: oidcSchema.nullable().optional(),
 	})
 	.strict();
@@ -337,6 +359,11 @@ export async function updateSettings(p: Principal, input: unknown) {
 	requireAdmin(p);
 	const data = settingsSchema.parse(input);
 	const current = await readOrganization();
+	const nextOidc = data.oidc === undefined ? current.oidc_json : data.oidc;
+	if ((data.passwordLogin ?? Boolean(current.password_login)) === false && !nextOidc)
+		throw new IdentityError(409, "org_policy", "Configure OIDC before disabling passwords");
+	if ((data.requireSso ?? Boolean(current.require_sso)) && !nextOidc)
+		throw new IdentityError(409, "org_policy", "Configure OIDC before requiring SSO");
 	if (data.requireSso === true && !(data.oidc ?? current.oidc_json))
 		throw new IdentityError(403, "org_policy", "Configure SSO before requiring it");
 	const writes: DbOwnerStatement[] = [];
@@ -549,11 +576,11 @@ export async function deactivate(p: Principal, userId: string, input: unknown, b
 			now,
 			userId,
 		]),
-		statement("UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'user_deactivated' WHERE user_id = ?", [
-			now,
-			userId,
-		]),
-		statement("UPDATE api_keys SET revoked_at = ? WHERE user_id = ?", [now, userId]),
+		statement(
+			"UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'user_deactivated' WHERE user_id = ? AND revoked_at IS NULL",
+			[now, userId],
+		),
+		statement("UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", [now, userId]),
 		auditStatement(p, "user.deactivated", "user", userId, plan),
 	];
 	if (data.mode === "transfer") {
@@ -572,15 +599,7 @@ export async function deactivate(p: Principal, userId: string, input: unknown, b
 	await organizationWrite(writes);
 	if (data.mode === "purge") {
 		const { runOffboardPurge } = await import("./organization-purge");
-		void runOffboardPurge(p, jobId, userId, basePath).catch(async (error: unknown) => {
-			await organizationWrite([
-				statement("UPDATE org_jobs SET status = 'failed',error = ?,finished_at = ? WHERE id = ?", [
-					error instanceof Error ? error.message : String(error),
-					new Date().toISOString(),
-					jobId,
-				]),
-			]);
-		});
+		void settleOffboardPurge(runOffboardPurge(p, jobId, userId, basePath), jobId);
 	}
 	return { jobId };
 }

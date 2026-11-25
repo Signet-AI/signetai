@@ -12,6 +12,7 @@ import { withTranscriptImportOperationLock } from "./transcript-import-operation
 import { controlImport, createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
 
 export interface TranscriptImportAdmissionInput {
+	readonly author: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly fileName: string;
 	readonly bytes: Uint8Array;
@@ -38,6 +39,7 @@ export async function stageTranscriptImport(
 		const fileId = randomUUID();
 		const scope: TranscriptUploadScope = { agentId: input.agentId, jobId, fileId, generation: 0 };
 		await createJob({
+			author: input.author,
 			jobId,
 			agentId: input.agentId,
 			schemaId: "signet-export",

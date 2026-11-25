@@ -31,6 +31,7 @@ function seedMemory(agentId: string, content = "Built daily reflections."): stri
 	const id = randomUUID();
 	dbAccessor.withWriteTx((db) => {
 		txIngestEnvelope(db, {
+			author: { userId: null, credential: "system" },
 			id,
 			content,
 			contentHash: `test-${agentId}-${content}`,
@@ -68,6 +69,10 @@ function seedReflection(
 
 function app(): Hono {
 	const next = new Hono();
+	next.use("*", async (c, next) => {
+		c.set("author", { userId: null, credential: "local" });
+		await next();
+	});
 	registerReflectionRoutes(next, {
 		agentsDir: dir,
 		getDbAccessor: () => dbAccessor,

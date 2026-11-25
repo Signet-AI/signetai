@@ -1,3 +1,5 @@
+import { reportReadResult } from "../request-read";
+import { jsonBody } from "../request-body";
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
@@ -190,8 +192,9 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:182",
+			"routes/session-routes.ts:184",
 		);
+		reportReadResult(c, scopedAgent.agentId, hits.length);
 		return c.json({ query, hits, count: hits.length });
 	});
 
@@ -425,7 +428,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:425",
+			"routes/session-routes.ts:428",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -476,11 +479,11 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:435");
+		}, "routes/session-routes.ts:438");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {
-		const body = await c.req.json().catch(() => ({}));
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const id = typeof body.id === "string" ? body.id.trim() : "";
 		if (!id) {
 			return c.json({ error: "id is required" }, 400);
@@ -576,7 +579,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	});
 
 	app.post("/api/git/config", async (c) => {
-		const body = (await c.req.json()) as Partial<GitConfig>;
+		const body = (await jsonBody(c)()) as Partial<GitConfig>;
 
 		applyGitConfigPatch(gc, body);
 

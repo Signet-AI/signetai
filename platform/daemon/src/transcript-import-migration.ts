@@ -1,3 +1,4 @@
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -155,6 +156,7 @@ async function retainedCommit(agentId: string, recordId: string) {
 		JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts))),
 	);
 	return buildCompletedTranscriptCommit(raw, {
+		author: SYSTEM_AUTHOR,
 		agentId,
 		sourceId: record.source_id,
 		sourceRecordId: recordId,

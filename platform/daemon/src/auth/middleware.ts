@@ -35,7 +35,7 @@ export function isAuthOpenPath(path: string): boolean {
 		].includes(path)
 	)
 		return true;
-	if (path.startsWith("/api/auth/invites/")) return true;
+	if (path === "/api/auth/invites/lookup") return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
 	return false;
 }
@@ -60,7 +60,7 @@ export function getPeerAddress(c: Context): string | null {
 
 export let hybridProxyDetected = false;
 const FORWARDED_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
-function isLocalhost(c: Context): boolean {
+export function isLoopbackRequest(c: Context): boolean {
 	if (FORWARDED_HEADERS.some((header) => c.req.header(header) !== undefined)) {
 		if (!hybridProxyDetected) console.warn("[auth] Hybrid proxy detected; forwarded requests require credentials");
 		hybridProxyDetected = true;
@@ -95,7 +95,7 @@ export function createAuthMiddleware(
 				"auth",
 				token && config.mode !== "local" ? await verifyOpen(c.req.path, token) : { authenticated: false, claims: null },
 			);
-			if (config.mode === "hybrid" && isLocalhost(c) && !c.get("auth")?.claims) {
+			if (config.mode === "hybrid" && isLoopbackRequest(c) && !c.get("auth")?.claims) {
 				c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
 			}
 			await next();
@@ -106,7 +106,7 @@ export function createAuthMiddleware(
 			await next();
 			return;
 		}
-		if (config.mode === "hybrid" && isLocalhost(c)) {
+		if (config.mode === "hybrid" && isLoopbackRequest(c)) {
 			c.set("auth", token ? await verify(token) : { authenticated: false, claims: null });
 			await next();
 			return;
@@ -144,7 +144,7 @@ export function createAuthMiddleware(
 export function requirePermission(permission: Permission, config: AuthConfig): MiddlewareHandler {
 	return async (c, next) => {
 		const auth = c.get("auth");
-		if (config.mode === "hybrid" && isLocalhost(c) && (!auth || !auth.claims)) {
+		if (config.mode === "hybrid" && isLoopbackRequest(c) && (!auth || !auth.claims)) {
 			await next();
 			return;
 		}
@@ -181,7 +181,7 @@ export function requireScope(getTarget: (c: Context) => TokenScope, config: Auth
 	return async (c, next) => {
 		const auth = c.get("auth");
 
-		if (config.mode === "hybrid" && isLocalhost(c) && (!auth || !auth.claims)) {
+		if (config.mode === "hybrid" && isLoopbackRequest(c) && (!auth || !auth.claims)) {
 			await next();
 			return;
 		}

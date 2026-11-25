@@ -364,10 +364,10 @@ export function runDbOwnerWorker(): void {
 			throw new Error(`DB owner transaction must contain 1 to ${DB_OWNER_MAX_TRANSACTION_STATEMENTS} statements`);
 		}
 		return withBusyRetry(() => {
-			const results = statements.map((statement) => executeStatement({ ...statement, transactional: false }, context));
-			for (let i = 0; i < results.length; i++) {
-				const statement = statements[i];
-				const result = results[i];
+			const results: unknown[] = [];
+			for (const statement of statements) {
+				const result = executeStatement({ ...statement, transactional: false }, context);
+				results.push(result);
 				if (
 					statement?.requireChanges === true &&
 					typeof result === "object" &&
@@ -1235,6 +1235,11 @@ export function runDbOwnerWorker(): void {
 				} catch {}
 				throw error;
 			}
+		}
+		if (job.request.kind === "reflection_answer") {
+			const { txAnswerReflection } = await import("./transactions");
+			const input = job.request.input;
+			return withBusyRetry(() => txAnswerReflection(db, input), context);
 		}
 		if (job.request.kind === "organization_memory_purge") {
 			const { purgeAuthoredMemoryBatchInTx } = await import("./auth/organization-purge");

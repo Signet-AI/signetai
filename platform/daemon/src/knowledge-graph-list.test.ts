@@ -339,6 +339,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedEntity("e-signet", "Signet");
 		seedEntity("e-other", "Other");
 		const created = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "create_entity_alias",
@@ -349,6 +350,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "test",
 				operation: "archive_entity_alias",
@@ -358,6 +360,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(await listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(1);
 
 		const archived = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "archive_entity_alias",

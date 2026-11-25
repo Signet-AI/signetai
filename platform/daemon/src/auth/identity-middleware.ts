@@ -1,13 +1,15 @@
+import { authCookies } from "./cookies";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import type { AuthConfig } from "./config";
-import { createAuthMiddleware, isAuthOpenPath } from "./middleware";
+import { createAuthMiddleware, isAuthOpenPath, isLoopbackRequest } from "./middleware";
 import { verifyApiKey, isSignetApiKey } from "./api-keys";
 import { legacyPrincipal, localPrincipal, rolePermissions, type Principal } from "./principal";
 import {
 	activeUser,
 	bindAccess,
+	bindRequestedReadAgent,
 	IdentityError,
 	readBoundKey,
 	readOrganization,
@@ -17,7 +19,10 @@ import {
 	bindHookSpeaker,
 	type OrganizationRow,
 } from "./organization-store";
+import { AuthRateLimiter } from "./rate-limiter";
+import { getPeerAddress } from "./middleware";
 import { PERMISSIONS } from "./types";
+import { prepareJsonBody, JsonBodyError } from "../request-body";
 import {
 	reconcileAgentSources,
 	checkPrincipalProject,
@@ -36,15 +41,76 @@ declare module "hono" {
 }
 export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | null): MiddlewareHandler {
 	const legacy = createAuthMiddleware(config, secret, verifyApiKey);
+	const ipLimits = new AuthRateLimiter(60_000, 20),
+		nameLimits = new AuthRateLimiter(60_000, 5),
+		deviceLimits = new AuthRateLimiter(60_000, 20);
+	const openAuthPaths = new Set([
+		"/api/auth/login",
+		"/api/org/claim",
+		"/api/auth/refresh",
+		"/api/auth/device/start",
+		"/api/auth/device/token",
+		"/api/auth/invites/lookup",
+		"/api/auth/invites/accept",
+		"/api/auth/sso/start",
+		"/api/auth/sso/callback",
+	]);
+	function admit(limiter: AuthRateLimiter, key: string, c: Context): boolean {
+		const result = limiter.check(key);
+		if (!result.allowed) {
+			c.header("Retry-After", String(Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000))));
+			return false;
+		}
+		limiter.record(key);
+		return true;
+	}
+
 	return async (c, next) => {
 		c.set("organization", null);
+		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${getPeerAddress(c) ?? "unknown"}`, c))
+			return failure(c, new IdentityError(429, "rate_limit"));
+		try {
+			await prepareJsonBody(c);
+		} catch (error) {
+			if (error instanceof JsonBodyError) return c.json({ error: error.message, reason: error.reason }, error.status);
+			throw error;
+		}
+		if (c.req.method === "POST" && c.req.path === "/api/auth/login") {
+			const body = c.get("parsedJsonBody");
+			const username = typeof body === "object" && body !== null ? Reflect.get(body, "username") : undefined;
+			if (typeof username === "string" && !admit(nameLimits, username.trim().toLowerCase(), c))
+				return failure(c, new IdentityError(429, "rate_limit"));
+		}
+		if (
+			config.mode !== "team" &&
+			["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+			isAuthOpenPath(c.req.path) &&
+			c.req.header("origin") &&
+			c.req.header("origin") !== new URL(c.req.url).origin
+		)
+			return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
 		if (config.mode !== "team")
 			return legacy(c, async () => {
 				const claims = c.get("auth")?.claims;
-				c.set("principal", claims ? legacyPrincipal(claims) : localPrincipal());
+				if (claims) {
+					c.set("principal", legacyPrincipal(claims));
+					c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				} else if (config.mode === "local" || isLoopbackRequest(c)) {
+					c.set("principal", localPrincipal());
+					c.set("author", { userId: null, credential: "local" });
+				}
 				return next();
 			});
 		const org = await readOrganization();
+		if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) && isAuthOpenPath(c.req.path)) {
+			const origin = c.req.header("origin");
+			if (
+				origin &&
+				origin !== new URL(c.req.url).origin &&
+				(!org.public_url || origin !== new URL(org.public_url).origin)
+			)
+				return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
+		}
 		if (!org.claimed_at)
 			return legacy(c, async () => {
 				const claims = c.get("auth")?.claims;
@@ -61,7 +127,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		c.set("organization", org);
 		const open = isAuthOpenPath(c.req.path);
 		const bearer = c.req.header("authorization");
-		const cookie = !bearer ? getCookie(c, "signet_session") : undefined;
+		const cookie = !bearer ? getCookie(c, authCookies(c).session) : undefined;
 		const token = bearer?.startsWith("Bearer ") ? bearer.slice(7) : cookie;
 		if (!token) {
 			c.set("auth", { authenticated: false, claims: null });
@@ -92,9 +158,9 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 						secure: new URL(c.req.url).protocol === "https:" || org.public_url?.startsWith("https:") === true,
 						maxAge: org.session_ttl_seconds,
 					};
-					setCookie(c, "signet_session", token, { ...options, httpOnly: true });
-					const csrfCookie = getCookie(c, "signet_csrf");
-					if (csrfCookie) setCookie(c, "signet_csrf", csrfCookie, { ...options, httpOnly: false });
+					setCookie(c, authCookies(c).session, token, { ...options, httpOnly: true });
+					const csrfCookie = getCookie(c, authCookies(c).csrf);
+					if (csrfCookie) setCookie(c, authCookies(c).csrf, csrfCookie, { ...options, httpOnly: false });
 				}
 				c.set("auth", {
 					authenticated: true,
@@ -162,21 +228,23 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				c.set("auth", { ...verified, claims: { ...verified.claims, role: p.role, permissions: [...p.permissions] } });
 			} else throw new IdentityError(401, "legacy_token");
 			c.set("principal", p);
+			if (
+				!open &&
+				/^\/api\/auth\/device\/[^/]+$/.test(c.req.path) &&
+				!admit(deviceLimits, p.userId ?? p.credential.id, c)
+			)
+				return failure(c, new IdentityError(429, "rate_limit"));
 			c.set("author", { userId: p.userId, credential: `${p.credential.kind}:${p.credential.id}` });
 			if (!open) {
 				for (const header of ["x-signet-actor", "x-signet-actor-type"]) {
 					const actor = c.req.header(header);
 					if (actor !== undefined && actor !== p.userId) throw new IdentityError(403, "actor_conflict");
 				}
-				let body: Record<string, unknown> = {};
-				if (
-					["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
-					c.req.header("content-type")?.includes("application/json")
-				) {
-					const parsed = await c.req.json<unknown>();
-					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))
-						body = z.record(z.string(), z.unknown()).parse(parsed);
-				}
+				const parsed = c.get("parsedJsonBody");
+				const body =
+					typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+						? z.record(z.string(), z.unknown()).parse(parsed)
+						: {};
 				if (p.harness && typeof body.harness === "string" && body.harness !== p.harness)
 					throw new IdentityError(403, "org_policy", "Credential is bound to another harness");
 				const headerSession = c.req.header("x-signet-session-key");
@@ -209,6 +277,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				if (p.boundAgentId && requested.value && requested.value !== p.boundAgentId)
 					throw new IdentityError(403, "agent_binding_conflict");
 				c.set("requestedOrganizationAgent", requested.value);
+				if (organizationReadRequest(c.req.method, c.req.path)) await bindRequestedReadAgent(p, requested.value);
 				const project = checkPrincipalProject(
 					p,
 					typeof body.project === "string" ? body.project : c.req.query("project"),
@@ -229,7 +298,9 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					if (!target.ok) throw new IdentityError(target.error.status, target.error.reason);
 					if (
 						sessionKey &&
-						/^\/api\/hooks?\/(session-start|user-prompt-submit|session-end|remember)$/.test(c.req.path)
+						/^\/api\/hooks?\/(session-start|user-prompt-submit|session-end|remember|compaction-complete)$/.test(
+							c.req.path,
+						)
 					) {
 						if (!p.permissions.has("remember")) throw new IdentityError(403, "permission");
 						await bindHookSpeaker(

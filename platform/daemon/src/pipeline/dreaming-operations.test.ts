@@ -418,6 +418,7 @@ describe("dreaming operations", () => {
 			),
 		).toEqual({ c: 0 });
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "agent-a",
 			id: proposalId,
 			actor: "dashboard",

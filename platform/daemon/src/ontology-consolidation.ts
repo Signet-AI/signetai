@@ -1,3 +1,4 @@
+import { requireWriteAuthor } from "./auth/audit-owner";
 import type { LlmProvider, OntologyProposal, OntologyProposalStatus } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { createOntologyProposals, listOntologyProposalConflicts, listOntologyProposals } from "./ontology-proposals";
@@ -353,7 +354,7 @@ export async function consolidateOntologyProposals(
 			sourceKind: "ontology_consolidation",
 			sourceId: `proposals:${source.items.length}`,
 			createdBy: params.createdBy?.trim() || "ontology-consolidate",
-			author: params.author,
+			author: requireWriteAuthor(params.author),
 		})),
 	);
 	return {

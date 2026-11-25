@@ -1,3 +1,5 @@
+import { resolveOperationalActor } from "./utils";
+import { jsonBody } from "../request-body";
 import type { Context, Hono } from "hono";
 import { spawnHidden } from "@signet/core";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -37,8 +39,7 @@ import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
 
 function resolveRepairContext(c: Context): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "manual repair";
-	const actor = c.req.header("x-signet-actor") ?? "operator";
-	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as "operator" | "agent" | "daemon";
+	const { actor, actorType } = resolveOperationalActor(c);
 	const requestId = c.req.header("x-signet-request-id") ?? crypto.randomUUID();
 	return { reason, actor, actorType, requestId };
 }
@@ -143,7 +144,7 @@ export function registerRepairRoutes(
 		const ctx = resolveRepairContext(c);
 		let repair = false;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			repair = body?.repair === true;
 		} catch {}
 		const result = await checkFtsConsistency(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, repair);
@@ -193,7 +194,7 @@ export function registerRepairRoutes(
 
 		let body: Record<string, unknown> = {};
 		try {
-			body = asRecord(await c.req.json());
+			body = asRecord(await jsonBody(c)());
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 			operationId = readString(body, "operationId") ?? readString(body, "operation_id");
@@ -240,7 +241,7 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/re-embed-migration", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const body = asRecord(await c.req.json().catch(() => ({})));
+		const body = asRecord(await jsonBody(c)().catch((): Record<string, unknown> => ({})));
 		const scoped = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			effectiveAuthConfig.mode,
@@ -269,7 +270,7 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/resync-vec", async (c) => {
 		const cfg = resolveMemoryConfig(AGENTS_DIR);
-		const body = asRecord(await c.req.json().catch(() => ({})));
+		const body = asRecord(await jsonBody(c)().catch((): Record<string, unknown> => ({})));
 		const ctx = resolveRepairContext(c);
 		const globalRejection = rejectGlobalVectorRepair(body);
 		if (globalRejection !== null) return globalRejection;
@@ -297,7 +298,7 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/clean-orphans", async (c) => {
 		const cfg = resolveMemoryConfig(AGENTS_DIR);
-		const body = asRecord(await c.req.json().catch(() => ({})));
+		const body = asRecord(await jsonBody(c)().catch((): Record<string, unknown> => ({})));
 		const ctx = resolveRepairContext(c);
 		const globalRejection = rejectGlobalVectorRepair(body);
 		if (globalRejection !== null) return globalRejection;
@@ -346,7 +347,7 @@ export function registerRepairRoutes(
 			semanticEnabled?: boolean;
 		} = {};
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") options.batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") options.dryRun = body.dryRun;
 			if (typeof body?.semanticThreshold === "number") options.semanticThreshold = body.semanticThreshold;
@@ -372,7 +373,7 @@ export function registerRepairRoutes(
 		let batchSize = 500;
 		let dryRun = false;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
 		} catch {}
@@ -390,7 +391,7 @@ export function registerRepairRoutes(
 		let dryRun = false;
 		let maxMentions = 1;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body?.maxMentions === "number") maxMentions = body.maxMentions;
@@ -413,7 +414,7 @@ export function registerRepairRoutes(
 		let dryRun = true;
 		let body: Record<string, unknown> = {};
 		try {
-			body = asRecord(await c.req.json());
+			body = asRecord(await jsonBody(c)());
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.candidateLimit === "number") candidateLimit = body.candidateLimit;
 			if (typeof body?.inspectionLimit === "number") inspectionLimit = body.inspectionLimit;
@@ -510,7 +511,7 @@ export function registerRepairRoutes(
 		let dryRun = false;
 		let body: Record<string, unknown> = {};
 		try {
-			body = asRecord(await c.req.json());
+			body = asRecord(await jsonBody(c)());
 			if (typeof body.batchSize === "number" && Number.isFinite(body.batchSize) && body.batchSize > 0) {
 				batchSize = Math.min(Math.floor(body.batchSize), 500);
 			}
@@ -659,7 +660,7 @@ export function registerRepairRoutes(
 
 		let batchSize = 50;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			if (typeof body?.batchSize === "number") batchSize = Math.min(body.batchSize, 200);
 		} catch {}
 
@@ -750,7 +751,7 @@ export function registerRepairRoutes(
 	app.post("/api/repair/dead-memories/forget", async (c) => {
 		let ids: unknown;
 		try {
-			const body = await c.req.json();
+			const body = await jsonBody(c)();
 			ids = body?.ids;
 		} catch {
 			return c.json({ error: "Request body must be JSON with an ids array" }, 400);
@@ -813,7 +814,7 @@ export function registerRepairRoutes(
 	});
 
 	app.post("/api/troubleshoot/exec", async (c) => {
-		const body = await c.req.json().catch(() => null);
+		const body = await jsonBody(c)().catch(() => null);
 		const key = typeof body === "object" && body !== null && "key" in body ? String(body.key) : "";
 
 		const cmd = TROUBLESHOOT_COMMANDS[key];

@@ -1,4 +1,4 @@
-import { writeAttributionStatements } from "../auth/write-attribution";
+import { authoredAuditStatements } from "../auth/audit-owner";
 import type { WriteAuthor } from "../auth/audit-owner";
 import type { Database } from "bun:sqlite";
 import { admitSessionTranscriptInDb } from "../session-transcripts";
@@ -538,7 +538,7 @@ function createDreamingPassStatements(
 			 ON CONFLICT(id) DO NOTHING`,
 			[id, agentId, mode, hash, policy.source],
 		),
-		...writeAttributionStatements(author, { kind: "dreaming_pass", id, agentId }),
+		...authoredAuditStatements(author, "dreaming.started", "dreaming_pass", id, agentId),
 	];
 }
 

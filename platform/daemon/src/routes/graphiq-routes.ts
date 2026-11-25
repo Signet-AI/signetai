@@ -1,3 +1,4 @@
+import { jsonBody } from "../request-body";
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -87,7 +88,7 @@ export function registerGraphiqRoutes(app: Hono): void {
 	});
 
 	app.post("/api/graphiq/index", async (c) => {
-		const body = await c.req.json().catch(() => ({}));
+		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const projectPath = body.path;
 		if (typeof projectPath !== "string" || !projectPath.trim()) {
 			return c.json({ success: false, error: "path is required" }, 400);

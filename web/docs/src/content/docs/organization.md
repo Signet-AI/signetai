@@ -34,6 +34,8 @@ Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/s
 
 An administrator creates an invitation with `POST /api/org/invites`, choosing a role and optional group IDs. Signet returns a one-use link; it does not send email. Invitations expire after seven days and can be revoked.
 
+Clients inspect an invitation with `POST /api/auth/invites/lookup` and a JSON `{ token }` body. Do not put the token in an API path.
+
 Password accounts accept through `POST /api/auth/invites/accept`. An SSO-required organization sends invitees to its SSO flow instead. The invitation's email, when specified, must match the verified SSO identity.
 
 ## Roles and teams
@@ -80,15 +82,25 @@ Register `<publicUrl>/api/auth/sso/callback` with your identity provider. Signet
 
 An allowed-domain user can join on first sign-in. Mapped identity-provider groups synchronize during sign-in, including removing stale provider-managed memberships. Manually managed memberships are retained.
 
+Signet rejects disabling password login until an OIDC provider is configured. New password hashes use 600,000 PBKDF2 iterations; existing hashes continue to verify using their stored iteration count.
+
 Keep password login enabled until SSO is working. `requireSso` prevents password sign-in. Changing authentication policy does not revoke existing sessions; use session or device revocation when needed.
 
 ## Offboarding and audit
 
-Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Pinned evidence can make a purge fail; inspect the job rather than assuming it completed.
+Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.
 
 Deactivation revokes credentials before returning. The next request from a deactivated user fails, including a previously valid connector request. Reactivation does not restore revoked sessions or keys.
 
 Credential and administrative changes are audited with their transaction. Read events are buffered and flushed every two seconds; the buffer is capped at 10,000 events. Overflow is visible in status and an `audit.dropped` event. Audit queries require `audit`; exports use NDJSON. Administrators can configure audit retention.
+
+## Request safety and reverse proxies
+
+JSON API mutations require `Content-Type: application/json` when a body is present; other media types return `415 unsupported_media_type`. Empty JSON bodies are accepted. Multipart source uploads (`POST /api/sources/import`), streamed import file uploads (`PUT /api/sources/imports/:id/files/:id`), and the MCP transport use their own parsers and limits.
+
+Open authentication mutations reject an `Origin` that matches neither the daemon origin nor `publicUrl`. Secure deployments use `__Host-signet_session`, `__Host-signet_csrf`, and `__Host-signet_oidc_state` cookies; HTTP loopback uses the plain names. Cookie-authenticated mutations still require the CSRF header.
+
+Open authentication endpoints are rate-limited by peer IP, with an additional username limit for password login. Device lookups and approvals also have signed-in limits. Behind a reverse proxy the peer is the proxy, so the IP limit is **per proxy**, not per forwarded client address. Forwarded headers never restore loopback trust in hybrid mode. Pending device flows are capped at 1,000 and expired flows are pruned. OIDC discovery is cached for five minutes.
 
 ## Upgrade an existing team workspace
 

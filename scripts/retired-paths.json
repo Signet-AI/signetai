@@ -1,5 +1,10 @@
 [
 	{
+		"path": "platform/daemon/src/auth/write-attribution.ts",
+		"reason": "Record authors at native write boundaries, never in organization job side records.",
+		"retiredIn": "2026-11-25"
+	},
+	{
 		"path": "docs/specs/dependencies.yaml",
 		"reason": "Retire the spec dependency index.",
 		"retiredIn": "2026-11-17"

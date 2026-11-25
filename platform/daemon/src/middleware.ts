@@ -1,3 +1,6 @@
+import "./request-read";
+import { organizationReadRequest } from "./auth/agent-access";
+import { requestRoute } from "./request-route";
 import { isIP } from "node:net";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -38,13 +41,32 @@ export function registerGlobalMiddleware(app: Hono): void {
 		}
 		return next();
 	});
+	const limitBody = bodyLimit({ maxSize: 10 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) });
+	const stopBody = bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) });
+	const importBody = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: "payload too large" }, 413) });
+	app.use("*", (c, next) =>
+		c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)
+			? next()
+			: c.req.path === "/api/hooks/stop"
+				? stopBody(c, next)
+				: c.req.method === "POST" && c.req.path === "/api/sources/imports"
+					? importBody(c, next)
+					: limitBody(c, next),
+	);
+	let identityConfig = authConfig,
+		identitySecret = authSecret,
+		identity = createIdentityMiddleware(identityConfig, identitySecret);
 	app.use("*", async (c, next) => {
 		if (authConfig.mode !== "local" && !authSecret) {
 			c.status(503);
 			return c.json({ error: "server initializing" });
 		}
-		const mw = createIdentityMiddleware(authConfig, authSecret);
-		return mw(c, next);
+		if (identityConfig !== authConfig || identitySecret !== authSecret) {
+			identityConfig = authConfig;
+			identitySecret = authSecret;
+			identity = createIdentityMiddleware(identityConfig, identitySecret);
+		}
+		return identity(c, next);
 	});
 	app.use("*", async (c, next) => {
 		if (authConfig.mode !== "team" && !c.get("auth")?.claims && isForeignBrowserWrite(c)) {
@@ -52,26 +74,21 @@ export function registerGlobalMiddleware(app: Hono): void {
 		}
 		return next();
 	});
-	const limitBody = bodyLimit({
-		maxSize: 10 * 1_048_576,
-		onError: (c) => c.json({ error: "payload too large" }, 413),
-	});
-	app.use("*", (c, next) =>
-		(c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)) ||
-		(c.req.method === "POST" && c.req.path === "/api/hooks/stop")
-			? next()
-			: limitBody(c, next),
-	);
 	app.use("*", async (c, next) => {
 		const start = Date.now();
 		await next();
 		const duration = Date.now() - start;
 		const principal = c.get("principal");
-		if (c.get("organization") && principal && c.req.method === "GET" && c.req.path.startsWith("/api/"))
-			bufferReadAudit(principal, c.req.path, c.get("requestedOrganizationAgent"), null);
-		logger.api.request(c.req.method, c.req.path, c.res.status, duration);
+		if (
+			c.get("organization") &&
+			principal &&
+			organizationReadRequest(c.req.method, c.req.path) &&
+			c.req.path.startsWith("/api/")
+		)
+			bufferReadAudit(principal, requestRoute(c), c.get("readAuditAgent"), c.get("readAuditCount") ?? null);
+		logger.api.request(c.req.method, requestRoute(c), c.res.status, duration);
 		const actor = c.req.header("x-signet-actor");
-		analyticsCollector.recordRequest(c.req.method, c.req.path, c.res.status, duration, actor ?? undefined);
+		analyticsCollector.recordRequest(c.req.method, requestRoute(c), c.res.status, duration, actor ?? undefined);
 		const p = c.req.path;
 		if (p.includes("/remember") || p.includes("/save")) {
 			analyticsCollector.recordLatency("remember", duration);

@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { txAnswerReflection } from "./transactions";
 import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -138,10 +139,10 @@ async function executeInlineOwnerRequest(
 	}
 	if (request.kind === "transaction") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
-			const results = request.transaction.statements.map((statement) => inlineStatement(db, statement));
-			for (let i = 0; i < results.length; i++) {
-				const statement = request.transaction.statements[i];
-				const result = results[i];
+			const results: unknown[] = [];
+			for (const statement of request.transaction.statements) {
+				const result = inlineStatement(db, statement);
+				results.push(result);
 				if (
 					statement?.requireChanges === true &&
 					typeof result === "object" &&
@@ -231,6 +232,11 @@ async function executeInlineOwnerRequest(
 			return {
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
+		});
+	if (request.kind === "reflection_answer")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Reflection requires writer");
+			return txAnswerReflection(db, request.input);
 		});
 	if (request.kind === "organization_memory_purge")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
@@ -685,10 +691,20 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
+export async function dbOwnerReflectionAnswer(
+	input: import("./transactions").ReflectionAnswerInput,
+	accessor: DbAccessor,
+): Promise<boolean> {
+	return submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "reflection_answer", input },
+		{ operation: "reflection.answer", lane: "write", deadlineMs: 10000 },
+	);
+}
 export async function dbOwnerOrganizationPurge(
 	userId: string,
 	author: import("./auth/audit-owner").WriteAuthor,
-): Promise<{ removed: number; remaining: number }> {
+): Promise<import("./auth/organization-purge").PurgeBatchResult> {
 	return submitWithAdmission(
 		await getDbOwner(),
 		{ kind: "organization_memory_purge", userId, author },
