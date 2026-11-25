@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { describe, expect, it } from "bun:test";
 import { formatProtectionLine, projectProtectionStatus } from "./protection";
 const payload = {

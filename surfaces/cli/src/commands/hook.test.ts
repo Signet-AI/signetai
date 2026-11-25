@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Readable } from "node:stream";
 import { Command } from "commander";

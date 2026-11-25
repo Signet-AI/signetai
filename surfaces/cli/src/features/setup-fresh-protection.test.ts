@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

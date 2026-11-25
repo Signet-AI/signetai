@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { registerMemoryCommands } from "./memory";

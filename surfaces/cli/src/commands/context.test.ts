@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
