@@ -1043,7 +1043,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							}
 							const encoded = await encodeExportRecord({ kind: table, ...row }, parts, c.req.raw.signal);
 							for (let offset = 0; offset < encoded.length; offset += 65536)
-								await output.write(encoded.slice(offset, offset + 65536));
+								await output.write(encoded.subarray(offset, offset + 65536));
 						}
 
 						if (rows.length === 0) break;

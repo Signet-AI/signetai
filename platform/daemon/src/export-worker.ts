@@ -6,7 +6,7 @@ if (!port) throw new Error("Export requires a worker thread");
 port.on("message", (data: ExportWorkerInput) => {
 	const content = redactCredentials(Buffer.concat(data.parts).toString("utf8"));
 	if (data.format === "authored") {
-		port.postMessage(JSON.stringify({ ...data.record, content }) + "\n");
+		port.postMessage(Buffer.from(JSON.stringify({ ...data.record, content }) + "\n", "utf8"));
 		return;
 	}
 	const record = buildExportTranscriptRecord({ ...data.record, content });

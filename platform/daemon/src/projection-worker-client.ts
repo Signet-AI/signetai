@@ -24,8 +24,8 @@ export function encodeExportRecord(
 	record: Record<string, unknown>,
 	parts: readonly Uint8Array[],
 	signal?: AbortSignal,
-): Promise<string> {
-	return runContentWorker<string>("export-worker", { format: "authored", record, parts }, signal, 30000);
+): Promise<Uint8Array> {
+	return runContentWorker<Uint8Array>("export-worker", { format: "authored", record, parts }, signal, 30000);
 }
 function runContentWorker<Result>(
 	kind: "projection-worker" | "export-worker",

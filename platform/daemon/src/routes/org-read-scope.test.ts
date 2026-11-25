@@ -996,3 +996,30 @@ test("B8 scoped owner caches schema column inspection", async () => {
 		expect(inspections).toBe(1);
 	});
 });
+
+test("B7 byte streaming preserves multibyte characters at every chunk boundary", async () => {
+	const content = "🙂a".repeat(2 * 1024 * 1024);
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES ('b7-unicode','beta',?,'b7-unicode',?,?,'bob')",
+			)
+			.run(content, at, at),
+	);
+	const response = await request("/api/org/export?author=bob", "bob");
+	const rows: unknown[] = response.body
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	const row = rows.find(
+		(row) => row !== null && typeof row === "object" && "sessionKey" in row && row.sessionKey === "b7-unicode",
+	);
+	if (!row || typeof row !== "object" || !("content" in row) || typeof row.content !== "string")
+		throw new Error("Unicode export missing");
+	expect(createHash("sha256").update(row.content).digest("hex")).toBe(
+		createHash("sha256").update(content).digest("hex"),
+	);
+	getDbAccessor().withWriteTx((db) =>
+		db.prepare("DELETE FROM session_transcripts WHERE session_key='b7-unicode'").run(),
+	);
+}, 60000);
