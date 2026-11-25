@@ -309,10 +309,8 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 		expect(config.provider).toEqual({ custom: {} });
 		expect(config.plugin).toEqual(["./existing.mjs", ["package-plugin", { option: true }], "./plugins/signet.mjs"]);
 		expect(config.mcp.signet).toEqual({
-			type: "remote",
-			url: "https://daemon.example.test:3850/mcp",
-			headers: { Authorization: "Bearer {file:./plugins/.signet-api-key}" },
-			oauth: false,
+			type: "local",
+			command: ["signet", "connector", "mcp", "opencode"],
 			enabled: true,
 		});
 		expect(readConfig(jsonPath).mcp).toBeUndefined();
@@ -320,13 +318,12 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 		expect(existsSync(join(ocPath(), "AGENTS.md"))).toBe(false);
 
 		const plugin = readFileSync(join(ocPath(), "plugins", "signet.mjs"), "utf-8");
-		expect(plugin).toContain('process.env["SIGNET_DAEMON_URL"] = "https://daemon.example.test:3850";');
-		expect(plugin).toContain("__signetReadFileSync");
+		expect(plugin).not.toContain('process.env["SIGNET_DAEMON_URL"] =');
+		expect(plugin).not.toContain("__signetReadFileSync");
 		expect(plugin).not.toContain("sig_sk_opencode_test_secret");
-		expect(plugin).toContain('process.env["SIGNET_AGENT_ID"] = "opencode-remote";');
+		expect(plugin).not.toContain('process.env["SIGNET_AGENT_ID"] =');
 		const apiKeyFile = join(ocPath(), "plugins", ".signet-api-key");
-		expect(readFileSync(apiKeyFile, "utf-8")).toBe("sig_sk_opencode_test_secret\n");
-		if (process.platform !== "win32") expect(statSync(apiKeyFile).mode & 0o777).toBe(0o600);
+		expect(existsSync(apiKeyFile)).toBe(false);
 	});
 
 	it("rejects invalid remote daemon URLs before writing connector files", async () => {
@@ -371,7 +368,7 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 		const config = readConfig(configPath);
 		expect(config.agent["signet-pipeline"]).toEqual(EXPECTED_AGENT);
 		expect(config.mcp.signet.type).toBe("local");
-		expect(config.mcp.signet.command).toEqual(["signet-mcp"]);
+		expect(config.mcp.signet.command).toEqual(["signet", "connector", "mcp", "opencode"]);
 		expect(config.mcp.signet.enabled).toBe(true);
 		expect(config.plugin).toEqual(["./plugins/signet.mjs"]);
 	});
