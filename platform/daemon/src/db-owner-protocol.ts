@@ -361,6 +361,7 @@ export interface DbOwnerTranscriptBulkCommit {
 	};
 }
 export type DbOwnerRequest =
+	| { readonly kind: "content_read"; readonly request: import("./content-read").ContentReadRequest }
 	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";

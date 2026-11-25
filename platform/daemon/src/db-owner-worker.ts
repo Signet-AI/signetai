@@ -1172,6 +1172,10 @@ export function runDbOwnerWorker(): void {
 				? executeReadOnlyStatement(job.request.statement)
 				: executeStatement(job.request.statement, context);
 		}
+		if (job.request.kind === "content_read") {
+			const { executeContentRead } = await import("./content-read-owner");
+			return executeContentRead(db, job.request.request);
+		}
 		if (job.request.kind === "embedding_projection") {
 			const { executeEmbeddingProjection } = await import("./embedding-projection-owner");
 			const result = executeEmbeddingProjection(db, job.request.request);

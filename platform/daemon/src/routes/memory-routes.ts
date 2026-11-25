@@ -9,6 +9,7 @@ import {
 	vectorSearchWithMetadata,
 } from "@signet/core";
 import type { Context, Hono, MiddlewareHandler } from "hono";
+import { stream } from "hono/streaming";
 import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
@@ -22,6 +23,9 @@ import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
 import { dbOwnerQuery } from "../db-owner-runtime";
+import { contentRead } from "../content-read";
+import { readScopeSql, type ReadScope } from "../read-scope";
+import { resolveRouteReadScope } from "./read-scope";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
 import { stagingCoverage } from "../embedding-index-migration";
@@ -34,13 +38,7 @@ import type { EmbeddingRole } from "../embedding-profile";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
-import {
-	buildAgentScopeClause,
-	currentMemorySql,
-	hybridRecall,
-	type RecallParams,
-	type RecallResponse,
-} from "../memory-search";
+import { currentMemorySql, hybridRecall, type RecallParams, type RecallResponse } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
@@ -564,6 +562,7 @@ function resolveMemoryScopedAgentId(
 }
 
 interface MemoryReadScope {
+	readonly readScope: ReadScope;
 	readonly agentId: string;
 	readonly readPolicy: AgentRosterReadPolicy;
 	readonly policyGroup: string | null;
@@ -593,37 +592,21 @@ async function resolveMemoryReadScope(
 	c: Context,
 	options: { readonly allowAllAgents?: boolean } = {},
 ): Promise<MemoryReadScope | Response> {
-	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
-	const project = parseOptionalString(c.get("auth")?.claims?.scope?.project);
-	const projectSql = project ? " AND m.project = ?" : "";
-	const projectArgs = project ? [project] : [];
-	if (requestedAgentId?.trim() === ALL_AGENTS) {
-		if (!options.allowAllAgents) return c.json({ error: "this route does not support an all-agents view" }, 400);
-		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
-		if (denied) return denied;
-		return {
-			agentId: ALL_AGENTS,
-			readPolicy: "shared",
-			policyGroup: null,
-			project,
-			sql: ` AND m.visibility != 'archived'${projectSql}`,
-			args: projectArgs,
-		};
-	}
-	const scopedAgent = resolveMemoryScopedAgentId(c, {
-		agentId: requestedAgentId,
-		sessionKey: c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key"),
-	});
-	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-	const agentScope = await getAgentScope(scopedAgent.agentId);
-	const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
+	const resolved = await resolveRouteReadScope(c, options);
+	if (resolved instanceof Response) return resolved;
+	const access = readScopeSql("m", resolved.scope);
+	const policy = await getAgentScope(resolved.agentId);
 	return {
-		agentId: scopedAgent.agentId,
-		readPolicy: agentScope.readPolicy,
-		policyGroup: agentScope.policyGroup,
-		project,
-		sql: `${access.sql}${projectSql}`,
-		args: [...(access.args as DbOwnerParameter[]), ...projectArgs],
+		readScope: resolved.scope,
+		agentId: resolved.agentId,
+		readPolicy: policy.readPolicy,
+		policyGroup: policy.policyGroup,
+		project: resolved.scope.projects?.length === 1 ? resolved.scope.projects[0] : undefined,
+		sql: access.sql,
+		args: access.args.map((value) => {
+			if (typeof value !== "string" && typeof value !== "number") throw new Error("Invalid read scope parameter");
+			return value;
+		}),
 	};
 }
 
@@ -991,6 +974,33 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		return next();
 	});
+	app.get("/api/org/export", async (c) => {
+		const principal = c.get("principal");
+		const author = c.req.query("author");
+		if (!author || author.length > 128) return c.json({ error: "author is required" }, 400);
+		if (!c.get("organization") || !principal || (principal.userId !== author && principal.role !== "admin"))
+			return c.json({ error: "not permitted", reason: "not_owner" }, 403);
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		c.header("Content-Type", "application/x-ndjson");
+		c.header("Cache-Control", "no-store");
+		return stream(c, async (output) => {
+			for (const table of ["memories", "session_transcripts", "memory_artifacts"] as const) {
+				let cursor = "";
+				while (!c.req.raw.signal.aborted) {
+					const rows = await contentRead<ReadonlyArray<Record<string, unknown>>>(
+						{ op: "export", table, author, scope: resolved.scope, cursor, limit: 100 },
+						c.req.raw.signal,
+					);
+					for (const row of rows) await output.write(`${JSON.stringify({ kind: table, ...row })}\n`);
+					if (rows.length < 100) break;
+					const next = rows.at(-1)?.id;
+					if (typeof next !== "string" || next <= cursor) throw new Error("Invalid export cursor");
+					cursor = next;
+				}
+			}
+		});
+	});
 	app.get("/api/memories", async (c) => {
 		try {
 			const limit = parseBoundedInt(c.req.query("limit"), 100, 1, MEMORY_LIST_MAX_LIMIT);
@@ -1003,7 +1013,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const memories = await dbOwnerQuery<Array<{ content: string; project: string | null }>>(
 				{
-					sql: `SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id, m.project
+					sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id, m.project
 					 FROM memories m
 					 ${whereSql}
 					 ORDER BY m.created_at DESC
@@ -1064,7 +1074,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (scope instanceof Response) return scope;
 			const rows = await dbOwnerQuery<Array<{ id: string; content: string }>>(
 				{
-					sql: `SELECT m.id, m.content, m.access_count, m.importance, m.type, m.tags, m.agent_id
+					sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.access_count, m.importance, m.type, m.tags, m.agent_id
 					 FROM memories m
 					 WHERE m.access_count > 0
 					   AND COALESCE(m.is_deleted, 0) = 0
@@ -1106,7 +1116,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			};
 			const injectedNeverUsed = await slice<{ id: string; content: string; sessions: number }>(
 				"memory.curator_injected_never_used",
-				`SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
+				`SELECT m.id, m.content, m.author_user_id AS authorUserId, COUNT(DISTINCT sm.session_key) AS sessions
 				 FROM session_memories sm
 				 JOIN memories m ON m.id = sm.memory_id
 				 WHERE sm.agent_id = ?
@@ -1122,7 +1132,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			);
 			const contradicted = await slice<{ id: string; content: string; contradicted_count: number }>(
 				"memory.curator_contradicted",
-				`SELECT m.id, m.content, COUNT(*) AS contradicted_count
+				`SELECT m.id, m.content, m.author_user_id AS authorUserId, COUNT(*) AS contradicted_count
 				 FROM session_memories sm
 				 JOIN memories m ON m.id = sm.memory_id
 				 WHERE sm.agent_id = ?
@@ -1136,7 +1146,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			);
 			const highUsed = await slice<{ id: string; content: string; used_count: number }>(
 				"memory.curator_high_used",
-				`SELECT m.id, m.content, COUNT(*) AS used_count
+				`SELECT m.id, m.content, m.author_user_id AS authorUserId, COUNT(*) AS used_count
 				 FROM session_memories sm
 				 JOIN memories m ON m.id = sm.memory_id
 				 WHERE sm.agent_id = ?
@@ -1262,22 +1272,26 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			let rows: Array<Record<string, unknown>> = [];
 			if (query) {
 				try {
+					const shards = await contentRead<string[]>({ op: "shards", base: "memories_fts", scope: scope.readScope });
+					const shardSql = shards
+						.map((table) => `SELECT rowid, bm25(${table}) AS score FROM ${table} WHERE ${table} MATCH ?`)
+						.join(" UNION ALL ");
 					rows = await search(
 						"memory.search_fts",
-						`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
-						        m.type, m.pinned, m.agent_id, bm25(memories_fts) as score
-						 FROM memories_fts
-						 JOIN memories m ON memories_fts.rowid = m.rowid
-						 WHERE memories_fts MATCH ?${clause}${liveSql}
-						 ORDER BY score
+						`SELECT m.id, m.content, m.author_user_id AS authorUserId, m.created_at, m.who, m.importance, m.tags,
+						        m.type, m.pinned, m.agent_id, fts.score
+						 FROM (${shardSql}) fts
+						 JOIN memories m ON fts.rowid = m.rowid
+						 WHERE 1=1${clause}${liveSql}
+						 ORDER BY score, m.id
 						 LIMIT ?`,
-						[query, ...filterArgs, limit],
+						[...shards.map(() => query), ...filterArgs, limit],
 					);
 				} catch (error) {
 					if (!isFtsQuerySyntaxError(error)) throw error;
 					rows = await search(
 						"memory.search_like",
-						`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id
+						`SELECT m.id, m.content, m.author_user_id AS authorUserId, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id
 						 FROM memories m
 						 WHERE (m.content LIKE ? OR m.tags LIKE ?)${clause}${liveSql}
 						 ORDER BY m.created_at DESC
@@ -1288,7 +1302,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			} else {
 				rows = await search(
 					"memory.search_filters",
-					`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id,
+					`SELECT m.id, m.content, m.author_user_id AS authorUserId, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id,
 					        CASE WHEN m.pinned = 1 THEN 1.0
 					             ELSE m.importance * MAX(0.1, POWER(0.95,
 					               CAST(JulianDay('now') - JulianDay(m.created_at) AS INTEGER)))
@@ -2157,7 +2171,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (scope instanceof Response) return scope;
 		const row = await dbOwnerQuery<Record<string, unknown> | undefined>(
 			{
-				sql: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who, m.agent_id,
+				sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.type, m.importance, m.tags, m.pinned, m.who, m.agent_id,
 				        m.source_id, m.source_type, m.source_path, m.runtime_path,
 				        m.idempotency_key, m.project, NULL AS session_id, m.confidence,
 				        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
@@ -2286,7 +2300,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			superseded_at: string | null;
 			superseded_reason: string | null;
 		};
-		const lineageColumns = `m.id, m.content, m.type, m.importance, m.version, m.created_at, m.updated_at,
+		const lineageColumns = `m.id, m.content, m.author_user_id AS authorUserId, m.type, m.importance, m.version, m.created_at, m.updated_at,
 		        m.superseded_by, m.superseded_at, m.superseded_reason`;
 		const lineageQuery = (operation: string, sql: string, id: string) =>
 			dbOwnerQuery<LineageRow | undefined>(
@@ -3434,7 +3448,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				}>
 			>(
 				{
-					sql: `SELECT m.id, m.content, m.type, m.tags, m.confidence, m.created_at
+					sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.type, m.tags, m.confidence, m.created_at
 					 FROM memories m
 					 WHERE m.id IN (${ids.map(() => "?").join(", ")})${currentMemorySql("m")}${scope.sql}`,
 					params: [...ids, ...scope.args],
@@ -3511,7 +3525,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						? (db
 								.prepare(`
 					SELECT
-						m.id, m.content, m.who, m.importance, m.type, m.tags,
+						m.id, m.content, m.author_user_id AS authorUserId, m.who, m.importance, m.type, m.tags,
 						m.source_type, m.source_id, m.created_at,
 						e.vector, e.dimensions
 					FROM embeddings e
@@ -3524,7 +3538,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: (db
 								.prepare(`
 					SELECT
-						m.id, m.content, m.who, m.importance, m.type, m.tags,
+						m.id, m.content, m.author_user_id AS authorUserId, m.who, m.importance, m.type, m.tags,
 						m.source_type, m.source_id, m.created_at
 					FROM embeddings e
 					INNER JOIN memories m ON m.id = e.source_id
@@ -3935,7 +3949,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const documentScopeArgs = enforce ? [scope.agentId, ...(scope.project ? [scope.project] : [])] : [];
 			const chunks = await dbOwnerQuery<Array<{ content: string }>>(
 				{
-					sql: `SELECT m.id, m.content, m.type, m.created_at,
+					sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.type, m.created_at,
 					        dm.chunk_index
 					 FROM document_memories dm
 					 JOIN documents d ON d.id = dm.document_id
