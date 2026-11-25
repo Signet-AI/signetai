@@ -18,6 +18,8 @@ beforeEach(() => {
 
 afterEach(async () => {
 	await ownerRuntime.closeDbOwner();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	Bun.gc(true);
 	await closeDbAccessor();
 	rmSync(tempDir, { recursive: true, force: true });
 });
