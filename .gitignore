@@ -42,3 +42,4 @@ pnpm-lock.yaml
 tmp/
 yarn.lock
 .bump-level
+/tests/support/python/__pycache__/

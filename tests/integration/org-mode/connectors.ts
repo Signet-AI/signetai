@@ -233,8 +233,16 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 					);
 					continue;
 				}
-				for (const needle of [...secrets, session])
-					assert(!content.includes(needle), `${harness}: key secret/prefix leaked into ${path}`);
+				for (const needle of [...secrets, session]) {
+					if (!content.includes(needle)) continue;
+					let safe = content.toString("utf8");
+					for (const credential of [...secrets, session]) safe = safe.replaceAll(credential, "[credential-redacted]");
+					const at = safe.indexOf("[credential-redacted]");
+					assert(
+						false,
+						`${harness}: pass ${pass} key secret/prefix leaked into ${path}: ${safe.slice(Math.max(0, at - 120), at + 180)}`,
+					);
+				}
 			}
 		}
 	}
