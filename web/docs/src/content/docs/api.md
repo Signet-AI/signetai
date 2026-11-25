@@ -49,20 +49,27 @@ not the current owner of the agent.
 
 | Method | Path | Query / result |
 | --- | --- | --- |
-| GET | `/api/org/export` | `author=<userId>`; self or admin; readable authored rows as NDJSON |
+| GET | `/api/org/export` | `author=<userId>`, optional `agentId`; recall permission and self or admin; readable authored rows as NDJSON |
 
 `GET /api/org/export?author=<userId>` returns `application/x-ndjson`. A user can
 export their own contributions; an administrator can select another author.
+Both require the `recall` permission. By default, the export includes every agent
+the caller can read; `agentId` narrows that selection.
 The export still uses the caller's agent, project, and classification access.
 Each line has `kind` (`memories`, `session_transcripts`, or `memory_artifacts`)
-and the stored row's fields, including attribution. It does not include
-unreadable contributions or documents. The response is not cached.
+and explicit public fields, including `authorUserId`. Internal storage columns
+are omitted, and credentials in content are redacted. It does not include
+unreadable contributions or documents. Owner pages are bounded to about 4 MiB;
+a larger record is transferred alone, up to a 16 MiB record limit. A failure after
+streaming begins ends with a terminal `{"kind":"error"}` record rather than a
+successfully truncated export. The response is not cached.
 
 Source counts and health reflect the readable source population. Organization
 views omit unscoped indexing-job progress and extraction outcomes. Source
 snapshots accept up to 1,000 readable artifacts per request. Embedding projections
-are computed from the readable selection, with a 5,000-item maximum; a shared
-cached projection is not used for these requests.
+are computed outside the DB owner from bounded readable selections, with a
+5,000-item maximum. Their cache is keyed by readable agents, compartments, and
+project scope; a projection never reuses geometry from another audience.
 
 In organization mode, an imported file's `content` endpoint returns only its
 readable inventoried JSONL records, in file order. It has

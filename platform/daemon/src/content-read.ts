@@ -4,7 +4,9 @@ import type { ReadScope } from "./read-scope";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
+import type { NamedContentReadRequest } from "./named-content-reads";
 export type ContentReadRequest =
+	| NamedContentReadRequest
 	| {
 			readonly op: "readable_pointers";
 			readonly scope: ReadScope;
@@ -79,12 +81,6 @@ export type ContentReadRequest =
 			readonly scope: ReadScope;
 			readonly sourceId: string;
 			readonly legacyRoot?: string;
-	  }
-	| {
-			readonly op: "scoped_query";
-			readonly scope: ReadScope;
-			readonly subject?: import("./read-scope").AudienceSubject;
-			readonly statement: import("./db-owner-protocol").DbOwnerStatement;
 	  }
 	| {
 			readonly op: "source_access";
@@ -167,6 +163,20 @@ export type ContentReadRequest =
 	  };
 
 function estimatedReadWork(request: ContentReadRequest): number {
+	if ("parameters" in request)
+		return request.op === "memory.projection.ledger"
+			? 5000
+			: request.op.startsWith("sources.health_")
+				? 10000
+				: request.op === "sources.import.list"
+					? 100
+					: request.op === "sources.import.rejections"
+						? 100
+						: request.op === "sources.import.files"
+							? 1000
+							: request.op === "sources.stats_artifacts" || request.op === "sources.stats_chunks"
+								? 10000
+								: 32;
 	switch (request.op) {
 		case "readable_pointers":
 			return request.references.length;

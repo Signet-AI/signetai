@@ -1,3 +1,4 @@
+import type { NamedContentReadRequest } from "./named-content-reads";
 import { buildBlackBoxSessionInDb, listBlackBoxSessionsInDb } from "./black-box";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { buildForgetCandidatesWhere } from "./memory-forget-read";
@@ -16,120 +17,100 @@ import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidenc
 function scopedContentDb(
 	db: ReadDb,
 	scope: import("./read-scope").ReadScope,
+	tables: readonly string[],
 	subject?: import("./read-scope").AudienceSubject,
 ): ReadDb {
 	return {
 		prepare(sql) {
-			const tables = [
-				"memories",
-				"memory_artifacts",
-				"session_transcripts",
-				"session_summaries",
-				"embeddings",
-				"entities",
-				"entity_aspects",
-				"entity_attributes",
-				"entity_dependencies",
-				"entity_communities",
-				"documents",
-				"source_import_records",
-				"source_import_files",
-				"source_import_jobs",
-				"memory_search_telemetry",
-				"session_recall_events",
-				"epistemic_assertions",
-			];
 			const args: unknown[] = [];
-			const views = /^\s*SELECT\b/i.test(sql)
-				? tables
+			if (sql.trimStart().toUpperCase().startsWith("PRAGMA ")) return db.prepare(sql);
+			const views = tables.map((table) => {
+				const columns = new Set(
+					db
+						.prepare(`PRAGMA table_info(${table})`)
+						.all<Record<string, unknown>>()
+						.flatMap((column) => (typeof column.name === "string" ? [column.name] : [])),
+				);
+				if (!columns.has("compartment_id")) {
+					if (!subject && scope.compartments !== "all") throw new Error("Import read requires a principal");
+					const access = readScopeSql(
+						"_content",
+						{ ...scope, projects: null },
+						{
+							visibility: null,
+							memory: null,
+							session: columns.has("canonical_key") ? "canonical_key" : null,
+							source: columns.has("source_id") ? "source_id" : null,
+						},
+					);
+					const audience =
+						subject?.local || scope.compartments === "all"
+							? ""
+							: ` AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=_content.agent_id AND (ca.target_kind='agent'${columns.has("source_id") ? " OR (ca.target_kind='source' AND ca.target_id=_content.source_id)" : ""}${columns.has("canonical_key") ? " OR (ca.target_kind='session' AND (ca.target_id=_content.canonical_key OR 'session:'||ca.target_id=_content.canonical_key OR ca.target_id='session:'||_content.canonical_key))" : ""}) AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?)))))`;
+					args.push(...access.args, ...(audience ? [subject?.userId, subject?.userId] : []));
+					if (scope.compartments === "all")
+						return `${table} AS (SELECT ${[...columns].map((column) => `_content.${column}`).join(",")} FROM (SELECT raw.*,NULL AS compartment_id FROM main.${table} raw) _content WHERE 1=1${access.sql}${scope.projects !== null ? " AND 0" : ""})`;
+					const projected = [...columns]
 						.filter(
-							(table) =>
-								new RegExp(`\\b${table}\\b`).test(sql) ||
-								(sql.includes("source_import_") && table.startsWith("source_import_")),
+							(column) =>
+								![
+									"total",
+									"imported",
+									"duplicate",
+									"rejected",
+									"pending",
+									"record_count",
+									"size_bytes",
+									"upload_size",
+									"upload_offset",
+									"updated_at",
+									"error",
+									"lease_token",
+									"content_hash",
+									"upload_digest",
+								].includes(column),
 						)
-						.map((table) => {
-							const columns = new Set(
-								db
-									.prepare(`PRAGMA table_info(${table})`)
-									.all<Record<string, unknown>>()
-									.flatMap((column) => (typeof column.name === "string" ? [column.name] : [])),
+						.map((column) => `_content.${column}`);
+					const counts = (status?: string) =>
+						`(SELECT COUNT(*) FROM source_import_records readable WHERE readable.${table === "source_import_files" ? "file_id" : "job_id"}=_content.id${status ? ` AND readable.status='${status}'` : ""})`;
+					if (table === "source_import_jobs") {
+						for (const status of ["total", "imported", "duplicate", "rejected", "pending"])
+							projected.push(`${counts(status === "total" ? undefined : status)} AS ${status}`);
+					}
+					if (table === "source_import_files") {
+						projected.push(`${counts()} AS record_count`);
+						for (const size of ["size_bytes", "upload_size", "upload_offset"])
+							projected.push(
+								`(SELECT COALESCE(SUM(readable.byte_length),0) FROM source_import_records readable WHERE readable.file_id=_content.id) AS ${size}`,
 							);
-							if (!columns.has("compartment_id")) {
-								if (!subject && scope.compartments !== "all") throw new Error("Import read requires a principal");
-								const access = readScopeSql(
-									"_content",
-									{ ...scope, projects: null },
-									{
-										visibility: null,
-										memory: null,
-										session: columns.has("canonical_key") ? "canonical_key" : null,
-										source: columns.has("source_id") ? "source_id" : null,
-									},
-								);
-								const audience =
-									subject?.local || scope.compartments === "all"
-										? ""
-										: ` AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=_content.agent_id AND (ca.target_kind='agent'${columns.has("source_id") ? " OR (ca.target_kind='source' AND ca.target_id=_content.source_id)" : ""}${columns.has("canonical_key") ? " OR (ca.target_kind='session' AND (ca.target_id=_content.canonical_key OR 'session:'||ca.target_id=_content.canonical_key OR ca.target_id='session:'||_content.canonical_key))" : ""}) AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?)))))`;
-								args.push(...access.args, ...(audience ? [subject?.userId, subject?.userId] : []));
-								if (scope.compartments === "all")
-									return `${table} AS (SELECT ${[...columns].map((column) => `_content.${column}`).join(",")} FROM (SELECT raw.*,NULL AS compartment_id FROM main.${table} raw) _content WHERE 1=1${access.sql}${scope.projects !== null ? " AND 0" : ""})`;
-								const projected = [...columns]
-									.filter(
-										(column) =>
-											![
-												"total",
-												"imported",
-												"duplicate",
-												"rejected",
-												"pending",
-												"record_count",
-												"size_bytes",
-												"upload_size",
-												"upload_offset",
-												"updated_at",
-												"error",
-												"lease_token",
-												"content_hash",
-												"upload_digest",
-											].includes(column),
-									)
-									.map((column) => `_content.${column}`);
-								const counts = (status?: string) =>
-									`(SELECT COUNT(*) FROM source_import_records readable WHERE readable.${table === "source_import_files" ? "file_id" : "job_id"}=_content.id${status ? ` AND readable.status='${status}'` : ""})`;
-								if (table === "source_import_jobs") {
-									for (const status of ["total", "imported", "duplicate", "rejected", "pending"])
-										projected.push(`${counts(status === "total" ? undefined : status)} AS ${status}`);
-								}
-								if (table === "source_import_files") {
-									projected.push(`${counts()} AS record_count`);
-									for (const size of ["size_bytes", "upload_size", "upload_offset"])
-										projected.push(
-											`(SELECT COALESCE(SUM(readable.byte_length),0) FROM source_import_records readable WHERE readable.file_id=_content.id) AS ${size}`,
-										);
-								}
-								if (columns.has("updated_at")) projected.push("_content.created_at AS updated_at");
-								for (const column of ["error", "lease_token", "content_hash", "upload_digest"])
-									if (columns.has(column)) projected.push(`NULL AS ${column}`);
-								const hasFiles =
-									table === "source_import_jobs"
-										? " AND EXISTS(SELECT 1 FROM source_import_files readable WHERE readable.job_id=_content.id)"
-										: "";
-								return `${table} AS (SELECT ${projected.join(",")} FROM (SELECT raw.*,NULL AS compartment_id FROM main.${table} raw) _content WHERE 1=1${access.sql}${audience}${scope.projects !== null ? " AND 0" : ""}${hasFiles})`;
-							}
-							const predicate = readScopeSql(
-								"_content",
-								columns.has("project") ? scope : { ...scope, projects: null },
-								{
-									visibility: columns.has("visibility") ? "visibility" : null,
-									memory: table === "memories" ? "id" : null,
-									session: columns.has("session_key") ? "session_key" : table === "memories" ? "source_id" : null,
-									source: columns.has("source_id") ? "source_id" : null,
-								},
-							);
-							args.push(...predicate.args);
-							return `${table} AS (SELECT _content.*, _content.rowid AS rowid FROM main.${table} _content WHERE 1=1${predicate.sql}${!columns.has("project") && scope.projects !== null ? " AND 0" : ""})`;
-						})
-				: [];
+					}
+					if (columns.has("updated_at")) projected.push("_content.created_at AS updated_at");
+					for (const column of ["error", "lease_token", "content_hash", "upload_digest"])
+						if (columns.has(column)) projected.push(`NULL AS ${column}`);
+					const hasFiles =
+						table === "source_import_jobs"
+							? " AND EXISTS(SELECT 1 FROM source_import_files readable WHERE readable.job_id=_content.id)"
+							: "";
+					return `${table} AS (SELECT ${projected.join(",")} FROM (SELECT raw.*,NULL AS compartment_id FROM main.${table} raw) _content WHERE 1=1${access.sql}${audience}${scope.projects !== null ? " AND 0" : ""}${hasFiles})`;
+				}
+				if (table === "entity_aspects") {
+					const parent = readScopeSql(
+						"parent",
+						{ ...scope, projects: null },
+						{ visibility: null, memory: null, session: null, source: "source_id" },
+					);
+					args.push(...parent.args);
+					return `entity_aspects AS (SELECT ${[...columns].map((column) => `_content.${column}`).join(",")} FROM main.entity_aspects _content JOIN main.entities parent ON parent.id=_content.entity_id AND parent.agent_id=_content.agent_id WHERE 1=1${parent.sql}${scope.projects === null ? "" : " AND 0"})`;
+				}
+				const predicate = readScopeSql("_content", columns.has("project") ? scope : { ...scope, projects: null }, {
+					visibility: columns.has("visibility") ? "visibility" : null,
+					memory: table === "memories" ? "id" : null,
+					session: columns.has("session_key") ? "session_key" : table === "memories" ? "source_id" : null,
+					source: columns.has("source_id") ? "source_id" : null,
+				});
+				args.push(...predicate.args);
+				return `${table} AS (SELECT _content.*, _content.rowid AS rowid FROM main.${table} _content WHERE 1=1${predicate.sql}${!columns.has("project") && scope.projects !== null ? " AND 0" : ""})`;
+			});
 			const statement = db.prepare(views.length ? `WITH ${views.join(",")} ${sql}` : sql);
 			return {
 				get: (...params: unknown[]) => statement.get(...args, ...params),
@@ -272,14 +253,27 @@ export function executeContentRead(
 	if (request.op === "timeline")
 		return buildMemoryTimeline(db, { tzOffsetMin: request.tzOffsetMin, scope: readScopeSql("m", request.scope) });
 	if (request.op === "blackbox" || request.op === "blackbox_list") {
-		const scoped = scopedContentDb(db, request.scope);
+		const scoped = scopedContentDb(db, request.scope, [
+			"memory_search_telemetry",
+			"session_recall_events",
+			"epistemic_assertions",
+			"memories",
+			"memory_artifacts",
+			"session_transcripts",
+			"session_summaries",
+		]);
 		const input = { ...request, agentId: request.scope.reach.kind === "all" ? "all" : request.agentId };
 		return request.op === "blackbox"
 			? buildBlackBoxSessionInDb(scoped, { ...input, sessionKey: request.sessionKey, at: request.at })
 			: listBlackBoxSessionsInDb(scoped, input);
 	}
 	if (request.op === "import_file" || request.op === "import_bytes") {
-		const scoped = scopedContentDb(db, request.scope, request.subject);
+		const scoped = scopedContentDb(
+			db,
+			request.scope,
+			["source_import_records", "source_import_files", "source_import_jobs"],
+			request.subject,
+		);
 		if (request.op === "import_file") {
 			return request.cursor === undefined
 				? (scoped
@@ -328,7 +322,7 @@ export function executeContentRead(
 		return result.toString("hex");
 	}
 	if (request.op === "source_snapshot")
-		return exportSourceSnapshotInDb(scopedContentDb(db, request.scope), {
+		return exportSourceSnapshotInDb(scopedContentDb(db, request.scope, ["memory_artifacts", "session_transcripts"]), {
 			source: request.source,
 			agentId: request.agentId,
 			includeLocalDiscord: request.includeLocalDiscord,
@@ -357,14 +351,14 @@ export function executeContentRead(
 				),
 		);
 	}
-	if (request.op === "scoped_query") {
-		const statement = scopedContentDb(db, request.scope, request.subject).prepare(request.statement.sql);
-		return request.statement.result === "all"
-			? statement.all(...(request.statement.params ?? []))
-			: statement.get(...(request.statement.params ?? []));
+	if ("parameters" in request) {
+		const definition = namedReadStatement(request);
+		if (!definition) throw new Error("Unknown content read operation");
+		const statement = scopedContentDb(db, request.scope, definition.tables, request.subject).prepare(definition.sql);
+		return definition.result === "all" ? statement.all(...request.parameters) : statement.get(...request.parameters);
 	}
 	if (request.op === "source_eligibility") {
-		const scoped = scopedContentDb(db, request.scope);
+		const scoped = scopedContentDb(db, request.scope, ["memory_artifacts", "session_transcripts"]);
 		const agents = scoped
 			.prepare(
 				"SELECT DISTINCT agent_id FROM memory_artifacts WHERE source_id=? UNION SELECT DISTINCT agent_id FROM session_transcripts WHERE source_id=? LIMIT 1001",
@@ -614,6 +608,7 @@ export function executeContentRead(
 				Math.max(1, Math.min(request.limit, 500)),
 			);
 	}
+	if (request.op !== "export") throw new Error("Unknown content read operation");
 	const transcript = request.table === "session_transcripts";
 	const memory = request.table === "memories";
 	const predicate = readScopeSql("r", request.scope, {
@@ -657,4 +652,204 @@ export function executeContentRead(
 		if (bytes >= 4 * 1024 * 1024) break;
 	}
 	return rows;
+}
+
+function exportWhere(request: NamedContentReadRequest): string[] {
+	const where = [request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"];
+	const filters = request.filters;
+	if (filters?.harnesses) where.push(`harness IN (${Array.from({ length: filters.harnesses }, () => "?").join(",")})`);
+	if (filters?.since) where.push("created_at >= ?");
+	if (filters?.until) where.push("created_at <= ?");
+	return where;
+}
+function namedReadStatement(request: NamedContentReadRequest): {
+	sql: string;
+	tables: readonly string[];
+	result: "all" | "get";
+} {
+	const params = request.parameters;
+	switch (request.op) {
+		case "sources.stats_artifacts":
+			return {
+				sql:
+					params.length === 4
+						? `SELECT COUNT(*) AS n FROM memory_artifacts
+				 WHERE ? IS NOT NULL AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))
+				   AND COALESCE(is_deleted, 0) = 0`
+						: `SELECT COUNT(*) AS n FROM memory_artifacts
+				 WHERE ? IS NOT NULL AND source_id = ? AND COALESCE(is_deleted, 0) = 0`,
+				tables: ["memory_artifacts"],
+				result: "get",
+			};
+		case "sources.stats_chunks":
+			return {
+				sql: `SELECT COUNT(*) AS n FROM embeddings WHERE ? IS NOT NULL AND source_type IN (?, ?) AND source_id >= ? AND source_id < ?`,
+				tables: ["embeddings"],
+				result: "get",
+			};
+		case "sources.health_orphan_chunks":
+			return {
+				sql: `SELECT rowid, source_id,
+		        CASE WHEN instr(tail, char(10)) > 0 THEN substr(tail, 1, instr(tail, char(10)) - 1) ELSE tail END AS chunk_text
+		 FROM (
+		   SELECT rowid, source_id,
+		          CASE WHEN header_at > 0 THEN substr(framed, header_at + 1, 1024) END AS tail
+		   FROM (
+		     SELECT rowid, source_id, char(10) || chunk_text AS framed,
+		            instr(char(10) || lower(chunk_text), char(10) || 'source_path:') AS header_at
+		     FROM embeddings
+		     WHERE ? IS NOT NULL AND source_type IN (?, ?) AND source_id >= ? AND source_id < ? AND rowid > ?
+		     ORDER BY rowid LIMIT ?
+		   )
+		 )`,
+				tables: ["embeddings"],
+				result: "all",
+			};
+		case "sources.health_live_paths":
+			return {
+				sql:
+					params.length === 6
+						? `SELECT rowid, source_path FROM memory_artifacts
+			 WHERE ? IS NOT NULL AND COALESCE(is_deleted, 0) = 0
+			   AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))
+			   AND rowid > ?
+			 ORDER BY rowid LIMIT ?`
+						: `SELECT rowid, source_path FROM memory_artifacts
+		 WHERE ? IS NOT NULL AND source_id = ? AND COALESCE(is_deleted, 0) = 0 AND rowid > ?
+		 ORDER BY rowid LIMIT ?`,
+				tables: ["memory_artifacts"],
+				result: "all",
+			};
+		case "sources.health_artifacts":
+			return {
+				sql:
+					params.length === 4
+						? `SELECT MAX(updated_at) AS latestArtifactAt,
+			        SUM(CASE WHEN COALESCE(is_deleted, 0) = 1 THEN 1 ELSE 0 END) AS deletedArtifacts
+			   FROM memory_artifacts WHERE ? IS NOT NULL
+			     AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))`
+						: `SELECT MAX(updated_at) AS latestArtifactAt,
+			        SUM(CASE WHEN COALESCE(is_deleted, 0) = 1 THEN 1 ELSE 0 END) AS deletedArtifacts
+			   FROM memory_artifacts WHERE ? IS NOT NULL AND source_id = ?`,
+				tables: ["memory_artifacts"],
+				result: "get",
+			};
+		case "sources.health_failures":
+			return {
+				sql: `SELECT source_meta_json
+			   FROM memory_artifacts
+			  WHERE ? IS NOT NULL AND source_id = ?
+			    AND source_kind = ? AND COALESCE(is_deleted, 0) = 0`,
+				tables: ["memory_artifacts"],
+				result: "all",
+			};
+		case "sources.health_discord":
+			return {
+				sql: `SELECT source_kind, source_meta_json, updated_at FROM memory_artifacts WHERE ? IS NOT NULL AND source_id = ? AND source_kind IN ('source_discord_failure', 'source_discord_checkpoint') AND COALESCE(is_deleted, 0) = 0`,
+				tables: ["memory_artifacts"],
+				result: "all",
+			};
+		case "sources.health_entities":
+			return {
+				sql: `SELECT COUNT(*) AS n FROM entities WHERE ? IS NOT NULL AND source_id = ?`,
+				tables: ["entities"],
+				result: "get",
+			};
+		case "sources.health_document_entity":
+			return {
+				sql: `SELECT id FROM entities WHERE ? IS NOT NULL AND source_id = ? AND entity_type = 'source_document' ORDER BY updated_at DESC LIMIT 1`,
+				tables: ["entities"],
+				result: "get",
+			};
+		case "sources.health_aspects":
+			return {
+				sql: `SELECT COUNT(*) AS n FROM entity_aspects AS a JOIN entities AS e ON e.id = a.entity_id AND e.agent_id = a.agent_id WHERE ? IS NOT NULL AND e.source_id = ?`,
+				tables: ["entities", "entity_aspects"],
+				result: "get",
+			};
+		case "sources.health_attributes":
+			return {
+				sql: `SELECT COUNT(*) AS n FROM entity_attributes WHERE ? IS NOT NULL AND source_id = ?`,
+				tables: ["entity_attributes"],
+				result: "get",
+			};
+		case "sources.health_dependencies":
+			return {
+				sql: `SELECT COUNT(*) AS n FROM entity_dependencies WHERE ? IS NOT NULL AND source_id = ?`,
+				tables: ["entity_dependencies"],
+				result: "get",
+			};
+		case "sources.health_communities":
+			return {
+				sql: `SELECT COUNT(*) AS n FROM entity_communities WHERE ? IS NOT NULL AND source_id = ?`,
+				tables: ["entity_communities"],
+				result: "get",
+			};
+		case "sources.import.list":
+			return {
+				sql: `SELECT id,kind,agent_id,schema_id,adapter_version,state,control_request,generation,total,imported,duplicate,rejected,pending,error,created_at,updated_at,started_at,completed_at,reconciled_at FROM source_import_jobs WHERE ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} ORDER BY created_at DESC LIMIT 100`,
+				tables: ["source_import_records", "source_import_files", "source_import_jobs"],
+				result: "all",
+			};
+		case "sources.import.export":
+			return {
+				sql: `SELECT speaker_user_id,session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${exportWhere(request).join(" AND ")} ${request.filters?.cursor ? "AND (created_at,session_key,agent_id) > (?,?,?)" : ""} ORDER BY created_at,session_key,agent_id LIMIT 1`,
+				tables: ["session_transcripts"],
+				result: "get",
+			};
+		case "sources.import.export.content":
+			return {
+				sql: "SELECT hex(substr(CAST(content AS BLOB),?,65536)) AS content FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND created_at = ? AND length(CAST(content AS BLOB)) = ?",
+				tables: ["session_transcripts"],
+				result: "get",
+			};
+		case "sources.import.status":
+			return {
+				sql: `SELECT id,kind,agent_id,schema_id,adapter_version,state,control_request,generation,total,imported,duplicate,rejected,pending,error,created_at,updated_at,started_at,completed_at,reconciled_at FROM source_import_jobs WHERE id = ? AND ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"}`,
+				tables: ["source_import_records", "source_import_files", "source_import_jobs"],
+				result: "get",
+			};
+		case "sources.import.files":
+			return {
+				sql: `SELECT id,job_id,source_id,agent_id,ordinal,name,size_bytes,state,record_count,created_at,updated_at,upload_generation,upload_offset,upload_size,storage_state FROM source_import_files WHERE job_id = ? AND ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} ORDER BY ordinal`,
+				tables: ["source_import_records", "source_import_files", "source_import_jobs"],
+				result: "all",
+			};
+		case "sources.import.rejections":
+			return {
+				sql: `SELECT id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_length,status,canonical_id,canonical_key,rejection_code,created_at,updated_at FROM source_import_records WHERE job_id = ? AND ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} AND status = 'rejected' AND id > ? ORDER BY id LIMIT 100`,
+				tables: ["source_import_records", "source_import_files", "source_import_jobs"],
+				result: "all",
+			};
+		case "sources.import.reconciliation":
+			return {
+				sql: `SELECT total,imported,duplicate,rejected,pending FROM source_import_jobs WHERE id = ? AND ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"}`,
+				tables: ["source_import_records", "source_import_files", "source_import_jobs"],
+				result: "all",
+			};
+		case "memory.projection.threads":
+			return {
+				sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM (SELECT COALESCE('project:'||NULLIF(project,''),'session:'||NULLIF(session_key,''),'harness:'||NULLIF(harness,''),'thread:unscoped') AS label,COALESCE(source_type,kind) AS source_type,latest_at,substr(content,1,240) AS sample,id AS node_id,project,session_key,harness,ROW_NUMBER() OVER (PARTITION BY agent_id,project,source_ref,session_key,harness ORDER BY latest_at DESC,id) AS rank FROM session_summaries WHERE agent_id=? AND COALESCE(source_type,kind)!='chunk') WHERE rank=1 ORDER BY latest_at DESC,node_id LIMIT 12`,
+				tables: ["session_summaries"],
+				result: "all",
+			};
+		case "memory.projection.top":
+			return {
+				sql: `SELECT m.id,m.content,m.type,m.importance,m.project FROM memories m WHERE m.is_deleted=0 ORDER BY m.pinned DESC,m.importance DESC,m.created_at DESC,m.id LIMIT 32`,
+				tables: ["memories"],
+				result: "all",
+			};
+		case "memory.projection.temporal":
+			return {
+				sql: `SELECT id,kind,COALESCE(source_type,kind) AS source_type,depth,latest_at,project,session_key,source_ref,content FROM session_summaries WHERE agent_id=? ORDER BY latest_at DESC,id LIMIT 20`,
+				tables: ["session_summaries"],
+				result: "all",
+			};
+		case "memory.projection.ledger":
+			return {
+				sql: `SELECT agent_id,source_path,source_sha256,source_kind,session_id,session_key,session_token,project,harness,captured_at,started_at,ended_at,source_node_id,memory_sentence,memory_sentence_quality,content FROM memory_artifacts WHERE agent_id=? AND source_kind IN ('summary','transcript','compaction','manifest') AND COALESCE(ended_at,captured_at)>=? ORDER BY COALESCE(ended_at,captured_at) DESC,captured_at DESC LIMIT 5000`,
+				tables: ["memory_artifacts"],
+				result: "all",
+			};
+	}
 }

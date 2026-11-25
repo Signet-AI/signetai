@@ -1823,13 +1823,9 @@ async function readThreadHeads(
 > {
 	try {
 		const rows = await contentRead<Awaited<ReturnType<typeof readThreadHeads>>>({
-			op: "scoped_query",
+			op: "memory.projection.threads",
 			scope,
-			statement: {
-				sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM (SELECT COALESCE('project:'||NULLIF(project,''),'session:'||NULLIF(session_key,''),'harness:'||NULLIF(harness,''),'thread:unscoped') AS label,COALESCE(source_type,kind) AS source_type,latest_at,substr(content,1,240) AS sample,id AS node_id,project,session_key,harness,ROW_NUMBER() OVER (PARTITION BY agent_id,project,source_ref,session_key,harness ORDER BY latest_at DESC,id) AS rank FROM session_summaries WHERE agent_id=? AND COALESCE(source_type,kind)!='chunk') WHERE rank=1 ORDER BY latest_at DESC,node_id LIMIT 12`,
-				params: [agentId],
-				result: "all",
-			},
+			parameters: [agentId],
 		});
 		return rows.filter(
 			(row) =>
@@ -1845,10 +1841,7 @@ async function readThreadHeads(
 	}
 }
 
-async function readTopMemories(
-	agentId: string,
-	scope: ReadScope,
-): Promise<
+async function readTopMemories(scope: ReadScope): Promise<
 	ReadonlyArray<{
 		readonly content: string;
 		readonly type: string;
@@ -1858,13 +1851,9 @@ async function readTopMemories(
 > {
 	try {
 		const rows = await contentRead<Awaited<ReturnType<typeof readTopMemories>>>({
-			op: "scoped_query",
+			op: "memory.projection.top",
 			scope,
-			statement: {
-				sql: `SELECT m.id,m.content,m.type,m.importance,m.project FROM memories m WHERE m.is_deleted=0 ORDER BY m.pinned DESC,m.importance DESC,m.created_at DESC,m.id LIMIT 32`,
-				params: [],
-				result: "all",
-			},
+			parameters: [],
 		});
 		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
@@ -1890,13 +1879,9 @@ async function readTemporalNodes(
 > {
 	try {
 		const rows = await contentRead<Awaited<ReturnType<typeof readTemporalNodes>>>({
-			op: "scoped_query",
+			op: "memory.projection.temporal",
 			scope,
-			statement: {
-				sql: `SELECT id,kind,COALESCE(source_type,kind) AS source_type,depth,latest_at,project,session_key,source_ref,content FROM session_summaries WHERE agent_id=? ORDER BY latest_at DESC,id LIMIT 20`,
-				params: [agentId],
-				result: "all",
-			},
+			parameters: [agentId],
 		});
 		return rows.filter(
 			(row) =>
@@ -1954,13 +1939,9 @@ async function buildLedger(agentId: string, scope: ReadScope): Promise<ReadonlyA
 	let rows: ArtifactRow[] = [];
 	try {
 		rows = await contentRead<ArtifactRow[]>({
-			op: "scoped_query",
+			op: "memory.projection.ledger",
 			scope,
-			statement: {
-				sql: `SELECT agent_id,source_path,source_sha256,source_kind,session_id,session_key,session_token,project,harness,captured_at,started_at,ended_at,source_node_id,memory_sentence,memory_sentence_quality,content FROM memory_artifacts WHERE agent_id=? AND source_kind IN ('summary','transcript','compaction','manifest') AND COALESCE(ended_at,captured_at)>=? ORDER BY COALESCE(ended_at,captured_at) DESC,captured_at DESC LIMIT 5000`,
-				params: [agentId, new Date(floor).toISOString()],
-				result: "all",
-			},
+			parameters: [agentId, new Date(floor).toISOString()],
 		});
 	} catch {
 		rows = [];
@@ -2146,7 +2127,7 @@ export async function renderMemoryProjection(
 		(await resolveReadScope({ reach, projects: null }, { local: true, userId: null, groupIds: [] }, async () => ({
 			compartments: [],
 		})));
-	const memories = await readTopMemories(agentId, scope);
+	const memories = await readTopMemories(scope);
 	const threadHeads = await readThreadHeads(agentId, scope);
 	const nodes = await readTemporalNodes(agentId, scope);
 	const ledger = await buildLedger(agentId, scope);

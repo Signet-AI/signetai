@@ -204,7 +204,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const mutationHealth = getDbAccessor().withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				getDiagnostics(db, providerTracker, getUpdateState(), undefined, getDiagnosticsOptions()),
-			"routes/telemetry-routes.ts:202",
+			"routes/telemetry-routes.ts:204",
 		);
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",

@@ -593,6 +593,12 @@ function isFtsQuerySyntaxError(error: unknown): boolean {
 	return /fts5: syntax error|no such column|malformed MATCH|unknown special query|unterminated string/i.test(message);
 }
 
+function ownerReadArgs(values: readonly unknown[]): readonly DbOwnerParameter[] {
+	return values.map((value) => {
+		if (typeof value !== "string" && typeof value !== "number") throw new Error("Invalid read scope parameter");
+		return value;
+	});
+}
 async function resolveMemoryReadScope(
 	c: Context,
 	options: { readonly allowAllAgents?: boolean; readonly agentId?: string; readonly current?: boolean } = {},
@@ -613,10 +619,7 @@ async function resolveMemoryReadScope(
 		policyGroup: reach.kind === "group" ? reach.group : null,
 		project: resolved.scope.projects?.length === 1 ? resolved.scope.projects[0] : undefined,
 		sql: access.sql,
-		args: access.args.map((value) => {
-			if (typeof value !== "string" && typeof value !== "number") throw new Error("Invalid read scope parameter");
-			return value;
-		}),
+		args: ownerReadArgs(access.args),
 	};
 }
 
@@ -1066,7 +1069,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,
-					params: [...scope.args.slice(0, ownerAccess.args.length), ...whereArgs],
+					params: [...ownerReadArgs(ownerAccess.args), ...whereArgs],
 					result: "get",
 				},
 				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
@@ -3580,7 +3583,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const scope = await resolveMemoryReadScope(c);
 		if (scope instanceof Response) return scope;
-		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}`;
 
 		try {
 			const { total, rows } = await contentRead<{

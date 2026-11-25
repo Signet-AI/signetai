@@ -774,3 +774,63 @@ test("A15 export failures after headers terminate with an error record", async (
 		getDbAccessor().withWriteTx((db) => db.exec("ALTER TABLE a15_unavailable_artifacts RENAME TO memory_artifacts"));
 	}
 });
+
+test("A15 unlisted SQL cannot enter the content-read owner", async () => {
+	const { executeContentRead } = await import("../content-read-owner");
+	getDbAccessor().withReadDb((db) => {
+		expect(() =>
+			Reflect.apply(executeContentRead, null, [
+				db,
+				{
+					op: "scoped_query",
+					scope: { reach: { kind: "all" }, compartments: [], projects: null },
+					statement: { sql: "SELECT 1 AS unrestricted", result: "get" },
+				},
+			]),
+		).toThrow();
+	});
+});
+
+test("A15 transcript export redacts content and terminates failed streams explicitly", async () => {
+	getDbAccessor().withWriteTx((db) =>
+		db
+			.prepare(
+				"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,speaker_user_id) VALUES ('a15-transcript-export','beta',?,'a15-export',?,?,'bob')",
+			)
+			.run("Authorization: Bearer a15mockcredentialonly", at, at),
+	);
+	const path = "/api/sources/imports/export/transcripts?harness=a15-export";
+	const complete = await request(path, "bob");
+	expect(complete.status).toBe(200);
+	expect(complete.body).not.toContain("a15mockcredentialonly");
+	const response = await app.request(`http://localhost${path}`, { headers: { "x-test-user": "bob" } });
+	expect(response.status).toBe(200);
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("Export body missing");
+	const first = await reader.read();
+	expect(first.done).toBe(false);
+	getDbAccessor().withWriteTx((db) => db.exec("ALTER TABLE session_transcripts RENAME TO a15_unavailable_transcripts"));
+	try {
+		let text = new TextDecoder().decode(first.value),
+			failure: unknown;
+		try {
+			for (;;) {
+				const part = await reader.read();
+				if (part.done) break;
+				text += new TextDecoder().decode(part.value);
+			}
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toBeUndefined();
+		const records = text
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(records.at(-1)).toMatchObject({ kind: "error" });
+	} finally {
+		getDbAccessor().withWriteTx((db) =>
+			db.exec("ALTER TABLE a15_unavailable_transcripts RENAME TO session_transcripts"),
+		);
+	}
+});
