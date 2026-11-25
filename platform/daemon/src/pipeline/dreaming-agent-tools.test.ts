@@ -983,6 +983,27 @@ describe("dreaming-agent-tools", () => {
 		expect(contradiction.some((c) => c.detected)).toBe(true);
 	});
 
+	it("omitted attention agent never reads outside a multi-agent pass", async () => {
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		for (const agentId of ["owner", "permitted", "foreign"]) {
+			await ownerRun(
+				owner,
+				`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority) VALUES (?, ?, 'hygiene', 'entity:test', '{}', 50)`,
+				[`attention-${agentId}`, agentId],
+				{ operation: "test.attention.seed" },
+			);
+		}
+		const tools = createDreamingAgentTools({
+			accessor: getDbAccessor(),
+			agentId: "owner",
+			allowedAgentIds: ["owner", "permitted"],
+			actor: "dreaming",
+		});
+		const result = readResult(await findTool(tools, "attention_list").execute("attention", {}));
+		expect(result.ok).toBe(true);
+		expect(result.items).toEqual([expect.objectContaining({ id: "attention-owner" })]);
+	});
+
 	it("attention_list returns pending and resolved hygiene records", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
 		const tools = createDreamingAgentTools({

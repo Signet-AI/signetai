@@ -929,7 +929,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"attention_list",
 			"List attention",
-			"List attention records by kind and resolution status. Use kind hygiene for structural queue work, kind surprisal for bounded exploration hints, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope. Each record carries its owning agentId.",
+			"List attention records by kind and resolution status. Use kind hygiene for structural queue work, kind surprisal for bounded exploration hints, or review_due for expired and approaching temporal claims. Omitted agentId means this pass's run agent, never the whole install. Each record carries its owning agentId.",
 			true,
 			z.object({
 				agentId: z.string().optional(),
@@ -939,7 +939,13 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async ({ agentId: scopeId, kind, status, limit }) => ({
 				ok: true,
-				items: await listDreamingAttention(accessor, { agentId: scopeId, kind, status, limit, agentFacing: true }),
+				items: await listDreamingAttention(accessor, {
+					agentId: scopeId ?? agentId,
+					kind,
+					status,
+					limit,
+					agentFacing: true,
+				}),
 			}),
 		),
 		capability(
