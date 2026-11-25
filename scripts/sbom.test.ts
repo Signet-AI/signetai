@@ -8,6 +8,7 @@ import {
 	packagesFromFiles,
 	packagesFromMetafile,
 	packagesInTree,
+	recordEmbeddedBundle,
 	recordShippedPackages,
 	shippedArtifacts,
 } from "./shipped-packages";
@@ -93,6 +94,65 @@ describe("shipped package records", () => {
 		expect(() => packagesFromMetafile(undefined, root)).toThrow("no inputs");
 	});
 
+	test("follows prebuilt workspace bundles and embedded bundles to the packages inside them", () => {
+		const root = scratch();
+		writePackage(join(root, "node_modules/.bun/libsodium@0.8.4/node_modules/libsodium"), "libsodium", "0.8.4");
+		writePackage(join(root, "node_modules/.bun/zod@4.6.7/node_modules/zod"), "zod", "4.6.7");
+		writePackage(join(root, "platform/core"), "@signet/core", "1.0.2");
+		mkdirSync(join(root, "platform/core/dist"), { recursive: true });
+		mkdirSync(join(root, "platform/core/.bundle-inputs"), { recursive: true });
+		writeFileSync(
+			join(root, "platform/core/.bundle-inputs/bundle.json"),
+			JSON.stringify({
+				outputs: {
+					"./index.js": {
+						inputs: {
+							"src/index.ts": {},
+							"../../node_modules/.bun/libsodium@0.8.4/node_modules/libsodium/dist/sodium.js": {},
+						},
+					},
+				},
+			}),
+		);
+		writePackage(join(root, "integrations/pi/extension"), "@signet/pi-extension", "1.0.2");
+		mkdirSync(join(root, "integrations/pi/extension/.bundle-inputs"), { recursive: true });
+		writeFileSync(
+			join(root, "integrations/pi/extension/.bundle-inputs/bundle.json"),
+			JSON.stringify({
+				outputs: {
+					"./signet-pi.mjs": {
+						inputs: {
+							"../../../platform/core/dist/index.js": {},
+							"../../../node_modules/.bun/zod@4.6.7/node_modules/zod/index.js": {},
+						},
+					},
+				},
+			}),
+		);
+		const connector = join(root, "integrations/pi/connector");
+		writePackage(connector, "@signet/connector-pi", "1.0.2");
+		recordEmbeddedBundle(connector, join(connector, "src/extension-bundle.ts"), [
+			join(root, "integrations/pi/extension/dist/signet-pi.mjs"),
+		]);
+		const metafile = {
+			inputs: { "integrations/pi/connector/src/extension-bundle.ts": {}, "platform/daemon/src/x.ts": {} },
+		};
+		expect(
+			packagesFromMetafile(metafile, root)
+				.map((item) => `${item.name}@${item.version}`)
+				.sort(),
+		).toEqual(["libsodium@0.8.4", "zod@4.6.7"]);
+	});
+
+	test("refuses a prebuilt workspace bundle whose inputs were not recorded", () => {
+		const root = scratch();
+		writePackage(join(root, "platform/core"), "@signet/core", "1.0.2");
+		expect(() => packagesFromMetafile({ inputs: { "platform/core/dist/index.js": {} } }, root)).toThrow(
+			"prebuilt workspace bundle with no recorded inputs",
+		);
+		expect(packagesFromMetafile({ inputs: { "platform/core/src/index.ts": {} } }, root)).toEqual([]);
+	});
+
 	test("walks vendored node_modules including scoped and nested packages", () => {
 		const root = scratch();
 		writePackage(join(root, "node_modules/@firecrawl/anydoc"), "@firecrawl/anydoc", "0.4.0");
@@ -111,6 +171,14 @@ describe("sbom", () => {
 		const dir = scratch();
 		recordShippedPackages("daemon", [{ name: "hono", version: "4.13.22" }], dir);
 		expect(() => buildSbom(dir, "1.0.2")).toThrow("Missing shipped package records for: daemon-js-vendor");
+	});
+
+	test("refuses an empty artifact record", () => {
+		const dir = scratch();
+		for (const artifact of shippedArtifacts)
+			recordShippedPackages(artifact, [{ name: "hono", version: "4.13.22" }], dir);
+		writeFileSync(join(dir, "dashboard.json"), "[]\n");
+		expect(() => buildSbom(dir, "1.0.2")).toThrow("dashboard.json is not a non-empty package list");
 	});
 
 	test("lists every shipped package once with the artifacts that contain it", () => {
@@ -178,7 +246,11 @@ describe("advisory audit", () => {
 
 test("root overrides are floors that let fixes through, not exact pins", () => {
 	const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
-	for (const [name, range] of Object.entries<string>(manifest.overrides ?? {})) {
-		expect({ name, exact: /^\d/.test(range) }).toEqual({ name, exact: false });
+	const ranges = (overrides: object, path: string): [string, unknown][] =>
+		Object.entries(overrides).flatMap(([name, value]): [string, unknown][] =>
+			typeof value === "object" && value !== null ? ranges(value, `${path}${name} > `) : [[`${path}${name}`, value]],
+		);
+	for (const [name, range] of ranges(manifest.overrides ?? {}, "")) {
+		expect({ name, exact: typeof range !== "string" || /^\d/.test(range) }).toEqual({ name, exact: false });
 	}
 });

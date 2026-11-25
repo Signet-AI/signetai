@@ -25,7 +25,10 @@
 		"ws": "^8.21.2",
 		"sharp": "^0.35.5",
 		"adm-zip": "^0.6.1",
-		"undici": "^8.12.3"
+		"undici": "^8.12.3",
+		"@opencode-ai/plugin": {
+			"zod": "^4.6.7"
+		}
 	},
 	"scripts": {
 		"build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:native && bun run build:graph-layout && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:signetai",

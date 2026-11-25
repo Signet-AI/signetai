@@ -27,7 +27,7 @@
 		]
 	},
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && tsc --emitDeclarationOnly --declaration --outDir dist",
+		"build": "bun build --metafile=.bundle-inputs/bundle.json src/index.ts --outdir dist --target node --external better-sqlite3 && tsc --emitDeclarationOnly --declaration --outDir dist",
 		"prepack": "bun run build",
 		"dev": "bun --watch src/index.ts",
 		"test": "bun test"

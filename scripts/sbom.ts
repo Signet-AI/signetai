@@ -34,7 +34,7 @@ function purl(item: ShippedPackage): string {
 
 function parsePackages(path: string): ShippedPackage[] {
 	const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-	if (!Array.isArray(parsed)) throw new Error(`${path} is not a package list`);
+	if (!Array.isArray(parsed) || parsed.length === 0) throw new Error(`${path} is not a non-empty package list`);
 	return parsed.map((entry: unknown) => {
 		if (typeof entry !== "object" || entry === null || !("name" in entry) || !("version" in entry)) {
 			throw new Error(`${path} has an invalid package entry`);

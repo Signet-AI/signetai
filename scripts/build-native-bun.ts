@@ -15,7 +15,13 @@ import {
 import { createRequire } from "node:module";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
-import { type ShippedPackage, packagesFromMetafile, readPackage, recordShippedPackages } from "./shipped-packages";
+import {
+	type ShippedPackage,
+	packageRoot,
+	packagesFromMetafile,
+	readPackage,
+	recordShippedPackages,
+} from "./shipped-packages";
 
 const root = join(import.meta.dir, "..");
 const outDir = join(root, "dist", "native");
@@ -259,6 +265,11 @@ const workerAssets: { name: string; contentBase64: string }[] = [
 const transformersPackageJson = daemonRequire.resolve("@huggingface/transformers/package.json");
 const transformersDir = dirname(transformersPackageJson);
 shipped.push(readPackage(transformersDir));
+for (const prebundled of ["@huggingface/jinja", "@huggingface/tokenizers"]) {
+	const root = packageRoot(Bun.resolveSync(prebundled, transformersDir));
+	if (root === null) throw new Error(`Cannot locate ${prebundled}, which the transformers web runtime inlines`);
+	shipped.push(readPackage(root));
+}
 const transformersRequire = createRequire(transformersPackageJson);
 const onnxRuntimeWebPackageJson = transformersRequire.resolve("onnxruntime-web/package.json");
 const onnxRuntimeWebDir = dirname(onnxRuntimeWebPackageJson);
