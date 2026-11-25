@@ -252,43 +252,53 @@ test("an existing store observes another store's new login", async () => {
 		await rm(home, { recursive: true, force: true });
 	}
 });
-test("post-rotation reread failure is in doubt and retains the pair", async () => {
-	const home = await mkdtemp(join(tmpdir(), "sdk-reread-"));
-	let encoded = JSON.stringify(loginFixture);
-	let unreadable = false;
-	let calls = 0;
-	const rotated = {
-		...loginFixture,
-		accessToken: "new-pair-fixture",
-		refreshToken: "new-pair-refresh",
-		accessExpiresAt: "2099-01-01T00:00:00Z",
-	};
-	const keyring = {
-		get: async () => {
-			if (unreadable) throw new Error("credential backend unreadable");
-			return { state: "found" as const, value: encoded };
-		},
-		set: async (value: string) => {
-			encoded = value;
-			return { state: "found" as const };
-		},
-	};
-	const server = Bun.serve({
-		port: 0,
-		fetch: () => {
-			calls++;
-			unreadable = true;
-			return Response.json(rotated);
-		},
-	});
-	try {
-		const store = new LoginStore(`http://127.0.0.1:${server.port}`, { env: { HOME: home }, keyring });
-		await expect(store.accessToken()).rejects.toMatchObject({ reason: "refresh_in_doubt" });
-		unreadable = false;
-		expect(await store.accessToken()).toBe(rotated.accessToken);
-		expect(calls).toBe(1);
-	} finally {
-		server.stop(true);
-		await rm(home, { recursive: true, force: true });
-	}
-});
+test.each(["throw", "unavailable", "unsupported"] as const)(
+	"post-rotation %s reread cannot shadow a newer login",
+	async (kind) => {
+		const home = await mkdtemp(join(tmpdir(), "sdk-reread-"));
+		let encoded = JSON.stringify(loginFixture);
+		let unreadable = false;
+		let calls = 0;
+		const rotated = {
+			...loginFixture,
+			accessToken: "new-pair-fixture",
+			refreshToken: "new-pair-refresh",
+			accessExpiresAt: "2099-01-01T00:00:00Z",
+		};
+		const keyring = {
+			get: async () => {
+				if (unreadable) {
+					if (kind === "throw") throw new Error("credential backend unreadable");
+					return { state: kind };
+				}
+				return { state: "found" as const, value: encoded };
+			},
+			set: async (value: string) => {
+				encoded = value;
+				return { state: "found" as const };
+			},
+		};
+		const server = Bun.serve({
+			port: 0,
+			fetch: () => {
+				calls++;
+				unreadable = true;
+				return Response.json(rotated);
+			},
+		});
+		try {
+			const store = new LoginStore(`http://127.0.0.1:${server.port}`, { env: { HOME: home }, keyring });
+			await expect(store.accessToken()).rejects.toMatchObject({ reason: "refresh_in_doubt" });
+			const newer = { ...rotated, accessToken: "newer-login-fixture", refreshToken: "newer-login-refresh" };
+			encoded = JSON.stringify(newer);
+			await expect(store.accessToken()).rejects.toMatchObject({ reason: "refresh_in_doubt" });
+			expect(encoded).toBe(JSON.stringify(newer));
+			unreadable = false;
+			expect(await store.accessToken()).toBe(newer.accessToken);
+			expect(calls).toBe(1);
+		} finally {
+			server.stop(true);
+			await rm(home, { recursive: true, force: true });
+		}
+	},
+);

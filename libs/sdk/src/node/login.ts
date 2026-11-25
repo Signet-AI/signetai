@@ -169,6 +169,10 @@ export class LoginStore {
 			this.observedReason = "refresh_in_doubt";
 			throw new SignetCredentialError(error, "refresh_in_doubt");
 		}
+		if (saved === null && this.observedReason !== null) {
+			this.observedReason = "refresh_in_doubt";
+			throw new SignetCredentialError(new Error("Cannot verify current login credential"), "refresh_in_doubt");
+		}
 		if (saved === null && this.observedReason === null) {
 			this.#pendingRotation = null;
 			this.#pendingPreviousRefresh = null;

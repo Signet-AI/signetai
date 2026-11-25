@@ -1471,6 +1471,10 @@ class DurableOutbox:
 
     def flush(self, send, *, timeout=5, deadline=None, force=False, cancel=None, origin=None, harness=None) -> OutboxFlushResult:
         end = _request_end(5,timeout,deadline)
+        try:
+            _check_control(end,cancel)
+        except (SignetNetworkError,SignetTimeoutError) as error:
+            return {"state":"failed","pending":None,"sent":0,"failure":{"code":type(error).__name__,"status":None,"reason":None}}
         if origin is not None and origin != self.origin or harness is not None and harness != self.harness:
             return {"state":"deferred","pending":0,"sent":0,"failure":{"code":"partition_mismatch","status":None,"reason":None}}
         legacy = self._legacy_pending()

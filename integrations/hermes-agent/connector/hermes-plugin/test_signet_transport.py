@@ -587,6 +587,20 @@ sys.exit(78)
         box.purge()
         self.assertEqual(box.status()["quarantined"], 0)
 
+    def test_empty_flush_honors_cancel_and_expired_deadline(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        for cancel, deadline, code in ((cancelled,None,"SignetNetworkError"),(None,0,"SignetTimeoutError")):
+            with self.subTest(code=code):
+                box = transport.DurableOutbox(self.url,env=self.env)
+                result = box.flush(lambda *_: self.fail("empty flush dispatched"),cancel=cancel,deadline=deadline)
+                self.assertEqual(result["state"],"failed")
+                failure = result["failure"]
+                if failure is None:
+                    self.fail("cancelled flush has no failure")
+                self.assertEqual(failure["code"],code)
+                self.assertFalse(box.directory.exists())
+
     def test_get_and_empty_flush_do_not_create_storage(self):
         self.authorized = True
         target = transport.resolve_target(flag_url=self.url, flag_key="fixture", env=self.env)
