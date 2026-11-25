@@ -1127,7 +1127,7 @@ function unpatchConfigToml(path: string): boolean {
 	let inSection = false;
 	for (const line of lines) {
 		if (line.trim() === "# Signet MCP server") continue;
-		if (line.trim() === "[mcp_servers.signet]") {
+		if (line.trim() === "[mcp_servers.signet]" || line.trim().startsWith("[mcp_servers.signet.")) {
 			inSection = true;
 			continue;
 		}

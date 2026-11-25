@@ -424,20 +424,18 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).not.toContain("command = 'signet-mcp'");
 	});
 
-	test("removes stale remote MCP auth header tables on reinstall without an API key", async () => {
+	test("removes noncontiguous legacy MCP credentials on reinstall", async () => {
 		process.env.SIGNET_DAEMON_URL = authServer.url.origin;
-		process.env.SIGNET_API_KEY = "sig_sk_codex_old_secret";
-
+		mkdirSync(join(configPath, ".."), { recursive: true });
+		writeFileSync(
+			configPath,
+			`[mcp_servers.signet]\nurl = '${authServer.url.origin}/mcp'\n[profiles.dev]\nmodel = 'fixture-model'\n[mcp_servers.signet.http_headers]\nAuthorization = 'Bearer sig_sk_codex_old_secret'\n`,
+		);
 		await connector().install(tempHome);
-		let content = readFileSync(configPath, "utf-8");
-		expect(content).toContain("[mcp_servers.signet.http_headers]");
-		expect(content).toContain("Authorization = 'Bearer sig_sk_codex_old_secret'");
-
-		Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
-		await connector().install(tempHome);
-
-		content = readFileSync(configPath, "utf-8");
+		const content = readFileSync(configPath, "utf8");
 		expect(content).toContain("[mcp_servers.signet]");
+		expect(content).toContain("'connector', 'mcp', 'codex'");
+		expect(content).toContain("model = 'fixture-model'");
 		expect(content).not.toContain("[mcp_servers.signet.http_headers]");
 		expect(content).not.toContain("sig_sk_codex_old_secret");
 	});
