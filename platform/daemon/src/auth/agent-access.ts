@@ -5,6 +5,21 @@ export function organizationReadRequest(method: string, path: string): boolean {
 		["GET", "HEAD"].includes(method) ||
 		(method === "POST" &&
 			[
+				"/mcp",
+				"/api/assistant/chat",
+				"/api/knowledge/expand",
+				"/api/knowledge/expand/session",
+				"/api/sessions/summaries/expand",
+				...[
+					"memory_head_read",
+					"search_entities",
+					"get_entity",
+					"list_aspect_claims",
+					"search_evidence",
+					"validate_proposal",
+					"zoom_history",
+					"attention_list",
+				].map((id) => `/api/dream/tools/${id}`),
 				"/api/memory/recall",
 				"/api/hooks/recall",
 				"/api/hook/recall",

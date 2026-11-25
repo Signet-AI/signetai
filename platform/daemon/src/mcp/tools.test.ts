@@ -248,6 +248,16 @@ describe("createMcpServer", () => {
 		await callTool(server, "memory_forget", { id: "mem-1", reason: "x", agent_id: "explicit" });
 		expect(new URL(capture.url ?? "").searchParams.get("agentId")).toBe("explicit");
 
+		for (const [name, input] of [
+			["knowledge_expand", { entity_name: "Signet" }],
+			["knowledge_expand_session", { entity_name: "Signet" }],
+			["lcm_expand", { id: "summary-one" }],
+		] as const) {
+			mockFetch(200, { items: [] }, capture);
+			await callTool(server, name, input);
+			expect(JSON.parse(capture.body ?? "{}").agentId).toBe("opencode-a");
+		}
+
 		mockFetch(200, { entities: [] }, capture);
 		await callTool(server, "knowledge_list_entities", {});
 		expect(new URL(capture.url ?? "").searchParams.get("agent_id")).toBe("opencode-a");

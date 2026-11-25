@@ -1596,6 +1596,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					entity: entity_name,
+					agentId: configuredAgentId,
 					aspect: aspect_filter,
 					question,
 					maxTokens: max_tokens ?? 2000,
@@ -2033,6 +2034,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					entityName: entity_name,
+					agentId: configuredAgentId,
 					sessionId: session_id,
 					timeRange: time_range,
 					maxResults: max_results ?? 10,
@@ -2066,6 +2068,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					id,
+					agentId: configuredAgentId,
 					includeTranscript: include_transcript ?? true,
 					transcriptCharLimit: transcript_char_limit,
 				},
