@@ -69,6 +69,9 @@ export function readScopeSql(
 				? `(${active} OR (${agent} IS NULL AND EXISTS(SELECT 1 FROM session_transcripts t WHERE t.session_key=${col("session_key")}) AND NOT EXISTS(SELECT 1 FROM (SELECT agent_id FROM session_transcripts WHERE session_key=${col("session_key")} UNION SELECT agent_id FROM session_claims WHERE session_key=${col("session_key")}) owners LEFT JOIN agents a ON a.id=owners.agent_id WHERE a.id IS NULL OR a.archived_at IS NOT NULL)))`
 				: active,
 		);
+	} else if (!visibility && (reach.kind === "shared" || reach.kind === "group")) {
+		clauses.push(`${agent} = ?`);
+		args.push(reach.agentId);
 	} else if (reach.kind === "shared") {
 		if (!visibility) throw new Error("shared reach requires visibility");
 		clauses.push(`(${visibility} = 'global' OR ${agent} = ?)`);

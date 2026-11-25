@@ -115,13 +115,9 @@ function scopedContentDb(
 										: "";
 								return `${table} AS (SELECT ${projected.join(",")} FROM (SELECT raw.*,NULL AS compartment_id FROM main.${table} raw) _content WHERE 1=1${access.sql}${audience}${scope.projects !== null ? " AND 0" : ""}${hasFiles})`;
 							}
-							const tableScope =
-								!columns.has("visibility") && scope.reach.kind === "shared"
-									? { ...scope, reach: { kind: "own" as const, agentId: scope.reach.agentId } }
-									: scope;
 							const predicate = readScopeSql(
 								"_content",
-								columns.has("project") ? tableScope : { ...tableScope, projects: null },
+								columns.has("project") ? scope : { ...scope, projects: null },
 								{
 									visibility: columns.has("visibility") ? "visibility" : null,
 									memory: table === "memories" ? "id" : null,
