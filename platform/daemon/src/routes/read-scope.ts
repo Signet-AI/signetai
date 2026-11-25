@@ -5,16 +5,21 @@ import { principalAccess, reconcileAgentSources, resolveReadAgent } from "../aut
 import { audienceSubjectFromPrincipal, resolveReadScope, type ReadScope } from "../read-scope";
 import { resolveScopedAgentId } from "./utils";
 
+function denied(c: Context, status: 400 | 401 | 403, reason: string): never {
+	if (status === 401) c.header("WWW-Authenticate", "Bearer");
+	throw new HTTPException(status, { res: c.json({ error: reason.replaceAll("_", " "), reason }, status) });
+}
+
 export async function resolveRouteReadScope(c: Context, requestedAgent?: string): Promise<ReadScope> {
 	const principal = c.get("principal");
 	if (c.get("organization")) {
-		if (!principal) throw new HTTPException(401, { message: "missing_credential" });
+		if (!principal) denied(c, 401, "missing_credential");
 		const requested = reconcileAgentSources([requestedAgent, c.get("requestedOrganizationAgent")]);
-		if (!requested.ok) throw new HTTPException(requested.error.status, { message: requested.error.reason });
+		if (!requested.ok) denied(c, requested.error.status, requested.error.reason);
 		const resolved = resolveReadAgent(principal, requested.value);
-		if (!resolved.ok) throw new HTTPException(resolved.error.status, { message: resolved.error.reason });
+		if (!resolved.ok) denied(c, resolved.error.status, resolved.error.reason);
 		const access = principalAccess(principal);
-		if (!access) throw new HTTPException(403, { message: "org_policy" });
+		if (!access) denied(c, 403, "org_policy");
 		c.set("readAuditAgent", resolved.value);
 		return resolveReadScope(
 			{
@@ -26,7 +31,7 @@ export async function resolveRouteReadScope(c: Context, requestedAgent?: string)
 		);
 	}
 	const resolved = resolveScopedAgentId(c, requestedAgent);
-	if (resolved.error) throw new HTTPException(403, { message: resolved.error });
+	if (resolved.error) denied(c, 403, resolved.error);
 	const policy = await getAgentScope(resolved.agentId);
 	const project = c.get("auth")?.claims?.scope.project;
 	return {
