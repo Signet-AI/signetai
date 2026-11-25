@@ -722,3 +722,16 @@ export { parseTranscriptMessages, buildExportTranscriptRecord } from "./transcri
 
 export { parseAssistantChatEvent } from "./assistant-chat";
 export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat";
+export {
+	compartmentFor,
+	ensureCompartmentShards,
+	dropEmptyCompartmentShards,
+	ftsShardTables,
+	vecShardTables,
+	syncEmbeddingCompartment,
+	resetCompartmentVectorShards,
+	missingCompartmentVectorSql,
+	deleteCompartmentVectors,
+	inheritEmbeddingCompartment,
+} from "./compartment-shards";
+export { COMPARTMENT_TABLES, backfillEvidenceCitations } from "./migrations/177-classifications";

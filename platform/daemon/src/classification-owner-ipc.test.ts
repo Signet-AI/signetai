@@ -1,0 +1,84 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { classificationFixture } from "./test-support/classification-fixture.test";
+import { createDbOwnerClient } from "./db-owner-client";
+import type { ClassificationRequest, ClassificationActor } from "./classifications";
+
+test("real DB owner commits classifications and exposes terminal durable job state through IPC", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "signet-classification-owner-"));
+	const dbPath = join(directory, "signet.db");
+	const db = classificationFixture();
+	db.prepare("VACUUM INTO ?").run(dbPath);
+	db.close();
+	const owner = createDbOwnerClient({ dbPath });
+	const actor: ClassificationActor = {
+		local: false,
+		userId: "carol",
+		groupIds: [],
+		compliance: true,
+		credential: "session:test",
+	};
+	const request = (request: ClassificationRequest) =>
+		owner.submit<unknown>(
+			{ kind: "classification", request },
+			{
+				operation: `classification.${request.op}`,
+				lane: "maintenance",
+				workloadClass: "maintenance",
+				deadlineMs: 120000,
+				estimatedWorkUnits: 10000,
+			},
+		).result;
+	const field = (value: unknown, name: string) => {
+		if (typeof value === "object" && value !== null) {
+			const result: unknown = Reflect.get(value, name);
+			if (typeof result === "string") return result;
+		}
+		throw new Error("invalid owner result");
+	};
+	try {
+		await owner.start();
+		const id = field(
+			await request({
+				op: "create",
+				actor,
+				name: "HR",
+				color: null,
+				description: null,
+				audience: [{ kind: "user", id: "alice" }],
+				appliers: [],
+			}),
+			"id",
+		);
+		const jobId = field(
+			await request({
+				op: "enqueue",
+				actor,
+				id,
+				target: { kind: "memory", id: "m", agentId: "default" },
+				remove: false,
+			}),
+			"jobId",
+		);
+		await request({ op: "execute", jobId });
+		const state = await owner.submit(
+			{
+				kind: "query",
+				statement: {
+					sql: "SELECT j.status,m.compartment_id FROM org_jobs j JOIN memories m ON m.id='m' WHERE j.id=?",
+					params: [jobId],
+					result: "get",
+					readonly: true,
+				},
+			},
+			{ operation: "classification.verify", lane: "read", deadlineMs: 5000 },
+		).result;
+		expect(state).toMatchObject({ status: "complete", compartment_id: expect.any(Number) });
+		expect(await request({ op: "readable", subject: { local: false, userId: "carol", groupIds: [] } })).toEqual([]);
+	} finally {
+		await owner.close();
+		rmSync(directory, { recursive: true, force: true });
+	}
+}, 30000);

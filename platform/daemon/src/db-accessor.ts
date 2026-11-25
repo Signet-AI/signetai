@@ -38,6 +38,8 @@ import {
 	runMigrations,
 	resolveWorkspacePath,
 	activeVectorProjectionTable,
+	syncEmbeddingCompartment,
+	missingCompartmentVectorSql,
 } from "@signet/core";
 import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
 import type { DbSpaceMetrics } from "./db-vacuum";
@@ -1831,7 +1833,7 @@ function hasMissingVecEmbeddings(db: SqliteWriteSurface, expectedDimensions: num
 					`SELECT 1 FROM embeddings e
 					 LEFT JOIN ${targetTable} v ON v.id = e.id
 					 LEFT JOIN vec_embeddings_quarantine q ON q.rowid = e.id
-					 WHERE v.id IS NULL AND q.rowid IS NULL AND e.dimensions = ? LIMIT 1`,
+					 WHERE ${missingCompartmentVectorSql(db, targetTable, "e")} AND q.rowid IS NULL AND e.dimensions = ? LIMIT 1`,
 				)
 				.get(expectedDimensions) !== undefined
 		);
@@ -1857,7 +1859,7 @@ function missingVecEmbeddingsRows(
 			`SELECT e.id, e.vector FROM embeddings e
 			 LEFT JOIN ${targetTable} v ON v.id = e.id
 			 LEFT JOIN vec_embeddings_quarantine q ON q.rowid = e.id
-			 WHERE v.id IS NULL AND q.rowid IS NULL AND e.dimensions = ? AND e.id > ?
+			 WHERE ${missingCompartmentVectorSql(db, targetTable, "e")} AND q.rowid IS NULL AND e.dimensions = ? AND e.id > ?
 			 ORDER BY e.id LIMIT ?`,
 		)
 		.all(expectedDimensions, lastId, limit) as Array<{ id: string; vector: unknown }>;
@@ -1884,7 +1886,7 @@ export function backfillVecEmbeddings(
 		Math.min(options.batchSize ?? VEC_EMBEDDING_BACKFILL_BATCH_SIZE, VEC_EMBEDDING_BACKFILL_BATCH_SIZE),
 	);
 	const vecTable = activeVecTables(db).table;
-	const insert = db.prepare(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`);
+
 	const quarantine = db.prepare(
 		"INSERT OR IGNORE INTO vec_embeddings_quarantine (rowid, dimensions, reason, quarantinedAt) VALUES (?, ?, ?, ?)",
 	);
@@ -1935,7 +1937,12 @@ export function backfillVecEmbeddings(
 						warn(`[db-accessor] Quarantined malformed embedding row ${row.id}: ${reason}`);
 					}
 				} else {
-					insert.run(row.id, decoded.vector);
+					syncEmbeddingCompartment(
+						db,
+						"embeddings",
+						row.id,
+						vecTable === "vec_embeddings_staging" ? "vec_embeddings_staging" : "vec_embeddings",
+					);
 					migrated++;
 				}
 				batchLastId = row.id;

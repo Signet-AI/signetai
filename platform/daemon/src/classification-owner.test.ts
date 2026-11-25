@@ -1,0 +1,217 @@
+import { classificationFixture } from "./test-support/classification-fixture.test";
+import { expect, test } from "bun:test";
+import { executeClassification } from "./classification-owner";
+import type { ClassificationActor } from "./classifications";
+
+const compliance: ClassificationActor = {
+	userId: "carol",
+	groupIds: [],
+	local: false,
+	compliance: true,
+	credential: "session:test",
+};
+const alice: ClassificationActor = {
+	userId: "alice",
+	groupIds: [],
+	local: false,
+	compliance: false,
+	credential: "session:alice",
+};
+const bob: ClassificationActor = { ...alice, userId: "bob" };
+const target = { kind: "memory", id: "m", agentId: "default" } as const;
+test("owners apply, only compliance removes, hidden definitions are absent and fanout is atomic", () => {
+	const db = classificationFixture();
+	const created = executeClassification(db, {
+		op: "create",
+		actor: compliance,
+		name: "HR",
+		color: null,
+		description: null,
+		audience: [{ kind: "user", id: "alice" }],
+		appliers: [],
+	});
+	const id =
+		typeof created === "object" && created !== null && "id" in created && typeof created.id === "string"
+			? created.id
+			: "";
+	expect(id.startsWith("cls_")).toBe(true);
+	expect(executeClassification(db, { op: "list", actor: bob })).toEqual([]);
+	expect(() => executeClassification(db, { op: "get", actor: bob, id })).toThrow("not_found");
+	expect(() => executeClassification(db, { op: "get", actor: bob, id: "cls_missing" })).toThrow("not_found");
+	const enqueue = executeClassification(db, { op: "enqueue", actor: alice, id, target, remove: false });
+	const jobId =
+		typeof enqueue === "object" && enqueue !== null && "jobId" in enqueue && typeof enqueue.jobId === "string"
+			? enqueue.jobId
+			: "";
+	executeClassification(db, { op: "execute", jobId });
+	const m = db.prepare("SELECT compartment_id FROM memories WHERE id=?").get("m");
+	expect(m?.compartment_id).toBeNumber();
+	expect(db.prepare("SELECT compartment_id FROM entities WHERE id=?").get("e")).toEqual(m);
+	expect(executeClassification(db, { op: "readable", subject: alice })).toEqual([m?.compartment_id]);
+	expect(executeClassification(db, { op: "readable", subject: compliance })).toEqual([]);
+	expect(() => executeClassification(db, { op: "enqueue", actor: alice, id, target, remove: true })).toThrow(
+		"permission",
+	);
+	const remove = executeClassification(db, { op: "enqueue", actor: compliance, id, target, remove: true });
+	const removeId =
+		typeof remove === "object" && remove !== null && "jobId" in remove && typeof remove.jobId === "string"
+			? remove.jobId
+			: "";
+	executeClassification(db, { op: "execute", jobId: removeId });
+	expect(db.prepare("SELECT compartment_id FROM memories WHERE id=?").get("m")).toEqual({ compartment_id: null });
+	expect(db.prepare("SELECT compartment_id FROM entities WHERE id=?").get("e")).toEqual({ compartment_id: null });
+	expect(
+		db
+			.prepare(
+				"SELECT count(*) n FROM audit_events WHERE action='classification.apply' OR action='classification.remove'",
+			)
+			.get(),
+	).toEqual({ n: 2 });
+	db.close();
+});
+
+function field(value: unknown, name: string): string {
+	if (typeof value === "object" && value !== null && name in value) {
+		const result = Reflect.get(value, name);
+		if (typeof result === "string") return result;
+	}
+	throw new Error("missing field");
+}
+function classification(db: ReturnType<typeof classificationFixture>): string {
+	return field(
+		executeClassification(db, {
+			op: "create",
+			actor: compliance,
+			name: "HR",
+			color: null,
+			description: null,
+			audience: [{ kind: "user", id: "alice" }],
+			appliers: [],
+		}),
+		"id",
+	);
+}
+test("audit failure rolls back assignments, derived rows and FTS and leaves a failed durable job", () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	const jobId = field(executeClassification(db, { op: "enqueue", actor: alice, id, target, remove: false }), "jobId");
+	db.exec(
+		"CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events WHEN new.action='classification.apply' BEGIN SELECT RAISE(ABORT,'crash'); END",
+	);
+	expect(() => executeClassification(db, { op: "execute", jobId })).toThrow("crash");
+	expect(db.prepare("SELECT count(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
+	expect(db.prepare("SELECT compartment_id FROM memories WHERE id=?").get("m")).toEqual({ compartment_id: null });
+	expect(db.prepare("SELECT compartment_id FROM entities WHERE id=?").get("e")).toEqual({ compartment_id: null });
+	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'secret'").get()).toEqual({ n: 1 });
+	expect(db.prepare("SELECT status FROM org_jobs WHERE id=?").get(jobId)).toEqual({ status: "failed" });
+	db.close();
+});
+test("audience intersection and group revocation are effective on the next owner read", () => {
+	const db = classificationFixture(),
+		first = classification(db);
+	db.exec(
+		"INSERT INTO groups(id,name) VALUES('hr','HR'); INSERT INTO group_members(group_id,user_id,role) VALUES('hr','bob','member')",
+	);
+	executeClassification(db, {
+		op: "audience",
+		id: first,
+		actor: compliance,
+		principals: [{ kind: "group", id: "hr" }],
+	});
+	const jobId = field(
+		executeClassification(db, { op: "enqueue", actor: compliance, id: first, target, remove: false }),
+		"jobId",
+	);
+	executeClassification(db, { op: "execute", jobId });
+	expect(executeClassification(db, { op: "readable", subject: bob })).toHaveLength(1);
+	db.exec("DELETE FROM group_members WHERE group_id='hr' AND user_id='bob'");
+	expect(executeClassification(db, { op: "readable", subject: bob })).toEqual([]);
+	expect(executeClassification(db, { op: "readable", subject: compliance })).toEqual([]);
+	const second = field(
+		executeClassification(db, {
+			op: "create",
+			actor: compliance,
+			name: "Legal",
+			color: null,
+			description: null,
+			audience: [{ kind: "user", id: "bob" }],
+			appliers: [],
+		}),
+		"id",
+	);
+	const job2 = field(
+		executeClassification(db, { op: "enqueue", actor: compliance, id: second, target, remove: false }),
+		"jobId",
+	);
+	executeClassification(db, { op: "execute", jobId: job2 });
+	expect(executeClassification(db, { op: "readable", subject: bob })).toHaveLength(0);
+	const current = db.prepare("SELECT compartment_id FROM memories WHERE id=?").get("m");
+	expect(executeClassification(db, { op: "readable", subject: bob })).not.toContain(current?.compartment_id);
+	db.close();
+});
+test("session and managed source fan out once and rebuild repairs tampered derived labels", () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	db.exec(
+		"INSERT INTO session_transcripts(session_key,content,agent_id,created_at,source_id) VALUES('s','transcript','default','now','src'); INSERT INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,session_id,session_key,session_token,captured_at,updated_at,source_id,content) VALUES('default','notes/x','sha','source','s','s','token','now','now','src','artifact'); UPDATE memories SET source_type='transcript',source_id='s' WHERE id='m'; INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) VALUES('second','Second','second','concept','default','now','now'); INSERT INTO evidence_citations VALUES('entity','second','default','artifact','notes/x');",
+	);
+	const sourceTarget = { kind: "source", id: "src", agentId: "default" } as const;
+	const job = field(
+		executeClassification(db, { op: "enqueue", actor: compliance, id, target: sourceTarget, remove: false }),
+		"jobId",
+	);
+	executeClassification(db, { op: "execute", jobId: job });
+	const c = db.prepare("SELECT compartment_id FROM memories WHERE id=?").get("m");
+	expect(c?.compartment_id).toBeNumber();
+	expect(db.prepare("SELECT compartment_id FROM entities WHERE id='second'").get()).toEqual(c);
+	db.exec("UPDATE entities SET compartment_id=NULL WHERE id='second'");
+	executeClassification(db, { op: "rebuild", agentId: "default" });
+	expect(db.prepare("SELECT compartment_id FROM entities WHERE id='second'").get()).toEqual(c);
+	executeClassification(db, { op: "recover" });
+	expect(db.prepare("SELECT count(*) n FROM org_jobs WHERE status='running'").get()).toEqual({ n: 0 });
+	db.close();
+});
+
+test("direct attributes, their materialized memories, hints and vectors move without transitive fanout", () => {
+	const db = classificationFixture(),
+		id = classification(db);
+	db.exec(`INSERT INTO memories(id,content,agent_id,memory_kind,created_at,updated_at) VALUES('derived','claim','default','derived','now','now');
+ INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name) VALUES('aspect','e','default','Aspect','aspect');
+ INSERT INTO entity_attributes(id,aspect_id,agent_id,memory_id,kind,content,normalized_content) VALUES('attr','aspect','default','derived','fact','claim','claim');
+ INSERT INTO evidence_citations VALUES('attribute','attr','default','memory','m');
+ INSERT INTO memory_hints(id,memory_id,agent_id,hint) VALUES('hint','derived','default','claim');
+ INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,chunk_text,created_at,agent_id) VALUES('emb','derived-hash','memory','derived',X'0000803f0000000000000000',3,'claim','now','default');
+ INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) VALUES('second','Second','second','concept','default','now','now');
+ INSERT INTO evidence_citations VALUES('entity','second','default','memory','derived');`);
+	const jobId = field(
+		executeClassification(db, { op: "enqueue", actor: compliance, id, target, remove: false }),
+		"jobId",
+	);
+	executeClassification(db, { op: "execute", jobId });
+	const expected = db.prepare("SELECT compartment_id FROM memories WHERE id='m'").get();
+	for (const [table, key] of [
+		["entity_attributes", "attr"],
+		["memories", "derived"],
+		["memory_hints", "hint"],
+		["embeddings", "emb"],
+	])
+		expect({ table, row: db.prepare(`SELECT compartment_id FROM ${table} WHERE id=?`).get(key) }).toEqual({
+			table,
+			row: expected,
+		});
+	expect(db.prepare("SELECT count(*) n FROM memory_hints_fts WHERE memory_hints_fts MATCH 'claim'").get()).toEqual({
+		n: 0,
+	});
+	expect(db.prepare("SELECT count(*) n FROM entities_fts WHERE entities_fts MATCH 'E'").get()).toEqual({ n: 0 });
+	expect(db.prepare("SELECT compartment_id FROM entities WHERE id='second'").get()).toEqual({ compartment_id: null });
+	expect(
+		executeClassification(db, {
+			op: "preview",
+			actor: compliance,
+			id,
+			target,
+			scope: { reach: { kind: "all" }, projects: null, compartments: [] },
+		}),
+	).toEqual({ evidence: 0, derived: 0 });
+	db.close();
+});

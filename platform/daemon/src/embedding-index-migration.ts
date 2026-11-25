@@ -1,7 +1,9 @@
+import { projectEmbeddingRows } from "./embedding-projection";
+import { resetCompartmentVectorShards, syncEmbeddingCompartment } from "@signet/core";
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, DbWriteQueueFullError, type ReadDb, type WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
-import { ownerBatch, ownerBytesFromHex, ownerReadAll, ownerReadOne, ownerRun } from "./db-owner-sql";
+import { ownerBatch, ownerReadAll, ownerReadOne, ownerRun } from "./db-owner-sql";
 import { vectorToBlob } from "./db-helpers";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import {
@@ -98,6 +100,7 @@ function isVecVirtualTable(db: ReadDb, name: string): boolean {
 }
 
 function createVectorIndex(db: WriteDb, table: string, dimensions: number): void {
+	resetCompartmentVectorShards(db, table);
 	db.exec(`
 		CREATE VIRTUAL TABLE ${table} USING vec0(
 			id TEXT PRIMARY KEY,
@@ -302,17 +305,12 @@ async function resetStagingVectorIndexThroughOwner(
 	dimensions: number,
 	projectionSlot?: "active" | "staging",
 ): Promise<void> {
-	const table = vectorTableForSlot(projectionSlot);
-	await ownerBatch(
-		owner,
-		[
-			{ sql: `DROP TABLE IF EXISTS ${table}` },
-			{
-				sql: `CREATE VIRTUAL TABLE ${table} USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${assertDimensions(dimensions)}] distance_metric=cosine)`,
-			},
-		],
-		ownerMaintenanceOptions("embedding-index.reset-projection"),
-	);
+	await projectEmbeddingRows(owner, {
+		store: "embeddings",
+		projection: vectorTableForSlot(projectionSlot),
+		ids: [],
+		resetDimensions: assertDimensions(dimensions),
+	});
 }
 
 async function rebuildVectorIndexThroughOwner(
@@ -351,17 +349,7 @@ async function rebuildVectorIndexThroughOwner(
 				ownerMaintenanceOptions("embedding-index.rebuild.read", limit),
 			);
 			if (rows.length === 0) return;
-			const statements = rows.map((row) => ({
-				sql: `INSERT INTO ${table} (id, embedding)
-					SELECT ?, ?
-					WHERE EXISTS (SELECT 1 FROM embeddings WHERE id = ?)
-					AND NOT EXISTS (SELECT 1 FROM ${table} WHERE id = ?)`,
-				params: [row.id, ownerBytesFromHex(row.vector_hex), row.id, row.id],
-			}));
-			await ownerBatch(owner, statements, {
-				...ownerMaintenanceOptions("embedding-index.rebuild.write", rows.length),
-				requireChanges: false,
-			});
+			await projectEmbeddingRows(owner, { store: "embeddings", projection: table, ids: rows.map((r) => r.id) });
 			lastId = rows[rows.length - 1]?.id ?? null;
 			if (lastId !== null) await persistCursor?.(lastId);
 			retries = 0;
@@ -433,7 +421,6 @@ async function rebuildVectorIndex(
 
 			await withQueuedWrite(accessor, (db) => {
 				const projectionTable = vectorTableForSlot(projectionSlot);
-				const insert = db.prepare(`INSERT OR IGNORE INTO ${projectionTable} (id, embedding) VALUES (?, ?)`);
 				const existing = db.prepare(`SELECT 1 FROM ${projectionTable} WHERE id = ?`);
 				const canonical = db.prepare("SELECT 1 FROM embeddings WHERE id = ?");
 				for (const row of rows) {
@@ -446,7 +433,7 @@ async function rebuildVectorIndex(
 						throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
 					if (canonical.get(row.id) == null || existing.get(row.id) != null) continue;
 					try {
-						insert.run(row.id, vector);
+						syncEmbeddingCompartment(db, "embeddings", row.id, projectionTable);
 					} catch (error) {
 						if (!isDuplicateVectorProjectionRow(error)) throw error;
 					}
@@ -811,16 +798,15 @@ async function stageEmbeddingBatchThroughOwner(input: {
 						row.content_hash,
 					],
 				},
-				{
-					sql: `INSERT INTO ${vectorTable} (id, embedding)
-					SELECT id, ? FROM embeddings_staging
-					WHERE content_hash = ? AND EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)
-					AND NOT EXISTS (SELECT 1 FROM ${vectorTable} WHERE id = embeddings_staging.id)`,
-					params: [vectorToBlob(vector), row.content_hash, row.content_hash],
-				},
 			],
 			ownerMaintenanceOptions("embedding-index.stage.write", 3),
 		);
+		await projectEmbeddingRows(input.owner, {
+			store: "embeddings_staging",
+			projection: vectorTable,
+			ids: [],
+			contentHashes: [row.content_hash],
+		});
 		if (results.some((result) => result.changes > 0)) staged++;
 	}
 	return { staged, coverage: await ownerStagingCoverage(input.owner, profile.dimensions, profile.fingerprint) };
@@ -976,11 +962,7 @@ export async function stageEmbeddingBatch(input: {
 			const stored = db.prepare("SELECT id FROM embeddings_staging WHERE content_hash = ?").get(row.content_hash) as
 				| { id: string }
 				| undefined;
-			if (stored)
-				db.prepare(`INSERT OR REPLACE INTO ${vectorTable} (id, embedding) VALUES (?, ?)`).run(
-					stored.id,
-					new Float32Array(vector),
-				);
+			if (stored) syncEmbeddingCompartment(db, "embeddings_staging", stored.id, vectorTable);
 		});
 		staged++;
 	}

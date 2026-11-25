@@ -239,6 +239,8 @@ async function executeInlineOwnerRequest(
 		);
 	}
 	switch (request.kind) {
+		case "classification":
+		case "embedding_projection":
 		case "initialize":
 		case "recall":
 		case "source_snapshot_import":

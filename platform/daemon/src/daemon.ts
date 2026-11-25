@@ -291,6 +291,7 @@ import {
 	sweepStaleSessions,
 } from "./hooks";
 import { mountMcpRoute } from "./mcp";
+import { registerClassificationRoutes } from "./routes/classification-routes";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
 import { stopHarnessHealth } from "./harness-health";
@@ -548,6 +549,7 @@ mountHealthRoutes(app);
 mountProtectionRoutes(app, { workspacePath: process.env.SIGNET_PATH });
 mountMcpRoute(app);
 registerAuthRoutes(app);
+registerClassificationRoutes(app);
 
 registerMemoryRoutes(app, { recallOwner });
 registerHooksRoutes(app);

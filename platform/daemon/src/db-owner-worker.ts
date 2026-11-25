@@ -882,10 +882,10 @@ export function runDbOwnerWorker(): void {
 					new Date().toISOString(),
 					input.agentId,
 				);
-			if (vecAvailable && vecDimensions === String(vector.length))
-				database
-					.prepare(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`)
-					.run(embeddingId, vectorToBlob(vector));
+			if (vecAvailable && vecDimensions === String(vector.length)) {
+				const { syncEmbeddingCompartment } = await import("@signet/core");
+				syncEmbeddingCompartment(database, "embeddings", embeddingId, vecTable);
+			}
 			embedded++;
 		}
 		const prefix = `${input.sourceId}:${input.sourceExternalId ?? input.sourcePath}#`;
@@ -1113,6 +1113,10 @@ export function runDbOwnerWorker(): void {
 		}
 		const { initDbAccessorAsync } = await import("./db-accessor");
 		const initialization = await initDbAccessorAsync(ownerDbPath, { agentsDir, deadlineAt: context?.deadlineAt });
+		if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='org_jobs'").get()) {
+			const { executeClassification } = await import("./classification-owner");
+			executeClassification(db, { op: "recover" });
+		}
 		recallAccessorReady = true;
 		try {
 			const { refreshQueryPlannerStatisticsOnOpen } = await import("./query-planner-statistics");
@@ -1137,6 +1141,18 @@ export function runDbOwnerWorker(): void {
 			return job.request.statement.readonly
 				? executeReadOnlyStatement(job.request.statement)
 				: executeStatement(job.request.statement, context);
+		}
+		if (job.request.kind === "embedding_projection") {
+			const { executeEmbeddingProjection } = await import("./embedding-projection-owner");
+			const result = executeEmbeddingProjection(db, job.request.request);
+			context.committed = true;
+			return result;
+		}
+		if (job.request.kind === "classification") {
+			const { executeClassification } = await import("./classification-owner");
+			const result = executeClassification(db, job.request.request);
+			context.committed = true;
+			return result;
 		}
 		if (job.request.kind === "memory_head") {
 			const { executeMemoryHead } = await import("./memory-head-owner");

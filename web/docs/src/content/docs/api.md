@@ -30,6 +30,41 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
   errors may include structured fields such as `status`, `code`, or
   `missingCapabilities`.
 
+## Classifications
+
+Organization-mode classifications separate content access from agent ownership.
+Definitions are visible to their audience; compliance officers can manage all
+definitions without gaining access to their content. A hidden definition and a
+missing definition return the same `404` body: `{ "error": "Not found" }`.
+
+| Method | Path | Body / result |
+| --- | --- | --- |
+| GET | `/api/classifications` | Definition array, audience-filtered unless compliance |
+| GET | `/api/classifications/:id` | One visible definition |
+| POST | `/api/classifications` | `{ name, color?, description?, audience: [{ kind: "user" \| "group", id }], appliers?: [] }`; compliance; `201 { id }` |
+| PATCH | `/api/classifications/:id` | `{ name?, color?, description?, archived? }`; compliance |
+| PUT | `/api/classifications/:id/audience` | Array of `{ kind, id }`; replaces the audience; compliance |
+| PUT | `/api/classifications/:id/appliers` | Array of `{ kind, id }`; replaces appliers; compliance |
+| POST | `/api/classifications/:id/preview` | `{ target }`; returns caller-readable `{ evidence, derived }` counts |
+| POST | `/api/classifications/:id/apply` | `{ target }`; returns `202 { jobId }` |
+| POST | `/api/classifications/:id/remove` | `{ target }`; compliance; returns `202 { jobId }` |
+| GET | `/api/classifications/:id/items?cursor=…` | `{ items, nextCursor }`; up to 100 assignments; opaque cursor |
+
+A target is `{ kind: "memory" | "session" | "source" | "agent", id, agentId }`.
+The agent target's `id` and `agentId` must agree. Apply requires compliance or
+target ownership and admission by the appliers list (an empty list permits
+owners). Removing requires compliance. Archived definitions reject apply with
+`409`. Add `?wait=1` to apply or remove to wait for the job's terminal result.
+A `202` without waiting reports acceptance, not completion. Interrupted pending
+or running classification jobs become failed on restart.
+
+Audience members receive only assignments whose content is readable under their
+full scope. Memory items include `{ id, content }` in `memory`. Compliance
+outside the audience receives target identifiers only, never memory content.
+Overlapping classifications require membership in every audience. Access and
+membership changes invalidate the owner-side readable-compartment cache in the
+same database transaction.
+
 ## Authentication
 
 The daemon supports three [Auth](/auth/) modes, set in `agent.yaml`:
