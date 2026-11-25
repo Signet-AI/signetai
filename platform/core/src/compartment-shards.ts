@@ -143,7 +143,10 @@ export interface CompartmentWriteScope {
 	readonly memoryId?: string | null;
 	readonly parentCompartment?: number | null;
 }
-export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+export function classificationsForWrite(
+	db: Pick<MigrationDb, "prepare">,
+	input: CompartmentWriteScope,
+): readonly string[] {
 	if (!input.agentId) throw new Error("agent_required");
 	const labels = new Set<string>();
 	const add = (rows: readonly Record<string, unknown>[]) => {
@@ -155,7 +158,7 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
 				.all(input.parentCompartment),
 		);
-	const assignments = (session: unknown, source: unknown, memory: unknown) =>
+	const assignments = (session: unknown, source: unknown, memory: unknown) => {
 		add(
 			db
 				.prepare(
@@ -163,6 +166,15 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				)
 				.all(input.agentId, session, session, session, source, source, memory),
 		);
+		if (shardSchema(db).tables.has("org_jobs"))
+			add(
+				db
+					.prepare(
+						"SELECT json_extract(params_json,'$.id') AS classification_id FROM org_jobs WHERE kind='classify' AND status IN ('pending','running') AND json_valid(params_json) AND json_extract(params_json,'$.target.agentId')=? AND (json_extract(params_json,'$.target.kind')='agent' OR (json_extract(params_json,'$.target.kind')='session' AND (json_extract(params_json,'$.target.id')=? OR json_extract(params_json,'$.target.id')='session:'||? OR 'session:'||json_extract(params_json,'$.target.id')=?)) OR (json_extract(params_json,'$.target.kind')='source' AND (json_extract(params_json,'$.target.id')=? OR substr(?,1,length(json_extract(params_json,'$.target.id'))+1)=json_extract(params_json,'$.target.id')||':')) OR (json_extract(params_json,'$.target.kind')='memory' AND json_extract(params_json,'$.target.id')=?))",
+					)
+					.all(input.agentId, session, session, session, source, source, memory),
+			);
+	};
 	assignments(input.sessionKey ?? null, input.sourceId ?? null, input.memoryId ?? null);
 	if (input.memoryId && shardSchema(db).tables.has("memories")) {
 		const columns = tableColumns(db, "memories");
@@ -197,7 +209,10 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				assignments(parent.session_key, parent.source_id, null);
 			}
 		}
-	return compartmentFor(db, [...labels]);
+	return [...labels].sort();
+}
+export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+	return compartmentFor(db, classificationsForWrite(db, input));
 }
 
 interface ShardSchema {
@@ -205,8 +220,8 @@ interface ShardSchema {
 	tables: Map<string, string>;
 	columns: Map<string, ReadonlySet<string>>;
 }
-const shardSchemas = new WeakMap<MigrationDb, ShardSchema>();
-function shardSchema(db: MigrationDb): ShardSchema {
+const shardSchemas = new WeakMap<Pick<MigrationDb, "prepare">, ShardSchema>();
+function shardSchema(db: Pick<MigrationDb, "prepare">): ShardSchema {
 	const version = db.prepare("PRAGMA schema_version").get()?.schema_version;
 	const hit = shardSchemas.get(db);
 	if (hit?.version === version) return hit;
@@ -217,7 +232,7 @@ function shardSchema(db: MigrationDb): ShardSchema {
 	shardSchemas.set(db, schema);
 	return schema;
 }
-function tableColumns(db: MigrationDb, table: string): ReadonlySet<string> {
+function tableColumns(db: Pick<MigrationDb, "prepare">, table: string): ReadonlySet<string> {
 	const schema = shardSchema(db);
 	const hit = schema.columns.get(table);
 	if (hit) return hit;

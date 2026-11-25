@@ -46,6 +46,47 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("A14 hidden hash and idempotency duplicates produce ordinary fresh writes", async () => {
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		registerMemoryRoutes(app, { fetchEmbedding: async () => null });
+		const agentId = `personal-${userId.slice(4)}`;
+		for (const idempotencyKey of [undefined, "hidden-write-key"]) {
+			const content = `Identical classified evidence ${idempotencyKey ?? "hash"}`;
+			const post = () =>
+				app.request("/api/memory/remember", {
+					method: "POST",
+					headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+					body: JSON.stringify({ content, agentId, idempotencyKey }),
+				});
+			const first = await post();
+			expect(first.status).toBe(200);
+			const hidden = await first.json();
+			await organizationWrite([
+				statement("INSERT OR IGNORE INTO classifications(id,name) VALUES('cls_hidden','Hidden')"),
+				statement("INSERT OR IGNORE INTO compartments(key,created_at) VALUES('cls_hidden','now')"),
+				statement(
+					"INSERT OR IGNORE INTO compartment_members SELECT id,'cls_hidden' FROM compartments WHERE key='cls_hidden'",
+				),
+				statement(
+					"UPDATE memories SET compartment_id=(SELECT id FROM compartments WHERE key='cls_hidden') WHERE id=?",
+					[hidden.id],
+				),
+			]);
+			const fresh = await post();
+			expect(fresh.status).toBe(200);
+			const result = await fresh.json();
+			expect(result.id).toEqual(expect.any(String));
+			expect(result.id).not.toBe(hidden.id);
+			expect(result.deduped).not.toBe(true);
+			expect(
+				await organizationQuery(
+					statement("SELECT count(*) AS n FROM memories WHERE content=? AND agent_id=?", [content, agentId], "get"),
+				),
+			).toEqual({ n: 2 });
+			const retry = await post();
+			expect((await retry.json()).id).toBe(result.id);
+		}
+	});
 	test("cross-agent message content inherits the sender session and admitted author", async () => {
 		await organizationWrite([
 			statement("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')"),

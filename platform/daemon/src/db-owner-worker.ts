@@ -887,7 +887,7 @@ export function runDbOwnerWorker(): void {
 						`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-					 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+					 ON CONFLICT DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
 					 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
 					 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 					)

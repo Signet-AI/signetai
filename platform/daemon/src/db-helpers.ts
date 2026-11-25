@@ -1,8 +1,12 @@
 import { createRequire } from "node:module";
+import type { WriteAuthor } from "./auth/audit-owner";
+import { readScopeSql } from "./read-scope";
 import {
 	attempt,
 	compartmentFor,
 	compartmentForWrite,
+	classificationsForWrite,
+	type CompartmentWriteScope,
 	deleteCompartmentVectors,
 	syncEmbeddingCompartment,
 	activeVectorProjectionTable,
@@ -195,4 +199,22 @@ export function recordEvidenceCitationsInTx(
 }
 export function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
 	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
+}
+
+export function memoryWriteDedupeSql(
+	db: ReadDb,
+	input: { readonly writeScope: CompartmentWriteScope; readonly author: WriteAuthor },
+	alias = "memories",
+): { readonly sql: string; readonly params: readonly unknown[] } {
+	const scope = readScopeSql(alias, {
+		reach: { kind: "own", agentId: input.writeScope.agentId },
+		compartments: "all",
+		projects: null,
+		...(input.author.userId ? { inFlightUserId: input.author.userId } : {}),
+	});
+	const key = classificationsForWrite(db, input.writeScope).join(",");
+	return {
+		sql: `${scope.sql} AND COALESCE((SELECT key FROM compartments WHERE id=${alias}.compartment_id),'')=? AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=${alias}.compartment_id AND NOT EXISTS(SELECT 1 FROM classification_audience ca WHERE ca.classification_id=cm.classification_id AND ((ca.principal_kind='user' AND ca.principal_id=?) OR (ca.principal_kind='group' AND ca.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))))`,
+		params: [...scope.args, key, input.author.userId, input.author.userId, input.author.userId],
+	};
 }

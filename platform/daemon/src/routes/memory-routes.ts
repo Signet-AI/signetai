@@ -19,6 +19,8 @@ import { normalizeAndHashContent } from "../content-normalization";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { getDbAccessor, prepareTypedStatement, type ReadDb, runWriteTxAsync, type WriteDb } from "../db-accessor";
 import { evidenceCompartmentInTx, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { memoryWriteDedupeSql } from "../db-helpers";
+import { LOCAL_AUTHOR } from "../auth/audit-owner";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
@@ -263,6 +265,8 @@ interface RememberRowProvenance {
 }
 
 interface RememberDedupeScope {
+	readonly writeScope: import("@signet/core").CompartmentWriteScope;
+	readonly author: import("../auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly visibility: "global" | "private" | "archived";
 	readonly project: string | null;
@@ -348,34 +352,21 @@ function chunkIdempotencyIndex(baseKey: string, key: string): number | null {
 	return Number.isSafeInteger(index) && index > 0 ? index - 1 : null;
 }
 
-function scopedMemoryPredicate(input: RememberDedupeScope): {
-	readonly sql: string;
-	readonly params: readonly string[];
-} {
+function scopedMemoryPredicate(
+	db: ReadDb,
+	input: RememberDedupeScope,
+): { readonly sql: string; readonly params: readonly unknown[] } {
+	const boundary = memoryWriteDedupeSql(db, input);
 	return {
-		sql: `
-			COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			AND COALESCE(project, '') = ?
-			AND COALESCE(visibility, 'global') = ?
-			AND COALESCE(scope, '__NULL__') = ?
-		`,
-		params: [input.agentId || "default", input.project ?? "", input.visibility, input.scope ?? "__NULL__"],
+		sql: `COALESCE(project,'')=? AND COALESCE(visibility,'global')=? AND COALESCE(scope,'__NULL__')=? ${boundary.sql}`,
+		params: [input.project ?? "", input.visibility, input.scope ?? "__NULL__", ...boundary.params],
 	};
 }
-
-function scopedContentHashPredicate(input: RememberDedupeScope): {
-	readonly sql: string;
-	readonly params: readonly string[];
-} {
-	return {
-		sql: `
-			COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			AND COALESCE(project, '') = ?
-			AND COALESCE(scope, '__NULL__') = ?
-			AND COALESCE(visibility, 'global') = ?
-		`,
-		params: [input.agentId || "default", input.project ?? "", input.scope ?? "__NULL__", input.visibility],
-	};
+function scopedContentHashPredicate(
+	db: ReadDb,
+	input: RememberDedupeScope,
+): { readonly sql: string; readonly params: readonly unknown[] } {
+	return scopedMemoryPredicate(db, input);
 }
 
 function getScopedIdempotencyMemoryId(
@@ -384,7 +375,7 @@ function getScopedIdempotencyMemoryId(
 	input: RememberDedupeScope,
 ): RememberDedupeIdRow | undefined {
 	if (!key) return undefined;
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, source_id AS sourceId
@@ -401,7 +392,7 @@ function getScopedIdempotencyDedupeRow(
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
 	if (!key) return undefined;
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
@@ -437,7 +428,7 @@ function getScopedSourceDedupeRow(
 	sourceId: string,
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
@@ -453,7 +444,7 @@ function getScopedContentHashMemoryId(
 	contentHash: string,
 	input: RememberDedupeScope,
 ): { readonly id: string } | undefined {
-	const scoped = scopedContentHashPredicate(input);
+	const scoped = scopedContentHashPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id
@@ -474,7 +465,7 @@ function getScopedContentHashDedupeRow(
 	contentHash: string,
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
-	const scoped = scopedContentHashPredicate(input);
+	const scoped = scopedContentHashPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
@@ -491,7 +482,7 @@ function getScopedChunkIdempotencyRows(
 	input: RememberDedupeScope,
 ): readonly RememberChunkDedupeRow[] {
 	if (!baseKey) return [];
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return prepareTypedStatement<RememberChunkDedupeRow>(
 		db,
 		`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
@@ -1462,7 +1453,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		await ensureAgentRegistered(agentId);
 		const visibility: RememberDedupeScope["visibility"] = body.visibility === "private" ? "private" : "global";
-		const dedupeScope: RememberDedupeScope = { agentId, visibility, project: body.project ?? null, scope };
+		const dedupeScope: RememberDedupeScope = {
+			agentId,
+			visibility,
+			project: body.project ?? null,
+			scope,
+			author: c.get("author") ?? LOCAL_AUTHOR,
+			writeScope: { agentId, sessionKey: c.req.header("x-signet-session-key") ?? null, sourceId: body.sourceId },
+		};
 		const hasBodyTags = Object.hasOwn(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {

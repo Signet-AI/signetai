@@ -295,7 +295,7 @@ export async function installSkillNode(
 					`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
 				 VALUES (?, ?, ?, ?, 'skill', ?, ?, ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+				 ON CONFLICT DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_id = excluded.source_id,

@@ -249,7 +249,7 @@ export function startEmbeddingTracker(
 									`INSERT INTO embeddings
 								   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at, agent_id, compartment_id)
 								 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
-								 ON CONFLICT(content_hash) DO UPDATE SET
+								 ON CONFLICT DO UPDATE SET
 								   vector = excluded.vector,
 								   dimensions = excluded.dimensions,
 								   chunk_text = excluded.chunk_text,

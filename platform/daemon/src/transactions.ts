@@ -1,8 +1,9 @@
-import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { auditAuthoredWriteInTx, LOCAL_AUTHOR, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { compartmentForWrite } from "@signet/core";
 import {
 	evidenceCompartmentInTx,
+	memoryWriteDedupeSql,
 	recordEvidenceCitationsInTx,
 	syncVecDeleteBySourceExceptHash,
 	syncVecDeleteBySourceId,
@@ -392,6 +393,11 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		finalContent = input.patch.content;
 
 		if (input.patch.contentHash !== undefined && input.patch.contentHash !== null) {
+			if (!existing.agent_id) throw new Error("agent_required");
+			const boundary = memoryWriteDedupeSql(db, {
+				writeScope: { agentId: existing.agent_id, memoryId: input.memoryId },
+				author: input.ctx?.author ?? LOCAL_AUTHOR,
+			});
 			const duplicate = db
 				.prepare(
 					`SELECT id FROM memories
@@ -401,7 +407,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 					   AND COALESCE(project, '') = COALESCE(?, '')
 					   AND COALESCE(scope, '__NULL__') = COALESCE(?, '__NULL__')
 					   AND COALESCE(visibility, 'global') = COALESCE(?, 'global')
-					   AND is_deleted = 0
+					   AND is_deleted = 0 ${boundary.sql}
 					 LIMIT 1`,
 				)
 				.get(
@@ -411,6 +417,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 					existing.project,
 					existing.scope,
 					existing.visibility,
+					...boundary.params,
 				) as { id: string } | undefined;
 			if (duplicate) {
 				return {
@@ -508,7 +515,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
 				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+				 ON CONFLICT DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,

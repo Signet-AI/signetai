@@ -1,3 +1,4 @@
+import { up as writeMigration } from "../../core/src/migrations/178-write-inheritance";
 import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
 import { classificationFixture } from "./test-support/classification-fixture.test";
@@ -13,6 +14,82 @@ function assigned() {
 	);
 	return db;
 }
+test("A14 embedding hashes coexist for separate classified evidence parents", () => {
+	const db = classificationFixture();
+	writeMigration(db);
+	db.exec(
+		"INSERT INTO classifications(id,name) VALUES('cls_hidden','Hidden');INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('visible','Visible','default','now','now')",
+	);
+	const compartment = shards.compartmentFor(db, ["cls_hidden"]);
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(compartment);
+	const insert = db.prepare(
+		"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,agent_id,compartment_id,created_at,chunk_text) VALUES(?,?,?,3,'memory',?,'default',?,'now','identical chunk')",
+	);
+	insert.run("hidden-vector", "same-vector", new Uint8Array(12), "m", compartment);
+	insert.run("visible-vector", "same-vector", new Uint8Array(12), "visible", null);
+	expect(
+		db
+			.prepare("SELECT source_id,compartment_id FROM embeddings WHERE content_hash='same-vector' ORDER BY source_id")
+			.all(),
+	).toEqual([
+		{ source_id: "m", compartment_id: compartment },
+		{ source_id: "visible", compartment_id: null },
+	]);
+	db.prepare("UPDATE memories SET content_hash='edit-target' WHERE id='m'").run();
+	expect(
+		db.transaction(() =>
+			txModifyMemory(db, {
+				memoryId: "visible",
+				patch: { content: "private secret", contentHash: "edit-target" },
+				reason: "edit",
+				changedBy: "alice",
+				changedAt: "now",
+				ctx: { author: { userId: "alice", credential: "session:alice" } },
+			}),
+		)(),
+	).toMatchObject({ status: "updated" });
+	db.close();
+});
+
+test("A14 pending jobs label new evidence before assignments are materialized", () => {
+	const db = classificationFixture();
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_pending','Pending')");
+	db.prepare("INSERT INTO org_jobs(id,kind,status,params_json) VALUES('pending-job','classify','pending',?)").run(
+		JSON.stringify({ id: "cls_pending", target: { kind: "session", id: "pending-session", agentId: "default" } }),
+	);
+	db.transaction(() =>
+		txIngestEnvelope(db, {
+			author: { userId: "alice", credential: "session:alice" },
+			id: "pending-memory",
+			content: "pendingclassified",
+			contentHash: "pending-hash",
+			who: "alice",
+			why: null,
+			project: null,
+			importance: 0.5,
+			type: "fact",
+			tags: null,
+			pinned: 0,
+			sourceType: "user",
+			sourceId: null,
+			sessionKey: "pending-session",
+			agentId: "default",
+			createdAt: "now",
+		}),
+	)();
+	expect(
+		db
+			.prepare(
+				"SELECT cm.classification_id FROM memories m JOIN compartment_members cm ON cm.compartment_id=m.compartment_id WHERE m.id='pending-memory'",
+			)
+			.all(),
+	).toEqual([{ classification_id: "cls_pending" }]);
+	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'pendingclassified'").get()).toEqual({
+		n: 0,
+	});
+	db.close();
+});
+
 test("canonical memory ingestion inherits a session assignment before publication", () => {
 	const db = classificationFixture();
 	db.exec(
