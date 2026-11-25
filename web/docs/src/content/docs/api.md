@@ -78,6 +78,27 @@ Overlapping classifications require membership in every audience. Access and
 membership changes invalidate the owner-side readable-compartment cache in the
 same database transaction.
 
+### Recall and prompt context
+
+`POST /api/memory/recall`, `GET /api/memory/search`, and MCP recall use the same
+retrieval operation. The daemon resolves read access from the authenticated
+principal; a request body cannot supply or widen its `readScope`. Organization
+agent reads cover non-archived agents, while personal and team agent reads stay
+within the selected agent. Classification audiences and credential project
+bindings apply before candidate ranking and result limits. Unreadable
+compartments do not contribute to the reader's full-text or vector ranking.
+
+Session-start and prompt-submit context use that same read access, independently
+of a redirected personal write agent. Generated `MEMORY.md` context is rendered
+from readable, still-supported entries rather than injecting the shared disk
+projection. It does not report omitted entries.
+
+Synthesized and transcript results may include server-authored `readProvenance`
+with `resultIds`, `attributeIds`, or `compartmentIds`. These identify copied inputs
+and their labels so recall bookkeeping retains the sensitivity of those inputs,
+including inputs omitted from a model summary's final result list. They are
+response metadata, not request permissions.
+
 ## Authentication
 
 The daemon supports three [Auth](/auth/) modes, set in `agent.yaml`:

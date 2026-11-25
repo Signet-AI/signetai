@@ -10,6 +10,7 @@ import {
 } from "@signet/core";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../agent-id";
+import { resolveHookReadScope } from "../hook-read-scope";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { auditAuthoredWriteInTx } from "../auth/audit-owner";
@@ -2086,6 +2087,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const agentScope = { readPolicy: scope.readPolicy, policyGroup: scope.policyGroup };
 			const params = {
 				query: q,
+				readScope: await resolveHookReadScope(c, agentId),
 				limit,
 				type,
 				tags,
@@ -3293,6 +3295,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const params = {
 				...body,
 				query,
+				readScope: await resolveHookReadScope(c, agentId),
 				limit: recallLimit,
 				aggregate: body.aggregate,
 				aggregateBudget: aggregateBudget ?? undefined,

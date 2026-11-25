@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { redactCredentials } from "@signet/core";
+import { attempt, type ReadScope, readScopeSql, redactCredentials } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource } from "./episodic-sources";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { countTokens } from "./pipeline/tokenizer";
+import { derivedScopeSql, evidenceScopeSql } from "./read-scope-tables";
 
 const hash = (text: string): string => createHash("sha256").update(text).digest("hex");
 const generatedMarker = /^<!-- (?:signet-generated-memory\b[^>]*|generated \d{4}-\d{2}-\d{2}[^>]*) -->\s*/;
@@ -39,18 +40,46 @@ export function memoryHeadInputError(input: MemoryHeadCommitInput): {
 	};
 }
 
-function currentSource(db: WriteDb, agentId: string, from: string) {
+function currentSource(db: WriteDb, agentId: string, from: string, readScope?: ReadScope) {
 	from = from.replace(/^source:/, "artifact:").replace(/^session:/, "transcript:");
 	if (!/^(memory|artifact|transcript|summary):.+$/.test(from)) return null;
+	const memoryScope = readScope ? readScopeSql("m", readScope) : { sql: "", args: [] };
 	if (
 		from.startsWith("memory:") &&
 		!db
 			.prepare(
-				"SELECT 1 FROM memories WHERE id=? AND agent_id=? AND is_deleted=0 AND superseded_by IS NULL AND stale_at IS NULL AND visibility != 'archived'",
+				`SELECT 1 FROM memories m WHERE m.id=? AND m.agent_id=? AND m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL AND m.visibility != 'archived'${memoryScope.sql}`,
 			)
-			.get(from.slice(7), agentId)
+			.get(from.slice(7), agentId, ...memoryScope.args)
 	)
 		return null;
+	if (readScope && !from.startsWith("memory:")) {
+		const separator = from.indexOf(":");
+		const kind = from.slice(0, separator);
+		const id = from.slice(separator + 1);
+		const target =
+			kind === "memory"
+				? { table: "memories", key: "id" }
+				: kind === "artifact"
+					? { table: "memory_artifacts", key: "source_path" }
+					: kind === "transcript"
+						? { table: "session_transcripts", key: "session_key" }
+						: { table: "session_summaries", key: "id" };
+		const predicate =
+			kind === "memory"
+				? readScopeSql("r", readScope)
+				: evidenceScopeSql("r", readScope, {
+						memory: null,
+						session: kind === "transcript" || kind === "artifact" ? "session_key" : null,
+						source: kind === "summary" ? null : "source_id",
+					});
+		if (
+			!db
+				.prepare(`SELECT 1 FROM ${target.table} r WHERE r.${target.key}=? AND r.agent_id=?${predicate.sql}`)
+				.get(id, agentId, ...predicate.args)
+		)
+			return null;
+	}
 	const source = readEpisodicSource(db, { agentId, from });
 	return source?.completed === true ? source : null;
 }
@@ -109,6 +138,66 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 	db.prepare(
 		"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
 	).run(new Date().toISOString(), agentId, head.revision);
+}
+
+const headEntryColumns = { memory: null, session: null, source: null } as const;
+
+function readableHeadBody(db: WriteDb, agentId: string, revision: number, scope: ReadScope): string {
+	const entry = derivedScopeSql("h", scope, headEntryColumns);
+	const copy = derivedScopeSql("e", scope, headEntryColumns);
+	const restricted = scope.compartments !== "all";
+	const evidence: Evidence = new Map();
+	return db
+		.prepare(
+			`SELECT h.canonical_text AS text, h.entry_id, e.provenance_json AS support
+			 FROM memory_head_revision_entries e
+			 JOIN memory_head_entries h ON h.agent_id = e.agent_id AND h.entry_id = e.entry_id
+			 WHERE e.agent_id = ? AND ${restricted ? "e.revision = h.last_revision" : "e.revision = ?"} AND e.operation IN ('add','update','retain') AND h.status='active'${entry.sql}${copy.sql}
+			 ORDER BY ${restricted ? "h.first_revision, e.ordinal, h.entry_id" : "e.ordinal"}`,
+		)
+		.all<Record<string, unknown>>(agentId, ...(restricted ? [] : [revision]), ...entry.args, ...copy.args)
+		.flatMap((row) => {
+			if (typeof row.text !== "string" || typeof row.entry_id !== "string") return [];
+			if (restricted) {
+				const rawSupport = row.support;
+				const support: unknown = typeof rawSupport === "string" ? attempt(() => JSON.parse(rawSupport)) : null;
+				if (!Array.isArray(support) || support.length === 0) return [];
+				const entryId = row.entry_id;
+				if (
+					!support.every(
+						(item: unknown) =>
+							typeof item === "object" &&
+							item !== null &&
+							!Array.isArray(item) &&
+							supportError(db, agentId, entryId, Object.fromEntries(Object.entries(item)), evidence, scope) === null,
+					)
+				)
+					return [];
+			}
+			return [`- ${row.text.trim()}`];
+		})
+		.join("\n");
+}
+
+function authoredHeadReadable(db: WriteDb, agentId: string, scope: ReadScope): boolean {
+	if (scope.projects !== null) return false;
+	const labels = db
+		.prepare(
+			"SELECT classification_id FROM classification_assignments WHERE target_kind = 'agent' AND target_id = ? AND agent_id = ? ORDER BY classification_id",
+		)
+		.all<Record<string, unknown>>(agentId, agentId)
+		.flatMap((row) => (typeof row.classification_id === "string" ? [row.classification_id] : []));
+	const existing =
+		labels.length === 0 ? null : db.prepare("SELECT id FROM compartments WHERE key = ?").get(labels.join(","));
+	const label = labels.length === 0 ? null : typeof existing?.id === "number" ? existing.id : 0;
+	const readable = evidenceScopeSql("authored", scope, headEntryColumns);
+	return Boolean(
+		db
+			.prepare(
+				`SELECT 1 AS readable FROM (SELECT ? AS agent_id, ? AS compartment_id) authored WHERE 1 = 1${readable.sql}`,
+			)
+			.get(agentId, label, ...readable.args),
+	);
 }
 
 export function withContentPassWrites<T>(db: WriteDb, passId: string | undefined, write: () => T): T {
@@ -226,16 +315,33 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 		}
 		return result;
 	}
+	const restrictedInspect =
+		request.action === "inspect" && request.readScope !== undefined && request.readScope.compartments !== "all";
 	const head = db
-		.prepare("SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?")
+		.prepare(
+			`SELECT revision, ${restrictedInspect ? "'' AS content, '' AS content_hash" : "content, content_hash"}, revision_id, is_current FROM memory_md_heads WHERE agent_id=?`,
+		)
 		.get(agentId) as Head | undefined;
 	if (request.action === "inspect") {
 		if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
-		const generated = !request.content.trim() || isGenerated(db, request.content);
+		const generated =
+			!request.content.trim() ||
+			(restrictedInspect && generatedMarker.test(request.content.trim())) ||
+			isGenerated(db, request.content);
+		const scope = request.readScope;
+		if (!generated)
+			return {
+				generated,
+				status: "authored",
+				content: scope === undefined || authoredHeadReadable(db, agentId, scope) ? request.content : null,
+			};
+		if (scope && scope.compartments !== "all" && head && head.revision > 0)
+			return { generated, status: "current", content: readableHeadBody(db, agentId, head.revision, scope) };
+		if (head?.is_current !== 1) return { generated, status: "stale", content: null };
 		return {
 			generated,
-			status: generated ? (head?.is_current === 1 ? "current" : "stale") : "authored",
-			content: generated ? (head?.is_current === 1 ? head.content : null) : request.content,
+			status: "current",
+			content: scope === undefined ? head.content : readableHeadBody(db, agentId, head.revision, scope),
 		};
 	}
 	const pass =
@@ -325,6 +431,7 @@ function supportError(
 	entryId: string,
 	support: Record<string, unknown>,
 	evidence: Evidence,
+	readScope?: ReadScope,
 ): { code: string; error: string } | null {
 	const sourceRef =
 		typeof support.source_ref === "string"
@@ -337,7 +444,7 @@ function supportError(
 		return { code: "INVALID_PROVENANCE", error: `entry ${entryId} requires scoped exact evidence` };
 	let rendered = evidence.get(sourceRef);
 	if (rendered === undefined) {
-		const source = currentSource(db, agentId, sourceRef);
+		const source = currentSource(db, agentId, sourceRef, readScope);
 		rendered = source === null ? null : renderDreamingEvidence(source);
 		evidence.set(sourceRef, rendered);
 	}

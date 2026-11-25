@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
+import { requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
+import { resolveHookReadScope } from "../hook-read-scope";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import {
@@ -543,7 +544,10 @@ function registerSessionStart(app: Hono): void {
 
 			recordRecallAttempt("prompt_injection");
 			recallAttempted = true;
-			const result = await handleSessionStart(body);
+			const result = await handleSessionStart(
+				body,
+				await resolveHookReadScope(c, scopedAgent.agentId, { useDefaultReadAgent: true }),
+			);
 			const response = await withCrossAgentNotifications(result, {
 				harness: body.harness,
 				hook: "SessionStart",
@@ -677,6 +681,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			try {
 				result = await handleUserPromptSubmit(body, undefined, {
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
+					readScope: await resolveHookReadScope(c, agentId, { useDefaultReadAgent: true }),
 				});
 			} finally {
 				release();
@@ -1304,7 +1309,7 @@ function registerRecall(app: Hono): void {
 					}
 				}
 
-				const agentScope = await getAgentScope(agentId);
+				const readScope = await resolveHookReadScope(c, agentId);
 				const cfg = loadMemoryConfig(AGENTS_DIR);
 				const recallSurface = "tool_call" as const;
 				if (body.aggregate === true && authConfig.mode !== "local") {
@@ -1340,8 +1345,7 @@ function registerRecall(app: Hono): void {
 					time: body.time as RecallParams["time"],
 					expand: body.expand,
 					agentId,
-					readPolicy: agentScope.readPolicy,
-					policyGroup: agentScope.policyGroup,
+					readScope,
 					sessionKey: recallSessionKey({ harness: body.harness, sessionKey: body.sessionKey }) ?? undefined,
 					includeRecalled: body.includeRecalled === true,
 					recallSurface: "api.hooks.recall",
@@ -1440,7 +1444,10 @@ function registerPreCompaction(app: Hono): void {
 				return c.json({ instructions: "", bypassed: true });
 			}
 
-			const result = handlePreCompaction(body);
+			const result = await handlePreCompaction(
+				body,
+				await resolveHookReadScope(c, agentId, { useDefaultReadAgent: true }),
+			);
 			if (transcriptPath) {
 				setImmediate(() =>
 					recordSkillsFromTranscript({

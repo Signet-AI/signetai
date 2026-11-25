@@ -271,7 +271,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			query: "How should Signet architecture handle prompt context?",
 			limit: 10,
 			agentId: "default",
-			readPolicy: "isolated",
+			readScope: { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null },
 			recallSurface: "api.hooks.user-prompt-submit",
 			recallMode: "automatic",
 			claimRecallResults: false,

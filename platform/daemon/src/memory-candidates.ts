@@ -1,11 +1,13 @@
 import { existsSync } from "node:fs";
-import { type AgentRosterReadPolicy, redactCredentials } from "@signet/core";
+import { type ReadScope, readScopeSql, redactCredentials } from "@signet/core";
 import { yieldEvery } from "./async-yield";
+import type { DbOwnerClient } from "./db-owner-client";
 import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadAll } from "./db-owner-sql";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
-import { buildAgentScopeClause, currentMemorySql } from "./memory-search";
+import { currentMemorySql } from "./memory-search";
+import { derivedScopeSql, evidenceScopeSql } from "./read-scope-tables";
 
 export interface ScoredMemory {
 	id: string;
@@ -116,10 +118,39 @@ export function buildActiveConstraintsSection(
 export const MAX_TRAVERSAL_CANDIDATE_IDS = 500;
 const TRAVERSAL_CANDIDATE_BATCH_SIZE = 50;
 
+async function readScoredMemoryRows(
+	owner: DbOwnerClient,
+	scope: ReadScope,
+	filter: { readonly sql: string; readonly args: readonly unknown[] },
+	tail: { readonly sql: string; readonly args: readonly unknown[] },
+	options: { readonly operation: string; readonly estimatedWorkUnits: number },
+): Promise<ScoredMemory[]> {
+	const boost = derivedScopeSql("ea", scope, { memory: "memory_id", session: null, source: "source_id" });
+	const visible = readScopeSql("m", scope);
+	const rows = await ownerReadAll<ScoredMemory>(
+		owner,
+		`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
+		        m.source_type, m.source_id, COALESCE(m.access_count, 0) AS access_count,
+		        COALESCE(
+		          (SELECT MAX(ea.importance)
+		           FROM entity_attributes ea
+		           WHERE ea.memory_id = m.id
+		             AND ea.status = 'active'${boost.sql}),
+		          m.importance,
+		          0.5
+		        ) AS effScore
+		 FROM memories m
+		 WHERE ${filter.sql}${currentMemorySql("m")}${visible.sql}${tail.sql}`,
+		[...boost.args, ...filter.args, ...visible.args, ...tail.args],
+		{ ...options, lane: "read", deadlineMs: 5_000 },
+	);
+	return [...rows];
+}
+
 export async function fetchTraversalCandidates(
 	memoryDbPath: string,
 	memoryIds: ReadonlyArray<string>,
-	agentId: string,
+	scope: ReadScope,
 ): Promise<ScoredMemory[]> {
 	if (memoryIds.length === 0 || !existsSync(memoryDbPath)) return [];
 
@@ -138,37 +169,13 @@ export async function fetchTraversalCandidates(
 
 		for (let offset = 0; offset < boundedMemoryIds.length; offset += TRAVERSAL_CANDIDATE_BATCH_SIZE) {
 			const batch = boundedMemoryIds.slice(offset, offset + TRAVERSAL_CANDIDATE_BATCH_SIZE);
-			const placeholders = batch.map(() => "?").join(", ");
-			const batchRows = await ownerReadAll<ScoredMemory>(
+			const batchRows = await readScoredMemoryRows(
 				owner,
-				`SELECT
-					 m.id,
-					 m.content,
-					 m.type,
-					 m.importance,
-					 m.tags,
-					 m.pinned,
-					 m.project,
-					 m.created_at,
-					 m.source_type,
-					 m.source_id,
-					 COALESCE(m.access_count, 0) AS access_count,
-					 COALESCE(
-						 (SELECT MAX(ea.importance)
-						  FROM entity_attributes ea
-						  WHERE ea.memory_id = m.id
-						    AND ea.agent_id = ?
-						    AND ea.status = 'active'),
-						 m.importance,
-						 0.5
-					 ) AS effScore
-				 FROM memories m
-				 WHERE m.id IN (${placeholders})${currentMemorySql("m")}`,
-				[agentId, ...batch],
+				scope,
+				{ sql: `m.id IN (${batch.map(() => "?").join(", ")})`, args: batch },
+				{ sql: "", args: [] },
 				{
 					operation: "session-start.traversal-candidate-hydration",
-					lane: "read",
-					deadlineMs: 5_000,
 					estimatedWorkUnits: Math.max(1, Math.min(150, batch.length * 3)),
 				},
 			);
@@ -189,43 +196,18 @@ export async function getAllScoredCandidates(
 	memoryDbPath: string,
 	project: string | undefined,
 	limit: number,
-	agentId = "default",
-	readPolicy: AgentRosterReadPolicy = "isolated",
-	policyGroup: string | null = null,
+	scope: ReadScope,
 ): Promise<ScoredMemory[]> {
 	if (!existsSync(memoryDbPath)) return [];
 
 	try {
-		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
 		const owner = await getDbOwner(memoryDbPath);
-		const readOptions = {
-			operation: "session-start.candidate-pool",
-			lane: "read" as const,
-			deadlineMs: 5_000,
-			estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)),
-		};
-		const rows: ReadonlyArray<{
-			id: string;
-			content: string;
-			type: string;
-			importance: number;
-			tags: string | null;
-			pinned: number;
-			project: string | null;
-			created_at: string;
-			source_type: string | null;
-			source_id: string | null;
-			access_count: number;
-		}> = await ownerReadAll(
+		const rows = await readScoredMemoryRows(
 			owner,
-			`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
-			        m.source_type, m.source_id,
-			        COALESCE(m.access_count, 0) AS access_count
-			 FROM memories m
-				 WHERE 1 = 1${currentMemorySql("m")}${scope.sql}
-			 ORDER BY m.created_at DESC LIMIT ?`,
-			[...scope.args, limit * 3],
-			readOptions,
+			scope,
+			{ sql: "1 = 1", args: [] },
+			{ sql: " ORDER BY m.created_at DESC LIMIT ?", args: [limit * 3] },
+			{ operation: "session-start.candidate-pool", estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)) },
 		);
 
 		const scored: ScoredMemory[] = rows
@@ -250,15 +232,36 @@ export async function getAllScoredCandidates(
 		return [];
 	}
 }
+
+async function readableMemoryFtsTables(
+	owner: DbOwnerClient,
+	scope: ReadScope,
+	options: { readonly operation: string; readonly lane: "read"; readonly deadlineMs: number },
+): Promise<string[]> {
+	const base = "memories_fts";
+	const readable = scope.compartments === "all" ? null : new Set(scope.compartments);
+	const rows = await ownerReadAll(
+		owner,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND (name = ? OR name GLOB ?) ORDER BY name",
+		[base, `${base}__c[0-9]*`],
+		{ ...options, estimatedWorkUnits: 1 },
+	);
+	return rows.flatMap((row) => {
+		const name = Reflect.get(row, "name");
+		if (name === base) return [base];
+		if (typeof name !== "string" || !/^memories_fts__c[1-9][0-9]*$/.test(name)) return [];
+		const compartment = Number(name.slice(base.length + 3));
+		return Number.isSafeInteger(compartment) && (readable === null || readable.has(compartment)) ? [name] : [];
+	});
+}
+
 export async function getPredictedContextMemories(
 	memoryDbPath: string,
 	project: string | undefined,
 	limit: number,
 	charBudget: number,
 	excludeIds: ReadonlySet<string>,
-	agentId: string,
-	readPolicy: AgentRosterReadPolicy = "isolated",
-	policyGroup: string | null = null,
+	scope: ReadScope,
 ): Promise<ScoredMemory[]> {
 	if (!existsSync(memoryDbPath)) return [];
 	if (!project || project.trim().length === 0) return [];
@@ -271,6 +274,11 @@ export async function getPredictedContextMemories(
 			deadlineMs: 5_000,
 			estimatedWorkUnits: Math.max(1, Math.min(500, limit * 10)),
 		};
+		const transcriptScope = evidenceScopeSql("st", scope, {
+			memory: null,
+			session: "session_key",
+			source: "source_id",
+		});
 		const transcriptRows = await ownerReadAll<{
 			readonly session_key: string;
 			readonly transcript: string;
@@ -278,9 +286,9 @@ export async function getPredictedContextMemories(
 			owner,
 			`SELECT st.session_key, st.content AS transcript
 			 FROM session_transcripts st
-			 WHERE st.project = ? AND st.completed_at IS NOT NULL AND st.agent_id = ?
+			 WHERE st.project = ? AND st.completed_at IS NOT NULL${transcriptScope.sql}
 			 ORDER BY COALESCE(st.updated_at, st.created_at) DESC LIMIT 5`,
-			[project, agentId],
+			[project, ...transcriptScope.args],
 			{ ...readOptions, operation: "session-start.predicted-context.transcripts" },
 		);
 
@@ -308,7 +316,12 @@ export async function getPredictedContextMemories(
 
 		if (recurring.length === 0) return [];
 		const ftsQuery = recurring.join(" OR ");
-		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
+		const visible = readScopeSql("m", scope);
+		const tables = await readableMemoryFtsTables(owner, scope, {
+			...readOptions,
+			operation: "session-start.predicted-context.shards",
+		});
+		if (tables.length === 0) return [];
 		const rows = await ownerReadAll<{
 			readonly id: string;
 			readonly content: string;
@@ -323,18 +336,19 @@ export async function getPredictedContextMemories(
 			readonly access_count: number;
 		}>(
 			owner,
-			`SELECT m.id, m.content, m.type, m.importance, m.tags,
+			`${tables
+				.map(
+					(table) => `SELECT m.id, m.content, m.type, m.importance, m.tags,
 			        m.pinned, m.project, m.created_at, m.source_type, m.source_id,
-			        COALESCE(m.access_count, 0) AS access_count
-			 FROM memories_fts
-			 JOIN memories m ON memories_fts.rowid = m.rowid
-			 WHERE memories_fts MATCH ?
+			        COALESCE(m.access_count, 0) AS access_count, bm25(${table}) AS bm25_score
+			 FROM ${table}
+			 JOIN memories m ON ${table}.rowid = m.rowid
+			 WHERE ${table} MATCH ?
 			   ${currentMemorySql("m")}
-			   AND m.project = ?
-			   ${scope.sql}
-			 ORDER BY bm25(memories_fts)
-			 LIMIT ?`,
-			[ftsQuery, project, ...scope.args, limit * 2],
+			   AND m.project = ?${visible.sql}`,
+				)
+				.join(" UNION ALL ")} ORDER BY bm25_score, id LIMIT ?`,
+			[...tables.flatMap(() => [ftsQuery, project, ...visible.args]), limit * 2],
 			{ ...readOptions, operation: "session-start.predicted-context.fts" },
 		);
 		const selected: ScoredMemory[] = [];
@@ -345,8 +359,17 @@ export async function getPredictedContextMemories(
 			const content = redactCredentials(r.content);
 			if (used + content.length > charBudget) break;
 			selected.push({
-				...r,
+				id: r.id,
 				content,
+				type: r.type,
+				importance: r.importance,
+				tags: r.tags,
+				pinned: r.pinned,
+				project: r.project,
+				created_at: r.created_at,
+				source_type: r.source_type,
+				source_id: r.source_id,
+				access_count: r.access_count,
 				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
 			});
 			used += content.length;

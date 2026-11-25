@@ -1,5 +1,4 @@
-import type { AgentRosterReadPolicy } from "@signet/core";
-import { buildAgentScopeClause } from "./memory-access-scope";
+import { type AgentReach, type AgentRosterReadPolicy, type ReadScope, readScopeSql } from "@signet/core";
 import { escapeLike } from "./sql-utils";
 
 export interface MemorySearchFilterInput {
@@ -17,6 +16,7 @@ export interface MemorySearchFilterInput {
 	readonly policyGroup?: string | null;
 	readonly aggregate?: boolean;
 	readonly excludeAggregateRecallMemories?: boolean;
+	readonly readScope?: ReadScope;
 }
 
 export interface MemorySearchFilterClause {
@@ -76,10 +76,32 @@ export function buildMemorySearchFilterClause(params: MemorySearchFilterInput): 
 		sql: parts.length > 0 ? ` AND ${parts.join(" AND ")}` : "",
 		args,
 	};
-	if (!params.agentId) return base;
-
-	const scope = buildAgentScopeClause(params.agentId, params.readPolicy ?? "isolated", params.policyGroup ?? null);
+	const readScope = memorySearchReadScope(params);
+	if (readScope === null) return base;
+	const scope = readScopeSql("m", readScope);
 	return { sql: base.sql + scope.sql, args: [...base.args, ...scope.args] };
+}
+
+export function localAgentReach(
+	agentId: string,
+	readPolicy: AgentRosterReadPolicy | undefined,
+	policyGroup: string | null | undefined,
+): AgentReach {
+	if (readPolicy === "shared") return { kind: "shared", agentId };
+	if (readPolicy === "group" && policyGroup) return { kind: "group", agentId, group: policyGroup };
+	return { kind: "own", agentId };
+}
+
+export function memorySearchReadScope(
+	params: Pick<MemorySearchFilterInput, "agentId" | "readPolicy" | "policyGroup" | "readScope">,
+): ReadScope | null {
+	if (params.readScope) return params.readScope;
+	if (!params.agentId) return null;
+	return {
+		reach: localAgentReach(params.agentId, params.readPolicy, params.policyGroup),
+		compartments: "all",
+		projects: null,
+	};
 }
 
 export function hasMemoryMetadataFilters(params: MemorySearchFilterInput): boolean {

@@ -316,6 +316,59 @@ describe("DB owner recall lane", () => {
 		}
 	});
 
+	test.each(["worker", "inline"] as const)(
+		"applies the request ReadScope inside the %s owner vector search",
+		async (lane) => {
+			directory = mkdtempSync(join(tmpdir(), `signet-db-owner-vector-scope-${lane}-`));
+			previousSignetPath = process.env.SIGNET_PATH;
+			mkdirSync(join(directory, "memory"), { recursive: true });
+			writeFileSync(join(directory, "agent.yaml"), "name: DbOwnerVectorScopeTest\n");
+			process.env.SIGNET_PATH = directory;
+			const databasePath = join(directory, "memory", "memories.db");
+			initDbAccessor(databasePath);
+			getDbAccessor().withWriteTx((db) => {
+				const memory = db.prepare(
+					`INSERT INTO memories (id, content, type, agent_id, visibility, compartment_id, created_at, updated_at, updated_by)
+					 VALUES (?, ?, 'fact', ?, 'global', ?, datetime('now'), datetime('now'), 'test')`,
+				);
+				const embedding = db.prepare(
+					"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, compartment_id, created_at) VALUES (?, ?, 'memory', ?, 3, '', ?, datetime('now'))",
+				);
+				for (const [id, agent, compartment] of [
+					["scope-own", "agent-a", null],
+					["scope-peer", "agent-b", null],
+					["scope-hidden", "agent-a", 7],
+				] as const) {
+					memory.run(id, `vector scope ${id}`, agent, compartment);
+					embedding.run(`hash-${id}`, id, new Float32Array([1, 0, 0]), compartment);
+				}
+			});
+			const readScope = { reach: { kind: "own" as const, agentId: "agent-a" }, compartments: [], projects: null };
+			const search = async () => {
+				if (lane === "inline") {
+					const previousOwnerWorker = process.env.SIGNET_DB_OWNER_WORKER;
+					process.env.SIGNET_DB_OWNER_WORKER = "1";
+					try {
+						const owner = await getDbRecallOwner(databasePath);
+						return await vectorSearchThroughDbOwner(owner, [1, 0, 0], { limit: 5, maxScanRows: 10, readScope });
+					} finally {
+						if (previousOwnerWorker === undefined) delete process.env.SIGNET_DB_OWNER_WORKER;
+						else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerWorker;
+					}
+				}
+				await closeDbAccessor();
+				const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+				try {
+					return await vectorSearchThroughDbOwner(client, [1, 0, 0], { limit: 5, maxScanRows: 10, readScope });
+				} finally {
+					await client.close();
+				}
+			};
+			const result = await search();
+			expect(result.results.map((row) => row.id)).toEqual(["scope-own"]);
+		},
+	);
+
 	test("nested recall-owner vector search does not reject its own isolated request", async () => {
 		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-nested-vector-search-"));
 		previousSignetPath = process.env.SIGNET_PATH;

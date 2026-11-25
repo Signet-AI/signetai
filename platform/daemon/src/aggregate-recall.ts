@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
 	type LlmUsage,
+	type ReadScope,
 	type RouteRequest,
 	type RouterResult,
+	readScopeSql,
 	redactCredentials,
 	summarizeAccountingProvenance,
 } from "@signet/core";
@@ -485,6 +487,16 @@ function rowToRecallResult(row: AggregateMemoryRow): RecallResult {
 	};
 }
 
+interface AggregateLookup {
+	readonly agentId: string;
+	readonly project: string | null;
+	readonly readScope?: ReadScope;
+}
+
+function scopeClause(scope: ReadScope | undefined): { readonly sql: string; readonly args: unknown[] } {
+	return scope ? readScopeSql("m", scope) : { sql: "", args: [] };
+}
+
 function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
 	const row = db
 		.prepare(
@@ -499,21 +511,22 @@ function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
 function loadAggregateByKey(
 	db: WriteDb,
 	key: string,
-	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
+	input: AggregateLookup & { readonly visibility: "global" | "private" },
 ): RecallResult | null {
+	const scope = scopeClause(input.readScope);
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
-			 FROM memories
-			 WHERE idempotency_key = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			   AND source_type = 'aggregate-recall'
-			   AND visibility = ?
-			   AND scope IS NULL
-			   AND is_deleted = 0
+			`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.visibility, m.created_at, m.stale_at
+			 FROM memories m
+			 WHERE m.idempotency_key = ?
+			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+			   AND m.source_type = 'aggregate-recall'
+			   AND m.visibility = ?
+			   AND m.scope IS NULL
+			   AND m.is_deleted = 0${scope.sql}
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId, input.visibility) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.visibility, ...scope.args) as AggregateMemoryRow | undefined;
 	if (!row || row.stale_at !== null) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return rowToRecallResult(row);
@@ -522,43 +535,41 @@ function loadAggregateByKey(
 function loadStaleAggregateByKey(
 	db: WriteDb,
 	key: string,
-	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
+	input: AggregateLookup & { readonly visibility: "global" | "private" },
 ): AggregateMemoryRow | null {
+	const scope = scopeClause(input.readScope);
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
-			 FROM memories
-			 WHERE idempotency_key = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			   AND source_type = 'aggregate-recall'
-			   AND visibility = ?
-			   AND scope IS NULL
-			   AND is_deleted = 0
-			   AND stale_at IS NOT NULL
+			`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.visibility, m.created_at, m.stale_at
+			 FROM memories m
+			 WHERE m.idempotency_key = ?
+			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+			   AND m.source_type = 'aggregate-recall'
+			   AND m.visibility = ?
+			   AND m.scope IS NULL
+			   AND m.is_deleted = 0
+			   AND m.stale_at IS NOT NULL${scope.sql}
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId, input.visibility) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.visibility, ...scope.args) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return row;
 }
 
-function loadMemoryByContentHash(
-	db: WriteDb,
-	contentHash: string,
-	input: { readonly agentId: string; readonly project: string | null },
-): ContentHashMatch | null {
+function loadMemoryByContentHash(db: WriteDb, contentHash: string, input: AggregateLookup): ContentHashMatch | null {
+	const scope = scopeClause(input.readScope);
 	const row = db
 		.prepare(
-			`SELECT id, content, source_type, source_id, type, tags, pinned, importance, who, project, visibility, created_at
-			 FROM memories
-			 WHERE content_hash = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			   AND scope IS NULL
-			   AND is_deleted = 0
+			`SELECT m.id, m.content, m.source_type, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.visibility, m.created_at
+			 FROM memories m
+			 WHERE m.content_hash = ?
+			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+			   AND m.scope IS NULL
+			   AND m.is_deleted = 0${scope.sql}
 			 LIMIT 1`,
 		)
-		.get(contentHash, input.agentId) as AggregateMemoryRow | undefined;
+		.get(contentHash, input.agentId, ...scope.args) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	return {
 		row: rowToRecallResult(row),
@@ -656,12 +667,14 @@ function resolveAggregateDuplicate(
 		readonly evidenceSources: readonly AggregateEvidenceSource[];
 		readonly saveVisibility: "global" | "private";
 		readonly now: string;
+		readonly readScope?: ReadScope;
 	},
 ): AggregateDuplicateResolution | null {
 	const existing = loadAggregateByKey(db, input.key, {
 		agentId: input.agentId,
 		project: input.project,
 		visibility: input.saveVisibility,
+		readScope: input.readScope,
 	});
 	if (existing) {
 		linkAggregateEvidenceSources(db, existing.id, input.evidenceSources, input.agentId, input.now);
@@ -672,6 +685,7 @@ function resolveAggregateDuplicate(
 		agentId: input.agentId,
 		project: input.project,
 		visibility: input.saveVisibility,
+		readScope: input.readScope,
 	});
 	if (stale) {
 		return {
@@ -691,6 +705,7 @@ function resolveAggregateDuplicate(
 	const duplicateContent = loadMemoryByContentHash(db, input.contentHash, {
 		agentId: input.agentId,
 		project: input.project,
+		readScope: input.readScope,
 	});
 	if (!duplicateContent) return null;
 	if (
@@ -718,7 +733,7 @@ async function embedAggregateMemory(
 	embedFn: EmbedFn,
 ): Promise<boolean> {
 	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-		siteToken: "aggregate-recall.ts:720",
+		siteToken: "aggregate-recall.ts:735",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
@@ -738,7 +753,7 @@ async function embedAggregateMemory(
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
-		{ siteToken: "aggregate-recall.ts:726" },
+		{ siteToken: "aggregate-recall.ts:741" },
 	);
 	return written;
 }
@@ -998,6 +1013,7 @@ export async function aggregateRecall(
 							evidenceSources,
 							saveVisibility,
 							now,
+							readScope: params.readScope,
 						});
 						if (duplicate) {
 							deduped = duplicate.refreshed !== true;
@@ -1047,6 +1063,7 @@ export async function aggregateRecall(
 								evidenceSources,
 								saveVisibility,
 								now,
+								readScope: params.readScope,
 							});
 							if (!racedDuplicate) {
 								deduped = true;
@@ -1062,7 +1079,7 @@ export async function aggregateRecall(
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:987" },
+					{ siteToken: "aggregate-recall.ts:1002" },
 				),
 		);
 		if (row && !deduped) {

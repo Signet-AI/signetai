@@ -16,8 +16,8 @@ import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
+import { buildMemorySearchFilterClause } from "./memory-search-filters";
 import {
-	buildAgentScopeClause,
 	classifyRecallTelemetry,
 	hybridRecall,
 	placeTranscriptEvidence,
@@ -3871,21 +3871,24 @@ describe("transcriptExcerpt", () => {
 	});
 });
 
-describe("buildAgentScopeClause regression tests", () => {
+describe("local agent fallback scope regression tests", () => {
+	const localScope = (readPolicy: "group" | "shared", policyGroup: string | null) =>
+		buildMemorySearchFilterClause({ scope: null, agentId: "agent-x", readPolicy, policyGroup });
+
 	it("falls back to isolated scope when policy is 'group' but policyGroup is null", () => {
-		const result = buildAgentScopeClause("agent-x", "group", null);
-		expect(result.sql).toBe(" AND m.agent_id = ? AND m.visibility != 'archived'");
+		const result = localScope("group", null);
+		expect(result.sql).toBe(" AND m.scope IS NULL AND m.agent_id = ? AND m.visibility != 'archived'");
 		expect(result.args).toEqual(["agent-x"]);
 	});
 
 	it("uses group scope when both readPolicy and policyGroup are provided", () => {
-		const result = buildAgentScopeClause("agent-x", "group", "team-a");
+		const result = localScope("group", "team-a");
 		expect(result.sql).toContain("policy_group = ?");
 		expect(result.args).toEqual(["team-a", "agent-x"]);
 	});
 
 	it("uses shared scope for readPolicy 'shared'", () => {
-		const result = buildAgentScopeClause("agent-x", "shared", null);
+		const result = localScope("shared", null);
 		expect(result.sql).toContain("m.visibility = 'global'");
 		expect(result.args).toEqual(["agent-x"]);
 	});

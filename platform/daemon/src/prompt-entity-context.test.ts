@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { type ReadScope, compartmentFor } from "@signet/core";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +75,47 @@ describe("matchPromptEntities", () => {
 	it("resolves active aliases to the canonical entity", async () => {
 		const matches = await matchPromptEntities(DB_PATH(), "default", "How is SignetAI doing?");
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Signet", "alias"]]);
+	});
+
+	it("scopes the entity scan by compartment, reach and project before matching", async () => {
+		const now = new Date().toISOString();
+		const hr = getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO classifications (id, name, created_at, updated_at) VALUES ('cls_hr', 'HR', ?, ?)").run(
+				now,
+				now,
+			);
+			const compartment = compartmentFor(db, ["cls_hr"]) ?? 0;
+			db.prepare(
+				"INSERT OR IGNORE INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('other-agent', 'other-agent', 'isolated', ?, ?)",
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, compartment_id, created_at, updated_at)
+				 VALUES ('ent-zephyr', 'Zephyr', 'zephyr', 'person', 'default', 10, ?, ?, ?)`,
+			).run(compartment, now, now);
+			db.prepare(
+				`INSERT INTO entity_aliases
+				 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+				 VALUES ('alias-zeph', 'ent-zephyr', 'default', 'Zed Morrow', 'zed morrow', 1, 'test', 'active', ?, ?)`,
+			).run(now, now);
+			return compartment;
+		});
+		const outside: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null };
+		const names = async (message: string, scope: ReadScope) =>
+			(await matchPromptEntities(DB_PATH(), "default", message, undefined, scope)).map((match) => match.entityName);
+
+		expect(await names("Tell me about Zephyr and Nicholai", outside)).toEqual(["Nicholai"]);
+		expect(await names("What did Zed Morrow decide?", outside)).toEqual([]);
+		expect(await names("Tell me about Zephyr", { ...outside, compartments: [hr] })).toEqual(["Zephyr"]);
+		expect(await names("What did Zed Morrow decide?", { ...outside, compartments: [hr] })).toEqual(["Zephyr"]);
+		expect(await names("What is Compass?", { ...outside, reach: { kind: "all" } })).toEqual(["Compass"]);
+		expect(
+			await names("What is Compass?", {
+				reach: { kind: "shared", agentId: "default" },
+				compartments: "all",
+				projects: null,
+			}),
+		).toEqual([]);
+		expect(await names("Tell me about Nicholai", { ...outside, projects: ["atlas"] })).toEqual([]);
 	});
 
 	it("never matches another agent's entities", async () => {

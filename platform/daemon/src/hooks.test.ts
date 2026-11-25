@@ -736,8 +736,8 @@ describe("handleSessionStart", () => {
 		const db = openTestDb();
 		db.prepare(
 			`INSERT INTO session_checkpoints
-				(id, session_key, harness, project, project_normalized, trigger, digest, prompt_count, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				(id, session_key, harness, project, project_normalized, trigger, digest, prompt_count, agent_id, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'default', ?)`,
 		).run(
 			"recovery-history-checkpoint",
 			"earlier-session",
@@ -3999,6 +3999,8 @@ describe("selectWithBudget type preservation", () => {
 	});
 });
 
+const defaultScope = { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null } as const;
+
 describe("getAllScoredCandidates", () => {
 	test.serial("returns scored memories without budget truncation", async () => {
 		createMemoryDb([
@@ -4007,7 +4009,7 @@ describe("getAllScoredCandidates", () => {
 			{ content: "Memory C", importance: 0.7 },
 		]);
 
-		const candidates = await getAllScoredCandidates(undefined, 30);
+		const candidates = await getAllScoredCandidates(undefined, 30, defaultScope);
 		expect(candidates.length).toBe(3);
 		for (const c of candidates) {
 			expect(c.effScore).toBeGreaterThan(0);
@@ -4027,7 +4029,7 @@ describe("getAllScoredCandidates", () => {
 			{ content: "Recent important fact", importance: 0.9 },
 		]);
 
-		const candidates = await getAllScoredCandidates(undefined, 30);
+		const candidates = await getAllScoredCandidates(undefined, 30, defaultScope);
 		expect(candidates.length).toBe(1);
 		expect(candidates[0].content).toBe("Recent important fact");
 	});
@@ -4046,7 +4048,7 @@ describe("getAllScoredCandidates", () => {
 			},
 		]);
 
-		const candidates = await getAllScoredCandidates("/home/user/myproject", 30);
+		const candidates = await getAllScoredCandidates("/home/user/myproject", 30, defaultScope);
 
 		if (candidates.length >= 2) {
 			expect(candidates[0].content).toBe("Project-specific memory");
@@ -4054,7 +4056,7 @@ describe("getAllScoredCandidates", () => {
 	});
 
 	test.serial("returns empty for missing database", async () => {
-		const candidates = await getAllScoredCandidates(undefined, 30);
+		const candidates = await getAllScoredCandidates(undefined, 30, defaultScope);
 		expect(candidates).toEqual([]);
 	});
 });

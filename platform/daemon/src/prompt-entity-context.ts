@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import type { ReadScope } from "@signet/core";
 import { getDbOwner } from "./db-owner-runtime";
 import type { DbOwnerClient } from "./db-owner-client";
 import { cancellableOwner, ownerReadAll } from "./db-owner-sql";
+import { derivedScopeSql } from "./read-scope-tables";
 
 export type PromptEntityMatch = {
 	readonly entityId: string;
@@ -210,7 +212,7 @@ const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
 const PROMPT_ENTITY_COUNTS = `CAST(COALESCE(e.mentions, 0) AS INTEGER) AS mentions,
 		   CAST(COALESCE(e.pinned, 0) AS INTEGER) AS pinned`;
 
-const PROMPT_ENTITY_NAMES = `SELECT
+const promptEntityNames = (scope: string) => `SELECT
 		   e.rowid AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
@@ -219,15 +221,14 @@ const PROMPT_ENTITY_NAMES = `SELECT
 		   'name' AS match_source,
 		   ${PROMPT_ENTITY_COUNTS}
 		 FROM entities e
-		 WHERE e.agent_id = ?
-		   AND e.rowid > ?
+		 WHERE e.rowid > ?${scope}
 		   AND ${PROMPT_ENTITY_ELIGIBLE}
 		   AND TYPEOF(COALESCE(e.canonical_name, LOWER(e.name))) = 'text'
 		   AND LENGTH(CAST(COALESCE(e.canonical_name, LOWER(e.name)) AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		 ORDER BY e.rowid
 		 LIMIT ?`;
 
-const PROMPT_ENTITY_ALIASES = `SELECT
+const promptEntityAliases = (scope: string) => `SELECT
 		   a.canonical_alias AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
@@ -237,9 +238,8 @@ const PROMPT_ENTITY_ALIASES = `SELECT
 		   ${PROMPT_ENTITY_COUNTS}
 		 FROM entity_aliases a
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
-		 WHERE a.agent_id = ?
-		   AND a.status = 'active'
-		   AND a.canonical_alias > ?
+		 WHERE a.status = 'active'
+		   AND a.canonical_alias > ?${scope}
 		   AND TYPEOF(a.canonical_alias) = 'text'
 		   AND TYPEOF(a.alias) = 'text'
 		   AND LENGTH(CAST(a.canonical_alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
@@ -252,7 +252,7 @@ async function readPromptEntityPages<Cursor extends number | string>(
 	owner: DbOwnerClient,
 	sql: string,
 	operation: string,
-	agentId: string,
+	scopeArgs: readonly unknown[],
 	initial: Cursor,
 	visit: (row: PromptEntityRow) => void,
 ): Promise<void> {
@@ -261,7 +261,7 @@ async function readPromptEntityPages<Cursor extends number | string>(
 		const page = await ownerReadAll<PromptEntityPageRow<Cursor>>(
 			owner,
 			sql,
-			[agentId, after, PROMPT_ENTITY_PAGE_ROWS],
+			[after, ...scopeArgs, PROMPT_ENTITY_PAGE_ROWS],
 			{
 				operation,
 				deadlineMs: 5_000,
@@ -280,6 +280,7 @@ export async function matchPromptEntities(
 	agentId: string,
 	userMessage: string,
 	signal?: AbortSignal,
+	readScope: ReadScope = { reach: { kind: "own", agentId }, compartments: "all", projects: null },
 ): Promise<readonly PromptEntityMatch[]> {
 	if (!existsSync(memoryDbPath)) return [];
 	const owner = cancellableOwner(await getDbOwner(memoryDbPath), signal);
@@ -297,7 +298,22 @@ export async function matchPromptEntities(
 	const visit = (row: PromptEntityRow): void => {
 		if (promptPhraseSpan(promptTerms, row.matched_text)) candidates.push(row);
 	};
-	await readPromptEntityPages(owner, PROMPT_ENTITY_NAMES, "user-prompt-submit.entity-names", agentId, 0, visit);
-	await readPromptEntityPages(owner, PROMPT_ENTITY_ALIASES, "user-prompt-submit.entity-aliases", agentId, "", visit);
+	const scope = derivedScopeSql("e", readScope, { memory: null, session: null, source: "source_id" });
+	await readPromptEntityPages(
+		owner,
+		promptEntityNames(scope.sql),
+		"user-prompt-submit.entity-names",
+		scope.args,
+		0,
+		visit,
+	);
+	await readPromptEntityPages(
+		owner,
+		promptEntityAliases(scope.sql),
+		"user-prompt-submit.entity-aliases",
+		scope.args,
+		"",
+		visit,
+	);
 	return selectPromptEntityMatches(candidates, userMessage);
 }

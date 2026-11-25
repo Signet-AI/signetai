@@ -51,6 +51,7 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			expect(prefetch).not.toBeNull();
 			expect(prefetch && [...prefetch.results.values()][0]?.content).toContain("+49 6232 142");
 			expect(submissions.map((options) => [options.operation, options.workloadClass])).toEqual([
+				["memory-search.shard-catalogue", "maintenance"],
 				["memory-search.transcript-evidence", "maintenance"],
 				["memory-search.transcript-evidence.content", "maintenance"],
 			]);

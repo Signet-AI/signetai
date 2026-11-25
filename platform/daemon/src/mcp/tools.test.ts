@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -213,6 +213,39 @@ describe("createMcpServer", () => {
 		await callTool(server, "memory_search", { query: "remote" });
 
 		expect(capture.headers?.get("Authorization")).toBe("Bearer sig_sk_mcp_test_secret");
+		expect(capture.headers?.get("x-signet-actor")).toBeNull();
+		expect(capture.headers?.get("x-signet-actor-type")).toBeNull();
+	});
+
+	it("routes every recall tool through the daemon recall route under the caller's credential", async () => {
+		await server.close();
+		server = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			authorizationHeader: "Bearer sig_ses_mcp_scope_secret",
+		});
+		const calls: Array<{ url: string; method: string; authorization: string | null }> = [];
+		spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+			calls.push({
+				url: typeof input === "string" ? input : input.toString(),
+				method: init?.method ?? "GET",
+				authorization: new Headers(init?.headers).get("Authorization"),
+			});
+			return Response.json({ results: [], meta: { totalReturned: 0, hasSupplementary: false, noHits: true } });
+		});
+
+		await callTool(server, "memory_search", { query: "scoped" });
+		await callTool(server, "memory_search", { query: "scoped", aggregate: true, session_key: "session-a" });
+		await callTool(server, "signet_recall", { query: "scoped" });
+		await callTool(server, "signet_source_search", { query: "scoped" });
+
+		expect(calls).toEqual(
+			Array.from({ length: 4 }, () => ({
+				url: "http://localhost:3850/api/memory/recall",
+				method: "POST",
+				authorization: "Bearer sig_ses_mcp_scope_secret",
+			})),
+		);
 	});
 
 	it("carries the configured agent on memory reads and writes", async () => {

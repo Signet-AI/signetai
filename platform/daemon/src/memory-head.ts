@@ -1,3 +1,4 @@
+import type { ReadScope } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
@@ -8,7 +9,12 @@ export type MemoryHeadWriteResult =
 
 export type MemoryHeadRequest =
 	| { readonly action: "read"; readonly agentId: string; readonly passId?: string }
-	| { readonly action: "inspect"; readonly agentId: string; readonly content: string }
+	| {
+			readonly action: "inspect";
+			readonly agentId: string;
+			readonly content: string;
+			readonly readScope?: ReadScope;
+	  }
 	| {
 			readonly action: "commit";
 			readonly input: {
