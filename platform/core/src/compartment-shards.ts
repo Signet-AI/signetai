@@ -310,10 +310,12 @@ export function inheritEmbeddingCompartment(
 	const sources =
 		row.source_type === "memory"
 			? [["memories", "id"]]
-			: [
-					["memory_artifacts", "source_path"],
-					["session_transcripts", "session_key"],
-				];
+			: row.source_type === "skill"
+				? [["entities", "id"]]
+				: [
+						["memory_artifacts", "source_path"],
+						["session_transcripts", "session_key"],
+					];
 	for (const [table, key] of sources) {
 		if (!table || !key || !shardSchema(db).tables.has(table)) continue;
 		const source = db

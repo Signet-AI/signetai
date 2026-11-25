@@ -46,6 +46,28 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("cross-agent message content inherits the sender session and admitted author", async () => {
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')"),
+			statement(
+				"INSERT INTO classification_assignments VALUES('session','classified-sender','default','cls_hr',?,'now')",
+				[userId],
+			),
+		]);
+		const { createAgentMessageAsync } = await import("../cross-agent");
+		const message = await createAgentMessageAsync({
+			fromAgentId: "default",
+			fromSessionKey: "classified-sender",
+			toAgentId: "default",
+			content: "classifiedmessage",
+			author: { userId, credential: "session:test" },
+		});
+		expect(
+			await organizationQuery(
+				statement("SELECT compartment_id,author_user_id FROM cross_agent_messages WHERE id=?", [message.id], "get"),
+			),
+		).toEqual({ compartment_id: expect.any(Number), author_user_id: userId });
+	});
 	test("R2 attribution does not manufacture organization jobs", async () => {
 		const { createAgentMessageAsync } = await import("../cross-agent");
 		await createAgentMessageAsync({

@@ -1,5 +1,7 @@
 import type { SQLQueryBindings } from "bun:sqlite";
-import type { DbAccessor } from "./db-accessor";
+import { type DbAccessor, type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { compartmentForWrite } from "@signet/core";
+import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
 
@@ -226,6 +228,52 @@ function rowToItem(row: MemorySearchTelemetryRow): MemorySearchTelemetryItem {
 	};
 }
 
+export function recallResultEvidenceInTx(
+	db: WriteDb,
+	agentId: string,
+	item: { readonly id: string; readonly source?: string; readonly source_path?: string; readonly session_id?: string },
+): readonly CitationEvidence[] {
+	if (item.id.startsWith("ontology-claim:"))
+		return [{ kind: "attribute", id: item.id.slice("ontology-claim:".length) }];
+	if (item.id.startsWith("transcript:")) {
+		const id = item.session_id ?? item.id.slice("transcript:".length);
+		const rows = prepareTypedStatement<{ session_key: string }>(
+			db,
+			"SELECT session_key FROM session_transcripts WHERE agent_id=? AND (session_key=? OR session_id=? OR source_path=?)",
+		).all(agentId, id, id, item.source_path ?? id);
+		if (!rows.length) throw new Error("recall_evidence_not_in_agent");
+		return rows.map((row) => ({ kind: "transcript", id: row.session_key }));
+	}
+	if (item.id.startsWith("source-chunk:") || item.id.startsWith("native-artifact:")) {
+		const embeddingId = item.id.slice("source-chunk:".length);
+		const rowid = item.id.slice("native-artifact:".length);
+		const rows = prepareTypedStatement<{ source_path: string }>(
+			db,
+			"SELECT source_path FROM memory_artifacts WHERE agent_id=? AND (source_path=? OR rowid=? OR source_path IN (SELECT source_id FROM embeddings WHERE id=? AND agent_id=?))",
+		).all(
+			agentId,
+			item.source_path ?? null,
+			item.id.startsWith("native-artifact:") ? rowid : null,
+			embeddingId,
+			agentId,
+		);
+		const transcripts = item.id.startsWith("source-chunk:")
+			? prepareTypedStatement<{ session_key: string }>(
+					db,
+					"SELECT session_key FROM session_transcripts WHERE agent_id=? AND source_path IN (SELECT source_id FROM embeddings WHERE id=? AND agent_id=?)",
+				).all(agentId, embeddingId, agentId)
+			: [];
+		if (!rows.length && !transcripts.length) throw new Error("recall_evidence_not_in_agent");
+		return [
+			...rows.map((row): CitationEvidence => ({ kind: "artifact", id: row.source_path })),
+			...transcripts.map((row): CitationEvidence => ({ kind: "transcript", id: row.session_key })),
+		];
+	}
+	if (item.id.startsWith("constructed:") || item.source === "llm_summary" || item.id.startsWith("summary:"))
+		throw new Error("recall_result_evidence_required");
+	return [{ kind: "memory", id: item.id }];
+}
+
 export async function recordMemorySearchTelemetry(
 	db: DbAccessor,
 	input: MemorySearchTelemetryRecordInput,
@@ -243,14 +291,22 @@ export async function recordMemorySearchTelemetry(
 
 	try {
 		await withWriteTxAsync((w) => {
+			const id = crypto.randomUUID();
+			const evidence = input.response.results.flatMap((result) => recallResultEvidenceInTx(w, input.agentId, result));
+			const compartment = evidenceCompartmentInTx(
+				w,
+				input.agentId,
+				evidence,
+				compartmentForWrite(w, { agentId: input.agentId, sessionKey: input.sessionKey }),
+			);
 			w.prepare(
 				`INSERT INTO memory_search_telemetry
 				 (id, created_at, route, agent_id, session_key, project, query,
 				  keyword_query, filters_json, method, result_count, top_score,
-				  no_hits, duration_ms, timings_json, results_json, sources_json)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  no_hits, duration_ms, timings_json, results_json, sources_json, compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
-				crypto.randomUUID(),
+				id,
 				createdAt,
 				input.route,
 				input.agentId,
@@ -267,7 +323,12 @@ export async function recordMemorySearchTelemetry(
 				stringifyJson(input.response.meta.timings, '{"totalMs":0,"stages":[]}'),
 				stringifyJson(results, "[]"),
 				null,
+				compartment,
 			);
+			recordEvidenceCitationsInTx(w, { agentId: input.agentId, derivedKind: "telemetry", derivedId: id, evidence });
+			w.prepare(
+				"DELETE FROM evidence_citations WHERE derived_kind='telemetry' AND derived_id IN (SELECT id FROM memory_search_telemetry WHERE created_at < ?)",
+			).run(cutoff);
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});
 	} catch (err) {
@@ -333,6 +394,6 @@ export async function listMemorySearchTelemetry(
 				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
 			return rows.map(rowToItem);
 		},
-		{ siteToken: "memory-search-telemetry.ts:321" },
+		{ siteToken: "db:memory-search-telemetry.site.321" },
 	);
 }

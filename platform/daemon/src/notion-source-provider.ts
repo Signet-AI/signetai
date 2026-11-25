@@ -8,6 +8,7 @@ import {
 import { yieldEvery } from "./async-yield";
 import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "./db-owner-runtime";
 import { logger } from "./logger";
+import { sourceWriteAuthor } from "./auth/audit-owner";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import {
 	type NotionPage,
@@ -425,6 +426,7 @@ async function writePageArtifact(
 	const sourceParentPath = parentPath(source, page);
 	const content = pageContent(page, markdown);
 	await indexExternalMemoryArtifact({
+		author: sourceWriteAuthor(source),
 		agentId,
 		harness: NOTION_HARNESS,
 		sourceId: source.id,
@@ -716,6 +718,7 @@ async function writeFailureArtifact(
 ): Promise<void> {
 	const fingerprint = failureFingerprint(failure);
 	await indexExternalMemoryArtifact({
+		author: sourceWriteAuthor(source),
 		agentId,
 		harness: NOTION_HARNESS,
 		sourceId: source.id,

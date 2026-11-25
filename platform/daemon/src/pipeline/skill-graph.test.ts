@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compartmentForWrite } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { DEFAULT_PIPELINE_V2, type EmbeddingConfig, type PipelineV2Config } from "../memory-config";
 import { installSkillNode, skillEmbeddingHash } from "./skill-graph";
@@ -46,6 +47,43 @@ afterEach(async () => {
 });
 
 describe("installSkillNode", () => {
+	it("labels skill entities and embeddings from their classified agent", async () => {
+		path = dbPath();
+		initDbAccessor(path);
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_skill','Skill'),('cls_parent','Parent'); INSERT INTO classification_assignments VALUES('agent','default','default','cls_skill','carol','now'),('source','skill-source','default','cls_parent','carol','now')",
+			),
+		);
+		const result = await installSkillNode(
+			{
+				frontmatter: { name: "classified-skill", description: "Secret skill" },
+				body: "",
+				source: "reconciler",
+				fsPath: "/skills/secret.md",
+			},
+			getDbAccessor(),
+			cfg(),
+			emb,
+			async () => {
+				getDbAccessor().withWriteTx((db) =>
+					db
+						.prepare("UPDATE entities SET compartment_id=? WHERE id='skill:default:classified-skill'")
+						.run(compartmentForWrite(db, { agentId: "default", sourceId: "skill-source" })),
+				);
+				return Array.from({ length: 768 }, () => 0.1);
+			},
+		);
+		expect(result.embeddingCreated).toBe(true);
+		getDbAccessor().withReadDb((db) => {
+			const entity = db.prepare("SELECT compartment_id FROM entities WHERE id=?").get(result.entityId);
+			expect(entity).toEqual({ compartment_id: expect.any(Number) });
+			expect(
+				db.prepare("SELECT agent_id,compartment_id FROM embeddings WHERE source_id=?").get(result.entityId),
+			).toEqual({ agent_id: "default", compartment_id: entity?.compartment_id });
+		});
+	});
+
 	it("upserts skill_meta when a duplicate entity_id row already exists", async () => {
 		path = dbPath();
 		initDbAccessor(path);

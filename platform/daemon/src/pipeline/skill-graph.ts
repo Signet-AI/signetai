@@ -1,6 +1,8 @@
+import { compartmentForWrite } from "@signet/core";
 import { createHash } from "node:crypto";
 import type { DbAccessor } from "../db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { skillEntityCompartmentInTx } from "../source-artifact-graph";
 import type { EmbeddingFetchOptions } from "../embedding-fetch";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedding-index-state";
 import type { EmbeddingRole } from "../embedding-profile";
@@ -71,7 +73,7 @@ async function findSkillEntityId(input: SkillUninstallInput, accessor: DbAccesso
 				.get(input.skillName, agentId) as { id: string } | undefined;
 			return adopted?.id ?? null;
 		},
-		{ siteToken: "pipeline/skill-graph.ts:55", operation: "pipeline.skill-graph.find" },
+		{ siteToken: "db:pipeline.skill-graph.site.55", operation: "pipeline.skill-graph.find" },
 	);
 }
 
@@ -192,9 +194,18 @@ export async function installSkillNode(
 				try {
 					db.prepare(
 						`INSERT INTO entities
-					 (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at)
-					 VALUES (?, ?, ?, 'skill', ?, ?, 0, ?, ?)`,
-					).run(entityId, fm.name, fm.name.toLowerCase(), agentId, fm.description, now, now);
+					 (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at, compartment_id)
+					 VALUES (?, ?, ?, 'skill', ?, ?, 0, ?, ?, ?)`,
+					).run(
+						entityId,
+						fm.name,
+						fm.name.toLowerCase(),
+						agentId,
+						fm.description,
+						now,
+						now,
+						compartmentForWrite(db, { agentId }),
+					);
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					if (!msg.includes("UNIQUE constraint")) throw e;
@@ -244,13 +255,13 @@ export async function installSkillNode(
 				);
 			}
 		},
-		{ siteToken: "pipeline/skill-graph.ts:145", operation: "pipeline.skill-graph.install-metadata" },
+		{ siteToken: "db:pipeline.skill-graph.site.145", operation: "pipeline.skill-graph.install-metadata" },
 	);
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
 	const writeConfig = await accessor.withReadDbAsync(
 		(db: import("../db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "pipeline/skill-graph.ts:251", operation: "pipeline.skill-graph.install-embedding-config" },
+		{ siteToken: "db:pipeline.skill-graph.site.251", operation: "pipeline.skill-graph.install-embedding-config" },
 	);
 	const embVec = await fetchEmbedding(embeddingText, writeConfig, "document", {
 		usage: { source: "artifact-index", agentId },
@@ -264,6 +275,7 @@ export async function installSkillNode(
 		embeddingCreated = await accessor.withWriteTxAsync(
 			(db: import("../db-accessor").WriteDb) => {
 				if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
+				const compartment = skillEntityCompartmentInTx(db, agentId, entityId);
 				const oldEmbs = db
 					.prepare(`SELECT id FROM embeddings WHERE source_type = 'skill' AND source_id = ?`)
 					.all(entityId) as Array<{ id: string }>;
@@ -281,19 +293,21 @@ export async function installSkillNode(
 				}
 				db.prepare(
 					`INSERT INTO embeddings
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-				 VALUES (?, ?, ?, ?, 'skill', ?, ?, ?)
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+				 VALUES (?, ?, ?, ?, 'skill', ?, ?, ?, ?, ?)
 				 ON CONFLICT(content_hash) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_id = excluded.source_id,
-				   chunk_text = excluded.chunk_text`,
-				).run(embId, embHash, blob, embVec.length, entityId, embeddingText, now);
+				   chunk_text = excluded.chunk_text,
+				   agent_id = excluded.agent_id,
+				   compartment_id = excluded.compartment_id`,
+				).run(embId, embHash, blob, embVec.length, entityId, embeddingText, now, agentId, compartment);
 				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embHash) as { id: string };
 				syncVecInsert(db, actualRow.id, embVec);
 				return true;
 			},
-			{ siteToken: "pipeline/skill-graph.ts:264", operation: "pipeline.skill-graph.install-embedding" },
+			{ siteToken: "db:pipeline.skill-graph.site.264", operation: "pipeline.skill-graph.install-embedding" },
 		);
 	}
 
@@ -324,7 +338,7 @@ export async function uninstallSkillNode(
 					).run(now, now, metaId, agentId);
 				}
 			},
-			{ siteToken: "pipeline/skill-graph.ts:319", operation: "pipeline.skill-graph.uninstall-metadata" },
+			{ siteToken: "db:pipeline.skill-graph.site.319", operation: "pipeline.skill-graph.uninstall-metadata" },
 		);
 		return { removed: false, entityId: null };
 	}
@@ -357,7 +371,7 @@ export async function uninstallSkillNode(
 			db.prepare("DELETE FROM entities WHERE id = ?").run(entityId);
 			reconcileOntologyContradictionsInTx(db, { agentId, entityId });
 		},
-		{ siteToken: "pipeline/skill-graph.ts:332", operation: "pipeline.skill-graph.uninstall" },
+		{ siteToken: "db:pipeline.skill-graph.site.332", operation: "pipeline.skill-graph.uninstall" },
 	);
 
 	logger.info("pipeline", "Skill node uninstalled", {

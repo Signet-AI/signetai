@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { getDbOwner } from "./db-owner-runtime";
+import { ownerReadOne } from "./db-owner-sql";
 import { compartmentForWrite } from "@signet/core";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
@@ -652,4 +654,17 @@ function updateSessionTranscriptSource(
 	db.prepare(`UPDATE session_transcripts SET ${updates.join(", ")} WHERE agent_id = ? AND session_key = ?`).run(
 		...values,
 	);
+}
+export async function nextTranscriptImportAgent(after: string): Promise<string | undefined> {
+	const owner = await getDbOwner();
+	const options = { operation: "sources.import.next-agent", deadlineMs: 5000, estimatedWorkUnits: 1 };
+	const read = (cursor: string) =>
+		ownerReadOne<{ agent_id: string }>(
+			owner,
+			"SELECT agent_id FROM source_import_jobs WHERE agent_id>? AND (state IN ('queued','running','inventorying','cancelling') OR cleanup_state='pending' OR retry_requested=1) ORDER BY agent_id LIMIT 1",
+			[cursor],
+			options,
+		);
+	const next = (await read(after)) ?? (await read(""));
+	return next?.agent_id;
 }

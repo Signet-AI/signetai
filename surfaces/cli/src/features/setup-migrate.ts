@@ -463,7 +463,7 @@ export async function runExistingSetupWizard(
 			let coreDb: CoreDatabase | null = null;
 			try {
 				coreDb = new CoreDatabase(dbPath);
-				importResult = importMemoryLogs(basePath, coreDb);
+				importResult = importMemoryLogs(basePath, coreDb, { agentId: "default", authorUserId: null });
 			} catch (err) {
 				console.warn(`\n  ⚠ Memory import warning: ${readErr(err)}`);
 			} finally {

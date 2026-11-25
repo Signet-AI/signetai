@@ -1601,37 +1601,6 @@ function registerCompactionComplete(app: Hono): void {
 				sessionKey: body.sessionKey,
 			});
 
-			if (body.sessionKey) {
-				try {
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					getDbAccessor().withWriteTx((db: WriteDb) => {
-						const hasTx = db
-							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
-							.get();
-						if (hasTx) {
-							db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(
-								body.sessionKey,
-								agentId,
-							);
-						}
-						const hasCur = db
-							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'")
-							.get();
-						if (hasCur) {
-							db.prepare("DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?").run(
-								body.sessionKey,
-								agentId,
-							);
-						}
-					}, "db:hooks.compaction.transcript-state.delete");
-				} catch (err) {
-					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
-						error: err instanceof Error ? err.message : String(err),
-						sessionKey: body.sessionKey,
-					});
-				}
-			}
-
 			void getSynthesisWorker()
 				?.triggerNow({
 					force: true,

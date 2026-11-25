@@ -1,4 +1,6 @@
-import type { WriteDb } from "./db-accessor";
+import { syncEmbeddingCompartment } from "@signet/core";
+import { type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
 
 const SEMANTIC_PREMISE_KIND = "ontology_claim";
 const EPISODIC_SOURCE_KINDS = new Set(["memory", "artifact", "transcript", "summary"]);
@@ -104,6 +106,11 @@ export function linkDerivedMemorySourcesInTx(
 	const derivedMemoryId = required(input.derivedMemoryId, "derivedMemoryId");
 	const agentId = required(input.agentId, "agentId");
 	const createdAt = required(input.createdAt, "createdAt");
+	const parent = prepareTypedStatement<{ compartment_id: number | null }>(
+		db,
+		"SELECT compartment_id FROM memories WHERE id=? AND agent_id=?",
+	).get(derivedMemoryId, agentId);
+	if (!parent) throw new Error("derived_memory_not_in_agent");
 	const seen = new Set<string>();
 	const insert = db.prepare(
 		`INSERT OR IGNORE INTO derived_memory_sources
@@ -119,6 +126,40 @@ export function linkDerivedMemorySourcesInTx(
 		validateDerivedMemorySourceInTx(db, { agentId, sourceKind, sourceId });
 		insert.run(derivedMemoryId, sourceKind, sourceId, source.sourcePath?.trim() || null, agentId, createdAt);
 	}
+	const sources = prepareTypedStatement<{ source_kind: string; source_id: string }>(
+		db,
+		"SELECT source_kind,source_id FROM derived_memory_sources WHERE derived_memory_id=? AND agent_id=?",
+	).all(derivedMemoryId, agentId);
+	const evidence = sources.map(
+		(source): CitationEvidence => ({
+			kind: citationKind(source.source_kind),
+			id: source.source_id,
+		}),
+	);
+	const compartment = evidenceCompartmentInTx(db, agentId, evidence, parent.compartment_id);
+	recordEvidenceCitationsInTx(db, { agentId, derivedKind: "memory", derivedId: derivedMemoryId, evidence });
+	db.prepare("UPDATE memories SET compartment_id=? WHERE id=? AND agent_id=?").run(
+		compartment,
+		derivedMemoryId,
+		agentId,
+	);
+	db.prepare("UPDATE memory_hints SET compartment_id=? WHERE memory_id=? AND agent_id=?").run(
+		compartment,
+		derivedMemoryId,
+		agentId,
+	);
+	for (const store of ["embeddings", "embeddings_staging"] as const) {
+		const embeddings = prepareTypedStatement<{ id: string }>(
+			db,
+			`SELECT id FROM ${store} WHERE source_type='memory' AND source_id=?`,
+		).all(derivedMemoryId);
+		for (const embedding of embeddings) syncEmbeddingCompartment(db, store, embedding.id);
+	}
+}
+export function citationKind(kind: string): CitationEvidence["kind"] {
+	if (kind === "ontology_claim") return "attribute";
+	if (kind === "memory" || kind === "artifact" || kind === "transcript" || kind === "summary") return kind;
+	throw new Error(`Unsupported evidence kind: ${kind}`);
 }
 export function markDerivedMemoriesStaleForSourceInTx(
 	db: WriteDb,

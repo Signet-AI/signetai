@@ -67,13 +67,13 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 						.get(info.sessionKey, info.agentId) as { completed_at?: string | null } | undefined;
 					return row?.completed_at != null;
 				},
-				{ siteToken: "session-ttl-finalizer.ts:56" },
+				{ siteToken: "db:session-ttl-finalizer.site.56" },
 			);
 			transcriptFinalized =
 				alreadyCompleted ||
 				(await deps.accessor.withWriteTxAsync(
 					(db) => markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
-					{ siteToken: "session-ttl-finalizer.ts:71" },
+					{ siteToken: "db:session-ttl-finalizer.site.71" },
 				));
 		} catch (err) {
 			logger.warn("session-tracker", "TTL-eviction transcript completion failed (non-fatal)", {

@@ -341,6 +341,7 @@ import {
 } from "./telemetry";
 import { startTranscriptCaptureWorker, type TranscriptCaptureWorkerHandle } from "./transcript-capture-worker";
 import { stageTranscriptImport } from "./transcript-import-admission";
+import { nextTranscriptImportAgent } from "./transcript-import-commit";
 import { registerClassificationRoutes } from "./routes/classification-routes";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { startTranscriptImportWorker, type TranscriptImportWorkerHandle } from "./transcript-import-worker";
@@ -2905,9 +2906,10 @@ async function main() {
 			transcriptImportWorkerHandle = startTranscriptImportWorker({
 				store: createOwnerTranscriptImportStore(),
 				agentId: resolveDaemonAgentId(),
+				nextAgentId: nextTranscriptImportAgent,
 				workspaceRoot: AGENTS_DIR,
-				onBatch: async (_jobId, sourceId) => {
-					const nudge = importedSourceAttentionUpsert(resolveDaemonAgentId(), sourceId);
+				onBatch: async (_jobId, sourceId, agentId) => {
+					const nudge = importedSourceAttentionUpsert(agentId, sourceId);
 					await dbOwnerTransaction([{ sql: nudge.sql, params: nudge.params, result: "run" }], {
 						operation: "sources.import.dreaming-attention",
 						lane: "write",

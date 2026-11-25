@@ -105,6 +105,21 @@ export function syncVecDeleteBySourceExceptHash(
 		);
 	} catch {}
 }
+export function resolveWriteCompartmentParameterInTx(
+	db: WriteDb,
+	value: Extract<import("./db-owner-protocol").DbOwnerParameter, { readonly type: "compartment" }>,
+): number | null {
+	const parent =
+		value.parentMemoryId === undefined
+			? value.scope.parentCompartment
+			: evidenceCompartmentInTx(
+					db,
+					value.scope.agentId,
+					[{ kind: "memory", id: value.parentMemoryId }],
+					value.scope.parentCompartment,
+				);
+	return compartmentForWrite(db, { ...value.scope, parentCompartment: parent });
+}
 export interface CitationEvidence {
 	readonly kind: "memory" | "transcript" | "artifact" | "summary" | "attribute";
 	readonly id: string;

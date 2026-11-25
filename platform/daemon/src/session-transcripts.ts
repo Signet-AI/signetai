@@ -1565,13 +1565,12 @@ export function writeSessionTranscriptRow(
 	const hasCompleted = cols.some((col) => col.name === "completed_at");
 	const hasHash = cols.some((col) => col.name === "content_hash");
 	const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
-	if (input.author) {
-		const previous = prepareTypedStatement<{ speaker_user_id: string | null }>(
-			db,
-			"SELECT speaker_user_id FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
-		).get(agentId, sessionKey);
-		if (previous?.speaker_user_id && previous.speaker_user_id !== input.author.userId) return "conflict";
-	}
+	const previous = prepareTypedStatement<{ speaker_user_id: string | null }>(
+		db,
+		"SELECT speaker_user_id FROM session_transcripts WHERE agent_id=? AND session_key=?",
+	).get(agentId, sessionKey);
+	if (input.author && previous?.speaker_user_id && previous.speaker_user_id !== input.author.userId) return "conflict";
+	const speakerUserId = input.author?.userId ?? previous?.speaker_user_id ?? null;
 	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at", "compartment_id"];
 	const values: unknown[] = [
 		sessionKey,
@@ -1589,11 +1588,9 @@ export function writeSessionTranscriptRow(
 		"agent_id = excluded.agent_id",
 		"compartment_id = excluded.compartment_id",
 	];
-	if (input.author) {
-		insertColumns.push("speaker_user_id");
-		values.push(input.author.userId);
-		updates.push("speaker_user_id = COALESCE(session_transcripts.speaker_user_id,excluded.speaker_user_id)");
-	}
+	insertColumns.push("speaker_user_id");
+	values.push(speakerUserId);
+	updates.push("speaker_user_id = COALESCE(session_transcripts.speaker_user_id,excluded.speaker_user_id)");
 	const sameContent = hasHash
 		? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"
 		: "session_transcripts.content = excluded.content";

@@ -10,7 +10,7 @@ import type {
 } from "@signet/core";
 import { yieldEvery } from "../async-yield";
 import type { DbAccessor } from "../db-accessor";
-import { writeFilesystemDocumentInTx } from "../embedding-projection-owner";
+import { dbOwnerFilesystemDocument } from "../db-owner-runtime";
 import { logger } from "../logger";
 import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 
@@ -258,18 +258,14 @@ async function processFile(
 		};
 	}
 
-	const result = await accessor.withWriteTxAsync(
-		(db) =>
-			writeFilesystemDocumentInTx(db, {
-				connectorId,
-				sourceUrl,
-				title: file.name,
-				content,
-				modifiedAt: file.mtime.getTime(),
-				forceUpdate,
-			}),
-		{ siteToken: "connectors/filesystem.ts:264" },
-	);
+	const result = await dbOwnerFilesystemDocument(accessor, {
+		connectorId,
+		sourceUrl,
+		title: file.name,
+		content,
+		modifiedAt: file.mtime.getTime(),
+		forceUpdate,
+	});
 	if (result.added > 0 || result.updated > 0) await enqueueDocumentIngestJob(accessor, result.id);
 	return { added: result.added, updated: result.updated, error: null };
 }

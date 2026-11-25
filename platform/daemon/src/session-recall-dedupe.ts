@@ -1,3 +1,6 @@
+import { compartmentForWrite } from "@signet/core";
+import { evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
+import { recallResultEvidenceInTx } from "./memory-search-telemetry";
 import { resolveAgentId } from "./agent-id";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
@@ -112,11 +115,18 @@ function insertRecallEvent(
 		readonly mode: string;
 	},
 ): boolean {
+	const evidence = recallResultEvidenceInTx(db, opts.agentId, opts.item);
+	const compartment = evidenceCompartmentInTx(
+		db,
+		opts.agentId,
+		evidence,
+		compartmentForWrite(db, { agentId: opts.agentId, sessionKey: opts.sessionKey }),
+	);
 	db.prepare(
 		`INSERT OR IGNORE INTO session_recall_events (
 			session_key, agent_id, context_epoch, item_kind, item_id,
-			surface, mode, score, source, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			surface, mode, score, source, created_at, compartment_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		opts.sessionKey,
 		opts.agentId,
@@ -128,9 +138,17 @@ function insertRecallEvent(
 		typeof opts.item.score === "number" && Number.isFinite(opts.item.score) ? opts.item.score : null,
 		opts.item.source ?? null,
 		new Date().toISOString(),
+		compartment,
 	);
 	const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
-	return (changed?.count ?? 0) > 0;
+	if ((changed?.count ?? 0) === 0) return false;
+	recordEvidenceCitationsInTx(db, {
+		agentId: opts.agentId,
+		derivedKind: "telemetry",
+		derivedId: JSON.stringify([opts.sessionKey, opts.epoch, itemKind(opts.item.id), opts.item.id]),
+		evidence,
+	});
+	return true;
 }
 
 function loadRecalledIds(
@@ -255,7 +273,7 @@ export function applyRecallDedupe<T extends RecallDedupeItem>(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return getDbAccessor().withWriteTx(
 			(db: import("./db-accessor").WriteDb) => applyRecallDedupeInTx(db, opts, sessionKey, agentId),
-			"session-recall-dedupe.ts:256",
+			"db:session-recall-dedupe.site.256",
 		);
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
@@ -288,7 +306,7 @@ export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 				return result;
 			},
 			{
-				siteToken: "session-recall-dedupe.ts:282",
+				siteToken: "db:session-recall-dedupe.site.282",
 				signal: opts.signal,
 				deadlineMs: deadlineAt === undefined ? undefined : deadlineAt - Date.now(),
 			},
@@ -335,7 +353,7 @@ export async function advanceRecallContextEpochAsync(input: {
 				const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 				return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
 			},
-			{ siteToken: "session-recall-dedupe.ts:326" },
+			{ siteToken: "db:session-recall-dedupe.site.326" },
 		);
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
@@ -381,7 +399,7 @@ export function advanceRecallContextEpoch(input: {
 			).run(sessionKey, agentId, next, input.reason, input.sourceRef ?? null, new Date().toISOString());
 			const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 			return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
-		}, "session-recall-dedupe.ts:374");
+		}, "db:session-recall-dedupe.site.374");
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
 			error: error instanceof Error ? error.message : String(error),

@@ -39,6 +39,11 @@ export function parseWriteAuthor(value: unknown): WriteAuthor {
 		throw new Error("Invalid write author");
 	return { userId, credential };
 }
+export function sourceWriteAuthor(source: import("@signet/core").SignetSourceEntry): WriteAuthor {
+	return source.writeIdentity
+		? { userId: source.writeIdentity.authorUserId, credential: source.writeIdentity.authorCredential }
+		: SYSTEM_AUTHOR;
+}
 export const SYSTEM_AUTHOR = { userId: null, credential: "system" } as const;
 export const LOCAL_AUTHOR = { userId: null, credential: "local" } as const;
 export interface WriteAuthor {

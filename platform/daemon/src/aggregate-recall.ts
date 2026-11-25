@@ -6,11 +6,11 @@ import {
 	redactCredentials,
 	summarizeAccountingProvenance,
 } from "@signet/core";
-import type { WriteAuthor } from "./auth/audit-owner";
+import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
-import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
+import { citationKind, linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
@@ -637,9 +637,9 @@ function linkAggregateQueryHint(
 	const hint = query.trim();
 	if (hint.length === 0) return;
 	db.prepare(
-		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-	).run(randomUUID(), aggregateMemoryId, agentId, hint, now);
+		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at, compartment_id)
+		 SELECT ?, id, agent_id, ?, ?, compartment_id FROM memories WHERE id=? AND agent_id=?`,
+	).run(randomUUID(), hint, now, aggregateMemoryId, agentId);
 }
 
 function resolveAggregateDuplicate(
@@ -718,7 +718,7 @@ async function embedAggregateMemory(
 	embedFn: EmbedFn,
 ): Promise<boolean> {
 	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-		siteToken: "aggregate-recall.ts:720",
+		siteToken: "db:aggregate-recall.site.720",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
@@ -731,14 +731,14 @@ async function embedAggregateMemory(
 			db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
 			db.prepare(`
 			INSERT INTO embeddings
-			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-			VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-		`).run(embId, contentHash, vectorToBlob(vec), vec.length, memoryId, content, createdAt);
+			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+			SELECT ?, ?, ?, ?, 'memory', id, ?, ?, agent_id, compartment_id FROM memories WHERE id=?
+		`).run(embId, contentHash, vectorToBlob(vec), vec.length, content, createdAt, memoryId);
 			syncVecInsert(db, embId, vec);
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
-		{ siteToken: "aggregate-recall.ts:726" },
+		{ siteToken: "db:aggregate-recall.site.726" },
 	);
 	return written;
 }
@@ -842,6 +842,8 @@ export async function aggregateRecall(
 	cfg: ResolvedMemoryConfig,
 	deps: AggregateRecallDeps,
 ): Promise<RecallResponse> {
+	const author = requireWriteAuthor(deps.author);
+	if (author.userId !== null && !params.agentId?.trim()) throw new Error("agent_required");
 	const budget = normalizeBudget(params.aggregateBudget ?? params.aggregate_budget);
 	const maxQueries = BUDGET_QUERY_LIMITS[budget];
 	const recall = deps.hybridRecall ?? hybridRecall;
@@ -1006,7 +1008,12 @@ export async function aggregateRecall(
 						}
 						const id = deps.idFactory?.() ?? randomUUID();
 						const envelope: IngestEnvelope = {
-							author: deps.author,
+							author,
+							evidence: evidenceSources.map((source) => ({
+								kind: citationKind(source.sourceKind),
+								id: source.sourceId,
+							})),
+							sessionKey: params.sessionKey,
 							id,
 							content: normalized.storageContent,
 							normalizedContent: normalized.normalizedContent || normalized.hashBasis,
@@ -1062,7 +1069,7 @@ export async function aggregateRecall(
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:987" },
+					{ siteToken: "db:aggregate-recall.site.987" },
 				),
 		);
 		if (row && !deduped) {

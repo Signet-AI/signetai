@@ -8,7 +8,27 @@ export type SignetSourceKind = "obsidian" | "web" | (string & {});
 export type SignetSourceMode = "read-only";
 export type SignetSourceProviderSettings = Readonly<Record<string, unknown>>;
 
+export interface SourceWriteIdentity {
+	readonly agentId: string;
+	readonly authorUserId: string | null;
+	readonly authorCredential: string;
+}
+interface SourceWriteIdentityInput {
+	readonly writeIdentity?: SourceWriteIdentity;
+}
+function sourceWriteIdentity(
+	input: SourceWriteIdentityInput,
+	existing: SignetSourceEntry | undefined,
+): { readonly writeIdentity?: SourceWriteIdentity } {
+	if (input.writeIdentity && existing && existing.writeIdentity?.agentId !== input.writeIdentity.agentId)
+		throw new Error("source_agent_conflict");
+	const identity = existing?.writeIdentity ?? input.writeIdentity;
+	if (identity && (!identity.agentId || !identity.authorCredential)) throw new Error("source_identity_required");
+	return identity ? { writeIdentity: identity } : {};
+}
+
 export interface SignetSourceEntry {
+	readonly writeIdentity?: SourceWriteIdentity;
 	readonly id: string;
 	readonly generation?: string;
 	readonly kind: SignetSourceKind;
@@ -36,7 +56,7 @@ export interface SignetSourcesConfig {
 	readonly sources: readonly SignetSourceEntry[];
 }
 
-export interface AddObsidianSourceInput {
+export interface AddObsidianSourceInput extends SourceWriteIdentityInput {
 	readonly root: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
@@ -47,7 +67,7 @@ export interface WebSourceSettings {
 	readonly url: string;
 }
 
-export interface AddWebSourceInput {
+export interface AddWebSourceInput extends SourceWriteIdentityInput {
 	readonly url: string;
 	readonly name?: string;
 	readonly now?: string;
@@ -78,7 +98,7 @@ export interface DiscordSourceSettings {
 	readonly syncMode: DiscordSourceSyncMode;
 }
 
-export interface AddDiscordSourceInput {
+export interface AddDiscordSourceInput extends SourceWriteIdentityInput {
 	readonly guildIds?: readonly string[];
 	readonly tokenRef?: string;
 	readonly desktopCachePath?: string;
@@ -112,7 +132,7 @@ export interface GitHubSourceSettings {
 	readonly maxItemsPerRepo: number;
 }
 
-export interface AddGitHubSourceInput {
+export interface AddGitHubSourceInput extends SourceWriteIdentityInput {
 	readonly repos: readonly string[];
 	readonly tokenRef?: string;
 	readonly name?: string;
@@ -130,7 +150,7 @@ export interface NotionSourceSettings {
 	readonly maxPages: number;
 }
 
-export interface AddNotionSourceInput {
+export interface AddNotionSourceInput extends SourceWriteIdentityInput {
 	readonly tokenRef: string;
 	readonly name?: string;
 	readonly maxPages?: number;
@@ -264,6 +284,7 @@ function addWebSourceUnlocked(input: AddWebSourceInput, agentsDir = getAgentsDir
 		const sourceId = `web:${createHash("sha256").update(url).digest("hex").slice(0, 16)}`;
 		const existing = config.sources.find((source) => source.id === sourceId);
 		const source: SignetSourceEntry = {
+			...sourceWriteIdentity(input, existing),
 			id: sourceId,
 			generation: existing?.generation ?? newSourceGeneration(),
 			kind: "web",
@@ -396,6 +417,7 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 	const existing = cfg.sources.find((source) => source.id === sourceId);
 	if (existing) {
 		const updated: SignetSourceEntry = {
+			...sourceWriteIdentity(input, existing),
 			...existing,
 			name: cleanName(input.name) ?? existing.name,
 			root,
@@ -415,6 +437,7 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 	}
 
 	const source: SignetSourceEntry = {
+		...sourceWriteIdentity(input, existing),
 		id: sourceId,
 		generation: newSourceGeneration(),
 		kind: "discord",
@@ -454,6 +477,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 		const updatedSettings = buildGitHubSettings(input, existingSettings);
 		if ("error" in updatedSettings) return { ok: false, error: updatedSettings.error };
 		const updated: SignetSourceEntry = {
+			...sourceWriteIdentity(input, existing),
 			...existing,
 			name: cleanName(input.name) ?? existing.name,
 			root,
@@ -473,6 +497,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 	}
 
 	const source: SignetSourceEntry = {
+		...sourceWriteIdentity(input, existing),
 		id: sourceId,
 		generation: newSourceGeneration(),
 		kind: "github",
@@ -508,6 +533,7 @@ function addNotionSourceChecked(input: AddNotionSourceInput, agentsDir = getAgen
 	const root = `notion://integrations/${settings.tokenRef}`;
 	if (existing) {
 		const updated: SignetSourceEntry = {
+			...sourceWriteIdentity(input, existing),
 			...existing,
 			name: cleanName(input.name) ?? existing.name,
 			root,
@@ -527,6 +553,7 @@ function addNotionSourceChecked(input: AddNotionSourceInput, agentsDir = getAgen
 	}
 
 	const source: SignetSourceEntry = {
+		...sourceWriteIdentity(input, existing),
 		id: sourceId,
 		generation: newSourceGeneration(),
 		kind: "notion",
@@ -830,9 +857,11 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 	const now = input.now ?? new Date().toISOString();
 	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const existing = cfg.sources.find((source) => source.kind === "obsidian" && source.root === root);
+	const identity = sourceWriteIdentity(input, existing);
 	if (existing) {
 		const updated = {
 			...existing,
+			...identity,
 			name: cleanName(input.name) ?? existing.name,
 			excludeGlobs: input.excludeGlobs
 				? mergeDefaultObsidianExcludeGlobs(input.excludeGlobs)
@@ -851,6 +880,7 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 	}
 
 	const source: SignetSourceEntry = {
+		...sourceWriteIdentity(input, existing),
 		id: `obsidian:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`,
 		generation: newSourceGeneration(),
 		kind: "obsidian",
@@ -1313,7 +1343,14 @@ function isSourceEntry(value: unknown): value is SignetSourceEntry {
 		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
 		(value.excludeGlobs === undefined ||
 			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string"))) &&
-		(value.providerSettings === undefined || isJsonRecord(value.providerSettings))
+		(value.providerSettings === undefined || isJsonRecord(value.providerSettings)) &&
+		(value.writeIdentity === undefined ||
+			(isRecord(value.writeIdentity) &&
+				typeof value.writeIdentity.agentId === "string" &&
+				value.writeIdentity.agentId.length > 0 &&
+				(value.writeIdentity.authorUserId === null || typeof value.writeIdentity.authorUserId === "string") &&
+				typeof value.writeIdentity.authorCredential === "string" &&
+				value.writeIdentity.authorCredential.length > 0))
 	);
 }
 

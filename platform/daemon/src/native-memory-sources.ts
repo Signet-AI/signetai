@@ -53,6 +53,7 @@ export const NATIVE_MEMORY_OWNER_DEADLINE_MS = 60_000;
 const EMBEDDING_PROVIDER_PROBE_TEXT = "Signet embedding provider health check.";
 
 export interface NativeMemorySource {
+	readonly writeIdentity?: import("@signet/core").SignetSourceEntry["writeIdentity"];
 	readonly harness: string;
 	readonly displayName: string;
 	readonly root: string;
@@ -101,6 +102,7 @@ export interface NativeMemoryBridgeSyncOptions {
 }
 
 export interface NativeMemoryBridgeOptions {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId?: string;
 	readonly pollIntervalMs?: number;
 	readonly embeddingConfig?: EmbeddingConfig;
@@ -388,7 +390,10 @@ export function obsidianNativeMemorySource(
 export function configuredNativeMemorySources(agentsDir?: string): NativeMemorySource[] {
 	const configured = loadSourcesConfig(agentsDir)
 		.sources.filter((source) => source.enabled && source.kind === "obsidian")
-		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs));
+		.map((source) => ({
+			...obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
+			writeIdentity: source.writeIdentity,
+		}));
 	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), hermesNativeMemorySource(), ...configured];
 }
 
@@ -446,7 +451,10 @@ function activeBridgeSources(
 	if (!options.includeConfiguredSources) return [...baseSources];
 	const configured = loadSourcesConfig(options.agentsDir)
 		.sources.filter((source) => source.enabled && source.kind === "obsidian")
-		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs));
+		.map((source) => ({
+			...obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
+			writeIdentity: source.writeIdentity,
+		}));
 	const byKey = new Map<string, NativeMemorySource>();
 	for (const source of [...baseSources, ...configured]) {
 		byKey.set(source.sourceId ?? `${source.harness}:${source.root}`, source);
@@ -927,7 +935,7 @@ export async function indexNativeMemoryFile(
 	agentId = resolveDaemonAgentId(),
 	options: Pick<
 		NativeMemoryBridgeOptions,
-		"embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled" | "onEmbeddingStatus"
+		"embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled" | "onEmbeddingStatus" | "author"
 	> & {
 		readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
 		readonly content?: string;
@@ -1104,6 +1112,11 @@ export async function indexNativeMemoryFile(
 				agentId,
 				sourcePath: filePath,
 				sourceHash: hash,
+				author:
+					options.author ??
+					(source.writeIdentity
+						? { userId: source.writeIdentity.authorUserId, credential: source.writeIdentity.authorCredential }
+						: undefined),
 				sourceKind: pattern.kind,
 				harness: source.harness,
 				content,
@@ -1364,7 +1377,7 @@ export function startNativeMemoryBridge(
 	],
 	options: NativeMemoryBridgeOptions = {},
 ): NativeMemoryBridgeHandle {
-	const agentId = resolveBridgeAgentId(options.agentId);
+	const bridgeAgentId = resolveBridgeAgentId(options.agentId);
 	const known = new Map<string, Set<string>>();
 	const sourceWorker = createNativeSourceWorker({
 		onScanStarted: () => options.onSourceWorkerScanStarted?.(),
@@ -1388,6 +1401,7 @@ export function startNativeMemoryBridge(
 		const pausedSources: NativeMemorySyncSourceResult[] = [];
 		const yielder = yieldEvery(options.yieldEveryFiles ?? 20);
 		for (const source of activeBridgeSources(sources, options)) {
+			const agentId = source.writeIdentity?.agentId ?? bridgeAgentId;
 			if (options.shouldContinue && !options.shouldContinue(source)) continue;
 			const flightKey = sourceFlightKey(source, agentId);
 			const existingFlight = sharedNativeMemorySourceFlights.get(flightKey);

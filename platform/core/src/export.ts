@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { compartmentForWrite } from "./compartment-shards";
 
 export interface ExportOptions {
 	readonly includeEmbeddings?: boolean;
@@ -56,6 +57,7 @@ interface ExportDb {
 
 interface ImportDb {
 	prepare(sql: string): {
+		all(...args: unknown[]): Record<string, unknown>[];
 		run(...args: unknown[]): void;
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 	};
@@ -287,8 +289,8 @@ export function importBundle(db: ImportDb, input: ImportInput, options: ImportOp
 				`INSERT INTO memories
 				 (id, content, type, category, confidence, source_type,
 				  tags, importance, pinned, who, project, agent_id, scope,
-				  visibility, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  visibility, created_at, updated_at, author_user_id, compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				mem.id,
 				mem.content,
@@ -306,6 +308,8 @@ export function importBundle(db: ImportDb, input: ImportInput, options: ImportOp
 				mem.visibility,
 				mem.row.created_at ?? now,
 				mem.row.updated_at ?? now,
+				typeof mem.row.author_user_id === "string" ? mem.row.author_user_id : null,
+				compartmentForWrite(db, { agentId: mem.agentId, memoryId: mem.id }),
 			);
 			memoriesImported++;
 		}
@@ -313,8 +317,8 @@ export function importBundle(db: ImportDb, input: ImportInput, options: ImportOp
 			db.prepare(
 				`INSERT OR IGNORE INTO entities
 				 (id, name, canonical_name, entity_type, description,
-				  mentions, agent_id, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  mentions, agent_id, created_at, updated_at, compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				entity.id,
 				entity.name,
@@ -325,6 +329,7 @@ export function importBundle(db: ImportDb, input: ImportInput, options: ImportOp
 				entity.agentId,
 				entity.row.created_at ?? now,
 				entity.row.updated_at ?? now,
+				compartmentForWrite(db, { agentId: entity.agentId }),
 			);
 		}
 		for (const rel of relations) {

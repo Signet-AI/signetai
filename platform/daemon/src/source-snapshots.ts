@@ -61,6 +61,7 @@ export interface ExportSourceSnapshotOptions {
 }
 
 export interface ImportSourceSnapshotOptions {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly source: SignetSourceEntry;
 	readonly agentId: string;
 	readonly snapshot: unknown;
@@ -179,6 +180,7 @@ export async function importSourceSnapshot(options: ImportSourceSnapshotOptions)
 
 	try {
 		const input: DbOwnerSourceSnapshotImport = {
+			author: options.author,
 			agentId: options.agentId,
 			sourceId: options.source.id,
 			sourceRoot: options.source.root,
@@ -212,6 +214,7 @@ export function applySourceSnapshotImportInTx(
 			{
 				agentId: input.agentId,
 				sourcePath: artifact.sourcePath,
+				author: input.author,
 				sourceSha256: artifact.sourceSha256,
 				sourceKind: artifact.sourceKind,
 				sessionId: artifact.sessionId,

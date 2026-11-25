@@ -12,6 +12,7 @@ import { getDbOwner } from "../db-owner-runtime";
 import { ownerReadAll } from "../db-owner-sql";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
+import { createDailyReflections, readReflectionSourceContext } from "../reflection-owner";
 
 type ReflectionDeps = {
 	readonly getDbAccessor: typeof getDbAccessor;
@@ -26,7 +27,6 @@ const DEFAULT_DEPS: ReflectionDeps = {
 };
 
 const POLL_INTERVAL_MS = 300_000;
-const DAILY_BRIEF_MEMORY_BATCH_SIZE = 50;
 export const BRIEF_MAX_CHARS = 236;
 
 function getRuntimeDir(): string {
@@ -334,50 +334,12 @@ export function parseDailyBriefInsights(text: string, limit = 1): DailyBriefInsi
 		.slice(0, limit);
 }
 
-export function collectReflectionContext(
+export async function collectReflectionContext(
 	agentId: string,
 	_config: PipelineReflectionsConfig,
-	deps: Pick<ReflectionDeps, "getDbAccessor"> = DEFAULT_DEPS,
-): ReflectionSourceContext {
-	const dbAccessor = deps.getDbAccessor();
-
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const memories = dbAccessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const rows = db
-			.prepare(
-				`SELECT id, content, type, tags, created_at FROM memories
-				 WHERE agent_id = ? AND is_deleted = 0
-				 ORDER BY created_at DESC LIMIT ?`,
-			)
-			.all(agentId, DAILY_BRIEF_MEMORY_BATCH_SIZE) as {
-			id: string;
-			content: string;
-			type: string;
-			tags: string | null;
-			created_at: string;
-		}[];
-		return rows.map((r) => ({
-			id: r.id,
-			content: r.content,
-			type: r.type,
-			tags: r.tags ?? "",
-			createdAt: r.created_at,
-		}));
-	}, "pipeline/reflection-worker.ts:345");
-
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const existingReflections = dbAccessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const rows = db
-			.prepare(
-				`SELECT id, question, summary, created_at FROM daily_reflections
-             WHERE agent_id = ?
-             ORDER BY created_at DESC LIMIT 24`,
-			)
-			.all(agentId) as { id: string; question: string | null; summary: string; created_at: string }[];
-		return rows.map((r) => ({ id: r.id, question: r.question, summary: r.summary, createdAt: r.created_at }));
-	}, "pipeline/reflection-worker.ts:369");
-
-	return { memories, summaries: [], transcripts: [], graphFacts: [], existingReflections };
+	_deps: Pick<ReflectionDeps, "getDbAccessor"> = DEFAULT_DEPS,
+): Promise<ReflectionSourceContext> {
+	return readReflectionSourceContext(agentId);
 }
 
 export async function generateDailyBriefInsights(
@@ -386,7 +348,7 @@ export async function generateDailyBriefInsights(
 	count = config.count,
 	deps: ReflectionDeps = DEFAULT_DEPS,
 ): Promise<string[]> {
-	const context = collectReflectionContext(agentId, config, deps);
+	const context = await collectReflectionContext(agentId, config, deps);
 	if (context.memories.length === 0) return [];
 
 	const prompt = buildReflectionPrompt(context, count);
@@ -411,39 +373,20 @@ export async function generateDailyBriefInsights(
 
 	const now = new Date().toISOString();
 	const date = todayDateInTimeZone(config.timezone);
-	const memoryIds = JSON.stringify(context.memories.map((m) => m.id).filter(Boolean));
-	const summaryIds = JSON.stringify(context.summaries.map((s) => s.id).filter(Boolean));
-	const ids: string[] = [];
-
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	deps.getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
-		for (const insight of insights) {
-			const id = randomUUID();
-			const contentKey = normalizeInsight(insight.summary);
-			const result = db
-				.prepare(
-					`INSERT OR IGNORE INTO daily_reflections
-				 (id, agent_id, date, summary, patterns, question, content_key, memory_ids, summary_ids, model, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
-				.run(
-					id,
-					agentId,
-					date,
-					insight.summary,
-					JSON.stringify(insight.patterns),
-					insight.question ?? null,
-					contentKey,
-					memoryIds,
-					summaryIds,
-					config.model,
-					now,
-				);
-			if (result.changes > 0) ids.push(id);
-		}
-	}, "pipeline/reflection-worker.ts:419");
-
-	return ids;
+	return createDailyReflections({
+		agentId,
+		date,
+		model: config.model,
+		now,
+		memoryIds: context.memories.flatMap((memory) => (memory.id ? [memory.id] : [])),
+		summaryIds: context.summaries.flatMap((summary) => (summary.id ? [summary.id] : [])),
+		priorReflectionIds: context.existingReflections.slice(0, 12).map((reflection) => reflection.id),
+		insights: insights.map((insight) => ({
+			...insight,
+			id: randomUUID(),
+			contentKey: normalizeInsight(insight.summary),
+		})),
+	});
 }
 
 export interface ReflectionWorkerHandle {

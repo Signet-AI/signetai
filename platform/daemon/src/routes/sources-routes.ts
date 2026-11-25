@@ -87,6 +87,18 @@ import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots"
 import { getActiveTelemetry } from "../telemetry";
 import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
 import { authConfig } from "./state.js";
+import { resolveScopedAgentId } from "./utils";
+import { LOCAL_AUTHOR } from "../auth/audit-owner";
+
+function resolveSourceWriteIdentity(c: import("hono").Context) {
+	const resolved = resolveScopedAgentId(c, undefined, resolveDaemonAgentId());
+	if (resolved.error) return { ok: false as const, error: resolved.error };
+	const author = c.get("author") ?? LOCAL_AUTHOR;
+	return {
+		ok: true as const,
+		identity: { agentId: resolved.agentId, authorUserId: author.userId, authorCredential: author.credential },
+	};
+}
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -301,12 +313,17 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForObsidian(root));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
-			const result = addObsidianSource({ root, name: body.name, excludeGlobs }, agentsDir);
+			const writeScope = resolveSourceWriteIdentity(c);
+			if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
+			const result = addObsidianSource(
+				{ root, name: body.name, excludeGlobs, writeIdentity: writeScope.identity },
+				agentsDir,
+			);
 			if (result.ok === false) {
 				recordSourceConnectionFailure("obsidian", result.error);
 				return c.json({ error: result.error }, 400);
 			}
-			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			await recordSourceConnected(result.source, writeScope.identity.agentId);
 
 			const job = enqueueSourceIndexJob({
 				source: result.source,
@@ -357,8 +374,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForDiscord(body, guildIds));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
+			const writeScope = resolveSourceWriteIdentity(c);
+			if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
 			const result = addDiscordSource(
 				{
+					writeIdentity: writeScope.identity,
 					guildIds,
 					tokenRef: typeof body.tokenRef === "string" ? body.tokenRef : "",
 					name: body.name,
@@ -385,7 +405,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordSourceConnectionFailure("discord", result.error);
 				return c.json({ error: result.error }, 400);
 			}
-			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			await recordSourceConnected(result.source, writeScope.identity.agentId);
 
 			const job = enqueueSourceIndexJob({
 				source: result.source,
@@ -426,9 +446,12 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 	app.post("/api/sources/:sourceId/snapshot/import", async (c) => {
 		const startedAt = Date.now();
+		const writeScope = resolveSourceWriteIdentity(c);
+		if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
 		const sourceId = c.req.param("sourceId");
-		const source = findConfiguredSource(sourceId, agentsDir, resolveDaemonAgentId());
-		if (!source) return c.json({ error: "Source not found" }, 404);
+		const source = findConfiguredSource(sourceId, agentsDir, writeScope.identity.agentId);
+		if (!source || (source.writeIdentity && source.writeIdentity.agentId !== writeScope.identity.agentId))
+			return c.json({ error: "Source not found" }, 404);
 		if (isSourceImportBlocked(source.id)) {
 			return c.json({ error: "Source snapshot import cannot run while source indexing is queued or running" }, 409);
 		}
@@ -442,7 +465,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			} catch {
 				await recordSourceIndexOperation({
 					source,
-					agentId: resolveDaemonAgentId(),
+					agentId: writeScope.identity.agentId,
 					discovered: 0,
 					accepted: 0,
 					failed: 1,
@@ -455,15 +478,16 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				return c.json({ error: "Invalid JSON body" }, 400);
 			}
 			const result = await importSnapshot({
+				author: c.get("author") ?? LOCAL_AUTHOR,
 				source,
-				agentId: resolveDaemonAgentId(),
+				agentId: writeScope.identity.agentId,
 				snapshot: body,
 				includeLocalDiscord: c.req.query("includeLocalDiscord") === "true",
 			});
 			if (result.ok === false) {
 				await recordSourceIndexOperation({
 					source,
-					agentId: resolveDaemonAgentId(),
+					agentId: writeScope.identity.agentId,
 					discovered: 0,
 					accepted: 0,
 					failed: 1,
@@ -478,14 +502,14 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			markSourceIndexed(source.id, undefined, agentsDir);
 			await recordSourceIndexOperation({
 				source,
-				agentId: resolveDaemonAgentId(),
+				agentId: writeScope.identity.agentId,
 				discovered: result.imported + result.skipped.localDiscordArtifacts,
 				accepted: result.imported,
 				skipped: result.skipped.localDiscordArtifacts,
 				durationMs: Date.now() - startedAt,
 				outcome: "success",
 				updateFreshness: false,
-				searchable: await sourceHasSearchableArtifacts(source, resolveDaemonAgentId()),
+				searchable: await sourceHasSearchableArtifacts(source, writeScope.identity.agentId),
 			});
 			return c.json(result);
 		} finally {
@@ -511,8 +535,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForGitHub(repos));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
+			const writeScope = resolveSourceWriteIdentity(c);
+			if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
 			const result = addGitHubSource(
 				{
+					writeIdentity: writeScope.identity,
 					repos,
 					tokenRef: typeof body.tokenRef === "string" ? body.tokenRef : undefined,
 					name: body.name,
@@ -533,7 +560,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordSourceConnectionFailure("github", result.error);
 				return c.json({ error: result.error }, 400);
 			}
-			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			await recordSourceConnected(result.source, writeScope.identity.agentId);
 
 			const job = enqueueSourceIndexJob({
 				source: result.source,
@@ -565,12 +592,14 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const releaseSourceMutation = beginSourceMutationLease(c, notionSourceId(body.tokenRef));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
-			const result = addNotionSource(body, agentsDir);
+			const writeScope = resolveSourceWriteIdentity(c);
+			if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
+			const result = addNotionSource({ ...body, writeIdentity: writeScope.identity }, agentsDir);
 			if (result.ok === false) {
 				recordSourceConnectionFailure("notion", result.error);
 				return c.json({ error: result.error }, 400);
 			}
-			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			await recordSourceConnected(result.source, writeScope.identity.agentId);
 			const job = enqueueSourceIndexJob({
 				source: result.source,
 				agentsDir,
@@ -596,8 +625,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const releaseSourceMutation = beginSourceMutationLease(c, sourceIdForWeb(body.url));
 		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
 		try {
+			const writeScope = resolveSourceWriteIdentity(c);
+			if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
 			const result = addWebSource(
 				{
+					writeIdentity: writeScope.identity,
 					url: typeof body.url === "string" ? body.url : "",
 					name: typeof body.name === "string" ? body.name : undefined,
 				},
@@ -607,7 +639,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordSourceConnectionFailure("web", result.error);
 				return c.json({ error: result.error }, 400);
 			}
-			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			await recordSourceConnected(result.source, writeScope.identity.agentId);
 			const job = enqueueSourceIndexJob({
 				source: result.source,
 				agentsDir,
@@ -623,9 +655,12 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 	app.delete("/api/sources/:sourceId", async (c) => {
 		const sourceId = c.req.param("sourceId");
-		const source = findConfiguredSource(sourceId, agentsDir, resolveDaemonAgentId(), { includeTombstoned: true });
-		if (source === undefined) return c.json({ error: "Source not found" }, 404);
-		const sourceAgentId = resolveDaemonAgentId();
+		const writeScope = resolveSourceWriteIdentity(c);
+		if (!writeScope.ok) return c.json({ error: writeScope.error }, 403);
+		const source = findConfiguredSource(sourceId, agentsDir, writeScope.identity.agentId, { includeTombstoned: true });
+		if (source === undefined || (source.writeIdentity && source.writeIdentity.agentId !== writeScope.identity.agentId))
+			return c.json({ error: "Source not found" }, 404);
+		const sourceAgentId = writeScope.identity.agentId;
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
 			return c.json({ error: "Source not found" }, 404);
 		const releaseSourceDeletion = beginSourceDeletion(source.id);
@@ -866,7 +901,7 @@ async function recordSourceIndexTelemetryBestEffort(
 
 async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
 	const startedAt = Date.now();
-	const agentId = resolveDaemonAgentId();
+	const agentId = input.source.writeIdentity?.agentId ?? resolveDaemonAgentId();
 	if (isSourceIndexInFlight(input.source.id)) {
 		scheduleSourceIndexJob(input, job, 50);
 		return;
@@ -939,25 +974,29 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		}
 		if (!provider.toNativeSource) throw new Error(`Source provider has no sync implementation: ${input.source.kind}`);
 		const memoryCfg = loadMemoryConfig(input.agentsDir);
-		bridge = input.startBridge([provider.toNativeSource(input.source)], {
-			pollIntervalMs: 0,
-			agentsDir: input.agentsDir,
-			yieldEveryFiles: 1,
-			sourceCleanupEnabled: false,
-			sourceGraphEnabled: true,
-			...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
-			onFileIndexed: (event) => {
-				if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
-				updateSourceIndexJobProgress(input.source.id, job.id, {
-					scanned: event.scanned,
-					total: event.total,
-					indexed: event.changed,
-					currentPath: event.filePath,
-					statusMessage: event.status,
-				});
+		bridge = input.startBridge(
+			[{ ...provider.toNativeSource(input.source), writeIdentity: input.source.writeIdentity }],
+			{
+				agentId,
+				pollIntervalMs: 0,
+				agentsDir: input.agentsDir,
+				yieldEveryFiles: 1,
+				sourceCleanupEnabled: false,
+				sourceGraphEnabled: true,
+				...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
+				onFileIndexed: (event) => {
+					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+					updateSourceIndexJobProgress(input.source.id, job.id, {
+						scanned: event.scanned,
+						total: event.total,
+						indexed: event.changed,
+						currentPath: event.filePath,
+						statusMessage: event.status,
+					});
+				},
+				shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),
 			},
-			shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),
-		});
+		);
 		const indexed = await bridge.syncExisting();
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		const syncResult = bridge.getLastSyncResult?.();

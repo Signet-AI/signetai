@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compartmentForWrite } from "../../core/src/compartment-shards";
 import type { RouteRequest } from "@signet/core";
 import { type AggregateInferenceRouter, aggregateRecall, InvalidAggregateRecallBudgetError } from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
@@ -177,6 +178,21 @@ describe("aggregateRecall", () => {
 		prevSignetPath = process.env.SIGNET_PATH;
 		process.env.SIGNET_PATH = dir;
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, agent] of [
+				["mem-1", "agent-a"],
+				["mem-2", "agent-a"],
+				["mem-3", "agent-a"],
+				["mem-api-1", "agent-a"],
+				["mem-private", "agent-private"],
+				["mem-legacy", "agent-legacy"],
+			])
+				db.prepare("INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES(?,? ,?,'now','now')").run(
+					id,
+					`Evidence ${id}`,
+					agent,
+				);
+		});
 	});
 
 	afterEach(() => {
@@ -194,6 +210,52 @@ describe("aggregateRecall", () => {
 			process.env.SIGNET_PATH = prevSignetPath;
 		}
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("labels aggregate evidence, hints, and embeddings and keeps the initiating author", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('alice','alice','Alice','member'); INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_assignments VALUES('memory','mem-1','agent-a','cls_hr','alice','now')",
+			);
+			db.prepare("UPDATE memories SET compartment_id=? WHERE id='mem-1'").run(
+				compartmentForWrite(db, { agentId: "agent-a", memoryId: "mem-1" }),
+			);
+		});
+		const cfg = loadMemoryConfig(dir);
+		const result = await aggregateRecall({ query: "private facts", agentId: "agent-a", aggregate: true }, cfg, {
+			author: { userId: "alice", credential: "session:alice" },
+			router: new StaticRouter(),
+			embedFn: async () => Array.from({ length: cfg.embedding.dimensions }, (_, index) => (index === 0 ? 1 : 0)),
+			logger: quietLogger(),
+			hybridRecall: async (params) => response(params.query, [row("mem-1", "Private facts")]),
+		});
+		const id = result.aggregate?.savedMemoryId;
+		expect(typeof id).toBe("string");
+		const persisted = await getDbAccessor().withReadDbAsync((db) => ({
+			memory: db.prepare("SELECT compartment_id,author_user_id FROM memories WHERE id=?").get(id),
+			hint: db.prepare("SELECT compartment_id FROM memory_hints WHERE memory_id=?").get(id),
+			embedding: db.prepare("SELECT compartment_id,agent_id FROM embeddings WHERE source_id=?").get(id),
+			citations: db
+				.prepare(
+					"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='memory' AND derived_id=?",
+				)
+				.all(id),
+		}));
+		expect(persisted.memory).toEqual({ compartment_id: expect.any(Number), author_user_id: "alice" });
+		expect(persisted.hint).toEqual({ compartment_id: expect.any(Number) });
+		expect(persisted.embedding).toEqual({ compartment_id: expect.any(Number), agent_id: "agent-a" });
+		expect(persisted.citations).toEqual([{ evidence_kind: "memory", evidence_id: "mem-1" }]);
+	});
+
+	it("requires a resolved agent for a principal aggregate call", async () => {
+		await expect(
+			aggregateRecall({ query: "private facts", aggregate: true }, loadMemoryConfig(dir), {
+				author: { userId: "alice", credential: "session:alice" },
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				hybridRecall: async (params) => response(params.query, [row("mem-1", "Private facts")]),
+			}),
+		).rejects.toThrow("agent_required");
 	});
 
 	it("rejects invalid aggregate budgets instead of falling back to small", async () => {
@@ -757,7 +819,9 @@ memory:
 		expect(result.results[0].content).toBe("Aggregate answer from memory evidence.");
 		expect(result.aggregate?.saved).toBe(false);
 		expect(result.aggregate?.savedMemoryId).toBeNull();
-		const count = getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM memories").get()) as {
+		const count = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source_type='aggregate-recall'").get(),
+		) as {
 			n: number;
 		};
 		expect(count.n).toBe(0);

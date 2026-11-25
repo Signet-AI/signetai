@@ -126,7 +126,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:127",
+			siteToken: "db:routes.memory-routes.site.127",
 		}),
 	};
 }
@@ -1579,7 +1579,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				}
 			}
 
-			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
+			const groupId =
+				sourceId ?? chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
 			const now = new Date().toISOString();
 			const plannedChunkIds = chunkPlans.map(() => crypto.randomUUID());
 			type ChunkInsertResult =

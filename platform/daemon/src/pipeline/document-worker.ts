@@ -242,7 +242,7 @@ async function processDocument(
 				async (db) => {
 					return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
 				},
-				{ siteToken: "pipeline/document-worker.ts:236" },
+				{ siteToken: "db:pipeline.document-worker.site.236" },
 			);
 
 	if (!doc) {
@@ -568,7 +568,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					| undefined;
 				return row?.status ?? null;
 			},
-			{ siteToken: "pipeline/document-worker.ts:531" },
+			{ siteToken: "db:pipeline.document-worker.site.531" },
 		);
 	}
 
@@ -594,7 +594,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 								| { chunk_count?: number | null; memory_count?: number | null }
 								| undefined,
-						{ siteToken: "pipeline/document-worker.ts:559" },
+						{ siteToken: "db:pipeline.document-worker.site.559" },
 					);
 			const durableLinks = deps.ownerMaintenance
 				? await ownerQueryOne<{ count?: number | null }>(
@@ -608,7 +608,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db
 								.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?")
 								.get(job.document_id) as { count?: number | null } | undefined,
-						{ siteToken: "pipeline/document-worker.ts:573" },
+						{ siteToken: "db:pipeline.document-worker.site.573" },
 					);
 			if (durable) {
 				const accepted =

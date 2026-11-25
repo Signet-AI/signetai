@@ -1,6 +1,6 @@
 import type { OntologyContradiction, OntologyContradictionStatus } from "@signet/core";
-import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { tableExists } from "./db-helpers";
+import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
+import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx, tableExists } from "./db-helpers";
 import { detectProspectiveContradictionRisk } from "./pipeline/antonyms";
 
 export interface ListOntologyContradictionsParams {
@@ -312,6 +312,17 @@ function insertOrReactivateContradiction(
 		| null
 		| undefined;
 	const timestamp = new Date().toISOString();
+	const evidence: readonly CitationEvidence[] = [
+		{ kind: "attribute", id: input.left.id },
+		{ kind: "attribute", id: input.right.id },
+		...prepareTypedStatement<{ evidence_kind: CitationEvidence["kind"]; evidence_id: string }>(
+			db,
+			"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='attribute' AND agent_id=? AND derived_id IN (?,?)",
+		)
+			.all(input.agentId, input.left.id, input.right.id)
+			.map((ref): CitationEvidence => ({ kind: ref.evidence_kind, id: ref.evidence_id })),
+	];
+	const compartment = evidenceCompartmentInTx(db, input.agentId, evidence);
 	if (existing != null) {
 		db.prepare(
 			`UPDATE ontology_contradictions
@@ -322,7 +333,7 @@ function insertOrReactivateContradiction(
 			     left_source_path = ?, left_source_root = ?, right_source_kind = ?, right_source_id = ?,
 			     right_source_path = ?, right_source_root = ?, left_evidence = ?, right_evidence = ?,
 			     detector = 'lexical', reason = ?, confidence = 1.0, status = 'active',
-			     detected_at = ?, resolved_at = NULL, resolution_reason = NULL, updated_at = ?
+			     detected_at = ?, resolved_at = NULL, resolution_reason = NULL, updated_at = ?, compartment_id = ?
 			 WHERE id = ? AND agent_id = ?`,
 		).run(
 			input.entityId,
@@ -352,9 +363,16 @@ function insertOrReactivateContradiction(
 			input.reason,
 			timestamp,
 			timestamp,
+			compartment,
 			existing.id,
 			input.agentId,
 		);
+		recordEvidenceCitationsInTx(db, {
+			agentId: input.agentId,
+			derivedKind: "contradiction",
+			derivedId: existing.id,
+			evidence,
+		});
 		return existing.id;
 	}
 
@@ -367,9 +385,9 @@ function insertOrReactivateContradiction(
 		  left_source_kind, left_source_id, left_source_path, left_source_root,
 		  right_source_kind, right_source_id, right_source_path, right_source_root,
 		  left_evidence, right_evidence, detector, reason, confidence, status,
-		  detected_at, created_at, updated_at)
+		  detected_at, created_at, updated_at, compartment_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		         'lexical', ?, 1.0, 'active', ?, ?, ?)`,
+		         'lexical', ?, 1.0, 'active', ?, ?, ?, ?)`,
 	).run(
 		id,
 		input.agentId,
@@ -403,7 +421,9 @@ function insertOrReactivateContradiction(
 		timestamp,
 		timestamp,
 		timestamp,
+		compartment,
 	);
+	recordEvidenceCitationsInTx(db, { agentId: input.agentId, derivedKind: "contradiction", derivedId: id, evidence });
 	return id;
 }
 
@@ -570,7 +590,7 @@ export function listOntologyContradictions(
 			limit,
 			offset,
 		};
-	}, "ontology-contradictions.ts:526");
+	}, "db:ontology-contradictions.site.526");
 }
 
 export function getOntologyContradiction(
@@ -584,7 +604,7 @@ export function getOntologyContradiction(
 				WHERE c.id = ? AND c.agent_id = ?`)
 			.get(params.id, params.agentId) as ContradictionRow | undefined | null;
 		return row == null ? null : rowToContradiction(row);
-	}, "ontology-contradictions.ts:581");
+	}, "db:ontology-contradictions.site.581");
 }
 
 export function parseOntologyContradictionStatus(

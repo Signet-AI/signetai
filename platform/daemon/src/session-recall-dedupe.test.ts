@@ -1,136 +1,15 @@
-import { afterAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as dbAccessor from "./db-accessor";
 
-type EventRow = {
-	readonly sessionKey: string;
-	readonly agentId: string;
-	readonly epoch: number;
-	readonly itemKind: string;
-	readonly itemId: string;
-	readonly surface: string;
-	readonly mode: string;
-	readonly score: number | null;
-	readonly source: string | null;
-};
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { compartmentForWrite } from "../../core/src/compartment-shards";
 
-type EpochRow = {
-	readonly sessionKey: string;
-	readonly agentId: string;
-	readonly epoch: number;
-	readonly reason: string;
-	readonly sourceRef: string | null;
-};
-
-const events = new Map<string, EventRow>();
-const epochs = new Map<string, EpochRow>();
-let changes = 0;
-let writeTxError: Error | null = null;
-
-function eventKey(sessionKey: string, agentId: string, epoch: number, itemKind: string, itemId: string): string {
-	return [sessionKey, agentId, epoch, itemKind, itemId].join("\0");
-}
-
-function epochKey(sessionKey: string, agentId: string, epoch: number): string {
-	return [sessionKey, agentId, epoch].join("\0");
-}
-
-function currentEpoch(sessionKey: string, agentId: string): number {
-	let max = 0;
-	for (const row of epochs.values()) {
-		if (row.sessionKey === sessionKey && row.agentId === agentId) {
-			max = Math.max(max, row.epoch);
-		}
-	}
-	return max;
-}
-
-const fakeDb = {
-	prepare(sql: string) {
-		return {
-			get(...args: unknown[]) {
-				if (sql.includes("sqlite_master")) return { count: 2 };
-				if (sql.includes("SELECT MAX(context_epoch)")) {
-					return { epoch: currentEpoch(String(args[0]), String(args[1])) };
-				}
-				if (sql.includes("SELECT changes()")) return { count: changes };
-				throw new Error(`Unexpected get SQL: ${sql}`);
-			},
-			all(...args: unknown[]) {
-				if (!sql.includes("FROM session_recall_events")) {
-					throw new Error(`Unexpected all SQL: ${sql}`);
-				}
-				const sessionKey = String(args[0]);
-				const agentId = String(args[1]);
-				const epoch = Number(args[2]);
-				const wanted = new Set<string>();
-				for (let i = 3; i < args.length; i += 2) {
-					wanted.add(`${String(args[i])}\0${String(args[i + 1])}`);
-				}
-				return [...events.values()]
-					.filter(
-						(row) =>
-							row.sessionKey === sessionKey &&
-							row.agentId === agentId &&
-							row.epoch === epoch &&
-							wanted.has(`${row.itemKind}\0${row.itemId}`),
-					)
-					.map((row) => ({ item_kind: row.itemKind, item_id: row.itemId }));
-			},
-			run(...args: unknown[]) {
-				changes = 0;
-				if (sql.includes("INSERT OR IGNORE INTO session_recall_events")) {
-					const row: EventRow = {
-						sessionKey: String(args[0]),
-						agentId: String(args[1]),
-						epoch: Number(args[2]),
-						itemKind: String(args[3]),
-						itemId: String(args[4]),
-						surface: String(args[5]),
-						mode: String(args[6]),
-						score: typeof args[7] === "number" ? args[7] : null,
-						source: typeof args[8] === "string" ? args[8] : null,
-					};
-					const key = eventKey(row.sessionKey, row.agentId, row.epoch, row.itemKind, row.itemId);
-					if (!events.has(key)) {
-						events.set(key, row);
-						changes = 1;
-					}
-					return;
-				}
-				if (sql.includes("INSERT OR IGNORE INTO session_context_epochs")) {
-					const row: EpochRow = {
-						sessionKey: String(args[0]),
-						agentId: String(args[1]),
-						epoch: Number(args[2]),
-						reason: String(args[3]),
-						sourceRef: typeof args[4] === "string" ? args[4] : null,
-					};
-					const key = epochKey(row.sessionKey, row.agentId, row.epoch);
-					if (!epochs.has(key)) {
-						epochs.set(key, row);
-						changes = 1;
-					}
-					return;
-				}
-				throw new Error(`Unexpected run SQL: ${sql}`);
-			},
-		};
-	},
-};
-
-const getDbAccessorSpy = spyOn(dbAccessor, "getDbAccessor").mockImplementation(
-	() =>
-		({
-			withWriteTx: <T>(fn: (db: typeof fakeDb) => T): T => {
-				if (writeTxError) throw writeTxError;
-				return fn(fakeDb);
-			},
-			withWriteTxAsync: async <T>(fn: (db: typeof fakeDb) => T): Promise<T> => {
-				if (writeTxError) throw writeTxError;
-				return fn(fakeDb);
-			},
-		}) as ReturnType<typeof dbAccessor.getDbAccessor>,
-);
+let dir = "";
+let accessor: ReturnType<typeof dbAccessor.getDbAccessor>;
+const originalGet = dbAccessor.getDbAccessor;
+const getDbAccessorSpy = spyOn(dbAccessor, "getDbAccessor").mockImplementation(() => accessor);
 
 const { advanceRecallContextEpoch, applyRecallDedupe, applyRecallDedupeAsync, claimRecallItems } = await import(
 	"./session-recall-dedupe"
@@ -140,11 +19,22 @@ afterAll(() => {
 	getDbAccessorSpy.mockRestore();
 });
 
-beforeEach(() => {
-	events.clear();
-	epochs.clear();
-	changes = 0;
-	writeTxError = null;
+beforeEach(async () => {
+	await dbAccessor.closeDbAccessor();
+	dir = mkdtempSync(join(tmpdir(), "signet-recall-dedupe-"));
+	mkdirSync(join(dir, "memory"));
+	dbAccessor.initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
+	accessor = originalGet();
+	await accessor.withWriteTxAsync((db) => {
+		for (const id of ["mem-1", "mem-2", "mem-duplicate"])
+			db.prepare(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES(?,?,'agent-a','now','now')",
+			).run(id, id);
+	});
+});
+afterEach(async () => {
+	await dbAccessor.closeDbAccessor();
+	rmSync(dir, { recursive: true, force: true });
 });
 
 describe("session recall dedupe", () => {
@@ -309,7 +199,7 @@ describe("session recall dedupe", () => {
 		expect(second.items.map((item) => item.id)).toEqual(["mem-1"]);
 	});
 
-	it("can filter already recalled rows without claiming unreturned candidates", () => {
+	it("can filter already recalled rows without claiming unreturned candidates", async () => {
 		const result = applyRecallDedupe({
 			sessionKey: "sess-1",
 			agentId: "agent-a",
@@ -319,11 +209,15 @@ describe("session recall dedupe", () => {
 			items: [{ id: "mem-1", score: 0.9, source: "hybrid" }],
 		});
 		expect(result.items).toHaveLength(1);
-		expect(events.size).toBe(0);
+		expect(
+			await accessor.withReadDbAsync((db) => db.prepare("SELECT count(*) n FROM session_recall_events").get()),
+		).toEqual({ n: 0 });
 	});
 
 	it("reports when dedupe fails open", () => {
-		writeTxError = new Error("ledger unavailable");
+		const writer = spyOn(accessor, "withWriteTx").mockImplementation(() => {
+			throw new Error("ledger unavailable");
+		});
 		const result = claimRecallItems({
 			sessionKey: "sess-failure",
 			agentId: "agent-a",
@@ -338,6 +232,36 @@ describe("session recall dedupe", () => {
 			advanced: false,
 			failedOpen: true,
 		});
+		writer.mockRestore();
+	});
+
+	it("copies the returned memory label and citation into the recall event", async () => {
+		await accessor.withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_assignments VALUES('memory','mem-1','agent-a','cls_hr','alice','now')",
+			);
+			db.prepare("UPDATE memories SET compartment_id=? WHERE id='mem-1'").run(
+				compartmentForWrite(db, { agentId: "agent-a", memoryId: "mem-1" }),
+			);
+		});
+		await applyRecallDedupeAsync({
+			sessionKey: "s",
+			agentId: "agent-a",
+			surface: "test",
+			mode: "direct",
+			claim: true,
+			items: [{ id: "mem-1" }],
+		});
+		expect(
+			await accessor.withReadDbAsync((db) => db.prepare("SELECT compartment_id FROM session_recall_events").get()),
+		).toEqual({ compartment_id: expect.any(Number) });
+		expect(
+			await accessor.withReadDbAsync((db) =>
+				db
+					.prepare("SELECT derived_id,evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='telemetry'")
+					.all(),
+			),
+		).toEqual([{ derived_id: '["s",0,"memory","mem-1"]', evidence_kind: "memory", evidence_id: "mem-1" }]);
 	});
 
 	it("keeps the async path aligned with batch dedupe", async () => {

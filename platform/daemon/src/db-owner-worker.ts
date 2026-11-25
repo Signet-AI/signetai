@@ -3,6 +3,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { dirname, resolve } from "node:path";
 import {
 	compartmentForWrite,
@@ -292,19 +293,7 @@ export function runDbOwnerWorker(): void {
 	function bindParameter(value: DbOwnerParameter, writeBatch = false): unknown {
 		if (typeof value === "object" && value !== null && value.type === "compartment") {
 			if (!writeBatch) throw new Error("compartment_parameter_requires_batch");
-			const parent =
-				value.parentMemoryId === undefined
-					? undefined
-					: db
-							.prepare("SELECT compartment_id FROM memories WHERE id=? AND agent_id=?")
-							.get(value.parentMemoryId, value.scope.agentId);
-			if (value.parentMemoryId !== undefined && !parent) throw new Error("parent_not_found");
-			return compartmentForWrite(db, {
-				...value.scope,
-				...(parent
-					? { parentCompartment: typeof parent.compartment_id === "number" ? parent.compartment_id : null }
-					: {}),
-			});
+			return resolveWriteCompartmentParameterInTx(db, value);
 		}
 		if (typeof value === "object" && value !== null && value.type === "bytes") {
 			return Buffer.from(value.base64, "base64");
@@ -786,6 +775,7 @@ export function runDbOwnerWorker(): void {
 			agentId: input.agentId,
 			sourcePath,
 			sourceSha256: input.sourceHash,
+			author: input.author,
 			sourceKind: input.sourceKind,
 			sessionId: `native:${input.harness}:${sourcePath}`,
 			sessionKey: `native:${input.harness}`,
@@ -1241,6 +1231,16 @@ export function runDbOwnerWorker(): void {
 			);
 		}
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
+		if (job.request.kind === "filesystem_document_write") {
+			const { writeFilesystemDocumentInTx } = await import("./embedding-projection-owner");
+			const request = job.request;
+			return withBusyRetry(() => writeFilesystemDocumentInTx(db, request.input), context);
+		}
+		if (job.request.kind === "session_checkpoint_write") {
+			const { writeSessionCheckpointInTx } = await import("./session-transcripts");
+			const request = job.request;
+			return withBusyRetry(() => writeSessionCheckpointInTx(db, request.input, request.maxPerSession), context);
+		}
 		if (job.request.kind === "session_transcript_write")
 			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "session_compaction_summary")
@@ -1304,6 +1304,11 @@ export function runDbOwnerWorker(): void {
 				} catch {}
 				throw error;
 			}
+		}
+		if (job.request.kind === "reflection_generate") {
+			const { txCreateDailyReflections } = await import("./reflection-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => txCreateDailyReflections(db, input), context);
 		}
 		if (job.request.kind === "reflection_answer") {
 			const { txAnswerReflection } = await import("./reflection-owner");
