@@ -13,6 +13,10 @@ function fixtureScope(db: Database) {
 		db.exec(
 			"ALTER TABLE memories ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'; ALTER TABLE memories ADD COLUMN visibility TEXT NOT NULL DEFAULT 'global'",
 		);
+		for (const table of ["embeddings", "embeddings_staging"]) {
+			if (db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(table))
+				db.exec(`ALTER TABLE ${table} ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'`);
+		}
 		scopedFixtures.add(db);
 	}
 	return localAllReadScope({ kind: "own", agentId: "default" });
@@ -31,7 +35,7 @@ describe("vector search fallback", () => {
 			);
 			INSERT INTO memories VALUES ('memory-fact', 'fact', NULL), ('memory-other', 'other', NULL), ('memory-aggregate', 'fact', 'aggregate-recall');
 		`);
-		const insert = raw.prepare("INSERT INTO embeddings VALUES (?, ?, ?, ?)");
+		const insert = raw.prepare("INSERT INTO embeddings(id,source_id,dimensions,vector) VALUES (?, ?, ?, ?)");
 		insert.run("embedding-fact", "memory-fact", 3, new Float32Array([1, 0, 0]));
 		insert.run("embedding-other", "memory-other", 3, new Float32Array([0, 1, 0]));
 		insert.run("embedding-aggregate", "memory-aggregate", 3, new Float32Array([1, 0, 0]));
@@ -66,7 +70,7 @@ describe("vector search fallback", () => {
 			);
 			INSERT INTO memories VALUES ('memory-old', 'fact', NULL), ('memory-new', 'fact', NULL);
 		`);
-		const insert = raw.prepare("INSERT INTO embeddings VALUES (?, ?, ?, ?)");
+		const insert = raw.prepare("INSERT INTO embeddings(id,source_id,dimensions,vector) VALUES (?, ?, ?, ?)");
 		insert.run("embedding-old", "memory-old", 3, new Float32Array([1, 0, 0]));
 		insert.run("embedding-new", "memory-new", 3, new Float32Array([1, 0, 0]));
 
@@ -102,7 +106,7 @@ describe("vector search fallback", () => {
 			INSERT INTO memories VALUES ('memory-truncated', 'fact', NULL);
 		`);
 		raw
-			.prepare("INSERT INTO embeddings VALUES (?, ?, ?, ?)")
+			.prepare("INSERT INTO embeddings(id,source_id,dimensions,vector) VALUES (?, ?, ?, ?)")
 			.run("embedding-truncated", "memory-truncated", 3, new Float32Array([1]));
 
 		expect(

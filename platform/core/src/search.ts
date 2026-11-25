@@ -172,6 +172,14 @@ function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
 	}
 }
 
+function embeddingReadPredicate(scope: ReadScope): { sql: string; args: unknown[] } {
+	return readScopeSql(
+		"e",
+		{ ...scope, reach: scope.reach.kind === "own" ? scope.reach : { kind: "all" }, projects: null },
+		{ visibility: null, memory: "source_id", source: "source_id", session: null },
+	);
+}
+
 function boundedCosineFallback(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
@@ -190,7 +198,8 @@ function boundedCosineFallback(
 		predicates.push("COALESCE(m.source_type, '') != 'aggregate-recall'");
 	}
 	const scope = readScopeSql("m", options.readScope);
-	params.push(...scope.args);
+	const embeddingScope = embeddingReadPredicate(options.readScope);
+	params.push(...scope.args, ...embeddingScope.args);
 	params.push(maxScanRows + 1);
 
 	const rows = db
@@ -198,7 +207,7 @@ function boundedCosineFallback(
 			`SELECT e.source_id, e.vector
 			 FROM ${searchTables.embeddings} e
 			 JOIN memories m ON e.source_id = m.id
-			 WHERE ${predicates.join(" AND ")}${scope.sql}
+			 WHERE ${predicates.join(" AND ")}${scope.sql}${embeddingScope.sql}
 			 ORDER BY e.rowid DESC
 			 LIMIT ?`,
 		)
@@ -248,11 +257,12 @@ export function vectorSearchWithMetadata(
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
 			const scope = readScopeSql("m", options.readScope);
+			const embeddingScope = embeddingReadPredicate(options.readScope);
 			const names = options.shardNames ?? searchShardNames(db, options.readScope);
 			const shards = selectedSearchTables(searchTables.projection, options.readScope, names);
 			if (shards.length === 0) throw new Error("Vector projection unavailable");
 			for (const table of shards) {
-				const size = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count;
+				const size = db.prepare(`SELECT COUNT(*) AS count FROM ${table}_rowids`).get()?.count;
 				if (typeof size !== "number") throw new Error("Vector shard size unavailable");
 				let requested = Math.min(size, limit * 4);
 				while (requested > 0) {
@@ -263,14 +273,14 @@ export function vectorSearchWithMetadata(
 						params.push(options.type);
 					}
 					if (options.excludeAggregateRecall) filter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
-					params.push(...scope.args, limit);
+					params.push(...scope.args, ...embeddingScope.args, limit);
 					const rows = db
 						.prepare(`WITH hits AS MATERIALIZED (
 						SELECT id,distance FROM ${table} WHERE embedding MATCH ? AND k=?
 					) SELECT e.source_id,hits.distance FROM hits
 					JOIN ${searchTables.embeddings} e ON e.id=hits.id
 					JOIN memories m ON m.id=e.source_id
-					WHERE 1=1${filter}${scope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
+					WHERE 1=1${filter}${scope.sql}${embeddingScope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
 						.all(...params);
 					if (rows.length >= limit || requested >= size) {
 						for (const row of rows)

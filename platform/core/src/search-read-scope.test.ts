@@ -50,6 +50,21 @@ describe("scoped search noninterference", () => {
 			db.close();
 		}
 	});
+	it("cosine fallback never lets a hidden embedding change a readable parent's score", () => {
+		const db = fixture();
+		try {
+			const insert = db.prepare("INSERT INTO embeddings VALUES (?,?,?, ?,NULL,'memory',3,?)");
+			insert.run("public-vector", "visible", "alice", null, new Float32Array([1, 0, 0]));
+			const options = { limit: 1, readScope: { ...scope, reach: { kind: "own" as const, agentId: "alice" } } };
+			const before = vectorSearchWithMetadata(db, new Float32Array([0, 1, 0]), options);
+			expect(before.results).toEqual([]);
+			insert.run("hidden-vector", "visible", "alice", 7, new Float32Array([0, 1, 0]));
+			expect(vectorSearchWithMetadata(db, new Float32Array([0, 1, 0]), options)).toEqual(before);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("prefilters indexed KNN and merges readable vector shards", () => {
 		const extension = findSqliteVecExtension();
 		expect(extension).toBeTruthy();
