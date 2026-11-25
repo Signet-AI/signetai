@@ -751,6 +751,9 @@ class DurableOutbox:
         value = _json_load(text) if text else {"evicted": 0, "dropped": 0, "lastDrop": None, "removing": []}
         if not isinstance(value, dict) or not all(isinstance(value.get(k), int) and value[k] >= 0 for k in ("evicted", "dropped")) or not isinstance(value.get("removing"), list):
             raise ValueError("Corrupt Signet outbox status")
+        value.setdefault("admitting", False)
+        if not isinstance(value["admitting"], bool):
+            raise ValueError("Invalid outbox admission marker")
         for entry_id in value["removing"]:
             self._file(entry_id)
         return value
@@ -764,6 +767,20 @@ class DurableOutbox:
                 self._file(entry_id).unlink(missing_ok=True)
             meta["removing"] = []
             self._save_meta(meta)
+        if not meta["admitting"]:
+            return
+        entries = self._entries()
+        total = sum(self._file(e["id"]).stat().st_size + 512 for e in entries)
+        evictions = []
+        while len(entries) > self.MAX_ENTRIES or total > self.MAX_BYTES:
+            oldest = entries.pop(0)
+            total -= self._file(oldest["id"]).stat().st_size + 512
+            evictions.append(oldest["id"])
+        meta["admitting"] = False
+        meta["evicted"] += len(evictions)
+        meta["removing"] = evictions
+        self._save_meta(meta)
+        self._recover(meta)
 
     def _entries(self):
         paths = list(self.directory.iterdir())
@@ -787,9 +804,7 @@ class DurableOutbox:
         return sorted(entries, key=lambda entry: (entry["createdAt"], entry["id"]))
 
     def _remove(self, meta, entry, disposition):
-        if disposition == "evicted":
-            meta["evicted"] += 1
-        elif isinstance(disposition, int):
+        if isinstance(disposition, int):
             meta["dropped"] += 1
             meta["lastDrop"] = {"id": entry["id"], "status": disposition, "at": _iso(time.time())}
         meta["removing"] = [entry["id"]]
@@ -811,11 +826,11 @@ class DurableOutbox:
         if size > self.MAX_BYTES:
             raise ValueError("Outbox entry exceeds 64 MiB")
         total = sum(self._file(e["id"]).stat().st_size + 512 for e in entries)
-        while len(entries) >= self.MAX_ENTRIES or total + size > self.MAX_BYTES:
-            oldest = entries.pop(0)
-            total -= self._file(oldest["id"]).stat().st_size + 512
-            self._remove(meta, oldest, "evicted")
+        if len(entries) >= self.MAX_ENTRIES or total + size > self.MAX_BYTES:
+            meta["admitting"] = True
+            self._save_meta(meta)
         _atomic_write(self._file(entry["id"]), encoded)
+        self._recover(meta)
         return entry
 
     def enqueue(self, method, path, body, *, idempotency_key=None, deadline=None, cancel=None, headers=None):

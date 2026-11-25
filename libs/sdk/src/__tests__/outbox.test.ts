@@ -261,6 +261,27 @@ test("foreign-origin entries are left untouched instead of replayed", async () =
 	expect((await second.entries())[0]).toEqual(entry);
 });
 
+test("failed replacement admission preserves all queued evidence", async () => {
+	const moduleUrl = new URL("../node.ts", import.meta.url).href;
+	const script = `import * as fs from 'node:fs/promises'; import {mock} from 'bun:test'; import {basename,dirname} from 'node:path'; const original={...fs}; let fail=false; let crash=false; let directory=''; mock.module('node:fs/promises',()=>({...original,rename:async(from,to)=>{if(fail&&dirname(String(to))===directory&&/^[a-f0-9-]{36}\\.json$/.test(basename(String(to))))throw Object.assign(new Error('disk full'),{code:'ENOSPC'});const result=await original.rename(from,to);if(crash&&basename(String(to))==='.status.json'&&JSON.parse(await original.readFile(to,'utf8')).evicted>0)process.exit(0);return result}})); const {DurableOutbox}=await import(${JSON.stringify(moduleUrl)}); const box=new DurableOutbox('https://admission.example');directory=box.directory;for(let i=0;i<200;i++)await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{i}});fail=true;try{await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{replacement:true}});throw new Error('expected admission failure')}catch(error){if(error.code!=='ENOSPC')throw error}fail=false; console.log(JSON.stringify({status:await box.status(),bodies:(await box.entries()).map(e=>e.body)}));crash=true;await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{replacement:true}});throw new Error('expected simulated exit');`;
+	const child = Bun.spawn([process.execPath, "--eval", script], {
+		env: { ...process.env, ...env },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const stdout = await new Response(child.stdout).text();
+	const stderr = await new Response(child.stderr).text();
+	expect(await child.exited, stderr).toBe(0);
+	expect(JSON.parse(stdout)).toMatchObject({
+		status: { pending: 200, evicted: 0 },
+		bodies: Array.from({ length: 200 }, (_, i) => ({ i })),
+	});
+	const recovered = new DurableOutbox("https://admission.example", { env });
+	expect(await recovered.status()).toMatchObject({ pending: 200, evicted: 1 });
+	expect((await recovered.entries()).at(-1)?.body).toEqual({ replacement: true });
+	expect(await recovered.status()).toMatchObject({ pending: 200, evicted: 1 });
+}, 60000);
+
 test("cross-process enqueue is serialized and dead stale locks recover", async () => {
 	const moduleUrl = new URL("../node.ts", import.meta.url).href;
 	const script = `import { DurableOutbox } from ${JSON.stringify(moduleUrl)}; const box = new DurableOutbox('https://org.example'); for(let i=0;i<8;i++) await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{pid:process.pid,i}});`;

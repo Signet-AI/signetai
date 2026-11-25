@@ -84,6 +84,7 @@ export interface OutboxStatus {
 	readonly lastDrop: { id: string; status: number; at: string } | null;
 }
 interface Metadata {
+	admitting: boolean;
 	evicted: number;
 	dropped: number;
 	lastDrop: OutboxStatus["lastDrop"];
@@ -161,7 +162,7 @@ export class DurableOutbox {
 	}
 	private async metadata(): Promise<Metadata> {
 		const text = await readPrivate(join(this.directory, ".status.json"));
-		if (!text) return { evicted: 0, dropped: 0, lastDrop: null, removing: [] };
+		if (!text) return { evicted: 0, dropped: 0, lastDrop: null, removing: [], admitting: false };
 		const value: unknown = JSON.parse(text);
 		if (
 			typeof value !== "object" ||
@@ -179,6 +180,8 @@ export class DurableOutbox {
 			!value.removing.every((id: unknown) => typeof id === "string" && /^[a-f0-9-]{36}$/.test(id))
 		)
 			throw new Error("Corrupt Signet outbox status");
+		if ("admitting" in value && typeof value.admitting !== "boolean")
+			throw new Error("Corrupt outbox admission marker");
 		let lastDrop: OutboxStatus["lastDrop"] = null;
 		if ("lastDrop" in value && value.lastDrop !== null) {
 			const drop = value.lastDrop;
@@ -194,16 +197,38 @@ export class DurableOutbox {
 				throw new Error("Corrupt Signet outbox drop");
 			lastDrop = { id: drop.id, status: drop.status, at: drop.at };
 		}
-		return { evicted: value.evicted, dropped: value.dropped, lastDrop, removing: value.removing };
+		return {
+			evicted: value.evicted,
+			dropped: value.dropped,
+			lastDrop,
+			removing: value.removing,
+			admitting: "admitting" in value && value.admitting === true,
+		};
 	}
 	private saveMetadata(meta: Metadata): Promise<void> {
 		return atomicPrivateWrite(join(this.directory, ".status.json"), JSON.stringify(meta));
 	}
 	private async recover(meta: Metadata): Promise<void> {
-		if (!meta.removing.length) return;
-		for (const id of meta.removing) await rm(this.file(id), { force: true });
-		meta.removing = [];
+		if (meta.removing.length) {
+			for (const id of meta.removing) await rm(this.file(id), { force: true });
+			meta.removing = [];
+			await this.saveMetadata(meta);
+		}
+		if (!meta.admitting) return;
+		const items = await this.list();
+		let total = items.reduce((n, item) => n + item.bytes + ENTRY_UPDATE_RESERVE, 0);
+		const evictions: string[] = [];
+		while (items.length > MAX_ENTRIES || total > MAX_BYTES) {
+			const oldest = items.shift();
+			if (!oldest) break;
+			evictions.push(oldest.entry.id);
+			total -= oldest.bytes + ENTRY_UPDATE_RESERVE;
+		}
+		meta.admitting = false;
+		meta.evicted += evictions.length;
+		meta.removing = evictions;
 		await this.saveMetadata(meta);
+		await this.recover(meta);
 	}
 	private async list(): Promise<{ entry: OutboxEntry; bytes: number }[]> {
 		const files = await readdir(this.directory);
@@ -221,13 +246,8 @@ export class DurableOutbox {
 			(a, b) => a.entry.createdAt.localeCompare(b.entry.createdAt) || a.entry.id.localeCompare(b.entry.id),
 		);
 	}
-	private async remove(
-		meta: Metadata,
-		entry: OutboxEntry,
-		disposition: "delivered" | "evicted" | number,
-	): Promise<void> {
-		if (disposition === "evicted") meta.evicted++;
-		else if (typeof disposition === "number") {
+	private async remove(meta: Metadata, entry: OutboxEntry, disposition: "delivered" | number): Promise<void> {
+		if (typeof disposition === "number") {
 			meta.dropped++;
 			meta.lastDrop = { id: entry.id, status: disposition, at: new Date().toISOString() };
 		}
@@ -258,14 +278,13 @@ export class DurableOutbox {
 		const encoded = JSON.stringify(entry);
 		const bytes = Buffer.byteLength(encoded) + ENTRY_UPDATE_RESERVE;
 		if (bytes > MAX_BYTES) throw new RangeError("Outbox entry exceeds 64 MiB");
-		let total = items.reduce((n, item) => n + item.bytes + ENTRY_UPDATE_RESERVE, 0);
-		while (items.length >= MAX_ENTRIES || total + bytes > MAX_BYTES) {
-			const oldest = items.shift();
-			if (!oldest) break;
-			await this.remove(meta, oldest.entry, "evicted");
-			total -= oldest.bytes + ENTRY_UPDATE_RESERVE;
+		const total = items.reduce((n, item) => n + item.bytes + ENTRY_UPDATE_RESERVE, 0);
+		if (items.length >= MAX_ENTRIES || total + bytes > MAX_BYTES) {
+			meta.admitting = true;
+			await this.saveMetadata(meta);
 		}
 		await atomicPrivateWrite(this.file(entry.id), encoded);
+		await this.recover(meta);
 		return entry;
 	}
 	async enqueue(request: OutboxRequest, control: RequestControl = {}): Promise<OutboxEntry> {

@@ -50,7 +50,6 @@ const EXCLUDED = new Set([
 	"node_modules",
 	"dist",
 ]);
-const EXCLUDED_PATHS = new Set(["libs/sdk/src/generated/client.ts"]);
 const CATEGORIES = ["raw-sql", "swallowed-error", "unchecked-cast"] as const;
 type Category = (typeof CATEGORIES)[number];
 type Counts = Record<Category, number>;
@@ -83,7 +82,6 @@ function production(path: string): boolean {
 		/^(?:platform|surfaces|libs|integrations)\//.test(path) &&
 		/\.tsx?$/.test(path) &&
 		!/\.(?:test|bench|spec|d)\.tsx?$/.test(path) &&
-		!EXCLUDED_PATHS.has(path) &&
 		!path.split("/").some((part) => EXCLUDED.has(part))
 	);
 }

@@ -504,6 +504,22 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(sent, [])
         self.assertEqual(second.entries(), [entry])
 
+    def test_failed_replacement_admission_preserves_queued_evidence(self):
+        box = transport.DurableOutbox(self.url, env=self.env)
+        for i in range(200):
+            box.enqueue("POST", "/api/hooks/session-end", {"i": i})
+        original = os.replace
+        def full(source, destination):
+            if Path(destination).parent == box.directory and transport.re.fullmatch(r"[a-f0-9-]{36}\.json", Path(destination).name):
+                raise OSError(28, "No space left on device")
+            return original(source, destination)
+        with patch.object(os, "replace", full):
+            with self.assertRaises(OSError):
+                box.enqueue("POST", "/api/hooks/session-end", {"replacement": True})
+        self.assertEqual(box.status()["pending"], 200)
+        self.assertEqual(box.status()["evicted"], 0)
+        self.assertEqual([entry["body"] for entry in box.entries()], [{"i": i} for i in range(200)])
+
     def test_cross_process_registry_updates_do_not_overwrite(self):
         script = "from signet_transport import ConnectorRegistry; import sys; r=ConnectorRegistry(); r.set(sys.argv[1], {'url':'https://org.example'})"
         children = [subprocess.Popen([sys.executable, "-c", script, "h%s" % i], env={**os.environ, "HOME": self.home, "PYTHONPATH": str(Path(__file__).parent)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(6)]
