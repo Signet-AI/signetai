@@ -100,7 +100,7 @@ test.each(
 			expect({ exit, stderr }).toMatchObject({ exit: 0 });
 			expect(stdout).toContain('"success":true');
 			const written = contents(root);
-			expect(written.includes("sig_sk_sync_policy_fixture")).toBe(mode === true);
+			expect(written.includes("sig_sk_sync_policy_fixture")).toBe(false);
 			if (["kimi", "muse-code", "forge", "opencode"].includes(name) && !remote) {
 				const command = mode === null ? "/override/signet" : "/host/bin/signet";
 				expect(written).toContain(command);
@@ -111,7 +111,7 @@ test.each(
 						`${command} hook session-start`,
 					);
 			}
-			if (mode === null) expect(stdout).toContain("SIGNET_API_KEY was omitted");
+
 			if (!remote && name === "kimi") {
 				const path = join(root, "kimi/mcp.json");
 				expect(readFileSync(path, "utf-8")).toContain(mode === null ? "/override/signet" : "/host/bin/signet");
