@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
-import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { closeDbAccessor, type DbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "../llm";
 import { txIngestEnvelope } from "../transactions";
 import { registerReflectionRoutes } from "./reflection-routes";

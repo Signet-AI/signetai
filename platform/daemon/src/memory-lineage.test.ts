@@ -1,31 +1,33 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { get_encoding } from "tiktoken/init";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+
 async function closeTestDatabase(): Promise<void> {
 	await (await import("./db-owner-runtime")).closeDbOwner();
 	Bun.gc(true);
 	await closeDbAccessor();
 }
+
+import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 import {
-	MEMORY_PROJECTION_MAX_TOKENS,
 	ensureCanonicalManifest,
-	writeCompactionArtifact,
 	indexCanonicalTranscriptJsonl,
 	indexExternalMemoryArtifact,
+	MEMORY_PROJECTION_MAX_TOKENS,
 	purgeCanonicalNoiseSessions,
 	purgeCanonicalNoiseSessionsOnce,
 	reindexMemoryArtifacts,
 	renderMemoryProjection,
 	resetProjectionPurgeState,
 	updateManifest,
+	writeCompactionArtifact,
 	writeSummaryArtifact,
 } from "./memory-lineage";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 import { canonicalTranscriptPath } from "./transcript-jsonl";
-import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 
 const tok = get_encoding("cl100k_base");
 

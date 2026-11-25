@@ -1,4 +1,5 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
+
 class FixtureDatabase extends Database {
 	readonly statements = new Set<{ finalize(): void; readonly isFinalized?: boolean }>();
 	override prepare<Row, Params extends SQLQueryBindings | SQLQueryBindings[]>(sql: string, params?: Params) {
@@ -12,13 +13,14 @@ class FixtureDatabase extends Database {
 		super.close(strict);
 	}
 }
+
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
 	existsSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -26,43 +28,43 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDbOwnerClient } from "./db-owner-client";
-import { isFtsIndexIncomplete } from "./fts-index-state";
-import {
-	getEventLoopLiveness,
-	recordEventLoopHeartbeat,
-	establishEventLoopHeartbeatBaseline,
-	resetDbObservability,
-} from "./db-observability";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import {
-	DbSpacePreflightError,
-	MigrationBackupAdmissionError,
-	DbReadAdmissionCancelledError,
-	DbReadAdmissionRejectedError,
-	DbWriteQueueFullError,
-	MAX_READ_CONNECTIONS,
-	MAX_WRITE_QUEUE,
-	MIGRATION_BACKUP_CHUNK_BYTES,
+	backfillVecEmbeddings,
 	backupBeforeMigration,
 	backupBeforeMigrationAsync,
-	copyMigrationBackupChunks,
 	closeDbAccessor,
+	copyMigrationBackupChunks,
+	DbReadAdmissionCancelledError,
+	DbReadAdmissionRejectedError,
+	DbSpacePreflightError,
+	DbWriteQueueFullError,
 	getDbAccessor,
 	hasPendingMigrationBackup,
 	initDbAccessor,
 	initDbAccessorAsync,
+	isGeneratedMigrationBackupName,
+	MAX_READ_CONNECTIONS,
+	MAX_WRITE_QUEUE,
+	MIGRATION_BACKUP_CHUNK_BYTES,
+	MigrationBackupAdmissionError,
 	pruneMigrationBackupsAfterIntegrity,
 	readVecEmbeddingDimensions,
 	resolveCustomSqlitePath,
 	resolveSqliteAgentsDir,
 	resolveSqliteRuntimeConfig,
 	runWriteTxAsync,
-	vecEmbeddingsSchemaNeedsRepair,
-	isGeneratedMigrationBackupName,
-	backfillVecEmbeddings,
 	VEC_EMBEDDING_POST_READY_BUDGET_MS,
+	vecEmbeddingsSchemaNeedsRepair,
 } from "./db-accessor";
+import {
+	establishEventLoopHeartbeatBaseline,
+	getEventLoopLiveness,
+	recordEventLoopHeartbeat,
+	resetDbObservability,
+} from "./db-observability";
+import { createDbOwnerClient } from "./db-owner-client";
+import { isFtsIndexIncomplete } from "./fts-index-state";
 
 function tmpDbPath(): string {
 	const dir = join(tmpdir(), `signet-accessor-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -397,7 +399,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:392" },
+				{ siteToken: "db-accessor.test.ts:394" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -430,7 +432,7 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:427");
+			}, "db-accessor.test.ts:429");
 		} finally {
 			Date.now = realNow;
 		}
@@ -462,7 +464,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:457" },
+				{ siteToken: "db-accessor.test.ts:459" },
 			);
 		} finally {
 			Date.now = realNow;

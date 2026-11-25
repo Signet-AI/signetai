@@ -1,28 +1,29 @@
-import { authCookies } from "../auth/cookies";
-import { jsonBody } from "../request-body";
 import type { Context, Hono, MiddlewareHandler } from "hono";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import type { AuthConfig } from "../auth/config";
-import { hybridProxyDetected } from "../auth/middleware";
+import { authCookies } from "../auth/cookies";
 import { failure } from "../auth/identity-middleware";
+import { hybridProxyDetected } from "../auth/middleware";
+import { oidcCallback, oidcStart } from "../auth/oidc";
+import * as admin from "../auth/organization-admin";
+import * as operations from "../auth/organization-operations";
 import {
 	claimOrganization,
 	claimSchema,
 	IdentityError,
+	type OrganizationRow,
 	readOrganization,
 	refreshSession,
-	type OrganizationRow,
 } from "../auth/organization-store";
-import * as operations from "../auth/organization-operations";
-import * as admin from "../auth/organization-admin";
-import { oidcStart, oidcCallback } from "../auth/oidc";
+import { getRequestOrigin } from "../auth/request-network";
+import { jsonBody } from "../request-body";
 
 function browserResult(result: Awaited<ReturnType<typeof operations.passwordLogin>>) {
 	return { user: result.user, expiresAt: result.accessExpiresAt, csrf: result.csrf };
 }
 function origin(c: Context): string {
-	return new URL(c.req.url).origin;
+	return getRequestOrigin(c);
 }
 async function body(c: Context): Promise<unknown> {
 	return jsonBody(c)();

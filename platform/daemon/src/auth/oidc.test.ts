@@ -2,16 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateKeyPair, exportJWK, SignJWT } from "jose";
-import { initDbAccessor, closeDbAccessor } from "../db-accessor";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { oidcCallback, oidcStart } from "./oidc";
 import {
-	ensureSetupToken,
 	claimOrganization,
-	organizationWrite,
+	ensureSetupToken,
 	organizationQuery,
+	organizationWrite,
 	statement,
 } from "./organization-store";
-import { oidcStart, oidcCallback } from "./oidc";
+
 let dir = "";
 beforeEach(async () => {
 	dir = mkdtempSync(join(tmpdir(), "org-oidc-"));

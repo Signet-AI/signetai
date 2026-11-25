@@ -11,8 +11,8 @@ import { getOntologyContradiction, listOntologyContradictions } from "./ontology
 import { applyOntologyOperation } from "./ontology-proposals";
 import { createDreamingCapabilities } from "./pipeline/dreaming-capabilities";
 import { uninstallSkillNode } from "./pipeline/skill-graph";
-import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { createRateLimiter, pruneGenericEntities } from "./repair-actions";
+import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { purgeSourceOwnedRows } from "./source-purge";
 
 describe("persisted ontology contradictions", () => {

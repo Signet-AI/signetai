@@ -1,25 +1,25 @@
-import { jsonBody } from "../request-body";
-import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
-	GRAPHIQ_DEFAULT_INSTALL_DIR,
-	GRAPHIQ_SYNCED_VERSION,
 	disableGraphiqState,
 	enableGraphiqState,
+	GRAPHIQ_DEFAULT_INSTALL_DIR,
+	GRAPHIQ_SYNCED_VERSION,
 	readGraphiqState,
 	setGraphiqActiveProject,
 	updateGraphiqActiveProject,
 } from "@signet/core";
-import type { Hono } from "hono";
+import type { Context, Hono, Next } from "hono";
 import { requirePermission } from "../auth";
 import { getActiveGraphiqDbPath, getAgentsDir, resolveGraphiqBinary, runCommand } from "../graphiq.js";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "../plugins/bundled/graphiq.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
+import { jsonBody } from "../request-body";
 import { getInstallScriptPath } from "./graphiq-install-path.js";
 import { authConfig } from "./state.js";
 
 export function registerGraphiqRoutes(app: Hono): void {
-	const adminGuard = async (c: import("hono").Context, next: import("hono").Next) => {
+	const adminGuard = async (c: Context, next: Next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	};
 	app.use("/api/graphiq/*", adminGuard);

@@ -1,6 +1,6 @@
-import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { createHash } from "node:crypto";
 import type { DependencyType } from "@signet/core";
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { applyOntologyOperationBatchInTx } from "./ontology-proposals";
 import { recordAgentFeedbackInner } from "./session-memories";
@@ -610,7 +610,7 @@ export function recordPathFeedback(
 	};
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db: WriteDb) => {
 		recordAgentFeedbackInner(db, input.sessionKey, input.ratings, input.agentId);
 		const ts = new Date().toISOString();
 		const ids = Object.keys(input.ratings);

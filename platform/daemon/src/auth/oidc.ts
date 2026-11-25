@@ -1,11 +1,13 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { z } from "zod";
+import type { DbOwnerStatement } from "../db-owner-protocol";
 import { getSecret } from "../secrets";
+import { readInvite } from "./organization-operations";
 import {
 	auditStatement,
 	digest,
-	id,
 	IdentityError,
+	id,
 	issueSession,
 	matchesHash,
 	organizationQuery,
@@ -17,8 +19,6 @@ import {
 	statement,
 	type UserRow,
 } from "./organization-store";
-import { readInvite } from "./organization-operations";
-import type { DbOwnerStatement } from "../db-owner-protocol";
 
 const configSchema = z.object({
 	issuer: z.url(),

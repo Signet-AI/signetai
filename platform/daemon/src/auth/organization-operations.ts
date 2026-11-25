@@ -1,33 +1,33 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { DbOwnerStatement } from "../db-owner-protocol";
-import type { Principal } from "./principal";
 import { principalAccess, resolveWriteAgent } from "./agent-access";
-import { PERMISSIONS, type Permission } from "./types";
 import {
 	activeUser,
-	bindRequestedReadAgent,
 	auditStatement,
+	bindRequestedReadAgent,
 	createOrganizationKey,
 	digest,
-	id,
 	IdentityError,
+	id,
 	issueSession,
+	type OrganizationRow,
 	organizationQuery,
 	organizationWrite,
 	passwordHash,
 	personalAgentStatements,
 	readOrganization,
 	readUser,
+	type SessionRow,
 	secret,
 	sessionMaterial,
 	statement,
+	type UserRow,
 	userView,
 	verifyUserPassword,
-	type OrganizationRow,
-	type UserRow,
-	type SessionRow,
 } from "./organization-store";
+import type { Principal } from "./principal";
+import { PERMISSIONS, type Permission } from "./types";
 
 export const roleSchema = z.enum(["admin", "operator", "member", "readonly"]);
 const text = z.string().trim().min(1).max(128);

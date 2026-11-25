@@ -3,18 +3,18 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
-	statSync,
+	readFileSync,
 	statfsSync,
+	statSync,
 	truncateSync,
 	unlinkSync,
 } from "node:fs";
 import {
 	open as openAsync,
-	rm as rmAsync,
 	readFile as readFileAsync,
 	rename as renameAsync,
+	rm as rmAsync,
 	unlink as unlinkAsync,
 	writeFile as writeFileAsync,
 } from "node:fs/promises";
@@ -22,6 +22,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
+	activeVectorProjectionTable,
 	createMemoriesFts,
 	findSqliteVecExtension,
 	hasPendingMigrations,
@@ -31,30 +32,28 @@ import {
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIntegrity,
 	readMemoriesFtsSql,
-	refreshMemoriesFtsState,
 	recreateMemoriesFts,
 	recreateMemoriesFtsSchema,
+	refreshMemoriesFtsState,
 	resolveSqliteJournalConfig,
-	runMigrations,
 	resolveWorkspacePath,
-	activeVectorProjectionTable,
+	runMigrations,
 } from "@signet/core";
-import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
-import type { DbSpaceMetrics } from "./db-vacuum";
-
-import { ensureEmbeddingIndexState } from "./embedding-index-state";
-import { loadMemoryConfig } from "./memory-config";
+import { closeDbAccessorParticipants } from "./db-accessor-lifecycle";
 import {
+	type DbOperationOutcome,
+	type DbRuntimeMetrics,
 	getDbRuntimeMetrics,
 	recordDbOperation,
 	resetDbObservability,
 	setDbQueueTelemetry,
-	type DbOperationOutcome,
-	type DbRuntimeMetrics,
 } from "./db-observability";
-import { closeDbAccessorParticipants } from "./db-accessor-lifecycle";
-import { observeDbLatency } from "./runtime-pressure";
+import type { DbSpaceMetrics } from "./db-vacuum";
+import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
+import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { resetFtsIndexState, setFtsIndexIncomplete } from "./fts-index-state";
+import { loadMemoryConfig } from "./memory-config";
+import { observeDbLatency } from "./runtime-pressure";
 import {
 	beginSyncDbCall,
 	captureSyncDbCallSiteToken,

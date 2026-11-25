@@ -1,53 +1,52 @@
-import { auditAuthoredWriteInTx } from "./auth/audit-owner";
 import { createHash } from "node:crypto";
-import { attempt } from "@signet/core";
-import { normalizeSessionTranscript } from "./transcript-normalization";
-import { upsertThreadHead } from "./thread-heads";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { attempt, resolveWorkspaceLayout } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
-import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
-import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
-import { writeTranscriptAudit } from "./transcript-audit";
+import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { type DbAccessor, getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
+import {
+	dbOwnerCommitCompactionSummary,
+	dbOwnerWriteSessionTranscript,
+	getDbOwnerForAccessor,
+} from "./db-owner-runtime";
+import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
+import { logger } from "./logger";
+import { sanitizeFtsQuery } from "./memory-search";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
-import { txForgetMemory } from "./transactions";
-import { markDerivedMemoriesStaleForSourceInTx, linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
+import { normalizeSessionKey } from "./session-end-state";
 import {
 	redactTranscriptFileBatch,
 	removeTranscriptDeletionTemp,
 	type TranscriptFileCheckpoint,
 } from "./session-transcript-files";
-import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
-import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import type {
+	TranscriptBypass,
 	TranscriptCaptureInput,
 	TranscriptDeleteInput,
 	TranscriptDeleteResult,
 	TranscriptLifecycleInput,
 	TranscriptLifecycleResult,
-	TranscriptBypass,
 } from "./session-transcript-lifecycle";
+import { captureTranscriptOwned, type TranscriptCaptureAdmission } from "./session-transcript-lifecycle";
+import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
+import { upsertThreadHead } from "./thread-heads";
+import { txForgetMemory } from "./transactions";
+import { writeTranscriptAudit } from "./transcript-audit";
+import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
 import {
-	dbOwnerWriteSessionTranscript,
-	dbOwnerCommitCompactionSummary,
-	getDbOwnerForAccessor,
-} from "./db-owner-runtime";
-import { logger } from "./logger";
-import { normalizeSessionKey } from "./session-end-state";
-import { sanitizeFtsQuery } from "./memory-search";
-import {
-	type TranscriptIdentity,
-	type TranscriptSessionKeyClassification,
 	canonicalTranscriptPath,
-	transcriptPrefix,
 	digestTranscriptTurns,
 	legacyTranscriptTurns,
 	readCanonicalTranscriptSessionKeys,
 	sanitizeHarnessPath,
 	sessionSeqCacheKey,
+	type TranscriptIdentity,
+	type TranscriptSessionKeyClassification,
+	transcriptPrefix,
 	transcriptTextToTurns,
 } from "./transcript-jsonl";
+import { normalizeSessionTranscript } from "./transcript-normalization";
 
 interface EvidenceTurn {
 	readonly role: string;
@@ -139,7 +138,7 @@ export async function commitCompactionSummary(accessor: DbAccessor, input: Compa
 }
 
 export interface CompactionSummaryInput {
-	readonly author: import("./auth/audit-owner").WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionKey: string | null;
 	readonly harness: string;
@@ -390,7 +389,7 @@ export async function captureSessionTranscriptOwned(
 	db: ReadDb,
 	input: TranscriptCaptureInput,
 	basePath: string,
-): Promise<import("./session-transcript-lifecycle").TranscriptCaptureAdmission> {
+): Promise<TranscriptCaptureAdmission> {
 	if (input.kind === "promotion") {
 		const replacements = input.input.replacements
 			.filter((entry) => admitSessionTranscriptInDb(db, entry.identity))
@@ -973,7 +972,7 @@ export interface StoredTranscriptInfo {
 }
 
 export interface SessionTranscriptUpsertOptions {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 	readonly rawTranscript?: string;
 	readonly completedAt?: string;
 	readonly preserveExistingContent?: boolean;
@@ -1049,10 +1048,7 @@ function diagnoseCompletedMismatch(
 function tableExists(name: string): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb(
-			(db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name),
-			"db:transcript.table.exists",
-		);
+		return getDbAccessor().withReadDb((db: ReadDb) => tableExistsInDatabase(db, name), "db:transcript.table.exists");
 	} catch {
 		return false;
 	}
@@ -1061,7 +1057,7 @@ function tableExists(name: string): boolean {
 function sessionTranscriptsHasColumn(column: string): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === column);
 		}, "db:transcript.column.exists");
@@ -1209,7 +1205,7 @@ async function backfillDatabaseTranscripts(
 		let offset = 0;
 		while (true) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+			const rows = getDbAccessor().withReadDb((db: ReadDb) => {
 				const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
 					Record<string, unknown>
 				>;
@@ -1404,7 +1400,7 @@ function writeMarker(markerPath: string, agentId?: string): boolean {
 function hasUpdatedAt(): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === "updated_at");
 		}, "db:transcript.updated-at.exists");
@@ -1458,7 +1454,7 @@ export function upsertSessionTranscript(
 
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
+		return (accessor ?? getDbAccessor()).withWriteTx((db: WriteDb) => {
 			return (
 				writeSessionTranscriptRow(db, { sessionKey, transcript, harness, project, agentId, capturedAt, ...options }) ===
 				"written"
@@ -1660,7 +1656,7 @@ export function markSessionTranscriptCompleted(
 	if (sessionKey.trim().length === 0 || agentId.trim().length === 0) return false;
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
+		return (accessor ?? getDbAccessor()).withWriteTx((db: WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
 		}, "db:transcript.row.complete");
@@ -1692,7 +1688,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 	const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT session_key, agent_id, content, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
@@ -1812,7 +1808,7 @@ export function getSessionTranscriptContent(
 	const placeholders = aliases.map(() => "?").join(", ");
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT content FROM session_transcripts
@@ -1845,7 +1841,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 	const lastActivity = hasUpdatedAt() ? "updated_at" : "created_at";
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const rows = db
 				.prepare(
 					`SELECT session_key, agent_id, harness, project, content, ${lastActivity} AS last_activity
@@ -1900,7 +1896,7 @@ export function searchTranscriptFallback(params: {
 		const keyPredicates = [`st.session_key IN (${placeholders})`];
 		if (hasSessionId) keyPredicates.push(`st.session_id IN (${placeholders})`);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: ReadDb) => {
 			const args: unknown[] = [
 				params.agentId,
 				...aliases,
@@ -1945,7 +1941,7 @@ export function searchTranscriptFallback(params: {
 				try {
 					const rows: TranscriptRow[] =
 						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-						getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+						getDbAccessor().withReadDb((db: ReadDb) => {
 							const parts = [
 								`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
 								`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
@@ -2009,7 +2005,7 @@ export function searchTranscriptFallback(params: {
 	try {
 		const rows: TranscriptRow[] =
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+			getDbAccessor().withReadDb((db: ReadDb) => {
 				const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
 				const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
 				const parts = [

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { buildAgentMessageRow, publishAgentMessage, type CreateAgentMessageInput } from "../cross-agent";
+import { buildAgentMessageRow, type CreateAgentMessageInput, publishAgentMessage } from "../cross-agent";
+import { AgentMessageCapacityError, agentMessageWriteStatements } from "../cross-agent-message-owner";
 import { closeDbAccessor, getDbAccessorPath } from "../db-accessor";
-import { agentMessageWriteStatements, AgentMessageCapacityError } from "../cross-agent-message-owner";
 export async function closeCrossAgentFixture() {
 	await (await import("../db-owner-runtime")).closeDbOwner();
 	await closeDbAccessor();

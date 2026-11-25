@@ -1,15 +1,12 @@
-import { resolveMutationActor } from "./utils";
-import { jsonBody } from "../request-body";
 import { redactCredentials } from "@signet/core";
 import type { Hono } from "hono";
 import { etag } from "hono/etag";
-
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
 import { getDbAccessor, getDbAccessorPath } from "../db-accessor";
 import { getDbOwner } from "../db-owner-runtime";
-import { expandKnowledgeGraphViaOwner } from "../knowledge-expansion";
 import { walkImpact } from "../graph-impact";
+import { expandKnowledgeGraphViaOwner } from "../knowledge-expansion";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsByName,
@@ -26,20 +23,21 @@ import {
 	listEntityClaims,
 	listEntityGroups,
 	listKnowledgeEntities,
-	resolveNamedEntity,
 	MAX_CONSTELLATION_ATTRIBUTES,
+	resolveNamedEntity,
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
-import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { loadMemoryConfig } from "../memory-config";
-import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
+import { applyOntologyOperation, OntologyProposalError } from "../ontology-proposals";
+import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import {
 	getTraversalStatus,
 	resolveFocalEntitiesViaOwner,
 	traverseKnowledgeGraphViaOwner,
 } from "../pipeline/graph-traversal";
+import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
-import { resolveScopedAgentId, resolveScopedProject } from "./utils";
+import { resolveMutationActor, resolveScopedAgentId, resolveScopedProject } from "./utils";
 
 export function registerKnowledgeRoutes(app: Hono): void {
 	const parseNavigationLimit = (value: string | undefined, fallback: number, max: number): number => {
@@ -373,7 +371,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:358" },
+			{ siteToken: "routes/knowledge-routes.ts:356" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -548,7 +546,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:544" },
+			{ siteToken: "routes/knowledge-routes.ts:542" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -637,7 +635,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: rows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:561" },
+			{ siteToken: "routes/knowledge-routes.ts:559" },
 		);
 	});
 
@@ -662,7 +660,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:663" },
+			{ siteToken: "routes/knowledge-routes.ts:661" },
 		);
 		return c.json(result);
 	});

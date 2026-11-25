@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
 import * as nodeCrypto from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import * as ownerRuntime from "../db-owner-runtime";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
+import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
 import { checkPermission } from "./policy";
 
 let tempDir = "";

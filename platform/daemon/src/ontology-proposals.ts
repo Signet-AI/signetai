@@ -11,9 +11,9 @@ import {
 	type OntologyProposal,
 	type OntologyProposalStatus,
 } from "@signet/core";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
-import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { requireDependencyReason } from "./dependency-history";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { classifyEntityQuality } from "./entity-quality";

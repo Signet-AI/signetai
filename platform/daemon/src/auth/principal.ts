@@ -1,6 +1,6 @@
+import { PERMISSION_MATRIX } from "./policy";
 import type { Permission, TokenClaims, TokenRole } from "./types";
 import { PERMISSIONS } from "./types";
-import { PERMISSION_MATRIX } from "./policy";
 
 export type PrincipalKind = "local" | "user" | "legacy";
 export interface Principal {

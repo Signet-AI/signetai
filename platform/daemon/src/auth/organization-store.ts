@@ -1,11 +1,11 @@
-import { createHash, randomBytes, timingSafeEqual, pbkdf2, scrypt } from "node:crypto";
+import { createHash, pbkdf2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { appendRefreshRetry, replayRefreshRetry, RefreshRetryCapacityError } from "./refresh-retry";
-import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
+import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "../db-owner-runtime";
+import { type AgentRecord, bindPrincipalAccess, principalAccess } from "./agent-access";
 import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
-import { bindPrincipalAccess, principalAccess, type AgentRecord } from "./agent-access";
+import { appendRefreshRetry, RefreshRetryCapacityError, replayRefreshRetry } from "./refresh-retry";
 import type { Permission, TokenRole } from "./types";
 
 export const statement = ownerStatement;
@@ -404,6 +404,13 @@ export async function verifySession(
 	if (session.access_expires_at <= new Date().toISOString()) throw new IdentityError(401, "expired");
 	const user = await activeUser(session.user_id, session.device_id);
 	if (requireCsrf && (!csrf || !matchesHash(csrf, session.csrf_hash))) throw new IdentityError(403, "csrf");
+	if (session.refresh_retry_json !== "[]")
+		await organizationWrite([
+			statement(
+				"UPDATE auth_sessions SET refresh_retry_json = '[]' WHERE id = ? AND token_hash = ? AND revoked_at IS NULL",
+				[session.id, session.token_hash],
+			),
+		]);
 	const now = Date.now();
 	let currentSession = session;
 	if (!session.last_used_at || Date.parse(session.last_used_at) <= now - 60_000) {
@@ -480,7 +487,7 @@ async function rotateSession(
 	const refreshExpiresAt = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
 	let retryState: string;
 	try {
-		retryState = appendRefreshRetry(row.refresh_retry_json, token, row.id, row.refresh_hash, {
+		retryState = appendRefreshRetry("[]", token, row.id, row.refresh_hash, {
 			accessToken: `sig_ses_${row.id}_${access}`,
 			refreshToken: `sig_ref_${row.id}_${refresh}`,
 			accessExpiresAt,

@@ -1,27 +1,27 @@
-import { resolveOperationalActor } from "./utils";
-import { jsonBody } from "../request-body";
-import type { Hono, Context } from "hono";
+import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { getDbAccessor } from "../db-accessor.js";
 import {
 	DEFAULT_QUEUE_THRESHOLDS,
-	type QueueCounts,
-	type QueueThresholds,
 	type getOldestDeadJob,
 	getQueueDiagnosticsSnapshot,
 	invalidateQueueDiagnosticsCache,
+	type QueueCounts,
+	type QueueThresholds,
 } from "../diagnostics-queue.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import {
-	type RepairContext,
-	type RepairResult,
 	cancelObsoleteJobs,
 	createRateLimiter,
 	pruneTerminalJobs,
+	type RepairContext,
+	type RepairResult,
 	requeueDeadJobs,
 } from "../repair-actions.js";
+import { jsonBody } from "../request-body";
 import { authConfig as daemonAuthConfig, repairLimiter } from "./state.js";
+import { resolveOperationalActor } from "./utils";
 
 function resolveAgentsDir(): string {
 	return process.env.SIGNET_AGENTS_DIR ?? process.env.AGENTS_DIR ?? `${process.env.HOME ?? "/tmp"}/.agents`;
@@ -155,7 +155,7 @@ export function registerQueueDiagnosticsRoutes(
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const response = resolveAccessor().withReadDb(
-				(db: import("../db-accessor").ReadDb) => buildQueueDiagnosticsResponse(db),
+				(db: ReadDb) => buildQueueDiagnosticsResponse(db),
 				"routes/queue-diagnostics.ts:157",
 			);
 			return c.json(response);

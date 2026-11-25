@@ -1,9 +1,9 @@
-import { jsonBody } from "../request-body";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
+import { jsonBody } from "../request-body";
 import { authConfig } from "./state.js";
 
 export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {

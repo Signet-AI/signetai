@@ -1,22 +1,22 @@
-import { SYSTEM_AUTHOR } from "./auth/audit-owner";
-import { constants } from "node:fs";
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { join } from "node:path";
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
+import { signetExportV1Adapter } from "./transcript-import-adapter";
 import {
 	appendTranscriptChunk,
 	readTranscriptBytes,
 	sealTranscriptUpload,
 	TRANSCRIPT_UPLOAD_BYTES,
 } from "./transcript-import-bytes";
+import { buildCompletedTranscriptCommit, canonicalTranscriptLine } from "./transcript-import-commit";
 import {
+	iterateContainedTranscriptDirectory,
 	openContainedTranscriptFile,
 	removeContainedTranscriptPath,
-	iterateContainedTranscriptDirectory,
+	resolveManagedTranscriptPath,
 } from "./transcript-import-safe-fs";
-import { resolveManagedTranscriptPath } from "./transcript-import-safe-fs";
-import { buildCompletedTranscriptCommit, canonicalTranscriptLine } from "./transcript-import-commit";
-import { signetExportV1Adapter } from "./transcript-import-adapter";
 export async function migrateTranscriptImportFile(
 	root: string,
 	agentId: string,

@@ -1,5 +1,6 @@
 import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
+import type { WriteAuthor } from "./auth/audit-owner";
 import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, normalizeImportedFile } from "./import-normalizer";
 import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
@@ -34,7 +35,7 @@ export type DocumentImportStatus =
 	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
 
 export interface DocumentImportInput {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 	readonly fileName: string;
 	readonly bytes: Uint8Array;
 	readonly contentType?: string;

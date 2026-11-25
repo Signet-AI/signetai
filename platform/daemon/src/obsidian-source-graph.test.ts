@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	buildObsidianMarkdownPathIndex,
-	isObsidianSourceFileIndexedInTx,
 	indexObsidianSourceStructure,
+	isObsidianSourceFileIndexedInTx,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
 } from "./obsidian-source-graph";

@@ -1,5 +1,5 @@
-import { jsonBody } from "../request-body";
 import type { Context, Hono } from "hono";
+import { z } from "zod";
 import { requirePermission } from "../auth";
 import {
 	BITWARDEN_MANAGED_FOLDER_SECRET,
@@ -9,13 +9,12 @@ import {
 	migrateLocalSecretsToBitwarden,
 } from "../bitwarden.js";
 import { logger } from "../logger.js";
-import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
+import { importOnePasswordSecrets, listOnePasswordVaults, ONEPASSWORD_SERVICE_ACCOUNT_SECRET } from "../onepassword.js";
 import { recordPluginAuditEvent } from "../plugins/audit.js";
-import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
+import { getDefaultPluginHost, SIGNET_SECRETS_PLUGIN_ID } from "../plugins/index.js";
+import { jsonBody } from "../request-body";
 import {
-	SecretExecQueueFullError,
-	SecretKeyringError,
 	deleteLocalSecretForMigration,
 	deleteSecret,
 	deleteSecretFromActiveProvider,
@@ -28,6 +27,8 @@ import {
 	listSecrets,
 	normalizeSecretExecTimeoutMs,
 	putSecret,
+	SecretExecQueueFullError,
+	SecretKeyringError,
 	setActiveSecretProvider,
 	startSecretExecJob,
 } from "../secrets.js";
@@ -55,12 +56,11 @@ function parseOptionalBoolean(value: unknown): boolean | undefined {
 }
 
 async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.text();
-	if (!raw.trim()) return {};
 	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-		return parsed as Record<string, unknown>;
+		const value: unknown = await jsonBody(c)();
+		return typeof value === "object" && value !== null && !Array.isArray(value)
+			? z.record(z.string(), z.unknown()).parse(value)
+			: null;
 	} catch {
 		return null;
 	}

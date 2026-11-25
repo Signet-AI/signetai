@@ -1,20 +1,17 @@
-import { jsonBody } from "../request-body";
-import { execFileHidden as execFile } from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
-	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-	SOURCE_CHUNK_SOURCE_TYPE,
-	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
 	addNotionSource,
 	addObsidianSource,
 	addWebSource,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
+	execFileHidden as execFile,
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	loadSourcesConfig,
 	markSourceIndexed,
 	normalizePublicWebUrl,
@@ -24,13 +21,15 @@ import {
 	removeSourceIfGeneration,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
+	type SignetSourceEntry,
+	SOURCE_CHUNK_SOURCE_TYPE,
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type Permission, requirePermission } from "../auth";
 import { getPeerAddress } from "../auth/middleware";
-import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
 import type { DbOwnerParameter } from "../db-owner-protocol";
+import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import { type ImportExtractionOutcome, readImportedSourceOutcome } from "../imported-source-outcome";
 import { logger } from "../logger";
@@ -42,12 +41,15 @@ import {
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
-
-import { getActiveTelemetry } from "../telemetry";
-import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
-import { authConfig } from "./state.js";
+import { jsonBody } from "../request-body";
 import {
-	type SourceIndexJob,
+	beginSourceDeletion,
+	beginSourceMutation,
+	isSourceDeletionInFlight,
+	SOURCE_DELETION_IN_PROGRESS_ERROR,
+	SOURCE_OPERATION_IN_PROGRESS_ERROR,
+} from "../source-deletion-lock";
+import {
 	beginSourceIndexJob,
 	cancelSourceIndexJob,
 	clearSourceIndexInFlight,
@@ -62,6 +64,7 @@ import {
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	pauseSourceIndexJob,
+	type SourceIndexJob,
 	trackSourceIndexRun,
 	updateSourceIndexJobProgress,
 	waitForSourceIndexRuns,
@@ -79,15 +82,11 @@ import {
 	trackSourceLifecycleWrite,
 } from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
-import {
-	beginSourceDeletion,
-	beginSourceMutation,
-	isSourceDeletionInFlight,
-	SOURCE_DELETION_IN_PROGRESS_ERROR,
-	SOURCE_OPERATION_IN_PROGRESS_ERROR,
-} from "../source-deletion-lock";
-import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
 import { purgeSourceOwnedRows } from "../source-purge";
+import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
+import { getActiveTelemetry } from "../telemetry";
+import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
+import { authConfig } from "./state.js";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;

@@ -1,15 +1,14 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import type { Context } from "hono";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
-import { resolveScopedAgentId } from "./utils";
 import { getPeerAddress } from "../auth/middleware";
 import { type DocumentImportStatus, importDocument } from "../document-import-service";
-import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_FILE_BYTES } from "../import-normalizer";
-import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
+import { type DurableImportAdmission, ImportAdmissionConflictError } from "../import-inbox";
+import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILES } from "../import-normalizer";
 import { isWorkspacePrivatePath } from "../workspace-private-paths";
 import { AGENTS_DIR, authConfig, getCurrentAgentsDir } from "./state.js";
+import { resolveScopedAgentId } from "./utils";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;

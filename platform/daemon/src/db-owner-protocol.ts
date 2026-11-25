@@ -1,5 +1,14 @@
 import type { AgentRemovalInput } from "./agent-removal";
-import type { MemoryHeadCommitInput } from "./memory-head";
+import type { WriteAuthor } from "./auth/audit-owner";
+import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
+import type { ReflectionAnswerInput } from "./reflection-owner";
+import type {
+	TranscriptCaptureInput,
+	TranscriptDeleteInput,
+	TranscriptLifecycleInput,
+} from "./session-transcript-lifecycle";
+import type { CompactionSummaryInput, SessionTranscriptWriteInput } from "./session-transcripts";
+import type { InventoryRecord, TranscriptCheckpoint } from "./transcript-import-scan";
 
 export type DbOwnerLane = "read" | "write" | "maintenance" | "verify";
 export type DbOwnerWorkloadClass = "foreground" | "maintenance";
@@ -162,7 +171,7 @@ export interface DbOwnerNativeMemoryIndex {
 }
 
 export interface DbOwnerSourceArtifactFields {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;
@@ -200,8 +209,8 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
-import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 import type { EpisodicSourceKind } from "./episodic-sources";
+import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 
 export interface DbOwnerDreamingEvidenceCoverageCursor {
 	readonly capturedAt: string;
@@ -325,7 +334,7 @@ export type DbOwnerDreamingEvidenceCoverageResult =
 	  };
 
 export interface DbOwnerTranscriptBulkCommit {
-	readonly author: import("./auth/audit-owner").WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly jobId: string;
 	readonly generation: number;
@@ -335,14 +344,14 @@ export interface DbOwnerTranscriptBulkCommit {
 	readonly commits: readonly CompletedTranscriptCommit[];
 	readonly inventory?: {
 		readonly fileId: string;
-		readonly records: readonly import("./transcript-import-scan").InventoryRecord[];
+		readonly records: readonly InventoryRecord[];
 		readonly previousByteOffset: number;
-		readonly checkpoint: import("./transcript-import-scan").TranscriptCheckpoint;
+		readonly checkpoint: TranscriptCheckpoint;
 		readonly complete: boolean;
 	};
 }
 export type DbOwnerRequest =
-	| { readonly kind: "memory_head"; readonly request: import("./memory-head").MemoryHeadRequest }
+	| { readonly kind: "memory_head"; readonly request: MemoryHeadRequest }
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
@@ -366,11 +375,11 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
-	| { readonly kind: "reflection_answer"; readonly input: import("./reflection-owner").ReflectionAnswerInput }
+	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
 	| {
 			readonly kind: "organization_memory_purge";
 			readonly userId: string;
-			readonly author: import("./auth/audit-owner").WriteAuthor;
+			readonly author: WriteAuthor;
 	  }
 	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
 	| { readonly kind: "source_native_memory_index"; readonly input: DbOwnerNativeMemoryIndex }
@@ -380,25 +389,25 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_evidence_eligibility"; readonly input: DbOwnerSourceEvidenceEligibility }
 	| {
 			readonly kind: "session_transcript_lifecycle";
-			readonly input: import("./session-transcript-lifecycle").TranscriptLifecycleInput;
+			readonly input: TranscriptLifecycleInput;
 	  }
 	| {
 			readonly kind: "session_transcript_capture";
-			readonly input: import("./session-transcript-lifecycle").TranscriptCaptureInput;
+			readonly input: TranscriptCaptureInput;
 	  }
 	| {
 			readonly kind: "session_transcript_delete";
-			readonly input: import("./session-transcript-lifecycle").TranscriptDeleteInput;
+			readonly input: TranscriptDeleteInput;
 	  }
 	| { readonly kind: "dreaming_evidence_coverage"; readonly input: DbOwnerDreamingEvidenceCoverage }
 	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
 	| {
 			readonly kind: "session_transcript_write";
-			readonly input: import("./session-transcripts").SessionTranscriptWriteInput;
+			readonly input: SessionTranscriptWriteInput;
 	  }
 	| {
 			readonly kind: "session_compaction_summary";
-			readonly input: import("./session-transcripts").CompactionSummaryInput;
+			readonly input: CompactionSummaryInput;
 	  }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }

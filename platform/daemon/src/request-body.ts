@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+
 declare module "hono" {
 	interface ContextVariableMap {
 		parsedJsonBody: unknown;
@@ -13,22 +14,32 @@ export class JsonBodyError extends Error {
 		super(reason);
 	}
 }
+export const RAW_BODY_ROUTES = [
+	{ method: "PUT", path: "/api/sources/imports/:jobId/files/:fileId" },
+	{ method: "PATCH", path: "/api/sources/imports/:jobId/files/:fileId" },
+	{ method: "POST", path: "/api/sources/import", contentType: "multipart/form-data" },
+	{ method: "ALL", path: "/mcp" },
+] as const;
 export function streamedRequestBody(c: Context): boolean {
-	return (
-		(c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)) ||
-		(c.req.method === "POST" &&
-			c.req.path === "/api/sources/import" &&
-			c.req.header("content-type")?.split(";")[0]?.trim().toLowerCase() === "multipart/form-data") ||
-		c.req.path === "/mcp"
+	return RAW_BODY_ROUTES.some(
+		(route) =>
+			(route.method === "ALL" || route.method === c.req.method) &&
+			route.path.split("/").length === c.req.path.split("/").length &&
+			route.path
+				.split("/")
+				.every((part, i) =>
+					part.startsWith(":") ? Boolean(c.req.path.split("/")[i]) : part === c.req.path.split("/")[i],
+				) &&
+			(!("contentType" in route) ||
+				route.contentType === c.req.header("content-type")?.split(";")[0]?.trim().toLowerCase()),
 	);
 }
 export async function prepareJsonBody(c: Context): Promise<void> {
 	if (c.get("jsonBodyParsed") || streamedRequestBody(c) || !["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method))
 		return;
 	const text = await c.req.text();
-	const api = c.req.path.startsWith("/api/") || c.req.path.startsWith("/memory/");
 	const json = c.req.header("content-type")?.split(";")[0]?.trim().toLowerCase() === "application/json";
-	if (text.length && api && !json) throw new JsonBodyError(415, "unsupported_media_type");
+	if (text.length && !json) throw new JsonBodyError(415, "unsupported_media_type");
 	if (!json && text.length) return;
 	let parsed: unknown = {};
 	if (text.length) {

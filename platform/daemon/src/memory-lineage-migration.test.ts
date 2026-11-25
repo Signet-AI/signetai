@@ -2,11 +2,13 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+
 async function closeTestDatabase(): Promise<void> {
 	await (await import("./db-owner-runtime")).closeDbOwner();
 	Bun.gc(true);
 	await closeDbAccessor();
 }
+
 import {
 	ensureCanonicalManifest,
 	reindexMemoryArtifacts,

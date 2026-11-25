@@ -1,7 +1,4 @@
-import { reportReadResult } from "../request-read";
-import { jsonBody } from "../request-body";
 import { createHash, randomUUID } from "node:crypto";
-import { auditAuthoredWriteInTx } from "../auth/audit-owner";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,17 +12,18 @@ import type { Context, Hono, MiddlewareHandler } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
+import { auditAuthoredWriteInTx } from "../auth/audit-owner";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
+import { normalizeAndHashContent } from "../content-normalization";
+import { getDatabaseIntegrityStatus } from "../database-integrity";
+import { getDbAccessor, prepareTypedStatement, type ReadDb, runWriteTxAsync, type WriteDb } from "../db-accessor";
+import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
-import { dbOwnerQuery } from "../db-owner-runtime";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
-import { normalizeAndHashContent } from "../content-normalization";
-import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { dbOwnerQuery } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
-import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { stagingCoverage } from "../embedding-index-migration";
 import {
 	isActiveEmbeddingConfig,
@@ -35,30 +33,32 @@ import {
 import type { EmbeddingRole } from "../embedding-profile";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
-import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { type EmbeddingConfig, loadMemoryConfig, type ResolvedMemoryConfig } from "../memory-config";
 import {
-	type RecallParams,
-	type RecallResponse,
 	buildAgentScopeClause,
 	currentMemorySql,
 	hybridRecall,
+	type RecallParams,
+	type RecallResponse,
 } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
-import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
+import { normalizePipelineCause, type PipelineCauseFamily, recordPipelineOperation } from "../pipeline-operation";
 import {
 	effectiveRecallLimit,
 	normalizeRecallSurface,
 	recordRecallAttempt,
 	recordRecallOutcome,
 } from "../recall-telemetry";
+import { jsonBody } from "../request-body";
+import { reportReadResult } from "../request-read";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { writeSessionTranscriptRow } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
-import { txInsertMemoryTemporalEdges, type MemoryTemporalEdgeInput } from "../temporal-edges";
+import { type MemoryTemporalEdgeInput, txInsertMemoryTemporalEdges } from "../temporal-edges";
 import { normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import {
 	type SupersedeMemoryTxStatus,
@@ -69,33 +69,33 @@ import {
 	txSupersedeMemory,
 } from "../transactions";
 import {
-	type ProjectionNode,
 	cacheProjection,
 	computeProjection,
 	computeProjectionForQuery,
 	getCachedProjection,
+	type ProjectionNode,
 } from "../umap-projection";
 import {
 	AGENTS_DIR,
-	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
 	authForgetLimiter,
 	authModifyLimiter,
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
+	PROJECTION_ERROR_TTL_MS,
 	projectionErrors,
 	projectionInFlight,
 } from "./state";
 
 import {
-	type FilterParams,
-	type ForgetCandidatesRequest,
 	blobToVector,
 	buildForgetConfirmToken,
 	buildWhere,
 	checkEmbeddingProvider,
 	chunkBySentence,
+	type FilterParams,
+	type ForgetCandidatesRequest,
 	inferType,
 	loadForgetCandidates,
 	loadForgetCandidatesByIds,

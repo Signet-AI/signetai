@@ -1,8 +1,8 @@
-import type { Principal } from "./principal";
-import { auditStatement, ensureSetupToken, organizationWrite, readOrganization, statement } from "./organization-store";
-import { logger } from "../logger";
-import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
+import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
+import { logger } from "../logger";
+import { auditStatement, ensureSetupToken, organizationWrite, readOrganization, statement } from "./organization-store";
+import type { Principal } from "./principal";
 
 const queue: DbOwnerStatement[] = [];
 const controllers = new Set<AbortController>();

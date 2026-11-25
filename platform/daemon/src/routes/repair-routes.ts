@@ -1,32 +1,29 @@
-import { resolveOperationalActor } from "./utils";
-import { jsonBody } from "../request-body";
-import type { Context, Hono } from "hono";
 import { spawnHidden } from "@signet/core";
+import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type AuthConfig, requirePermission } from "../auth";
+import type { ReadDb, WriteDb } from "../db-accessor";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { fetchEmbedding } from "../embedding-fetch.js";
 import { linkMemoryToEntities, previewMemoryEntityLinks } from "../inline-entity-linker.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
 import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
-import { resolveScopedAgent } from "../request-scope";
-import { openBoundedSse } from "../sse-stream.js";
 import {
-	type RepairContext,
-	type RepairResult,
 	checkFtsConsistency,
 	cleanOrphanedEmbeddings,
 	deduplicateMemories,
 	findDeadMemories,
 	forgetDeadMemories,
+	type GenericEntityCursor,
 	getDedupStats,
 	getEmbeddingGapStats,
 	integrityCheck,
 	pruneChunkGroupEntities,
 	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
-	type GenericEntityCursor,
+	type RepairContext,
+	type RepairResult,
 	rebuildDerivedIndexes,
 	reembedMissingMemories,
 	reembedModelMigration,
@@ -34,8 +31,12 @@ import {
 	requeueDeadJobs,
 	resyncVectorIndex,
 } from "../repair-actions.js";
+import { jsonBody } from "../request-body";
+import { resolveScopedAgent } from "../request-scope";
+import { openBoundedSse } from "../sse-stream.js";
 import { which } from "../which.js";
 import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
+import { resolveOperationalActor } from "./utils";
 
 function resolveRepairContext(c: Context): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "manual repair";
@@ -449,7 +450,7 @@ export function registerRepairRoutes(
 		const accessor = getDbAccessor();
 		return c.json(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+			accessor.withReadDb((db: ReadDb) => {
 				const tableExists = db
 					.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`)
 					.get();
@@ -500,7 +501,7 @@ export function registerRepairRoutes(
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		const result = getDbAccessor().withWriteTx(
-			(db: import("../db-accessor").WriteDb) => clusterEntities(db, scoped.agentId),
+			(db: WriteDb) => clusterEntities(db, scoped.agentId),
 			"db:repair.cluster-entities.write",
 		);
 		return c.json(result);
@@ -532,7 +533,7 @@ export function registerRepairRoutes(
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const unlinked = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				db
 					.prepare(
 						`SELECT id, content FROM memories
@@ -562,7 +563,7 @@ export function registerRepairRoutes(
 
 		if (dryRun) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const preview = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+			const preview = accessor.withReadDb((db: ReadDb) => {
 				let linked = 0;
 				let entities = 0;
 				let aspects = 0;
@@ -614,7 +615,7 @@ export function registerRepairRoutes(
 		for (const mem of unlinked) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			const result = accessor.withWriteTx(
-				(db: import("../db-accessor").WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, scoped.agentId),
+				(db: WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, scoped.agentId),
 				"db:repair.relink-entities.write",
 			);
 			linked += result.linked;
@@ -625,7 +626,7 @@ export function registerRepairRoutes(
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				(
 					db
 						.prepare(
@@ -667,7 +668,7 @@ export function registerRepairRoutes(
 		const accessor = getDbAccessor();
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const unhinted = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				db
 					.prepare(
 						`SELECT m.id, m.content FROM memories m
@@ -692,7 +693,7 @@ export function registerRepairRoutes(
 		const { enqueueHintsJob: enqueue } = await import("../pipeline/prospective-index.js");
 		let enqueued = 0;
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+		accessor.withWriteTx((db: WriteDb) => {
 			for (const mem of unhinted) {
 				enqueue(db, mem.id, mem.content);
 				enqueued++;
@@ -701,7 +702,7 @@ export function registerRepairRoutes(
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+			(db: ReadDb) =>
 				(
 					db
 						.prepare(
@@ -742,7 +743,7 @@ export function registerRepairRoutes(
 		}
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const dead = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
+			(db: ReadDb) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
 			"db:repair.dead-memories.read",
 		);
 		return c.json({ count: dead.length, memories: dead });

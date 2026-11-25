@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeCrossAgentFixture, createAgentMessage } from "./__tests__/cross-agent-fixture";
 import { acknowledgeAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "./cross-agent";
-import { createAgentMessage, closeCrossAgentFixture } from "./__tests__/cross-agent-fixture";
 import {
-	WAKE_RATE_LIMIT_PER_HOUR,
 	activeWakeWaiterCount,
 	claimDirectMessageWakes,
 	consumeSessionEndWake,
@@ -13,6 +12,7 @@ import {
 	resetDirectMessageWakeStateForTest,
 	setWakeHistoryCapForTest,
 	setWakeWaiterCapForTest,
+	WAKE_RATE_LIMIT_PER_HOUR,
 	waitForDirectMessageWake,
 } from "./cross-agent-wake";
 import { initDbAccessor } from "./db-accessor";

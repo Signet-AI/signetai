@@ -1,35 +1,37 @@
-import { authCookies } from "./cookies";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
+import { hasDbAccessor } from "../db-accessor";
+import { JsonBodyError, prepareJsonBody } from "../request-body";
+import {
+	checkPrincipalProject,
+	organizationReadRequest,
+	principalAccess,
+	reconcileAgentSources,
+	resolveWriteAgent,
+} from "./agent-access";
+import { isSignetApiKey, verifyApiKey } from "./api-keys";
 import type { AuthConfig } from "./config";
+import { authCookies } from "./cookies";
 import { createAuthMiddleware, isAuthOpenPath, isLoopbackRequest } from "./middleware";
-import { verifyApiKey, isSignetApiKey } from "./api-keys";
-import { legacyPrincipal, localPrincipal, rolePermissions, type Principal } from "./principal";
 import {
 	activeUser,
 	bindAccess,
+	bindHookSpeaker,
 	bindRequestedReadAgent,
 	IdentityError,
+	type OrganizationRow,
 	readBoundKey,
 	readOrganization,
 	renewConnectorKey,
 	userPrincipal,
 	verifySession,
-	bindHookSpeaker,
-	type OrganizationRow,
 } from "./organization-store";
+import { acceptRequestOrigin } from "./origins";
+import { legacyPrincipal, localPrincipal, type Principal, rolePermissions } from "./principal";
 import { AuthRateLimiter } from "./rate-limiter";
-import { getPeerAddress } from "./middleware";
+import { getClientAddress, resolveRequestNetwork } from "./request-network";
 import { PERMISSIONS } from "./types";
-import { prepareJsonBody, JsonBodyError } from "../request-body";
-import {
-	reconcileAgentSources,
-	checkPrincipalProject,
-	principalAccess,
-	resolveWriteAgent,
-	organizationReadRequest,
-} from "./agent-access";
 
 declare module "hono" {
 	interface ContextVariableMap {
@@ -42,7 +44,8 @@ declare module "hono" {
 export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | null): MiddlewareHandler {
 	const legacy = createAuthMiddleware(config, secret, verifyApiKey);
 	const ipLimits = new AuthRateLimiter(60_000, 20),
-		nameLimits = new AuthRateLimiter(60_000, 5),
+		nameLimits = new AuthRateLimiter(60_000, 30),
+		pairLimits = new AuthRateLimiter(60_000, 5),
 		deviceLimits = new AuthRateLimiter(60_000, 20);
 	const openAuthPaths = new Set([
 		"/api/auth/login",
@@ -67,7 +70,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 
 	return async (c, next) => {
 		c.set("organization", null);
-		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${getPeerAddress(c) ?? "unknown"}`, c))
+		resolveRequestNetwork(c, config);
+		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${getClientAddress(c) ?? "unknown"}`, c))
 			return failure(c, new IdentityError(429, "rate_limit"));
 		try {
 			await prepareJsonBody(c);
@@ -78,17 +82,22 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		if (c.req.method === "POST" && c.req.path === "/api/auth/login") {
 			const body = c.get("parsedJsonBody");
 			const username = typeof body === "object" && body !== null ? Reflect.get(body, "username") : undefined;
-			if (typeof username === "string" && !admit(nameLimits, username.trim().toLowerCase(), c))
+			if (typeof username === "string" && (username.trim().length === 0 || username.trim().length > 128))
+				return failure(c, new IdentityError(400, "invalid_request"));
+			if (
+				typeof username === "string" &&
+				(!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), getClientAddress(c)]), c) ||
+					!admit(nameLimits, username.trim().toLowerCase(), c))
+			)
 				return failure(c, new IdentityError(429, "rate_limit"));
 		}
-		if (
-			config.mode !== "team" &&
-			["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
-			isAuthOpenPath(c.req.path) &&
-			c.req.header("origin") &&
-			c.req.header("origin") !== new URL(c.req.url).origin
-		)
-			return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
+		if (config.mode !== "team" && ["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) && c.req.header("origin")) {
+			let accepted = acceptRequestOrigin(c, config, null);
+			if (!accepted && hasDbAccessor())
+				accepted = acceptRequestOrigin(c, config, (await readOrganization()).public_url);
+			if (!accepted && isAuthOpenPath(c.req.path))
+				return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
+		}
 		if (config.mode !== "team")
 			return legacy(c, async () => {
 				const claims = c.get("auth")?.claims;
@@ -102,15 +111,12 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				return next();
 			});
 		const org = await readOrganization();
-		if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) && isAuthOpenPath(c.req.path)) {
-			const origin = c.req.header("origin");
-			if (
-				origin &&
-				origin !== new URL(c.req.url).origin &&
-				(!org.public_url || origin !== new URL(org.public_url).origin)
-			)
-				return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
-		}
+		if (
+			["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+			isAuthOpenPath(c.req.path) &&
+			!acceptRequestOrigin(c, config, org.public_url)
+		)
+			return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
 		if (!org.claimed_at)
 			return legacy(c, async () => {
 				const claims = c.get("auth")?.claims;
@@ -155,7 +161,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					const options = {
 						sameSite: "Lax" as const,
 						path: "/",
-						secure: new URL(c.req.url).protocol === "https:" || org.public_url?.startsWith("https:") === true,
+						secure: authCookies(c, org).secure,
 						maxAge: org.session_ttl_seconds,
 					};
 					setCookie(c, authCookies(c).session, token, { ...options, httpOnly: true });

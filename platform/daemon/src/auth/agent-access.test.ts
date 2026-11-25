@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
-	canActAs,
-	resolveWriteAgent,
-	resolveReadAgent,
 	bindPrincipalAccess,
+	canActAs,
 	reconcileAgentSources,
+	resolveReadAgent,
+	resolveWriteAgent,
 } from "./agent-access";
 import { localPrincipal, type Principal } from "./principal";
 

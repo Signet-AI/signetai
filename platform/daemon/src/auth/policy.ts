@@ -1,5 +1,6 @@
-import type { AuthMode, Permission, PolicyDecision, TokenClaims, TokenRole, TokenScope } from "./types";
 import { logger } from "../logger";
+import type { AuthMode, Permission, PolicyDecision, TokenClaims, TokenRole, TokenScope } from "./types";
+
 const warnedEmptyScope = new Set<string>();
 
 const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {

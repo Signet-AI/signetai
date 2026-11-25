@@ -1,5 +1,3 @@
-import { controlImport, createJob, createOwnerTranscriptImportStore } from "../transcript-import-store";
-import { DbOwnerError } from "../db-owner-client";
 import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
@@ -8,30 +6,32 @@ import {
 	loadSourcesConfig,
 	resolveDefaultBasePath,
 } from "@signet/core";
-import { Hono, type Context } from "hono";
-import { jsonBody } from "../request-body";
+import { type Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
-import { authConfig } from "./state";
-import { requirePermission, type AuthMode, type TokenClaims } from "../auth";
-import { resolveScopedAgent } from "../request-scope";
-import { resolveScopedAgentId } from "./utils";
+import { type AuthMode, requirePermission, type TokenClaims } from "../auth";
+import { DbOwnerError } from "../db-owner-client";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
-import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
+import { jsonBody } from "../request-body";
+import { resolveScopedAgent } from "../request-scope";
 import { beginSourceMutation, SOURCE_OPERATION_IN_PROGRESS_ERROR } from "../source-deletion-lock";
 import {
-	cleanupCancelledTranscriptImport,
-	bindTranscriptSource,
 	appendTranscriptChunk,
 	beginTranscriptUpload,
+	bindTranscriptSource,
+	cleanupCancelledTranscriptImport,
 	purgeTranscriptBytes,
 	readTranscriptBytes,
 	sealTranscriptUpload,
+	TRANSCRIPT_FILE_BYTES,
+	TRANSCRIPT_UPLOAD_BYTES,
+	type TranscriptUploadScope,
 	transcriptUpload,
 	uploadTranscriptStream,
-	TRANSCRIPT_UPLOAD_BYTES,
-	TRANSCRIPT_FILE_BYTES,
-	type TranscriptUploadScope,
 } from "../transcript-import-bytes";
+import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
+import { controlImport, createJob, createOwnerTranscriptImportStore } from "../transcript-import-store";
+import { authConfig } from "./state";
+import { resolveScopedAgentId } from "./utils";
 
 const MAX_FILES_PER_IMPORT = 25;
 const IMPORT_DUPLICATE_MODES = ["skip", "replace", "reimport"] as const;

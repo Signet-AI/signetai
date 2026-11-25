@@ -1,37 +1,37 @@
-import { jsonBody } from "../request-body";
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-	PIPELINE_CONFIG_FILES,
 	findPipelineConfigFile,
+	PIPELINE_CONFIG_FILES,
 	parseSimpleYaml,
 	readPipelinePauseState,
 	resolveAgentMemoryPolicy,
 } from "@signet/core";
 import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
+import type { AgentRemovalResult } from "../agent-removal.js";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
-import type { AgentRemovalResult } from "../agent-removal.js";
 import { dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
+import { jsonBody } from "../request-body";
 import { openBoundedSse } from "../sse-stream.js";
 import {
-	MAX_UPDATE_INTERVAL_SECONDS,
-	MIN_UPDATE_INTERVAL_SECONDS,
 	checkForUpdates as checkForUpdatesImpl,
 	getUpdateState,
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
 	parseBooleanFlag,
 	parseUpdateChannel,
 	parseUpdateInterval,
 	runUpdate as runUpdateImpl,
 	setUpdateConfig,
 } from "../update-system.js";
+import { isRetryableWritePressure, WRITE_PRESSURE_RETRY_AFTER_SECONDS } from "../write-pressure";
 import { loadDashboardIdentity } from "./dashboard-identity.js";
 import { AGENTS_DIR, authConfig } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, toRecord } from "./utils.js";
-import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
 

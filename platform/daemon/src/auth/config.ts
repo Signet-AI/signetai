@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { z } from "zod";
-import { AUTH_MODES, type AuthMode } from "./types";
 import { DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./rate-limiter";
+import { normalizeTrustedProxies } from "./request-network";
+import { AUTH_MODES, type AuthMode } from "./types";
 
 export interface PasswordLoginConfig {
 	readonly username: string;
@@ -17,6 +18,7 @@ export interface AuthLoginConfig {
 
 export interface AuthConfig {
 	readonly mode: AuthMode;
+	readonly trustedProxies: readonly string[];
 	readonly secretPath: string;
 	readonly rateLimits: Readonly<Record<string, RateLimitConfig>>;
 	readonly defaultTokenTtlSeconds: number;
@@ -27,6 +29,7 @@ export interface AuthConfig {
 const password = z.object({ username: z.string().optional(), passwordHash: z.string().optional() });
 const schema = z.object({
 	mode: z.enum(AUTH_MODES).default("local"),
+	trustedProxies: z.array(z.string().trim().min(1).max(128)).max(256).default([]),
 	rateLimits: z
 		.object(
 			Object.fromEntries(
@@ -71,6 +74,7 @@ export function parseAuthConfig(raw: unknown, agentsDir: string): AuthConfig {
 	const cfg = result.data;
 	return {
 		mode: cfg.mode,
+		trustedProxies: normalizeTrustedProxies(cfg.trustedProxies),
 		secretPath: join(resolveWorkspaceLayout(agentsDir).runtime, "auth-secret"),
 		rateLimits: cfg.rateLimits,
 		defaultTokenTtlSeconds: cfg.defaultTokenTtlSeconds,

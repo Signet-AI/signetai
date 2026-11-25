@@ -1,21 +1,21 @@
-import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
 import { randomUUID } from "node:crypto";
-import {
-	buildCompletedTranscriptCommit,
-	transcriptCommitBatchBytes,
-	type CompletedTranscriptCommit,
-} from "./transcript-import-commit";
-import { signetExportV1Adapter, TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
+import { resolveDefaultBasePath } from "@signet/core";
+import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
+import { type SignetExportRecord, signetExportV1Adapter, TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
 import {
 	cleanupCancelledTranscriptImport,
 	readTranscriptBytes,
 	type TranscriptUploadScope,
 } from "./transcript-import-bytes";
-import { scanTranscriptBatch, type TranscriptCheckpoint } from "./transcript-import-scan";
-import type { InventoryRecord } from "./transcript-import-scan";
-import { prepareTranscriptRetry, type ImportStore } from "./transcript-import-store";
-import { resolveDefaultBasePath } from "@signet/core";
+import {
+	buildCompletedTranscriptCommit,
+	type CompletedTranscriptCommit,
+	transcriptCommitBatchBytes,
+} from "./transcript-import-commit";
 import { migrateTranscriptImports } from "./transcript-import-migration";
+import type { InventoryRecord } from "./transcript-import-scan";
+import { scanTranscriptBatch, type TranscriptCheckpoint } from "./transcript-import-scan";
+import { type ImportStore, prepareTranscriptRetry } from "./transcript-import-store";
 
 export interface TranscriptImportWorkerHandle {
 	readonly running: boolean;
@@ -120,7 +120,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 							offset += bytes.length;
 						}
 						const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts)));
-						let value: import("./transcript-import-adapter").SignetExportRecord;
+						let value: SignetExportRecord;
 						try {
 							value = signetExportV1Adapter.parse(parsed);
 						} catch {

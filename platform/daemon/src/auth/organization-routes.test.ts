@@ -1,14 +1,15 @@
-import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { initDbAccessor, closeDbAccessor } from "../db-accessor";
-import { ensureSetupToken, organizationQuery, statement } from "./organization-store";
-import { createIdentityMiddleware } from "./identity-middleware";
+import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { registerOrganizationRoutes } from "../routes/organization-routes";
 import { parseAuthConfig } from "./config";
+import { createIdentityMiddleware } from "./identity-middleware";
+import { ensureSetupToken, organizationQuery, statement } from "./organization-store";
 import { generateSecret } from "./tokens";
+
 let dir = "";
 let app: Hono;
 let setup = "";
@@ -206,7 +207,9 @@ describe("organization HTTP flows", () => {
 		try {
 			Date.now = () => 1000;
 			for (let n = 0; n < 10000; n++) limiter.record(`peer-${n}`);
-			expect(limiter.check("new-peer").allowed).toBe(false);
+			expect(limiter.check("new-peer").allowed).toBe(true);
+			limiter.record("new-peer");
+			expect(limiter.check("peer-0").allowed).toBe(true);
 			Date.now = () => 2000;
 			expect(limiter.check("new-peer").allowed).toBe(true);
 		} finally {
@@ -411,20 +414,65 @@ describe("organization HTTP flows", () => {
 		expect((await call("/api/test-empty", "DELETE")).status).toBe(200);
 	});
 
-	test("A10 refresh retries within sixty seconds return the same current pair across multiple rotations", async () => {
+	test("A10 a lost rotation survives sixty seconds and restart until the new access token is used", async () => {
 		const root = await claim();
 		const { issueSession } = await import("./organization-store");
 		const session = await issueSession(root.user.id, "cli");
 		const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
-		const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
-		expect(retry.status).toBe(200);
-		const same = await retry.json();
-		expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
-		const { closeDbOwner } = await import("../db-owner-runtime");
-		await closeDbOwner();
-		const second = await (await call("/api/auth/refresh", "POST", { refreshToken: first.refreshToken }, "")).json();
-		const oldRetry = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
-		expect(oldRetry.accessToken === second.accessToken && oldRetry.refreshToken === second.refreshToken).toBe(true);
+		const clock = Date.now;
+		const later = clock() + 61_000;
+		try {
+			Date.now = () => later;
+			await (await import("../db-owner-runtime")).closeDbOwner();
+			const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(retry.status).toBe(200);
+			const same = await retry.json();
+			expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
+			expect((await call("/api/auth/sessions", "GET", undefined, first.accessToken)).status).toBe(200);
+			const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(reuse.status).toBe(401);
+			expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+			expect((await call("/api/auth/sessions", "GET", undefined, first.accessToken)).status).toBe(401);
+			expect(
+				await organizationQuery(
+					statement("SELECT revoked_reason FROM auth_sessions WHERE id=?", [session.sessionId], "get"),
+				),
+			).toEqual({ revoked_reason: "refresh_reuse" });
+		} finally {
+			Date.now = clock;
+		}
+	});
+	test("A10 use of the new refresh token ends the preceding retry grace", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		const session = await issueSession(root.user.id, "cli");
+		const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
+		expect((await call("/api/auth/refresh", "POST", { refreshToken: first.refreshToken }, "")).status).toBe(200);
+		const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+		expect(reuse.status).toBe(401);
+		expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+	});
+	test("A10 an unused rotation has a twenty-four-hour retry bound", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		const session = await issueSession(root.user.id, "cli");
+		const clock = Date.now;
+		const start = clock();
+		try {
+			Date.now = () => start;
+			const first = await (await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "")).json();
+			Date.now = () => start + 86400_000 - 1;
+			const retry = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(retry.status).toBe(200);
+			const same = await retry.json();
+			expect(same.accessToken === first.accessToken && same.refreshToken === first.refreshToken).toBe(true);
+			Date.now = () => start + 86400_000;
+			const reuse = await call("/api/auth/refresh", "POST", { refreshToken: session.refreshToken }, "");
+			expect(reuse.status).toBe(401);
+			expect(await reuse.json()).toMatchObject({ reason: "refresh_reuse" });
+		} finally {
+			Date.now = clock;
+		}
 	});
 	test("R14 transfer preserves authorship and reactivation restores writing", async () => {
 		const root = await claim();

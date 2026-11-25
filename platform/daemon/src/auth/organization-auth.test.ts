@@ -3,17 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { initDbAccessor, closeDbAccessor } from "../db-accessor";
+import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { parseAuthConfig } from "./config";
+import { createIdentityMiddleware } from "./identity-middleware";
 import {
+	claimOrganization,
+	ensureSetupToken,
+	issueSession,
 	organizationQuery,
 	organizationWrite,
 	statement,
-	ensureSetupToken,
-	claimOrganization,
-	issueSession,
 } from "./organization-store";
-import { createIdentityMiddleware } from "./identity-middleware";
-import { parseAuthConfig } from "./config";
 import { generateSecret } from "./tokens";
 
 let dir = "";
@@ -539,4 +539,52 @@ describe("organization credential boundary", () => {
 			setup_token_hash: null,
 		});
 	});
+});
+
+test("trusted proxy HTTPS selects secure cookies and accepts its canonical public origin", async () => {
+	const { authCookies } = await import("./cookies");
+	const probe = new Hono();
+	probe.use(
+		"*",
+		createIdentityMiddleware(parseAuthConfig({ mode: "team", trustedProxies: ["127.0.0.1"] }, "/unused"), null),
+	);
+	probe.post("/api/auth/login", (c) => c.json(authCookies(c)));
+	for (const peer of ["127.0.0.1", "::ffff:127.0.0.1"]) {
+		const response = await probe.fetch(
+			new Request("http://daemon.invalid/api/auth/login", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					origin: "https://public.example",
+					"x-forwarded-proto": "https",
+					"x-forwarded-host": "public.example:443",
+				},
+				body: "{}",
+			}),
+			{ incoming: { socket: { remoteAddress: peer } } },
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			secure: true,
+			session: "__Host-signet_session",
+			csrf: "__Host-signet_csrf",
+		});
+	}
+});
+test("team authentication accepts public_url but not the development Origin exception", async () => {
+	await organizationWrite([statement("UPDATE organization SET public_url='https://public.example' WHERE id=1")]);
+	const probe = new Hono();
+	probe.use("*", createIdentityMiddleware(config, null));
+	probe.post("/api/auth/login", (c) => c.json({ ok: true }));
+	for (const [origin, status] of [
+		["https://public.example", 200],
+		["http://localhost:5173", 403],
+	] as const) {
+		const response = await probe.request("http://daemon.invalid/api/auth/login", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: "{}",
+		});
+		expect(response.status).toBe(status);
+	}
 });

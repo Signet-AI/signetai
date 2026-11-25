@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeCrossAgentFixture, createAgentMessage } from "../__tests__/cross-agent-fixture";
 import { acknowledgeAgentMessage, resetCrossAgentStateForTest } from "../cross-agent";
-import { createAgentMessage, closeCrossAgentFixture } from "../__tests__/cross-agent-fixture";
 import { initDbAccessor } from "../db-accessor";
 import {
 	appendNotificationInject,

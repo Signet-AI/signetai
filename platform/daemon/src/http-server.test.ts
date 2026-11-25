@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createSignetHttpServer, closeSignetHttpServer } from "./http-server";
 import { createConnection } from "node:net";
+import { closeSignetHttpServer, createSignetHttpServer } from "./http-server";
 
 test("shutdown closes idle TCP preconnections without aborting an active response", async () => {
 	let complete: () => void = () => {};

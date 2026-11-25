@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
+import type { Context } from "hono";
 import {
+	checkPrincipalProject,
+	organizationReadRequest,
 	principalAccess,
 	resolveReadAgent,
 	resolveWriteAgent,
-	organizationReadRequest,
-	checkPrincipalProject,
 } from "../auth/agent-access";
-import { jsonBody } from "../request-body";
-import type { Context } from "hono";
+import type { WriteAuthor } from "../auth/audit-owner";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
-import { getDbAccessor } from "../db-accessor";
+import { getDbAccessor, type ReadDb } from "../db-accessor";
 import {
 	fetchEmbedding,
 	findLlamaCppEmbeddingModel,
@@ -21,15 +21,17 @@ import {
 	setNativeFallbackProvider,
 } from "../embedding-fetch";
 import { logger } from "../logger";
-import { getActiveSessions, hasSession, normalizeSessionKey } from "../session-tracker";
-import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import type { EmbeddingConfig } from "../memory-config";
+import type * as native_embeddingModule from "../native-embedding";
 import type { NativeEmbeddingRuntimeOptions } from "../native-embedding";
+import { jsonBody } from "../request-body";
 import {
 	resolveScopedAgent,
 	resolveScopedProject as resolveScopedProjectForClaims,
 	shouldEnforceScope,
 } from "../request-scope";
+import { getActiveSessions, hasSession, normalizeSessionKey } from "../session-tracker";
+import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import { authConfig } from "./state";
 
 export interface EmbeddingStatus {
@@ -383,7 +385,7 @@ export function parseTagsMutation(value: unknown): string | null | undefined {
 }
 
 export interface MutationActor {
-	author?: import("../auth/audit-owner").WriteAuthor;
+	author?: WriteAuthor;
 	changedBy: string;
 	actorType: string;
 	sessionId: string | undefined;
@@ -520,7 +522,7 @@ export function loadForgetCandidates(
 	scope?: { readonly sql: string; readonly args: readonly unknown[] },
 ): ForgetCandidate[] {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+	return getDbAccessor().withReadDb((db: ReadDb) => {
 		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
 		const withQuery = req.query.trim().length > 0;
 		const { clause, args } = buildForgetCandidatesWhere(req, "m");
@@ -606,7 +608,7 @@ export function loadForgetCandidatesByIds(
 	if (dedupedIds.length === 0) return [];
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+	return getDbAccessor().withReadDb((db: ReadDb) => {
 		const placeholders = dedupedIds.map(() => "?").join(", ");
 		const scopeSql = scope?.sql ?? "";
 		const scopeArgs = scope?.args ?? [];
@@ -754,7 +756,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 	const now = Date.now();
 	const cacheKey = embeddingStatusCacheKey(cfg);
 	const cached = embeddingStatusCache.get(cacheKey);
-	let nativeEmbedding: typeof import("../native-embedding") | null = null;
+	let nativeEmbedding: typeof native_embeddingModule | null = null;
 	if (cfg.provider === "native" && cfg.warmNative !== false) {
 		nativeEmbedding = await import("../native-embedding");
 		nativeEmbedding.configureNativeEmbeddingLifecycle({ idleTtlMs: cfg.idleTtlMs });

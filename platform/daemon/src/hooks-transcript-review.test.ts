@@ -3,16 +3,16 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { closeCrossAgentFixture, createAgentMessage } from "./__tests__/cross-agent-fixture";
 import { resetCrossAgentStateForTest } from "./cross-agent";
-import { createAgentMessage, closeCrossAgentFixture } from "./__tests__/cross-agent-fixture";
 import { resetDirectMessageWakeStateForTest, waitForDirectMessageWake } from "./cross-agent-wake";
 import { initDbAccessor } from "./db-accessor";
 import { handleCheckpointExtract } from "./hooks";
 import { writeCompactionArtifact, writeSummaryArtifact, writeTranscriptArtifact } from "./memory-lineage";
+import { getEndedSession, releaseSession } from "./session-tracker";
 import * as lifecycle from "./session-transcript-lifecycle";
 import { deleteSessionTranscript, updateTranscriptLifecycle } from "./session-transcript-lifecycle";
 import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
-import { getEndedSession, releaseSession } from "./session-tracker";
 import * as capture from "./transcript-capture";
 import { TranscriptLockTimeoutError } from "./transcript-jsonl";
 

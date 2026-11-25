@@ -1,16 +1,16 @@
 import { prepareTypedStatement, type WriteDb } from "../db-accessor";
-import {
-	purgeDocumentRecordInTx,
-	purgeSummaryRecordInTx,
-	purgeArtifactRecordInTx,
-	purgeMemoryInTx,
-	purgeMemoryEmbeddingsInTx,
-} from "../source-purge-tx";
 import { dbOwnerOrganizationPurge, dbOwnerTranscriptOperation, getDbOwner } from "../db-owner-runtime";
 import type { TranscriptDeleteResult } from "../session-transcript-lifecycle";
-import type { Principal } from "./principal";
+import {
+	purgeArtifactRecordInTx,
+	purgeDocumentRecordInTx,
+	purgeMemoryEmbeddingsInTx,
+	purgeMemoryInTx,
+	purgeSummaryRecordInTx,
+} from "../source-purge-tx";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./audit-owner";
 import { auditStatement, organizationQuery, organizationWrite, statement } from "./organization-store";
+import type { Principal } from "./principal";
 
 export interface PurgeBatchResult {
 	removed: number;

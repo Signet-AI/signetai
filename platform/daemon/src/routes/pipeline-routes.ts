@@ -1,14 +1,14 @@
-import { jsonBody } from "../request-body";
 import { existsSync, readFileSync } from "node:fs";
-import { hybridProxyDetected } from "../auth/middleware";
-import { auditRuntimeStatus } from "../auth/organization-runtime";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
-import { DbOwnerCancelledError, DbOwnerError } from "../db-owner-client";
 import { isAgentRegistered, resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
+import { hybridProxyDetected } from "../auth/middleware";
+import { auditRuntimeStatus } from "../auth/organization-runtime";
+import type { ReadDb } from "../db-accessor";
 import { getDbAccessor } from "../db-accessor.js";
+import { DbOwnerCancelledError, DbOwnerError } from "../db-owner-client";
 import {
 	getDbOwnerMaintenanceState,
 	ownerQueryAll,
@@ -16,49 +16,44 @@ import {
 	withRegisteredDbOwnerMaintenance,
 } from "../db-owner-maintenance.js";
 import { getVacuumConversionStatusAsync } from "../db-vacuum.js";
-import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
+import { getQueueDiagnosticsSnapshot, type QueueCounts } from "../diagnostics-queue.js";
 import { readEmbeddingUsageSummary } from "../embedding-usage";
-import { readWorkspaceLayoutStatus } from "../workspace-layout-upgrade";
-import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
+import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
 import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
-import { getLlmConcurrencyStatus } from "../pipeline/provider.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
 import {
+	getActiveDreamingPasses,
 	getDreamingAttention,
 	getDreamingEvidenceExclusions,
-	getDreamingReviewedEvidence,
-	getDreamingPasses,
 	getDreamingPass,
+	getDreamingPasses,
 	getDreamingPassPolicy,
-	getActiveDreamingPasses,
 	getDreamingQualityReport,
+	getDreamingReviewedEvidence,
 	getDreamingState,
 	getDreamingToolCalls,
-} from "../pipeline";
-import { getDreamingEvidenceCoverage } from "../pipeline/dreaming-evidence-coverage";
-import {
 	getDreamingWorker,
 	getDreamingWorkloadDiagnostics,
 	getPipelineWorkerStatus,
 	requestDreamingEvidenceRequeue,
 	requestDreamingReviewedEvidenceRequeue,
 } from "../pipeline";
-import {
-	DREAMING_LIVE_HEARTBEAT_MS,
-	dreamingLiveEvents,
-	type DreamingLiveEvent,
-} from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
+import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
+import { getDreamingEvidenceCoverage } from "../pipeline/dreaming-evidence-coverage";
+import {
+	DREAMING_LIVE_HEARTBEAT_MS,
+	type DreamingLiveEvent,
+	dreamingLiveEvents,
+} from "../pipeline/dreaming-live-events";
+import { applyDreamingOperations, DREAMING_MAX_OPERATIONS_PER_REQUEST } from "../pipeline/dreaming-operations.js";
+import { callDreamingPassTool } from "../pipeline/dreaming-pass-tools";
 import { DEFAULT_DREAMING_POLICIES } from "../pipeline/dreaming-policies";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
-import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
-import { callDreamingPassTool } from "../pipeline/dreaming-pass-tools";
-import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError, type DreamingSchedulerStatus } from "../pipeline/dreaming-worker.js";
-import { getSseDiagnosticsSnapshot, openBoundedSse } from "../sse-stream.js";
 import { getTraversalStatus } from "../pipeline/graph-traversal.js";
 import {
 	getAvailableModels,
@@ -66,33 +61,38 @@ import {
 	getRegistryStatus,
 	refreshRegistry,
 } from "../pipeline/model-registry.js";
+import { getLlmConcurrencyStatus } from "../pipeline/provider.js";
+import { jsonBody } from "../request-body";
 import { getCachedResourceSnapshot } from "../resource-monitor.js";
 import { activeSessionCount, getBypassedSessionKeys, getSessionTrackerStats } from "../session-tracker.js";
+import { getSseDiagnosticsSnapshot, openBoundedSse } from "../sse-stream.js";
+import { getWorkspaceStatusSummary } from "../status-summary.js";
 import { telemetryDisabledByEnv } from "../telemetry.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
-import { getWorkspaceStatusSummary } from "../status-summary.js";
+import { readWorkspaceLayoutStatus } from "../workspace-layout-upgrade";
+import { isRetryableWritePressure, WRITE_PRESSURE_RETRY_AFTER_SECONDS } from "../write-pressure";
 import {
 	AGENTS_DIR,
-	BIND_HOST,
-	CURRENT_VERSION,
-	DAEMON_RUNTIME,
-	HOST,
-	LOG_DIR,
-	MEMORY_DB,
-	WORKSPACE_LAYOUT,
-	NETWORK_MODE,
-	PORT,
 	analyticsCollector,
 	authAdminLimiter,
 	authConfig,
+	BIND_HOST,
 	buildOpenClawHealth,
+	CURRENT_VERSION,
+	DAEMON_RUNTIME,
 	getCachedDiagnosticsReport,
 	getCachedDiagnosticsReportIfFresh,
 	getExtractionWorkloadState,
 	getUpdateState,
+	HOST,
 	invalidateDiagnosticsCache,
+	LOG_DIR,
+	MEMORY_DB,
+	NETWORK_MODE,
+	type OpenClawHeartbeatData,
 	openClawHeartbeat,
+	PORT,
 	pipelineTransition,
 	providerRuntimeResolution,
 	readEnvTrimmed,
@@ -101,15 +101,15 @@ import {
 	setOpenClawHeartbeat,
 	setPipelineTransition,
 	telemetryRef,
+	WORKSPACE_LAYOUT,
 } from "./state.js";
 import {
-	STATUS_CACHE_TTL,
 	cachedEmbeddingStatus,
-	resolveScopedAgentId,
 	resolveMutationActor,
+	resolveScopedAgentId,
+	STATUS_CACHE_TTL,
 	statusCacheTime,
 } from "./utils.js";
-import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 interface PipelineQueueBlock {
 	readonly memory: QueueCounts;
@@ -145,7 +145,7 @@ export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: bo
 	try {
 		const accessor = getDbAccessor();
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+		return accessor.withReadDb((db: ReadDb) => {
 			const snapshot = getQueueDiagnosticsSnapshot(db);
 			return {
 				memory: snapshot.memory,
@@ -543,7 +543,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "pluginVersion (string) is required" }, 400);
 		}
 		const prev = openClawHeartbeat?.data;
-		const newData: import("./state.js").OpenClawHeartbeatData = {
+		const newData: OpenClawHeartbeatData = {
 			pluginVersion: b.pluginVersion.slice(0, 128),
 			hooksRegistered: Array.isArray(b.hooksRegistered)
 				? (b.hooksRegistered as unknown[])

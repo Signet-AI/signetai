@@ -1,17 +1,17 @@
-import { resolveReadAgent } from "../auth/agent-access";
-import { jsonBody } from "../request-body";
 import { randomUUID } from "node:crypto";
 import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getDbAccessor } from "../db-accessor";
+import { resolveReadAgent } from "../auth/agent-access";
+import { getDbAccessor, type ReadDb } from "../db-accessor";
+import { dbOwnerQuery, dbOwnerReflectionAnswer } from "../db-owner-runtime";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { generateDailyBriefInsights, todayDateInTimeZone } from "../pipeline/reflection-worker";
-import { resolveScopedAgentId } from "./utils";
-import { dbOwnerReflectionAnswer, dbOwnerQuery } from "../db-owner-runtime";
+import { jsonBody } from "../request-body";
 import { authConfig } from "./state";
+import { resolveScopedAgentId } from "./utils";
 
 const DEFAULT_REFLECTION_LIMIT = 30;
 const MAX_REFLECTION_LIMIT = 100;
@@ -97,7 +97,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+			const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
 				return db
 					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
 					.all(agentId, date, limit) as ReflectionRow[];
@@ -119,7 +119,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+			const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
 				return db
 					.prepare(
 						`SELECT id, date, summary, patterns, question, answer,
@@ -173,7 +173,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		}
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+		const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
 			return db
 				.prepare(
 					`SELECT * FROM daily_reflections WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`,

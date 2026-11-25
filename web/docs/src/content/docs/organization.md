@@ -94,13 +94,15 @@ Deactivation revokes credentials before returning. The next request from a deact
 
 Credential and administrative changes are audited with their transaction. Read events are buffered and flushed every two seconds; the buffer is capped at 10,000 events. Overflow is visible in status and an `audit.dropped` event. Audit queries require `audit`; exports use NDJSON. Administrators can configure audit retention.
 
+CLI and desktop refresh retries survive a lost response or client crash for up to 24 hours, including daemon restarts. The old refresh token returns the same current pair until that pair is first used. An authenticated request with the new access token, or a refresh with the new refresh token, ends the grace; subsequent reuse revokes the session.
+
 ## Request safety and reverse proxies
 
-JSON API mutations require `Content-Type: application/json` when a body is present; other media types return `415 unsupported_media_type`. Empty JSON bodies are accepted. Multipart source uploads (`POST /api/sources/import`), streamed import file uploads (`PUT /api/sources/imports/:id/files/:id`), and the MCP transport use their own parsers and limits.
+JSON API mutations require `Content-Type: application/json` when a body is present; other media types return `415 unsupported_media_type`. Empty JSON bodies are accepted. Multipart source uploads (`POST /api/sources/import`), streamed import file uploads (`PUT` and `PATCH /api/sources/imports/:id/files/:id`), and the MCP transport use their own parsers and limits.
 
-Open authentication mutations reject an `Origin` that matches neither the daemon origin nor `publicUrl`. Secure deployments use `__Host-signet_session`, `__Host-signet_csrf`, and `__Host-signet_oidc_state` cookies; HTTP loopback uses the plain names. Cookie-authenticated mutations still require the CSRF header.
+Open authentication mutations accept the daemon origin (including the browser-facing origin supplied by a trusted proxy) or `publicUrl`. Local and hybrid deployments also allow the development dashboard origins; team deployments do not. Other origins are rejected. Secure deployments use `__Host-signet_session`, `__Host-signet_csrf`, and `__Host-signet_oidc_state` cookies; HTTP loopback uses the plain names. Cookie-authenticated mutations still require the CSRF header.
 
-Open authentication endpoints are rate-limited by peer IP, with an additional username limit for password login. Device lookups and approvals also have signed-in limits. Behind a reverse proxy the peer is the proxy, so the IP limit is **per proxy**, not per forwarded client address. Forwarded headers never restore loopback trust in hybrid mode. Pending device flows are capped at 1,000 and expired flows are pruned. OIDC discovery is cached for five minutes.
+Open authentication endpoints are rate-limited by client address. Login allows five attempts per minute per username/client-address pair and 30 per username across clients. Device lookups and approvals also have signed-in limits. Configure `auth.trustedProxies` in `agent.yaml` with the IPs or CIDRs of your controlled proxies (empty by default). A trusted socket peer enables the rightmost untrusted `X-Forwarded-For` hop and forwarded protocol/host; otherwise these headers do not change addressing or origin, so clients share the proxy’s bucket. Require your proxy to replace incoming forwarding headers. Forwarded headers never restore loopback trust in hybrid mode. See [reverse proxy configuration](/auth/#reverse-proxies-and-browser-origins). Pending device flows are capped at 1,000 and expired flows are pruned. OIDC discovery is cached for five minutes.
 
 ## Upgrade an existing team workspace
 

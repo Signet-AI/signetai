@@ -1,16 +1,17 @@
 import { stat } from "node:fs/promises";
-import { txAnswerReflection } from "./reflection-owner";
-import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
+import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
+import type { WriteAuthor } from "./auth/audit-owner";
+import { type PurgeBatchResult, purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { getDbAccessorPath, hasDbAccessor, resolveSqliteAgentsDir } from "./db-accessor";
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
 import {
 	createDbOwnerClient,
 	DbOwnerAdmissionError,
-	DbOwnerDiedError,
 	type DbOwnerClient,
 	type DbOwnerClientOptions,
+	DbOwnerDiedError,
 	type DbOwnerJobHandle,
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
@@ -21,30 +22,34 @@ import {
 	submitRegisteredDbOwnerJob,
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
-import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
-import type { CompactionSummaryInput } from "./session-transcripts";
-import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
-import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
-import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type {
+	DbOwnerDreamingEvidenceCoverage,
+	DbOwnerDreamingEvidenceCoverageResult,
 	DbOwnerJob,
+	DbOwnerNativeMemoryIndex,
 	DbOwnerParameter,
 	DbOwnerRequest,
+	DbOwnerSourceArtifactIndex,
+	DbOwnerSourceArtifactPurge,
+	DbOwnerSourceArtifactUpsert,
 	DbOwnerSourceEvidenceEligibility,
-	DbOwnerDreamingEvidenceCoverage,
 	DbOwnerSourceGraphFilePurge,
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
 	DbOwnerSourcePurge,
 	DbOwnerSourceSnapshotImport,
-	DbOwnerSourceArtifactIndex,
-	DbOwnerNativeMemoryIndex,
-	DbOwnerSourceArtifactPurge,
-	DbOwnerSourceArtifactUpsert,
 	DbOwnerStatement,
+	DbOwnerTranscriptBulkCommit,
 	DbOwnerWorkloadClass,
-	DbOwnerDreamingEvidenceCoverageResult,
 } from "./db-owner-protocol";
+import { type ReflectionAnswerInput, txAnswerReflection } from "./reflection-owner";
+import type {
+	CompactionSummaryInput,
+	SessionTranscriptWriteInput,
+	writeSessionTranscriptRow,
+} from "./session-transcripts";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
+import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -665,7 +670,7 @@ export async function dbOwnerSourceSnapshotImport(
 }
 
 export async function dbOwnerTranscriptBulkCommit(
-	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	input: DbOwnerTranscriptBulkCommit,
 	options: DbOwnerSqlOptions,
 ): Promise<readonly unknown[]> {
 	const owner = await getDbOwner();
@@ -691,20 +696,14 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
-export async function dbOwnerReflectionAnswer(
-	input: import("./reflection-owner").ReflectionAnswerInput,
-	accessor: DbAccessor,
-): Promise<boolean> {
+export async function dbOwnerReflectionAnswer(input: ReflectionAnswerInput, accessor: DbAccessor): Promise<boolean> {
 	return submitWithAdmission(
 		await getDbOwnerForAccessor(accessor),
 		{ kind: "reflection_answer", input },
 		{ operation: "reflection.answer", lane: "write", deadlineMs: 10000 },
 	);
 }
-export async function dbOwnerOrganizationPurge(
-	userId: string,
-	author: import("./auth/audit-owner").WriteAuthor,
-): Promise<import("./auth/organization-purge").PurgeBatchResult> {
+export async function dbOwnerOrganizationPurge(userId: string, author: WriteAuthor): Promise<PurgeBatchResult> {
 	return submitWithAdmission(
 		await getDbOwner(),
 		{ kind: "organization_memory_purge", userId, author },

@@ -1,9 +1,9 @@
-import { purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
-import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
 import type { WriteDb } from "./db-accessor";
+import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
+import { purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 
 interface MemoryPurgeTable {
 	readonly name: string;

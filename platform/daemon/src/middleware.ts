@@ -1,14 +1,15 @@
 import "./request-read";
-import { organizationReadRequest } from "./auth/agent-access";
-import { requestRoute } from "./request-route";
 import { isIP } from "node:net";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { isAuthOpenPath } from "./auth";
+import { organizationReadRequest } from "./auth/agent-access";
 import { createIdentityMiddleware } from "./auth/identity-middleware";
 import { bufferReadAudit } from "./auth/organization-runtime";
 import { logger } from "./logger";
+import { streamedRequestBody } from "./request-body";
+import { requestRoute } from "./request-route";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -17,6 +18,7 @@ const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 function isForeignBrowserWrite(c: Context): boolean {
 	if (!UNSAFE_METHODS.has(c.req.method) || isAuthOpenPath(c.req.path)) return false;
 	const origin = c.req.header("origin");
+	if (["proxy", "public", "development"].includes(c.get("acceptedOrigin") ?? "")) return false;
 	if (origin !== undefined && isAllowedOrigin(origin)) return false;
 	if (c.req.header("sec-fetch-site") === "cross-site") return true;
 	if (origin === undefined) return false;
@@ -30,7 +32,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 	app.use(
 		"*",
 		cors({
-			origin: (origin) => (isAllowedOrigin(origin) ? origin : null),
+			origin: (origin) => (authConfig.mode !== "team" && isAllowedOrigin(origin) ? origin : null),
 			credentials: true,
 		}),
 	);
@@ -45,7 +47,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 	const stopBody = bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) });
 	const importBody = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: "payload too large" }, 413) });
 	app.use("*", (c, next) =>
-		c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)
+		streamedRequestBody(c)
 			? next()
 			: c.req.path === "/api/hooks/stop"
 				? stopBody(c, next)

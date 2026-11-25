@@ -1,4 +1,3 @@
-import { jsonBody } from "../request-body";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
@@ -6,34 +5,33 @@ import { listEntityAliases } from "../knowledge-graph";
 import { getInferenceProviderOrNull } from "../llm";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	parseEpistemicAssertionPredicate,
 	parseEpistemicAssertionStatus,
 	supersedeEpistemicAssertion,
 	validateEpistemicObserverScope,
 } from "../ontology-assertions";
 import {
-	OntologyClaimEvidenceError,
 	getOntologyClaimEvidence,
+	OntologyClaimEvidenceError,
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
-import { OntologyClaimTraceError, explainOntologyClaim } from "../ontology-claim-trace";
-import { OntologyConsolidationError, consolidateOntologyProposals } from "../ontology-consolidation";
+import { explainOntologyClaim, OntologyClaimTraceError } from "../ontology-claim-trace";
+import { consolidateOntologyProposals, OntologyConsolidationError } from "../ontology-consolidation";
 import {
 	getOntologyContradiction,
 	listOntologyContradictions,
 	parseOntologyContradictionStatus,
 } from "../ontology-contradictions";
-import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
-import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
+import { extractOntologyProposals, OntologyExtractionError } from "../ontology-extraction";
+import { getOntologyLinkEvidence, OntologyLinkEvidenceError } from "../ontology-link-evidence";
 import {
-	OntologyProposalError,
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
@@ -46,12 +44,14 @@ import {
 	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
+	OntologyProposalError,
 	parseOntologyProposalStatus,
 	proposeDuplicateEntityMerges,
 	rejectOntologyProposal,
 } from "../ontology-proposals";
+import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
-import { parseBoundedInt, resolveScopedAgentId, validateSessionAgentBinding, resolveMutationActor } from "./utils";
+import { parseBoundedInt, resolveMutationActor, resolveScopedAgentId, validateSessionAgentBinding } from "./utils";
 
 function asRecord(value: unknown): Record<string, unknown> {
 	if (typeof value === "object" && value !== null && !Array.isArray(value)) {

@@ -23,7 +23,7 @@ import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
-import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
+import { hasPendingMigrations, MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");

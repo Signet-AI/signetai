@@ -1,5 +1,5 @@
-import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";

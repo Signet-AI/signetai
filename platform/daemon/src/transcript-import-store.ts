@@ -1,5 +1,7 @@
-import { parseWriteAuthor } from "./auth/audit-owner";
+import { parseWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
+import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
 import { dbOwnerQuery, dbOwnerTransaction, dbOwnerTranscriptBulkCommit } from "./db-owner-runtime";
+import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 
 export type ImportJobState =
 	| "staging"
@@ -139,7 +141,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 				)) as Result;
 			}
 			if (operation.operation === "commit") {
-				const commits = p.commits as import("./transcript-import-commit").CompletedTranscriptCommit[];
+				const commits = p.commits as CompletedTranscriptCommit[];
 				const results = await dbOwnerTranscriptBulkCommit(
 					{
 						author: parseWriteAuthor(p.author),
@@ -152,7 +154,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 						commits,
 						...(p.inventory === undefined
 							? {}
-							: { inventory: p.inventory as import("./db-owner-protocol").DbOwnerTranscriptBulkCommit["inventory"] }),
+							: { inventory: p.inventory as DbOwnerTranscriptBulkCommit["inventory"] }),
 					},
 					{ operation: "sources.import.store.commit", lane: "write" },
 				);
@@ -232,7 +234,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 	};
 }
 export function createJob(input: {
-	readonly author: import("./auth/audit-owner").WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly jobId: string;
 	readonly agentId: string;
 	readonly schemaId?: string;

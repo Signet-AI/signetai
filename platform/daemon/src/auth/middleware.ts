@@ -1,3 +1,7 @@
+import { getPeerAddress, resolveRequestNetwork } from "./request-network";
+
+export { getClientAddress, getPeerAddress } from "./request-network";
+
 import type { Context, MiddlewareHandler } from "hono";
 import { isSignetApiKey } from "./api-keys";
 import type { AuthConfig } from "./config";
@@ -5,6 +9,7 @@ import { checkPermission, checkScope } from "./policy";
 import type { AuthRateLimiter } from "./rate-limiter";
 import { verifyToken } from "./tokens";
 import type { AuthResult, Permission, TokenScope } from "./types";
+
 declare module "hono" {
 	interface ContextVariableMap {
 		auth: AuthResult;
@@ -49,15 +54,6 @@ function isDashboardRequest(c: Context): boolean {
 	if (path === "/" || path.includes(".")) return true;
 	return c.req.header("accept")?.includes("text/html") ?? false;
 }
-export function getPeerAddress(c: Context): string | null {
-	try {
-		const addr = (c.env as Record<string, unknown>)?.incoming as { socket?: { remoteAddress?: string } } | undefined;
-		return addr?.socket?.remoteAddress ?? null;
-	} catch {
-		return null;
-	}
-}
-
 export let hybridProxyDetected = false;
 const FORWARDED_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
 export function isLoopbackRequest(c: Context): boolean {
@@ -89,6 +85,7 @@ export function createAuthMiddleware(
 		}
 	};
 	return async (c, next) => {
+		resolveRequestNetwork(c, config);
 		const token = extractBearerToken(c.req.header("authorization"));
 		if (isAuthOpenPath(c.req.path) || isDashboardRequest(c)) {
 			c.set(

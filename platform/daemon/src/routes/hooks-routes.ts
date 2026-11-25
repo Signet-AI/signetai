@@ -1,18 +1,16 @@
-import { reportReadResult } from "../request-read";
-import { jsonBody } from "../request-body";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
-import type { Context } from "hono";
-import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { commitCompactionSummary } from "../session-transcripts";
-import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
-
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
+import {
+	boardAuthorAudience,
+	claimBoardActivityNotices,
+	createBoardEventVisibility,
+	resolveBoardViewer,
+} from "../board";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import {
 	type AcpDeliveryAttempt,
@@ -36,28 +34,30 @@ import {
 	touchAgentPresence,
 	upsertAgentPresence,
 } from "../cross-agent";
-import { boardAuthorAudience, createBoardEventVisibility, resolveBoardViewer } from "../board";
-import { contextFromProject, parsePresenceContext, type AgentPresenceContextPatch } from "../cross-agent-context";
+import { type AgentPresenceContextPatch, contextFromProject, parsePresenceContext } from "../cross-agent-context";
 import {
+	canViewSessionOf,
 	INSPECT_DEFAULT_MESSAGES,
 	INSPECT_MAX_MESSAGES,
-	canViewSessionOf,
-	resolvePresenceAudience,
 	readTranscriptTail,
+	resolvePresenceAudience,
 } from "../cross-agent-inspect";
-import { getDbAccessor } from "../db-accessor";
+import {
+	consumeSessionEndWake,
+	MAX_WAKE_RELEASE_IDS,
+	MAX_WAKE_WAIT_MS,
+	releaseDirectMessageWakes,
+	releaseWakeClaimsWithRetry,
+	waitForDirectMessageWake,
+	wasWokenSince,
+} from "../cross-agent-wake";
+import { getDbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
+import { DbOwnerAdmissionError, DbOwnerDiedError, DbOwnerError } from "../db-owner-client";
+import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import type { EmbeddingRole } from "../embedding-profile";
 import {
 	type CheckpointExtractRequest,
-	type PreCompactionRequest,
-	type RecallRequest,
-	type RememberRequest,
-	type SessionEndRequest,
-	type SessionStartRequest,
-	type StopResponse,
-	type SynthesisRequest,
-	type UserPromptSubmitRequest,
 	handleCheckpointExtract,
 	handlePreCompaction,
 	handleSessionEnd,
@@ -65,30 +65,38 @@ import {
 	handleStop,
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
+	type PreCompactionRequest,
+	type RecallRequest,
+	type RememberRequest,
 	resetSessionStartDedupe,
+	type SessionEndRequest,
+	type SessionStartRequest,
+	type StopResponse,
+	type SynthesisRequest,
+	type UserPromptSubmitRequest,
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { hybridRecall, type RecallParams } from "../memory-search";
 import {
-	type BoardActivityNotice,
-	type HookNotificationsBlock,
 	appendNotificationInject,
+	type BoardActivityNotice,
 	collectCrossAgentNotifications,
+	type HookNotificationsBlock,
 	isNotificationCompatibleHook,
 } from "../notifications/cross-agent-notifications";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
-import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
-import { openBoundedSse } from "../sse-stream.js";
+import { normalizePipelineCause, type PipelineCauseFamily, recordPipelineOperation } from "../pipeline-operation";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
+import { jsonBody } from "../request-body";
+import { reportReadResult } from "../request-read";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
 import { recallSessionKey } from "../session-start-state";
 import {
-	type RuntimePath,
 	claimSession,
 	clearEndedSession,
 	getActiveSessions,
@@ -98,23 +106,18 @@ import {
 	isSessionBypassed,
 	markSessionEnded,
 	normalizeSessionKey,
+	type RuntimePath,
 	releaseSession,
 	renewSession,
 } from "../session-tracker.js";
+import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
+import { commitCompactionSummary } from "../session-transcripts";
 import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
+import { openBoundedSse } from "../sse-stream.js";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
-import { claimBoardActivityNotices } from "../board";
-import {
-	MAX_WAKE_RELEASE_IDS,
-	MAX_WAKE_WAIT_MS,
-	consumeSessionEndWake,
-	releaseDirectMessageWakes,
-	releaseWakeClaimsWithRetry,
-	waitForDirectMessageWake,
-	wasWokenSince,
-} from "../cross-agent-wake";
+import { isRetryableWritePressure, WRITE_PRESSURE_RETRY_AFTER_SECONDS } from "../write-pressure";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
@@ -136,7 +139,6 @@ import {
 	validateSessionAgentBinding,
 	validateSessionControl,
 } from "./utils";
-import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 async function checkTranscriptLifecycle(input: Parameters<typeof updateTranscriptLifecycle>[0]): Promise<void> {
 	try {
@@ -1527,7 +1529,7 @@ function registerCompactionComplete(app: Hono): void {
 			const transcriptRow = body.sessionKey
 				? // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 					getDbAccessor().withReadDb(
-						(db: import("../db-accessor").ReadDb) =>
+						(db: ReadDb) =>
 							db
 								.prepare(
 									`SELECT project
@@ -1611,7 +1613,7 @@ function registerCompactionComplete(app: Hono): void {
 			if (body.sessionKey) {
 				try {
 					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+					getDbAccessor().withWriteTx((db: WriteDb) => {
 						const hasTx = db
 							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
 							.get();

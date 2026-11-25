@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { extractOntologyProposals } from "./ontology-extraction";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	supersedeEpistemicAssertion,
 } from "./ontology-assertions";
+import { extractOntologyProposals } from "./ontology-extraction";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
 
 describe("epistemic assertions", () => {

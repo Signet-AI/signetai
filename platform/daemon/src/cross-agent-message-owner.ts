@@ -1,7 +1,7 @@
+import { authoredAuditStatements, type WriteAuthor } from "./auth/audit-owner";
 import type { CrossAgentMessageRow } from "./cross-agent";
 import type { DbOwnerStatement } from "./db-owner-protocol";
 import { dbOwnerTransaction } from "./db-owner-runtime";
-import { authoredAuditStatements, type WriteAuthor } from "./auth/audit-owner";
 export class AgentMessageCapacityError extends Error {
 	constructor() {
 		super("Cross-agent message capacity reached; wait for retention cleanup before retrying");

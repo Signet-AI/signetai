@@ -32,7 +32,6 @@ export class AuthRateLimiter {
 		this.prune(now);
 		const entry = this.windows.get(key);
 
-		if (!entry && this.windows.size >= 10000) return { allowed: false, remaining: 0, resetAt: now + this.windowMs };
 		if (!entry || now - entry.windowStart >= this.windowMs) {
 			return {
 				allowed: true,
@@ -55,7 +54,17 @@ export class AuthRateLimiter {
 		const entry = this.windows.get(key);
 
 		if (!entry || now - entry.windowStart >= this.windowMs) {
-			if (this.windows.size < 10000 || entry) this.windows.set(key, { count: 1, windowStart: now });
+			if (!entry && this.windows.size >= 10000) {
+				let oldestKey: string | undefined,
+					oldest = Infinity;
+				for (const [candidate, value] of this.windows)
+					if (value.windowStart < oldest) {
+						oldest = value.windowStart;
+						oldestKey = candidate;
+					}
+				if (oldestKey !== undefined) this.windows.delete(oldestKey);
+			}
+			this.windows.set(key, { count: 1, windowStart: now });
 			return;
 		}
 

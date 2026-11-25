@@ -1,3 +1,4 @@
+import type { WriteAuthor } from "./auth/audit-owner";
 import type { WriteDb } from "./db-accessor";
 import { txIngestEnvelope } from "./transactions";
 export interface ReflectionAnswerInput {
@@ -7,7 +8,7 @@ export interface ReflectionAnswerInput {
 	readonly memoryId: string;
 	readonly answer: string;
 	readonly now: string;
-	readonly author: import("./auth/audit-owner").WriteAuthor;
+	readonly author: WriteAuthor;
 }
 export function txAnswerReflection(db: WriteDb, input: ReflectionAnswerInput): boolean {
 	const changed = db

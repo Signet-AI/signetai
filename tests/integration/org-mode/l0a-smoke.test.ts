@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { resolve, join } from "node:path";
 import { createServer } from "node:net";
-import { runMigrations } from "../../../platform/core/src/migrations";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { z } from "zod";
+import { runMigrations } from "../../../platform/core/src/migrations";
 
 function cookieToken(response: Response): string {
 	return (
@@ -272,6 +272,95 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		} finally {
 			beforePurge.close();
 		}
+		const uploadPath = join(root, "cli-upload.jsonl");
+		const uploadBytes = new TextEncoder().encode(
+			JSON.stringify({
+				id: "cli-smoke",
+				source: "signet",
+				harness: "hermes-agent",
+				agent_id: key.key.agentId,
+				session_key: "cli-smoke-upload",
+				project: null,
+				timestamp: new Date().toISOString(),
+				message_count: 1,
+				messages: [{ role: "user", content: "u".repeat(1024 * 1024 + 17) }],
+			}) + "\n",
+		);
+		await writeFile(uploadPath, uploadBytes);
+		const uploadCreated = await request(
+			`/api/sources/imports?agentId=${key.key.agentId}`,
+			"POST",
+			{ files: [{ name: "cli-upload.jsonl" }] },
+			key.secret,
+		);
+		expect(uploadCreated.status).toBe(201);
+		const upload = z
+			.object({ jobId: z.string(), files: z.array(z.object({ id: z.string() })) })
+			.parse(await uploadCreated.json());
+		const uploadFile = upload.files[0];
+		if (!uploadFile) throw new Error("Upload file slot missing");
+		const uploader = Bun.spawn(
+			[
+				process.execPath,
+				resolve(cwd, "../../surfaces/cli/src/cli.ts"),
+				"sources",
+				"imports",
+				"upload",
+				upload.jobId,
+				uploadFile.id,
+				uploadPath,
+				"--agent",
+				key.key.agentId,
+			],
+			{
+				cwd,
+				env: { ...env, SIGNET_DAEMON_URL: base, SIGNET_API_KEY: key.secret, SIGNET_TOKEN: "" },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [uploadExit, uploadOut, uploadErr] = await Promise.all([
+			uploader.exited,
+			new Response(uploader.stdout).text(),
+			new Response(uploader.stderr).text(),
+		]);
+		if (uploadExit !== 0) throw new Error(`CLI upload exited ${uploadExit}: ${uploadOut} ${uploadErr}`);
+		expect(uploadExit).toBe(0);
+		const uploadStatus = await request(
+			`/api/sources/imports/${upload.jobId}?agentId=${key.key.agentId}`,
+			"GET",
+			undefined,
+			key.secret,
+		);
+		expect(uploadStatus.status).toBe(200);
+		const uploaded = z
+			.object({
+				files: z.array(
+					z.object({
+						id: z.string(),
+						upload_offset: z.number(),
+						upload_size: z.number().nullable(),
+						upload_digest: z.string(),
+						state: z.string(),
+					}),
+				),
+			})
+			.parse(await uploadStatus.json())
+			.files.find((file) => file.id === uploadFile.id);
+		expect(uploaded?.upload_offset).toBe(uploadBytes.byteLength);
+		expect(uploaded?.upload_size).toBe(uploadBytes.byteLength);
+		expect(uploaded?.upload_digest.length).toBe(64);
+		expect(uploaded?.state).not.toBe("staging");
+		console.log(
+			JSON.stringify({
+				probe: "cli-chunk-upload",
+				exit: uploadExit,
+				bytes: uploadBytes.byteLength,
+				chunks: Math.ceil(uploadBytes.byteLength / (1024 * 1024)),
+				offset: uploaded?.upload_offset,
+				state: uploaded?.state,
+			}),
+		);
 		const deactivated = await request(`/api/org/users/${alice.user.id}/deactivate`, "POST", {
 			mode: "keep",
 			dryRun: false,

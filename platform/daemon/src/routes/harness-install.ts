@@ -1,15 +1,15 @@
-import { jsonBody } from "../request-body";
-import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getHarnessLoader, type HarnessAction } from "../harness-registry";
-import type { HarnessInstallWorkerEvent, HarnessInstallWorkerRequest } from "../harness-install-worker";
-import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import { inspectHarnessConnector } from "../harness-health";
+import type { HarnessInstallWorkerEvent, HarnessInstallWorkerRequest } from "../harness-install-worker";
+import { getHarnessLoader, type HarnessAction } from "../harness-registry";
+import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
+import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
 
 let installing = false;

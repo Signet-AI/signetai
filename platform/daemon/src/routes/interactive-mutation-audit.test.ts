@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import { OntologyProposalError, applyOntologyOperation, listOntologyProposals } from "../ontology-proposals";
+import { applyOntologyOperation, listOntologyProposals, OntologyProposalError } from "../ontology-proposals";
 import { registerKnowledgeRoutes } from "./knowledge-routes";
 import { registerOntologyRoutes } from "./ontology-routes";
 

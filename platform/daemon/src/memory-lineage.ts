@@ -1,23 +1,20 @@
-import type { WriteAuthor } from "./auth/audit-owner";
 import type { Database } from "bun:sqlite";
-import { withSessionArtifactLease } from "./session-artifact-lease";
-import { admitSessionTranscriptInDb } from "./session-transcripts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
-	type LlmProvider,
 	currentArtifactRelativePath,
+	type LlmProvider,
 	redactCredentials,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
 } from "@signet/core";
 import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
+import type { WriteAuthor } from "./auth/audit-owner";
 import type { WriteDb } from "./db-accessor";
-import { runWriteTxAsync } from "./db-accessor";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
 import {
 	dbOwnerBatch,
 	dbOwnerQuery,
@@ -25,17 +22,19 @@ import {
 	dbOwnerSourceArtifactUpsertBatch,
 	ownerStatement,
 } from "./db-owner-runtime";
+import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
+import { loadMemoryConfig } from "./memory-config";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { countTokens } from "./pipeline/tokenizer";
+import { withSessionArtifactLease } from "./session-artifact-lease";
 import { isNoiseSession, isTempProject } from "./session-noise";
-import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
+import { admitSessionTranscriptInDb } from "./session-transcripts";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
-import { loadMemoryConfig } from "./memory-config";
-import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
+import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -517,7 +516,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	return path;
 }
 export interface MemoryArtifactUpsertFields {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;
@@ -752,7 +751,7 @@ async function upsertSourceArtifactRow(
 		readonly trustSourcePath?: boolean;
 		readonly trustNativeMarker?: boolean;
 		readonly signal?: AbortSignal;
-		readonly author?: import("./auth/audit-owner").WriteAuthor;
+		readonly author?: WriteAuthor;
 	} = {},
 ): Promise<void> {
 	await dbOwnerSourceArtifactUpsert(
@@ -774,7 +773,7 @@ async function upsertSourceArtifactRow(
 }
 
 export async function indexExternalMemoryArtifact(input: {
-	readonly author?: import("./auth/audit-owner").WriteAuthor;
+	readonly author?: WriteAuthor;
 	readonly agentId?: string;
 	readonly sourcePath: string;
 	readonly sourceKind: string;

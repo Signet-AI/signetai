@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
-import { admitSessionTranscriptInDb } from "./session-transcripts";
-import { filterTranscriptMessagesInDb } from "./session-transcripts";
-import { type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
+import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
+import { admitSessionTranscriptInDb, filterTranscriptMessagesInDb } from "./session-transcripts";
 import {
-	TRANSCRIPT_IMPORT_LIMITS,
 	canonicalTranscriptIdentity,
 	externalIdentityFingerprint,
 	type SignetExportRecord,
+	TRANSCRIPT_IMPORT_LIMITS,
 } from "./transcript-import-adapter";
 
 export interface CompletedTranscriptEvidence {
@@ -48,7 +48,7 @@ export interface TranscriptCommitResult {
 }
 export function commitTranscriptImportBatchInTx(
 	db: WriteDb,
-	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	input: DbOwnerTranscriptBulkCommit,
 ): TranscriptCommitResult[] {
 	if (
 		input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch ||

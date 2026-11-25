@@ -1,7 +1,4 @@
-import { authoredAuditStatements } from "../auth/audit-owner";
-import type { WriteAuthor } from "../auth/audit-owner";
 import type { Database } from "bun:sqlite";
-import { admitSessionTranscriptInDb } from "../session-transcripts";
 import { createHash, randomUUID } from "node:crypto";
 import type {
 	AccountingProvenance,
@@ -10,9 +7,25 @@ import type {
 	LlmCacheRequestAccounting,
 	LlmUsage,
 } from "@signet/core";
+import type { WriteAuthor } from "../auth/audit-owner";
+import { authoredAuditStatements } from "../auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { DbOwnerDeadlineError, DbOwnerDiedError } from "../db-owner-client";
+import {
+	type DbOwnerMaintenance,
+	ownerChanges,
+	ownerDreamingEpisodicBacklog,
+	ownerDreamingEpisodicBacklogExists,
+	ownerDreamingEpisodicBacklogProbe,
+	ownerDreamingHygieneAttention,
+	ownerDreamingSurprisalAttention,
+	ownerQueryAll,
+	ownerQueryOne,
+	ownerRunStatement,
+	ownerTransaction,
+	runOwnerJob,
+} from "../db-owner-maintenance";
 import type {
-	DbOwnerStatement,
 	DbOwnerDreamingEpisodicBacklog,
 	DbOwnerDreamingEpisodicBacklogExists,
 	DbOwnerDreamingEpisodicBacklogProbe,
@@ -20,48 +33,35 @@ import type {
 	DbOwnerDreamingHygieneAttention,
 	DbOwnerDreamingPassFinalize,
 	DbOwnerDreamingSurprisalAttention,
+	DbOwnerStatement,
 } from "../db-owner-protocol";
-import {
-	ownerDreamingEpisodicBacklog,
-	ownerDreamingEpisodicBacklogExists,
-	ownerDreamingEpisodicBacklogProbe,
-	ownerDreamingHygieneAttention,
-	ownerDreamingSurprisalAttention,
-	ownerTransaction,
-	ownerQueryAll,
-	ownerQueryOne,
-	ownerRunStatement,
-	runOwnerJob,
-	ownerChanges,
-	type DbOwnerMaintenance,
-} from "../db-owner-maintenance";
-import { DbOwnerDeadlineError, DbOwnerDiedError } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
 import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
 import {
 	EPISODIC_CAPTURED_AT_FLOOR,
-	scanEpisodicSourceCandidates,
 	type EpisodicCursor,
 	type EpisodicSourceRecord,
 	readEpisodicSource,
+	scanEpisodicSourceCandidates,
 	searchEpisodicSources,
 	timestampMillis,
 	utcTimestampMs,
 } from "../episodic-sources";
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
+import { detectLocalTimeZone } from "../memory-config";
+import { type MemoryHeadCommitInput, type MemoryHeadCommitter, readCuratedMemoryHead } from "../memory-head";
+import { commitCuratedMemoryHeadInDb, memoryHeadInputError, withContentPassWrites } from "../memory-head-owner";
 import type { GraphWriteCaps } from "../ontology-proposals";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
+import { admitSessionTranscriptInDb } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
 import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
-import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
-import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
-import { commitCuratedMemoryHeadInDb, memoryHeadInputError, withContentPassWrites } from "../memory-head-owner";
 import { renderDreamingEvidence, sanitizeTranscriptForDreaming } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
@@ -73,38 +73,38 @@ import {
 	STALLED_EVIDENCE_ATTENTION_SQL,
 } from "./dreaming-evidence-consumption";
 import {
+	collectRejectedDreamingEvidence,
+	type RejectedDreamingEvidence,
+	recordRejectedDreamingEvidenceInTx,
+} from "./dreaming-evidence-retry";
+import {
 	parseDreamingReviewedExcludedEvidence,
 	recordDreamingReviewedExcludedEvidenceInTx,
 } from "./dreaming-evidence-reviews";
+import { dreamingScopeKey, renderDreamingHistoryForPass } from "./dreaming-history";
 import {
-	type RejectedDreamingEvidence,
-	collectRejectedDreamingEvidence,
-	recordRejectedDreamingEvidenceInTx,
-} from "./dreaming-evidence-retry";
+	type DreamingLiveEventHub,
+	dreamingLiveEvents,
+	publishDreamingAgentEvent,
+	publishDreamingSessionInfo,
+	publishDreamingToolTrace,
+} from "./dreaming-live-events";
 import type { ApplyDreamingOperationsResult, DreamingOperationRequest } from "./dreaming-operations";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 import {
 	DREAMING_SURPRISAL_SELECTOR_VERSION,
 	type DreamingSurprisalSelection,
 	selectDreamingSurprisalInDb,
 } from "./dreaming-surprisal";
 import {
-	type DreamingBacklogTokenEntry,
-	countDreamingBacklogTokenEntries,
 	beginDreamingEpisodicTokenBacklogMeasurement,
+	countDreamingBacklogTokenEntries,
+	type DreamingBacklogTokenEntry,
 	invalidateDreamingEpisodicTokenBacklog,
 	recordDreamingEpisodicTokenBacklog,
 	refreshDreamingBacklogTokenCache,
 } from "./dreaming-token-cache";
-import {
-	dreamingLiveEvents,
-	publishDreamingAgentEvent,
-	publishDreamingSessionInfo,
-	publishDreamingToolTrace,
-	type DreamingLiveEventHub,
-} from "./dreaming-live-events";
 import { countTokens } from "./tokenizer";
-import { dreamingScopeKey, renderDreamingHistoryForPass } from "./dreaming-history";
-import { detectLocalTimeZone } from "../memory-config";
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
 

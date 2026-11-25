@@ -1,13 +1,13 @@
 import { z } from "zod";
-
+import { readableClassificationsFor } from "../classification-access";
+import type { DbOwnerStatement } from "../db-owner-protocol";
 import { logger } from "../logger";
-import type { Principal } from "./principal";
-import { rolePermissions } from "./principal";
-import { canActAs, type AgentRecord } from "./agent-access";
+import { type AgentRecord, canActAs } from "./agent-access";
+import { groupOwner, requireAdmin, requireAudit } from "./organization-operations";
 import {
 	auditStatement,
-	id,
 	IdentityError,
+	id,
 	organizationQuery,
 	organizationWrite,
 	readOrganization,
@@ -16,9 +16,8 @@ import {
 	userPrincipal,
 	userView,
 } from "./organization-store";
-import { groupOwner, requireAdmin, requireAudit } from "./organization-operations";
-import type { DbOwnerStatement } from "../db-owner-protocol";
-import { readableClassificationsFor } from "../classification-access";
+import type { Principal } from "./principal";
+import { rolePermissions } from "./principal";
 
 const text = z.string().trim().min(1).max(128);
 export async function invites(p: Principal) {
@@ -423,11 +422,14 @@ export async function settleOffboardPurge(work: Promise<void>, jobId: string): P
 	if (result?.status !== "rejected") return;
 	const [recorded] = await Promise.allSettled([
 		organizationWrite([
-			statement("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=?", [
-				result.reason instanceof Error ? result.reason.message : String(result.reason),
-				new Date().toISOString(),
-				jobId,
-			]),
+			{
+				...statement("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=?", [
+					result.reason instanceof Error ? result.reason.message : String(result.reason),
+					new Date().toISOString(),
+					jobId,
+				]),
+				requireChanges: true,
+			},
 		]),
 	]);
 	if (recorded?.status === "rejected")

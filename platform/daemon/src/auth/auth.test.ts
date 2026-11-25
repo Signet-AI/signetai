@@ -1,20 +1,19 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Hono } from "hono";
-
-import { generateSecret, loadOrCreateSecret, createToken, verifyToken } from "./tokens";
-import { hashPassword, verifyPasswordHash } from "./password";
-import { checkPermission, checkScope } from "./policy";
-import { AuthRateLimiter } from "./rate-limiter";
+import { parseAuthConfig } from "./config";
 import {
 	createAuthMiddleware,
 	requirePermission,
 	requirePermissionWithRateLimit,
 	requireRateLimit,
 } from "./middleware";
-import { parseAuthConfig } from "./config";
+import { hashPassword, verifyPasswordHash } from "./password";
+import { checkPermission, checkScope } from "./policy";
+import { AuthRateLimiter } from "./rate-limiter";
+import { createToken, generateSecret, loadOrCreateSecret, verifyToken } from "./tokens";
 import type { TokenClaims, TokenRole } from "./types";
 
 describe("tokens", () => {
@@ -388,6 +387,7 @@ const testLoginConfig = {
 };
 
 const teamConfig = {
+	...parseAuthConfig(undefined, "/isolated"),
 	mode: "team" as const,
 	secretPath: "",
 	rateLimits: {},
@@ -396,6 +396,7 @@ const teamConfig = {
 	login: testLoginConfig,
 };
 const localConfig = {
+	...parseAuthConfig(undefined, "/isolated"),
 	mode: "local" as const,
 	secretPath: "",
 	rateLimits: {},
@@ -404,6 +405,7 @@ const localConfig = {
 	login: testLoginConfig,
 };
 const hybridConfig = {
+	...parseAuthConfig(undefined, "/isolated"),
 	mode: "hybrid" as const,
 	secretPath: "",
 	rateLimits: {},

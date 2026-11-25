@@ -1,16 +1,16 @@
-import type { WriteAuthor } from "./auth/audit-owner";
-import { requireWriteAuthor, authoredAuditStatements } from "./auth/audit-owner";
 import { randomUUID } from "node:crypto";
 import type { AgentRosterReadPolicy } from "@signet/core";
 import { getAgentScope } from "./agent-id";
+import type { WriteAuthor } from "./auth/audit-owner";
+import { authoredAuditStatements, requireWriteAuthor } from "./auth/audit-owner";
 import {
 	type AgentMessage,
 	type CrossAgentMessageRow,
 	isMessageVisibleToAgent,
 	rowToAgentMessage,
 } from "./cross-agent";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import type { DbOwnerParameter, DbOwnerStatement } from "./db-owner-protocol";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import type { BoardActivityNotice } from "./notifications/cross-agent-notifications";

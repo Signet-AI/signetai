@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeCrossAgentFixture, createAgentMessage } from "./__tests__/cross-agent-fixture";
+import { invalidateAgentScopeCache } from "./agent-id";
 import {
-	type BoardViewer,
 	BoardConflictError,
 	BoardForbiddenError,
 	BoardNotFoundError,
 	BoardValidationError,
+	type BoardViewer,
 	claimBoardActivityNotices,
 	createBoardEventVisibility,
 	createBoardThread,
@@ -22,12 +24,10 @@ import {
 	updateBoardThread,
 } from "./board";
 import { resetCrossAgentStateForTest } from "./cross-agent";
-import { createAgentMessage, closeCrossAgentFixture } from "./__tests__/cross-agent-fixture";
 import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { getDbAccessor, initDbAccessor } from "./db-accessor";
-import { readRecentEpisodicSources } from "./episodic-sources";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
-import { invalidateAgentScopeCache } from "./agent-id";
+import { readRecentEpisodicSources } from "./episodic-sources";
 
 let tempDir = "";
 

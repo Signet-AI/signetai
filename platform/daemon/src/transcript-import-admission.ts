@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { addImportedSource, resolveDefaultBasePath } from "@signet/core";
+import type { WriteAuthor } from "./auth/audit-owner";
 import {
 	appendTranscriptChunk,
 	beginTranscriptUpload,
@@ -12,7 +13,7 @@ import { withTranscriptImportOperationLock } from "./transcript-import-operation
 import { controlImport, createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
 
 export interface TranscriptImportAdmissionInput {
-	readonly author: import("./auth/audit-owner").WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly fileName: string;
 	readonly bytes: Uint8Array;

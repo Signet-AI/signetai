@@ -1,6 +1,5 @@
-import type { WriteAuthor } from "../auth/audit-owner";
-import type { DreamingPassLiveOptions } from "./dreaming";
 import type { DreamingConfig, DreamingPolicies } from "@signet/core";
+import type { WriteAuthor } from "../auth/audit-owner";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
@@ -10,15 +9,17 @@ import { getOrCreateInferenceRouter } from "../inference-router";
 import type { GraphHygieneCaps } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
 import { isSystemPressureHigh } from "../system-pressure";
-import { getLlmConcurrencyLimit } from "./provider";
+import type { DreamingPassLiveOptions } from "./dreaming";
 import {
-	type DreamingAgentExecutor,
-	type DreamingMode,
-	type DreamingPassFocus,
 	createDreamingPass,
 	createDreamingPassThroughOwner,
-	dreamingPassPolicy,
+	type DreamingAgentExecutor,
+	type DreamingEpisodicBacklogProbe,
+	type DreamingMode,
+	type DreamingPassFocus,
+	type DreamingTriggerDecision,
 	dreamingFocusOfMode,
+	dreamingPassPolicy,
 	enqueueDreamingHygieneAttention,
 	enqueueDreamingSurprisalAttention,
 	evaluateDreamingTrigger,
@@ -28,13 +29,12 @@ import {
 	recordDreamingFailure,
 	runDreamingAgentPass,
 	selectDreamingPassMode,
-	type DreamingEpisodicBacklogProbe,
-	type DreamingTriggerDecision,
 } from "./dreaming";
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
-import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
-import type { PiAgentRetryPolicy } from "./pi-agent-protocol";
+import { autoRequeueRepairedDreamingEvidence, type DreamingEvidenceRetryPolicy } from "./dreaming-evidence-retry";
 import { compactDreamingHistory, type DreamingHistoryCompleter, narrowDreamingPassScopeKey } from "./dreaming-history";
+import type { PiAgentRetryPolicy } from "./pi-agent-protocol";
+import { getLlmConcurrencyLimit } from "./provider";
 
 const DREAMING_PROVIDER_RETRY: PiAgentRetryPolicy = { maxRetries: 8, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 };
 export class AlreadyRunningError extends Error {

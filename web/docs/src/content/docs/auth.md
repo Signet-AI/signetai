@@ -19,11 +19,29 @@ An unclaimed team daemon prints a one-time setup token. Claim it through `POST /
 
 Browser sessions use `signet_session` (HttpOnly, SameSite=Lax) and `signet_csrf`. Cookie-authenticated writes require `x-signet-csrf` containing the CSRF secret. Cookies are Secure over HTTPS or when the configured public URL is HTTPS. Secure cookies use the `__Host-` prefix (`__Host-signet_session` and `__Host-signet_csrf`); HTTP loopback keeps the plain names. Bearer-authenticated clients do not need CSRF headers.
 
-CLI and desktop sessions use the device-code flow and rotating refresh tokens. Retrying a refresh token rotated away less than 60 seconds ago returns the same current access/refresh pair, including after a daemon restart. Older reuse revokes the session with `refresh_reuse`. Session, device, and key revocations and user deactivation are checked against server records on every request. Logout leaves connector keys intact; revoke the key or device to stop a connector.
+CLI and desktop sessions use the device-code flow and rotating refresh tokens. Retrying a rotated-away refresh token returns the same current access/refresh pair until the client first uses that pair, up to 24 hours after rotation, including across daemon restarts. Using the new access token on an authenticated request or refreshing with the new refresh token ends the old token’s retry grace. Reusing the old token afterward revokes the session with `refresh_reuse`. Session, device, and key revocations and user deactivation are checked against server records on every request. Logout leaves connector keys intact; revoke the key or device to stop a connector.
 
 The `member` role has core memory and document permissions. Admin adds administration and audit, not classification authority. A compliance flag adds `classify` and `audit`. Connector permissions are bounded by their user and their enforced agent, harness, device, and project bindings. Actor headers cannot change the authenticated user.
 
 Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. `whoami.effectiveAccess` is `open`, `authenticated`, or `none`.
+
+## Reverse proxies and browser origins
+
+`auth.trustedProxies` is an IP/CIDR list, empty by default. It is validated when configuration loads. List only proxies that you control:
+
+```yaml
+auth:
+  mode: team
+  trustedProxies:
+    - 192.0.2.10
+    - "2001:db8:1::/48"
+```
+
+When the socket peer is trusted, the daemon uses the rightmost untrusted `X-Forwarded-For` hop as the client address and honors `X-Forwarded-Proto` and `X-Forwarded-Host` for the browser-facing origin. Configure the proxy to replace client-supplied forwarding headers. Otherwise, forwarded headers do not change the client address or origin. Without a trusted-proxy entry, clients behind one proxy share its rate-limit bucket. Forwarding headers still disable hybrid loopback trust, even when the proxy is trusted.
+
+Browser authentication writes accept the configured organization public URL or the request origin, including the origin supplied by a trusted proxy. Local and hybrid modes also accept the existing development dashboard origins, including `http://localhost:5173` and `http://127.0.0.1:5173`; team mode does not grant that development exception. Cookie-authenticated writes still require CSRF protection.
+
+Password login allows five attempts per minute for each username/client-address pair and at most 30 per username across clients. Open authentication endpoints also have per-client admission limits. Full limiter maps evict their oldest-expiring entries rather than rejecting every new client.
 
 ## Legacy team configuration
 

@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
+
 const pairSchema = z.object({
 	accessToken: z.string().regex(/^sig_ses_ses_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/),
 	refreshToken: z.string().regex(/^sig_ref_ses_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/),
@@ -34,7 +35,7 @@ export function appendRefreshRetry(
 ): string {
 	const live = entries(raw).filter((entry) => entry.expiresAt > now);
 	if (live.length >= 64) throw new RefreshRetryCapacityError("Refresh retry capacity reached");
-	const expiresAt = now + 60_000;
+	const expiresAt = now + 86400_000;
 	const nonce = randomBytes(12);
 	const cipher = createCipheriv("aes-256-gcm", createHash("sha256").update(token).digest(), nonce);
 	cipher.setAAD(aad(sessionId, previousHash, expiresAt));
