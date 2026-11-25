@@ -1,4 +1,4 @@
-import type { DbAccessor, ReadDb } from "./db-accessor";
+import type { ReadDb } from "./db-accessor";
 
 export type BlackBoxEventKind =
 	| "recall.requested"
@@ -190,7 +190,7 @@ function listTelemetryEvents(
 		.prepare(
 			`SELECT id, created_at, route, query, result_count, top_score, duration_ms, results_json
 			 FROM memory_search_telemetry
-			 WHERE agent_id = ? AND session_key = ? AND (? IS NULL OR project = ?)
+			 WHERE ${agentId === "all" ? "? IS NOT NULL" : "agent_id = ?"} AND session_key = ? AND (? IS NULL OR project = ?)
 			 ORDER BY created_at ASC
 			 LIMIT ?`,
 		)
@@ -244,7 +244,7 @@ function listSessionRecallEvents(
 		.prepare(
 			`SELECT session_key, item_kind, item_id, surface, mode, score, source, created_at
 			 FROM session_recall_events
-			 WHERE agent_id = ? AND (session_key = ? OR (session_key >= ? AND session_key < ?))
+			 WHERE ${agentId === "all" ? "? IS NOT NULL" : "agent_id = ?"} AND (session_key = ? OR (session_key >= ? AND session_key < ?))
 			 ORDER BY created_at ASC
 			 LIMIT ?`,
 		)
@@ -279,7 +279,7 @@ function listArtifactEvents(
 			`SELECT source_path, source_kind, session_id, session_key, session_token, project, harness,
 			        captured_at, memory_sentence, source_id, source_external_id
 			 FROM memory_artifacts
-			 WHERE agent_id = ?
+			 WHERE ${agentId === "all" ? "? IS NOT NULL" : "agent_id = ?"}
 			   AND COALESCE(is_deleted, 0) = 0
 			   AND (? IS NULL OR project = ?)
 			   AND (session_id = ? OR session_key = ? OR session_token = ?)
@@ -326,7 +326,7 @@ function listAssertionEvents(
 					`SELECT ea.id, ea.subject_entity_id, ea.predicate, ea.content, ea.source_kind, ea.source_id, ea.source_path,
 					        ea.status, ea.asserted_at, ea.confidence
 					 FROM epistemic_assertions ea
-					 WHERE ea.agent_id = ?
+					 WHERE ${agentId === "all" ? "? IS NOT NULL" : "ea.agent_id = ?"}
 					   AND EXISTS (
 					     SELECT 1
 					     FROM memory_artifacts ma
@@ -350,7 +350,7 @@ function listAssertionEvents(
 					`SELECT id, subject_entity_id, predicate, content, source_kind, source_id, source_path,
 					        status, asserted_at, confidence
 					 FROM epistemic_assertions
-					 WHERE agent_id = ?
+					 WHERE ${agentId === "all" ? "? IS NOT NULL" : "agent_id = ?"}
 					   AND (source_id = ? OR source_path = ?)
 					 ORDER BY asserted_at ASC
 					 LIMIT ?`,
@@ -417,30 +417,23 @@ function buildFrame(events: readonly BlackBoxEvent[], requestedAt?: string): Bla
 	};
 }
 
-export function buildBlackBoxSession(
-	accessor: DbAccessor,
-	input: {
-		readonly agentId: string;
-		readonly sessionKey: string;
-		readonly project?: string;
-		readonly at?: string;
-		readonly limit?: number;
-	},
-): BlackBoxSession {
+export interface BlackBoxReadInput {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly project?: string;
+	readonly at?: string;
+	readonly limit?: number;
+}
+export function buildBlackBoxSessionInDb(db: ReadDb, input: BlackBoxReadInput): BlackBoxSession {
 	const limit = Math.max(1, Math.min(input.limit ?? MAX_EVENTS, MAX_EVENTS));
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const events = accessor.withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
-			[
-				...listTelemetryEvents(db, input.agentId, input.sessionKey, input.project, limit),
-				...listSessionRecallEvents(db, input.agentId, input.sessionKey, input.project, limit),
-				...listArtifactEvents(db, input.agentId, input.sessionKey, input.project, limit),
-				...listAssertionEvents(db, input.agentId, input.sessionKey, input.project, limit),
-			]
-				.sort(compareEvent)
-				.slice(0, limit),
-		"black-box.ts:432",
-	);
+	const events = [
+		...listTelemetryEvents(db, input.agentId, input.sessionKey, input.project, limit),
+		...listSessionRecallEvents(db, input.agentId, input.sessionKey, input.project, limit),
+		...listArtifactEvents(db, input.agentId, input.sessionKey, input.project, limit),
+		...listAssertionEvents(db, input.agentId, input.sessionKey, input.project, limit),
+	]
+		.sort(compareEvent)
+		.slice(0, limit);
 	return {
 		sessionKey: input.sessionKey,
 		agentId: input.agentId,
@@ -458,70 +451,70 @@ interface SessionAggregateRow {
 	readonly count: number;
 }
 
-export function listBlackBoxSessions(
-	accessor: DbAccessor,
-	input: { readonly agentId: string; readonly project?: string; readonly limit?: number },
-): readonly BlackBoxSessionSummary[] {
+export interface BlackBoxListInput {
+	readonly agentId: string;
+	readonly project?: string;
+	readonly limit?: number;
+}
+export function listBlackBoxSessionsInDb(db: ReadDb, input: BlackBoxListInput): readonly BlackBoxSessionSummary[] {
 	const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const bySession = new Map<string, BlackBoxSessionSummary>();
-		const telemetryRows = db
-			.prepare(
-				`SELECT session_key, project, MAX(created_at) AS last_at, COUNT(*) AS count
+	const agentId = input.agentId;
+	const bySession = new Map<string, BlackBoxSessionSummary>();
+	const telemetryRows = db
+		.prepare(
+			`SELECT session_key, project, MAX(created_at) AS last_at, COUNT(*) AS count
 				 FROM memory_search_telemetry
-				 WHERE agent_id = ? AND session_key IS NOT NULL AND session_key != '' AND (? IS NULL OR project = ?)
+				 WHERE ${agentId === "all" ? "? IS NOT NULL" : "agent_id = ?"} AND session_key IS NOT NULL AND session_key != '' AND (? IS NULL OR project = ?)
 				 GROUP BY session_key
 				 ORDER BY last_at DESC
 				 LIMIT ?`,
-			)
-			.all(
-				input.agentId,
-				input.project ?? null,
-				input.project ?? null,
-				limit,
-			) as unknown as readonly SessionAggregateRow[];
-		for (const row of telemetryRows) {
-			if (!row.session_key || !row.last_at) continue;
-			bySession.set(row.session_key, {
-				sessionKey: row.session_key,
-				agentId: input.agentId,
-				project: row.project,
-				lastAt: row.last_at,
-				recallEvents: row.count,
-				artifactEvents: 0,
-			});
-		}
+		)
+		.all(
+			input.agentId,
+			input.project ?? null,
+			input.project ?? null,
+			limit,
+		) as unknown as readonly SessionAggregateRow[];
+	for (const row of telemetryRows) {
+		if (!row.session_key || !row.last_at) continue;
+		bySession.set(row.session_key, {
+			sessionKey: row.session_key,
+			agentId: input.agentId,
+			project: row.project,
+			lastAt: row.last_at,
+			recallEvents: row.count,
+			artifactEvents: 0,
+		});
+	}
 
-		const artifactRows = db
-			.prepare(
-				`SELECT COALESCE(NULLIF(session_key, ''), session_id, session_token) AS session_key,
+	const artifactRows = db
+		.prepare(
+			`SELECT COALESCE(NULLIF(session_key, ''), session_id, session_token) AS session_key,
 				        project, MAX(captured_at) AS last_at, COUNT(*) AS count
 				 FROM memory_artifacts
-				 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0 AND (? IS NULL OR project = ?)
+				 WHERE ${agentId === "all" ? "? IS NOT NULL" : "agent_id = ?"} AND COALESCE(is_deleted, 0) = 0 AND (? IS NULL OR project = ?)
 				 GROUP BY COALESCE(NULLIF(session_key, ''), session_id, session_token)
 				 ORDER BY last_at DESC
 				 LIMIT ?`,
-			)
-			.all(
-				input.agentId,
-				input.project ?? null,
-				input.project ?? null,
-				limit,
-			) as unknown as readonly SessionAggregateRow[];
-		for (const row of artifactRows) {
-			if (!row.session_key || !row.last_at) continue;
-			const existing = bySession.get(row.session_key);
-			bySession.set(row.session_key, {
-				sessionKey: row.session_key,
-				agentId: input.agentId,
-				project: existing?.project ?? row.project,
-				lastAt: existing && existing.lastAt > row.last_at ? existing.lastAt : row.last_at,
-				recallEvents: existing?.recallEvents ?? 0,
-				artifactEvents: row.count,
-			});
-		}
+		)
+		.all(
+			input.agentId,
+			input.project ?? null,
+			input.project ?? null,
+			limit,
+		) as unknown as readonly SessionAggregateRow[];
+	for (const row of artifactRows) {
+		if (!row.session_key || !row.last_at) continue;
+		const existing = bySession.get(row.session_key);
+		bySession.set(row.session_key, {
+			sessionKey: row.session_key,
+			agentId: input.agentId,
+			project: existing?.project ?? row.project,
+			lastAt: existing && existing.lastAt > row.last_at ? existing.lastAt : row.last_at,
+			recallEvents: existing?.recallEvents ?? 0,
+			artifactEvents: row.count,
+		});
+	}
 
-		return [...bySession.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
-	}, "black-box.ts:467");
+	return [...bySession.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
 }

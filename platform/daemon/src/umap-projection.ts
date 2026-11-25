@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
 import type { ReadDb, WriteDb } from "./db-accessor";
 import { escapeLike } from "./sql-utils";
+import { readScopeSql, type ReadScope } from "./read-scope";
 let nativeKnn: typeof import("@signet/native") | null = null;
 try {
 	const esmRequire = createRequire(import.meta.url);
@@ -9,6 +10,7 @@ try {
 } catch {}
 
 export interface ProjectionNode {
+	readonly authorUserId?: string | null;
 	readonly id: string;
 	readonly x: number;
 	readonly y: number;
@@ -43,6 +45,7 @@ export interface ProjectionFilters {
 }
 
 export interface ProjectionQuery {
+	readonly scope?: ReadScope;
 	readonly limit?: number;
 	readonly offset?: number;
 	readonly filters?: ProjectionFilters;
@@ -214,6 +217,7 @@ function buildKnnEdges(projected: readonly number[][], k: number): [number, numb
 }
 
 interface EmbeddingRow {
+	author_user_id: string | null;
 	id: string;
 	content: string;
 	who: string | null;
@@ -240,6 +244,7 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 	return {
 		id,
 		content,
+		author_user_id: typeof raw.author_user_id === "string" ? raw.author_user_id : null,
 		who: typeof raw.who === "string" ? raw.who : null,
 		importance: typeof raw.importance === "number" ? raw.importance : null,
 		type: typeof raw.type === "string" ? raw.type : null,
@@ -254,7 +259,7 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 }
 
 const EMBEDDINGS_SELECT_SQL = `
-	SELECT m.id, m.content, m.who, m.importance, m.type, m.tags, m.pinned,
+	SELECT m.id, m.content, m.author_user_id, m.who, m.importance, m.type, m.tags, m.pinned,
 	       m.source_type, m.source_id, m.created_at,
 	       e.vector, e.dimensions
 `;
@@ -359,9 +364,12 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	const requestedLimit =
 		typeof query.limit === "number" && Number.isFinite(query.limit) ? Math.max(1, Math.trunc(query.limit)) : null;
 
-	const { clause, params } = buildProjectionWhere(query.filters);
+	const filter = buildProjectionWhere(query.filters);
+	const access = query.scope ? readScopeSql("m", query.scope) : { sql: "", args: [] };
+	const clause = `${filter.clause}${access.sql}${query.scope ? " AND COALESCE(m.is_deleted,0)=0 AND m.superseded_by IS NULL" : ""}`;
+	const params = [...filter.params, ...access.args];
 
-	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC`;
+	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC,m.id`;
 	const rowParams: unknown[] = [...params];
 	if (requestedLimit !== null) {
 		sql += " LIMIT ? OFFSET ?";
@@ -409,6 +417,7 @@ function buildNodesFromRows(
 	return rows.map((row, i) => {
 		const base = {
 			id: row.id,
+			authorUserId: row.author_user_id,
 			x: xs[i],
 			y: ys[i],
 			content: row.content,
@@ -448,7 +457,12 @@ function computeProjectionFromRows(rows: readonly EmbeddingRow[], nComponents: 2
 		return full.length > UMAP_MAX_DIMENSIONS ? full.slice(0, UMAP_MAX_DIMENSIONS) : full;
 	});
 	const nNeighbors = Math.min(15, Math.max(2, vectors.length - 1));
-	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0 });
+	let seed = 42;
+	const random = () => {
+		seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+		return seed / 4294967296;
+	};
+	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0, random });
 	const projected: number[][] = umap.fit(vectors);
 
 	let xs: number[];

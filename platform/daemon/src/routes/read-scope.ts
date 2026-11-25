@@ -8,7 +8,13 @@ import { parseOptionalString, resolveScopedAgentId, resolveScopedProject } from 
 
 export async function resolveRouteReadScope(
 	c: Context,
-	options: { readonly agentId?: string; readonly project?: string; readonly allowAllAgents?: boolean } = {},
+	options: {
+		readonly agentId?: string;
+		readonly project?: string;
+		readonly allowAllAgents?: boolean;
+		readonly memory?: boolean;
+		readonly localGlobal?: boolean;
+	} = {},
 ): Promise<{ readonly agentId: string; readonly scope: ReadScope } | Response> {
 	const requested =
 		options.agentId ?? c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
@@ -58,9 +64,9 @@ export async function resolveRouteReadScope(
 	const reach =
 		agentId === "all"
 			? { kind: "all" as const }
-			: policy.readPolicy === "shared"
+			: options.localGlobal || (options.memory && policy.readPolicy === "shared")
 				? { kind: "shared" as const, agentId }
-				: policy.readPolicy === "group" && policy.policyGroup
+				: options.memory && policy.readPolicy === "group" && policy.policyGroup
 					? { kind: "group" as const, agentId, group: policy.policyGroup }
 					: { kind: "own" as const, agentId };
 	return { agentId, scope: await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] }) };

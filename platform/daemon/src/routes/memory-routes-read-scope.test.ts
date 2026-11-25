@@ -13,7 +13,7 @@ let initDbAccessor: typeof import("../db-accessor").initDbAccessor;
 let closeDbAccessor: typeof import("../db-accessor").closeDbAccessor;
 let getDbAccessor: typeof import("../db-accessor").getDbAccessor;
 let invalidateAgentScopeCache: typeof import("../agent-id").invalidateAgentScopeCache;
-let createAuthMiddleware: typeof import("../auth").createAuthMiddleware;
+let createIdentityMiddleware: typeof import("../auth/identity-middleware").createIdentityMiddleware;
 let createToken: typeof import("../auth").createToken;
 let state: typeof import("./state.js");
 
@@ -36,10 +36,7 @@ async function makeApp(mode: "local" | "team"): Promise<Hono> {
 	writeAuthConfig(mode);
 	state.reloadAuthState(agentsDir);
 	const app = new appFactory();
-	if (mode === "team") {
-		if (!state.authSecret) throw new Error("expected auth secret in team mode");
-		app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
-	}
+	app.use("*", createIdentityMiddleware(state.authConfig, state.authSecret));
 	registerMemoryRoutes(app, { fetchEmbedding: async () => null });
 	return app;
 }
@@ -118,7 +115,8 @@ beforeAll(async () => {
 	({ initDbAccessor, closeDbAccessor, getDbAccessor } = await import("../db-accessor"));
 	({ invalidateAgentScopeCache } = await import("../agent-id"));
 	({ registerMemoryRoutes } = await import("./memory-routes"));
-	({ createAuthMiddleware, createToken } = await import("../auth"));
+	({ createToken } = await import("../auth"));
+	({ createIdentityMiddleware } = await import("../auth/identity-middleware"));
 	state = await import("./state.js");
 	initDbAccessor(join(agentsDir, "memory", "memories.db"));
 });
@@ -363,7 +361,7 @@ describe("memory read routes apply agent scope in local mode", () => {
 
 		expect((await get(app, "/api/memory/beta-private?agentId=alpha")).status).toBe(404);
 		expect((await get(app, "/api/memory/beta-private/history?agentId=alpha")).status).toBe(404);
-		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).body.count).toBe(0);
+		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).status).toBe(404);
 
 		expect((await get(app, "/api/memory/beta-private?agentId=beta")).body.id).toBe("beta-private");
 		expect((await get(app, "/api/memory/beta-private/history?agentId=beta")).body.count).toBe(1);
@@ -554,7 +552,7 @@ describe("memory routes keep a scoped credential to its own agent's memories by 
 
 		expect((await get(app, "/api/memory/beta-private", headers)).status).toBe(404);
 		expect((await get(app, "/api/memory/beta-private/history", headers)).status).toBe(404);
-		expect((await get(app, "/api/memory/beta-private/lineage", headers)).body.count).toBe(0);
+		expect((await get(app, "/api/memory/beta-private/lineage", headers)).status).toBe(404);
 		expect((await get(app, "/memory/similar?id=beta-global", headers)).status).toBe(404);
 		expect((await get(app, "/api/memory/alpha-private", headers)).status).toBe(200);
 	});
@@ -998,7 +996,7 @@ describe("scope boundaries around memory routes", () => {
 		expect((await get(app, "/api/memory/jobs/alpha-job", headers)).body.memory_id).toBe("alpha-private");
 	});
 
-	it("marks a similarity result truncated when out-of-scope neighbors fill the candidate window", async () => {
+	it("does not let out-of-scope neighbors fill the candidate window", async () => {
 		const app = await makeApp("team");
 		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
 		const vector = (values: number[]) => new Uint8Array(new Float32Array(values).buffer);
@@ -1021,6 +1019,7 @@ describe("scope boundaries around memory routes", () => {
 		const res = await get(app, "/memory/similar?id=alpha-global&k=1", headers);
 		expect(res.status).toBe(200);
 		expect(JSON.stringify(res.body.results)).not.toContain("beta-near");
-		expect(res.body.truncated).toBe(true);
+		expect(rowIds(res.body.results)).toEqual(["alpha-neighbor"]);
+		expect(res.body.truncated).toBeUndefined();
 	});
 });

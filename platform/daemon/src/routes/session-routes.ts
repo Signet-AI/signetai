@@ -1,9 +1,10 @@
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
-import { buildBlackBoxSession, listBlackBoxSessions } from "../black-box.js";
+
 import { getAgentPresenceForSessionAgent, listAgentPresence, touchAgentPresence } from "../cross-agent.js";
-import type { ReadDb } from "../db-accessor";
+import { contentRead } from "../content-read";
+import { resolveRouteReadScope } from "./read-scope";
 import { getDbAccessor } from "../db-accessor.js";
 import { jsonBody } from "../request-body";
 import { reportReadResult } from "../request-read";
@@ -16,9 +17,7 @@ import {
 	unbypassSession,
 } from "../session-tracker.js";
 import { deleteSessionTranscript } from "../session-transcript-lifecycle";
-import { getSessionTranscriptContent, getStoredSessionTranscriptInfo } from "../session-transcripts.js";
-import { searchSessionTranscripts } from "../subagent-context.js";
-import { expandTemporalNode } from "../temporal-expand.js";
+
 import { clampGitSyncIntervalSeconds } from "./git-config.js";
 import { authAdminLimiter, authConfig, authForgetLimiter } from "./state.js";
 import {
@@ -122,80 +121,62 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return requirePermission("admin", authConfig)(c, next);
 	});
 
-	app.get("/api/sessions", (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const sessions = listLiveSessions(scopedAgent.agentId);
+	app.get("/api/sessions", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		if (!c.get("organization") && resolved.scope.projects === null) {
+			const sessions = listLiveSessions(resolved.agentId);
+			return c.json({ sessions, count: sessions.length });
+		}
+		const rows = await contentRead<Array<Record<string, unknown>>>(
+			{ op: "transcripts", mode: "list", scope: resolved.scope, limit: 500 },
+			c.req.raw.signal,
+		);
+		const sessions = rows.map(({ content: _content, ...row }) => ({
+			...row,
+			key: row.sessionKey,
+			runtimePath: "transcript",
+			status: row.completedAt ? "stored" : "active",
+		}));
 		return c.json({ sessions, count: sessions.length });
 	});
 
-	app.get("/api/sessions/blackbox", (c) => {
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			parseOptionalString(c.req.query("agent_id")) ?? parseOptionalString(c.req.query("agentId")),
-			"default",
+	app.get("/api/sessions/blackbox", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const raw = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const limit = Number.isFinite(raw) ? Math.max(1, Math.min(100, raw)) : 50;
+		const sessions = await contentRead<unknown[]>(
+			{ op: "blackbox_list", scope: resolved.scope, agentId: resolved.agentId, project: c.req.query("project"), limit },
+			c.req.raw.signal,
 		);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const scopedProject = resolveScopedProject(c, c.req.query("project"));
-		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
-		const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10);
-		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, limitRaw)) : 50;
-		const sessions = listBlackBoxSessions(getDbAccessor(), {
-			agentId: scopedAgent.agentId,
-			project: scopedProject.project,
-			limit,
-		});
-		return c.json({ agentId: scopedAgent.agentId, project: scopedProject.project, sessions, count: sessions.length });
+		return c.json({ agentId: resolved.agentId, project: c.req.query("project"), sessions, count: sessions.length });
 	});
 
 	app.post("/api/sessions/search", async (c) => {
 		const body = await readOptionalJsonObject(c);
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const query = typeof body.query === "string" ? body.query.trim() : "";
-		if (query.length === 0) return c.json({ error: "query is required" }, 400);
-
-		const rawAgentId =
-			(typeof body.agentId === "string" ? body.agentId : undefined) ??
-			(typeof body.agent_id === "string" ? body.agent_id : undefined) ??
-			c.req.query("agent_id");
-		const rawCurrentSessionKey =
-			(typeof body.currentSessionKey === "string" ? body.currentSessionKey : undefined) ??
-			(typeof body.current_session_key === "string" ? body.current_session_key : undefined);
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			resolveAgentId({
-				agentId: rawAgentId,
-				sessionKey: rawCurrentSessionKey ?? (typeof body.sessionKey === "string" ? body.sessionKey : undefined),
-			}),
+		if (!query) return c.json({ error: "query is required" }, 400);
+		const resolved = await resolveRouteReadScope(c, {
+			agentId: parseOptionalString(body.agentId) ?? parseOptionalString(body.agent_id),
+			project: parseOptionalString(body.project),
+		});
+		if (resolved instanceof Response) return resolved;
+		const raw = typeof body.limit === "number" ? body.limit : Number(c.req.query("limit") ?? 10);
+		const limit = Number.isFinite(raw) ? Math.max(1, Math.min(20, Math.trunc(raw))) : 10;
+		const hits = await contentRead<Array<Record<string, unknown>>>(
+			{
+				op: "transcripts",
+				mode: "search",
+				query,
+				scope: resolved.scope,
+				sessionKey: parseOptionalString(body.sessionKey) ?? parseOptionalString(body.session_key),
+				limit,
+			},
+			c.req.raw.signal,
 		);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const scopedProject = resolveScopedProject(
-			c,
-			(typeof body.project === "string" ? body.project : undefined) ?? c.req.query("project"),
-		);
-		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
-
-		const limitRaw = typeof body.limit === "number" ? body.limit : Number(c.req.query("limit") ?? 10);
-		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.trunc(limitRaw))) : 10;
-		const sessionKey =
-			(typeof body.sessionKey === "string" ? body.sessionKey : undefined) ??
-			(typeof body.session_key === "string" ? body.session_key : undefined);
-
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const hits = getDbAccessor().withReadDb(
-			(db: ReadDb) =>
-				searchSessionTranscripts({
-					db,
-					query,
-					agentId: scopedAgent.agentId,
-					sessionKey,
-					currentSessionKey: rawCurrentSessionKey,
-					project: scopedProject.project,
-					limit,
-				}),
-			"routes/session-routes.ts:185",
-		);
-		reportReadResult(c, scopedAgent.agentId, hits.length);
+		reportReadResult(c, resolved.agentId, hits.length);
 		return c.json({ query, hits, count: hits.length });
 	});
 
@@ -246,82 +227,57 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return c.json(result);
 	});
 
-	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", (c) => {
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c) => {
 		const key = normalizeSessionKey(c.req.param("key"));
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			resolveAgentId({
-				agentId: c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: key,
-			}),
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const row = await contentRead<Record<string, unknown> | null>(
+			{ op: "transcripts", mode: "detail", scope: resolved.scope, sessionKey: key, limit: 1 },
+			c.req.raw.signal,
 		);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const scopedProject = resolveScopedProject(c, c.req.query("project"));
-		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
-		const content = getSessionTranscriptContent(key, scopedAgent.agentId, scopedProject.project);
-		if (!content) return c.json({ error: "Transcript not found" }, 404);
-		return c.json({ sessionKey: key, agentId: scopedAgent.agentId, content });
+		if (!row) return c.json({ error: "Transcript not found" }, 404);
+		return c.json(row);
 	});
 
-	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/blackbox", (c) => {
-		const key = c.req.param("key").trim();
-		const requestedAgentId =
-			parseOptionalString(c.req.query("agent_id")) ??
-			parseOptionalString(c.req.query("agentId")) ??
-			parseOptionalString(c.req.header("x-signet-agent-id"));
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			requestedAgentId ?? (key.startsWith("agent:") ? resolveAgentId({ sessionKey: key }) : undefined),
-		);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const scopedProject = resolveScopedProject(c, c.req.query("project"));
-		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
-		const atRaw = parseOptionalString(c.req.query("at"));
-		let at: string | undefined;
-		if (atRaw) {
-			const parsed = new Date(atRaw);
-			if (Number.isNaN(parsed.getTime())) return c.json({ error: "at must be an ISO timestamp" }, 400);
-			at = parsed.toISOString();
-		}
-		const limitRaw = Number.parseInt(c.req.query("limit") ?? "500", 10);
-		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 500;
-		return c.json(
-			buildBlackBoxSession(getDbAccessor(), {
-				agentId: scopedAgent.agentId,
-				sessionKey: key,
-				project: scopedProject.project,
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/blackbox", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const at = c.req.query("at");
+		if (at && Number.isNaN(Date.parse(at))) return c.json({ error: "at must be an ISO timestamp" }, 400);
+		const raw = Number.parseInt(c.req.query("limit") ?? "500", 10);
+		const limit = Number.isFinite(raw) ? Math.max(1, Math.min(500, raw)) : 500;
+		const result = await contentRead<import("../black-box").BlackBoxSession>(
+			{
+				op: "blackbox",
+				scope: resolved.scope,
+				agentId: resolved.agentId,
+				sessionKey: normalizeSessionKey(c.req.param("key")),
+				project: c.req.query("project"),
 				at,
 				limit,
-			}),
+			},
+			c.req.raw.signal,
 		);
+		return c.json(result);
 	});
 
-	app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}", async (c) => {
 		const key = normalizeSessionKey(c.req.param("key"));
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			resolveAgentId({
-				agentId: c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: key,
-			}),
-			"default",
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const stored = await contentRead<Record<string, unknown> | null>(
+			{ op: "transcripts", mode: "detail", scope: resolved.scope, sessionKey: key, limit: 1 },
+			c.req.raw.signal,
 		);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const scopedProject = resolveScopedProject(c, c.req.query("project"));
-		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
-		const stored = getStoredSessionTranscriptInfo(key, scopedAgent.agentId);
-		if (scopedProject.project !== undefined && (stored?.project ?? "") !== scopedProject.project) {
-			return c.json({ error: "Session not found" }, 404);
+		if (!c.get("organization") && (resolved.scope.projects === null || stored)) {
+			const live = listLiveSessions(resolved.agentId).find((row) => row.key === key);
+			if (live) return c.json(live);
 		}
-		const session = listLiveSessions(scopedAgent.agentId).find((s) => s.key === key);
-		if (session) return c.json(session);
 		if (!stored) return c.json({ error: "Session not found" }, 404);
+		const { content: _content, ...row } = stored;
 		return c.json({
+			...row,
 			key: `session:${stored.sessionKey}`,
-			sessionKey: stored.sessionKey,
-			agentId: stored.agentId,
-			harness: stored.harness,
-			project: stored.project,
 			runtimePath: "transcript",
 			provider: "session_transcripts",
 			startedAt: stored.createdAt,
@@ -386,101 +342,27 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return c.json({ key, renewed: true, expiresAt });
 	});
 
-	app.get("/api/sessions/summaries", (c) => {
-		const accessor = getDbAccessor();
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			resolveAgentId({
-				agentId:
-					parseOptionalString(c.req.query("agent_id")) ??
-					parseOptionalString(c.req.query("agentId")) ??
-					parseOptionalString(c.req.header("x-signet-agent-id")),
-				sessionKey:
-					parseOptionalString(c.req.query("session_key")) ??
-					parseOptionalString(c.req.query("sessionKey")) ??
-					parseOptionalString(c.req.header("x-signet-session-key")),
-			}),
-		);
-		if (scopedAgent.error) {
-			return c.json({ error: scopedAgent.error }, 403);
-		}
-		const scopedProject = resolveScopedProject(c, c.req.query("project"));
-		if (scopedProject.error) {
-			return c.json({ error: scopedProject.error }, 403);
-		}
-		const agentId = scopedAgent.agentId;
-		const project = scopedProject.project;
-		const summarySessionKey =
-			parseOptionalString(c.req.query("session_key")) ?? parseOptionalString(c.req.query("sessionKey"));
+	app.get("/api/sessions/summaries", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
 		const depthRaw = c.req.query("depth");
-		const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
-		if (
-			depthNum !== undefined &&
-			(Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")
-		) {
+		const depth = depthRaw === undefined ? undefined : Number(depthRaw);
+		if (depth !== undefined && (!Number.isSafeInteger(depth) || depth < 0 || depthRaw?.trim() === ""))
 			return c.json({ error: "depth must be a non-negative integer" }, 400);
-		}
-		const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
-		const offsetParsed = Number.parseInt(c.req.query("offset") ?? "0", 10);
-		const limit = Number.isFinite(limitParsed) ? Math.min(Math.max(limitParsed, 0), 200) : 50;
-		const offset = Number.isFinite(offsetParsed) ? Math.max(offsetParsed, 0) : 0;
-
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const tableExists = accessor.withReadDb(
-			(db: ReadDb) =>
-				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:429",
+		const limit = Math.max(0, Math.min(200, Number.parseInt(c.req.query("limit") ?? "50", 10) || 0));
+		const offset = Math.max(0, Number.parseInt(c.req.query("offset") ?? "0", 10) || 0);
+		const result = await contentRead<{ summaries: Array<Record<string, unknown>>; total: number }>(
+			{
+				op: "summaries",
+				scope: resolved.scope,
+				depth,
+				sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
+				limit,
+				offset,
+			},
+			c.req.raw.signal,
 		);
-		if (!tableExists) {
-			return c.json({ summaries: [], total: 0 });
-		}
-
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return accessor.withReadDb((db: ReadDb) => {
-			let where = "WHERE agent_id = ?";
-			const params: unknown[] = [agentId];
-
-			if (project) {
-				where += " AND project = ?";
-				params.push(project);
-			}
-			if (depthNum !== undefined) {
-				where += " AND depth = ?";
-				params.push(depthNum);
-			}
-			if (summarySessionKey) {
-				where += " AND session_key = ?";
-				params.push(summarySessionKey);
-			}
-
-			const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM session_summaries ${where}`).get(...params) as
-				| { cnt: number }
-				| undefined;
-
-			const summaries = db
-				.prepare(
-					`SELECT id, project, depth, kind, content, token_count,
-					        earliest_at, latest_at, session_key, harness, agent_id,
-					        source_type, source_ref, meta_json, created_at
-					 FROM session_summaries
-					 ${where}
-					 ORDER BY latest_at DESC
-					 LIMIT ? OFFSET ?`,
-				)
-				.all(...params, limit, offset) as Array<Record<string, unknown>>;
-
-			const childCountStmt = db.prepare("SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?");
-
-			const enriched = summaries.map((s) => {
-				const childRow = childCountStmt.get(s.id) as { cnt: number } | undefined;
-				return { ...s, childCount: childRow?.cnt ?? 0 };
-			});
-
-			return c.json({
-				summaries: enriched,
-				total: countRow?.cnt ?? 0,
-			});
-		}, "routes/session-routes.ts:439");
+		return c.json(result);
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {
@@ -495,26 +377,22 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			typeof body.transcriptCharLimit === "number" && Number.isFinite(body.transcriptCharLimit)
 				? Math.max(200, Math.min(12000, Math.trunc(body.transcriptCharLimit)))
 				: undefined;
-		const scopedAgent = resolveScopedAgentId(
-			c,
-			resolveAgentId({
-				agentId: typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
-				sessionKey: typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
-			}),
-		);
-		if (scopedAgent.error) {
-			return c.json({ error: scopedAgent.error }, 403);
-		}
-		const scopedProject = resolveScopedProject(c, undefined);
-		if (scopedProject.error) {
-			return c.json({ error: scopedProject.error }, 403);
-		}
-
-		const result = expandTemporalNode(id, scopedAgent.agentId, {
-			includeTranscript,
-			project: scopedProject.project,
-			transcriptCharLimit,
+		const resolved = await resolveRouteReadScope(c, {
+			agentId: parseOptionalString(body.agentId),
+			project: parseOptionalString(body.project),
 		});
+		if (resolved instanceof Response) return resolved;
+		const result = await contentRead<Record<string, unknown> | null>(
+			{
+				op: "summary_expand",
+				id,
+				agentId: resolved.agentId,
+				scope: resolved.scope,
+				includeTranscript,
+				transcriptCharLimit,
+			},
+			c.req.raw.signal,
+		);
 		if (!result) {
 			return c.json({ error: "summary node not found" }, 404);
 		}

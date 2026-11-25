@@ -1,3 +1,7 @@
+import { contentRead } from "../content-read";
+import { type ReadScope, readScopeSql, audienceSubjectFromPrincipal } from "../read-scope";
+import { resolveRouteReadScope } from "./read-scope";
+import type { DbOwnerStatement } from "../db-owner-protocol";
 import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
@@ -45,6 +49,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isDuplicateMode(value: unknown): value is ImportDuplicateMode {
 	return typeof value === "string" && (IMPORT_DUPLICATE_MODES as readonly string[]).includes(value);
 }
+const importReadScopes = new WeakMap<Context, ReadScope>();
+async function readImportQuery<T>(
+	c: Context,
+	statement: DbOwnerStatement,
+	_options: Parameters<typeof dbOwnerQuery>[1],
+): Promise<T> {
+	const scope = importReadScopes.get(c);
+	if (!scope) throw new Error("Import read scope missing");
+	const principal = c.get("principal");
+	return contentRead<T>(
+		{
+			op: "scoped_query",
+			scope,
+			statement,
+			subject: principal ? audienceSubjectFromPrincipal(principal) : { local: true, userId: null, groupIds: [] },
+		},
+		c.req.raw.signal,
+	);
+}
+
 export function resolveTranscriptImportAgent(
 	claims: TokenClaims | null,
 	authMode: AuthMode,
@@ -69,6 +93,11 @@ export function resolveTranscriptImportAgent(
 
 function agent(c: Context): string | null {
 	if (c.get("organization")) {
+		const principal = c.get("principal");
+		if (c.req.method === "GET" && c.get("requestedOrganizationAgent") === "all")
+			return principal?.role === "admin" && principal.permissions.has("admin") && !principal.boundAgentId
+				? "all"
+				: null;
 		const resolved = resolveScopedAgentId(c, undefined);
 		return resolved.error ? null : resolved.agentId;
 	}
@@ -153,6 +182,16 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 	});
 	app.use("/api/sources/imports", permission("modify"));
 	app.use("/api/sources/imports/*", permission("modify"));
+	const bindRead = async (c: Context, next: () => Promise<void>) => {
+		if (c.req.method === "GET") {
+			const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+			if (resolved instanceof Response) return resolved;
+			importReadScopes.set(c, resolved.scope);
+		}
+		await next();
+	};
+	app.use("/api/sources/imports", bindRead);
+	app.use("/api/sources/imports/*", bindRead);
 	app.post("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
@@ -182,9 +221,10 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 	app.get("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
-		const rows = await dbOwnerQuery(
+		const rows = await readImportQuery(
+			c,
 			{
-				sql: "SELECT * FROM source_import_jobs WHERE agent_id = ? ORDER BY created_at DESC LIMIT 100",
+				sql: `SELECT * FROM source_import_jobs WHERE ${importReadScopes.get(c)?.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} ORDER BY created_at DESC LIMIT 100`,
 				params: [agentId],
 				result: "all",
 				readonly: true,
@@ -205,7 +245,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			return c.json({ error: "invalid export bounds" }, 400);
 		const since = c.req.query("since"),
 			until = c.req.query("until");
-		const where = ["agent_id = ?"];
+		const where = [importReadScopes.get(c)?.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"];
 		const params: Array<string | number> = [agentId];
 		if (harnesses.length) {
 			where.push(`harness IN (${harnesses.map(() => "?").join(",")})`);
@@ -221,7 +261,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		}
 		const json = c.req.query("json") === "true",
 			messagesOnly = c.req.query("messagesOnly") === "true";
-		let cursor: [string, string] | undefined,
+		let cursor: [string, string, string] | undefined,
 			visited = 0,
 			emitted = 0,
 			opened = false;
@@ -241,11 +281,15 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 							controller.close();
 							return;
 						}
-						const row = await dbOwnerQuery<
-							Omit<Parameters<typeof buildExportTranscriptRecord>[0], "content"> & { bytes: number }
+						const row = await readImportQuery<
+							Omit<Parameters<typeof buildExportTranscriptRecord>[0], "content"> & {
+								bytes: number;
+								speaker_user_id: string | null;
+							}
 						>(
+							c,
 							{
-								sql: `SELECT session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${where.join(" AND ")} ${cursor ? "AND (created_at,session_key) > (?,?)" : ""} ORDER BY created_at,session_key LIMIT 1`,
+								sql: `SELECT speaker_user_id,session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${where.join(" AND ")} ${cursor ? "AND (created_at,session_key,agent_id) > (?,?,?)" : ""} ORDER BY created_at,session_key,agent_id LIMIT 1`,
 								params: [...params, ...(cursor ?? [])],
 								result: "get",
 								readonly: true,
@@ -257,7 +301,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 							controller.close();
 							return;
 						}
-						cursor = [row.created_at, row.session_key];
+						cursor = [row.created_at, row.session_key, row.agent_id];
 						if (visited++ < skip) {
 							controller.enqueue(new Uint8Array());
 							return;
@@ -266,10 +310,11 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 						const parts: Buffer[] = [];
 						for (let offset = 0; offset < row.bytes; offset += 64 * 1024) {
 							c.req.raw.signal.throwIfAborted();
-							const part = await dbOwnerQuery<{ content: string }>(
+							const part = await readImportQuery<{ content: string }>(
+								c,
 								{
 									sql: "SELECT hex(substr(CAST(content AS BLOB),?,65536)) AS content FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND created_at = ? AND length(CAST(content AS BLOB)) = ?",
-									params: [offset + 1, agentId, row.session_key, row.created_at, row.bytes],
+									params: [offset + 1, row.agent_id, row.session_key, row.created_at, row.bytes],
 									result: "get",
 									readonly: true,
 								},
@@ -284,7 +329,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 							: record.messages;
 						controller.enqueue(
 							encoder.encode(
-								`${json && emitted ? "," : ""}${JSON.stringify({ ...record, messages, message_count: messages.length })}${json ? "" : "\n"}`,
+								`${json && emitted ? "," : ""}${JSON.stringify({ ...record, authorUserId: row.speaker_user_id, speakerUserId: row.speaker_user_id, messages, message_count: messages.length })}${json ? "" : "\n"}`,
 							),
 						);
 						emitted++;
@@ -300,9 +345,10 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 		const jobId = c.req.param("jobId");
-		const job = await dbOwnerQuery(
+		const job = await readImportQuery(
+			c,
 			{
-				sql: "SELECT * FROM source_import_jobs WHERE id = ? AND agent_id = ?",
+				sql: `SELECT * FROM source_import_jobs WHERE id = ? AND ${importReadScopes.get(c)?.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"}`,
 				params: [jobId, agentId],
 				result: "get",
 				readonly: true,
@@ -310,9 +356,10 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			{ operation: "sources.import.status", lane: "read" },
 		);
 		if (job == null) return c.json({ error: "import not found" }, 404);
-		const files = await dbOwnerQuery(
+		const files = await readImportQuery(
+			c,
 			{
-				sql: "SELECT * FROM source_import_files WHERE job_id = ? AND agent_id = ? ORDER BY ordinal",
+				sql: `SELECT * FROM source_import_files WHERE job_id = ? AND ${importReadScopes.get(c)?.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} ORDER BY ordinal`,
 				params: [jobId, agentId],
 				result: "all",
 				readonly: true,
@@ -450,6 +497,66 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		}),
 	);
 	app.get("/api/sources/imports/:jobId/files/:fileId/content", async (c) => {
+		if (c.get("organization")) {
+			const readScope = importReadScopes.get(c);
+			const principal = c.get("principal");
+			if (!readScope || !principal) return c.json({ error: "import not found" }, 404);
+			const subject = audienceSubjectFromPrincipal(principal);
+			const jobId = c.req.param("jobId"),
+				fileId = c.req.param("fileId");
+			const file = await contentRead<{ storage_state: string } | null>(
+				{ op: "import_file", scope: readScope, subject, jobId, fileId },
+				c.req.raw.signal,
+			);
+			if (!file) return c.json({ error: "import not found" }, 404);
+			if (file.storage_state !== "sealed") return c.json({ error: "source is not sealed" }, 409);
+			let cursor = -1;
+			let record: { id: string; ordinal: number; byte_offset: number; byte_length: number } | null = null;
+			let position = 0;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					async pull(controller) {
+						try {
+							c.req.raw.signal.throwIfAborted();
+							if (!record) {
+								record = await contentRead(
+									{ op: "import_file", scope: readScope, subject, jobId, fileId, cursor },
+									c.req.raw.signal,
+								);
+								position = 0;
+								if (!record) {
+									controller.close();
+									return;
+								}
+							}
+							const length = Math.min(65536, record.byte_length - position);
+							const hex = await contentRead<string>(
+								{
+									op: "import_bytes",
+									scope: readScope,
+									subject,
+									jobId,
+									fileId,
+									recordId: record.id,
+									offset: record.byte_offset + position,
+									length,
+								},
+								c.req.raw.signal,
+							);
+							controller.enqueue(Buffer.from(hex, "hex"));
+							position += length;
+							if (position >= record.byte_length) {
+								cursor = record.ordinal;
+								record = null;
+							}
+						} catch (error) {
+							controller.error(error);
+						}
+					},
+				}),
+				{ headers: { "content-type": "application/x-ndjson", "x-signet-import-view": "readable-records" } },
+			);
+		}
 		const upload = scope(c);
 		const file = await transcriptUpload(upload);
 		if (file.storage_state !== "sealed") return c.json({ error: "source is not sealed" }, 409);
@@ -495,12 +602,13 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			const agentId = agent(c);
 			if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 			const jobId = c.req.param("jobId");
-			const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+			const rows = await readImportQuery<Array<Record<string, unknown>>>(
+				c,
 				{
 					sql:
 						suffix === "rejections"
-							? "SELECT * FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND id > ? ORDER BY id LIMIT 100"
-							: "SELECT total,imported,duplicate,rejected,pending FROM source_import_jobs WHERE id = ? AND agent_id = ?",
+							? `SELECT * FROM source_import_records WHERE job_id = ? AND ${importReadScopes.get(c)?.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} AND status = 'rejected' AND id > ? ORDER BY id LIMIT 100`
+							: `SELECT total,imported,duplicate,rejected,pending FROM source_import_jobs WHERE id = ? AND ${importReadScopes.get(c)?.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"}`,
 					params: [jobId, agentId, ...(suffix === "rejections" ? [c.req.query("cursor") ?? ""] : [])],
 					result: "all",
 					readonly: true,

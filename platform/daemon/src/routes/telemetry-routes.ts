@@ -9,7 +9,9 @@ import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { addResourceUtilizationSample, emptyResourceUtilizationStats } from "../resource-telemetry.js";
-import { getCheckpointsByProject, getCheckpointsBySessionAsync, redactCheckpointRow } from "../session-checkpoints.js";
+import { type CheckpointRow, redactCheckpointRow } from "../session-checkpoints.js";
+import { contentRead } from "../content-read";
+import { resolveRouteReadScope } from "./read-scope";
 import type { TelemetryEventType } from "../telemetry.js";
 import { type TimelineSources, buildTimeline } from "../timeline.js";
 import {
@@ -200,7 +202,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const mutationHealth = getDbAccessor().withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				getDiagnostics(db, providerTracker, getUpdateState(), undefined, getDiagnosticsOptions()),
-			"routes/telemetry-routes.ts:200",
+			"routes/telemetry-routes.ts:202",
 		);
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",
@@ -242,7 +244,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 					 LIMIT ?`,
 				)
 				.all(limit) as Array<Record<string, unknown>>;
-		}, "routes/telemetry-routes.ts:221");
+		}, "routes/telemetry-routes.ts:223");
 
 		const scoreValues = scores.map((s) => s.score as number).reverse();
 		const trend = scoreValues.length >= 2 ? scoreValues[scoreValues.length - 1] - scoreValues[0] : 0;
@@ -281,7 +283,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 						score: number;
 						created_at: string;
 					}>,
-				"routes/telemetry-routes.ts:265",
+				"routes/telemetry-routes.ts:267",
 			);
 
 		return c.json({ scores });
@@ -803,7 +805,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/checkpoints", (c) => {
+	app.get("/api/checkpoints", async (c) => {
 		const project = c.req.query("project");
 		const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 
@@ -816,14 +818,29 @@ export function registerTelemetryRoutes(app: Hono): void {
 			projectNormalized = realpathSync(project);
 		} catch {}
 
-		const rows = getCheckpointsByProject(getDbAccessor(), projectNormalized, Math.min(limit, 100));
+		const resolved = await resolveRouteReadScope(c);
+		if (resolved instanceof Response) return resolved;
+		const rows = await contentRead<CheckpointRow[]>(
+			{
+				op: "checkpoints",
+				scope: resolved.scope,
+				project: projectNormalized,
+				limit: Number.isFinite(limit) ? Math.max(1, Math.min(limit, 100)) : 10,
+			},
+			c.req.raw.signal,
+		);
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});
 
 	app.get("/api/checkpoints/:sessionKey", async (c) => {
 		const sessionKey = c.req.param("sessionKey");
-		const rows = await getCheckpointsBySessionAsync(getDbAccessor(), sessionKey);
+		const resolved = await resolveRouteReadScope(c);
+		if (resolved instanceof Response) return resolved;
+		const rows = await contentRead<CheckpointRow[]>(
+			{ op: "checkpoints", scope: resolved.scope, sessionKey, limit: 500 },
+			c.req.raw.signal,
+		);
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});

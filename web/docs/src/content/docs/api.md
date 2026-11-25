@@ -30,6 +30,42 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
   errors may include structured fields such as `status`, `code`, or
   `missingCapabilities`.
 
+## Organization reads and exports
+
+In a claimed organization, the organization agent reads across non-archived
+agents. Selecting a personal agent narrows that view; it does not grant mutation
+authority over that agent. Classifications, including overlapping audiences,
+still apply to administrators. An unreadable item returns the same response as a
+missing item. List totals and pagination describe only readable items.
+
+Memory, document, artifact, and transcript responses expose `authorUserId`.
+Transcripts also expose `speakerUserId`. These identify the original contributor,
+not the current owner of the agent.
+
+| Method | Path | Query / result |
+| --- | --- | --- |
+| GET | `/api/org/export` | `author=<userId>`; self or admin; readable authored rows as NDJSON |
+
+`GET /api/org/export?author=<userId>` returns `application/x-ndjson`. A user can
+export their own contributions; an administrator can select another author.
+The export still uses the caller's agent, project, and classification access.
+Each line has `kind` (`memories`, `session_transcripts`, or `memory_artifacts`)
+and the stored row's fields, including attribution. It does not include
+unreadable contributions or documents. The response is not cached.
+
+Source counts and health reflect the readable source population. Organization
+views omit unscoped indexing-job progress and extraction outcomes. Source
+snapshots accept up to 1,000 readable artifacts per request. Embedding projections
+are computed from the readable selection, with a 5,000-item maximum; a shared
+cached projection is not used for these requests.
+
+In organization mode, an imported file's `content` endpoint returns only its
+readable inventoried JSONL records, in file order. It has
+`X-Signet-Import-View: readable-records` and no original-file `Content-Length`.
+Records are unavailable until inventory has identified them. Import counters
+exclude unreadable records and sources. Local-mode downloads retain the original
+uploaded bytes.
+
 ## Classifications
 
 Organization-mode classifications separate content access from agent ownership.

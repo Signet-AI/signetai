@@ -1,14 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations/index";
-import { expandTemporalNode } from "./temporal-expand";
+import { expandTemporalNodeInDb } from "./temporal-expand";
 
 let db: Database;
-const accessor = {
-	withReadDb<T>(fn: (db: Database) => T): T {
-		return fn(db);
-	},
-};
 
 describe("expandTemporalNode", () => {
 	beforeEach(() => {
@@ -130,7 +125,7 @@ describe("expandTemporalNode", () => {
 			now,
 		);
 
-		const out = expandTemporalNode("node-1", "agent-a", { transcriptCharLimit: 600, accessor });
+		const out = expandTemporalNodeInDb(db, "node-1", "agent-a", { transcriptCharLimit: 600 });
 		expect(out).not.toBeNull();
 		expect(out?.node.id).toBe("node-1");
 		expect(out?.parents.map((row) => row.id)).toEqual(["parent-1"]);
@@ -252,10 +247,9 @@ describe("expandTemporalNode", () => {
 			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		).run("sess-scope", "Off-scope transcript", "opencode", "proj-b", "agent-a", now, now);
 
-		const out = expandTemporalNode("node-scope", "agent-a", {
+		const out = expandTemporalNodeInDb(db, "node-scope", "agent-a", {
 			project: "proj-a",
 			transcriptCharLimit: 600,
-			accessor,
 		});
 		expect(out).not.toBeNull();
 		expect(out?.node.id).toBe("node-scope");
