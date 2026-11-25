@@ -312,6 +312,11 @@ describe("DB owner client", () => {
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
+		await client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1 AS warm", result: "get" } },
+			{ operation: "test.write-lane.warm", lane: "write", deadlineMs: 5000 },
+		).result;
+
 		const original = setTimeout;
 		const delayed = spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) =>
 			original(callback, ms && ms > 0 && ms <= 80 ? 1500 : ms, ...args),
