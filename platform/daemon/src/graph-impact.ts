@@ -1,5 +1,6 @@
-import type { ReadDb } from "./db-accessor";
-import { tableExists } from "./db-helpers";
+import type { ReadScope } from "./read-scope";
+import type { DbAccessor } from "./db-accessor";
+import { knowledgeReadDb, knowledgeTableExists as tableExists } from "./knowledge-graph-hygiene";
 
 const DEPTH_LABELS = {
 	1: "WILL BREAK",
@@ -25,8 +26,8 @@ interface ImpactResult {
 	readonly direction: "upstream" | "downstream";
 	readonly impact: readonly ImpactLayer[];
 }
-export function walkImpact(
-	db: ReadDb,
+export async function walkImpact(
+	_accessor: DbAccessor,
 	params: {
 		readonly entityId: string;
 		readonly agentId: string;
@@ -34,18 +35,20 @@ export function walkImpact(
 		readonly maxDepth: number;
 		readonly timeoutMs?: number;
 	},
-): ImpactResult {
+	readScope?: ReadScope,
+): Promise<ImpactResult> {
+	const db = knowledgeReadDb(readScope);
 	const { entityId, agentId, direction, maxDepth } = params;
 	const timeout = params.timeoutMs ?? 200;
 	const deadline = Date.now() + timeout;
-	const root = db
+	const root = (await db
 		.prepare("SELECT name, entity_type FROM entities WHERE id = ? AND agent_id = ?")
-		.get(entityId, agentId) as { name: string; entity_type: string } | undefined;
+		.get(entityId, agentId)) as { name: string; entity_type: string } | undefined;
 	if (!root) return { entityId, entityName: entityId, direction, impact: [] };
 
 	const entityName = root.name;
 
-	if (!tableExists(db, "entity_dependencies")) {
+	if (!(await tableExists(db, "entity_dependencies"))) {
 		return { entityId, entityName, direction, impact: [] };
 	}
 	const sql =
@@ -75,7 +78,7 @@ export function walkImpact(
 		for (const id of frontier) {
 			if (Date.now() > deadline) break;
 
-			const rows = stmt.all(id, agentId, agentId) as Array<{
+			const rows = (await stmt.all(id, agentId, agentId)) as Array<{
 				id: string;
 				name: string;
 				entity_type: string;

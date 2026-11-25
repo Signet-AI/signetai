@@ -180,6 +180,29 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		dbPath = "";
 	});
 
+	test("read scope hides classified entities before pagination and aggregate counts", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity("scope-visible", "Visible");
+		seedAspect("scope-aspect", "scope-visible", "details");
+		const scope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null } as const;
+		const params = { agentId: "default", limit: 1, offset: 0, readScope: scope };
+		const before = await listKnowledgeEntities(getDbAccessor(), params, scope);
+		seedEntity("scope-hidden", "A hidden", { pinned: true });
+		seedAttribute("scope-hidden-attribute", "scope-aspect");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (99, 'scope-test', '2026-11-25')").run();
+			db.prepare("UPDATE entities SET compartment_id = 99 WHERE id = 'scope-hidden'").run();
+			db.prepare("UPDATE entity_attributes SET compartment_id = 99 WHERE id = 'scope-hidden-attribute'").run();
+		});
+		expect(await listKnowledgeEntities(getDbAccessor(), params, scope)).toEqual(before);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET name = 'Changed hidden', mentions = 900 WHERE id = 'scope-hidden'").run();
+		});
+		expect(await listKnowledgeEntities(getDbAccessor(), params, scope)).toEqual(before);
+		expect(await listKnowledgeEntities(getDbAccessor(), params, { ...scope, compartments: [99] })).toHaveLength(1);
+	});
+
 	test("returns entities in the documented order (pinned, pinned_at, mentions, updated_at, name)", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);

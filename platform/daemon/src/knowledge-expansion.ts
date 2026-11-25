@@ -1,3 +1,5 @@
+import type { ReadScope } from "./read-scope";
+import { knowledgeReadOwner } from "./knowledge-graph-hygiene";
 import { redactCredentialsDeep } from "@signet/core";
 
 import type { DbOwnerClient } from "./db-owner-client";
@@ -118,7 +120,7 @@ function traversalMetadata(
 	return {};
 }
 export async function expandKnowledgeGraphViaOwner(
-	owner: DbOwnerClient,
+	inputOwner: DbOwnerClient,
 	params: {
 		readonly primaryEntityId: string;
 		readonly agentId: string;
@@ -127,7 +129,9 @@ export async function expandKnowledgeGraphViaOwner(
 		readonly traversalConfig: TraversalConfig;
 		readonly traversal: TraversalResult;
 	},
+	readScope?: ReadScope,
 ): Promise<KnowledgeExpansionResponse> {
+	const owner = readScope ? await knowledgeReadOwner(inputOwner, readScope) : inputOwner;
 	const hydrationDeadlineAt = Date.now() + HYDRATION_TIMEOUT_MS;
 	const option = (operation: string, estimatedWorkUnits: number) =>
 		readOptions(operation, hydrationDeadlineAt, estimatedWorkUnits);

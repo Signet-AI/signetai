@@ -1,3 +1,5 @@
+import { knowledgeReadDb, knowledgeReadQuery, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
 import type {
 	AttributeKind,
 	AttributeStatus,
@@ -12,9 +14,8 @@ import type {
 	TaskStatus,
 } from "@signet/core";
 import { CLAIM_TIME_PRECISIONS, SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
-import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
-import { DB_OWNER_READ_DEADLINE_MS, dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
-import { ownerReadOne } from "./db-owner-sql";
+import type { DbAccessor, ReadDb } from "./db-accessor";
+import { DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import { runWriteTxAsync } from "./db-accessor";
 import { utcTimestampMs } from "./episodic-sources";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
@@ -178,8 +179,9 @@ export async function getAspectsForEntity(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly EntityAspect[]> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT * FROM entity_aspects
 			 WHERE entity_id = ? AND agent_id = ?
@@ -189,6 +191,7 @@ export async function getAspectsForEntity(
 			result: "all",
 		},
 		{ operation: "db:knowledge.aspects-for-entity.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToAspect);
 }
@@ -197,8 +200,9 @@ export async function getAttributesForAspect(
 	_accessor: DbAccessor,
 	aspectId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly EntityAttribute[]> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT * FROM entity_attributes
 			 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
@@ -207,6 +211,7 @@ export async function getAttributesForAspect(
 			result: "all",
 		},
 		{ operation: "db:knowledge.attributes-for-aspect.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToAttribute);
 }
@@ -214,8 +219,9 @@ export async function getConstraintsForEntity(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly EntityAttribute[]> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT ea.* FROM entity_attributes ea
 			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
@@ -229,6 +235,7 @@ export async function getConstraintsForEntity(
 			result: "all",
 		},
 		{ operation: "db:knowledge.constraints-for-entity.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToAttribute);
 }
@@ -236,14 +243,16 @@ export async function getConstraintsForEntity(
 export async function getEntityDependencyById(
 	_accessor: DbAccessor,
 	params: { readonly id: string; readonly agentId: string },
+	readScope?: ReadScope,
 ): Promise<EntityDependency | null> {
-	const row = await dbOwnerQuery<Record<string, unknown> | null>(
+	const row = await knowledgeReadQuery<Record<string, unknown> | null>(
 		{
 			sql: "SELECT * FROM entity_dependencies WHERE id = ? AND agent_id = ?",
 			params: [params.id, params.agentId],
 			result: "get",
 		},
 		{ operation: "db:knowledge.dependency-by-id.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return row === null ? null : rowToDependency(row);
 }
@@ -252,8 +261,9 @@ export async function getDependenciesFrom(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly EntityDependency[]> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT dep.*
 			 FROM entity_dependencies dep
@@ -267,6 +277,7 @@ export async function getDependenciesFrom(
 			result: "all",
 		},
 		{ operation: "db:knowledge.dependencies-from.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToDependency);
 }
@@ -275,8 +286,9 @@ export async function getDependenciesTo(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly EntityDependency[]> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT dep.*
 			 FROM entity_dependencies dep
@@ -290,6 +302,7 @@ export async function getDependenciesTo(
 			result: "all",
 		},
 		{ operation: "db:knowledge.dependencies-to.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToDependency);
 }
@@ -297,8 +310,9 @@ export async function getDependenciesTo(
 export async function getPinnedEntities(
 	_accessor: DbAccessor,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<ReadonlyArray<PinnedEntitySummary>> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT id, name, pinned_at
 			 FROM entities
@@ -310,6 +324,7 @@ export async function getPinnedEntities(
 			result: "all",
 		},
 		{ operation: "db:knowledge.pinned-entities.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.flatMap((row) => {
 		if (typeof row.id !== "string" || typeof row.name !== "string") return [];
@@ -364,14 +379,20 @@ export async function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMet
 	});
 }
 
-export async function getTaskMeta(_accessor: DbAccessor, entityId: string, agentId: string): Promise<TaskMeta | null> {
-	const row = await dbOwnerQuery<Record<string, unknown> | null>(
+export async function getTaskMeta(
+	_accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+	readScope?: ReadScope,
+): Promise<TaskMeta | null> {
+	const row = await knowledgeReadQuery<Record<string, unknown> | null>(
 		{
 			sql: "SELECT * FROM task_meta WHERE entity_id = ? AND agent_id = ?",
 			params: [entityId, agentId],
 			result: "get",
 		},
 		{ operation: "db:knowledge.task-meta.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return row ? rowToTaskMeta(row) : null;
 }
@@ -544,6 +565,7 @@ export async function resolveNamedEntity(
 		readonly name: string;
 		readonly deadlineAt?: number;
 	},
+	readScope?: ReadScope,
 ): Promise<ResolvedNamedEntity | null> {
 	const canonical = toCanonicalName(input.name);
 	if (canonical.length === 0) return null;
@@ -551,7 +573,7 @@ export async function resolveNamedEntity(
 	const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 	const starts = `${escaped}%`;
 	const contains = `%${escaped}%`;
-	const rows = await dbOwnerQuery<{
+	const rows = await knowledgeReadQuery<{
 		readonly id: string;
 		readonly name: string;
 		readonly canonical_name: string;
@@ -611,6 +633,7 @@ export async function resolveNamedEntity(
 			deadlineMs:
 				input.deadlineAt === undefined ? DB_OWNER_READ_DEADLINE_MS : Math.max(1, input.deadlineAt - Date.now()),
 		},
+		readScope,
 	);
 	if (!rows) return null;
 	return {
@@ -625,28 +648,33 @@ export async function resolveNamedEntity(
 async function resolveEntityByNameOnOwner(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly name: string },
+	readScope?: ReadScope,
 ): Promise<Entity | null> {
-	const resolved = await resolveNamedEntity(accessor, params);
+	const resolved = await resolveNamedEntity(accessor, params, readScope);
 	if (!resolved) return null;
-	const row = await dbOwnerQuery<Record<string, unknown> | null>(
+	const row = await knowledgeReadQuery<Record<string, unknown> | null>(
 		{
 			sql: "SELECT * FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'",
 			params: [resolved.id, params.agentId],
 			result: "get",
 		},
 		{ operation: "db:knowledge.entity-by-name.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return row ? rowToEntity(row) : null;
 }
 
-async function resolveAspectByNameOnOwner(params: {
-	readonly entityId: string;
-	readonly agentId: string;
-	readonly aspect: string;
-}): Promise<EntityAspect | null> {
+async function resolveAspectByNameOnOwner(
+	params: {
+		readonly entityId: string;
+		readonly agentId: string;
+		readonly aspect: string;
+	},
+	readScope?: ReadScope,
+): Promise<EntityAspect | null> {
 	const canonical = toCanonicalName(params.aspect);
 	if (canonical.length === 0) return null;
-	const row = await dbOwnerQuery<Record<string, unknown> | null>(
+	const row = await knowledgeReadQuery<Record<string, unknown> | null>(
 		{
 			sql: `SELECT * FROM entity_aspects
 			 WHERE entity_id = ? AND agent_id = ?
@@ -657,6 +685,7 @@ async function resolveAspectByNameOnOwner(params: {
 			result: "get",
 		},
 		{ operation: "db:knowledge.aspect-by-name.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return row ? rowToAspect(row) : null;
 }
@@ -726,9 +755,10 @@ export async function getKnowledgeEntityByName(
 		readonly agentId: string;
 		readonly name: string;
 	},
+	readScope?: ReadScope,
 ): Promise<KnowledgeEntityDetail | null> {
-	const resolved = await resolveNamedEntity(accessor, params);
-	return resolved ? await getKnowledgeEntityDetail(accessor, resolved.id, params.agentId) : null;
+	const resolved = await resolveNamedEntity(accessor, params, readScope);
+	return resolved ? await getKnowledgeEntityDetail(accessor, resolved.id, params.agentId, readScope) : null;
 }
 
 export async function listEntityAliases(
@@ -738,6 +768,7 @@ export async function listEntityAliases(
 		readonly entityId: string;
 		readonly status?: "active" | "archived" | "all";
 	},
+	readScope?: ReadScope,
 ): Promise<readonly EntityAlias[]> {
 	const conditions = ["entity_id = ?", "agent_id = ?"];
 	const args: Array<string | number> = [params.entityId, params.agentId];
@@ -747,13 +778,14 @@ export async function listEntityAliases(
 	} else if (!params.status) {
 		conditions.push("status = 'active'");
 	}
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT * FROM entity_aliases WHERE ${conditions.join(" AND ")} ORDER BY status ASC, alias ASC`,
 			params: args,
 			result: "all",
 		},
 		{ operation: "db:knowledge.entity-aliases.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToEntityAlias);
 }
@@ -764,10 +796,15 @@ export async function getEntityAspectsByName(
 		readonly agentId: string;
 		readonly entity: string;
 	},
+	readScope?: ReadScope,
 ): Promise<{ readonly entity: Entity; readonly items: readonly AspectWithCounts[] } | null> {
-	const entity = await resolveEntityByNameOnOwner(accessor, { agentId: params.agentId, name: params.entity });
+	const entity = await resolveEntityByNameOnOwner(
+		accessor,
+		{ agentId: params.agentId, name: params.entity },
+		readScope,
+	);
 	if (!entity) return null;
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT asp.*, COUNT(DISTINCT CASE WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id END) AS attribute_count,
 				COUNT(DISTINCT CASE WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id END) AS constraint_count
@@ -778,6 +815,7 @@ export async function getEntityAspectsByName(
 			result: "all",
 		},
 		{ operation: "db:knowledge.entity-aspects-with-counts.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return {
 		entity,
@@ -798,8 +836,8 @@ type MutableEntityTreeGroup = {
 	claims: EntityTreeClaim[];
 };
 
-function readEntityTreeGroups(
-	db: ReadDb,
+async function readEntityTreeGroups(
+	db: KnowledgeReadDb,
 	params: {
 		readonly agentId: string;
 		readonly aspectRows: readonly Record<string, unknown>[];
@@ -808,7 +846,8 @@ function readEntityTreeGroups(
 		readonly maxTotalClaims: number;
 		readonly depth: number;
 	},
-): ReadonlyMap<string, readonly EntityTreeGroup[]> {
+	_readScope?: ReadScope,
+): Promise<ReadonlyMap<string, readonly EntityTreeGroup[]>> {
 	if (params.depth < 2 || params.aspectRows.length === 0) return new Map<string, readonly EntityTreeGroup[]>();
 	const groupsByAspect = new Map<string, Map<string, MutableEntityTreeGroup>>();
 
@@ -849,7 +888,7 @@ function readEntityTreeGroups(
 		sg.latest_updated_at AS group_latest_updated_at`;
 	const rows =
 		params.depth >= 3
-			? (db
+			? ((await db
 					.prepare(
 						`${groupCtes},
 						 claim_stats AS (
@@ -937,8 +976,8 @@ function readEntityTreeGroups(
 						params.agentId,
 						params.maxClaims,
 						params.maxTotalClaims,
-					) as Array<Record<string, unknown>>)
-			: (db
+					)) as Array<Record<string, unknown>>)
+			: ((await db
 					.prepare(
 						`${groupCtes}
 						 ${groupSelect}, NULL AS claim_key, NULL AS claim_attribute_count,
@@ -947,7 +986,7 @@ function readEntityTreeGroups(
 						 FROM selected_groups sg
 						 ORDER BY sg.aspect_rank ASC, sg.group_rank ASC`,
 					)
-					.all(...aspectParams, params.agentId, params.maxGroups) as Array<Record<string, unknown>>);
+					.all(...aspectParams, params.agentId, params.maxGroups)) as Array<Record<string, unknown>>);
 
 	for (const row of rows) {
 		const aspectId = row.aspect_id as string;
@@ -1004,18 +1043,22 @@ export async function getEntityKnowledgeTree(
 		readonly maxTotalClaims: number;
 		readonly depth: number;
 	},
+	readScope?: ReadScope,
 ): Promise<EntityKnowledgeTree | null> {
-	return await accessor.withReadDbAsync(
-		async (db) => {
-			const entity = resolveEntityRecordByName(db, {
+	return await (async (db) => {
+		const entity = await resolveEntityByNameOnOwner(
+			accessor,
+			{
 				agentId: params.agentId,
 				name: params.entity,
-			});
-			if (!entity) return null;
+			},
+			readScope,
+		);
+		if (!entity) return null;
 
-			const aspectRows = db
-				.prepare(
-					`SELECT
+		const aspectRows = (await db
+			.prepare(
+				`SELECT
 				   asp.*,
 				   COUNT(DISTINCT CASE
 				     WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
@@ -1038,43 +1081,45 @@ export async function getEntityKnowledgeTree(
 				 GROUP BY asp.id
 				 ORDER BY asp.weight DESC, asp.name ASC
 				 LIMIT ?`,
-				)
-				.all(entity.id, params.agentId, params.maxAspects) as Array<Record<string, unknown>>;
-			const groupsByAspect = readEntityTreeGroups(db, {
+			)
+			.all(entity.id, params.agentId, params.maxAspects)) as Array<Record<string, unknown>>;
+		const groupsByAspect = await readEntityTreeGroups(
+			db,
+			{
 				agentId: params.agentId,
 				aspectRows,
 				maxGroups: params.maxGroups,
 				maxClaims: params.maxClaims,
 				maxTotalClaims: params.maxTotalClaims,
 				depth: params.depth,
-			});
+			},
+			readScope,
+		);
 
-			return {
-				entity,
-				limits: {
-					maxAspects: params.maxAspects,
-					maxGroups: params.maxGroups,
-					maxClaims: params.maxClaims,
-					maxTotalClaims: params.maxTotalClaims,
-					depth: params.depth,
-				},
-				items: aspectRows.map((aspectRow) => {
-					const aspect = rowToAspect(aspectRow);
-					const groupRows = groupsByAspect.get(aspect.id) ?? [];
+		return {
+			entity,
+			limits: {
+				maxAspects: params.maxAspects,
+				maxGroups: params.maxGroups,
+				maxClaims: params.maxClaims,
+				maxTotalClaims: params.maxTotalClaims,
+				depth: params.depth,
+			},
+			items: aspectRows.map((aspectRow) => {
+				const aspect = rowToAspect(aspectRow);
+				const groupRows = groupsByAspect.get(aspect.id) ?? [];
 
-					return {
-						aspect,
-						attributeCount: Number(aspectRow.attribute_count ?? 0),
-						constraintCount: Number(aspectRow.constraint_count ?? 0),
-						groupCount: Number(aspectRow.group_count ?? 0),
-						claimCount: Number(aspectRow.claim_count ?? 0),
-						groups: groupRows,
-					};
-				}),
-			};
-		},
-		{ siteToken: "db:knowledge.entity-knowledge-tree.read" },
-	);
+				return {
+					aspect,
+					attributeCount: Number(aspectRow.attribute_count ?? 0),
+					constraintCount: Number(aspectRow.constraint_count ?? 0),
+					groupCount: Number(aspectRow.group_count ?? 0),
+					claimCount: Number(aspectRow.claim_count ?? 0),
+					groups: groupRows,
+				};
+			}),
+		};
+	})(knowledgeReadDb(readScope));
 }
 
 export async function listEntityGroups(
@@ -1084,20 +1129,28 @@ export async function listEntityGroups(
 		readonly entity: string;
 		readonly aspect: string;
 	},
+	readScope?: ReadScope,
 ): Promise<{
 	readonly entity: Entity;
 	readonly aspect: EntityAspect;
 	readonly items: readonly EntityGroupSummary[];
 } | null> {
-	const entity = await resolveEntityByNameOnOwner(accessor, { agentId: params.agentId, name: params.entity });
+	const entity = await resolveEntityByNameOnOwner(
+		accessor,
+		{ agentId: params.agentId, name: params.entity },
+		readScope,
+	);
 	if (!entity) return null;
-	const aspect = await resolveAspectByNameOnOwner({
-		entityId: entity.id,
-		agentId: params.agentId,
-		aspect: params.aspect,
-	});
+	const aspect = await resolveAspectByNameOnOwner(
+		{
+			entityId: entity.id,
+			agentId: params.agentId,
+			aspect: params.aspect,
+		},
+		readScope,
+	);
 	if (!aspect) return null;
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT
 				   COALESCE(ea.group_key, 'general') AS group_key,
@@ -1121,6 +1174,7 @@ export async function listEntityGroups(
 			result: "all",
 		},
 		{ operation: "db:knowledge.entity-groups.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return {
 		entity,
@@ -1145,6 +1199,7 @@ export async function listEntityClaims(
 		readonly limit: number;
 		readonly offset: number;
 	},
+	readScope?: ReadScope,
 ): Promise<{
 	readonly entity: Entity;
 	readonly aspect: EntityAspect;
@@ -1153,20 +1208,27 @@ export async function listEntityClaims(
 	readonly offset: number;
 	readonly hasMore: boolean;
 } | null> {
-	const entity = await resolveEntityByNameOnOwner(accessor, { agentId: params.agentId, name: params.entity });
+	const entity = await resolveEntityByNameOnOwner(
+		accessor,
+		{ agentId: params.agentId, name: params.entity },
+		readScope,
+	);
 	if (!entity) return null;
-	const aspect = await resolveAspectByNameOnOwner({
-		entityId: entity.id,
-		agentId: params.agentId,
-		aspect: params.aspect,
-	});
+	const aspect = await resolveAspectByNameOnOwner(
+		{
+			entityId: entity.id,
+			agentId: params.agentId,
+			aspect: params.aspect,
+		},
+		readScope,
+	);
 	if (!aspect) return null;
 	const group = toCanonicalName(params.group).replace(/\s+/g, "_");
 	const limit = Number.isFinite(params.limit) ? Math.min(Math.max(Math.trunc(params.limit), 1), 200) : 50;
 	const offset = Number.isFinite(params.offset)
 		? Math.min(Math.max(Math.trunc(params.offset), 0), Number.MAX_SAFE_INTEGER)
 		: 0;
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT
 				   ea.claim_key,
@@ -1200,6 +1262,7 @@ export async function listEntityClaims(
 			result: "all",
 		},
 		{ operation: "db:knowledge.entity-claims.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return {
 		entity,
@@ -1233,18 +1296,26 @@ export async function listEntityAttributesByPath(
 		readonly limit: number;
 		readonly offset: number;
 	},
+	readScope?: ReadScope,
 ): Promise<{
 	readonly entity: Entity;
 	readonly aspect: EntityAspect;
 	readonly items: readonly EntityAttribute[];
 } | null> {
-	const entity = await resolveEntityByNameOnOwner(accessor, { agentId: params.agentId, name: params.entity });
+	const entity = await resolveEntityByNameOnOwner(
+		accessor,
+		{ agentId: params.agentId, name: params.entity },
+		readScope,
+	);
 	if (!entity) return null;
-	const aspect = await resolveAspectByNameOnOwner({
-		entityId: entity.id,
-		agentId: params.agentId,
-		aspect: params.aspect,
-	});
+	const aspect = await resolveAspectByNameOnOwner(
+		{
+			entityId: entity.id,
+			agentId: params.agentId,
+			aspect: params.aspect,
+		},
+		readScope,
+	);
 	if (!aspect) return null;
 	const group = toCanonicalName(params.group).replace(/\s+/g, "_");
 	const claim = toCanonicalName(params.claim).replace(/\s+/g, "_");
@@ -1268,7 +1339,7 @@ export async function listEntityAttributesByPath(
 		conditions.push("ea.status = 'active'");
 	}
 
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT ea.*
 				 FROM entity_attributes ea
@@ -1279,6 +1350,7 @@ export async function listEntityAttributesByPath(
 			result: "all",
 		},
 		{ operation: "db:knowledge.attributes-by-path.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return { entity, aspect, items: rows.map(rowToAttribute) };
 }
@@ -1292,6 +1364,7 @@ export async function listKnowledgeEntities(
 		readonly limit: number;
 		readonly offset: number;
 	},
+	readScope?: ReadScope,
 ): Promise<readonly KnowledgeEntityListItem[]> {
 	const conditions = ["e.agent_id = ?"];
 	const args: Array<string | number> = [params.agentId];
@@ -1304,7 +1377,7 @@ export async function listKnowledgeEntities(
 		conditions.push("e.canonical_name LIKE ?");
 		args.push(`%${params.query.trim().toLowerCase()}%`);
 	}
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `WITH page AS (
 					SELECT e.id
@@ -1357,6 +1430,7 @@ export async function listKnowledgeEntities(
 			result: "all",
 		},
 		{ operation: "db:knowledge.entities-list.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 
 	return rows.map((row) => ({
@@ -1372,8 +1446,9 @@ export async function getKnowledgeEntityDetail(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<KnowledgeEntityDetail | null> {
-	const row = await dbOwnerQuery<Record<string, unknown> | null>(
+	const row = await knowledgeReadQuery<Record<string, unknown> | null>(
 		{
 			sql: `SELECT
 					e.*,
@@ -1425,10 +1500,11 @@ export async function getKnowledgeEntityDetail(
 			result: "get",
 		},
 		{ operation: "db:knowledge.entity-detail.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 
 	if (!row) return null;
-	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
+	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId, readScope);
 	const incomingDependencyCount = Number(row.incoming_dependency_count ?? 0);
 	const outgoingDependencyCount = Number(row.outgoing_dependency_count ?? 0);
 
@@ -1448,8 +1524,9 @@ export async function getEntityAspectsWithCounts(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly AspectWithCounts[]> {
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT
 				asp.*,
@@ -1470,6 +1547,7 @@ export async function getEntityAspectsWithCounts(
 			result: "all",
 		},
 		{ operation: "db:knowledge.aspects-with-counts.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 
 	return rows.map((row) => ({
@@ -1490,6 +1568,7 @@ export async function getAttributesForAspectFiltered(
 		readonly limit: number;
 		readonly offset: number;
 	},
+	readScope?: ReadScope,
 ): Promise<readonly EntityAttribute[]> {
 	const conditions = [
 		"asp.entity_id = ?",
@@ -1509,7 +1588,7 @@ export async function getAttributesForAspectFiltered(
 		args.push(params.status);
 	}
 
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT ea.*
 			 FROM entity_attributes ea
@@ -1522,6 +1601,7 @@ export async function getAttributesForAspectFiltered(
 			result: "all",
 		},
 		{ operation: "db:knowledge.attributes-filtered.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	return rows.map(rowToAttribute);
 }
@@ -1533,6 +1613,7 @@ export async function getEntityDependenciesDetailed(
 		readonly agentId: string;
 		readonly direction: "incoming" | "outgoing" | "both";
 	},
+	readScope?: ReadScope,
 ): Promise<readonly KnowledgeDependencyEdge[]> {
 	const directionClauses: string[] = [];
 	if (params.direction === "incoming" || params.direction === "both") {
@@ -1541,7 +1622,7 @@ export async function getEntityDependenciesDetailed(
 	if (params.direction === "outgoing" || params.direction === "both") {
 		directionClauses.push("dep.source_entity_id = ?");
 	}
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT
 				dep.*,
@@ -1564,6 +1645,7 @@ export async function getEntityDependenciesDetailed(
 			result: "all",
 		},
 		{ operation: "db:knowledge.dependencies-detailed.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 
 	return rows.map((row) => ({
@@ -1658,8 +1740,12 @@ export function normalizeKnowledgeStatsRow(value: unknown): KnowledgeStats {
 	};
 }
 
-export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string): Promise<KnowledgeStats> {
-	const row = await ownerReadOne<{
+export async function getKnowledgeStats(
+	_accessor: DbAccessor,
+	agentId: string,
+	readScope?: ReadScope,
+): Promise<KnowledgeStats> {
+	const row = await knowledgeReadQuery<{
 		readonly scopedMemoryCount: number;
 		readonly entityCount: number;
 		readonly aspectCount: number;
@@ -1672,11 +1758,15 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 		readonly averageAspectWeight: number;
 		readonly maxWeightAspectCount: number;
 		readonly minWeightAspectCount: number;
-	}>(await getDbOwner(getDbAccessorPath()), KNOWLEDGE_STATS_SQL, Array(12).fill(agentId), {
-		operation: "knowledge.stats",
-		deadlineMs: 5_000,
-		estimatedWorkUnits: 12,
-	});
+	}>(
+		{ sql: KNOWLEDGE_STATS_SQL, params: Array(12).fill(agentId), result: "get" },
+		{
+			operation: "knowledge.stats",
+			deadlineMs: 5_000,
+			estimatedWorkUnits: 12,
+		},
+		readScope,
+	);
 	return normalizeKnowledgeStatsRow(row);
 }
 
@@ -1685,14 +1775,16 @@ export async function getEntityHealth(
 	agentId: string,
 	since?: string,
 	minComparisons = 3,
+	readScope?: ReadScope,
 ): Promise<ReadonlyArray<EntityHealth>> {
-	const predictorTable = await dbOwnerQuery<Record<string, unknown> | null>(
+	const predictorTable = await knowledgeReadQuery<Record<string, unknown> | null>(
 		{
 			sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'",
 			params: [],
 			result: "get",
 		},
 		{ operation: "db:knowledge.predictor-table.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 	if (predictorTable === null) return [];
 
@@ -1702,7 +1794,7 @@ export async function getEntityHealth(
 		args.push(since);
 	}
 
-	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
+	const rows = await knowledgeReadQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT
 			focal_entity_id,
@@ -1719,6 +1811,7 @@ export async function getEntityHealth(
 			result: "all",
 		},
 		{ operation: "db:knowledge.entity-health.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		readScope,
 	);
 
 	const grouped = new Map<
@@ -1971,21 +2064,29 @@ function placeholders(count: number): string {
 	return Array.from({ length: count }, () => "?").join(", ");
 }
 
-function getConstellationAllAgentIds(db: ReadDb, agentId: string): readonly string[] {
-	const rows = db.prepare("SELECT id FROM agents UNION SELECT DISTINCT agent_id AS id FROM entities").all() as Array<
-		Record<string, unknown>
-	>;
+async function getConstellationAllAgentIds(
+	db: KnowledgeReadDb,
+	agentId: string,
+	_readScope?: ReadScope,
+): Promise<readonly string[]> {
+	const rows = (await db
+		.prepare("SELECT id FROM agents UNION SELECT DISTINCT agent_id AS id FROM entities")
+		.all()) as Array<Record<string, unknown>>;
 	const ids = new Set<string>([agentId]);
 	for (const row of rows) if (typeof row.id === "string" && row.id.trim().length > 0) ids.add(row.id);
 	return [...ids];
 }
 
-function getConstellationVisibleAgentIds(db: ReadDb, agentId: string): readonly string[] {
+async function getConstellationVisibleAgentIds(
+	db: KnowledgeReadDb,
+	agentId: string,
+	_readScope?: ReadScope,
+): Promise<readonly string[]> {
 	const ids = new Set<string>([agentId]);
 	try {
-		const rows = db.prepare("SELECT id FROM agents WHERE id = ? OR read_policy = 'shared'").all(agentId) as Array<
-			Record<string, unknown>
-		>;
+		const rows = (await db
+			.prepare("SELECT id FROM agents WHERE id = ? OR read_policy = 'shared'")
+			.all(agentId)) as Array<Record<string, unknown>>;
 		for (const row of rows) {
 			if (typeof row.id === "string" && row.id.trim().length > 0) {
 				ids.add(row.id);
@@ -2034,11 +2135,22 @@ function resolveProposalTargetEntity(
 	return { id: entitiesByName.get(toCanonicalName(name)) ?? null, name };
 }
 
-function getConstellationDreamingSummary(
-	db: ReadDb,
+async function getConstellationDreamingSummary(
+	db: KnowledgeReadDb,
 	agentId: string,
 	backlogProbe?: DreamingEpisodicBacklogProbe,
-): ConstellationDreamingSummary {
+	readScope?: ReadScope,
+): Promise<ConstellationDreamingSummary> {
+	if (readScope && readScope.compartments !== "all")
+		return {
+			episodicTokensPending: null,
+			episodicBacklogProbe: null,
+			consecutiveFailures: 0,
+			lastPassAt: null,
+			lastPassId: null,
+			lastPassMode: null,
+			latestPass: null,
+		};
 	let state:
 		| {
 				consecutive_failures: number;
@@ -2059,13 +2171,13 @@ function getConstellationDreamingSummary(
 		  }
 		| undefined;
 	try {
-		state = db
+		state = (await db
 			.prepare(
 				`SELECT consecutive_failures, last_pass_at, last_pass_id, last_pass_mode
 			 FROM dreaming_state WHERE agent_id = ?`,
 			)
-			.get(agentId) as typeof state;
-		latestPass = db
+			.get(agentId)) as typeof state;
+		latestPass = (await db
 			.prepare(
 				`SELECT id, mode, status, completed_at, mutations_applied, mutations_skipped, mutations_failed
 			 FROM dreaming_passes
@@ -2073,7 +2185,7 @@ function getConstellationDreamingSummary(
 			 ORDER BY created_at DESC
 			 LIMIT 1`,
 			)
-			.get(agentId) as typeof latestPass;
+			.get(agentId)) as typeof latestPass;
 	} catch {
 		state = undefined;
 		latestPass = undefined;
@@ -2109,22 +2221,26 @@ function getConstellationDreamingSummary(
 	};
 }
 
-function getConstellationProposalSummary(db: ReadDb, agentId: string): ConstellationProposalSummary {
-	const pending = db
+async function getConstellationProposalSummary(
+	db: KnowledgeReadDb,
+	agentId: string,
+	_readScope?: ReadScope,
+): Promise<ConstellationProposalSummary> {
+	const pending = (await db
 		.prepare("SELECT COUNT(*) AS n FROM ontology_proposals WHERE agent_id = ? AND status = 'pending'")
-		.get(agentId) as { n: number } | undefined;
-	const applied = db
+		.get(agentId)) as { n: number } | undefined;
+	const applied = (await db
 		.prepare(
 			`SELECT COUNT(*) AS n FROM ontology_proposals
 			 WHERE agent_id = ? AND status = 'applied' AND updated_at >= datetime('now', '-7 days')`,
 		)
-		.get(agentId) as { n: number } | undefined;
-	const failed = db
+		.get(agentId)) as { n: number } | undefined;
+	const failed = (await db
 		.prepare(
 			`SELECT COUNT(*) AS n FROM ontology_proposals
 			 WHERE agent_id = ? AND status = 'failed' AND updated_at >= datetime('now', '-7 days')`,
 		)
-		.get(agentId) as { n: number } | undefined;
+		.get(agentId)) as { n: number } | undefined;
 	return {
 		pending: Math.max(0, pending?.n ?? 0),
 		appliedRecent: Math.max(0, applied?.n ?? 0),
@@ -2134,9 +2250,10 @@ function getConstellationProposalSummary(db: ReadDb, agentId: string): Constella
 export const MAX_CONSTELLATION_ATTRIBUTES = 10_000;
 
 export async function getKnowledgeGraphForConstellation(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	agentId: string,
 	options: ConstellationGraphOptions = {},
+	readScope?: ReadScope,
 ): Promise<ConstellationGraph> {
 	const limit = boundedInteger(options.limit, 150, 1, 300);
 	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
@@ -2150,17 +2267,17 @@ export async function getKnowledgeGraphForConstellation(
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 	const assertionLimit = boundedInteger(options.assertionLimit, 250, 1, 1000);
 
-	return await accessor.withReadDbAsync(
-		async (db) => {
-			const visibleAgentIds = options.allAgents
-				? getConstellationAllAgentIds(db, agentId)
-				: getConstellationVisibleAgentIds(db, agentId);
-			const agentPlaceholders = placeholders(visibleAgentIds.length);
-			const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
-			const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
-			const entityRows = db
-				.prepare(
-					`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id,
+	return await (async (db) => {
+		const visibleAgentIds =
+			options.allAgents || readScope?.reach.kind === "all"
+				? await getConstellationAllAgentIds(db, agentId, readScope)
+				: await getConstellationVisibleAgentIds(db, agentId, readScope);
+		const agentPlaceholders = placeholders(visibleAgentIds.length);
+		const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
+		const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
+		const entityRows = (await db
+			.prepare(
+				`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id,
 				        e.source_id, e.source_kind, e.source_path, e.created_at, e.updated_at
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
@@ -2204,43 +2321,43 @@ export async function getKnowledgeGraphForConstellation(
 				   )
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC, e.id ASC
 				 LIMIT ?`,
-				)
-				.all(
-					...visibleAgentIds,
-					...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
-					...SOURCE_CLAIM_ENTITY_TYPES,
-					limit + 1,
-				) as Array<Record<string, unknown>>;
-			const truncated = {
-				entities: entityRows.length > limit,
-				aspects: false,
-				attributes: false,
-				dependencies: false,
-				assertions: false,
+			)
+			.all(
+				...visibleAgentIds,
+				...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
+				...SOURCE_CLAIM_ENTITY_TYPES,
+				limit + 1,
+			)) as Array<Record<string, unknown>>;
+		const truncated = {
+			entities: entityRows.length > limit,
+			aspects: false,
+			attributes: false,
+			dependencies: false,
+			assertions: false,
+		};
+		entityRows.length = Math.min(entityRows.length, limit);
+
+		const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
+
+		if (entityIds.length === 0) {
+			return {
+				entities: [],
+				dependencies: [],
+				assertions: [],
+				proposals: [],
+				metadata: {
+					dreaming: await getConstellationDreamingSummary(db, agentId, options.backlogProbe, readScope),
+					proposals: await getConstellationProposalSummary(db, agentId, readScope),
+					truncated,
+				},
 			};
-			entityRows.length = Math.min(entityRows.length, limit);
+		}
 
-			const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
-
-			if (entityIds.length === 0) {
-				return {
-					entities: [],
-					dependencies: [],
-					assertions: [],
-					proposals: [],
-					metadata: {
-						dreaming: getConstellationDreamingSummary(db, agentId, options.backlogProbe),
-						proposals: getConstellationProposalSummary(db, agentId),
-						truncated,
-					},
-				};
-			}
-
-			const entityIdSet = new Set(entityIds);
-			const entityIdPlaceholders = placeholders(entityIds.length);
-			const aspectRows = db
-				.prepare(
-					`SELECT id, entity_id, name, weight, status, proposal_id, created_at, updated_at, rn
+		const entityIdSet = new Set(entityIds);
+		const entityIdPlaceholders = placeholders(entityIds.length);
+		const aspectRows = (await db
+			.prepare(
+				`SELECT id, entity_id, name, weight, status, proposal_id, created_at, updated_at, rn
 				 FROM (
 				   SELECT id, entity_id, name, weight, status, proposal_id, created_at, updated_at,
 				          ROW_NUMBER() OVER (
@@ -2269,52 +2386,52 @@ export async function getKnowledgeGraphForConstellation(
 				 ) ranked_aspects
 				 WHERE rn <= ?
 				 ORDER BY entity_id ASC, weight DESC, name ASC, id ASC`,
-				)
-				.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity + 1) as Array<Record<string, unknown>>;
+			)
+			.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity + 1)) as Array<Record<string, unknown>>;
 
-			const aspectsByEntity = new Map<
-				string,
-				Array<{
-					id: string;
-					name: string;
-					weight: number;
-					status: "active" | "archived";
-					proposalId: string | null;
-					createdAt: string | null;
-					updatedAt: string | null;
-				}>
-			>();
-			const aspectIds: string[] = [];
+		const aspectsByEntity = new Map<
+			string,
+			Array<{
+				id: string;
+				name: string;
+				weight: number;
+				status: "active" | "archived";
+				proposalId: string | null;
+				createdAt: string | null;
+				updatedAt: string | null;
+			}>
+		>();
+		const aspectIds: string[] = [];
 
-			for (const row of aspectRows) {
-				const entityId = row.entity_id as string;
-				if (!entityIdSet.has(entityId)) continue;
-				if (Number(row.rn) > maxAspectsPerEntity) {
-					truncated.aspects = true;
-					continue;
-				}
-				const bucket = aspectsByEntity.get(entityId) ?? [];
-				const aspectId = row.id as string;
-				aspectIds.push(aspectId);
-				bucket.push({
-					id: aspectId,
-					name: row.name as string,
-					weight: Number(row.weight ?? 0.5),
-					status: row.status === "archived" ? "archived" : "active",
-					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-					createdAt: isoTimestamp(row.created_at),
-					updatedAt: isoTimestamp(row.updated_at),
-				});
-				aspectsByEntity.set(entityId, bucket);
+		for (const row of aspectRows) {
+			const entityId = row.entity_id as string;
+			if (!entityIdSet.has(entityId)) continue;
+			if (Number(row.rn) > maxAspectsPerEntity) {
+				truncated.aspects = true;
+				continue;
 			}
+			const bucket = aspectsByEntity.get(entityId) ?? [];
+			const aspectId = row.id as string;
+			aspectIds.push(aspectId);
+			bucket.push({
+				id: aspectId,
+				name: row.name as string,
+				weight: Number(row.weight ?? 0.5),
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+				createdAt: isoTimestamp(row.created_at),
+				updatedAt: isoTimestamp(row.updated_at),
+			});
+			aspectsByEntity.set(entityId, bucket);
+		}
 
-			const attrsByAspect = new Map<string, ConstellationAttribute[]>();
-			if (aspectIds.length > 0) {
-				const aspectIdSet = new Set(aspectIds);
-				const aspectIdPlaceholders = placeholders(aspectIds.length);
-				const attrRows = db
-					.prepare(
-						`SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
+		const attrsByAspect = new Map<string, ConstellationAttribute[]>();
+		if (aspectIds.length > 0) {
+			const aspectIdSet = new Set(aspectIds);
+			const aspectIdPlaceholders = placeholders(aspectIds.length);
+			const attrRows = (await db
+				.prepare(
+					`SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					        version, version_root_id, previous_attribute_id,
 					        group_key, claim_key, source_kind, source_id, source_path, source_root,
 					        proposal_id, proposal_evidence, created_at, updated_at, claim_priority, rn
@@ -2336,84 +2453,84 @@ export async function getKnowledgeGraphForConstellation(
 					 WHERE rn <= ?
 					 ORDER BY rn ASC, aspect_id ASC
 					 LIMIT ?`,
-					)
-					.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect + 1, maxAttributes + 1) as Array<
-					Record<string, unknown>
-				>;
-				let kept = 0;
-				for (const row of attrRows) {
-					const aspectId = row.aspect_id as string;
-					if (!aspectIdSet.has(aspectId)) continue;
-					if (Number(row.rn) > maxAttributesPerAspect || kept >= maxAttributes) {
-						truncated.attributes = true;
-						continue;
-					}
-					kept++;
-					const bucket = attrsByAspect.get(aspectId) ?? [];
-					bucket.push({
-						id: row.id as string,
-						content: row.content as string,
-						kind: row.kind as "attribute" | "constraint" | "claim",
-						importance: Number(row.importance ?? 0.5),
-						confidence: Number(row.confidence ?? 0),
-						memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
-						status: row.status as AttributeStatus,
-						version: typeof row.version === "number" ? row.version : 1,
-						versionRootId: typeof row.version_root_id === "string" ? row.version_root_id : null,
-						previousAttributeId: typeof row.previous_attribute_id === "string" ? row.previous_attribute_id : null,
-						groupKey: typeof row.group_key === "string" ? row.group_key : null,
-						claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
-						sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
-						sourceId: typeof row.source_id === "string" ? row.source_id : null,
-						sourcePath: typeof row.source_path === "string" ? row.source_path : null,
-						sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
-						proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-						proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
-						createdAt: isoTimestamp(row.created_at),
-						updatedAt: isoTimestamp(row.updated_at),
-					});
-					attrsByAspect.set(aspectId, bucket);
+				)
+				.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect + 1, maxAttributes + 1)) as Array<
+				Record<string, unknown>
+			>;
+			let kept = 0;
+			for (const row of attrRows) {
+				const aspectId = row.aspect_id as string;
+				if (!aspectIdSet.has(aspectId)) continue;
+				if (Number(row.rn) > maxAttributesPerAspect || kept >= maxAttributes) {
+					truncated.attributes = true;
+					continue;
 				}
-			}
-
-			const entitiesById = new Map<string, string>();
-			const entitiesByName = new Map<string, string>();
-			const entities: ConstellationEntity[] = entityRows.map((row) => {
-				const eid = row.id as string;
-				const name = row.name as string;
-				entitiesById.set(eid, name);
-				entitiesByName.set(toCanonicalName(name), eid);
-				const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
-					id: asp.id,
-					name: asp.name,
-					weight: asp.weight,
-					status: asp.status,
-					proposalId: asp.proposalId,
-					createdAt: asp.createdAt,
-					updatedAt: asp.updatedAt,
-					attributes: attrsByAspect.get(asp.id) ?? [],
-				}));
-				return {
-					id: eid,
-					agentId: row.agent_id as string,
-					name,
-					entityType: row.entity_type as string,
-					mentions: typeof row.mentions === "number" ? row.mentions : 0,
-					pinned: row.pinned === 1,
-					status: row.status === "archived" ? "archived" : "active",
-					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-					sourceId: typeof row.source_id === "string" ? row.source_id : null,
+				kept++;
+				const bucket = attrsByAspect.get(aspectId) ?? [];
+				bucket.push({
+					id: row.id as string,
+					content: row.content as string,
+					kind: row.kind as "attribute" | "constraint" | "claim",
+					importance: Number(row.importance ?? 0.5),
+					confidence: Number(row.confidence ?? 0),
+					memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
+					status: row.status as AttributeStatus,
+					version: typeof row.version === "number" ? row.version : 1,
+					versionRootId: typeof row.version_root_id === "string" ? row.version_root_id : null,
+					previousAttributeId: typeof row.previous_attribute_id === "string" ? row.previous_attribute_id : null,
+					groupKey: typeof row.group_key === "string" ? row.group_key : null,
+					claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
 					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+					sourceId: typeof row.source_id === "string" ? row.source_id : null,
 					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+					sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
+					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 					createdAt: isoTimestamp(row.created_at),
 					updatedAt: isoTimestamp(row.updated_at),
-					aspects,
-				};
-			});
+				});
+				attrsByAspect.set(aspectId, bucket);
+			}
+		}
 
-			const depRows = db
-				.prepare(
-					`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
+		const entitiesById = new Map<string, string>();
+		const entitiesByName = new Map<string, string>();
+		const entities: ConstellationEntity[] = entityRows.map((row) => {
+			const eid = row.id as string;
+			const name = row.name as string;
+			entitiesById.set(eid, name);
+			entitiesByName.set(toCanonicalName(name), eid);
+			const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
+				id: asp.id,
+				name: asp.name,
+				weight: asp.weight,
+				status: asp.status,
+				proposalId: asp.proposalId,
+				createdAt: asp.createdAt,
+				updatedAt: asp.updatedAt,
+				attributes: attrsByAspect.get(asp.id) ?? [],
+			}));
+			return {
+				id: eid,
+				agentId: row.agent_id as string,
+				name,
+				entityType: row.entity_type as string,
+				mentions: typeof row.mentions === "number" ? row.mentions : 0,
+				pinned: row.pinned === 1,
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+				sourceId: typeof row.source_id === "string" ? row.source_id : null,
+				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+				createdAt: isoTimestamp(row.created_at),
+				updatedAt: isoTimestamp(row.updated_at),
+				aspects,
+			};
+		});
+
+		const depRows = (await db
+			.prepare(
+				`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
 				 FROM entity_dependencies
 				 WHERE agent_id IN (${agentPlaceholders})
 				   AND COALESCE(status, 'active') = 'active'
@@ -2425,26 +2542,26 @@ export async function getKnowledgeGraphForConstellation(
 				          dependency_type ASC,
 				          id ASC
 				 LIMIT ?`,
-				)
-				.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit + 1) as Array<Record<string, unknown>>;
-			truncated.dependencies = depRows.length > dependencyLimit;
-			depRows.length = Math.min(depRows.length, dependencyLimit);
+			)
+			.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit + 1)) as Array<Record<string, unknown>>;
+		truncated.dependencies = depRows.length > dependencyLimit;
+		depRows.length = Math.min(depRows.length, dependencyLimit);
 
-			const dependencies: ConstellationDependency[] = depRows.map((row) => ({
-				sourceEntityId: row.source_entity_id as string,
-				targetEntityId: row.target_entity_id as string,
-				dependencyType: row.dependency_type as string,
-				strength: Number(row.strength ?? 0.5),
-				status: row.status === "archived" ? "archived" : "active",
-				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-				proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
-			}));
+		const dependencies: ConstellationDependency[] = depRows.map((row) => ({
+			sourceEntityId: row.source_entity_id as string,
+			targetEntityId: row.target_entity_id as string,
+			dependencyType: row.dependency_type as string,
+			strength: Number(row.strength ?? 0.5),
+			status: row.status === "archived" ? "archived" : "active",
+			proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+			proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
+		}));
 
-			let assertionRows: Array<Record<string, unknown>> = [];
-			try {
-				assertionRows = db
-					.prepare(
-						`SELECT a.id, a.subject_entity_id, a.claim_attribute_id, a.predicate,
+		let assertionRows: Array<Record<string, unknown>> = [];
+		try {
+			assertionRows = (await db
+				.prepare(
+					`SELECT a.id, a.subject_entity_id, a.claim_attribute_id, a.predicate,
 						        a.content, a.confidence, a.speaker, a.evidence,
 						        a.source_kind, a.source_id, a.source_path, a.source_root,
 						        a.asserted_at
@@ -2454,87 +2571,86 @@ export async function getKnowledgeGraphForConstellation(
 					   AND a.status = 'active'
 					 ORDER BY a.confidence DESC, a.asserted_at DESC, a.id ASC
 					 LIMIT ?`,
-					)
-					.all(...visibleAgentIds, ...entityIds, assertionLimit + 1) as Array<Record<string, unknown>>;
-				truncated.assertions = assertionRows.length > assertionLimit;
-				assertionRows.length = Math.min(assertionRows.length, assertionLimit);
-			} catch (error) {
-				if (!(error instanceof Error) || !error.message.includes("no such table: epistemic_assertions")) throw error;
-			}
-			const assertions: ConstellationAssertion[] = assertionRows.map((row) => ({
-				id: row.id as string,
-				subjectEntityId: row.subject_entity_id as string,
-				claimAttributeId: typeof row.claim_attribute_id === "string" ? row.claim_attribute_id : null,
-				predicate: row.predicate as string,
-				content: row.content as string,
-				confidence: Number(row.confidence ?? 0),
-				speaker: typeof row.speaker === "string" ? row.speaker : null,
-				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
-				sourceId: typeof row.source_id === "string" ? row.source_id : null,
-				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
-				sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
-				evidenceCount: parseJsonArray(row.evidence).length,
-				assertedAt: row.asserted_at as string,
-			}));
+				)
+				.all(...visibleAgentIds, ...entityIds, assertionLimit + 1)) as Array<Record<string, unknown>>;
+			truncated.assertions = assertionRows.length > assertionLimit;
+			assertionRows.length = Math.min(assertionRows.length, assertionLimit);
+		} catch (error) {
+			if (!(error instanceof Error) || !error.message.includes("no such table: epistemic_assertions")) throw error;
+		}
+		const assertions: ConstellationAssertion[] = assertionRows.map((row) => ({
+			id: row.id as string,
+			subjectEntityId: row.subject_entity_id as string,
+			claimAttributeId: typeof row.claim_attribute_id === "string" ? row.claim_attribute_id : null,
+			predicate: row.predicate as string,
+			content: row.content as string,
+			confidence: Number(row.confidence ?? 0),
+			speaker: typeof row.speaker === "string" ? row.speaker : null,
+			sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+			sourceId: typeof row.source_id === "string" ? row.source_id : null,
+			sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+			sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
+			evidenceCount: parseJsonArray(row.evidence).length,
+			assertedAt: row.asserted_at as string,
+		}));
 
-			const proposalRows = db
-				.prepare(
-					`SELECT id, operation, payload, confidence, rationale, evidence,
+		const proposalRows = (await db
+			.prepare(
+				`SELECT id, operation, payload, confidence, rationale, evidence,
 				        source_kind, source_path, updated_at
 				 FROM ontology_proposals
 				 WHERE agent_id IN (${agentPlaceholders}) AND status = 'pending'
 				 ORDER BY updated_at DESC
 				 LIMIT 80`,
-				)
-				.all(...visibleAgentIds) as Array<Record<string, unknown>>;
-			const proposals: ConstellationProposal[] = proposalRows.map((row) => {
-				const payload = parseJsonRecord(row.payload);
-				const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);
-				return {
-					id: row.id as string,
-					operation: row.operation as string,
-					confidence: Number(row.confidence ?? 0),
-					rationale: typeof row.rationale === "string" ? row.rationale : "",
-					evidenceCount: parseJsonArray(row.evidence).length,
-					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
-					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
-					updatedAt: row.updated_at as string,
-					targetEntityId: target.id,
-					targetEntityName: target.name,
-					targetAspectName: readStringValue(payload, ["aspect", "target_aspect", "aspect_name"]),
-					preview: previewFromProposalPayload(payload),
-				};
-			});
-
+			)
+			.all(...visibleAgentIds)) as Array<Record<string, unknown>>;
+		const proposals: ConstellationProposal[] = proposalRows.map((row) => {
+			const payload = parseJsonRecord(row.payload);
+			const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);
 			return {
-				entities,
-				dependencies,
-				assertions,
-				proposals,
-				metadata: {
-					dreaming: getConstellationDreamingSummary(db, agentId, options.backlogProbe),
-					proposals: getConstellationProposalSummary(db, agentId),
-					truncated,
-				},
+				id: row.id as string,
+				operation: row.operation as string,
+				confidence: Number(row.confidence ?? 0),
+				rationale: typeof row.rationale === "string" ? row.rationale : "",
+				evidenceCount: parseJsonArray(row.evidence).length,
+				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+				updatedAt: row.updated_at as string,
+				targetEntityId: target.id,
+				targetEntityName: target.name,
+				targetAspectName: readStringValue(payload, ["aspect", "target_aspect", "aspect_name"]),
+				preview: previewFromProposalPayload(payload),
 			};
-		},
-		{ siteToken: "db:knowledge.graph-constellation.read" },
-	);
+		});
+
+		return {
+			entities,
+			dependencies,
+			assertions,
+			proposals,
+			metadata: {
+				dreaming: await getConstellationDreamingSummary(db, agentId, options.backlogProbe, readScope),
+				proposals: await getConstellationProposalSummary(db, agentId, readScope),
+				truncated,
+			},
+		};
+	})(knowledgeReadDb(readScope));
 }
 
 export async function getStructuralDensity(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<StructuralDensity> {
-	const row = await ownerReadOne<{
+	const row = await knowledgeReadQuery<{
 		readonly aspectCount: number;
 		readonly attributeCount: number;
 		readonly constraintCount: number;
 		readonly dependencyCount: number;
 	}>(
-		await getDbOwner(getDbAccessorPath()),
-		`SELECT
+		{
+			sql: `SELECT
 			(SELECT COUNT(*) FROM entity_aspects WHERE entity_id = ? AND agent_id = ?) AS aspectCount,
 			(SELECT COUNT(*) FROM entity_attributes ea JOIN entity_aspects asp ON asp.id = ea.aspect_id
 			 WHERE asp.entity_id = ? AND asp.agent_id = ? AND ea.agent_id = ?
@@ -2544,8 +2660,11 @@ export async function getStructuralDensity(
 			 AND ea.kind = 'constraint' AND ea.status = 'active') AS constraintCount,
 			(SELECT COUNT(*) FROM entity_dependencies
 			 WHERE (source_entity_id = ? OR target_entity_id = ?) AND agent_id = ?) AS dependencyCount`,
-		[entityId, agentId, entityId, agentId, agentId, entityId, agentId, agentId, entityId, entityId, agentId],
+			params: [entityId, agentId, entityId, agentId, agentId, entityId, agentId, agentId, entityId, entityId, agentId],
+			result: "get",
+		},
 		{ operation: "knowledge.structural-density", deadlineMs: DB_OWNER_READ_DEADLINE_MS, estimatedWorkUnits: 4 },
+		readScope,
 	);
 	return {
 		aspectCount: Number(row?.aspectCount ?? 0),

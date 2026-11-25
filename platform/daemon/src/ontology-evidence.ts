@@ -1,6 +1,6 @@
 import { redactCredentials } from "@signet/core";
-import type { ReadDb } from "./db-accessor";
-import { tableExists } from "./db-helpers";
+import type { ReadScope } from "./read-scope";
+import { type KnowledgeReadDb, knowledgeTableExists as tableExists } from "./knowledge-graph-hygiene";
 
 export interface OntologyEvidenceRef {
 	readonly sourceKind: string | null;
@@ -70,8 +70,13 @@ function readString(record: Readonly<Record<string, unknown>>, key: string): str
 	return trimmed.length > 0 ? trimmed : null;
 }
 
-function columnExists(db: ReadDb, table: string, column: string): boolean {
-	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
+async function columnExists(
+	db: KnowledgeReadDb,
+	table: string,
+	column: string,
+	_readScope?: ReadScope,
+): Promise<boolean> {
+	const cols = (await db.prepare(`PRAGMA table_info(${table})`).all()) as ReadonlyArray<Record<string, unknown>>;
 	return cols.some((col) => col.name === column);
 }
 
@@ -154,18 +159,19 @@ export function uniqueOntologyEvidenceRefs(refs: readonly OntologyEvidenceRef[])
 	});
 }
 
-function readSessionTranscriptEvidence(
-	db: ReadDb,
+async function readSessionTranscriptEvidence(
+	db: KnowledgeReadDb,
 	agentId: string,
 	ref: OntologyEvidenceRef,
-): SessionTranscriptEvidenceRow | null {
+	readScope?: ReadScope,
+): Promise<SessionTranscriptEvidenceRow | null> {
 	const ids = sourceIdCandidates(ref.sourceId);
-	if (ids.length === 0 || !tableExists(db, "session_transcripts")) return null;
+	if (ids.length === 0 || !(await tableExists(db, "session_transcripts"))) return null;
 	const placeholders = ids.map(() => "?").join(", ");
-	const seenExpr = columnExists(db, "session_transcripts", "updated_at")
+	const seenExpr = (await columnExists(db, "session_transcripts", "updated_at", readScope))
 		? "COALESCE(updated_at, created_at)"
 		: "created_at";
-	const row = db
+	const row = (await db
 		.prepare(
 			`SELECT session_key, content, ${seenExpr} AS seen_at
 			 FROM session_transcripts
@@ -173,35 +179,37 @@ function readSessionTranscriptEvidence(
 			 ORDER BY ${seenExpr} DESC
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids) as SessionTranscriptEvidenceRow | undefined;
+		.get(agentId, ...ids)) as SessionTranscriptEvidenceRow | undefined;
 	return row ?? null;
 }
 
-function readOntologyProposalEvidence(
-	db: ReadDb,
+async function readOntologyProposalEvidence(
+	db: KnowledgeReadDb,
 	agentId: string,
 	ref: OntologyEvidenceRef,
-): OntologyProposalEvidenceRow | null {
-	if (!tableExists(db, "ontology_proposals")) return null;
+	_readScope?: ReadScope,
+): Promise<OntologyProposalEvidenceRow | null> {
+	if (!(await tableExists(db, "ontology_proposals"))) return null;
 	const proposalId = ref.sourceKind === "ontology_proposal" ? ref.sourceId : null;
 	if (proposalId === null) return null;
-	const row = db
+	const row = (await db
 		.prepare(
 			`SELECT id, operation, rationale, evidence, created_at
 			 FROM ontology_proposals
 			 WHERE id = ? AND agent_id = ?
 			 LIMIT 1`,
 		)
-		.get(proposalId, agentId) as OntologyProposalEvidenceRow | null | undefined;
+		.get(proposalId, agentId)) as OntologyProposalEvidenceRow | null | undefined;
 	return row ?? null;
 }
 
-function readMemoryArtifactEvidence(
-	db: ReadDb,
+async function readMemoryArtifactEvidence(
+	db: KnowledgeReadDb,
 	agentId: string,
 	ref: OntologyEvidenceRef,
-): MemoryArtifactEvidenceRow | null {
-	if (!tableExists(db, "memory_artifacts")) return null;
+	_readScope?: ReadScope,
+): Promise<MemoryArtifactEvidenceRow | null> {
+	if (!(await tableExists(db, "memory_artifacts"))) return null;
 	const ids = sourceIdCandidates(ref.sourceId);
 	const filters = ["agent_id = ?", "COALESCE(is_deleted, 0) = 0"];
 	const args: unknown[] = [agentId];
@@ -221,7 +229,7 @@ function readMemoryArtifactEvidence(
 	} else {
 		return null;
 	}
-	const row = db
+	const row = (await db
 		.prepare(
 			`SELECT source_path, source_kind, session_id, session_key, session_token, content
 			 FROM memory_artifacts
@@ -229,20 +237,25 @@ function readMemoryArtifactEvidence(
 			 ORDER BY captured_at DESC
 			 LIMIT 1`,
 		)
-		.get(...args) as MemoryArtifactEvidenceRow | undefined;
+		.get(...args)) as MemoryArtifactEvidenceRow | undefined;
 	return row ?? null;
 }
 
-function readMemoryEvidence(db: ReadDb, agentId: string, ref: OntologyEvidenceRef): MemoryEvidenceRow | null {
-	if (!ref.memoryId || !tableExists(db, "memories")) return null;
-	const row = db
+async function readMemoryEvidence(
+	db: KnowledgeReadDb,
+	agentId: string,
+	ref: OntologyEvidenceRef,
+	_readScope?: ReadScope,
+): Promise<MemoryEvidenceRow | null> {
+	if (!ref.memoryId || !(await tableExists(db, "memories"))) return null;
+	const row = (await db
 		.prepare(
 			`SELECT id, source_id, source_type, source_path, content
 			 FROM memories
 			 WHERE id = ? AND agent_id = ? AND COALESCE(is_deleted, 0) = 0
 			 LIMIT 1`,
 		)
-		.get(ref.memoryId, agentId) as MemoryEvidenceRow | undefined;
+		.get(ref.memoryId, agentId)) as MemoryEvidenceRow | undefined;
 	return row ?? null;
 }
 
@@ -255,12 +268,13 @@ function sourceLooksLikeTranscript(ref: OntologyEvidenceRef): boolean {
 	);
 }
 
-export function resolveOntologyEvidenceRef(
-	db: ReadDb,
+export async function resolveOntologyEvidenceRef(
+	db: KnowledgeReadDb,
 	agentId: string,
 	ref: OntologyEvidenceRef,
-): OntologyEvidenceItem {
-	const proposal = readOntologyProposalEvidence(db, agentId, ref);
+	readScope?: ReadScope,
+): Promise<OntologyEvidenceItem> {
+	const proposal = await readOntologyProposalEvidence(db, agentId, ref, readScope);
 	if (proposal !== null) {
 		return {
 			kind: "ontology_proposal",
@@ -274,7 +288,8 @@ export function resolveOntologyEvidenceRef(
 		};
 	}
 
-	const sourcePathArtifact = ref.sourcePath !== null ? readMemoryArtifactEvidence(db, agentId, ref) : null;
+	const sourcePathArtifact =
+		ref.sourcePath !== null ? await readMemoryArtifactEvidence(db, agentId, ref, readScope) : null;
 	if (sourcePathArtifact !== null) {
 		return {
 			kind: "memory_artifact",
@@ -288,7 +303,9 @@ export function resolveOntologyEvidenceRef(
 		};
 	}
 
-	const transcript = sourceLooksLikeTranscript(ref) ? readSessionTranscriptEvidence(db, agentId, ref) : null;
+	const transcript = sourceLooksLikeTranscript(ref)
+		? await readSessionTranscriptEvidence(db, agentId, ref, readScope)
+		: null;
 	if (transcript !== null) {
 		return {
 			kind: "session_transcript",
@@ -302,7 +319,7 @@ export function resolveOntologyEvidenceRef(
 		};
 	}
 
-	const artifact = ref.sourcePath === null ? readMemoryArtifactEvidence(db, agentId, ref) : null;
+	const artifact = ref.sourcePath === null ? await readMemoryArtifactEvidence(db, agentId, ref, readScope) : null;
 	if (artifact !== null) {
 		return {
 			kind: "memory_artifact",
@@ -316,7 +333,7 @@ export function resolveOntologyEvidenceRef(
 		};
 	}
 
-	const memory = readMemoryEvidence(db, agentId, ref);
+	const memory = await readMemoryEvidence(db, agentId, ref, readScope);
 	if (memory !== null) {
 		return {
 			kind: "memory",

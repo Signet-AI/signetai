@@ -49,14 +49,14 @@ describe("knowledge graph hygiene report", () => {
 		dbPath = "";
 	});
 
-	test("reports suspicious entities and safe mention candidates without mutating", () => {
+	test("reports suspicious entities and safe mention candidates without mutating", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity("entity-signet", "Signet", 5);
 		seedEntity("entity-the", "The", 1);
 		seedMemory("mem-1", "Signet should keep graph repair mechanical.");
 
-		const report = getKnowledgeHygieneReport(getDbAccessor(), {
+		const report = await getKnowledgeHygieneReport(getDbAccessor(), {
 			agentId: "default",
 			limit: 10,
 			memoryLimit: 10,
