@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,9 +102,28 @@ describe("cross-agent messages", () => {
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "first" });
 		createAgentMessage({ fromAgentId: "beta", toAgentId: "alpha", content: "second" });
 		createAgentMessage({ fromAgentId: "gamma", broadcast: true, content: "broadcast" });
-		expect(listAgentMessagePage({ agentId: "owner", includeBroadcast: false }).total).toBe(0);
-		const first = listAgentMessagePage({ agentId: "owner", allAgents: true, limit: 2, order: "asc" });
-		const second = listAgentMessagePage({ agentId: "owner", allAgents: true, limit: 2, offset: 2, order: "asc" });
+		expect(
+			listAgentMessagePage({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				agentId: "owner",
+				includeBroadcast: false,
+			}).total,
+		).toBe(0);
+		const first = listAgentMessagePage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "owner",
+			allAgents: true,
+			limit: 2,
+			order: "asc",
+		});
+		const second = listAgentMessagePage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "owner",
+			allAgents: true,
+			limit: 2,
+			offset: 2,
+			order: "asc",
+		});
 		expect(first.total).toBe(3);
 		expect(first.hasMore).toBe(true);
 		expect([...first.items, ...second.items].map((item) => item.content)).toEqual(["first", "second", "broadcast"]);
@@ -128,7 +148,10 @@ describe("cross-agent messages", () => {
 			type: "assist_request",
 		});
 
-		const inbox = listAgentMessages({ agentId: "beta" });
+		const inbox = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+		});
 		expect(inbox.length).toBe(1);
 		expect(inbox[0]?.type).toBe("assist_request");
 		expect(inbox[0]?.content).toContain("migration rollout");
@@ -140,7 +163,11 @@ describe("cross-agent messages", () => {
 			toAgentId: "beta",
 			content: "outbound",
 		});
-		const outboundPage = listAgentMessagePage({ agentId: "alpha", includeSent: true });
+		const outboundPage = listAgentMessagePage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "alpha",
+			includeSent: true,
+		});
 		expect(outboundPage.items).toHaveLength(1);
 		expect(outboundPage.unreadCount).toBe(0);
 
@@ -149,7 +176,13 @@ describe("cross-agent messages", () => {
 			toAgentId: "alpha",
 			content: "self-addressed",
 		});
-		expect(listAgentMessagePage({ agentId: "alpha", includeSent: true }).unreadCount).toBe(1);
+		expect(
+			listAgentMessagePage({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				agentId: "alpha",
+				includeSent: true,
+			}).unreadCount,
+		).toBe(1);
 	});
 
 	it("includes broadcast messages in recipient inbox", () => {
@@ -160,7 +193,10 @@ describe("cross-agent messages", () => {
 			type: "decision_update",
 		});
 
-		const inbox = listAgentMessages({ agentId: "beta" });
+		const inbox = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+		});
 		expect(inbox.length).toBe(1);
 		expect(inbox[0]?.broadcast).toBe(true);
 	});
@@ -203,7 +239,13 @@ describe("cross-agent messages", () => {
 		});
 		expect(delivered.deliveryStatus).toBe("delivered");
 		expect(delivered.deliveryReceipt).toEqual({ status: 201, runId: "run-1" });
-		expect(listAgentMessages({ agentId: "alpha", includeSent: true })[0]?.deliveryStatus).toBe("delivered");
+		expect(
+			listAgentMessages({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				agentId: "alpha",
+				includeSent: true,
+			})[0]?.deliveryStatus,
+		).toBe("delivered");
 	});
 
 	it("rejects unresolved local session targets instead of allowing session-key reassignment leaks", () => {
@@ -232,7 +274,10 @@ describe("cross-agent messages", () => {
 			message.deliveryReceipt.nested = { ok: false };
 		}
 
-		const inbox = listAgentMessages({ agentId: "beta" });
+		const inbox = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+		});
 		expect(inbox[0]?.deliveryReceipt).toEqual({
 			status: 200,
 			nested: { ok: true },
@@ -279,8 +324,14 @@ describe("cross-agent messages", () => {
 			harness: "opencode",
 		});
 
-		const betaInbox = listAgentMessages({ agentId: "beta" });
-		const gammaInbox = listAgentMessages({ agentId: "gamma" });
+		const betaInbox = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+		});
+		const gammaInbox = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "gamma",
+		});
 		expect(betaInbox.length).toBe(1);
 		expect(gammaInbox.length).toBe(0);
 		expect(
@@ -294,6 +345,11 @@ describe("cross-agent messages", () => {
 
 	it("persists unread messages across DB-owner restarts", async () => {
 		const { createAgentMessageAsync } = await import("./cross-agent");
+		const db = new Database(dbPath);
+		db.exec(
+			"INSERT INTO agents(id,name,created_at,updated_at) VALUES('alpha','Alpha','now','now'),('beta','Beta','now','now')",
+		);
+		db.close();
 		await createAgentMessageAsync({
 			fromAgentId: "alpha",
 			toAgentId: "beta",
@@ -309,7 +365,11 @@ describe("cross-agent messages", () => {
 			),
 		).toEqual({ content: "Durable restart delivery." });
 
-		const inbox = listAgentMessagePage({ agentId: "beta", unreadOnly: true });
+		const inbox = listAgentMessagePage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			unreadOnly: true,
+		});
 		expect(inbox.unreadCount).toBe(1);
 		expect(inbox.items[0]?.content).toBe("Durable restart delivery.");
 	});
@@ -321,17 +381,36 @@ describe("cross-agent messages", () => {
 			content: "Acknowledge after processing.",
 		});
 
-		expect(() => acknowledgeAgentMessage({ messageId: message.id, agentId: "gamma" })).toThrow(
-			"not found or not visible",
-		);
+		expect(() =>
+			acknowledgeAgentMessage({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				messageId: message.id,
+				agentId: "gamma",
+			}),
+		).toThrow("not found or not visible");
 
-		const first = acknowledgeAgentMessage({ messageId: message.id, agentId: "beta" });
-		const retry = acknowledgeAgentMessage({ messageId: message.id, agentId: "beta" });
+		const first = acknowledgeAgentMessage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			messageId: message.id,
+			agentId: "beta",
+		});
+		const retry = acknowledgeAgentMessage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			messageId: message.id,
+			agentId: "beta",
+		});
 		expect(first.alreadyAcknowledged).toBe(false);
 		expect(retry).toEqual({ ...first, alreadyAcknowledged: true });
 
-		const unread = listAgentMessagePage({ agentId: "beta", unreadOnly: true });
-		const history = listAgentMessagePage({ agentId: "beta" });
+		const unread = listAgentMessagePage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			unreadOnly: true,
+		});
+		const history = listAgentMessagePage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+		});
 		expect(unread.items).toEqual([]);
 		expect(unread.unreadCount).toBe(0);
 		expect(history.items[0]?.acknowledgedAt).toBe(first.acknowledgedAt);
@@ -350,7 +429,11 @@ describe("ACP delivery reconciliation", () => {
 		});
 
 		expect(await reconcileAcpDeliveries(undefined, Date.parse(message.createdAt) + 31_000)).toBe(1);
-		const recovered = listAgentMessages({ agentId: "alpha", includeSent: true })[0];
+		const recovered = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "alpha",
+			includeSent: true,
+		})[0];
 		expect(recovered?.deliveryState).toBe("indeterminate");
 		expect(recovered?.deliveryError).toBe("ACP relay was queued but never started");
 	});
@@ -364,11 +447,21 @@ describe("ACP delivery reconciliation", () => {
 			acpBaseUrl: "https://acp.example.com",
 			acpTargetAgentName: "helper",
 		});
-		const first = claimAcpMessageDelivery({ messageId: message.id, agentId: "alpha", nowMs: 1_000 });
+		const first = claimAcpMessageDelivery({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			messageId: message.id,
+			agentId: "alpha",
+			nowMs: 1_000,
+		});
 		expect(await reconcileAcpDeliveries(undefined, 80_000)).toBe(0);
-		expect(() => claimAcpMessageDelivery({ messageId: message.id, agentId: "alpha", nowMs: 20_000 })).toThrow(
-			"already active",
-		);
+		expect(() =>
+			claimAcpMessageDelivery({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				messageId: message.id,
+				agentId: "alpha",
+				nowMs: 20_000,
+			}),
+		).toThrow("already active");
 		expect(first.idempotencyKey).toBe(`signet-acp-${message.deliveryAttemptId}`);
 		expect(completeAcpMessageDelivery(message.id, first.leaseToken, { status: "delivered" }).deliveryState).toBe(
 			"delivered",
@@ -384,13 +477,23 @@ describe("ACP delivery reconciliation", () => {
 			acpBaseUrl: "https://acp.example.com",
 			acpTargetAgentName: "helper",
 		});
-		const first = claimAcpMessageDelivery({ messageId: message.id, agentId: "alpha", nowMs: 1_000 });
+		const first = claimAcpMessageDelivery({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			messageId: message.id,
+			agentId: "alpha",
+			nowMs: 1_000,
+		});
 		expect(await reconcileAcpDeliveries(undefined, 200_000)).toBe(1);
-		const indeterminate = listAgentMessages({ agentId: "alpha", includeSent: true })[0];
+		const indeterminate = listAgentMessages({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "alpha",
+			includeSent: true,
+		})[0];
 		expect(indeterminate?.deliveryState).toBe("indeterminate");
 		expect(indeterminate?.deliveryStatus).toBe("queued");
 		expect(() =>
 			claimAcpMessageDelivery({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 				messageId: message.id,
 				agentId: "other-agent",
 				retryIndeterminate: true,
@@ -399,6 +502,7 @@ describe("ACP delivery reconciliation", () => {
 		).toThrow();
 
 		const retry = claimAcpMessageDelivery({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			messageId: message.id,
 			agentId: "alpha",
 			retryIndeterminate: true,

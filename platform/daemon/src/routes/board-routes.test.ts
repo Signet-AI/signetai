@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { closeCrossAgentFixture, createAgentMessage } from "../__tests__/cross-agent-fixture";
 import type { TokenClaims } from "../auth";
+import { localPrincipal, legacyPrincipal } from "../auth/principal";
 import { LOCAL_AUTHOR } from "../auth/audit-owner";
 import { resetBoardStateForTest } from "../board";
 import { resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
@@ -28,6 +29,7 @@ beforeEach(() => {
 	app = new Hono();
 	app.use("*", async (c, next) => {
 		c.set("author", LOCAL_AUTHOR);
+		c.set("principal", localPrincipal());
 		await next();
 	});
 	registerHooksRoutes(app);
@@ -134,6 +136,8 @@ describe("cross-agent wake routes under a scoped token", () => {
 		const scoped = new Hono();
 		scoped.use("*", async (c, next) => {
 			c.set("auth", { authenticated: true, claims });
+			c.set("principal", legacyPrincipal(claims));
+			c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
 			await next();
 		});
 		registerHooksRoutes(scoped);

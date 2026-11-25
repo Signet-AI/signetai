@@ -1,3 +1,4 @@
+import type { ReadScope } from "../read-scope";
 import { type AgentMessage, listAgentMessagePage } from "../cross-agent";
 
 export const HARNESS_NOTIFICATION_HOOKS = {
@@ -20,6 +21,7 @@ export interface BoardActivityNotice {
 }
 
 export interface CollectCrossAgentNotificationsInput {
+	readonly readScope: ReadScope;
 	readonly harness: string;
 	readonly hook: string;
 	readonly agentId: string;
@@ -200,6 +202,7 @@ export function collectCrossAgentNotifications(
 
 	const limit = clampLimit(input.limit);
 	const page = listAgentMessagePage({
+		readScope: input.readScope,
 		agentId: input.agentId,
 		sessionKey: input.sessionKey,
 		includeBroadcast: true,

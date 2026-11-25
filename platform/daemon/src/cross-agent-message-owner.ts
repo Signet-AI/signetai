@@ -1,3 +1,4 @@
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { authoredAuditStatements, type WriteAuthor } from "./auth/audit-owner";
 import type { CrossAgentMessageRow } from "./cross-agent";
 import type { DbOwnerStatement } from "./db-owner-protocol";
@@ -73,4 +74,20 @@ export async function persistAgentMessage(row: CrossAgentMessageRow, author: Wri
 			throw new AgentMessageCapacityError();
 		throw error;
 	}
+}
+
+export function agentMessageReadPredicate(scope: ReadScope, alias = "m"): { sql: string; args: (string | number)[] } {
+	const clause = readScopeSql(
+		alias,
+		{
+			...scope,
+			reach:
+				scope.reach.kind === "shared" || scope.reach.kind === "group"
+					? { kind: "own", agentId: scope.reach.agentId }
+					: scope.reach,
+			projects: null,
+		},
+		{ agent: "from_agent_id", visibility: null, memory: null, session: "from_session_key", source: null },
+	);
+	return { ...clause, sql: clause.sql + (scope.projects === null ? "" : " AND 0") };
 }

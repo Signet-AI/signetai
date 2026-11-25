@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { legacyPrincipal, localPrincipal } from "../auth/principal";
 import type { TokenClaims } from "../auth";
 import { invalidateAgentScopeCache } from "../agent-id";
 import { getAgentPresenceForSessionAgent, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
@@ -22,6 +23,12 @@ beforeEach(() => {
 	dir = mkdtempSync(join(suiteDir, "case-"));
 	initDbAccessor(join(dir, "memory.db"), { agentsDir: dir });
 	app = new Hono();
+	app.use("*", async (c, next) => {
+		const claims = c.get("auth")?.claims;
+		c.set("principal", claims ? legacyPrincipal(claims) : localPrincipal());
+		c.set("author", { userId: null, credential: claims ? `token:${claims.sub}` : "local" });
+		await next();
+	});
 	registerHooksRoutes(app);
 });
 
@@ -102,6 +109,12 @@ function withClaims(claims: Partial<TokenClaims> & Pick<TokenClaims, "role">, ru
 		const scoped = new Hono();
 		scoped.use("*", async (c, next) => {
 			c.set("auth", { authenticated: true, claims: full });
+			await next();
+		});
+		scoped.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			c.set("principal", claims ? legacyPrincipal(claims) : localPrincipal());
+			c.set("author", { userId: null, credential: claims ? `token:${claims.sub}` : "local" });
 			await next();
 		});
 		registerHooksRoutes(scoped);

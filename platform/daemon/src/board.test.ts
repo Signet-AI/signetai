@@ -81,6 +81,36 @@ async function registerAgent(id: string, readPolicy: string, policyGroup: string
 }
 
 describe("message board", () => {
+	it("cannot promote a hidden message into public board evidence", async () => {
+		const message = await createAgentMessage({
+			fromAgentId: "alpha",
+			toAgentId: "beta",
+			content: "Classified board promotion",
+		});
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_board_secret','Board secret'); INSERT INTO compartments(key,created_at) VALUES('cls_board_secret','now'); INSERT INTO compartment_members SELECT id,'cls_board_secret' FROM compartments WHERE key='cls_board_secret'",
+			);
+			db.prepare(
+				"UPDATE cross_agent_messages SET compartment_id=(SELECT id FROM compartments WHERE key='cls_board_secret') WHERE id=?",
+			).run(message.id);
+		});
+		const author = {
+			agentId: "alpha",
+			principalAuthor: { userId: "reader", credential: "session:reader" },
+			messageReadScope: { reach: { kind: "all" as const }, compartments: [], projects: null },
+		};
+		await expect(
+			createBoardThread({ viewer: operator, author, topic: "general", fromMessageId: message.id }),
+		).rejects.toBeInstanceOf(BoardNotFoundError);
+		expect(
+			await dbOwnerQuery(ownerStatement("SELECT count(*) n FROM board_posts", [], "get"), {
+				operation: "test.board.promotion-count",
+				lane: "read",
+			}),
+		).toEqual({ n: 0 });
+	});
+
 	it("creates a thread in a new topic, replies, and lists it with tags and counts", async () => {
 		const alpha = agent("alpha");
 		const created = await createBoardThread({
