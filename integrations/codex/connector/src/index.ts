@@ -1105,12 +1105,6 @@ function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 		return true;
 	}
 
-	const content = readFileSync(path, "utf-8");
-
-	if (!content.includes("[mcp_servers.signet]")) {
-		writeConfigText(path, `${content.trimEnd()}\n\n${block}`);
-		return true;
-	}
 	unpatchConfigToml(path);
 	const updated = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
 	const prefix = updated.length > 0 ? `${updated}\n\n` : "";
@@ -1121,14 +1115,15 @@ function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 function unpatchConfigToml(path: string): boolean {
 	if (!existsSync(path)) return false;
 	const content = readFileSync(path, "utf-8");
-	if (!content.includes("[mcp_servers.signet]")) return false;
 	const lines = content.split("\n");
 	const filtered: string[] = [];
 	let inSection = false;
+	let found = false;
 	for (const line of lines) {
 		if (line.trim() === "# Signet MCP server") continue;
 		if (line.trim() === "[mcp_servers.signet]" || line.trim().startsWith("[mcp_servers.signet.")) {
 			inSection = true;
+			found = true;
 			continue;
 		}
 		if (inSection) {
@@ -1143,6 +1138,7 @@ function unpatchConfigToml(path: string): boolean {
 		}
 		filtered.push(line);
 	}
+	if (!found) return false;
 	writeFileSync(
 		path,
 		`${filtered
