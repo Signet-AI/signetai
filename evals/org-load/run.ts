@@ -6,6 +6,12 @@ import { OrgDaemon } from "../../tests/integration/org-mode/daemon";
 import { Fixture, type User } from "../../tests/integration/org-mode/fixture";
 import { record, request, success, type Credential } from "../../tests/integration/org-mode/http";
 
+interface Rejection {
+	status: number;
+	error: string;
+	retryAfter: string | null;
+	count: number;
+}
 interface Sample {
 	ms: number;
 	status: number;
@@ -63,6 +69,7 @@ export async function run(): Promise<void> {
 	);
 	const daemon = await OrgDaemon.create();
 	const routes = new Map<string, Sample[]>();
+	const rejections = new Map<string, Map<string, Rejection>>();
 	const queue: {
 		observedAt: string;
 		status: number;
@@ -99,8 +106,24 @@ export async function run(): Promise<void> {
 			try {
 				const reply = await request(daemon.origin, path, user.connector, "POST", body);
 				status = reply.status;
-				if (status < 200 || status >= 300) error = `http_${status}`;
-				else if (record(reply.body).error) error = "semantic_error";
+				if (status < 200 || status >= 300) {
+					error = `http_${status}`;
+					const payload = reply.body;
+					const detail =
+						payload !== null && typeof payload === "object" && !Array.isArray(payload) ? payload.error : undefined;
+					const rejection = {
+						status,
+						error: typeof detail === "string" ? detail.slice(0, 512) : "No JSON error message",
+						retryAfter: reply.headers.get("retry-after"),
+						count: 0,
+					};
+					const signature = JSON.stringify(rejection);
+					const reasons = rejections.get(path) ?? new Map<string, Rejection>();
+					const existing = reasons.get(signature);
+					if (existing) existing.count++;
+					else if (reasons.size < 20) reasons.set(signature, { ...rejection, count: 1 });
+					rejections.set(path, reasons);
+				} else if (record(reply.body).error) error = "semantic_error";
 			} catch (failure) {
 				error = failure instanceof Error ? failure.name : "transport_error";
 			}
@@ -185,7 +208,21 @@ export async function run(): Promise<void> {
 			agentModel: isBaseline ? null : model,
 			runtime: process.env.SIGNET_DAEMON_BIN ? "compiled" : "source",
 			elapsedMs: performance.now() - startedAt,
-			routes: Object.fromEntries([...routes].map(([path, samples]) => [path, summarize(samples)])),
+			routes: Object.fromEntries(
+				[...routes].map(([path, samples]) => {
+					const responses = [...(rejections.get(path)?.values() ?? [])];
+					return [
+						path,
+						{
+							...summarize(samples),
+							rejectionResponses: responses,
+							rejectionResponsesOmitted:
+								samples.filter((sample) => sample.error?.startsWith("http_")).length -
+								responses.reduce((sum, response) => sum + response.count, 0),
+						},
+					];
+				}),
+			),
 			dbOwnerQueue: {
 				endpoint: "/health",
 				metric: "dbOwner.queuedJobs",
