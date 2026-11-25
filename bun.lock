@@ -322,8 +322,10 @@
     "libs/sdk": {
       "name": "@signet/sdk",
       "version": "1.0.1",
-      "devDependencies": {
+      "dependencies": {
         "@signet/core": "workspace:*",
+      },
+      "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
       },

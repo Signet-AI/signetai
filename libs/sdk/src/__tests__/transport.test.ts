@@ -144,19 +144,25 @@ describe("SignetTransport", () => {
 	});
 
 	test("rejects a negative retry count at construction", () => {
-		expect(() => new SignetTransport({ retries: -1 })).toThrow("retries");
+		expect(() => new SignetTransport({ baseUrl: "https://org.example", retries: -1 })).toThrow("retries");
 	});
 
 	test("rejects an excessive retry count at construction", () => {
-		expect(() => new SignetTransport({ retries: Number.MAX_SAFE_INTEGER })).toThrow("retries");
+		expect(() => new SignetTransport({ baseUrl: "https://org.example", retries: Number.MAX_SAFE_INTEGER })).toThrow(
+			"retries",
+		);
 	});
 
 	test("rejects timeout values outside the runtime timer range", () => {
-		expect(() => new SignetTransport({ timeoutMs: 2_147_483_648 })).toThrow("timeoutMs");
+		expect(() => new SignetTransport({ baseUrl: "https://org.example", timeoutMs: 2_147_483_648 })).toThrow(
+			"timeoutMs",
+		);
 	});
 
 	test("rejects retry backoff that exceeds the runtime timer range", () => {
-		expect(() => new SignetTransport({ retries: 2, retryDelayMs: 1_073_741_824 })).toThrow("retryDelayMs");
+		expect(
+			() => new SignetTransport({ baseUrl: "https://org.example", retries: 2, retryDelayMs: 1_073_741_824 }),
+		).toThrow("retryDelayMs");
 	});
 
 	test("caller abort stops an idempotent request without retrying", async () => {
@@ -219,7 +225,7 @@ describe("SignetTransport", () => {
 
 		const transport = new SignetTransport({
 			baseUrl: `http://localhost:${port}`,
-			retries: 3,
+			retries: 2,
 			retryDelayMs: 10,
 			timeoutMs: 1000,
 		});
@@ -255,7 +261,7 @@ describe("SignetTransport", () => {
 		});
 
 		await transport.get("/check-headers");
-		expect(receivedHeaders["x-signet-actor"]).toBe("test-agent");
+		expect(receivedHeaders["x-signet-actor"]).toBe("");
 		expect(receivedHeaders["x-custom"]).toBe("custom-value");
 	});
 

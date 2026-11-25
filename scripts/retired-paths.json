@@ -1,5 +1,15 @@
 [
 	{
+		"path": "libs/sdk/src/generated/client.ts",
+		"reason": "Remove the unused regex-generated SDK; the handwritten client uses the shared transport.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "libs/sdk/scripts/generate-client.ts",
+		"reason": "Retire the route-regex SDK generator; future contract generation belongs to signet-domain.",
+		"retiredIn": "2026-11-25"
+	},
+	{
 		"path": "docs/specs/dependencies.yaml",
 		"reason": "Retire the spec dependency index.",
 		"retiredIn": "2026-11-17"
