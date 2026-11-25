@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import type {
@@ -630,7 +632,9 @@ export async function getDreamingPasses(
 	accessor: DbAccessor,
 	agentId: string,
 	limit = 10,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingPassRow[]> {
+	const predicate = dreamingReadPredicate("", readScope);
 	return await ownerQueryAll<DreamingPassRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.list",
@@ -646,10 +650,10 @@ export async function getDreamingPasses(
 		        summary, error,
 		        policy_hash AS policyHash, policy_source AS policySource
 		 FROM dreaming_passes
-		 WHERE agent_id = ?
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"} ${predicate.sql}
 		 ORDER BY created_at DESC
 		 LIMIT ?`,
-		[agentId, limit],
+		[...(readScope ? [] : [agentId]), ...predicate.args, limit],
 		{ deadlineMs: 30_000, estimatedWorkUnits: Math.max(1, Math.min(limit, 100)) },
 	);
 }
@@ -664,7 +668,9 @@ export async function getDreamingPassPolicy(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<{ readonly policy: DreamingPassPolicyRecord | null } | null> {
+	const predicate = dreamingReadPredicate("pass", readScope);
 	const row = await ownerQueryOne<{
 		readonly hash: string | null;
 		readonly source: "default" | "custom" | null;
@@ -675,9 +681,9 @@ export async function getDreamingPassPolicy(
 		`SELECT pass.policy_hash AS hash, pass.policy_source AS source, policy.text AS text
 		 FROM dreaming_passes pass
 		 LEFT JOIN dreaming_policies policy ON policy.hash = pass.policy_hash
-		 WHERE pass.agent_id = ? AND pass.id = ?
+		 WHERE ${readScope ? "1=1" : "pass.agent_id = ?"} AND pass.id = ? ${predicate.sql}
 		 LIMIT 1`,
-		[agentId, passId],
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args],
 		{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
 	);
 	if (row == null) return null;
@@ -690,6 +696,7 @@ export interface DreamingPassScope extends DreamingPassRow {
 }
 
 interface DreamingPassReadOptions {
+	readonly readScope?: ReadScope;
 	readonly signal?: AbortSignal;
 }
 
@@ -714,12 +721,13 @@ export async function getDreamingPass(
 	passId: string,
 	options: DreamingPassReadOptions = {},
 ): Promise<DreamingPassScope | null> {
+	const predicate = dreamingReadPredicate("", options.readScope);
 	return (
 		(await ownerQueryOne<DreamingPassScope>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.pass.read",
-			`${dreamingPassSelect(true)} WHERE agent_id = ? AND id = ? LIMIT 1`,
-			[agentId, passId],
+			`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql} LIMIT 1`,
+			[...(options.readScope ? [] : [agentId]), passId, ...predicate.args],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1, signal: options.signal },
 		)) ?? null
 	);
@@ -730,11 +738,12 @@ export async function getActiveDreamingPasses(
 	agentId: string,
 	options: DreamingPassReadOptions = {},
 ): Promise<readonly DreamingPassScope[]> {
+	const predicate = dreamingReadPredicate("", options.readScope);
 	return await ownerQueryAll<DreamingPassScope>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.active",
-		`${dreamingPassSelect(true)} WHERE agent_id = ? AND status = 'running' ORDER BY started_at ASC, id ASC`,
-		[agentId],
+		`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND status = 'running' ${predicate.sql} ORDER BY started_at ASC, id ASC`,
+		[...(options.readScope ? [] : [agentId]), ...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10, signal: options.signal },
 	);
 }
@@ -817,7 +826,10 @@ export async function getDreamingToolCalls(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingToolCall[]> {
+	const predicate = dreamingReadPredicate("", readScope);
+	const passPredicate = dreamingReadPredicate("p", readScope);
 	const rows = await ownerQueryAll<{
 		id: string;
 		passId: string;
@@ -836,9 +848,10 @@ export async function getDreamingToolCalls(
 		        tool_name AS toolName, input_json AS inputJson, output_json AS outputJson,
 		        success, latency_ms AS latencyMs, created_at AS createdAt
 		 FROM dreaming_tool_calls
-		 WHERE agent_id = ? AND pass_id = ?
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"} AND pass_id = ? ${predicate.sql}
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_tool_calls.pass_id AND p.agent_id = dreaming_tool_calls.agent_id ${passPredicate.sql})` : ""}
 		 ORDER BY sequence ASC`,
-		[agentId, passId],
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args, ...(readScope ? passPredicate.args : [])],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
 	);
 	return rows.map((typed) => ({
@@ -858,7 +871,9 @@ export async function getDreamingToolCalls(
 export async function getDreamingEvidenceExclusions(
 	accessor: DbAccessor,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingEvidenceExclusion[]> {
+	const predicate = dreamingReadPredicate("p", readScope);
 	return await ownerQueryAll<DreamingEvidenceExclusion>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.evidence-exclusions.list",
@@ -868,9 +883,10 @@ export async function getDreamingEvidenceExclusions(
 		        pass_id AS passId, excluded_at AS excludedAt,
 		        requeue_requested_at AS requeueRequestedAt, resolved_at AS resolvedAt
 		 FROM dreaming_evidence_exclusions
-		 WHERE agent_id = ? AND resolved_at IS NULL
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"} AND resolved_at IS NULL
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_exclusions.pass_id AND p.agent_id = dreaming_evidence_exclusions.agent_id ${predicate.sql})` : ""}
 		 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
-		[agentId],
+		[...(readScope ? predicate.args : [agentId])],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
 	);
 }

@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { ownerReadAll, ownerReadOne } from "../db-owner-sql";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
@@ -185,7 +187,9 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 export async function getDreamingReviewedEvidence(
 	accessor: DbAccessor,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingReviewedEvidence[]> {
+	const predicate = dreamingReadPredicate("p", readScope);
 	const owner = await getDbOwnerForAccessor(accessor);
 	const exists = await ownerReadOne<{ readonly present: number }>(
 		owner,
@@ -201,9 +205,10 @@ export async function getDreamingReviewedEvidence(
 		        source_revision AS sourceRevision, reason, pass_id AS passId,
 		        reviewed_at AS reviewedAt
 		 FROM dreaming_evidence_reviews
-		 WHERE agent_id = ?
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"}
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_reviews.pass_id AND p.agent_id = dreaming_evidence_reviews.agent_id ${predicate.sql})` : ""}
 		 ORDER BY reviewed_at DESC, source_kind ASC, source_id ASC`,
-		[agentId],
+		[...(readScope ? predicate.args : [agentId])],
 		{ operation: "dreaming.evidence-reviews-read", workloadClass: "foreground" },
 	);
 }
@@ -233,6 +238,6 @@ export async function requestDreamingReviewedEvidenceRequeue(
 			});
 			return true;
 		},
-		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:236" },
+		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:241" },
 	);
 }

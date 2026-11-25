@@ -1,3 +1,4 @@
+import { type ReadScope, readScopeSql } from "../read-scope";
 export interface ReviewDueMemory {
 	readonly id: string;
 	readonly content: string;
@@ -19,6 +20,7 @@ export interface ReviewWindowOptions {
 	readonly expiringSoonMs?: number;
 	readonly limit?: number;
 	readonly agentId?: string;
+	readonly readScope?: ReadScope;
 }
 
 interface ReviewDueRow {
@@ -62,12 +64,13 @@ function toReviewDueMemory(row: ReviewDueRow): ReviewDueMemory {
 }
 
 function reviewDueQuery(options: ReviewWindowOptions): { readonly sql: string; readonly params: unknown[] } {
+	const predicate = options.readScope ? readScopeSql("m", options.readScope) : { sql: "", args: [] };
 	return options.agentId
 		? {
-				sql: "AND m.agent_id = ?",
-				params: [options.agentId],
+				sql: `AND m.agent_id = ? ${predicate.sql}`,
+				params: [options.agentId, ...predicate.args],
 			}
-		: { sql: "", params: [] };
+		: { sql: predicate.sql, params: predicate.args };
 }
 
 const REVIEW_DUE_SELECT = `
@@ -84,6 +87,10 @@ const REVIEW_DUE_SELECT = `
 	 WHERE m.review_after IS NOT NULL
 	   AND m.superseded_by IS NULL
 	   AND m.is_deleted = 0`;
+function reviewDueSelect(options: ReviewWindowOptions): string {
+	if (!options.readScope) return REVIEW_DUE_SELECT;
+	return REVIEW_DUE_SELECT.replace("ON ea.memory_id = m.id", "ON 0 AND ea.memory_id = m.id");
+}
 export function findExpiredReviewDueMemories(
 	accessor: ReviewDueAccessor,
 	now = new Date(),
@@ -92,7 +99,7 @@ export function findExpiredReviewDueMemories(
 	const limit = opts.limit ?? 50;
 	const query = reviewDueQuery(opts);
 	const rows = accessor.all<ReviewDueRow>(
-		`${REVIEW_DUE_SELECT}
+		`${reviewDueSelect(opts)}
 		    AND m.review_after < ?
 		    ${query.sql}
 		  ORDER BY review_after ASC
@@ -113,7 +120,7 @@ export function findApproachingReviewDueMemories(
 	const query = reviewDueQuery(opts);
 	const horizon = new Date(now.getTime() + windowMs);
 	const rows = accessor.all<ReviewDueRow>(
-		`${REVIEW_DUE_SELECT}
+		`${reviewDueSelect(opts)}
 		    AND m.review_after >= ?
 		    AND m.review_after <= ?
 		    ${query.sql}

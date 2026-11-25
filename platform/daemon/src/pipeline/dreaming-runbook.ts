@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
@@ -223,7 +225,7 @@ export function writeDreamingRunbook(
 			)
 			.run(serializeRunbook(params.entry), params.passId, params.agentId);
 		return result.changes === 1;
-	}, "pipeline/dreaming-runbook.ts:218");
+	}, "db:dreaming.runbook.write");
 }
 export function recordDreamingEvidenceWindowInTx(
 	db: WriteDb,
@@ -254,26 +256,32 @@ export async function readDreamingPassRecord(
 	owner: DbOwnerClient,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<DreamingRunbookPass | null> {
+	const predicate = dreamingReadPredicate("", readScope);
+	const passPredicate = dreamingReadPredicate("p", readScope);
 	const row = await ownerQueryOne<Record<string, unknown>>(
 		owner,
 		"dreaming.pass-record.read",
-		`SELECT id, mode, status, started_at AS startedAt, completed_at AS completedAt,
+		`SELECT agent_id AS agentId, id, mode, status, started_at AS startedAt, completed_at AS completedAt,
 		        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
 		        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
-		 FROM dreaming_passes WHERE agent_id = ? AND id = ?`,
-		[agentId, passId],
+		 FROM dreaming_passes WHERE ${readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql}`,
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 	if (row === undefined) return null;
+	if (typeof row.agentId !== "string") throw new Error("Dreaming pass agent is unresolved");
+	const recordAgentId = row.agentId;
 	const [calls, quarantines] = await Promise.all([
 		ownerQueryAll<{ inputJson: string; outputJson: string }>(
 			owner,
 			"dreaming.pass-record.operations",
 			`SELECT input_json AS inputJson, output_json AS outputJson
-			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops'
+			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops' ${predicate.sql}
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_tool_calls.pass_id AND p.agent_id = dreaming_tool_calls.agent_id ${passPredicate.sql})` : ""}
 			 ORDER BY sequence ASC`,
-			[agentId, passId],
+			[recordAgentId, passId, ...predicate.args, ...(readScope ? passPredicate.args : [])],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		),
 		ownerQueryAll<DreamingRunbookPass["quarantines"][number]>(
@@ -281,8 +289,9 @@ export async function readDreamingPassRecord(
 			"dreaming.pass-record.quarantines",
 			`SELECT source_kind AS sourceKind, source_id AS sourceId, reason
 			 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND pass_id = ? AND resolved_at IS NULL
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_exclusions.pass_id AND p.agent_id = dreaming_evidence_exclusions.agent_id ${passPredicate.sql})` : ""}
 			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
-			[agentId, passId],
+			[recordAgentId, passId, ...(readScope ? passPredicate.args : [])],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		),
 	]);

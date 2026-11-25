@@ -1,3 +1,8 @@
+import type { ReadScope } from "../read-scope";
+import { ownerQueryAll } from "../db-owner-maintenance";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
+import { countTokens } from "./tokenizer";
 import { type Entity, redactCredentialsDeep } from "@signet/core";
 import { z } from "zod";
 import { runDbOwnerDomainOperation } from "../db-owner-runtime";
@@ -18,9 +23,7 @@ import {
 	listKnowledgeEntities,
 } from "../knowledge-graph";
 
-import { getOntologyClaimEvidence } from "../ontology-claim-evidence";
 import { listOntologyContradictions } from "../ontology-contradictions";
-import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-proposals";
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
@@ -214,6 +217,7 @@ export interface DreamingCapability {
 
 export interface CreateDreamingCapabilitiesParams {
 	readonly accessor: DbAccessor;
+	readonly readScope?: ReadScope;
 	readonly agentId: string;
 	readonly allowedScopes?: readonly string[];
 	readonly actor: string;
@@ -280,10 +284,13 @@ function capability<T extends z.ZodType>(
 		},
 	};
 }
-export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
+export function searchDreamingEvidenceInDb(
+	db: ReadDb,
+	input: DbOwnerDreamingEvidenceSearch & { readonly readScope?: ReadScope },
+): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
 	if (input.sourceRef !== undefined) {
-		const source = readEpisodicSource(db, { agentId: scopeId, from: input.sourceRef });
+		const source = readEpisodicSource(db, { agentId: scopeId, from: input.sourceRef, readScope: input.readScope });
 		if (source === null) return { ok: false, error: "Evidence source not found" };
 		if (source.kind === "transcript" && !source.completed)
 			return { ok: false, error: "Transcript is still in progress" };
@@ -300,11 +307,12 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 			: { ok: true, items: [fragment] };
 	}
 	const query = input.query?.trim() || undefined;
-	if (query === undefined && input.since === undefined && input.before === undefined) {
+	if (input.readScope === undefined && query === undefined && input.since === undefined && input.before === undefined) {
 		return drainDreamingEvidenceQueueInDb(db, input);
 	}
 	const sources = searchEpisodicSources(db, {
 		agentId: scopeId,
+		readScope: input.readScope,
 		query: query ?? "",
 		since: input.since,
 		before: input.before,
@@ -335,7 +343,10 @@ function interleaveWaiting(
 	return [...order.values()];
 }
 
-function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
+function drainDreamingEvidenceQueueInDb(
+	db: ReadDb,
+	input: DbOwnerDreamingEvidenceSearch & { readonly readScope?: ReadScope },
+): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
 	const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 20), 50));
 	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
@@ -352,6 +363,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		cursorFor(source).stalledPasses >= DREAMING_EVIDENCE_STALL_PASSES;
 	const queue = {
 		agentId: scopeId,
+		readScope: input.readScope,
 		query: "",
 		kind: input.kind,
 		excludeDelivered: true,
@@ -428,19 +440,19 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 
 export function readDreamingEvidenceSourceInDb(
 	db: ReadDb,
-	input: DbOwnerDreamingEvidenceSource,
+	input: DbOwnerDreamingEvidenceSource & { readonly readScope?: ReadScope },
 ): EpisodicSourceRecord | null {
-	return readEpisodicSource(db, { agentId: input.agentId, from: input.sourceRef });
+	return readEpisodicSource(db, { agentId: input.agentId, from: input.sourceRef, readScope: input.readScope });
 }
 
 export function collectDreamingReviewDueInDb(
 	db: ReadDb,
-	input: DbOwnerDreamingReviewDue,
+	input: DbOwnerDreamingReviewDue & { readonly readScope?: ReadScope },
 ): ReturnType<typeof collectReviewDueClaims> {
 	return collectReviewDueClaims(
 		{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
 		new Date(input.nowMs),
-		{ agentId: input.agentId, limit: input.limit },
+		{ agentId: input.agentId, limit: input.limit, readScope: input.readScope },
 	);
 }
 
@@ -452,12 +464,14 @@ export async function listDreamingAttention(
 		readonly status?: "pending" | "resolved";
 		readonly limit?: number;
 		readonly agentFacing?: boolean;
+		readonly readScope?: ReadScope;
 	},
 ): Promise<readonly unknown[]> {
-	const { agentId: scopeId, kind, status, limit, agentFacing } = params;
+	const { agentId: scopeId, kind, status, limit, agentFacing, readScope } = params;
 	if (kind === "review_due") {
 		if (status === "resolved") return [];
-		const input: DbOwnerDreamingReviewDue = {
+		const input: DbOwnerDreamingReviewDue & { readonly readScope?: ReadScope } = {
+			readScope,
 			agentId: scopeId,
 			nowMs: Date.now(),
 			limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200),
@@ -510,13 +524,40 @@ export async function listDreamingAttention(
 				status: status ?? "pending",
 				limit: bounded(limit, 20, 100),
 				agentFacing,
+				readScope,
 			})
 		: getDreamingAttentionAcrossScopes(accessor, {
 				kind,
 				status: status ?? "pending",
 				limit: bounded(limit, 50, 200),
 				agentFacing,
+				readScope,
 			});
+}
+
+async function readScopedCuratedMemoryHead(
+	accessor: DbAccessor,
+	agentId: string,
+	readScope: ReadScope,
+): Promise<Record<string, unknown>> {
+	const predicate = dreamingReadPredicate("e", readScope);
+	const entries = await ownerQueryAll<{ entry_id: string; canonical_text: string; status: string }>(
+		await getDbOwnerForAccessor(accessor),
+		"dreaming.memory-head.scoped",
+		`SELECT e.entry_id, e.canonical_text, e.status FROM memory_head_entries e
+ WHERE e.agent_id = ? AND e.status = 'active' ${predicate.sql} ORDER BY e.entry_id LIMIT 200`,
+		[agentId, ...predicate.args],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 200 },
+	);
+	const content = entries.map((entry) => `- ${entry.canonical_text.trim()}`).join("\n");
+	return {
+		agentId,
+		content,
+		status: "scoped",
+		entries,
+		maxTokens: MEMORY_HEAD_MAX_TOKENS,
+		tokens: countTokens(content),
+	};
 }
 
 const EVIDENCE_CHARS_PER_TOKEN = 4;
@@ -556,9 +597,11 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				scopeId === agentId
 					? {
 							ok: true,
-							head: await (params.memoryHeadCommitter
-								? params.memoryHeadCommitter.read(scopeId)
-								: readCuratedMemoryHead(scopeId)),
+							head: await (params.readScope
+								? readScopedCuratedMemoryHead(accessor, scopeId, params.readScope)
+								: params.memoryHeadCommitter
+									? params.memoryHeadCommitter.read(scopeId)
+									: readCuratedMemoryHead(scopeId)),
 						}
 					: { ok: false, error: "Head scope must match the active agent" },
 		),
@@ -600,13 +643,17 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			async ({ agentId: scopeId, query, type, limit, offset }) => ({
 				ok: true,
 				items: (
-					await listKnowledgeEntities(accessor, {
-						agentId: scopeId,
-						query,
-						type,
-						limit: bounded(limit, 20, 100),
-						offset: Math.max(0, Math.floor(offset ?? 0)),
-					})
+					await listKnowledgeEntities(
+						accessor,
+						{
+							agentId: scopeId,
+							query,
+							type,
+							limit: bounded(limit, 20, 100),
+							offset: Math.max(0, Math.floor(offset ?? 0)),
+						},
+						params.readScope,
+					)
 				).map((item) => ({
 					id: item.entity.id,
 					name: item.entity.name,
@@ -633,7 +680,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				offset: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, entityId, include, direction, limit, offset }) => {
-				const detail = await getKnowledgeEntityDetail(accessor, entityId, scopeId);
+				const detail = await getKnowledgeEntityDetail(accessor, entityId, scopeId, params.readScope);
 				if (!detail) return { ok: false, error: "Entity not found" };
 				const hydrationLimit = bounded(limit, 50, MAX_HYDRATED_ITEMS);
 				const hydrationOffset = Math.max(0, Math.floor(offset ?? 0));
@@ -647,7 +694,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					dependencyCount: detail.dependencyCount,
 				};
 				if (include?.includes("aspects")) {
-					const aspects = await getEntityAspectsWithCounts(accessor, entityId, scopeId);
+					const aspects = await getEntityAspectsWithCounts(accessor, entityId, scopeId, params.readScope);
 					const hydratedAspects = aspects.slice(hydrationOffset, hydrationOffset + hydrationLimit).map((aspect) => ({
 						id: aspect.aspect.id,
 						name: boundedText(aspect.aspect.name, MAX_ENTITY_TEXT_CHARS),
@@ -659,11 +706,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					result.aspectsTruncated = hydrationOffset + hydratedAspects.length < aspects.length;
 				}
 				if (include?.includes("links")) {
-					const links = await getEntityDependenciesDetailed(accessor, {
-						entityId,
-						agentId: scopeId,
-						direction: direction ?? "both",
-					});
+					const links = await getEntityDependenciesDetailed(
+						accessor,
+						{
+							entityId,
+							agentId: scopeId,
+							direction: direction ?? "both",
+						},
+						params.readScope,
+					);
 					const hydratedLinks = links.slice(hydrationOffset, hydrationOffset + hydrationLimit).map((link) => ({
 						...link,
 						reason: boundedText(link.reason ?? undefined, MAX_ENTITY_TEXT_CHARS) ?? null,
@@ -690,23 +741,31 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			async ({ agentId: scopeId, entityId, aspectId, include, limit, offset }) => {
 				const result: MutableCapabilityOutput = {
 					ok: true,
-					items: await getAttributesForAspectFiltered(accessor, {
-						entityId,
-						aspectId,
-						agentId: scopeId,
-						kind: "attribute",
-						status: "active",
-						limit: bounded(limit, 50, 200),
-						offset: Math.max(0, Math.floor(offset ?? 0)),
-					}),
+					items: await getAttributesForAspectFiltered(
+						accessor,
+						{
+							entityId,
+							aspectId,
+							agentId: scopeId,
+							kind: "attribute",
+							status: "active",
+							limit: bounded(limit, 50, 200),
+							offset: Math.max(0, Math.floor(offset ?? 0)),
+						},
+						params.readScope,
+					),
 				};
 				if (include?.includes("contradictions")) {
-					result.contradictions = listOntologyContradictions(accessor, {
-						agentId: scopeId,
-						entityId,
-						aspectId,
-						status: "active",
-					});
+					result.contradictions = await listOntologyContradictions(
+						accessor,
+						{
+							agentId: scopeId,
+							entityId,
+							aspectId,
+							status: "active",
+						},
+						params.readScope,
+					);
 				}
 				return result;
 			},
@@ -742,7 +801,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						note: "This pass has used its time or evidence budget for new evidence. File what you have read, write the runbook, and finish; the rest of the queue is delivered to the next pass.",
 					};
 				}
-				const input: DbOwnerDreamingEvidenceSearch = {
+				const input: DbOwnerDreamingEvidenceSearch & { readonly readScope?: ReadScope } = {
+					readScope: params.readScope,
 					agentId: scopeId,
 					...(query === undefined ? {} : { query }),
 					...(since === undefined ? {} : { since }),
@@ -838,19 +898,24 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				const result: MutableCapabilityOutput = { ok: true };
 				if (name !== undefined) {
 					result.label = classifyEntityQuality(name, type);
-					result.duplicates = await findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
+					if (params.readScope) result.duplicateCheck = "unavailable";
+					else result.duplicates = await findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
 					result.contradiction = (
-						await getAttributesForAspectFiltered(accessor, {
-							entityId,
-							aspectId,
-							agentId: scopeId,
-							kind: "attribute",
-							status: "active",
-							limit: 200,
-							offset: 0,
-						})
+						await getAttributesForAspectFiltered(
+							accessor,
+							{
+								entityId,
+								aspectId,
+								agentId: scopeId,
+								kind: "attribute",
+								status: "active",
+								limit: 200,
+								offset: 0,
+							},
+							params.readScope,
+						)
 					).map((attribute) => ({
 						attributeId: attribute.id,
 						content: attribute.content,
@@ -878,8 +943,9 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			async ({ agentId: scopeId, id, n, scopes }) => {
 				const allowedScopes = params.allowedScopes ?? [scopeId];
 				return await zoomDreamingHistory(accessor, {
-					agentId,
+					agentId: params.readScope ? scopeId : agentId,
 					scopeKey: scopes ?? dreamingScopeKey(allowedScopes),
+					readScope: params.readScope,
 					allowedScopes,
 					id,
 					n,
@@ -939,7 +1005,14 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async ({ agentId: scopeId, kind, status, limit }) => ({
 				ok: true,
-				items: await listDreamingAttention(accessor, { agentId: scopeId, kind, status, limit, agentFacing: true }),
+				items: await listDreamingAttention(accessor, {
+					agentId: scopeId,
+					kind,
+					status,
+					limit,
+					agentFacing: true,
+					readScope: params.readScope,
+				}),
 			}),
 		),
 		capability(

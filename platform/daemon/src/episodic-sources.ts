@@ -1,4 +1,24 @@
+import { type ReadScope, readScopeSql } from "./read-scope";
 import type { ReadDb } from "./db-accessor";
+function episodicReadPredicate(alias: string, kind: EpisodicSourceKind, scope?: ReadScope) {
+	if (!scope) return { sql: "", args: [] };
+	return readScopeSql(
+		alias,
+		{
+			...scope,
+			reach:
+				scope.reach.kind === "shared" && kind !== "memory"
+					? { kind: "own", agentId: scope.reach.agentId }
+					: scope.reach,
+		},
+		{
+			visibility: kind === "memory" ? "visibility" : null,
+			memory: kind === "memory" ? "id" : null,
+			session: kind === "memory" ? "source_id" : "session_key",
+			source: kind === "summary" ? null : "source_id",
+		},
+	);
+}
 export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
 export const EPISODIC_CAPTURED_AT_FLOOR = "2000-01-01T00:00:00.000Z";
 export function utcTimestampMs(value: string): number {
@@ -45,6 +65,7 @@ export interface EpisodicSourceCandidateScan {
 }
 
 export interface ReadEpisodicSourceOptions {
+	readonly readScope?: ReadScope;
 	readonly agentId: string;
 	readonly from: string;
 }
@@ -206,14 +227,20 @@ export function sourceIdCandidates(value: string): string[] {
 	];
 }
 
-export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicMemory(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	readScope?: ReadScope,
+): EpisodicSourceRecord | null {
+	const predicate = episodicReadPredicate("memories", "memory", readScope);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
 			`SELECT id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
 			 FROM memories
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${predicate.sql}
 			   AND memory_kind = 'episodic'
 			   AND COALESCE(is_deleted, 0) = 0
 			   AND visibility != 'archived'
@@ -221,7 +248,7 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 			   AND id IN (${placeholders})
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids) as
+		.get(agentId, ...predicate.args, ...ids) as
 		| {
 				readonly id: string;
 				readonly content: string;
@@ -252,7 +279,13 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 	};
 }
 
-export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicArtifact(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	readScope?: ReadScope,
+): EpisodicSourceRecord | null {
+	const predicate = episodicReadPredicate("memory_artifacts", "artifact", readScope);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
@@ -260,7 +293,7 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 			`SELECT source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
 			        project, harness, content, captured_at, updated_at
 			 FROM memory_artifacts
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${predicate.sql}
 			   AND COALESCE(is_deleted, 0) = 0
 			   AND (
 			     source_path = ?
@@ -272,7 +305,7 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 			 ORDER BY captured_at DESC
 			 LIMIT 1`,
 		)
-		.get(agentId, id, ...ids, ...ids, ...ids, ...ids) as
+		.get(agentId, ...predicate.args, id, ...ids, ...ids, ...ids, ...ids) as
 		| {
 				readonly source_path: string;
 				readonly source_sha256: string | null;
@@ -307,7 +340,13 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 	};
 }
 
-export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicTranscript(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	readScope?: ReadScope,
+): EpisodicSourceRecord | null {
+	const predicate = episodicReadPredicate("st", "transcript", readScope);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const hasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
@@ -331,11 +370,11 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 			        ${completedAt} AS completed_at, ${completed} AS completed, ${sourceId} AS source_id,
 			        ${sourceRecordId} AS source_record_id, ${sourceMeta} AS source_meta_json, ${contentHash} AS content_hash
 			 FROM session_transcripts AS st
-			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
+			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders}) ${predicate.sql}
 			 ORDER BY ${orderBy}
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids) as
+		.get(agentId, ...ids, ...predicate.args) as
 		| {
 				readonly session_key: string;
 				readonly content: string;
@@ -371,21 +410,27 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	};
 }
 
-export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+export function readEpisodicSummary(
+	db: ReadDb,
+	agentId: string,
+	id: string,
+	readScope?: ReadScope,
+): EpisodicSourceRecord | null {
+	const predicate = episodicReadPredicate("session_summaries", "summary", readScope);
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
 			`SELECT id, content, project, harness, session_key, source_type, source_ref, latest_at
 			 FROM session_summaries
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${predicate.sql}
 			   AND depth = 0
 			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))
 			 ORDER BY latest_at DESC
 			 LIMIT 1`,
 		)
-		.get(agentId, ...ids, ...ids) as
+		.get(agentId, ...predicate.args, ...ids, ...ids) as
 		| {
 				readonly id: string;
 				readonly content: string;
@@ -711,20 +756,20 @@ export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOption
 	const from = options.from.trim();
 	if (!from) return null;
 	if (from.startsWith("memory:")) {
-		return readEpisodicMemory(db, options.agentId, from.replace(/^memory:/, ""));
+		return readEpisodicMemory(db, options.agentId, from.replace(/^memory:/, ""), options.readScope);
 	}
 	if (from.startsWith("transcript:") || from.startsWith("session:")) {
-		return readEpisodicTranscript(db, options.agentId, from);
+		return readEpisodicTranscript(db, options.agentId, from, options.readScope);
 	}
-	if (from.startsWith("summary:")) return readEpisodicSummary(db, options.agentId, from);
+	if (from.startsWith("summary:")) return readEpisodicSummary(db, options.agentId, from, options.readScope);
 	if (from.startsWith("artifact:") || from.startsWith("source:")) {
-		return readEpisodicArtifact(db, options.agentId, from.replace(/^(artifact|source):/, ""));
+		return readEpisodicArtifact(db, options.agentId, from.replace(/^(artifact|source):/, ""), options.readScope);
 	}
 	return (
-		readEpisodicMemory(db, options.agentId, from) ??
-		readEpisodicArtifact(db, options.agentId, from) ??
-		readEpisodicTranscript(db, options.agentId, from) ??
-		readEpisodicSummary(db, options.agentId, from)
+		readEpisodicMemory(db, options.agentId, from, options.readScope) ??
+		readEpisodicArtifact(db, options.agentId, from, options.readScope) ??
+		readEpisodicTranscript(db, options.agentId, from, options.readScope) ??
+		readEpisodicSummary(db, options.agentId, from, options.readScope)
 	);
 }
 export function resolveStrictEpisodicSourceRef(
@@ -836,6 +881,7 @@ export function episodicQueryTerms(query: string): readonly string[] {
 }
 
 interface EpisodicSourceSearchParams {
+	readonly readScope?: ReadScope;
 	readonly agentId: string;
 	readonly query: string;
 	readonly since?: string;
@@ -851,7 +897,9 @@ interface EpisodicSourceSearchParams {
 
 export function searchEpisodicSources(db: ReadDb, params: EpisodicSourceSearchParams): EpisodicSourceRecord[] {
 	return selectEpisodicSourceRefs(db, params)
-		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
+		.map((row) =>
+			readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}`, readScope: params.readScope }),
+		)
 		.filter((source): source is EpisodicSourceRecord => source !== null);
 }
 
@@ -959,6 +1007,7 @@ function selectEpisodicSourceRefs(
 
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (wants("memory")) {
+		const predicate = episodicReadPredicate("memories", "memory", params.readScope);
 		branches.push({
 			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at, created_at AS arrived_at,
 			             ${matchScore("content")} AS match_score
@@ -971,18 +1020,26 @@ function selectEpisodicSourceRefs(
 			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
 			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}
 			        ${memoryCandidate.sql}
-			        ${memoryExcluded.sql}`,
-			args: [...commonArgs, ...memoryCandidate.args, ...memoryExcluded.args],
+			        ${memoryExcluded.sql} ${predicate.sql}`,
+			args: [...commonArgs, ...memoryCandidate.args, ...memoryExcluded.args, ...predicate.args],
 		});
 	}
 	if (wants("artifact")) {
+		const predicate = episodicReadPredicate("ma", "artifact", params.readScope);
+		const duplicate = episodicReadPredicate("ma2", "artifact", params.readScope);
+		const transcript = episodicReadPredicate("st", "transcript", params.readScope);
+		const summary = episodicReadPredicate("ss", "summary", params.readScope);
+		const eligibility = ARTIFACT_IS_DREAMING_INPUT.replace(
+			"WHERE st.agent_id",
+			`WHERE 1=1 ${transcript.sql} AND st.agent_id`,
+		).replace("WHERE ss.agent_id", `WHERE 1=1 ${summary.sql} AND ss.agent_id`);
 		branches.push({
 			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at, ma.updated_at AS arrived_at,
 			             ${matchScore("ma.content")} AS match_score
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			        AND length(ma.content) > 0
-			        AND ${ARTIFACT_IS_DREAMING_INPUT}
+			        AND ${eligibility}
 			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
@@ -991,17 +1048,31 @@ function selectEpisodicSourceRefs(
 			             OR ma.source_path = (
 			               SELECT ma2.source_path FROM memory_artifacts ma2
 			               WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
-			                 AND ma2.source_sha256 = ma.source_sha256
+			                 ${duplicate.sql} AND ma2.source_sha256 = ma.source_sha256
 			                 AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
 			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
 			               LIMIT 1
 			             ))
 			        ${artifactCandidate.sql}
-			        ${artifactExcluded.sql}`,
-			args: [...commonArgs, ...artifactCandidate.args, ...artifactExcluded.args],
+			        ${artifactExcluded.sql} ${predicate.sql}`,
+			args: [
+				...contentArgs,
+				params.agentId,
+				...transcript.args,
+				...summary.args,
+				...sinceArgs,
+				...beforeArgs,
+				...deliveredArgs,
+				...reviewedArgs,
+				...duplicate.args,
+				...artifactCandidate.args,
+				...artifactExcluded.args,
+				...predicate.args,
+			],
 		});
 	}
 	if (wants("transcript")) {
+		const predicate = episodicReadPredicate("session_transcripts", "transcript", params.readScope);
 		branches.push({
 			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at,
 			             ${transcriptSearchTime} AS arrived_at,
@@ -1013,11 +1084,12 @@ function selectEpisodicSourceRefs(
 			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
 			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
 			        ${transcriptCandidate.sql}
-			        ${transcriptExcluded.sql}`,
-			args: [...commonArgs, ...transcriptCandidate.args, ...transcriptExcluded.args],
+			        ${transcriptExcluded.sql} ${predicate.sql}`,
+			args: [...commonArgs, ...transcriptCandidate.args, ...transcriptExcluded.args, ...predicate.args],
 		});
 	}
 	if (wants("summary")) {
+		const predicate = episodicReadPredicate("session_summaries", "summary", params.readScope);
 		branches.push({
 			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at, created_at AS arrived_at,
 			             ${matchScore("content")} AS match_score
@@ -1029,8 +1101,8 @@ function selectEpisodicSourceRefs(
 			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
 			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}
 			        ${summaryCandidate.sql}
-			        ${summaryExcluded.sql}`,
-			args: [...commonArgs, ...summaryCandidate.args, ...summaryExcluded.args],
+			        ${summaryExcluded.sql} ${predicate.sql}`,
+			args: [...commonArgs, ...summaryCandidate.args, ...summaryExcluded.args, ...predicate.args],
 		});
 	}
 
