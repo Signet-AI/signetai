@@ -128,19 +128,14 @@ Subcommands:
 
 ## `signet api-key`
 
-Create named API keys for remote connectors and other daemon clients. See
-[Remote Harness Connectors](/remote-connectors/) for the full remote setup flow.
+The legacy key-management commands are for local-daemon maintenance, not team
+harness enrollment. Use `signet login` and `signet connect <harness>` for a team
+instance so its daemon issues a user-session-bound connector key. Do not copy a
+key into harness settings or an environment assignment.
 
-```bash
-signet api-key create --name "work laptop pi" --connector pi --agent-id pi-work-laptop
-signet api-key list
-signet api-key revoke <id-or-prefix>
-```
-
-The raw `sig_sk_...` key is printed once. Store it on the remote machine as
-`SIGNET_API_KEY`. `--agent-id` creates an auth-enforced agent scope: a key
-created with `--agent-id <agent-name>` defaults requests to that agent and rejects requests
-for other agents.
+Revoke exposed legacy keys before reconnecting. Removing a key from a local
+configuration file does not revoke it on the server. See
+[Remote Harness Connectors](/remote-connectors/) for enrollment and recovery.
 
 ---
 
@@ -232,7 +227,10 @@ API/migration endpoint:
 | `POST /api/synthesis/trigger` | Trigger Dreaming's manifest-gated MEMORY.md publication |
 
 Most subcommands require `-H, --harness <harness>` identifying the calling
-platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is
+platform (e.g. `claude-code`, `opencode`, `openclaw`). The SDK resolves the
+registered target and credential for that harness; hook commands do not carry
+inline keys. Authentication failures exit `3` for HTTP 401 and `4` for HTTP 403;
+`--json` includes the reason.
 
 When hook payloads are provided over stdin, the CLI now prefers canonical
 `session_key` / `sessionKey` fields before legacy `session_id` aliases.
@@ -248,6 +246,9 @@ for the daemon after 10 seconds. On an HTTP 503 it tries again, up to 3 attempts
 one second apart, within that limit. It does not retry timeouts or other errors.
 `signet hook compaction-complete` also forwards stdin `cwd` as the fallback
 `project` scope when transcript persistence has not landed yet.
-not running, hooks exit cleanly with code 0 so the harness is not blocked.
+
+When the daemon is unavailable, a zero hook exit code is not proof of server
+capture. Session-end evidence remains in the durable outbox until delivery can
+be retried; authorization failures never silently retarget it to a local daemon.
 
 ---
