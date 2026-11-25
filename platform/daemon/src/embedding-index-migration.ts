@@ -42,6 +42,9 @@ const VECTOR_REBUILD_RETRY_DELAY_MS = 100;
 const MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION = 3;
 
 interface ActiveEmbeddingRow {
+	readonly id: string;
+	readonly staging_id: string;
+	readonly compartment_id: number | null;
 	readonly content_hash: string;
 	readonly source_type: string;
 	readonly source_id: string;
@@ -131,7 +134,7 @@ function migrationFailureCount(db: ReadDb, targetFingerprint: string | undefined
 		(
 			db
 				.prepare(
-					"SELECT COUNT(*) AS n FROM embedding_index_failures f INNER JOIN embeddings e ON e.content_hash = f.content_hash WHERE f.target_fingerprint = ? AND f.retry_policy = 'quarantined'",
+					"SELECT COUNT(*) AS n FROM embedding_index_failures f INNER JOIN embeddings e ON e.content_hash = f.content_hash AND e.source_type IS f.source_type AND e.source_id IS f.source_id AND e.agent_id IS f.agent_id WHERE f.target_fingerprint = ? AND f.retry_policy = 'quarantined'",
 				)
 				.get(targetFingerprint) as { n: number } | undefined
 		)?.n ?? 0
@@ -574,7 +577,7 @@ export function stagingCoverage(
 			db
 				.prepare(
 					`SELECT COUNT(*) AS n FROM embeddings e
-				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
+				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id
 				 WHERE s.id IS NULL`,
 				)
 				.get() as { n: number } | undefined
@@ -627,7 +630,7 @@ async function ownerStagingCoverage(
 		(
 			await ownerReadOne<{ readonly n: number }>(
 				owner,
-				"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash WHERE s.id IS NULL",
+				"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id WHERE s.id IS NULL",
 				[],
 				ownerMaintenanceOptions("embedding-index.coverage"),
 			)
@@ -648,7 +651,7 @@ async function ownerStagingCoverage(
 				await ownerReadOne<{ readonly n: number }>(
 					owner,
 					`SELECT COUNT(*) AS n FROM embedding_index_failures f
-					 INNER JOIN embeddings e ON e.content_hash = f.content_hash
+					 INNER JOIN embeddings e ON e.content_hash = f.content_hash AND e.source_type IS f.source_type AND e.source_id IS f.source_id AND e.agent_id IS f.agent_id
 					 WHERE f.target_fingerprint = ? AND f.retry_policy = 'quarantined'`,
 					[targetFingerprint],
 					ownerMaintenanceOptions("embedding-index.coverage"),
@@ -676,10 +679,10 @@ async function pruneStagingRowsThroughOwner(owner: DbOwnerClient): Promise<void>
 		owner,
 		[
 			{
-				sql: `DELETE FROM ${table} WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash WHERE e.id IS NULL)`,
+				sql: `DELETE FROM ${table} WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash AND e.source_type IS s.source_type AND e.source_id IS s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id WHERE e.id IS NULL)`,
 			},
 			{
-				sql: "DELETE FROM embeddings_staging WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash WHERE e.id IS NULL)",
+				sql: "DELETE FROM embeddings_staging WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash AND e.source_type IS s.source_type AND e.source_id IS s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id WHERE e.id IS NULL)",
 			},
 		],
 		ownerMaintenanceOptions("embedding-index.prune-staging"),
@@ -700,7 +703,7 @@ async function recordMigrationFailureThroughOwner(
 			(content_hash, source_type, source_id, agent_id, target_fingerprint, provider, model,
 			 failure_class, attempts, retry_policy, first_failed_at, last_failed_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'quarantined', ?, ?)
-			ON CONFLICT(content_hash, target_fingerprint) DO UPDATE SET
+			ON CONFLICT(agent_id,source_type,source_id,content_hash,target_fingerprint) DO UPDATE SET
 			 source_type = excluded.source_type, source_id = excluded.source_id, agent_id = excluded.agent_id,
 			 provider = excluded.provider, model = excluded.model, failure_class = excluded.failure_class,
 			 attempts = embedding_index_failures.attempts + 1, retry_policy = 'quarantined', last_failed_at = excluded.last_failed_at`,
@@ -740,12 +743,12 @@ async function stageEmbeddingBatchThroughOwner(input: {
 	await pruneStagingRowsThroughOwner(input.owner);
 	const hasFailures = await ownerTableExists(input.owner, "embedding_index_failures");
 	const failureFilter = hasFailures
-		? ` AND NOT EXISTS (SELECT 1 FROM embedding_index_failures f WHERE f.content_hash = e.content_hash AND f.target_fingerprint = ? AND f.retry_policy = 'quarantined')`
+		? ` AND NOT EXISTS (SELECT 1 FROM embedding_index_failures f WHERE f.content_hash = e.content_hash AND f.source_type IS e.source_type AND f.source_id IS e.source_id AND f.agent_id IS e.agent_id AND f.target_fingerprint = ? AND f.retry_policy = 'quarantined')`
 		: "";
 	const rows = await ownerReadAll<ActiveEmbeddingRow>(
 		input.owner,
-		`SELECT e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
-		 FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
+		`SELECT e.id, COALESCE(s.id,e.id) AS staging_id, e.compartment_id, e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
+		 FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id
 		 WHERE (s.id IS NULL OR s.dimensions != ?)${failureFilter}
 		 ORDER BY e.created_at ASC LIMIT ?`,
 		hasFailures ? [profile.dimensions, profile.fingerprint, input.batchSize] : [profile.dimensions, input.batchSize],
@@ -769,12 +772,12 @@ async function stageEmbeddingBatchThroughOwner(input: {
 			throw new Error(
 				`Staging provider returned ${vector.length} dimensions for ${profile.model}; expected ${profile.dimensions}`,
 			);
-		const id = randomUUID();
+		const id = row.staging_id;
 		const results = await ownerBatch(
 			input.owner,
 			[
 				{
-					sql: `UPDATE embeddings_staging SET vector = ?, dimensions = ?, source_type = ?, source_id = ?, chunk_text = ?, created_at = datetime('now'), agent_id = ?,compartment_id=? WHERE content_hash = ? AND EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)`,
+					sql: `UPDATE embeddings_staging SET vector = ?, dimensions = ?, source_type = ?, source_id = ?, chunk_text = ?, created_at = datetime('now'), agent_id = ?,compartment_id=? WHERE content_hash = ? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ? AND EXISTS (SELECT 1 FROM embeddings WHERE id = ? AND content_hash=? AND compartment_id IS ? AND agent_id IS ? AND source_type=? AND source_id=?)`,
 					params: [
 						vectorToBlob(vector),
 						vector.length,
@@ -788,14 +791,23 @@ async function stageEmbeddingBatchThroughOwner(input: {
 							...(row.source_type === "memory" ? { parentMemoryId: row.source_id } : {}),
 						},
 						row.content_hash,
+						row.source_type,
+						row.source_id,
+						row.agent_id,
+						row.compartment_id,
+						row.id,
 						row.content_hash,
+						row.compartment_id,
+						row.agent_id,
+						row.source_type,
+						row.source_id,
 					],
 				},
 				{
 					sql: `INSERT INTO embeddings_staging (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 					SELECT ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?,?
-					WHERE EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)
-					AND NOT EXISTS (SELECT 1 FROM embeddings_staging WHERE content_hash = ?)`,
+					WHERE EXISTS (SELECT 1 FROM embeddings WHERE id = ? AND content_hash=? AND compartment_id IS ? AND agent_id IS ? AND source_type=? AND source_id=?)
+					AND NOT EXISTS (SELECT 1 FROM embeddings_staging WHERE content_hash = ? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ?)`,
 					params: [
 						id,
 						row.content_hash,
@@ -810,8 +822,17 @@ async function stageEmbeddingBatchThroughOwner(input: {
 							scope: { agentId: row.agent_id, sourceId: row.source_id },
 							...(row.source_type === "memory" ? { parentMemoryId: row.source_id } : {}),
 						},
+						row.id,
 						row.content_hash,
+						row.compartment_id,
+						row.agent_id,
+						row.source_type,
+						row.source_id,
 						row.content_hash,
+						row.source_type,
+						row.source_id,
+						row.agent_id,
+						row.compartment_id,
 					],
 				},
 			],
@@ -820,8 +841,7 @@ async function stageEmbeddingBatchThroughOwner(input: {
 				embeddingProjection: {
 					store: "embeddings_staging",
 					projection: vectorTable,
-					ids: [],
-					contentHashes: [row.content_hash],
+					ids: [id],
 				},
 			},
 		);
@@ -836,7 +856,7 @@ async function pruneStagingRows(accessor: DbAccessor): Promise<void> {
 		const stale = db
 			.prepare(
 				`SELECT s.id FROM embeddings_staging s
-				 LEFT JOIN embeddings e ON e.content_hash = s.content_hash
+				 LEFT JOIN embeddings e ON e.content_hash = s.content_hash AND e.source_type IS s.source_type AND e.source_id IS s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id
 				 WHERE e.id IS NULL`,
 			)
 			.all() as Array<{ id: string }>;
@@ -864,7 +884,7 @@ async function recordMigrationFailure(
 			 (content_hash, source_type, source_id, agent_id, target_fingerprint, provider, model,
 			  failure_class, attempts, retry_policy, first_failed_at, last_failed_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'quarantined', ?, ?)
-			 ON CONFLICT(content_hash, target_fingerprint) DO UPDATE SET
+			 ON CONFLICT(agent_id,source_type,source_id,content_hash,target_fingerprint) DO UPDATE SET
 			   source_type = excluded.source_type, source_id = excluded.source_id, agent_id = excluded.agent_id,
 			   provider = excluded.provider, model = excluded.model, failure_class = excluded.failure_class,
 			   attempts = embedding_index_failures.attempts + 1, retry_policy = 'quarantined',
@@ -913,16 +933,16 @@ export async function stageEmbeddingBatch(input: {
 			const failureFilter = hasFailures
 				? ` AND NOT EXISTS (
 					SELECT 1 FROM embedding_index_failures f
-					WHERE f.content_hash = e.content_hash
+					WHERE f.content_hash = e.content_hash AND f.source_type IS e.source_type AND f.source_id IS e.source_id AND f.agent_id IS e.agent_id
 					  AND f.target_fingerprint = ?
 					  AND f.retry_policy = 'quarantined'
 				)`
 				: "";
 			return db
 				.prepare(
-					`SELECT e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
+					`SELECT e.id, COALESCE(s.id,e.id) AS staging_id, e.compartment_id, e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
 				 FROM embeddings e
-				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
+				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id
 				 WHERE (s.id IS NULL OR s.dimensions != ?)
 				 ${failureFilter}
 				 ORDER BY e.created_at ASC
@@ -957,19 +977,32 @@ export async function stageEmbeddingBatch(input: {
 				`Staging provider returned ${vector.length} dimensions for ${profile.model}; expected ${profile.dimensions}`,
 			);
 		}
-		await withQueuedWrite(input.accessor, (db) => {
+		const applied = await withQueuedWrite(input.accessor, (db) => {
+			if (
+				!db
+					.prepare(
+						"SELECT 1 FROM embeddings WHERE id=? AND content_hash=? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ?",
+					)
+					.get(row.id, row.content_hash, row.source_type, row.source_id, row.agent_id, row.compartment_id)
+			)
+				return false;
 			if (!row.agent_id) throw new Error("agent_required");
 			const c = compartmentForWrite(db, {
 				agentId: row.agent_id,
 				sourceId: row.source_id,
 				memoryId: row.source_type === "memory" ? row.source_id : undefined,
 			});
-			const id = randomUUID();
+			const previous = db
+				.prepare(
+					"SELECT id FROM embeddings_staging WHERE content_hash=? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ?",
+				)
+				.get(row.content_hash, row.source_type, row.source_id, row.agent_id, c);
+			const id = typeof previous?.id === "string" ? previous.id : randomUUID();
 			db.prepare(
 				`INSERT INTO embeddings_staging
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?,?)
-				 ON CONFLICT DO UPDATE SET
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector, dimensions = excluded.dimensions, source_type = excluded.source_type,
 				   source_id = excluded.source_id, chunk_text = excluded.chunk_text, created_at = excluded.created_at,
 				   agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
@@ -984,12 +1017,11 @@ export async function stageEmbeddingBatch(input: {
 				row.agent_id,
 				c,
 			);
-			const stored = db.prepare("SELECT id FROM embeddings_staging WHERE content_hash = ?").get(row.content_hash) as
-				| { id: string }
-				| undefined;
+			const stored = db.prepare("SELECT id FROM embeddings_staging WHERE id = ?").get(id) as { id: string } | undefined;
 			if (stored) syncEmbeddingCompartment(db, "embeddings_staging", stored.id, vectorTable);
+			return true;
 		});
-		staged++;
+		if (applied) staged++;
 	}
 
 	const coverage = await input.accessor.withReadDbAsync(

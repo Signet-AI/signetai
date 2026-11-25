@@ -1,3 +1,4 @@
+import { up as writeMigration } from "../../core/src/migrations/178-write-inheritance";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +21,7 @@ function vectorFixture() {
 	);
 	return db;
 }
-test("hash projection covers every canonical row matching the hash", () => {
+test("id projection never touches equal hashes belonging to another parent", () => {
 	const db = vectorFixture();
 	db.exec(
 		"DROP TABLE embeddings;CREATE TABLE embeddings(id TEXT PRIMARY KEY,content_hash TEXT,vector BLOB,dimensions INTEGER,source_type TEXT,source_id TEXT,chunk_text TEXT,created_at TEXT,agent_id TEXT,compartment_id INTEGER,projection_compartment_id INTEGER)",
@@ -32,10 +33,9 @@ test("hash projection covers every canonical row matching the hash", () => {
 	executeEmbeddingProjection(db, {
 		store: "embeddings",
 		projection: "vec_embeddings",
-		ids: [],
-		contentHashes: ["same"],
+		ids: ["a"],
 	});
-	expect(db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all()).toEqual([{ id: "a" }, { id: "b" }]);
+	expect(db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all()).toEqual([{ id: "a" }]);
 	db.close();
 });
 test("legacy syncVecInsert leaves canonical data intact when optional projection rejects the vector", () => {
@@ -110,6 +110,13 @@ test("the staging producer inherits and publishes classified rows in its owner b
 	db.prepare(
 		"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id,compartment_id) VALUES('old','hash',?,3,'memory','m','secret','now','default',?)",
 	).run(new Float32Array([1, 0, 0]), c);
+	writeMigration(db);
+	db.exec(
+		"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('public-parent','public','default','now','now')",
+	);
+	db.prepare(
+		"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id) VALUES('public-embedding','hash',?,3,'memory','public-parent','public','now','default')",
+	).run(new Float32Array([0, 1, 0]));
 	const active = {
 			fingerprint: "old",
 			provider: "ollama",
@@ -137,7 +144,7 @@ test("the staging producer inherits and publishes classified rows in its owner b
 			fetchEmbedding: async () => [0, 1, 0, 0],
 			batchSize: 10,
 		});
-		expect(result.staged).toBe(1);
+		expect(result.staged).toBe(2);
 		const state = await owner.submit(
 			{
 				kind: "query",
@@ -148,7 +155,7 @@ test("the staging producer inherits and publishes classified rows in its owner b
 			},
 			{ operation: "test.staged-compartment", lane: "read", deadlineMs: 5000 },
 		).result;
-		expect(state).toEqual({ canonical: 1, projected: 1, base: 0 });
+		expect(state).toEqual({ canonical: 1, projected: 1, base: 1 });
 	} finally {
 		await closeDbAccessor();
 		await owner.close();

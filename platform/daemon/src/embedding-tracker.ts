@@ -244,12 +244,18 @@ export function startEmbeddingTracker(
 							if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
 							for (const { row, vector, contentHash } of cycle.results) {
 								syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
-								const embId = randomUUID();
+								const compartment = evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id: row.id }]);
+								const previous = db
+									.prepare(
+										"SELECT id FROM embeddings WHERE content_hash=? AND source_type='memory' AND source_id=? AND agent_id=? AND compartment_id IS ?",
+									)
+									.get(contentHash, row.id, agentId, compartment);
+								const embId = typeof previous?.id === "string" ? previous.id : randomUUID();
 								db.prepare(
 									`INSERT INTO embeddings
 								   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at, agent_id, compartment_id)
 								 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
-								 ON CONFLICT DO UPDATE SET
+								 ON CONFLICT(id) DO UPDATE SET
 								   vector = excluded.vector,
 								   dimensions = excluded.dimensions,
 								   chunk_text = excluded.chunk_text,
@@ -263,9 +269,9 @@ export function startEmbeddingTracker(
 									vector.length,
 									row.content,
 									agentId,
-									evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id: row.id }]),
+									compartment,
 								);
-								const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+								const actualRow = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as
 									| { id: string }
 									| undefined;
 								if (actualRow) syncVecInsert(db, actualRow.id, vector);

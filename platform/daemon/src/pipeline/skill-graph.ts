@@ -295,7 +295,7 @@ export async function installSkillNode(
 					`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
 				 VALUES (?, ?, ?, ?, 'skill', ?, ?, ?, ?, ?)
-				 ON CONFLICT DO UPDATE SET
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_id = excluded.source_id,
@@ -303,7 +303,7 @@ export async function installSkillNode(
 				   agent_id = excluded.agent_id,
 				   compartment_id = excluded.compartment_id`,
 				).run(embId, embHash, blob, embVec.length, entityId, embeddingText, now, agentId, compartment);
-				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embHash) as { id: string };
+				const actualRow = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as { id: string };
 				syncVecInsert(db, actualRow.id, embVec);
 				return true;
 			},

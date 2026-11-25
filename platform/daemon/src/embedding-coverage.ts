@@ -207,7 +207,7 @@ export function listStaleEmbeddingRows(
 			       )
 			       AND NOT EXISTS (
 			         SELECT 1 FROM embeddings e
-			         WHERE e.source_type = 'memory' AND e.content_hash = m.content_hash
+			         WHERE e.source_type = 'memory' AND e.content_hash = m.content_hash AND e.source_id = m.id AND e.compartment_id IS m.compartment_id AND (e.agent_id IS NULL OR e.agent_id = m.agent_id)
 			       )
 			     )
 			     OR EXISTS (
