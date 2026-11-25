@@ -1,3 +1,5 @@
+import { persistAgentMessage, persistAgentMessageInTx } from "./cross-agent-message-owner";
+import { getDbOwnerMaintenance } from "./db-owner-maintenance";
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import {
@@ -120,6 +122,7 @@ export interface CrossAgentMessageRow {
 }
 
 export interface CreateAgentMessageInput {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly fromAgentId?: string;
 	readonly fromSessionKey?: string;
 	readonly toAgentId?: string;
@@ -180,12 +183,7 @@ export class AgentMessageNotFoundError extends Error {
 	}
 }
 
-export class AgentMessageCapacityError extends Error {
-	constructor() {
-		super("Cross-agent message capacity reached; wait for retention cleanup before retrying");
-		this.name = "AgentMessageCapacityError";
-	}
-}
+export { AgentMessageCapacityError } from "./cross-agent-message-owner";
 
 export interface AgentPresenceEvent {
 	readonly type: "presence";
@@ -208,7 +206,6 @@ const AGENT_MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MESSAGE_LIMIT = 100;
 const MAX_MESSAGE_LIMIT = 500;
 const MAX_MESSAGE_CONTENT_CHARS = 65_536;
-const MAX_DURABLE_MESSAGES = 10_000;
 const ACP_RELAY_LEASE_MS = 150_000;
 const ACP_PENDING_GRACE_MS = 30_000;
 const ACP_MAX_RETRY_ATTEMPTS = 3;
@@ -670,7 +667,7 @@ function unreadCount(db: ReadDb, options: ListAgentMessageOptions, now: string):
 	return query ? countRows(db, query) : 0;
 }
 
-export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage {
+function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessageRow {
 	prunePresence();
 	const content = normalizeText(input.content);
 	if (!content) throw new Error("content is required");
@@ -726,56 +723,27 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 		acknowledged_at: null,
 	};
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-		pruneExpiredMessages(db, now);
-		const countRow = db.prepare("SELECT COUNT(*) AS count FROM cross_agent_messages").get() as
-			| { count: number }
-			| null
-			| undefined;
-		if ((countRow?.count ?? 0) >= MAX_DURABLE_MESSAGES) throw new AgentMessageCapacityError();
-		db.prepare(
-			`INSERT INTO cross_agent_messages (
-				id, from_agent_id, from_session_key, to_agent_id, to_session_key,
-				to_session_agent_id, broadcast, message_type, content, delivery_path,
-				delivery_status, delivery_state, delivery_attempt_id, delivery_attempts,
-				delivery_lease_token, delivery_lease_expires_at, delivery_attempt_started_at,
-				delivery_updated_at, delivery_error, delivery_receipt_json, acp_base_url,
-				acp_target_agent_name, acp_timeout_ms, acp_metadata_json, created_at, expires_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			row.id,
-			row.from_agent_id,
-			row.from_session_key,
-			row.to_agent_id,
-			row.to_session_key,
-			row.to_session_agent_id,
-			row.broadcast,
-			row.message_type,
-			row.content,
-			row.delivery_path,
-			row.delivery_status,
-			row.delivery_state,
-			row.delivery_attempt_id,
-			row.delivery_attempts,
-			row.delivery_lease_token,
-			row.delivery_lease_expires_at,
-			row.delivery_attempt_started_at,
-			row.delivery_updated_at,
-			row.delivery_error,
-			row.delivery_receipt_json,
-			row.acp_base_url,
-			row.acp_target_agent_name,
-			row.acp_timeout_ms,
-			row.acp_metadata_json,
-			row.created_at,
-			row.expires_at,
-		);
-	}, "db:cross-agent.message.create");
-
+	return row;
+}
+function publishAgentMessage(row: CrossAgentMessageRow): AgentMessage {
 	const out = rowToAgentMessage(row);
-	emit({ type: "message", message: out, timestamp: now });
+	emit({ type: "message", message: out, timestamp: row.created_at });
 	return out;
+}
+export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage {
+	if (getDbOwnerMaintenance()) throw new Error("Live message creation requires createAgentMessageAsync");
+	const row = buildAgentMessageRow(input);
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx(
+		(db: WriteDb) => persistAgentMessageInTx(db, row, input.author),
+		"db:cross-agent.message.create",
+	);
+	return publishAgentMessage(row);
+}
+export async function createAgentMessageAsync(input: CreateAgentMessageInput): Promise<AgentMessage> {
+	const row = buildAgentMessageRow(input);
+	await persistAgentMessage(row, input.author);
+	return publishAgentMessage(row);
 }
 
 export class AgentMessageDeliveryLeaseError extends Error {

@@ -13,6 +13,7 @@ import {
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
+import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { requireDependencyReason } from "./dependency-history";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { classifyEntityQuality } from "./entity-quality";
@@ -68,6 +69,7 @@ export interface CreateOntologyProposalInput {
 	readonly sourcePath?: string | null;
 	readonly sourceRoot?: string | null;
 	readonly createdBy?: string;
+	readonly author?: WriteAuthor;
 }
 
 export interface CreateOntologyProposalsResult {
@@ -158,6 +160,7 @@ export interface EntityMergePlanParams {
 	readonly force?: boolean;
 	readonly writeProposal?: boolean;
 	readonly createdBy?: string;
+	readonly author?: WriteAuthor;
 	readonly rationale?: string;
 	readonly evidence?: readonly unknown[];
 }
@@ -190,6 +193,7 @@ export interface ApplyOntologyProposalParams {
 	readonly agentId: string;
 	readonly id: string;
 	readonly actor: string;
+	readonly author?: WriteAuthor;
 	readonly writeCaps?: GraphWriteCaps;
 }
 
@@ -202,6 +206,7 @@ export interface ProposeDuplicateEntityMergesParams {
 	readonly limit?: number;
 	readonly writeProposals?: boolean;
 	readonly createdBy?: string;
+	readonly author?: WriteAuthor;
 }
 
 export interface FindDuplicateEntityMergesParams {
@@ -225,6 +230,7 @@ export interface OntologyOperationInput {
 export interface ApplyOntologyOperationParams extends OntologyOperationInput {
 	readonly agentId: string;
 	readonly actor: string;
+	readonly author?: WriteAuthor;
 	readonly dryRun?: boolean;
 	readonly propose?: boolean;
 	readonly writeCaps?: GraphWriteCaps;
@@ -240,6 +246,7 @@ export interface ApplyOntologyOperationResult {
 export interface ApplyOntologyOperationBatchParams {
 	readonly agentId: string;
 	readonly actor: string;
+	readonly author?: WriteAuthor;
 	readonly operations: readonly OntologyOperationInput[];
 	readonly dryRun?: boolean;
 	readonly propose?: boolean;
@@ -263,7 +270,7 @@ export interface OntologyOperationBatchError {
 }
 export function applyOntologyOperationBatchInTx(
 	db: WriteDb,
-	params: Pick<ApplyOntologyOperationBatchParams, "agentId" | "actor" | "operations"> & {
+	params: Pick<ApplyOntologyOperationBatchParams, "agentId" | "actor" | "author" | "operations"> & {
 		readonly writeCaps?: GraphWriteCaps;
 	},
 ): ApplyOntologyOperationBatchResult {
@@ -288,6 +295,7 @@ export function applyOntologyOperationBatchInTx(
 				sourcePath: operation.sourcePath,
 				sourceRoot: operation.sourceRoot,
 				createdBy: params.actor,
+				author: params.author,
 			},
 			now(),
 		);
@@ -598,7 +606,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 				| undefined;
 			return row ?? null;
 		},
-		{ siteToken: "ontology-proposals.ts:594" },
+		{ siteToken: "ontology-proposals.ts:602" },
 	);
 }
 
@@ -661,8 +669,8 @@ function insertProposalInTx(db: WriteDb, input: CreateOntologyProposalInput, ts:
 		`INSERT INTO ontology_proposals
 		 (id, agent_id, operation, status, payload, confidence, rationale,
 		  evidence, risk, source_kind, source_id, source_path, source_root,
-		  created_by, created_at, updated_at)
-		 VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  created_by, created_at, updated_at,author_user_id)
+		 VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		agentId,
@@ -679,7 +687,9 @@ function insertProposalInTx(db: WriteDb, input: CreateOntologyProposalInput, ts:
 		input.createdBy?.trim() || "operator",
 		ts,
 		ts,
+		input.author?.userId ?? null,
 	);
+	auditAuthoredWriteInTx(db, input.author, "ontology.proposed", "proposal", id, agentId);
 	return readBackInTx(db, id, agentId);
 }
 
@@ -987,6 +997,7 @@ function materializeAttributeMemoryInTx(
 		readonly time: ClaimTime;
 		readonly proposal: ProposalRow;
 		readonly actor: string;
+		readonly author?: WriteAuthor;
 	},
 ): string {
 	const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(input.attributeId) as
@@ -1054,6 +1065,7 @@ function supersedeAttributeMemoryInTx(
 		readonly replacementMemoryId: string;
 		readonly proposal: ProposalRow;
 		readonly actor: string;
+		readonly author?: WriteAuthor;
 	},
 ): void {
 	if (!input.memoryId || input.memoryId === input.replacementMemoryId) return;
@@ -2562,7 +2574,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2563" },
+		{ siteToken: "ontology-proposals.ts:2575" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2600,7 +2612,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2580" },
+		{ siteToken: "ontology-proposals.ts:2592" },
 	);
 }
 
@@ -2658,7 +2670,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2612" },
+		{ siteToken: "ontology-proposals.ts:2624" },
 	);
 }
 
@@ -2753,7 +2765,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2696" },
+		{ siteToken: "ontology-proposals.ts:2708" },
 	);
 }
 
@@ -3174,7 +3186,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3176",
+		siteToken: "ontology-proposals.ts:3188",
 	});
 }
 
@@ -3185,7 +3197,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3187",
+		siteToken: "ontology-proposals.ts:3199",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3216,6 +3228,7 @@ export async function proposeDuplicateEntityMerges(
 			sourceKind: "ontology_index",
 			sourceId: `entities:${item.canonicalName}`,
 			createdBy: params.createdBy?.trim() || "ontology-repair",
+			author: params.author,
 		})),
 	);
 	return {
@@ -3236,7 +3249,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3237" },
+		{ siteToken: "ontology-proposals.ts:3250" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
@@ -3250,6 +3263,7 @@ export async function createEntityMergePlan(
 		sourceKind: "ontology_index",
 		sourceId: `entities:${plan.target.id}`,
 		createdBy: params.createdBy?.trim() || "ontology-merge-plan",
+		author: params.author,
 	});
 	return { ...plan, dryRun: false, proposal };
 }
@@ -3394,6 +3408,7 @@ export async function applyOntologyOperationBatch(
 				sourcePath: operation.sourcePath,
 				sourceRoot: operation.sourceRoot,
 				createdBy: params.actor,
+				author: params.author,
 			})),
 		);
 		return {
@@ -3429,6 +3444,7 @@ export async function applyOntologyOperationBatch(
 							sourcePath: operation.sourcePath,
 							sourceRoot: operation.sourceRoot,
 							createdBy: params.actor,
+							author: params.author,
 						},
 						now(),
 					);

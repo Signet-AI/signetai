@@ -101,7 +101,13 @@ import {
 	setPipelineTransition,
 	telemetryRef,
 } from "./state.js";
-import { STATUS_CACHE_TTL, cachedEmbeddingStatus, resolveScopedAgentId, statusCacheTime } from "./utils.js";
+import {
+	STATUS_CACHE_TTL,
+	cachedEmbeddingStatus,
+	resolveScopedAgentId,
+	resolveMutationActor,
+	statusCacheTime,
+} from "./utils.js";
 import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 interface PipelineQueueBlock {
@@ -589,7 +595,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:592",
+				"routes/pipeline-routes.ts:598",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -940,7 +946,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:943",
+						"routes/pipeline-routes.ts:949",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -1098,7 +1104,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			if (typeof body.instructionSourceRef !== "string" || body.instructionSourceRef.length > 200)
 				return c.json({ error: "Invalid instruction source reference" }, 400);
 			const capability = getDreamingCapability(
-				{ accessor: getDbAccessor(), agentId, actor: "dashboard-user" },
+				{ accessor: getDbAccessor(), agentId, actor: resolveMutationActor(c, "dashboard-user").changedBy },
 				"search_evidence",
 			);
 			if (!capability) return c.json({ error: "Evidence retrieval unavailable" }, 503);
@@ -1125,7 +1131,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 		let passId: string;
 		try {
-			passId = await worker.triggerAsync(mode, agentId, userRequest);
+			passId = await worker.triggerAsync(mode, agentId, userRequest, c.get("author"));
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 			const msg = e instanceof Error ? e.message : String(e);

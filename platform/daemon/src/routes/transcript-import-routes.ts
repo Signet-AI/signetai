@@ -175,7 +175,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			requestedFiles.push({ id: randomUUID(), name: file.name.trim() });
 		}
 		const jobId = randomUUID();
-		await createJob({ jobId, agentId, schemaId, duplicateMode, files: requestedFiles });
+		await createJob({ jobId, agentId, author: c.get("author"), schemaId, duplicateMode, files: requestedFiles });
 		return c.json({ id: jobId, jobId, agentId, state: "staging", duplicateMode, files: requestedFiles }, 201);
 	});
 	app.get("/api/sources/imports", async (c) => {

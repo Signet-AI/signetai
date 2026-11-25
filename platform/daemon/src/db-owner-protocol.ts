@@ -162,6 +162,7 @@ export interface DbOwnerNativeMemoryIndex {
 }
 
 export interface DbOwnerSourceArtifactFields {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;

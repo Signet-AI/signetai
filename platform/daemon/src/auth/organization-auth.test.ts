@@ -47,6 +47,128 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("POST recall resolves a readable personal agent without requiring act-as", async () => {
+		const { id } = await import("./organization-store");
+		const other = id("usr");
+		await organizationWrite([
+			statement("INSERT INTO users (id,username,display_name,role) VALUES (?,'other','Other','member')", [other]),
+			statement(
+				"INSERT INTO agents (id,name,kind,owner_user_id,read_policy,created_at,updated_at) VALUES ('other-personal','Other','personal',?,'isolated',datetime('now'),datetime('now'))",
+				[other],
+			),
+		]);
+		app.post("/api/memory/recall", (c) => c.json({ ok: true }));
+		const response = await app.request("/api/memory/recall", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ agentId: "other-personal" }),
+		});
+		expect(response.status).toBe(200);
+	});
+
+	test("cross-agent message creation carries its principal through the DB owner", async () => {
+		const { createAgentMessageAsync } = await import("../cross-agent");
+		const author = { userId, credential: "session:test" };
+		const message = await createAgentMessageAsync({
+			fromAgentId: "default",
+			toAgentId: "default",
+			content: "Owned message",
+			author,
+		});
+		const { readWriteAttribution } = await import("./write-attribution");
+		expect(await readWriteAttribution({ kind: "cross_agent_message", id: message.id, agentId: "default" })).toEqual(
+			author,
+		);
+	});
+	test("Dreaming pass admission records the initiating principal without changing claim authorship", async () => {
+		const { createDreamingPass } = await import("../pipeline/dreaming");
+		const { getDbAccessor } = await import("../db-accessor");
+		const author = { userId, credential: "session:test" };
+		const passId = await createDreamingPass(
+			getDbAccessor(),
+			"default",
+			"incremental",
+			{ text: "test policy", source: "custom" },
+			author,
+		);
+		const { readWriteAttribution } = await import("./write-attribution");
+		expect(await readWriteAttribution({ kind: "dreaming_pass", id: passId, agentId: "default" })).toEqual(author);
+	});
+	test("ontology proposal writes retain the explicit principal author", async () => {
+		const { createOntologyProposal } = await import("../ontology-proposals");
+		const { getDbAccessor } = await import("../db-accessor");
+		const proposal = await createOntologyProposal(getDbAccessor(), {
+			agentId: "default",
+			operation: "create_entity",
+			payload: { name: "Actor" },
+			createdBy: `user:${userId}`,
+			author: { userId, credential: "session:test" },
+		});
+		expect(
+			await organizationQuery(
+				statement("SELECT author_user_id FROM ontology_proposals WHERE id = ?", [proposal.id], "get"),
+			),
+		).toEqual({ author_user_id: userId });
+	});
+	test("board projections retain their principal author across projection retries", async () => {
+		const { createBoardThread, projectBoardPost } = await import("../board");
+		const author = { userId, credential: "session:test" };
+		const result = await createBoardThread({
+			viewer: { kind: "operator" },
+			author: { agentId: "default", principalAuthor: author },
+			topic: "authorship",
+			title: "Authored thread",
+			body: "Principal-authored board evidence",
+		});
+		await projectBoardPost(result.post.id);
+		expect(
+			await organizationQuery(
+				statement("SELECT author_user_id FROM memory_artifacts WHERE source_external_id = ?", [result.post.id], "get"),
+			),
+		).toEqual({ author_user_id: userId });
+	});
+	test("queued transcript imports retain their principal author through the durable admission record", async () => {
+		const { createJob } = await import("../transcript-import-store");
+		const jobId = crypto.randomUUID();
+		const author = { userId, credential: "session:test" };
+		await createJob({ jobId, agentId: "default", author });
+		const { readWriteAttribution } = await import("./write-attribution");
+		expect(await readWriteAttribution({ kind: "transcript_import", id: jobId, agentId: "default" })).toEqual(author);
+		await expect(readWriteAttribution({ kind: "transcript_import", id: jobId, agentId: "different" })).rejects.toThrow(
+			"scope",
+		);
+		const { buildCompletedTranscriptCommit, commitCompletedTranscriptBatchInTx } = await import(
+			"../transcript-import-commit"
+		);
+		const { signetExportV1Adapter } = await import("../transcript-import-adapter");
+		const { runWriteTxAsync, getDbAccessor } = await import("../db-accessor");
+		const record = signetExportV1Adapter.parse({
+			source: "signet",
+			id: "imported-original",
+			harness: "test",
+			agent_id: "default",
+			session_key: "original",
+			project: null,
+			timestamp: new Date().toISOString(),
+			message_count: 1,
+			messages: [{ role: "user", content: "Original named author remains in this evidence" }],
+		});
+		const commit = buildCompletedTranscriptCommit(record, {
+			agentId: "default",
+			sourceId: "import-source",
+			sourceRecordId: "source-record",
+		});
+		await runWriteTxAsync(getDbAccessor(), (db) => commitCompletedTranscriptBatchInTx(db, [{ ...commit, author }]));
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT speaker_user_id FROM session_transcripts WHERE session_key = ?",
+					[commit.canonicalKey],
+					"get",
+				),
+			),
+		).toEqual({ speaker_user_id: userId });
+	});
 	test("legacy team rejects empty-scoped members while claimed organizations reject HMAC credentials", async () => {
 		const { createToken } = await import("./tokens");
 		const signingSecret = generateSecret();

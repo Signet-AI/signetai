@@ -1,3 +1,5 @@
+import { writeAttributionStatements } from "../auth/write-attribution";
+import type { WriteAuthor } from "../auth/audit-owner";
 import type { Database } from "bun:sqlite";
 import { admitSessionTranscriptInDb } from "../session-transcripts";
 import { createHash, randomUUID } from "node:crypto";
@@ -520,6 +522,7 @@ function createDreamingPassStatements(
 	agentId: string,
 	mode: DreamingMode,
 	policy: DreamingPassPolicy,
+	author?: WriteAuthor,
 ): DbOwnerStatement[] {
 	const hash = createHash("sha256").update(policy.text).digest("hex");
 	return [
@@ -535,6 +538,7 @@ function createDreamingPassStatements(
 			 ON CONFLICT(id) DO NOTHING`,
 			[id, agentId, mode, hash, policy.source],
 		),
+		...writeAttributionStatements(author, { kind: "dreaming_pass", id, agentId }),
 	];
 }
 
@@ -543,12 +547,13 @@ export async function createDreamingPass(
 	agentId: string,
 	mode: DreamingMode,
 	policy: DreamingPassPolicy,
+	author?: WriteAuthor,
 ): Promise<string> {
 	const id = randomUUID();
 	await ownerTransaction(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.pass.create",
-		createDreamingPassStatements(id, agentId, mode, policy),
+		createDreamingPassStatements(id, agentId, mode, policy, author),
 		{ deadlineMs: 10_000, estimatedWorkUnits: 2 },
 	);
 	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
@@ -560,11 +565,12 @@ export async function createDreamingPassThroughOwner(
 	agentId: string,
 	mode: DreamingMode,
 	policy: DreamingPassPolicy,
+	author?: WriteAuthor,
 ): Promise<string> {
 	const id = randomUUID();
 	const request = {
 		kind: "transaction" as const,
-		transaction: { statements: createDreamingPassStatements(id, agentId, mode, policy) },
+		transaction: { statements: createDreamingPassStatements(id, agentId, mode, policy, author) },
 	};
 	let creationMayHaveCommitted = false;
 	for (;;) {

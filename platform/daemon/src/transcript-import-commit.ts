@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readWriteAttributionInTx } from "./auth/write-attribution";
+import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { admitSessionTranscriptInDb } from "./session-transcripts";
 import { filterTranscriptMessagesInDb } from "./session-transcripts";
 import { type WriteDb, prepareTypedStatement } from "./db-accessor";
@@ -10,6 +12,7 @@ import {
 } from "./transcript-import-adapter";
 
 export interface CompletedTranscriptEvidence {
+	readonly author?: WriteAuthor;
 	readonly recordId: string;
 	readonly sourceId: string;
 	readonly sourceRecordId: string;
@@ -68,6 +71,13 @@ export function commitTranscriptImportBatchInTx(
 		)
 		.get(input.jobId, input.agentId, input.generation, input.leaseToken);
 	if (lease == null) throw new Error("stale import lease");
+	const author = readWriteAttributionInTx(db, { kind: "transcript_import", id: input.jobId, agentId: input.agentId });
+	if (author?.userId) {
+		const user = prepareTypedStatement<{ status: string }>(db, "SELECT status FROM users WHERE id = ?").get(
+			author.userId,
+		);
+		if (user?.status !== "active") throw new Error("Transcript import author is inactive");
+	}
 	const inventory = input.inventory;
 	if (inventory) {
 		const file = db
@@ -132,7 +142,7 @@ export function commitTranscriptImportBatchInTx(
 			continue;
 		}
 		if (row.status !== "pending") throw new Error("import record is not pending");
-		const result = commitCompletedTranscriptBatchInTx(db, [item])[0];
+		const result = commitCompletedTranscriptBatchInTx(db, [{ ...item, author }])[0];
 		if (!result) throw new Error("missing transcript commit outcome");
 		const rejected =
 			result.outcome === "conversation_identity_conflict" || result.outcome === "session_transcript_deleted";
@@ -328,6 +338,11 @@ function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscri
 		commit.agentId,
 		commit.capturedAt,
 	];
+	if (commit.author) {
+		if (!names.has("speaker_user_id")) throw new Error("Transcript author schema is missing");
+		insertColumns.push("speaker_user_id");
+		values.push(commit.author.userId);
+	}
 	if (names.has("updated_at")) {
 		insertColumns.push("updated_at");
 		values.push(commit.capturedAt);
@@ -355,6 +370,7 @@ function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscri
 	db.prepare(
 		`INSERT INTO session_transcripts (${insertColumns.join(",")}) VALUES (${insertColumns.map(() => "?").join(",")})`,
 	).run(...values);
+	auditAuthoredWriteInTx(db, commit.author, "transcript.imported", "session", commit.canonicalKey, commit.agentId);
 }
 
 function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscriptCommit): void {
@@ -376,6 +392,10 @@ function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscri
 	add("source_id", commit.sourceId);
 	add("source_record_id", commit.sourceRecordId);
 	add("source_meta_json", commit.sourceMetaJson);
+	if (commit.author && names.has("speaker_user_id")) {
+		updates.push("speaker_user_id = COALESCE(speaker_user_id, ?)");
+		values.push(commit.author.userId);
+	}
 	if (!updates.length) return;
 	values.push(commit.canonicalKey, commit.agentId);
 	db.prepare(`UPDATE session_transcripts SET ${updates.join(", ")} WHERE session_key = ? AND agent_id = ?`).run(

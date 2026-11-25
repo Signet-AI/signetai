@@ -595,12 +595,12 @@ export function upsertMemoryArtifactInTx(
 		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n		WHERE memory_artifacts.source_id = excluded.source_id`
 		: MEMORY_ARTIFACT_UPSERT_SQL;
 	const speaker =
-		!fields.author && fields.sourceId === null && fields.sessionKey
+		!fields.author && fields.sessionKey
 			? db
-					.query<{ speaker_user_id: string | null }, [string, string]>(
-						"SELECT speaker_user_id FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
+					.query<{ speaker_user_id: string | null }, [string, string, string | null, string | null]>(
+						"SELECT speaker_user_id FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND ((source_id IS NULL AND ? IS NULL) OR source_id = ?)",
 					)
-					.get(fields.agentId, fields.sessionKey)
+					.get(fields.agentId, fields.sessionKey, fields.sourceId, fields.sourceId)
 			: null;
 	const author =
 		fields.author ??
@@ -738,10 +738,16 @@ async function upsertSourceArtifactRow(
 		readonly trustSourcePath?: boolean;
 		readonly trustNativeMarker?: boolean;
 		readonly signal?: AbortSignal;
+		readonly author?: import("./auth/audit-owner").WriteAuthor;
 	} = {},
 ): Promise<void> {
 	await dbOwnerSourceArtifactUpsert(
-		{ fields: artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options) },
+		{
+			fields: {
+				...artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options),
+				author: options.author,
+			},
+		},
 		{
 			operation: "sources.artifacts.upsert",
 			lane: "write",
@@ -754,6 +760,7 @@ async function upsertSourceArtifactRow(
 }
 
 export async function indexExternalMemoryArtifact(input: {
+	readonly author?: import("./auth/audit-owner").WriteAuthor;
 	readonly agentId?: string;
 	readonly sourcePath: string;
 	readonly sourceKind: string;
@@ -798,7 +805,7 @@ export async function indexExternalMemoryArtifact(input: {
 		},
 		input.content,
 		input.sourceMtimeMs,
-		{ trustNativeMarker: true, trustSourcePath: true, signal: input.signal },
+		{ author: input.author, trustNativeMarker: true, trustSourcePath: true, signal: input.signal },
 	);
 }
 

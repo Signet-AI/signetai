@@ -1,4 +1,30 @@
 import type { WriteDb } from "../db-accessor";
+import type { DbOwnerStatement } from "../db-owner-protocol";
+export function authoredAuditStatements(
+	author: WriteAuthor | undefined,
+	action: string,
+	targetKind: string,
+	targetId: string,
+	agentId: string | null,
+): readonly DbOwnerStatement[] {
+	if (!author) return [];
+	return [
+		{
+			sql: "INSERT INTO audit_events (id,at,actor_user_id,actor_credential,action,target_kind,target_id,agent_id,outcome) VALUES (?,?,?,?,?,?,?,?,'ok')",
+			params: [
+				`aud_${crypto.randomUUID().replaceAll("-", "")}`,
+				new Date().toISOString(),
+				author.userId,
+				author.credential,
+				action,
+				targetKind,
+				targetId,
+				agentId,
+			],
+			result: "run",
+		},
+	];
+}
 export interface WriteAuthor {
 	readonly userId: string | null;
 	readonly credential: string;

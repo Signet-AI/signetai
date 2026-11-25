@@ -217,6 +217,7 @@ export function registerOntologyRoutes(app: Hono): void {
 			const { result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: scoped.agentId,
 				actor: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+				author: c.get("author"),
 				operation: "create_entity_alias",
 				payload: {
 					entity_id: c.req.param("id"),
@@ -246,6 +247,7 @@ export function registerOntologyRoutes(app: Hono): void {
 			await applyOntologyOperation(getDbAccessor(), {
 				agentId: scoped.agentId,
 				actor: resolveMutationActor(c, "operator").changedBy,
+				author: c.get("author"),
 				operation: "archive_entity_alias",
 				payload: {
 					entity_id: c.req.param("id"),
@@ -287,6 +289,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 			);
 		} catch (err) {
@@ -309,6 +312,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					force: readBoolean(body, "force") ?? false,
 					writeProposal: readBoolean(body, "write_proposal") ?? readBoolean(body, "write_proposals") ?? false,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "ontology-merge-plan").changedBy,
+					author: c.get("author"),
 					rationale: readString(body, "rationale") ?? readString(body, "reason"),
 					evidence: readArray(body, "evidence"),
 				}),
@@ -333,6 +337,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					writeAssertions: readBoolean(body, "write_assertions") ?? false,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "ontology-extract").changedBy,
+					author: c.get("author"),
 					limit: readNumber(body, "limit"),
 					useProvider,
 					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
@@ -360,6 +365,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "ontology-consolidate").changedBy,
+					author: c.get("author"),
 					useProvider,
 					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
 					providerTimeoutMs: readNumber(body, "provider_timeout_ms"),
@@ -629,6 +635,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourceRoot: readString(body, "source_root") ?? null,
 					claimAttributeId: readString(body, "claim_attribute_id") ?? null,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 				201,
 			);
@@ -666,6 +673,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					reason: readString(body, "reason") ?? null,
 				}),
 			);
@@ -698,6 +706,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourceRoot: readString(body, "source_root") ?? null,
 					claimAttributeId: readString(body, "claim_attribute_id") ?? null,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 			);
 		} catch (err) {
@@ -718,6 +727,7 @@ export function registerOntologyRoutes(app: Hono): void {
 				await applyOntologyOperation(getDbAccessor(), {
 					agentId: scoped.agentId,
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
 					operation,
 					payload,
@@ -808,6 +818,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					sourcePath: readString(body, "source_path") ?? null,
 					sourceRoot: readString(body, "source_root") ?? null,
 					createdBy: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
+					author: c.get("author"),
 				}),
 				201,
 			);
@@ -868,6 +879,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
 				}),
 			);
@@ -886,6 +898,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
+					author: c.get("author"),
 					reason: readString(body, "reason"),
 				}),
 			);
