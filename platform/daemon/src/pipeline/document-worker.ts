@@ -73,6 +73,7 @@ interface MutableDocumentOperation {
 }
 
 interface DocumentRow {
+	readonly author_user_id: string | null;
 	readonly id: string;
 	readonly source_url: string | null;
 	readonly source_type: string;
@@ -236,7 +237,7 @@ async function processDocument(
 				async (db) => {
 					return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
 				},
-				{ siteToken: "pipeline/document-worker.ts:235" },
+				{ siteToken: "pipeline/document-worker.ts:236" },
 			);
 
 	if (!doc) {
@@ -398,6 +399,7 @@ async function processDocument(
 
 			if (!existingScopedMemory) {
 				txIngestEnvelope(db, {
+					author: doc.author_user_id ? { userId: doc.author_user_id, credential: `document:${doc.id}` } : undefined,
 					id: memId,
 					content: normalized.storageContent,
 					normalizedContent: normalized.normalizedContent,
@@ -533,7 +535,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					| undefined;
 				return row?.status ?? null;
 			},
-			{ siteToken: "pipeline/document-worker.ts:529" },
+			{ siteToken: "pipeline/document-worker.ts:531" },
 		);
 	}
 
@@ -559,7 +561,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 								| { chunk_count?: number | null; memory_count?: number | null }
 								| undefined,
-						{ siteToken: "pipeline/document-worker.ts:557" },
+						{ siteToken: "pipeline/document-worker.ts:559" },
 					);
 			const durableLinks = deps.ownerMaintenance
 				? await ownerQueryOne<{ count?: number | null }>(
@@ -573,7 +575,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db
 								.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?")
 								.get(job.document_id) as { count?: number | null } | undefined,
-						{ siteToken: "pipeline/document-worker.ts:571" },
+						{ siteToken: "pipeline/document-worker.ts:573" },
 					);
 			if (durable) {
 				const accepted =

@@ -1,5 +1,4 @@
-import { persistAgentMessage, persistAgentMessageInTx } from "./cross-agent-message-owner";
-import { getDbOwnerMaintenance } from "./db-owner-maintenance";
+import { persistAgentMessage } from "./cross-agent-message-owner";
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import {
@@ -667,7 +666,7 @@ function unreadCount(db: ReadDb, options: ListAgentMessageOptions, now: string):
 	return query ? countRows(db, query) : 0;
 }
 
-function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessageRow {
+export function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessageRow {
 	prunePresence();
 	const content = normalizeText(input.content);
 	if (!content) throw new Error("content is required");
@@ -725,21 +724,12 @@ function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessage
 
 	return row;
 }
-function publishAgentMessage(row: CrossAgentMessageRow): AgentMessage {
+export function publishAgentMessage(row: CrossAgentMessageRow): AgentMessage {
 	const out = rowToAgentMessage(row);
 	emit({ type: "message", message: out, timestamp: row.created_at });
 	return out;
 }
-export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage {
-	if (getDbOwnerMaintenance()) throw new Error("Live message creation requires createAgentMessageAsync");
-	const row = buildAgentMessageRow(input);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx(
-		(db: WriteDb) => persistAgentMessageInTx(db, row, input.author),
-		"db:cross-agent.message.create",
-	);
-	return publishAgentMessage(row);
-}
+export const createAgentMessage = createAgentMessageAsync;
 export async function createAgentMessageAsync(input: CreateAgentMessageInput): Promise<AgentMessage> {
 	const row = buildAgentMessageRow(input);
 	await persistAgentMessage(row, input.author);

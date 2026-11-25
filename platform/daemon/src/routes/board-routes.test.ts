@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { resetBoardStateForTest } from "../board";
-import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
+import { resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
+import { createAgentMessage, closeCrossAgentFixture } from "../__tests__/cross-agent-fixture";
 import { consumeSessionEndWake, resetDirectMessageWakeStateForTest } from "../cross-agent-wake";
-import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { initDbAccessor } from "../db-accessor";
 import { getEndedSession, markSessionEnded } from "../session-tracker";
 
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -32,7 +33,7 @@ afterEach(async () => {
 	resetDirectMessageWakeStateForTest();
 	resetBoardStateForTest();
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(dir, { recursive: true, force: true });
 });
 

@@ -2,12 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	acknowledgeAgentMessage,
-	createAgentMessage,
-	resetCrossAgentStateForTest,
-	upsertAgentPresence,
-} from "./cross-agent";
+import { acknowledgeAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "./cross-agent";
+import { createAgentMessage, closeCrossAgentFixture } from "./__tests__/cross-agent-fixture";
 import {
 	WAKE_RATE_LIMIT_PER_HOUR,
 	activeWakeWaiterCount,
@@ -19,7 +15,7 @@ import {
 	setWakeWaiterCapForTest,
 	waitForDirectMessageWake,
 } from "./cross-agent-wake";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { initDbAccessor } from "./db-accessor";
 import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 
 let tempDir = "";
@@ -32,7 +28,7 @@ beforeEach(() => {
 afterEach(async () => {
 	resetDirectMessageWakeStateForTest();
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -373,7 +369,7 @@ describe("direct message wake", () => {
 			true,
 		);
 		resetDirectMessageWakeStateForTest();
-		await closeDbAccessor();
+		await closeCrossAgentFixture();
 		initDbAccessor(join(tempDir, "memory.db"), { agentsDir: tempDir });
 
 		const after = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 });

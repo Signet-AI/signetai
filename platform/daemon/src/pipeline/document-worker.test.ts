@@ -103,6 +103,29 @@ function jobStatus(db: Database, id: string): string {
 }
 
 describe("document worker admission", () => {
+	it("inherits the durable document author's identity on chunk evidence", async () => {
+		const db = freshDb();
+		const userId = `usr_${crypto.randomUUID().replaceAll("-", "")}`;
+		db.prepare("INSERT INTO users(id,username,display_name,role) VALUES (?,'author','Author','member')").run(userId);
+		insertDocumentJob(db, "authored-doc", "agent-author", "Authored chunk evidence");
+		db.prepare("UPDATE documents SET author_user_id = ? WHERE id = 'authored-doc'").run(userId);
+		const worker = startDocumentWorker({
+			accessor: asAccessor(db),
+			embeddingCfg,
+			fetchEmbedding: async () => null,
+			pipelineCfg: workerConfig(),
+		});
+		try {
+			await waitFor(() => jobStatus(db, "authored-doc-job") === "completed");
+			expect(db.prepare("SELECT author_user_id,agent_id FROM memories WHERE source_id = 'authored-doc'").all()).toEqual(
+				[{ author_user_id: userId, agent_id: "agent-author" }],
+			);
+		} finally {
+			await worker.stop();
+			db.close();
+		}
+	});
+
 	it("shares the cap across worker instances before leasing another job", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);

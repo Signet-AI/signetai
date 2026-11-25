@@ -197,6 +197,13 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					c.req.header("x-signet-agent-id"),
 					sessionAgent,
 					headerSessionAgent,
+					...[
+						body.sessionKey,
+						body.session_key,
+						body.fromSessionKey,
+						...(c.req.queries("sessionKey") ?? []),
+						...(c.req.queries("session_key") ?? []),
+					].map((key) => (typeof key === "string" && key.startsWith("agent:") ? key.split(":")[1] : undefined)),
 				]);
 				if (!requested.ok) throw new IdentityError(requested.error.status, requested.error.reason);
 				if (p.boundAgentId && requested.value && requested.value !== p.boundAgentId)
@@ -214,6 +221,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
 					!organizationReadRequest(c.req.method, c.req.path)
 				) {
+					if (body.scope === "all" || c.req.query("scope") === "all")
+						throw new IdentityError(403, "agent_not_permitted");
 					const access = principalAccess(p);
 					if (!access) throw new IdentityError(403, "org_policy");
 					const target = resolveWriteAgent(p, requested.value, access);

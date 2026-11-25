@@ -47,6 +47,52 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("documents retain the resolved personal agent and principal author", async () => {
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		registerMemoryRoutes(app);
+		const response = await app.request("/api/documents", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ source_type: "text", content: "Document authorship evidence", agentId: "default" }),
+		});
+		expect(response.status).toBe(201);
+		const body = await response.json();
+		expect(
+			await organizationQuery(
+				statement("SELECT author_user_id,agent_id FROM documents WHERE id = ?", [body.id], "get"),
+			),
+		).toEqual({ author_user_id: userId, agent_id: `personal-${userId}` });
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT actor_user_id FROM audit_events WHERE action = 'document.created' AND target_id = ?",
+					[body.id],
+					"get",
+				),
+			),
+		).toEqual({ actor_user_id: userId });
+	});
+	test("file imports retain the explicit principal on their evidence artifacts", async () => {
+		const { importDocument } = await import("../document-import-service");
+		const result = await importDocument({
+			fileName: "authored.txt",
+			bytes: new TextEncoder().encode("Authored file import evidence"),
+			workspaceRoot: dir,
+			agentId: "default",
+			author: { userId, credential: "session:test" },
+		});
+		if (result.status.status !== "imported") throw new Error("Expected imported evidence");
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT DISTINCT author_user_id FROM memory_artifacts WHERE source_id = ?",
+					[result.status.sourceId],
+					"all",
+				),
+			),
+		).toEqual([{ author_user_id: userId }]);
+	});
+
 	test("POST recall resolves a readable personal agent without requiring act-as", async () => {
 		const { id } = await import("./organization-store");
 		const other = id("usr");

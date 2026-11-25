@@ -21,9 +21,10 @@ import {
 	subscribeBoardEvents,
 	updateBoardThread,
 } from "./board";
-import { createAgentMessage, resetCrossAgentStateForTest } from "./cross-agent";
+import { resetCrossAgentStateForTest } from "./cross-agent";
+import { createAgentMessage, closeCrossAgentFixture } from "./__tests__/cross-agent-fixture";
 import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { getDbAccessor, initDbAccessor } from "./db-accessor";
 import { readRecentEpisodicSources } from "./episodic-sources";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { invalidateAgentScopeCache } from "./agent-id";
@@ -49,7 +50,7 @@ afterEach(async () => {
 	resetBoardStateForTest();
 	resetCrossAgentStateForTest();
 	invalidateAgentScopeCache();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 

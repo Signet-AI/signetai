@@ -6,7 +6,6 @@ import {
 	acknowledgeAgentMessage,
 	claimAcpMessageDelivery,
 	completeAcpMessageDelivery,
-	createAgentMessage,
 	isMessageVisibleToAgent,
 	listAgentMessagePage,
 	listAgentMessages,
@@ -20,7 +19,8 @@ import {
 	updateAgentMessageDelivery,
 	upsertAgentPresence,
 } from "./cross-agent";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { createAgentMessage, closeCrossAgentFixture } from "./__tests__/cross-agent-fixture";
+import { initDbAccessor } from "./db-accessor";
 
 let tempDir = "";
 let dbPath = "";
@@ -34,7 +34,7 @@ beforeEach(() => {
 
 afterEach(async () => {
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -292,15 +292,22 @@ describe("cross-agent messages", () => {
 		).toBe(false);
 	});
 
-	it("persists unread messages across daemon restarts", () => {
-		createAgentMessage({
+	it("persists unread messages across DB-owner restarts", async () => {
+		const { createAgentMessageAsync } = await import("./cross-agent");
+		await createAgentMessageAsync({
 			fromAgentId: "alpha",
 			toAgentId: "beta",
 			content: "Durable restart delivery.",
 		});
 
-		closeDbAccessor();
-		initDbAccessor(dbPath, { agentsDir: tempDir });
+		const { closeDbOwner, dbOwnerQuery, ownerStatement } = await import("./db-owner-runtime");
+		await closeDbOwner();
+		expect(
+			await dbOwnerQuery(
+				ownerStatement("SELECT content FROM cross_agent_messages WHERE to_agent_id = ?", ["beta"], "get"),
+				{ operation: "test.message.restart", lane: "read", deadlineMs: 5000 },
+			),
+		).toEqual({ content: "Durable restart delivery." });
 
 		const inbox = listAgentMessagePage({ agentId: "beta", unreadOnly: true });
 		expect(inbox.unreadCount).toBe(1);

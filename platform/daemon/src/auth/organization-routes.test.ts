@@ -401,6 +401,17 @@ describe("organization HTTP flows", () => {
 		expect((await call("/write", "POST", { fromAgentId: "other" }, key.secret)).status).toBe(403);
 		expect(
 			(
+				await call(
+					"/write",
+					"POST",
+					{ sessionKey: `agent:personal-${root.user.id}:main`, fromSessionKey: "agent:other:main" },
+					key.secret,
+				)
+			).status,
+		).toBe(400);
+		expect((await call("/write?scope=all", "POST", {}, key.secret)).status).toBe(403);
+		expect(
+			(
 				await app.request("/write?agentId=other", {
 					method: "POST",
 					headers: { authorization: `Bearer ${key.secret}`, "content-type": "application/json" },

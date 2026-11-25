@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
-import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
+import { resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
+import { createAgentMessage, closeCrossAgentFixture } from "../__tests__/cross-agent-fixture";
 import { getSynthesisWorker } from "../hooks";
 import { invalidateAgentScopeCache } from "../agent-id";
 import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { getDbAccessor, initDbAccessor } from "../db-accessor";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const suiteDir = mkdtempSync(join(tmpdir(), "signet-notification-routes-suite-"));
@@ -29,7 +30,7 @@ beforeEach(() => {
 
 afterEach(async () => {
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(dir, { recursive: true, force: true });
 });
 
