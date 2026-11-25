@@ -1318,8 +1318,7 @@ export function runDbOwnerWorker(): void {
 				scope: job.request.scope,
 				fresh: true,
 			});
-		if (job.request.kind === "projection_read")
-			return (await import("./embedding-projection-owner")).executeProjectionReadInOwner(db, job.request);
+
 		if (job.request.kind === "dreaming_reviewed_read")
 			return (await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
 				db,

@@ -244,7 +244,6 @@ export const DAEMON_JS_WORKER_FILES = [
 	"db-owner-worker.js",
 	"native-memory-source-worker.js",
 	"embedding-worker.js",
-	"embedding-projection-worker.js",
 	"harness-install-worker.js",
 	"dreaming-token-worker.js",
 	"transcript-recovery-child.js",

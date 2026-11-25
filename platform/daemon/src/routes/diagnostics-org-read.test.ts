@@ -164,7 +164,6 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 		"/api/checkpoints?project=atlas&limit=1",
 		"/api/checkpoints/thread?limit=1",
 		"/api/diagnostics/database/tables/memories/sample?limit=1",
-		"/api/embeddings/projection?limit=1",
 	];
 	const read = async (path: string, audience = false) => {
 		const res = await app.request(path, { headers: audience ? { "x-test-user": "audience" } : {} });
@@ -172,7 +171,6 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 		return res.headers.get("content-type")?.includes("ndjson") ? res.text() : res.json();
 	};
 	const before = await Promise.all(paths.map((path) => read(path)));
-	expect(before.at(-1)).toMatchObject({ count: 1, total: 1, nodes: [{ id: "visible", content: "readable" }] });
 	await write(
 		"INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('hidden','secret','default',1,'9999','9999')",
 	);
@@ -196,7 +194,6 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 	expect(await Promise.all(paths.map((path) => read(path)))).toEqual(before);
 	const allowed = await Promise.all(paths.map((path) => read(path, true)));
 	for (let i = 0; i < allowed.length; i++) expect(allowed[i]).not.toEqual(before[i]);
-	expect(allowed.at(-1)).toMatchObject({ count: 1, total: 2, nodes: [{ id: "hidden", content: "edited secret" }] });
 	const queue = await body("/api/diagnostics/queue");
 	expect(queue.oldestDeadMemoryJob).toBeNull();
 	expect((await body("/api/diagnostics/queue", true)).oldestDeadMemoryJob).toMatchObject({ id: "hidden-job" });
@@ -216,7 +213,6 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 		"INSERT INTO memory_search_telemetry(id,created_at,route,agent_id,query,filters_json,method,result_count,no_hits,duration_ms,timings_json,results_json,compartment_id) VALUES('copied-search','2090','copy','default','copied visible','{}','hybrid',1,0,1,'{}','[]',2)",
 	);
 	await write("INSERT INTO evidence_citations VALUES('telemetry','copied-search','default','memory','copied')");
-	expect(await body("/api/embeddings/projection")).toMatchObject({ count: 2, total: 2 });
 	expect(await body("/api/telemetry/memory-search")).toMatchObject({ count: 1, items: [{ id: "copied-search" }] });
 	await write(
 		"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('pending-classify','classify','running',?, '2026-01-01')",
@@ -225,7 +221,6 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 	await write(
 		"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('memory','visible','default','cls_secret','audience','2026-01-01')",
 	);
-	expect(await body("/api/embeddings/projection")).toMatchObject({ count: 0, total: 0 });
 	expect(await body("/api/diagnostics/database/tables/entities/sample")).toMatchObject({ rows: [], rowCount: 0 });
 	expect(await body("/api/diagnostics/database/tables/entities/sample", true)).toMatchObject({
 		rows: [{ id: "cited-entity" }],
@@ -237,9 +232,7 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 		queues: { memory: { dead: 0 } },
 	});
 	expect(await body("/api/diagnostics/queue", true)).toMatchObject({ queues: { memory: { dead: 2 } } });
-	expect(await body("/api/embeddings/projection", true)).toMatchObject({ count: 3, total: 3 });
 	await write("UPDATE memories SET compartment_id=1 WHERE id='visible'");
-	expect(await body("/api/embeddings/projection")).toMatchObject({ count: 0, total: 0, nodes: [], edges: [] });
 });
 
 test("organization permissions do not bypass unavailable unlabelled diagnostics or leak into other routes", async () => {

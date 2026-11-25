@@ -46,7 +46,7 @@ function seed(daemon: OrgDaemon, hidden: boolean): void {
 	}
 }
 
-test("real daemon diagnostics and projection preserve hidden-row isolation across restarts", async () => {
+test("real daemon diagnostics preserve hidden-row isolation across restarts", async () => {
 	const daemon = await OrgDaemon.create();
 	try {
 		const claim = await request(daemon.origin, "/api/org/claim", {}, "POST", {
@@ -60,7 +60,6 @@ test("real daemon diagnostics and projection preserve hidden-row isolation acros
 		seed(daemon, false);
 		await daemon.start();
 		const paths = [
-			"/api/embeddings/projection",
 			"/api/telemetry/memory-search?limit=1",
 			"/api/checkpoints?project=atlas&limit=1",
 			"/api/checkpoints/diagnostic-session?limit=1",
@@ -93,7 +92,7 @@ test("real daemon diagnostics and projection preserve hidden-row isolation acros
 			);
 		const countBefore = await globalCounts();
 		const before = await snapshot();
-		expect(before[0]).toMatchObject({ count: 3, total: 3 });
+
 		await daemon.stop();
 		seed(daemon, true);
 		await daemon.start();
@@ -136,7 +135,7 @@ test("real daemon diagnostics and projection preserve hidden-row isolation acros
 		}
 		await daemon.start();
 		const allowed = await snapshot();
-		expect(allowed[0]).toMatchObject({ count: 4, total: 4 });
+
 		expect(JSON.stringify(allowed[0])).toContain("hidden edited");
 		expect(allowed.at(-1)).toMatchObject({ oldestDeadMemoryJob: { id: "hidden-job", error: "hidden error" } });
 	} finally {

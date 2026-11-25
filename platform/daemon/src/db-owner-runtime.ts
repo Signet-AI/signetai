@@ -261,10 +261,7 @@ async function executeInlineOwnerRequest(
 		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
 			(await import("./diagnostics-queue")).getQueueDiagnosticsSnapshot(db, { scope: request.scope, fresh: true }),
 		);
-	if (request.kind === "projection_read")
-		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
-			(await import("./embedding-projection-owner")).executeProjectionReadInOwner(db, request),
-		);
+
 	if (request.kind === "dreaming_reviewed_read")
 		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
 			(await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(

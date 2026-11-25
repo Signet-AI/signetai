@@ -417,12 +417,6 @@ export type DbOwnerRequest =
 			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
 	  }
 	| { readonly kind: "queue_diagnostics_read"; readonly scope: import("./read-scope").ReadScope }
-	| ({
-			readonly kind: "projection_read";
-			readonly query: import("./umap-projection").ProjectionQuery & {
-				readonly scope: import("./read-scope").ReadScope;
-			};
-	  } & ({ readonly op: "count" } | { readonly op: "rows"; readonly limit: number; readonly offset: number }))
 	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
 	| {
 			readonly kind: "organization_memory_purge";
