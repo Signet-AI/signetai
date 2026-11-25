@@ -62,7 +62,10 @@ function reflectionPredicate(scope: ReadScope): ReturnType<typeof readScopeSql> 
 		"r",
 		{
 			...scope,
-			reach: scope.reach.kind === "shared" ? { kind: "own", agentId: scope.reach.agentId } : scope.reach,
+			reach:
+				scope.reach.kind === "shared" || scope.reach.kind === "group"
+					? { kind: "own", agentId: scope.reach.agentId }
+					: scope.reach,
 			projects: scope.projects === null ? null : [],
 		},
 		{ visibility: null, memory: null, session: null, source: null },

@@ -184,6 +184,19 @@ describe("reflection routes", () => {
 		expect(await hidden.text()).toBe(await absent.text());
 	});
 
+	it("local reflection reads retain their agent boundary under group sharing", async () => {
+		dbAccessor.withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO agents(id,name,read_policy,policy_group,created_at,updated_at) VALUES('group-a','A','group','team','now','now'),('group-b','B','group','team','now','now')",
+			);
+		});
+		seedReflection("own-group", "group-a", "2026-11-25", "Own reflection", "2026-11-25T08:00:00.000Z");
+		seedReflection("peer-group", "group-b", "2026-11-25", "Peer reflection", "2026-11-25T09:00:00.000Z");
+		const response = await app().request("/api/reflections?agentId=group-a&limit=1");
+		expect(response.status).toBe(200);
+		expect((await response.json()).reflections.map((item: { id: string }) => item.id)).toEqual(["own-group"]);
+	});
+
 	it("loads pipeline config from SIGNET_PATH and persists manual generation", async () => {
 		const memoryId = seedMemory("agent-a");
 
