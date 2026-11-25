@@ -2053,6 +2053,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	}
 
+	const retentionConfig = {
+		...DEFAULT_RETENTION,
+		telemetryRetentionMs: memoryCfg.pipelineV2.telemetry.retentionDays * 86400000,
+	};
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
 			getDbAccessor(),
@@ -2065,6 +2069,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			analyticsCollector,
 			telemetry,
 			dbOwnerMaintenanceHandle ?? undefined,
+			retentionConfig,
 		);
 		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
 			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
@@ -2075,7 +2080,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			});
 		}
 	} else {
-		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
+		ensureRetentionWorker(getDbAccessor(), retentionConfig, dbOwnerMaintenanceHandle ?? undefined);
 	}
 
 	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
@@ -2965,6 +2970,7 @@ async function main() {
 				dispatchDocument: async (row) => {
 					if (!row.bytes) throw new Error("managed import original is unavailable");
 					const result = await importDocument({
+						author: SYSTEM_AUTHOR,
 						fileName: row.fileName,
 						bytes: row.bytes,
 						agentId,

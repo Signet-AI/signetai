@@ -6,7 +6,7 @@ import { attempt, resolveWorkspaceLayout, redactCredentials } from "@signet/core
 import { extractAnchorTerms } from "./anchor-terms";
 import { evidenceCompartmentInTx, recordEvidenceCitationsInTx, type CitationEvidence } from "./db-helpers";
 import type { WriteCheckpointParams } from "./session-checkpoints";
-import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { type DbAccessor, getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
 import {
 	dbOwnerCommitCompactionSummary,
@@ -182,6 +182,19 @@ export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointP
 	db.prepare(`DELETE FROM session_checkpoints WHERE id IN (
 		SELECT id FROM session_checkpoints WHERE session_key=? AND agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET ?
 	)`).run(params.sessionKey, params.agentId, maxPerSession);
+}
+
+export async function sessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<WriteAuthor> {
+	return accessor.withReadDbAsync((db) => {
+		const row = db
+			.prepare("SELECT speaker_user_id FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+			.get(sessionKey, agentId);
+		return { userId: typeof row?.speaker_user_id === "string" ? row.speaker_user_id : null, credential: "system" };
+	});
 }
 
 export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummaryInput): boolean {
@@ -1652,6 +1665,7 @@ export async function upsertSessionTranscriptAsync(
 
 export async function appendSessionTranscriptAsync(
 	input: {
+		readonly author: WriteAuthor;
 		readonly sessionKey: string;
 		readonly agentId: string;
 		readonly harness: string;
@@ -1660,8 +1674,9 @@ export async function appendSessionTranscriptAsync(
 	},
 	accessor: DbAccessor = getDbAccessor(),
 ): Promise<void> {
+	const author = requireWriteAuthor(input.author);
 	const written = await writeSessionTranscriptAsync(
-		{ ...input, append: true, capturedAt: new Date().toISOString() },
+		{ ...input, author, append: true, capturedAt: new Date().toISOString() },
 		accessor,
 	);
 	if (!written) throw new Error("Transcript append did not write a row");

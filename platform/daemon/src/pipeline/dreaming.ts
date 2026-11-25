@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import { compartmentForWrite, withWritePrincipal } from "@signet/core";
 import type {
 	AccountingProvenance,
 	DreamingConfig,
@@ -1456,7 +1457,13 @@ export function isPiCompactionStart(event: unknown): event is { type: "compactio
 	return typeof event === "object" && event !== null && (event as { type?: unknown }).type === "compaction_start";
 }
 
-export async function runDreamingAgentPass(
+export function runDreamingAgentPass(
+	...args: Parameters<typeof executeDreamingAgentPass>
+): ReturnType<typeof executeDreamingAgentPass> {
+	return withWritePrincipal(undefined, () => executeDreamingAgentPass(...args));
+}
+
+async function executeDreamingAgentPass(
 	accessor: DbAccessor,
 	executor: DreamingAgentExecutor,
 	cfg: DreamingConfig,
@@ -1966,8 +1973,8 @@ function writeDreamingTranscriptManifestInTx(
 		`INSERT INTO session_summaries (
 			id, project, depth, kind, content, token_count,
 			earliest_at, latest_at, session_key, harness,
-			agent_id, source_type, source_ref, meta_json, created_at
-		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'transcript', ?, ?, ?)
+			agent_id, source_type, source_ref, meta_json, created_at, compartment_id, author_user_id
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'transcript', ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			content = excluded.content,
@@ -1979,7 +1986,9 @@ function writeDreamingTranscriptManifestInTx(
 			agent_id = excluded.agent_id,
 			source_type = excluded.source_type,
 			source_ref = excluded.source_ref,
-			meta_json = excluded.meta_json`,
+			meta_json = excluded.meta_json,
+			compartment_id = excluded.compartment_id,
+			author_user_id = excluded.author_user_id`,
 	);
 	const now = new Date().toISOString();
 	for (const entry of params.entries) {
@@ -2004,6 +2013,14 @@ function writeDreamingTranscriptManifestInTx(
 			)
 			.get(entry.scope, entry.source.id) as { id: string } | null;
 		const nodeId = existing?.id ?? `transcript:${entry.scope}:${entry.source.id}`;
+		const compartment = compartmentForWrite(db, {
+			agentId: entry.scope,
+			sessionKey: entry.source.id,
+			sourceId: entry.source.id,
+		});
+		const speaker = db
+			.prepare("SELECT speaker_user_id FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
+			.get(entry.scope, entry.source.id)?.speaker_user_id;
 		statement.run(
 			nodeId,
 			entry.source.project,
@@ -2022,6 +2039,8 @@ function writeDreamingTranscriptManifestInTx(
 				contentHash,
 			}),
 			now,
+			compartment,
+			typeof speaker === "string" ? speaker : null,
 		);
 		upsertThreadHead(db as unknown as Database, {
 			agentId: entry.scope,
