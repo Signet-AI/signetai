@@ -11,7 +11,7 @@ Open **My teams** to see your memberships, the team's agents, and its members. T
 
 ## People and agents
 
-Administrators can search **Users**, filter by status, role, or team ID, invite people, change roles, and reactivate accounts. **Offboard…** first previews the daemon's affected counts. Choose whether to keep material, transfer agent ownership, or purge authored material. Type the person's displayed name exactly before confirming. Transferring ownership preserves authorship.
+Administrators can search **Users**, filter by status, role, or team name, invite people, change roles through a confirmed row action, and reactivate accounts. At narrow widths, each person is a stacked card with the same actions. **Offboard…** opens a three-step dialog: choose material handling, review readable impact and agent destinations, then type the person's displayed name exactly and confirm. Transferring ownership preserves authorship.
 
 Offboarding and bulk key revocation return tracked jobs. Pending or running is not complete. If tracking becomes unavailable, retry to read the durable status; do not assume the operation failed or submit it again.
 
