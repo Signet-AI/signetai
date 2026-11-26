@@ -131,11 +131,20 @@ and reconnect or run doctor to trigger replay. Permission denials never trigger 
 reports quarantine and permanent-rejection counters separately.
 
 Remote file capture is recorded in the outbox before the client reads the
-transcript. The current daemon has no chunked transcript-upload route, so files
-above the 4 MiB inline limit remain pending as file references rather than being
-discarded or loaded into an unbounded buffer. Keep the original transcript file;
-doctor reports the pending capture, and replay retains it until delivery can
-complete. Capture failures exit `1` and include a reason with `--json`.
+transcript. The Node SDK and Hermes Python transport send files above the
+4 MiB inline limit through a resumable upload, then hand its reference to the
+normal session-end handler. A process exit or lost acknowledgement does not
+restart the transfer: replay reads the daemon's durable offset and continues
+from there without rereading the earlier client-file bytes.
+
+Keep the original transcript file until handoff is acknowledged. A changed
+file is rejected and its outbox reference stays pending; replacement contents
+are not silently sent as the original evidence. Unconsumed server uploads expire
+after 24 hours without progress. If an upload is unavailable, its client-file
+reference stays in the outbox for inspection rather than being discarded.
+Capture failures exit `1` and include a reason with `--json`. A queued capture
+receipt means accepted work, not completed processing. See the hook-upload
+protocol in the API reference for transfer bounds and receipt polling.
 
 `logout` revokes your current login session; `logout --all` revokes your sessions
 on other devices too. Use disconnect to remove an installed integration and its
