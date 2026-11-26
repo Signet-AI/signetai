@@ -4,7 +4,12 @@ import { compartmentForWrite } from "@signet/core";
 import { dirname, join } from "node:path";
 import { attempt, resolveWorkspaceLayout, redactCredentials } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
-import { evidenceCompartmentInTx, recordEvidenceCitationsInTx, type CitationEvidence } from "./db-helpers";
+import {
+	evidenceCompartmentInTx,
+	recordEvidenceCitationsInTx,
+	readSessionFinalizerAuthorInTx,
+	type CitationEvidence,
+} from "./db-helpers";
 import type { WriteCheckpointParams } from "./session-checkpoints";
 import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { type DbAccessor, getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
@@ -165,14 +170,7 @@ export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointP
 	const admittedAuthor = requireWriteAuthor(params.author);
 	const author =
 		params.trigger === "ttl_expired" && admittedAuthor.credential === "system"
-			? {
-					userId:
-						prepareTypedStatement<{ speaker_user_id: string | null }>(
-							db,
-							"SELECT speaker_user_id FROM session_transcripts WHERE session_key=? AND agent_id=?",
-						).get(params.sessionKey, params.agentId)?.speaker_user_id ?? null,
-					credential: "system",
-				}
+			? readSessionFinalizerAuthorInTx(db, params.agentId, params.sessionKey)
 			: admittedAuthor;
 	const compartment = compartmentForWrite(db, { agentId: params.agentId, sessionKey: params.sessionKey });
 	const now = new Date().toISOString();
