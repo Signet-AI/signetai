@@ -12,12 +12,15 @@ export function selectedAgentId(): string | undefined {
 	const session = currentSession();
 	const whoami = session.kind === "signed-in" ? session.whoami : null;
 	if (!whoami) return undefined;
-	return selected?.userId === whoami.user.id ? selected.agentId : whoami.agents.defaultRead;
+	return (
+		whoami.credential.agentId ?? (selected?.userId === whoami.user.id ? selected.agentId : whoami.agents.defaultRead)
+	);
 }
 
 export function selectAgent(agentId: string): void {
 	const session = currentSession();
 	if (session.kind !== "signed-in" || !session.whoami || !agentId.trim()) return;
+	if (session.whoami.credential.agentId && session.whoami.credential.agentId !== agentId) return;
 	selected = { userId: session.whoami.user.id, agentId };
 	for (const listener of listeners) listener();
 }
