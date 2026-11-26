@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Attribution } from "@/components/shell/attribution";
 import { useWhoami } from "@/lib/session";
+import { usePanelQuery } from "@/lib/use-panel-query";
+import type { OrganizationAgent } from "@/lib/organization";
 import { OrganizationResource } from "@/views/organization";
 import { ClassifyAction } from "./classifications";
-import { Action, OrganizationBlock, OrganizationTable, cellClass, rowClass } from "./controls";
+import { Action, OrganizationBlock, displayLabel } from "./controls";
+import { EvidenceList } from "./evidence-list";
 
 interface SessionRecord {
 	readonly sessionKey: string;
@@ -15,6 +17,7 @@ interface SessionRecord {
 export function OrganizationSessions() {
 	const whoami = useWhoami();
 	const [selected, setSelected] = useState<SessionRecord | null>(null);
+	const agents = usePanelQuery<{ agents: readonly OrganizationAgent[] }>(whoami ? "/api/agents" : null);
 	if (!whoami) return null;
 	return (
 		<OrganizationBlock title="Sessions">
@@ -24,31 +27,33 @@ export function OrganizationSessions() {
 			>
 				{(data) => (
 					<>
-						<OrganizationTable columns={["Session", "Attribution", "Harness"]}>
-							{data.sessions.map((session) => (
-								<tr className={rowClass} key={`${session.agentId}:${session.sessionKey}`}>
-									<td className={cellClass}>
-										<Action secondary onClick={() => setSelected(session)}>
-											{session.sessionKey}
-										</Action>
-									</td>
-									<td className={cellClass}>
-										<Attribution author={session.speakerUserId ?? null} agent={session.agentId} />
-									</td>
-									<td className={cellClass}>{session.harness}</td>
-								</tr>
-							))}
-						</OrganizationTable>
+						<EvidenceList
+							rows={data.sessions.map((session) => ({
+								key: `${session.agentId}:${session.sessionKey}`,
+								title: `${displayLabel(session.harness)} session`,
+								identifier: session.sessionKey,
+								kind: "session",
+								agent: agents.result?.data?.agents.find((agent) => agent.id === session.agentId)?.name ?? "Agent",
+								author:
+									session.speakerUserId === whoami.user.id
+										? whoami.user.displayName
+										: session.speakerUserId
+											? "Another person"
+											: undefined,
+								onOpen: () => setSelected(session),
+							}))}
+						/>
 						{selected && (
-							<OrganizationBlock title={selected.sessionKey}>
+							<OrganizationBlock title={`${displayLabel(selected.harness)} session`}>
+								<p className="text-xs text-muted-foreground">{selected.sessionKey}</p>
 								<ClassifyAction target={{ kind: "session", id: selected.sessionKey, agentId: selected.agentId }} />
 								<OrganizationResource<SessionRecord>
 									path={`/api/sessions/${encodeURIComponent(selected.sessionKey)}/transcript?agent_id=${encodeURIComponent(selected.agentId)}`}
 								>
 									{(detail) => (
-										<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-small">
+										<div className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-small">
 											{detail.content ?? "Transcript content unavailable."}
-										</pre>
+										</div>
 									)}
 								</OrganizationResource>
 								<Action secondary onClick={() => setSelected(null)}>

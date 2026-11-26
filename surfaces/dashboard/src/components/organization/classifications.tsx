@@ -14,6 +14,8 @@ import {
 	cellClass,
 	rowClass,
 } from "./controls";
+import { EvidenceList } from "./evidence-list";
+import { displayLabel } from "./controls";
 import { TrackedJob } from "./job";
 
 export function ClassifyAction({ target }: { target: ClassificationTarget }) {
@@ -167,6 +169,69 @@ export function PrincipalEditor({
 		</OrganizationBlock>
 	);
 }
+interface ClassificationItemPage {
+	readonly items: readonly {
+		target_kind: string;
+		target_id: string;
+		agent_id: string;
+		memory?: { id: string; content: string } | null;
+	}[];
+	readonly nextCursor: string | null;
+}
+function ClassificationItems({ classification }: { classification: OrganizationClassification }) {
+	const [cursor, setCursor] = useState("");
+	const [history, setHistory] = useState<readonly string[]>([]);
+	const page = usePanelQuery<ClassificationItemPage>(
+		`/api/classifications/${encodeURIComponent(classification.id)}/items${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+	);
+	return (
+		<OrganizationBlock title={`${classification.name} items`}>
+			<Panel
+				result={page.result}
+				empty={page.result?.data?.items.length === 0}
+				emptyMessage="No readable items carry this classification."
+				onRetry={page.refresh}
+			>
+				{(data) => (
+					<EvidenceList
+						rows={data.items.map((item) => ({
+							key: `${item.target_kind}:${item.agent_id}:${item.target_id}`,
+							title: item.memory?.content.slice(0, 180) ?? `${displayLabel(item.target_kind)} material`,
+							identifier: item.target_id,
+							kind: item.target_kind,
+							agent: "Agent",
+						}))}
+					/>
+				)}
+			</Panel>
+			<div className="flex gap-2">
+				<Action
+					secondary
+					disabled={!history.length}
+					onClick={() => {
+						setCursor(history.at(-1) ?? "");
+						setHistory(history.slice(0, -1));
+					}}
+				>
+					Previous page
+				</Action>
+				<Action
+					secondary
+					disabled={!page.result?.data?.nextCursor}
+					onClick={() => {
+						const next = page.result?.data?.nextCursor;
+						if (next) {
+							setHistory([...history, cursor]);
+							setCursor(next);
+						}
+					}}
+				>
+					Next page
+				</Action>
+			</div>
+		</OrganizationBlock>
+	);
+}
 export function ClassificationsContent({
 	classifications,
 	canManage,
@@ -185,7 +250,7 @@ export function ClassificationsContent({
 	const [appliers, setAppliers] = useState<readonly ClassificationPrincipal[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
-	const [items, setItems] = useState<unknown>(null);
+	const [items, setItems] = useState<OrganizationClassification | null>(null);
 	const select = (item: OrganizationClassification | null) => {
 		setSelected(item);
 		setName(item?.name ?? "");
@@ -237,9 +302,7 @@ export function ClassificationsContent({
 	const listItems = async (item: OrganizationClassification) => {
 		setSelected(item);
 		setEditing(false);
-		const result = await getJSONResult(`/api/classifications/${encodeURIComponent(item.id)}/items`);
-		setError(result.error);
-		setItems(result.data);
+		setItems(item);
 	};
 	return (
 		<div className="flex flex-col gap-6">
@@ -247,11 +310,30 @@ export function ClassificationsContent({
 				title="Classifications"
 				description="A classification audience is the security boundary. Administrative roles do not bypass it."
 			>
-				<OrganizationTable columns={["Name", "Description", "State", "Actions"]}>
+				<OrganizationTable
+					columns={[
+						"Name",
+						"Description",
+						...(classifications.some((item) => item.audience !== undefined) ? ["Audience"] : []),
+						"State",
+						"Actions",
+					]}
+				>
 					{classifications.map((item) => (
 						<tr key={item.id} className={rowClass}>
 							<td className={cellClass}>{item.name}</td>
-							<td className={cellClass}>{item.description}</td>
+							<td className={cellClass}>
+								{item.description || <span className="text-muted-foreground">No description</span>}
+							</td>
+							{classifications.some((definition) => definition.audience !== undefined) && (
+								<td className={cellClass}>
+									{item.audience?.map((principal) => (
+										<span key={`${principal.kind}:${principal.id}`} title={principal.id} className="mr-2">
+											{displayLabel(principal.kind)}
+										</span>
+									)) ?? "Unavailable"}
+								</td>
+							)}
 							<td className={cellClass}>{item.archived_at ? "Archived" : "Active"}</td>
 							<td className={cellClass}>
 								<div className="flex gap-2">
@@ -308,13 +390,7 @@ export function ClassificationsContent({
 					</Action>
 				</OrganizationBlock>
 			)}
-			{items !== null && (
-				<OrganizationBlock title={`${selected?.name ?? "Classification"} items`}>
-					<pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-small">
-						{JSON.stringify(items, null, 2)}
-					</pre>
-				</OrganizationBlock>
-			)}
+			{items !== null && <ClassificationItems key={items.id} classification={items} />}
 			<Message error={error} />
 		</div>
 	);
