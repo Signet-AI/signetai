@@ -10,6 +10,7 @@ import {
 	readStagedChunks,
 	purgeStagedChunkBatch,
 	TRANSCRIPT_FILE_BYTES,
+	UploadOffsetConflict,
 	type TranscriptUpload,
 	type StagedChunk,
 	type StoredStagedChunk,
@@ -18,6 +19,7 @@ import {
 
 export const HOOK_TRANSCRIPT_BYTES = TRANSCRIPT_FILE_BYTES;
 export class HookUploadMissing extends Error {}
+export class HookUploadChecksumMismatch extends Error {}
 export class HookUploadBusy extends Error {}
 export interface HookUploadRow extends TranscriptUpload {
 	readonly id: string;
@@ -133,6 +135,11 @@ async function readChunks(scope: WriteScope, start: number, end: number): Promis
 }
 async function seal(scope: WriteScope, sha256: string): Promise<void> {
 	const filter = stagedScopeFilter(scope, "");
+	const row = await metadata(scope);
+	if (row.sha256 !== sha256) {
+		await discardHookUpload(row, true);
+		throw new HookUploadChecksumMismatch();
+	}
 	await dbOwnerTransaction(
 		[
 			{
@@ -170,6 +177,43 @@ async function finishPurge(scope: HookUploadScope): Promise<void> {
 		],
 		write,
 	);
+}
+async function discardHookUpload(row: HookUploadRow, checksumFailure: boolean): Promise<void> {
+	if (row.storage_state === "consumed") throw new UploadOffsetConflict(row.upload_offset);
+	const filter = stagedScopeFilter(hookUploadScope(row), "");
+	await dbOwnerTransaction(
+		[
+			{
+				sql: `UPDATE hook_transcript_uploads SET storage_state = 'purging',upload_generation = upload_generation + 1 WHERE ${filter.sql} AND storage_state IN ('uploading','sealed') AND upload_generation = ?`,
+				params: [...filter.params, row.upload_generation],
+				result: "run",
+				requireChanges: true,
+			},
+			...(checksumFailure
+				? [
+						{
+							sql: `INSERT INTO hook_transcript_receipts (id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256,size_bytes,result_json) SELECT id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256,upload_offset,json_object('memoriesSaved',0,'queued',json('false'),'captureFailed',json('true'),'reason','upload_checksum_mismatch') FROM hook_transcript_uploads WHERE ${filter.sql} AND storage_state = 'purging'`,
+							params: filter.params,
+							result: "run" as const,
+						},
+					]
+				: []),
+			{
+				sql: `DELETE FROM hook_transcript_chunks WHERE file_id = ? AND agent_id = ? AND EXISTS (SELECT 1 FROM hook_transcript_uploads WHERE ${filter.sql} AND storage_state = 'purging')`,
+				params: [row.id, row.agent_id, ...filter.params],
+				result: "run",
+			},
+			{
+				sql: `DELETE FROM hook_transcript_uploads WHERE ${filter.sql} AND storage_state = 'purging'`,
+				params: filter.params,
+				result: "run",
+			},
+		],
+		write,
+	);
+}
+export async function abortHookUpload(principal: Principal, id: string): Promise<void> {
+	await discardHookUpload(await getHookUpload(principal, id), false);
 }
 export const hookUploadStaging = createStagingOwner<HookUploadScope, WriteScope>({
 	get: metadata,
@@ -296,7 +340,7 @@ export async function createHookUpload(
 		throw new RangeError("Transcript exceeds upload byte limit");
 	const receipt = await dbOwnerQuery<{ id: string; agent_id: string; size_bytes: number }>(
 		{
-			sql: "SELECT id,agent_id,size_bytes FROM hook_transcript_receipts WHERE principal_id = ? AND credential_kind = ? AND credential_id = ? AND agent_id = ? AND harness = ? AND session_key = ? AND sha256 = ? AND consumed_at > datetime('now','-7 days') ORDER BY consumed_at DESC,id LIMIT 1",
+			sql: "SELECT id,agent_id,size_bytes FROM hook_transcript_receipts WHERE principal_id = ? AND credential_kind = ? AND credential_id = ? AND agent_id = ? AND harness = ? AND session_key = ? AND sha256 = ? AND json_extract(result_json,'$.captureFailed') IS NOT 1 AND consumed_at > datetime('now','-7 days') ORDER BY consumed_at DESC,id LIMIT 1",
 			params: [
 				principalId(principal),
 				principal.credential.kind,
@@ -399,6 +443,7 @@ export function hookUploadResult(row: { readonly result_json: unknown }): Sessio
 		typeof result.queued !== "boolean"
 	)
 		throw new Error("Invalid upload receipt");
+	if ("reason" in result && result.reason === "upload_checksum_mismatch") throw new HookUploadChecksumMismatch();
 	if (!result.queued)
 		return {
 			memoriesSaved: 0,

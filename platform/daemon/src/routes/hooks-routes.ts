@@ -4,7 +4,7 @@ import {
 	HookUploadMissing,
 	type HookUploadEndState,
 } from "../hook-transcript-uploads";
-import { registerHookUploadRoutes } from "./hook-upload-routes";
+import { registerHookUploadRoutes, isHookUploadCallerError, hookUploadErrorResponse } from "./hook-upload-routes";
 import { withStopAdmission } from "../stop-admission";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
@@ -1084,7 +1084,7 @@ function registerSessionEnd(app: Hono): void {
 				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
 				return c.json({ error: "Write pressure; retry the session end", retryable: true }, 503);
 			}
-			if (e instanceof HookUploadMissing) return c.json({ error: "Upload not found" }, 404);
+			if (isHookUploadCallerError(e)) return hookUploadErrorResponse(c, e);
 			if (e instanceof RangeError) return c.json({ error: e.message }, 400);
 			logger.error("hooks", "Session end hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);

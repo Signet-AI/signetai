@@ -9,6 +9,16 @@ export const TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
 export const TRANSCRIPT_READ_BYTES = 6 * TRANSCRIPT_CHUNK_BYTES;
 export const TRANSCRIPT_FILE_BYTES = 64 * 1024 ** 3;
 
+export class UploadOffsetConflict extends Error {
+	constructor(readonly receivedBytes: number) {
+		super("Upload offset conflict");
+	}
+}
+export class UploadIncomplete extends Error {
+	constructor(readonly receivedBytes: number) {
+		super("Upload incomplete");
+	}
+}
 export interface TranscriptUpload {
 	readonly upload_generation: number;
 	readonly upload_offset: number;
@@ -120,7 +130,6 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 		if (
 			!Number.isSafeInteger(offset) ||
 			offset < 0 ||
-			offset % TRANSCRIPT_CHUNK_BYTES !== 0 ||
 			bytes.length === 0 ||
 			bytes.length > TRANSCRIPT_UPLOAD_BYTES ||
 			checksum(bytes) !== expectedChecksum
@@ -132,16 +141,22 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 			(file.storage_state !== "uploading" && file.storage_state !== "legacy") ||
 			file.upload_size === null
 		)
-			throw new Error("upload generation is not writable");
+			throw new UploadOffsetConflict(file.upload_offset);
+		if (
+			offset > file.upload_offset ||
+			offset % TRANSCRIPT_CHUNK_BYTES !== 0 ||
+			(offset < file.upload_offset && offset + bytes.length > file.upload_offset)
+		)
+			throw new UploadOffsetConflict(file.upload_offset);
 		if (
 			offset + bytes.length > file.upload_size ||
 			(bytes.length % TRANSCRIPT_CHUNK_BYTES !== 0 && offset + bytes.length !== file.upload_size)
 		)
 			throw new RangeError("upload chunk size mismatch");
 		if (offset < file.upload_offset) {
-			if (offset + bytes.length > file.upload_offset) throw new Error("upload replay overlaps durable offset");
+			if (offset + bytes.length > file.upload_offset) throw new UploadOffsetConflict(file.upload_offset);
 			if ((await rangeChecksum(scope, offset, bytes.length)) !== expectedChecksum)
-				throw new Error("upload replay checksum mismatch");
+				throw new UploadOffsetConflict(file.upload_offset);
 			return file.upload_offset;
 		}
 		let digest = file.upload_digest;
@@ -156,10 +171,12 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 			await store.append(scope, offset, bytes.length, digest, chunks);
 		} catch (error) {
 			const committed = await store.get(scope);
-			if (committed.upload_generation !== scope.generation || committed.upload_offset < offset + bytes.length)
+			if (committed.upload_generation !== scope.generation || committed.upload_offset < offset + bytes.length) {
+				if (committed.upload_offset !== file.upload_offset) throw new UploadOffsetConflict(committed.upload_offset);
 				throw error;
+			}
 			if ((await rangeChecksum(scope, offset, bytes.length)) !== expectedChecksum)
-				throw new Error("upload replay checksum mismatch");
+				throw new UploadOffsetConflict(committed.upload_offset);
 			return committed.upload_offset;
 		}
 		return offset + bytes.length;
@@ -173,7 +190,7 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 			file.upload_size === null ||
 			file.upload_offset !== file.upload_size
 		)
-			throw new Error("upload incomplete");
+			throw new UploadIncomplete(file.upload_offset);
 		const hash = createHash("sha256");
 		for (let offset = 0; offset < file.upload_size; ) {
 			if (!active()) throw new Error("import interrupted");
@@ -209,7 +226,7 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 			}
 		}
 		if (buffered.length) await append(scope, offset, buffered, checksum(buffered));
-		if (offset + buffered.length !== size) throw new Error("upload incomplete");
+		if (offset + buffered.length !== size) throw new UploadIncomplete(offset + buffered.length);
 	}
 	async function purge(scope: Read, active: () => boolean = () => true): Promise<void> {
 		await store.beginPurge(scope);

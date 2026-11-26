@@ -333,6 +333,22 @@ is acknowledged; if it changes during an interrupted transfer, delivery fails
 and the outbox retains the original reference rather than sending replacement
 bytes as the original evidence.
 
+### DELETE /api/hooks/session-end/uploads/:id
+
+Abort an unconsumed upload. The same principal, credential, agent, harness, and
+session binding required for upload reads applies. The transaction removes
+staged bytes and releases the reservation. Success returns `{"aborted": true}`;
+missing and other-principal IDs return identical `404` responses. A consumed
+upload belongs to its capture job and cannot be aborted.
+
+Upload gaps, overlaps, and replays with different bytes return `409` with
+`reason: "upload_offset_conflict"` and the durable `receivedBytes`. Finalizing
+before all declared bytes arrive returns `409 upload_incomplete`. A whole-file
+checksum mismatch returns `422 upload_checksum_mismatch`, records failure,
+and releases staging; declaring the same content again creates a fresh ID.
+Unexpected upload-service failures return `503 upload_unavailable` rather than
+being exposed as caller-error `500` responses.
+
 ### POST /api/hooks/remember
 
 Explicit memory save from within a session. Requires `remember` permission.

@@ -1,3 +1,4 @@
+import { logger } from "../logger";
 import { resolveDaemonAgentId } from "../agent-id";
 import type { Context, Hono } from "hono";
 import { jsonBody } from "../request-body";
@@ -12,14 +13,37 @@ import {
 	hookUploadStaging,
 	HookUploadMissing,
 	HookUploadBusy,
+	HookUploadChecksumMismatch,
+	abortHookUpload,
 } from "../hook-transcript-uploads";
-import { TRANSCRIPT_UPLOAD_BYTES } from "../staged-upload-owner";
+import { UploadOffsetConflict, UploadIncomplete, TRANSCRIPT_UPLOAD_BYTES } from "../staged-upload-owner";
 
-function response(c: Context, error: unknown): Response {
+export function isHookUploadCallerError(error: unknown): boolean {
+	return (
+		error instanceof HookUploadMissing ||
+		error instanceof HookUploadBusy ||
+		error instanceof HookUploadChecksumMismatch ||
+		error instanceof UploadOffsetConflict ||
+		error instanceof UploadIncomplete
+	);
+}
+export function hookUploadErrorResponse(c: Context, error: unknown): Response {
+	if (error instanceof UploadOffsetConflict)
+		return c.json(
+			{ error: "Upload offset conflict", reason: "upload_offset_conflict", receivedBytes: error.receivedBytes },
+			409,
+		);
+	if (error instanceof UploadIncomplete)
+		return c.json({ error: "Upload incomplete", reason: "upload_incomplete", receivedBytes: error.receivedBytes }, 409);
+	if (error instanceof HookUploadChecksumMismatch)
+		return c.json({ error: "Upload checksum mismatch", reason: "upload_checksum_mismatch" }, 422);
 	if (error instanceof HookUploadMissing) return c.json({ error: "Upload not found" }, 404);
 	if (error instanceof HookUploadBusy) return c.json({ error: "Upload capacity unavailable", reason: "busy" }, 503);
 	if (error instanceof RangeError) return c.json({ error: "Invalid upload bounds or checksum" }, 400);
-	throw error;
+	logger.warn("hooks", "Hook upload unavailable", {
+		error: error instanceof Error ? error.message : "Unknown upload failure",
+	});
+	return c.json({ error: "Upload unavailable", reason: "upload_unavailable" }, 503);
 }
 async function chunkBytes(request: Request): Promise<Uint8Array> {
 	const reader = request.body?.getReader();
@@ -90,7 +114,17 @@ export function registerHookUploadRoutes(app: Hono): void {
 			});
 			return c.json({ uploadId: row.id, chunkBytes: TRANSCRIPT_UPLOAD_BYTES, receivedBytes: row.upload_offset }, 201);
 		} catch (error) {
-			return response(c, error);
+			return hookUploadErrorResponse(c, error);
+		}
+	});
+	app.delete("/api/hooks/session-end/uploads/:id", async (c) => {
+		const principal = c.get("principal");
+		if (!principal) return c.json({ error: "Authentication required" }, 401);
+		try {
+			await abortHookUpload(principal, c.req.param("id"));
+			return c.json({ aborted: true });
+		} catch (error) {
+			return hookUploadErrorResponse(c, error);
 		}
 	});
 	app.get("/api/hooks/session-end/uploads/:id", async (c) => {
@@ -100,7 +134,7 @@ export function registerHookUploadRoutes(app: Hono): void {
 			const row = await getHookUpload(principal, c.req.param("id"));
 			return c.json({ uploadId: row.id, receivedBytes: row.upload_offset, chunkBytes: TRANSCRIPT_UPLOAD_BYTES });
 		} catch (error) {
-			return response(c, error);
+			return hookUploadErrorResponse(c, error);
 		}
 	});
 	app.patch("/api/hooks/session-end/uploads/:id", async (c) => {
@@ -123,7 +157,7 @@ export function registerHookUploadRoutes(app: Hono): void {
 			);
 			return c.json({ uploadId: row.id, receivedBytes });
 		} catch (error) {
-			return response(c, error);
+			return hookUploadErrorResponse(c, error);
 		} finally {
 			transfers--;
 		}
