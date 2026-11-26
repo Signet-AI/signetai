@@ -20,7 +20,7 @@ export async function dreamOperation(
 	const credential = agentId === "default" ? fixture.admin : (owner?.session ?? fixture.admin);
 	const reply = await request(fixture.daemon.origin, endpoint, credential, "POST", {
 		agentId,
-		input: { agentId, operations: [{ operation, payload, evidence }] },
+		input: { agentId, operations: [{ operation, payload, evidence, reason: record(payload).reason }] },
 	});
 	assert.equal(reply.status, 200, `POST ${endpoint}: ${operation}: ${JSON.stringify(reply.body)}`);
 	const body = success(reply, `POST ${endpoint}: ${operation}`);

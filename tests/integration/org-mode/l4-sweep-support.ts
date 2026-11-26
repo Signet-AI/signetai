@@ -146,12 +146,11 @@ export class WriteSweep {
 		await this.daemon.start();
 		await until(
 			async () => {
-				const response = await request(this.daemon.origin, "/api/pipeline/status", this.credential);
-				if (response.status !== 200) return false;
-				const workers = record(record(response.body).workers);
-				return record(workers.document).running === true && record(workers.retention).running === true;
+				return this.read(
+					(db) => !db.query("SELECT 1 FROM session_recall_events WHERE session_key='l4-expired-telemetry'").get(),
+				);
 			},
-			"document and retention workers ready",
+			"seeded telemetry retention completed",
 			60_000,
 		);
 	}

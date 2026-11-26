@@ -1644,8 +1644,8 @@ describe("hybridRecall", () => {
 		);
 
 		const resultText = JSON.stringify(result);
-		expect(resultText).toContain("Team alpha session timeline activity");
-		expect(resultText).toContain("/repo/alpha-temporal.md");
+		expect(resultText).not.toContain("Team alpha session timeline activity");
+		expect(resultText).not.toContain("/repo/alpha-temporal.md");
 		expect(resultText).not.toContain("Team beta session timeline activity");
 		expect(resultText).not.toContain("/repo/beta-temporal.md");
 	});

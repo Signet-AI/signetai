@@ -129,7 +129,7 @@ describe("temporal recall", () => {
 			readPolicy: "group",
 			policyGroup: "team-a",
 		});
-		expect(group.response?.results.map((row) => row.subject_id)).toEqual(["teammate-doc", "owner-doc"]);
+		expect(group.response?.results.map((row) => row.subject_id)).toEqual(["owner-doc"]);
 
 		const isolated = resolveTemporalRecall({ query: "", time, limit: 10, agentId: "owner", readPolicy: "isolated" });
 		expect(isolated.response?.results.map((row) => row.subject_id)).toEqual(["owner-doc"]);
