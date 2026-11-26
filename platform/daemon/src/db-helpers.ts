@@ -1,3 +1,6 @@
+import { ownerReadOne } from "./db-owner-sql";
+import { getDbOwnerForAccessor } from "./db-owner-runtime";
+import type { DbAccessor } from "./db-accessor";
 import { createRequire } from "node:module";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { readScopeSql } from "./read-scope";
@@ -314,6 +317,20 @@ export function recallResultEvidenceInTx(
 	if (item.id.startsWith("constructed:") || item.source === "llm_summary" || item.id.startsWith("summary:"))
 		throw new Error("recall_result_evidence_required");
 	return [{ kind: "memory", id: item.id }];
+}
+
+export async function sessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<WriteAuthor> {
+	const row = await ownerReadOne<{ speaker_user_id: string | null }>(
+		await getDbOwnerForAccessor(accessor),
+		"SELECT speaker_user_id FROM session_transcripts WHERE session_key=? AND agent_id=?",
+		[sessionKey, agentId],
+		{ operation: "session.finalizer.author", deadlineMs: 5000 },
+	);
+	return { userId: row?.speaker_user_id ?? null, credential: "system" };
 }
 
 export function pruneSessionRecallEventsInTx(db: WriteDb, cutoff: string, limit: number): number {

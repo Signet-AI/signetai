@@ -271,10 +271,7 @@ export function startEmbeddingTracker(
 									agentId,
 									compartment,
 								);
-								const actualRow = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as
-									| { id: string }
-									| undefined;
-								if (actualRow) syncVecInsert(db, actualRow.id, vector);
+								syncVecInsert(db, embId, vector);
 								db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
 								processed++;
 							}

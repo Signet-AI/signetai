@@ -1017,8 +1017,7 @@ export async function stageEmbeddingBatch(input: {
 				row.agent_id,
 				c,
 			);
-			const stored = db.prepare("SELECT id FROM embeddings_staging WHERE id = ?").get(id) as { id: string } | undefined;
-			if (stored) syncEmbeddingCompartment(db, "embeddings_staging", stored.id, vectorTable);
+			syncEmbeddingCompartment(db, "embeddings_staging", id, vectorTable);
 			return true;
 		});
 		if (applied) staged++;

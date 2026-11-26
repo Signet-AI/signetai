@@ -13,7 +13,6 @@ import {
 	dbOwnerWriteSessionTranscript,
 	getDbOwnerForAccessor,
 } from "./db-owner-runtime";
-import { ownerReadOne } from "./db-owner-sql";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
@@ -153,6 +152,8 @@ export interface CompactionSummaryInput {
 	readonly capturedAt?: string;
 }
 
+export { sessionFinalizerAuthor } from "./db-helpers";
+
 export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointParams, maxPerSession: number): void {
 	const admittedAuthor = requireWriteAuthor(params.author);
 	const author =
@@ -195,20 +196,6 @@ export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointP
 	db.prepare(`DELETE FROM session_checkpoints WHERE id IN (
 		SELECT id FROM session_checkpoints WHERE session_key=? AND agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET ?
 	)`).run(params.sessionKey, params.agentId, maxPerSession);
-}
-
-export async function sessionFinalizerAuthor(
-	accessor: DbAccessor,
-	agentId: string,
-	sessionKey: string,
-): Promise<WriteAuthor> {
-	const row = await ownerReadOne<{ speaker_user_id: string | null }>(
-		await getDbOwnerForAccessor(accessor),
-		"SELECT speaker_user_id FROM session_transcripts WHERE session_key=? AND agent_id=?",
-		[sessionKey, agentId],
-		{ operation: "session.finalizer.author", deadlineMs: 5000 },
-	);
-	return { userId: row?.speaker_user_id ?? null, credential: "system" };
 }
 
 export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummaryInput): boolean {
@@ -697,18 +684,10 @@ export function deleteSessionTranscriptInTx(
 			"SELECT outcome FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND generation = ? AND kind = 'memory' AND id = ?",
 		).get(...scope, memory.id);
 		if (outcome !== "deleted") {
-			if (outcome === "mixed" && memory.source_id !== null && sourceKind !== null && !otherProvenance)
-				linkDerivedMemorySourcesInTx(db, {
-					agentId: input.agentId,
-					derivedMemoryId: memory.id,
-					sources: [{ sourceKind, sourceId: memory.source_id }],
-					createdAt: row.watermark,
-				});
 			if (memory.source_id !== null && !otherProvenance)
-				db.prepare("UPDATE memories SET source_id = NULL, source_type = NULL WHERE id = ? AND agent_id = ?").run(
-					memory.id,
-					input.agentId,
-				);
+				db.prepare(
+					"UPDATE memories SET source_id = NULL, source_type = NULL, stale_at=CASE WHEN ?='mixed' THEN COALESCE(stale_at,?) ELSE stale_at END WHERE id = ? AND agent_id = ?",
+				).run(outcome, row.watermark, memory.id, input.agentId);
 			if (outcome === "mixed") {
 				const sources = prepareTypedStatement<{ source_kind: string; source_id: string }>(
 					db,
@@ -1142,7 +1121,7 @@ function sessionTranscriptsHasColumn(column: string): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		return getDbAccessor().withReadDb((db: ReadDb) => {
-			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 			return cols.some((col) => col.name === column);
 		}, "db:transcript.column.exists");
 	} catch {
@@ -1485,7 +1464,7 @@ function hasUpdatedAt(): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		return getDbAccessor().withReadDb((db: ReadDb) => {
-			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 			return cols.some((col) => col.name === "updated_at");
 		}, "db:transcript.updated-at.exists");
 	} catch {
@@ -1587,7 +1566,7 @@ export function writeSessionTranscriptRow(
 		? [existing?.trimEnd(), transcript.trim()].filter((part) => part && part.trim().length > 0).join("\n")
 		: mergeTranscriptContent(existing ?? "", transcript);
 	const now = capturedAt ?? new Date().toISOString();
-	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 	const hasUpdated = cols.some((col) => col.name === "updated_at");
 	const hasCompleted = cols.some((col) => col.name === "completed_at");
 	const hasHash = cols.some((col) => col.name === "content_hash");
@@ -1729,7 +1708,7 @@ export function markSessionTranscriptCompletedInTx(
 	completedAt: string,
 ): boolean {
 	updateTranscriptLifecycleInTx(db, { agentId, sessionKey, action: "end" });
-	const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const columns = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 	if (!columns.some((column) => column.name === "completed_at")) return false;
 	const hasUpdated = columns.some((column) => column.name === "updated_at");
 	const set = hasUpdated ? "completed_at = ?, updated_at = ?" : "completed_at = ?";
@@ -1827,7 +1806,7 @@ function readStoredSessionTranscriptInfo(
 ): StoredTranscriptInfo | undefined {
 	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
 	const placeholders = aliases.map(() => "?").join(", ");
-	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 	const hasUpdated = cols.some((col) => col.name === "updated_at");
 	const hasCompleted = cols.some((col) => col.name === "completed_at");
 	const hasHash = cols.some((col) => col.name === "content_hash");

@@ -478,12 +478,7 @@ async function processDocument(
 						   dimensions = excluded.dimensions,
 						   compartment_id = excluded.compartment_id`,
 					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId, compartment);
-					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as
-						| { id: string }
-						| undefined;
-					if (actualEmbRow) {
-						syncVecInsert(db, actualEmbRow.id, vector);
-					}
+					syncVecInsert(db, embId, vector);
 				}
 			}
 
