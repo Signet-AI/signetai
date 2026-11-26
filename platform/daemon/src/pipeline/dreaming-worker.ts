@@ -842,13 +842,26 @@ export function startDreamingWorker(
 		return false;
 	}
 
-	async function check(): Promise<void> {
+	async function checkLaneSafely(lane: number | null): Promise<void> {
 		try {
-			await checkLane(null);
-		} finally {
-			schedule();
+			await checkLane(lane);
+		} catch (error) {
+			logger.error(
+				"dreaming-worker",
+				"Dreaming check failed; scheduling next check",
+				error instanceof Error ? error : undefined,
+				{
+					lane: lane === null ? "public" : "classified",
+					error: error instanceof Error ? error.message : String(error),
+				},
+			);
 		}
-		await checkLane(1);
+	}
+
+	async function check(): Promise<void> {
+		await checkLaneSafely(null);
+		schedule();
+		await checkLaneSafely(1);
 	}
 
 	async function checkLane(lane: number | null): Promise<void> {
@@ -991,16 +1004,7 @@ export function startDreamingWorker(
 		const delay = nextCheckDelay();
 		timer = setTimeout(async () => {
 			timer = null;
-			try {
-				await check();
-			} catch (e) {
-				logger.error(
-					"dreaming-worker",
-					"Dreaming check failed; scheduling next check",
-					e instanceof Error ? e : undefined,
-					{ error: e instanceof Error ? e.message : String(e) },
-				);
-			}
+			await check();
 		}, delay);
 	}
 	function checkSoon(compartmentId: number | null): void {
@@ -1010,13 +1014,7 @@ export function startDreamingWorker(
 			lane,
 			setTimeout(async () => {
 				settledTimers.delete(lane);
-				try {
-					await checkLane(compartmentId);
-				} catch (error) {
-					logger.error("dreaming-worker", "Settled lane check failed", error instanceof Error ? error : undefined, {
-						lane,
-					});
-				}
+				await checkLaneSafely(compartmentId);
 			}, PASS_SETTLED_CHECK_DELAY_MS),
 		);
 	}
