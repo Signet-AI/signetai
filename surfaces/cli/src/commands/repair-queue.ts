@@ -1,6 +1,13 @@
+import { runOrganizationOperatorJob } from "./organization-jobs.js";
 import chalk from "chalk";
 import type { Command } from "commander";
-import { parseCsvFlag, parseDurationFlag, parseTablesFlag, runRepairQueue } from "../features/repair-queue.js";
+import {
+	type DispatchRepairArgs,
+	parseCsvFlag,
+	parseDurationFlag,
+	parseTablesFlag,
+	runRepairQueue,
+} from "../features/repair-queue.js";
 
 export interface RepairQueueDeps {
 	readonly apiCall: (
@@ -35,27 +42,29 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.option("--older-than <duration>", "e.g. 7d, 12h, 30m, 60000ms")
 		.option("--error-pattern <pattern>", "LIKE %pattern% over error column")
 		.option("--max-batch <n>", "cap on rows touched (default: 50)")
+		.option("--wait", "Wait for the organization job to settle")
+		.option("--json", "Machine-readable organization job output")
 		.option("--apply", "mutate; without this the command only previews")
 		.action(async (opts: Record<string, unknown>) => {
 			const dryRun = opts.apply !== true;
 			const tables = parseTablesOption(opts.tables, program);
-			const result = await runRepairQueue(
-				{
-					action: "requeue",
-					dryRun,
-					ids: parseCsvFlag(typeof opts.ids === "string" ? opts.ids : undefined),
-					tables,
-					olderThanMs: parseDurationFlag(typeof opts.olderThan === "string" ? opts.olderThan : undefined),
-					errorPattern: typeof opts.errorPattern === "string" ? opts.errorPattern : undefined,
-					maxBatch: typeof opts.maxBatch === "string" ? Number(opts.maxBatch) : undefined,
-				},
-				{
-					baseUrl: deps.baseUrl,
-					apiCall: deps.apiCall,
-					stdout: (line) => console.log(line),
-					chalk,
-				},
-			);
+			const request: DispatchRepairArgs = {
+				action: "requeue",
+				dryRun,
+				ids: parseCsvFlag(typeof opts.ids === "string" ? opts.ids : undefined),
+				tables,
+				olderThanMs: parseDurationFlag(typeof opts.olderThan === "string" ? opts.olderThan : undefined),
+				errorPattern: typeof opts.errorPattern === "string" ? opts.errorPattern : undefined,
+				maxBatch: typeof opts.maxBatch === "string" ? Number(opts.maxBatch) : undefined,
+			};
+			const { action, ...options } = request;
+			if (await runOrganizationOperatorJob({ action: `queue.${action}`, options }, opts)) return;
+			const result = await runRepairQueue(request, {
+				baseUrl: deps.baseUrl,
+				apiCall: deps.apiCall,
+				stdout: (line) => console.log(line),
+				chalk,
+			});
 			if (!result.success) {
 				process.exitCode = 1;
 			}
@@ -68,26 +77,28 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.option("--tables <list>", "memory|summary (summary is retired; default: both)")
 		.option("--older-than <duration>", "default: 30d")
 		.option("--error-pattern <pattern>", "LIKE %pattern% over error column")
+		.option("--wait", "Wait for the organization job to settle")
+		.option("--json", "Machine-readable organization job output")
 		.option("--apply", "mutate; without this the command only previews")
 		.action(async (opts: Record<string, unknown>) => {
 			const dryRun = opts.apply !== true;
 			const tables = parseTablesOption(opts.tables, program);
-			const result = await runRepairQueue(
-				{
-					action: "cancel",
-					dryRun,
-					ids: parseCsvFlag(typeof opts.ids === "string" ? opts.ids : undefined),
-					tables,
-					olderThanMs: parseDurationFlag(typeof opts.olderThan === "string" ? opts.olderThan : undefined),
-					errorPattern: typeof opts.errorPattern === "string" ? opts.errorPattern : undefined,
-				},
-				{
-					baseUrl: deps.baseUrl,
-					apiCall: deps.apiCall,
-					stdout: (line) => console.log(line),
-					chalk,
-				},
-			);
+			const request: DispatchRepairArgs = {
+				action: "cancel",
+				dryRun,
+				ids: parseCsvFlag(typeof opts.ids === "string" ? opts.ids : undefined),
+				tables,
+				olderThanMs: parseDurationFlag(typeof opts.olderThan === "string" ? opts.olderThan : undefined),
+				errorPattern: typeof opts.errorPattern === "string" ? opts.errorPattern : undefined,
+			};
+			const { action, ...options } = request;
+			if (await runOrganizationOperatorJob({ action: `queue.${action}`, options }, opts)) return;
+			const result = await runRepairQueue(request, {
+				baseUrl: deps.baseUrl,
+				apiCall: deps.apiCall,
+				stdout: (line) => console.log(line),
+				chalk,
+			});
 			if (!result.success) {
 				process.exitCode = 1;
 			}
@@ -100,26 +111,28 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.option("--tables <list>", "memory|summary (summary is retired; default: both)")
 		.option("--older-than <duration>", "retention window (default: 90d). All matched rows must be older than this.")
 		.option("--max-batch <n>", "cap on rows touched (default: 1000, hard cap)")
+		.option("--wait", "Wait for the organization job to settle")
+		.option("--json", "Machine-readable organization job output")
 		.option("--apply", "mutate; without this the command only previews")
 		.action(async (opts: Record<string, unknown>) => {
 			const dryRun = opts.apply !== true;
 			const tables = parseTablesOption(opts.tables, program);
-			const result = await runRepairQueue(
-				{
-					action: "prune",
-					dryRun,
-					ids: parseCsvFlag(typeof opts.ids === "string" ? opts.ids : undefined),
-					tables,
-					retentionMs: parseDurationFlag(typeof opts.olderThan === "string" ? opts.olderThan : undefined),
-					maxBatch: typeof opts.maxBatch === "string" ? Number(opts.maxBatch) : undefined,
-				},
-				{
-					baseUrl: deps.baseUrl,
-					apiCall: deps.apiCall,
-					stdout: (line) => console.log(line),
-					chalk,
-				},
-			);
+			const request: DispatchRepairArgs = {
+				action: "prune",
+				dryRun,
+				ids: parseCsvFlag(typeof opts.ids === "string" ? opts.ids : undefined),
+				tables,
+				retentionMs: parseDurationFlag(typeof opts.olderThan === "string" ? opts.olderThan : undefined),
+				maxBatch: typeof opts.maxBatch === "string" ? Number(opts.maxBatch) : undefined,
+			};
+			const { action, ...options } = request;
+			if (await runOrganizationOperatorJob({ action: `queue.${action}`, options }, opts)) return;
+			const result = await runRepairQueue(request, {
+				baseUrl: deps.baseUrl,
+				apiCall: deps.apiCall,
+				stdout: (line) => console.log(line),
+				chalk,
+			});
 			if (!result.success) {
 				process.exitCode = 1;
 			}

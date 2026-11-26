@@ -29,6 +29,30 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		for (const action of ["requeue", "cancel", "prune"]) {
+			const job = await cli(["repair", "queue", action, "--wait", "--json"]);
+			expect(job.kind).toBe("operator");
+			expect(job.status).toBe("complete");
+		}
+		const embeddingAudit = await cli(["embed", "audit", "--wait", "--json"]);
+		expect(embeddingAudit.status).toBe("complete");
+		const embeddingPreview = await cli(["embed", "backfill", "--dry-run", "--wait", "--json"]);
+		expect(embeddingPreview.status).toBe("complete");
+		expect(JSON.parse(embeddingPreview.progress_json).dryRun).toBe(true);
+		success(
+			await request(daemon.origin, "/api/memory/remember", admin.credential, "POST", {
+				content: "Operator backfill proof without a configured embedding provider",
+				agentId: record(status.identity.agents).defaultWrite,
+			}),
+			"write backfill source",
+		);
+		expect((await cli(["embed", "backfill", "--wait", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
+			"job_failed",
+		);
+		expect(
+			(await cli(["repair", "queue", "requeue", "--wait", "--json"], text(fixture.user("alice").session.bearer), 4))
+				.reason,
+		).toBe("permission");
 		expect((await cli(["logs", "--json", "--lines", "5"])).redacted).toBe(true);
 		expect((await cli(["logs", "--local", "--json"], text(admin.credential.bearer), 1)).error).toBe(
 			"JSON log output requires an organization target",

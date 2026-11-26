@@ -1,3 +1,4 @@
+import { SignetError } from "../../../../libs/sdk/src/index.js";
 import { Command } from "commander";
 import type { NodeTransport } from "../../../../libs/sdk/src/node.js";
 import { cliTransport } from "../lib/organization-target.js";
@@ -31,8 +32,11 @@ export async function waitForOrganizationJob(
 			timeoutMs: Math.min(10000, Math.max(1, deadline - Date.now())),
 		});
 		if (job.status === "complete") return job;
-		if (job.status === "failed" || job.status === "cancelled")
-			throw new Error(job.error ?? `Job ${jobId} ${job.status}`);
+		if (job.status === "failed" || job.status === "cancelled" || job.status === "incomplete")
+			throw new SignetError(
+				`Job ${jobId} ${job.status}: ${job.error ?? "operation did not complete"}`,
+				`job_${job.status}`,
+			);
 		await new Promise<void>((resolve) => setTimeout(resolve, 250));
 	}
 	throw new Error(`Timed out waiting for ${jobId}; the job may still be running. Check signet org jobs ${jobId}.`);

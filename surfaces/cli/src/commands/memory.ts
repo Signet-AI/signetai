@@ -6,6 +6,8 @@ import {
 	parseRecallPayload,
 	parseRememberResponse,
 } from "@signet/core";
+import { cliTarget } from "../lib/organization-target.js";
+import { runOrganizationOperatorJob } from "./organization-jobs.js";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -203,8 +205,10 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 	embedCmd
 		.command("audit")
 		.description("Check embedding coverage for memories")
+		.option("--wait", "Wait for the organization audit job")
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
+			if (await runOrganizationOperatorJob({ action: "embed.audit" }, options)) return;
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
 			const spinner = ora("Checking embedding coverage...").start();
@@ -258,12 +262,30 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 	embedCmd
 		.command("backfill")
 		.description("Generate missing embeddings or migrate existing vectors to the configured model")
+		.option("--wait", "Wait for the organization backfill job")
 		.option("--dry-run", "Preview what would be embedded without making changes")
 		.option("--model-mismatch", "Select vectors stored under a different model or dimensions")
 		.option("--all", "Select all active memories (requires --dry-run or an explicit migration run)")
 		.option("--batch-size <n>", "Number of memories to embed per batch", Number.parseInt, 50)
 		.option("--json", "Output as JSON")
-		.action(async (options) => {
+		.action(async (options, command: Command) => {
+			if (cliTarget()?.remote) {
+				if (options.all || options.modelMismatch)
+					throw new Error(
+						"Organization backfill does not migrate embedding profiles; run the migration on the instance host with --local.",
+					);
+				await runOrganizationOperatorJob(
+					{
+						action: "embed.backfill",
+						options: {
+							dryRun: options.dryRun === true,
+							maxBatch: command.getOptionValueSource("batchSize") === "default" ? 20 : options.batchSize,
+						},
+					},
+					options,
+				);
+				return;
+			}
 			if (!(await deps.ensureDaemonForSecrets())) return;
 			if (options.all === true && options.dryRun !== true && options.modelMismatch !== true) {
 				console.error(

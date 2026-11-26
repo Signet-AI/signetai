@@ -96,8 +96,7 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 			throw new Error("Remote portable bundles are not available yet. No local database was opened.");
 		if (
 			selected.remote &&
-			(["restart", "repair", "embed"].includes(top.name()) ||
-				(top.name() === "daemon" && ["restart"].includes(command.name())))
+			(["restart"].includes(top.name()) || (top.name() === "daemon" && ["restart"].includes(command.name())))
 		)
 			throw new Error("This remote operator command is not available yet. No local action was attempted.");
 		if (
