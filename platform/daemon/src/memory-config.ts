@@ -441,7 +441,21 @@ export function readRuntimeConfig(agentsDir: string): {
 		.map((name) => join(agentsDir, name))
 		.find((path) => existsSync(path));
 	try {
-		const yaml = path ? parseRuntimeYaml(readFileSync(path, "utf8")) : {};
+		return parseRuntimeConfig(agentsDir, path, path ? readFileSync(path, "utf8") : "");
+	} catch (error) {
+		if (error instanceof MemoryConfigValidationError) throw error;
+		throw new MemoryConfigValidationError(
+			`${path ?? join(agentsDir, "agent.yaml")}: ${error instanceof Error ? error.message : "invalid runtime configuration"}`,
+		);
+	}
+}
+function parseRuntimeConfig(
+	agentsDir: string,
+	path: string | undefined,
+	source: string,
+): ReturnType<typeof readRuntimeConfig> {
+	try {
+		const yaml = source ? parseRuntimeYaml(source) : {};
 		const result = runtimeSchema.safeParse(yaml);
 		if (!result.success) throw new Error(`${result.error.issues[0]?.path.join(".")} is invalid`);
 		const { embedding, search, network } = result.data;
@@ -1153,7 +1167,12 @@ export function graphWriteCaps(cfg: ResolvedMemoryConfig): {
 }
 
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
-	const config = readRuntimeConfig(agentsDir);
+	return resolveMemoryConfig(agentsDir, readRuntimeConfig(agentsDir));
+}
+export function loadMemoryConfigFromText(agentsDir: string, source: string, path: string): ResolvedMemoryConfig {
+	return resolveMemoryConfig(agentsDir, parseRuntimeConfig(agentsDir, path, source));
+}
+function resolveMemoryConfig(agentsDir: string, config: ReturnType<typeof readRuntimeConfig>): ResolvedMemoryConfig {
 	try {
 		rejectRetiredEmbeddingConfig(config.yaml);
 		const warmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");

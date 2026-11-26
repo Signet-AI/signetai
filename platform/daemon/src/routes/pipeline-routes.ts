@@ -5,7 +5,9 @@ import { resolveKnowledgeReadScope } from "./read-scope";
 import { listDreamingAttention } from "../pipeline/dreaming-capabilities";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
+import { parseSimpleYaml } from "@signet/core";
+import { changePipelinePause } from "../pipeline-control";
+import { IdentityError } from "../auth/organization-store";
 import type { Context, Hono } from "hono";
 import { isAgentRegistered, resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
@@ -104,10 +106,7 @@ import {
 	providerRuntimeResolution,
 	readEnvTrimmed,
 	readPipelineMode,
-	restartPipelineRuntimeRef,
 	setOpenClawHeartbeat,
-	setPipelineTransition,
-	telemetryRef,
 	WORKSPACE_LAYOUT,
 } from "./state.js";
 import {
@@ -346,43 +345,13 @@ export function getDreamingBlockedBy(
 }
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
-	if (pipelineTransition) {
-		return c.json({ error: "Pipeline transition already in progress" }, 409);
-	}
-
-	const prev = readPipelinePauseState(AGENTS_DIR);
-	if (!prev.exists) {
-		return c.json({ error: "No Signet config file found" }, 404);
-	}
-
-	setPipelineTransition(true);
+	const p = c.get("principal");
+	if (!p) return c.json({ error: "authentication required", reason: "missing_credential" }, 401);
 	try {
-		const changed = prev.paused !== paused;
-		const next = changed ? setPipelinePaused(AGENTS_DIR, paused) : prev;
-		if (changed) {
-			if (!restartPipelineRuntimeRef) {
-				throw new Error("Pipeline runtime not initialized");
-			}
-			await restartPipelineRuntimeRef(loadMemoryConfig(AGENTS_DIR), telemetryRef);
-		}
-		const liveCfg = loadMemoryConfig(AGENTS_DIR);
-		return c.json({
-			success: true,
-			changed,
-			paused: next.paused,
-			file: next.file,
-			mode: readPipelineMode(liveCfg.pipelineV2),
-		});
-	} catch (err) {
-		const { logger } = await import("../logger.js");
-		logger.error(
-			"pipeline",
-			paused ? "Failed to pause pipeline" : "Failed to resume pipeline",
-			err instanceof Error ? err : new Error(String(err)),
-		);
-		return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
-	} finally {
-		setPipelineTransition(false);
+		return c.json(await changePipelinePause(p, paused));
+	} catch (error) {
+		if (error instanceof IdentityError) return c.json({ error: error.message, reason: error.reason }, error.status);
+		return c.json({ error: "Pipeline transition failed", reason: "pipeline_transition_failed" }, 500);
 	}
 }
 

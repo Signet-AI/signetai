@@ -907,7 +907,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1500,
+      "line": 1504,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -1645,7 +1645,7 @@
       "path": "memory-config.ts",
       "line": 444,
       "api": "readFileSync",
-      "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
+      "source": "return parseRuntimeConfig(agentsDir, path, path ? readFileSync(path, \"utf8\") : \"\");",
       "category": "hot-path"
     },
     {
@@ -3293,35 +3293,35 @@
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 114,
+      "line": 130,
       "api": "readdirSync",
       "source": "const dirFiles = readdirSync(AGENTS_DIR);",
       "category": "hot-path"
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 119,
+      "line": 135,
       "api": "statSync",
       "source": "const fileStat = statSync(filePath);",
       "category": "hot-path"
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 121,
+      "line": 137,
       "api": "readFileSync",
       "source": "const content = readFileSync(filePath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 198,
+      "line": 214,
       "api": "writeFileSync",
       "source": "writeFileSync(filePath, content, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 155,
+      "line": 154,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: ReadDb) => {",
       "category": "hot-path",
@@ -3329,28 +3329,28 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 452,
+      "line": 421,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 453,
+      "line": 422,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 496,
+      "line": 465,
       "api": "existsSync",
       "source": "memoryDb: existsSync(MEMORY_DB),",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 555,
+      "line": 524,
       "api": "readFileSync",
       "source": "soulContent = readFileSync(soulPath, \"utf-8\").slice(0, 500);",
       "category": "hot-path"

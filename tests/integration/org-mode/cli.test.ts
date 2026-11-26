@@ -28,6 +28,42 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		expect(
+			(await request(daemon.origin, "/api/pipeline/pause", fixture.user("alice").session, "POST", {})).status,
+		).toBe(403);
+		const scopedOperator = success(
+			await request(daemon.origin, "/api/auth/api-keys", admin.credential, "POST", {
+				name: "scoped-operator",
+				agentId: record(status.identity.agents).defaultWrite,
+				permissions: ["admin", "diagnostics"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			}),
+			"create scoped operator key",
+		);
+		expect(
+			(await request(daemon.origin, "/api/pipeline/pause", { bearer: text(scopedOperator.secret) }, "POST", {})).status,
+		).toBe(403);
+		const paused = success(
+			await request(daemon.origin, "/api/pipeline/pause", admin.credential, "POST", {}),
+			"pause organization workers",
+		);
+		expect(paused.paused).toBe(true);
+		const pauseAudit = success(
+			await request(daemon.origin, "/api/org/audit?action=operator.pipeline_paused", admin.credential),
+			"read pause audit",
+		);
+		expect(Array.isArray(pauseAudit.events) && pauseAudit.events.length > 0).toBe(true);
+		await daemon.restart();
+		expect(
+			success(await request(daemon.origin, "/api/pipeline/pause", admin.credential, "POST", {}), "verify durable pause")
+				.changed,
+		).toBe(false);
+		expect(
+			success(
+				await request(daemon.origin, "/api/pipeline/resume", admin.credential, "POST", {}),
+				"resume organization workers",
+			).paused,
+		).toBe(false);
 		const browserKey = success(
 			await request(daemon.origin, "/api/auth/api-keys", admin.credential, "POST", {
 				name: "browser-ceiling-proof",

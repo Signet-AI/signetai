@@ -203,6 +203,9 @@ describe("createMcpServer", () => {
 		expect(capture.url).toBe("http://localhost:3850/api/org/audit?actor=usr_alice");
 		expect((await callTool(server, "signet_operator_logs", { limit: 5 })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/logs?limit=5");
+		expect((await callTool(server, "signet_pipeline_pause", { paused: true })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/pipeline/pause");
+		expect(capture.method).toBe("POST");
 		mockFetch(200, { actAs: [] }, capture);
 		await callTool(server, "signet_org_access", { userId: "usr_alice" });
 		expect(capture.url).toBe("http://localhost:3850/api/org/access/usr_alice");
@@ -397,7 +400,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_org_job");
 		expect(names).toContain("signet_classify");
 		expect(names).toContain("signet_operator_logs");
-		expect(names.length).toBe(67);
+		expect(names.length).toBe(68);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {

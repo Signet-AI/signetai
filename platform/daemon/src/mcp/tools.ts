@@ -437,6 +437,17 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 	registerMcpTool(
 		server,
+		"signet_pipeline_pause",
+		{
+			title: "Pause or Resume Pipeline Workers",
+			description:
+				"Persist the instance worker pause state. Requires an administrator without agent or project restrictions.",
+			inputSchema: z.object({ paused: z.boolean() }).strict(),
+		},
+		async ({ paused }) => organizationResult(`/api/pipeline/${paused ? "pause" : "resume"}`, "POST", {}),
+	);
+	registerMcpTool(
+		server,
 		"signet_org_access",
 		{
 			title: "Inspect Organization Access",

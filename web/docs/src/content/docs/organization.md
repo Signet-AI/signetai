@@ -149,6 +149,10 @@ Organization log feeds require both `admin` and `diagnostics`, without an agent 
 
 A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
 
+## Worker pause controls
+
+Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge publishes removed counts only after durable deletion and cleanup complete. Running jobs report their phase; an incomplete job does not claim completed removal counts. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its readable residuals instead of assuming it completed.
