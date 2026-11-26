@@ -36,6 +36,10 @@ Supported IDs: `claude-code`, `codex`, `forge`, `gemini`, `hermes-agent` (alias
 `hermes`), `kimi`, `muse-code`, `opencode`, `openclaw`, `oh-my-pi`, and `pi`.
 The default local daemon still works without a login:
 
+A loopback URL without a credential remains local, including an explicitly
+configured URL or registry entry. Local capture passes the transcript path to
+the daemon rather than uploading its contents.
+
 ```bash
 signet connect claude-code
 ```
@@ -102,6 +106,13 @@ A `401` prints "Signet session expired, run `signet login`". Rejected session-en
 evidence stays in that harness's durable outbox. Sign in to the same instance
 and reconnect or run doctor to trigger replay. Permission-denied captures are
 quarantined, not discarded or sent under another agent.
+
+Remote file capture is recorded in the outbox before the client reads the
+transcript. The current daemon has no chunked transcript-upload route, so files
+above the 4 MiB inline limit remain pending as file references rather than being
+discarded or loaded into an unbounded buffer. Keep the original transcript file;
+doctor reports the pending capture, and replay retains it until delivery can
+complete. Capture failures exit `1` and include a reason with `--json`.
 
 `logout` revokes your current login session; `logout --all` revokes your sessions
 on other devices too. Use disconnect to remove an installed integration and its

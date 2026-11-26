@@ -1,6 +1,5 @@
-import { captureRemoteSessionEnd } from "@signet/connector-base";
 import { connectorRegistryKey } from "./connector-registry.js";
-import { SignetApiError, SignetTimeoutError } from "../../../../libs/sdk/src/index.js";
+import { SignetApiError, SignetError, SignetTimeoutError } from "../../../../libs/sdk/src/index.js";
 import { ConnectorRegistry, NodeTransport, resolveTarget } from "../../../../libs/sdk/src/node.js";
 import type { DaemonFetchResult } from "./daemon.js";
 
@@ -20,11 +19,10 @@ export async function createHookFetch(harness: string): Promise<HookFetch> {
 		path: string,
 		options?: RequestInit & { timeout?: number },
 	): Promise<DaemonFetchResult<T>> => {
-		let body: unknown = typeof options?.body === "string" ? JSON.parse(options.body) : undefined;
-		if (entry?.agentId && typeof body === "object" && body !== null && !Array.isArray(body) && !("agentId" in body))
-			body = { ...body, agentId: entry.agentId };
-		if (target.remote && path === "/api/hooks/session-end") body = await captureRemoteSessionEnd(body);
 		try {
+			let body: unknown = typeof options?.body === "string" ? JSON.parse(options.body) : undefined;
+			if (entry?.agentId && typeof body === "object" && body !== null && !Array.isArray(body) && !("agentId" in body))
+				body = { ...body, agentId: entry.agentId };
 			const headers = new Headers(options?.headers);
 			headers.delete("content-type");
 			const data = await transport.request<T>(options?.method ?? "GET", path, {
@@ -37,7 +35,12 @@ export async function createHookFetch(harness: string): Promise<HookFetch> {
 		} catch (error) {
 			if (error instanceof SignetApiError)
 				return { ok: false, reason: "http", status: error.status, body: error.body, error: error.message };
-			return { ok: false, reason: error instanceof SignetTimeoutError ? "timeout" : "offline" };
+			return {
+				ok: false,
+				reason: error instanceof SignetTimeoutError ? "timeout" : "offline",
+				body: { reason: error instanceof SignetError ? error.code : "request_failed" },
+				error: error instanceof Error ? error.message : "Hook delivery failed",
+			};
 		}
 	};
 	return Object.assign(fetch, { remote: target.remote });

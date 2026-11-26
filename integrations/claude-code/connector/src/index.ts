@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	BaseConnector,
-	captureRemoteSessionEnd,
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
@@ -160,7 +159,7 @@ export async function dispatchSessionEndFireAndForget(
 	try {
 		const target = await resolveTarget({ harness: "claude-code", configUrl: daemonUrl });
 		const transport = new NodeTransport(target, { headers: { "x-signet-runtime-path": "legacy" } });
-		await transport.post("/api/hooks/session-end", target.remote ? await captureRemoteSessionEnd(payload) : payload);
+		await transport.post("/api/hooks/session-end", payload);
 		return true;
 	} catch (error) {
 		console.warn(

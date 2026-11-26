@@ -1,4 +1,5 @@
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
+import { isIP } from "node:net";
 import { LoginStore, type LoginStoreOptions } from "./login.js";
 import { ConnectorRegistry, readKeyFile } from "./registry.js";
 import { identifier } from "./storage.js";
@@ -36,7 +37,7 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 			? await new ConnectorRegistry(options).read()
 			: {};
 	const registry = options.harness && Object.hasOwn(entries, options.harness) ? entries[options.harness] : undefined;
-	const explicit = flagUrl || envUrl || registry?.url || options.configUrl;
+
 	const url = resolveSignetDaemonUrl({
 		env: { ...env, SIGNET_DAEMON_URL: flagUrl || envUrl },
 		configUrl: registry?.url ?? options.configUrl,
@@ -77,6 +78,15 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 		harness,
 		origin,
 		credential,
-		remote: Boolean(explicit) || !["127.0.0.1", "[::1]", "localhost"].includes(new URL(url).hostname),
+		remote: credential.source !== "none" || !isLoopback(new URL(url).hostname),
 	};
+}
+
+function isLoopback(hostname: string): boolean {
+	return (
+		hostname === "localhost" ||
+		hostname === "[::1]" ||
+		(isIP(hostname) === 4 && hostname.startsWith("127.")) ||
+		/^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(hostname)
+	);
 }

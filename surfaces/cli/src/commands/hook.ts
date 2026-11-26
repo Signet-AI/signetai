@@ -11,7 +11,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult } from "../lib/daemon.js";
 import { reportAuthError } from "./auth.js";
-import { apiError } from "../../../../libs/sdk/src/errors.js";
+import { apiError, SignetError } from "../../../../libs/sdk/src/errors.js";
 
 interface HookDeps {
 	readonly createHookFetch?: (
@@ -401,14 +401,25 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		if (deps.createHookFetch) {
 			const options = action.optsWithGlobals();
 			const harness = typeof options.harness === "string" ? options.harness : "cli";
-			const fetch = await deps.createHookFetch(harness);
+			const fetch = await deps.createHookFetch(harness).catch((error: unknown): never => {
+				reportAuthError(error, options.json === true);
+				return process.exit(process.exitCode ?? 1);
+			});
 			deps = {
 				...deps,
 				fetchDaemonResult: async <T>(path: string, request?: RequestInit & { timeout?: number }) => {
 					const result = await fetch<T>(path, request);
-					if (!result.ok && (result.status === 401 || result.status === 403)) {
-						reportAuthError(apiError(result.status, result.body), options.json === true);
-						process.exit(process.exitCode);
+					if (!result.ok && (result.status === 401 || result.status === 403 || fetch.remote)) {
+						const body = result.body;
+						const reason =
+							typeof body === "object" && body !== null && "reason" in body && typeof body.reason === "string"
+								? body.reason
+								: result.reason;
+						const error = result.status
+							? apiError(result.status, body)
+							: new SignetError(result.error ?? "Hook delivery failed", reason);
+						reportAuthError(error, options.json === true);
+						process.exit(process.exitCode ?? 1);
 					}
 					return result;
 				},

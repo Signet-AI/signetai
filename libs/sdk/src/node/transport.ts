@@ -18,6 +18,7 @@ import {
 	type OutboxFlushResult,
 } from "./outbox.js";
 import type { ResolvedTarget } from "./target.js";
+import { captureRemoteSessionEnd } from "./capture.js";
 import type { StorageOptions } from "./storage.js";
 
 export interface NodeTransportOptions
@@ -49,6 +50,17 @@ export class NodeTransport extends SignetTransport {
 		opts: RequestOptions,
 		capturedHeaders?: Readonly<Record<string, string>>,
 	): Promise<T> {
+		if (this.target.remote && path === "/api/hooks/session-end") {
+			try {
+				opts = { ...opts, body: await captureRemoteSessionEnd(opts.body, opts.signal) };
+			} catch (error) {
+				if (error instanceof SignetError || opts.signal?.aborted) throw error;
+				throw new SignetError(
+					error instanceof Error ? error.message : "Transcript capture failed",
+					"transcript_capture_failed",
+				);
+			}
+		}
 		let used: string | null = null;
 		let acquired = false;
 		const callHeaders = new Headers(opts.headers);

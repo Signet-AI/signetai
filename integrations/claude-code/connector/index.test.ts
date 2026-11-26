@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => {
-	it("delivers session-end through the canonical transport", async () => {
+	it.each([false, true])("delivers session-end through the canonical transport; credential=%s", async (remote) => {
 		const requests: unknown[] = [];
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -49,8 +49,9 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 			},
 		});
 		try {
-			const { ConnectorRegistry } = await import("../../../libs/sdk/src/node");
-			await new ConnectorRegistry().set("claude-code", { url: server.url.origin });
+			const { ConnectorRegistry, writeKeyFile } = await import("../../../libs/sdk/src/node");
+			const keyFile = remote ? await writeKeyFile(server.url.origin, "claude-code", "fixture-credential") : undefined;
+			await new ConnectorRegistry().set("claude-code", { url: server.url.origin, ...(keyFile ? { keyFile } : {}) });
 			writeFileSync(join(tmpRoot, "transcript.jsonl"), "session evidence");
 			const payload: SessionEndFireAndForgetPayload = {
 				harness: "claude-code",
@@ -62,7 +63,9 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 				{
 					path: "/api/hooks/session-end",
 					contentType: "application/json",
-					body: { harness: "claude-code", sessionId: "session-real-transport", transcript: "session evidence" },
+					body: remote
+						? { harness: "claude-code", sessionId: "session-real-transport", transcript: "session evidence" }
+						: payload,
 				},
 			]);
 		} finally {

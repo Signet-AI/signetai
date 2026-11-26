@@ -68,6 +68,18 @@ test("target and credential precedence is origin-bound and uses core host semant
 	expect(await fromLogin.credential.get()).toBe("login");
 });
 
+test("loopback target overrides and registry entries without credentials stay local", async () => {
+	for (const options of [
+		{ flagUrl: "http://127.0.0.1:4141" },
+		{ configUrl: "http://localhost:4141" },
+		{ env: { ...env, SIGNET_DAEMON_URL: "http://127.0.0.1:4141" } },
+	])
+		expect((await resolveTarget({ env, keyring: absentKeyring, ...options })).remote).toBe(false);
+	await new ConnectorRegistry({ env }).set("claude-code", { url: "http://127.0.0.1:4141" });
+	expect((await resolveTarget({ env, harness: "claude-code", keyring: absentKeyring })).remote).toBe(false);
+	expect((await resolveTarget({ env, flagUrl: "http://127.0.0.1:4141", flagKey: "fixture" })).remote).toBe(true);
+});
+
 test("key files and registry are protected, atomic and reject insecure credentials", async () => {
 	const path = await writeKeyFile("https://org.example", "hermes", "credential", { env });
 	expect(await readKeyFile(path)).toBe("credential");

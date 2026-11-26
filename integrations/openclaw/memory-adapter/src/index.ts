@@ -19,7 +19,7 @@ import {
 import type { RecallPayload, RecallRow } from "@signet/core";
 import { SignetApiError, SignetUnauthorizedError, SignetTimeoutError, SignetResponseError } from "@signet/sdk";
 import { resolveTarget, NodeTransport } from "@signet/sdk/node";
-import { captureRemoteSessionEnd } from "@signet/connector-base";
+
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi, OpenClawToolResult } from "./openclaw-types.js";
 
@@ -284,10 +284,8 @@ async function daemonFetchResult<T>(
 			headers: { "x-signet-runtime-path": RUNTIME_PATH },
 			deliveryPaths: ["/api/hooks/stop"],
 		});
-		const body =
-			target.remote && path === "/api/hooks/session-end" ? await captureRemoteSessionEnd(options.body) : options.body;
 		const data = await transport.request<T>(options.method ?? "GET", path, {
-			body,
+			body: options.body,
 			timeoutMs: options.timeout ?? READ_TIMEOUT,
 			signal: options.signal,
 		});

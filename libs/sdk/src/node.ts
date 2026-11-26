@@ -12,4 +12,5 @@ export {
 } from "./node/outbox.js";
 export { NodeTransport, createNodeClient, type NodeTransportOptions } from "./node/transport.js";
 export { SignetOutboxAdmissionError } from "./errors.js";
+export { captureRemoteSessionEnd } from "./node/capture.js";
 export { configDirectory, originHash, type StorageOptions } from "./node/storage.js";

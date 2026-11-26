@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import open from "open";
 import {
 	SignetApiError,
+	SignetError,
 	SignetForbiddenError,
 	SignetTransport,
 	SignetUnauthorizedError,
@@ -38,7 +39,11 @@ interface DeviceToken {
 export function reportAuthError(error: unknown, json = false): void {
 	const status = error instanceof SignetApiError ? error.status : 0;
 	const reason =
-		error instanceof SignetUnauthorizedError || error instanceof SignetForbiddenError ? error.reason : undefined;
+		error instanceof SignetUnauthorizedError || error instanceof SignetForbiddenError
+			? error.reason
+			: error instanceof SignetError
+				? error.code
+				: "request_failed";
 	const message =
 		status === 401
 			? "Signet session expired, run `signet login`"
