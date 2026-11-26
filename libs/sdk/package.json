@@ -2,6 +2,9 @@
 	"name": "@signet/sdk",
 	"version": "1.0.1",
 	"license": "Apache-2.0",
+	"publishConfig": {
+		"access": "public"
+	},
 	"description": "HTTP client SDK for the Signet daemon API",
 	"type": "module",
 	"main": "./dist/index.js",
