@@ -1079,7 +1079,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				},
 				{ operation: "memory.list", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
 			);
-			const ownerAccess = readScopeSql("owner", scope.readScope);
 			const stats = await dbOwnerQuery<{ total: number; critical: number; with_embeddings: number } | undefined>(
 				{
 					sql: `SELECT COUNT(*) AS total,
@@ -1089,7 +1088,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,
-					params: [...ownerReadArgs(ownerAccess.args), ...whereArgs],
+					params: whereArgs,
 					result: "get",
 				},
 				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },

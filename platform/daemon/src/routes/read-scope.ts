@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { getAgentScope, resolveDaemonAgentId } from "../agent-id";
-import { principalAccess, resolveReadAgent } from "../auth/agent-access";
+import { principalAccess, reconcileAgentSources, resolveReadAgent } from "../auth/agent-access";
 import { requirePermission } from "../auth";
 import { audienceSubjectFromPrincipal, resolveReadScope, type ReadScope } from "../read-scope";
 import { authConfig } from "./state";
@@ -31,7 +31,10 @@ export async function resolveRouteReadScope(
 			return c.json({ error: "agent binding conflict", reason: "agent_binding_conflict" }, 403);
 		agentId = "all";
 	} else if (organization && principal) {
-		const result = resolveReadAgent(principal, c.get("requestedOrganizationAgent") ?? requested);
+		const reconciled = reconcileAgentSources([requested, c.get("requestedOrganizationAgent")]);
+		if (!reconciled.ok)
+			return c.json({ error: reconciled.error.error, reason: reconciled.error.reason }, reconciled.error.status);
+		const result = resolveReadAgent(principal, reconciled.value);
 		if (!result.ok) return c.json({ error: result.error.error, reason: result.error.reason }, result.error.status);
 		agentId = result.value;
 	} else {
@@ -77,13 +80,18 @@ export async function resolveRouteReadScope(
 				: options.memory && policy.readPolicy === "group" && policy.policyGroup
 					? { kind: "group" as const, agentId, group: policy.policyGroup }
 					: { kind: "own" as const, agentId };
-	const scope = await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] });
+	const scope = {
+		...(await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] })),
+		organizationMode: false,
+	};
 	c.set("readResponseScope", scope);
 	return { agentId, scope };
 }
 
 export async function resolveKnowledgeReadScope(c: Context, agentId?: string): Promise<ReadScope> {
-	const resolved = await resolveRouteReadScope(c, { agentId, memory: true });
+	if (agentId === "all" && c.get("organization"))
+		throw new HTTPException(403, { res: c.json({ error: "agent not permitted", reason: "agent_not_permitted" }, 403) });
+	const resolved = await resolveRouteReadScope(c, { agentId, memory: true, allowAllAgents: true });
 	if (resolved instanceof Response)
 		throw new HTTPException(resolved.status === 401 ? 401 : resolved.status === 400 ? 400 : 403, { res: resolved });
 	return resolved.scope;
