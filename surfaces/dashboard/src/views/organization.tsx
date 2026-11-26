@@ -18,6 +18,7 @@ import {
 	type OrganizationUserRow,
 	organizationUser,
 } from "@/lib/organization";
+import { UserLookup } from "@/components/organization/user-lookup";
 import { useSession, useWhoami } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
 import { useAgentContext } from "@/lib/agent-context";
@@ -273,44 +274,14 @@ function TeamsSection({
 	);
 }
 function AccessSection() {
-	const [query, setQuery] = useState("");
 	const [selected, setSelected] = useState("");
-	const users = usePanelQuery<{ users: readonly OrganizationUserRow[] }>("/api/org/users");
-	const matches =
-		users.result?.data?.users.filter((person) =>
-			[person.display_name, person.username, person.email]
-				.filter(Boolean)
-				.join(" ")
-				.toLowerCase()
-				.includes(query.toLowerCase()),
-		) ?? [];
 	return (
 		<div className="flex flex-col gap-6">
-			<TextField label="Find a person" value={query} onChange={setQuery} />
-			<Panel
-				result={users.result}
-				empty={matches.length === 0}
-				emptyMessage="No matching people."
-				onRetry={users.refresh}
-			>
-				{() => (
-					<div role="listbox" aria-label="People" className="max-h-48 overflow-y-auto divide-y">
-						{matches.map((person) => (
-							<button
-								type="button"
-								role="option"
-								aria-selected={selected === person.id}
-								key={person.id}
-								className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-small hover:bg-muted"
-								onClick={() => setSelected(person.id)}
-							>
-								<span>{person.display_name}</span>
-								<span className="text-muted-foreground">{person.email ?? person.username}</span>
-							</button>
-						))}
-					</div>
-				)}
-			</Panel>
+			<UserLookup
+				label="Find a person"
+				onSelect={(person) => setSelected(person.id)}
+				onSearch={() => setSelected("")}
+			/>
 			{selected && (
 				<OrganizationResource<EffectiveAccess> path={`/api/org/access/${encodeURIComponent(selected)}`}>
 					{(access) => (

@@ -17,6 +17,7 @@ import {
 } from "./controls";
 import { EvidenceList } from "./evidence-list";
 import { displayLabel } from "./controls";
+import { UserLookup, type LookupPerson } from "./user-lookup";
 import { TrackedJob } from "./job";
 
 export function ClassifyAction({ target }: { target: ClassificationTarget }) {
@@ -161,15 +162,21 @@ export function PrincipalEditor({
 	const [kind, setKind] = useState("group");
 	const [id, setId] = useState("");
 	const groups = usePanelQuery<{ groups: readonly { id: string; name: string }[] }>("/api/org/groups");
-	const users = usePanelQuery<{ users: readonly { id: string; display_name: string }[] }>(
-		whoami?.user.role === "admin" ? "/api/org/users" : null,
-	);
+	const [person, setPerson] = useState<LookupPerson | null>(null);
 	const options =
 		kind === "group"
 			? (groups.result?.data?.groups ?? []).map((group) => ({ value: group.id, label: group.name }))
-			: (
-					users.result?.data?.users ?? (whoami ? [{ id: whoami.user.id, display_name: whoami.user.displayName }] : [])
-				).map((user) => ({ value: user.id, label: user.display_name }));
+			: Array.from(
+					new Map(
+						[
+							...values
+								.filter((value) => value.kind === "user")
+								.map((value) => ({ value: value.id, label: value.displayName ?? "Person" })),
+							...(whoami ? [{ value: whoami.user.id, label: whoami.user.displayName }] : []),
+							...(person ? [{ value: person.id, label: person.displayName }] : []),
+						].map((option) => [option.value, option]),
+					).values(),
+				);
 	return (
 		<OrganizationBlock title={title}>
 			<Choice
@@ -184,6 +191,16 @@ export function PrincipalEditor({
 					{ value: "user", label: "Person" },
 				]}
 			/>
+			{kind === "user" && (
+				<UserLookup
+					label={`Find ${title.toLowerCase()} person`}
+					onSelect={(value) => {
+						setPerson(value);
+						setId(value.id);
+					}}
+					onSearch={() => setId("")}
+				/>
+			)}
 			<Choice
 				label={`Add to ${title.toLowerCase()}`}
 				value={id}
