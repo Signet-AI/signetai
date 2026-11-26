@@ -274,7 +274,15 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				async () => text(await page.evaluate("document.body.innerText")).length > 100,
 				"Remote dashboard rendered",
 			);
-			if (screenDir) await cdp.screenshot(join(screenDir, "remote-dashboard-baseline.png"));
+			await until(
+				async () =>
+					(await page.evaluate(
+						"Array.from(document.querySelectorAll('header button')).some(button=>button.textContent.includes('Alice'))",
+					)) === true,
+				"Authenticated dashboard session chip rendered",
+			);
+			expect(await page.evaluate("document.querySelector('form[aria-label=\"Sign in to Signet\"]')===null")).toBe(true);
+			if (screenDir) await cdp.screenshot(join(screenDir, "signed-in-remote-dashboard.png"));
 			await cdp.evaluate(
 				"void fetch('/api/auth/logout',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}); true",
 			);
