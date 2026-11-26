@@ -14,7 +14,7 @@ class FixtureDatabase extends Database {
 	}
 }
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
 	existsSync,
@@ -135,50 +135,58 @@ describe("DbAccessor", () => {
 		).toHaveLength(1);
 	});
 
-	test("initializes a multi-chunk pending-migration database without inline global verification", async () => {
-		const dbPath = tmpDbPath();
-		cleanupDirs.push(join(dbPath, ".."));
+	describe("pending-migration initialization", () => {
+		let fixturePath: string | undefined;
+		let sourceSizeBeforeInit = 0;
+		beforeAll(async () => {
+			fixturePath = tmpDbPath();
+			const dbPath = fixturePath;
+			cleanupDirs.push(join(dbPath, ".."));
 
-		initDbAccessor(dbPath);
-		await closeDbAccessor();
-		for (const name of readdirSync(join(dbPath, ".."))) {
-			if (name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json")) rmSync(join(dbPath, "..", name));
-		}
-		const fixture = new FixtureDatabase(dbPath);
-		fixture.exec("CREATE TABLE migration_large_fixture (payload BLOB NOT NULL)");
-		fixture
-			.prepare("INSERT INTO migration_large_fixture (payload) VALUES (zeroblob(?))")
-			.run(3 * MIGRATION_BACKUP_CHUNK_BYTES + 1);
-		fixture.exec("DELETE FROM schema_migrations WHERE version = 128");
-		fixture.close(true);
-		const sourceSizeBeforeInit = statSync(dbPath).size;
+			initDbAccessor(dbPath);
+			await closeDbAccessor();
+			for (const name of readdirSync(join(dbPath, ".."))) {
+				if (name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json")) rmSync(join(dbPath, "..", name));
+			}
+			const fixture = new FixtureDatabase(dbPath);
+			fixture.exec("CREATE TABLE migration_large_fixture (payload BLOB NOT NULL)");
+			fixture
+				.prepare("INSERT INTO migration_large_fixture (payload) VALUES (zeroblob(?))")
+				.run(3 * MIGRATION_BACKUP_CHUNK_BYTES + 1);
+			fixture.exec("DELETE FROM schema_migrations WHERE version = 128");
+			fixture.close(true);
+			sourceSizeBeforeInit = statSync(dbPath).size;
+		});
+		test("initializes a multi-chunk pending-migration database without inline global verification", async () => {
+			if (!fixturePath) throw new Error("Pending-migration fixture was not initialized");
+			const dbPath = fixturePath;
+			const owner = createDbOwnerClient({ dbPath });
+			const started = performance.now();
+			try {
+				await owner.start();
+				await owner.initialize(join(dbPath, ".."));
+			} finally {
+				await owner.close();
+			}
+			expect(performance.now() - started).toBeLessThan(45_000);
 
-		const owner = createDbOwnerClient({ dbPath });
-		const started = performance.now();
-		try {
-			await owner.start();
-			await owner.initialize(join(dbPath, ".."));
-		} finally {
-			await owner.close();
-		}
-		expect(performance.now() - started).toBeLessThan(45_000);
+			const backupsAfterInit = readdirSync(join(dbPath, ".."))
+				.filter((name) => name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json"))
+				.sort();
+			expect(backupsAfterInit).toHaveLength(1);
+			const backupPath = join(dbPath, "..", backupsAfterInit[0]);
+			const backupStat = statSync(backupPath);
+			expect(backupStat.size).toBe(sourceSizeBeforeInit);
+			const cursor = JSON.parse(readFileSync(`${backupPath}.cursor.json`, "utf8")) as { offset: number };
+			expect(cursor.offset).toBe(sourceSizeBeforeInit);
 
-		const backupsAfterInit = readdirSync(join(dbPath, ".."))
-			.filter((name) => name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json"))
-			.sort();
-		expect(backupsAfterInit).toHaveLength(1);
-		const backupPath = join(dbPath, "..", backupsAfterInit[0]);
-		const backupStat = statSync(backupPath);
-		expect(backupStat.size).toBe(sourceSizeBeforeInit);
-		const cursor = JSON.parse(readFileSync(`${backupPath}.cursor.json`, "utf8")) as { offset: number };
-		expect(cursor.offset).toBe(sourceSizeBeforeInit);
-
-		closeDbAccessor();
-		const backupBeforeRestart = statSync(backupPath);
-		await initDbAccessorAsync(dbPath, { deadlineAt: Date.now() + 60_000 });
-		expect(statSync(backupPath)).toMatchObject({
-			size: backupBeforeRestart.size,
-			mtimeMs: backupBeforeRestart.mtimeMs,
+			closeDbAccessor();
+			const backupBeforeRestart = statSync(backupPath);
+			await initDbAccessorAsync(dbPath, { deadlineAt: Date.now() + 60_000 });
+			expect(statSync(backupPath)).toMatchObject({
+				size: backupBeforeRestart.size,
+				mtimeMs: backupBeforeRestart.mtimeMs,
+			});
 		});
 	});
 
@@ -399,7 +407,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:394" },
+				{ siteToken: "db-accessor.test.ts:402" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -432,7 +440,7 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:429");
+			}, "db-accessor.test.ts:437");
 		} finally {
 			Date.now = realNow;
 		}
@@ -464,7 +472,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:459" },
+				{ siteToken: "db-accessor.test.ts:467" },
 			);
 		} finally {
 			Date.now = realNow;
