@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { chmod, lstat, mkdir, open, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -63,7 +63,7 @@ export async function snapshotInstallation(paths: readonly string[]): Promise<()
 			await rm(path, { recursive: true, force: true });
 			return;
 		}
-		let current: Awaited<ReturnType<typeof lstat>> | undefined;
+		let current: Stats | undefined;
 		try {
 			current = await lstat(path);
 		} catch (error) {

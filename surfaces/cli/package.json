@@ -24,6 +24,7 @@
 		"prebuild": "bun run build:workspace-deps && bun run copy:skills",
 		"prepublishOnly": "bun run build",
 		"test": "bun test",
+		"typecheck": "tsc --project tsconfig.hooks.json",
 		"typecheck:hooks": "tsc --project tsconfig.hooks.json"
 	},
 	"keywords": [
