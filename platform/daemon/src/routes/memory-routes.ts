@@ -1023,14 +1023,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					sql: `SELECT COUNT(*) AS total,
 					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
 					        COALESCE(SUM(CASE WHEN
-					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
-					          OR (m.content_hash IS NOT NULL AND EXISTS (
-					            SELECT 1 FROM embeddings e
-					            JOIN memories owner ON owner.id = e.source_id
-					            WHERE e.source_type = 'memory'
-					              AND e.content_hash = m.content_hash
-					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-					          ))
+					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id AND e.agent_id=m.agent_id)
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,

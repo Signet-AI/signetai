@@ -510,7 +510,12 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		if (newHash && input.embeddingVector && input.embeddingVector.length > 0 && embeddingGenerationActive) {
 			if (!existing.agent_id) throw new Error("agent_required");
 			const compartment = compartmentForWrite(db, { agentId: existing.agent_id, memoryId: input.memoryId });
-			const embId = crypto.randomUUID();
+			const prior = db
+				.prepare(
+					"SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND content_hash=? AND compartment_id IS ?",
+				)
+				.get(input.memoryId, existing.agent_id, newHash, compartment);
+			const embId = typeof prior?.id === "string" ? prior.id : crypto.randomUUID();
 			const blob = vectorToBlob(input.embeddingVector);
 			db.prepare(
 				`INSERT INTO embeddings

@@ -180,13 +180,13 @@ describe("GET /api/memories agent scope", () => {
 		expect(group.body.memories[0]?.agent_id).toBe("team-b");
 	});
 
-	it("counts a memory that shares a same-agent embedding by content hash as embedded", async () => {
+	it("counts only a memory with its own parent-scoped embedding", async () => {
 		seedMemory("alpha-copy", "alpha", { contentHash: "alpha-global-hash" });
 		seedMemory("beta-copy", "beta", { contentHash: "alpha-global-hash" });
 		const app = await makeApp("local");
 
 		const alpha = await list(app, "?agentId=alpha");
-		expect(alpha.body.stats).toMatchObject({ total: 3, withEmbeddings: 2 });
+		expect(alpha.body.stats).toMatchObject({ total: 3, withEmbeddings: 1 });
 
 		const beta = await list(app, "?agentId=beta");
 		expect(beta.body.stats).toMatchObject({ total: 3, withEmbeddings: 1 });

@@ -60,6 +60,35 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		db.close();
 	});
 
+	it("reuses a parent hash embedding when an edit keeps its hash", () => {
+		insertMemory(db, { id: "same-hash-edit", content: "Original", contentHash: "same-hash" });
+		insertMemory(db, { id: "other-parent", content: "Independent", contentHash: "other-memory-hash" });
+		const insert = db.prepare(
+			"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,agent_id,created_at,chunk_text) VALUES(?,'same-hash',?,3,'memory',?,'default','now','Original')",
+		);
+		insert.run("existing-vector", new Uint8Array(new Float32Array([1, 0, 0]).buffer), "same-hash-edit");
+		insert.run("other-vector", new Uint8Array(new Float32Array([0, 1, 0]).buffer), "other-parent");
+		const result = txModifyMemory(asWriteDb(db), {
+			memoryId: "same-hash-edit",
+			patch: { content: "Original normalized", contentHash: "same-hash" },
+			reason: "normalize",
+			changedBy: "test",
+			changedAt: new Date().toISOString(),
+			ctx: { author: SYSTEM_AUTHOR },
+			embeddingVector: [0, 0, 1],
+		});
+		expect(result.status).toBe("updated");
+		expect(db.prepare("SELECT id,source_id FROM embeddings ORDER BY id").all()).toEqual([
+			{ id: "existing-vector", source_id: "same-hash-edit" },
+			{ id: "other-vector", source_id: "other-parent" },
+		]);
+		expect(db.prepare("SELECT hex(vector) vector FROM embeddings WHERE id='existing-vector'").get()).toEqual({
+			vector: Buffer.from(new Float32Array([0, 0, 1]).buffer)
+				.toString("hex")
+				.toUpperCase(),
+		});
+	});
+
 	it("rejects missing modify authors before metadata mutation or duplicate lookup", () => {
 		insertMemory(db, { id: "author-required", content: "Original evidence", contentHash: "original" });
 		insertMemory(db, { id: "duplicate", content: "Duplicate evidence", contentHash: "duplicate" });
