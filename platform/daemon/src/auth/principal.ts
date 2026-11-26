@@ -12,6 +12,7 @@ export interface Principal {
 	readonly groupIds: readonly string[];
 	readonly credential: { readonly kind: "local" | "session" | "api_key" | "token"; readonly id: string };
 	readonly sessionId: string | null;
+	readonly sourceKeyId?: string;
 	readonly deviceId: string | null;
 	readonly harness: string | null;
 	readonly boundAgentId: string | null;

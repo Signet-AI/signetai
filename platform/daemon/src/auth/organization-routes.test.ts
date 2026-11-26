@@ -88,6 +88,160 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("personal-key cookie sessions retain durable permission, agent and expiry ceilings", async () => {
+		const root = await claim();
+		const bob = await member("bob");
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const issued = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "browser fallback",
+				permissions: ["recall"],
+				agentId: root.user.personalAgentId ?? (await (await call("/api/auth/whoami")).json()).agents.defaultWrite,
+				allowedProjects: ["project-a"],
+				expiresAt,
+			})
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		expect(exchanged.status).toBe(200);
+		const payload = await exchanged.json();
+		expect(payload).not.toHaveProperty("accessToken");
+		expect(payload.expiresAt).toBe(expiresAt);
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((item) => item.split(";")[0])
+			.join("; ");
+		const read = (path: string, headers: Record<string, string> = {}) =>
+			app.request(path, { headers: { cookie, ...headers } });
+		const identity = await (await read("/api/auth/whoami")).json();
+		expect(identity.permissions).toEqual(["recall"]);
+		const denied = await read(`/api/agents?agentId=${bob.agentId}`);
+		expect(denied.status).toBe(403);
+		expect(
+			(
+				await app.request("/api/org/invites", {
+					method: "POST",
+					headers: { cookie, "content-type": "application/json", "x-signet-csrf": payload.csrf },
+					body: "{}",
+				})
+			).status,
+		).toBe(403);
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"UPDATE auth_sessions SET last_used_at='2000-01-01T00:00:00.000Z',access_expires_at=? WHERE source_key_id=?",
+				[new Date(Date.now() + 90_000).toISOString(), issued.key.id],
+			),
+		]);
+		await read("/api/auth/whoami");
+		const persisted = await organizationQuery<{ access_expires_at: string }>(
+			statement("SELECT access_expires_at FROM auth_sessions WHERE source_key_id=?", [issued.key.id], "get"),
+		);
+		expect(persisted.access_expires_at).toBe(expiresAt);
+		await closeDbAccessor();
+		initDbAccessor((await import("@signet/core")).resolveWorkspaceLayout(dir).database, { agentsDir: dir });
+		expect((await (await read("/api/auth/whoami")).json()).permissions).toEqual(["recall"]);
+		expect((await call(`/api/auth/api-keys/${issued.key.id}`, "DELETE")).status).toBe(200);
+		expect((await read("/api/agents")).status).toBe(401);
+	});
+	test("key-cookie handoff and live parent narrowing cannot widen issuance ceilings", async () => {
+		await claim();
+		const own = (await (await call("/api/auth/whoami")).json()).agents.defaultWrite;
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const issued = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "handoff ceiling",
+				permissions: ["recall"],
+				agentId: own,
+				allowedProjects: ["project-a"],
+				expiresAt,
+			})
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		expect(exchanged.status).toBe(200);
+		const initial = await exchanged.json();
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((item) => item.split(";")[0])
+			.join("; ");
+		const write = (path: string, body: unknown, csrf = initial.csrf) =>
+			app.request(path, {
+				method: "POST",
+				headers: { cookie, "content-type": "application/json", "x-signet-csrf": csrf },
+				body: JSON.stringify(body),
+			});
+		expect((await write("/api/auth/handoff", {}, "wrong")).status).toBe(403);
+		expect((await write("/api/auth/api-keys", { name: "escape", permissions: ["recall"] })).status).toBe(403);
+		expect((await write("/api/auth/device/approve", { userCode: "AAAA-AAAA", decision: "approve" })).status).toBe(403);
+		const handoff = await (await write("/api/auth/handoff", {})).json();
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		expect(redeemed.status).toBe(200);
+		expect((await redeemed.json()).expiresAt).toBe(expiresAt);
+		const secondCookie = redeemed.headers
+			.getSetCookie()
+			.map((item) => item.split(";")[0])
+			.join("; ");
+		const read = (path: string) => app.request(path, { headers: { cookie: secondCookie } });
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"UPDATE api_keys SET permissions_json=?,agent_id=NULL,scope_json=json_remove(scope_json,'$.agent'),allowed_projects_json=NULL,expires_at=? WHERE id=?",
+				[JSON.stringify(["recall", "remember"]), new Date(Date.now() + 86400_000).toISOString(), issued.key.id],
+			),
+		]);
+		expect((await (await read("/api/auth/whoami")).json()).permissions).toEqual(["recall"]);
+		expect((await read("/api/agents?agentId=default")).status).toBe(403);
+		expect((await read("/api/agents?project=project-b")).status).toBe(403);
+		await organizationWrite([
+			statement("UPDATE api_keys SET permissions_json='[]',expires_at=? WHERE id=?", [
+				new Date(Date.now() + 120_000).toISOString(),
+				issued.key.id,
+			]),
+		]);
+		const narrowed = await (await read("/api/auth/whoami")).json();
+		expect(narrowed.permissions).toEqual([]);
+		expect(Date.parse(narrowed.credential.expiresAt)).toBeLessThan(Date.parse(expiresAt));
+		await organizationWrite([
+			statement("UPDATE api_keys SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?", [issued.key.id]),
+		]);
+		const expired = await read("/api/agents");
+		expect(expired.status).toBe(401);
+		expect(await expired.json()).toMatchObject({ reason: "expired" });
+	});
+	test("key-cookie exchange denies wrong scope and shared credentials", async () => {
+		await claim();
+		const bob = await member("bob");
+		const issued = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "scope",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement("UPDATE api_keys SET agent_id=?,scope_json=json_set(scope_json,'$.agent',?) WHERE id=?", [
+				"default",
+				"default",
+				issued.key.id,
+			]),
+		]);
+		expect(
+			(
+				await app.request(`/api/auth/session?agentId=${bob.agentId}`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${issued.secret}`, "content-type": "application/json" },
+					body: "{}",
+				})
+			).status,
+		).toBe(403);
+		await organizationWrite([statement("UPDATE api_keys SET kind='shared' WHERE id=?", [issued.key.id])]);
+		expect((await call("/api/auth/session", "POST", {}, issued.secret)).status).toBe(403);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id=?", [bob.userId], "get"),
+			),
+		).toEqual({ n: 1 });
+	});
 	test("own profile updates are scoped and SSO identity fields are read-only", async () => {
 		await claim();
 		const alice = await member("alice");
