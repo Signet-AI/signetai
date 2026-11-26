@@ -486,6 +486,9 @@ describe("DB owner FTS maintenance", () => {
 		directory = database.directory;
 		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
 
+		const partial = await maintenance.rebuildFts({ chunkSize: 3, maxChunks: 1 });
+		expect(partial).toMatchObject({ status: "running", processed: 3 });
+		expect(countFts(database.path)).toBe(3);
 		const result = await maintenance.rebuildFts({
 			chunkSize: 3,
 			audit: {
@@ -723,6 +726,7 @@ function makeVectorRepairDatabase(rowCount: number): { readonly directory: strin
 	const directory = mkdtempSync(join(tmpdir(), "signet-vector-repair-owner-"));
 	const path = join(directory, "memory.db");
 	const db = new Database(path);
+	db.exec("PRAGMA journal_mode = WAL");
 	runMigrations(db as never);
 	db.exec("DROP TABLE IF EXISTS vec_embeddings");
 	db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
@@ -735,6 +739,7 @@ function makeVectorRepairDatabase(rowCount: number): { readonly directory: strin
 		`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
 		 VALUES (?, ?, ?, 3, 'memory', ?, ?, ?, 'default')`,
 	);
+	db.exec("BEGIN");
 	for (let index = 0; index < rowCount; index += 1) {
 		const memoryId = `owner-vector-memory-${index}`;
 		insertMemory.run(memoryId, `owner vector memory ${index}`, `owner-vector-hash-${index}`, now, now);
@@ -751,6 +756,7 @@ function makeVectorRepairDatabase(rowCount: number): { readonly directory: strin
 		"owner-vector-orphan",
 		Buffer.from(new Float32Array([9, 9, 9]).buffer),
 	);
+	db.exec("COMMIT");
 	db.close();
 	return { directory, path };
 }
