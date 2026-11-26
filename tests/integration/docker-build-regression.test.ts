@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,6 +73,37 @@ function getBuildCommands(source: string): string[] {
 }
 
 describe("Docker build pipeline regression guard", () => {
+	it.each([200, 503])("probes public health without legacy credentials for HTTP %i", async (status) => {
+		const home = mkdtempSync(join(tmpdir(), "signet-docker-health-"));
+		const requests: Request[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				requests.push(request);
+				return Response.json({}, { status: request.headers.has("authorization") ? 401 : status });
+			},
+		});
+		try {
+			mkdirSync(join(home, "runtime"));
+			writeFileSync(join(home, "workspace-layout.json"), JSON.stringify({ version: 2 }));
+			writeFileSync(join(home, "runtime/auth-secret"), Buffer.alloc(32, 1));
+			const child = Bun.spawn([process.execPath, join(rootDir, "deploy/docker/scripts/healthcheck.mjs")], {
+				env: { ...process.env, HOME: home, SIGNET_PATH: home, SIGNET_PORT: String(server.port) },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+			expect(exit, stderr).toBe(status === 200 ? 0 : 1);
+			expect(requests).toHaveLength(1);
+			expect(requests[0]?.headers.get("authorization")).toBeNull();
+			expect(new URL(requests[0]?.url ?? "http://invalid").pathname).toBe("/health");
+		} finally {
+			server.stop(true);
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	it("skips the Electron binary download in the daemon image build", () => {
 		expect(dockerfile).toContain("ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1");
 		expect(dockerfile.indexOf("ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1")).toBeLessThan(
