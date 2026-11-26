@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -18,9 +19,12 @@ class UploadResumeConformanceTests(unittest.TestCase):
     def test_shared_upload_process_restart_conformance(self):
         root=Path(__file__).resolve().parents[4]
         fixture=json.loads((root/"tests/fixtures/connector-conformance.json").read_text())
+        runtime = os.environ.get("SIGNET_TEST_BUN") or shutil.which("bun")
+        if runtime is None:
+            self.fail("Bun is required for upload restart conformance")
         for case in fixture["uploads"]:
             with self.subTest(case=case["name"]):
-                result=subprocess.run([os.environ.get("SIGNET_TEST_BUN","/home/nicholai/.bun/bin/bun"),str(root/"tests/support/upload-resume-conformance.ts"),"python",case["name"]],cwd=root,env=os.environ.copy(),capture_output=True,text=True,timeout=180)
+                result=subprocess.run([runtime,str(root/"tests/support/upload-resume-conformance.ts"),"python",case["name"]],cwd=root,env=os.environ.copy(),capture_output=True,text=True,timeout=180)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                 print(result.stdout.strip())
 
