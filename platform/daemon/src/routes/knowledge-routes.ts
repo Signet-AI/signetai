@@ -1,5 +1,7 @@
 import { redactCredentials } from "@signet/core";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import type { Principal } from "../auth/principal";
+import { audienceSubjectFromPrincipal, resolveReadScope } from "../read-scope";
 import { etag } from "hono/etag";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
@@ -38,6 +40,15 @@ import {
 import { jsonBody } from "../request-body";
 import { AGENTS_DIR, authConfig } from "./state";
 import { resolveMutationActor, resolveScopedAgentId, resolveScopedProject } from "./utils";
+
+async function knowledgeReadScope(c: Context, agentId: string) {
+	const principal: Principal | undefined = c.get("principal");
+	if (!principal) throw new Error("unauthorized");
+	return resolveReadScope(
+		{ reach: { kind: "own", agentId }, projects: principal.allowedProjects },
+		audienceSubjectFromPrincipal(principal),
+	);
+}
 
 export function registerKnowledgeRoutes(app: Hono): void {
 	const parseNavigationLimit = (value: string | undefined, fallback: number, max: number): number => {
@@ -282,7 +293,12 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
-		const entity = await getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
+		const entity = await getKnowledgeEntityDetail(
+			getDbAccessor(),
+			c.req.param("id"),
+			agentId,
+			await knowledgeReadScope(c, agentId),
+		);
 		if (!entity) {
 			return c.json({ error: "Entity not found" }, 404);
 		}
@@ -294,7 +310,12 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
 		return c.json({
-			items: await getEntityAspectsWithCounts(getDbAccessor(), c.req.param("id"), agentId),
+			items: await getEntityAspectsWithCounts(
+				getDbAccessor(),
+				c.req.param("id"),
+				agentId,
+				await knowledgeReadScope(c, agentId),
+			),
 		});
 	});
 
@@ -311,6 +332,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		return c.json({
 			items: await getAttributesForAspectFiltered(getDbAccessor(), {
+				readScope: await knowledgeReadScope(c, agentId),
 				entityId: c.req.param("id"),
 				aspectId: c.req.param("aspectId"),
 				agentId,

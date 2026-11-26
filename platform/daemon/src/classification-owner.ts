@@ -1226,6 +1226,43 @@ export type DreamingMutationTable =
 	| "memory_head_entries"
 	| "temporal_edges";
 
+export function graphReadTablesInScope(agentId: string, scope: ReadScope) {
+	if (scope.projects !== null) throw new Error("project_scope_unsupported");
+	const predicates = ["e", "asp", "attr", "dep"].map((alias) =>
+		readScopeSql(alias, scope, {
+			memory: null,
+			session: null,
+			source: "source_id",
+			visibility: null,
+		}),
+	);
+	const [entity, aspect, attribute, dependency] = predicates;
+	if (!entity || !aspect || !attribute || !dependency) throw new Error("invalid_read_scope");
+	const params = predicates
+		.flatMap((predicate) => [agentId, ...predicate.args])
+		.map((value) => {
+			if (typeof value === "string" || typeof value === "number" || value === null) return value;
+			throw new Error("invalid_read_scope");
+		});
+	return {
+		params,
+		sql: `WITH visible_entities AS NOT MATERIALIZED (
+			SELECT e.* FROM entities e WHERE e.agent_id=? ${entity.sql}
+		), visible_aspects AS NOT MATERIALIZED (
+			SELECT asp.* FROM entity_aspects asp JOIN visible_entities e ON e.id=asp.entity_id AND e.agent_id=asp.agent_id
+			WHERE asp.agent_id=? ${aspect.sql}
+		), visible_attributes AS NOT MATERIALIZED (
+			SELECT attr.* FROM entity_attributes attr JOIN visible_aspects asp ON asp.id=attr.aspect_id AND asp.agent_id=attr.agent_id
+			WHERE attr.agent_id=? ${attribute.sql}
+		), visible_dependencies AS NOT MATERIALIZED (
+			SELECT dep.* FROM entity_dependencies dep
+			JOIN visible_entities src ON src.id=dep.source_entity_id AND src.agent_id=dep.agent_id
+			JOIN visible_entities dst ON dst.id=dep.target_entity_id AND dst.agent_id=dep.agent_id
+			WHERE dep.agent_id=? ${dependency.sql}
+		)`,
+	};
+}
+
 export function dreamingReadScopeInDb(db: ReadDb, agentId: string, compartmentId: number | null): ReadScope {
 	if (!agentId.trim()) throw new Error("agent_required");
 	if (compartmentId !== null && (!Number.isSafeInteger(compartmentId) || compartmentId < 1))

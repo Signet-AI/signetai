@@ -22,6 +22,7 @@ import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "./pipeline/dreaming-token-cache";
 
 import type { ReadScope } from "./read-scope";
+import { graphReadTablesInScope } from "./classification-owner";
 import { readOntologyEntityAliasRows } from "./ontology-proposals";
 
 function toCanonicalName(raw: string): string {
@@ -1361,19 +1362,23 @@ export async function getKnowledgeEntityDetail(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<KnowledgeEntityDetail | null> {
+	const scope: ReadScope = readScope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null };
+	if (scope.projects !== null) return null;
+	const plan = graphReadTablesInScope(agentId, scope);
 	const row = await dbOwnerQuery<Record<string, unknown> | null>(
 		{
-			sql: `SELECT
+			sql: `${plan.sql} SELECT
 					e.*,
 					(
-						SELECT COUNT(*) FROM entity_aspects asp
+						SELECT COUNT(*) FROM visible_aspects asp
 						  WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
 						    AND COALESCE(asp.status, 'active') = 'active'
 					) AS aspect_count,
 					(
-						SELECT COUNT(*) FROM entity_attributes attr
-						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						SELECT COUNT(*) FROM visible_attributes attr
+						JOIN visible_aspects asp ON asp.id = attr.aspect_id
 						  WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
 						  AND COALESCE(asp.status, 'active') = 'active'
@@ -1382,8 +1387,8 @@ export async function getKnowledgeEntityDetail(
 						  AND attr.status = 'active'
 					) AS attribute_count,
 					(
-						SELECT COUNT(*) FROM entity_attributes attr
-						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						SELECT COUNT(*) FROM visible_attributes attr
+						JOIN visible_aspects asp ON asp.id = attr.aspect_id
 						  WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
 						  AND COALESCE(asp.status, 'active') = 'active'
@@ -1392,32 +1397,32 @@ export async function getKnowledgeEntityDetail(
 						  AND attr.status = 'active'
 					) AS constraint_count,
 					(
-						SELECT COUNT(*) FROM entity_dependencies dep
-						JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+						SELECT COUNT(*) FROM visible_dependencies dep
+						JOIN visible_entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
 						WHERE dep.agent_id = e.agent_id
 						  AND COALESCE(dep.status, 'active') = 'active'
 						  AND COALESCE(dst.status, 'active') = 'active'
 						  AND dep.source_entity_id = e.id
 					) AS outgoing_dependency_count,
 					(
-						SELECT COUNT(*) FROM entity_dependencies dep
-						JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+						SELECT COUNT(*) FROM visible_dependencies dep
+						JOIN visible_entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
 						WHERE dep.agent_id = e.agent_id
 						  AND COALESCE(dep.status, 'active') = 'active'
 						  AND COALESCE(src.status, 'active') = 'active'
 						  AND dep.target_entity_id = e.id
 					) AS incoming_dependency_count
-			 FROM entities e
+			 FROM visible_entities e
 			 WHERE e.id = ? AND e.agent_id = ?
 			   AND COALESCE(e.status, 'active') = 'active'`,
-			params: [entityId, agentId],
+			params: [...plan.params, entityId, agentId],
 			result: "get",
 		},
 		{ operation: "db:knowledge.entity-detail.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 	);
 
 	if (!row) return null;
-	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
+	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId, scope);
 	const incomingDependencyCount = Number(row.incoming_dependency_count ?? 0);
 	const outgoingDependencyCount = Number(row.outgoing_dependency_count ?? 0);
 
@@ -1437,10 +1442,14 @@ export async function getEntityAspectsWithCounts(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly AspectWithCounts[]> {
+	const scope: ReadScope = readScope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null };
+	if (scope.projects !== null) return [];
+	const plan = graphReadTablesInScope(agentId, scope);
 	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
 		{
-			sql: `SELECT
+			sql: `${plan.sql} SELECT
 				asp.*,
 				COUNT(DISTINCT CASE
 					WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
@@ -1448,14 +1457,14 @@ export async function getEntityAspectsWithCounts(
 				COUNT(DISTINCT CASE
 					WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
 				END) AS constraint_count
-			 FROM entity_aspects asp
-			 LEFT JOIN entity_attributes attr
+			 FROM visible_aspects asp
+			 LEFT JOIN visible_attributes attr
 			   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
 			 WHERE asp.entity_id = ? AND asp.agent_id = ?
 			   AND COALESCE(asp.status, 'active') = 'active'
 			 GROUP BY asp.id
 			 ORDER BY asp.weight DESC, asp.name ASC`,
-			params: [entityId, agentId],
+			params: [...plan.params, entityId, agentId],
 			result: "all",
 		},
 		{ operation: "db:knowledge.aspects-with-counts.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
@@ -1478,8 +1487,16 @@ export async function getAttributesForAspectFiltered(
 		readonly status?: AttributeStatus;
 		readonly limit: number;
 		readonly offset: number;
+		readonly readScope?: ReadScope;
 	},
 ): Promise<readonly EntityAttribute[]> {
+	const scope: ReadScope = params.readScope ?? {
+		reach: { kind: "own", agentId: params.agentId },
+		compartments: [],
+		projects: null,
+	};
+	if (scope.projects !== null) return [];
+	const plan = graphReadTablesInScope(params.agentId, scope);
 	const conditions = [
 		"asp.entity_id = ?",
 		"asp.id = ?",
@@ -1500,14 +1517,14 @@ export async function getAttributesForAspectFiltered(
 
 	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
 		{
-			sql: `SELECT ea.*
-			 FROM entity_attributes ea
-			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
-			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+			sql: `${plan.sql} SELECT ea.*
+			 FROM visible_attributes ea
+			 JOIN visible_aspects asp ON asp.id = ea.aspect_id
+			 JOIN visible_entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE ${conditions.join(" AND ")}
 			 ORDER BY ea.importance DESC, ea.created_at DESC
 			 LIMIT ? OFFSET ?`,
-			params: [...args, params.limit, params.offset],
+			params: [...plan.params, ...args, params.limit, params.offset],
 			result: "all",
 		},
 		{ operation: "db:knowledge.attributes-filtered.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
@@ -2515,7 +2532,11 @@ export async function getStructuralDensity(
 	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<StructuralDensity> {
+	const scope: ReadScope = readScope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null };
+	if (scope.projects !== null) return { aspectCount: 0, attributeCount: 0, constraintCount: 0, dependencyCount: 0 };
+	const plan = graphReadTablesInScope(agentId, scope);
 	const row = await ownerReadOne<{
 		readonly aspectCount: number;
 		readonly attributeCount: number;
@@ -2523,17 +2544,32 @@ export async function getStructuralDensity(
 		readonly dependencyCount: number;
 	}>(
 		await getDbOwner(getDbAccessorPath()),
-		`SELECT
-			(SELECT COUNT(*) FROM entity_aspects WHERE entity_id = ? AND agent_id = ?) AS aspectCount,
-			(SELECT COUNT(*) FROM entity_attributes ea JOIN entity_aspects asp ON asp.id = ea.aspect_id
+		`${plan.sql} SELECT
+			(SELECT COUNT(*) FROM visible_aspects WHERE entity_id = ? AND agent_id = ?) AS aspectCount,
+			(SELECT COUNT(*) FROM visible_attributes ea JOIN visible_aspects asp ON asp.id = ea.aspect_id
 			 WHERE asp.entity_id = ? AND asp.agent_id = ? AND ea.agent_id = ?
 			 AND ea.kind = 'attribute' AND ea.status = 'active') AS attributeCount,
-			(SELECT COUNT(*) FROM entity_attributes ea JOIN entity_aspects asp ON asp.id = ea.aspect_id
+			(SELECT COUNT(*) FROM visible_attributes ea JOIN visible_aspects asp ON asp.id = ea.aspect_id
 			 WHERE asp.entity_id = ? AND asp.agent_id = ? AND ea.agent_id = ?
 			 AND ea.kind = 'constraint' AND ea.status = 'active') AS constraintCount,
-			(SELECT COUNT(*) FROM entity_dependencies
-			 WHERE (source_entity_id = ? OR target_entity_id = ?) AND agent_id = ?) AS dependencyCount`,
-		[entityId, agentId, entityId, agentId, agentId, entityId, agentId, agentId, entityId, entityId, agentId],
+			(SELECT COUNT(*) FROM visible_dependencies
+			 WHERE (source_entity_id = ? OR target_entity_id = ?) AND agent_id = ?) AS dependencyCount FROM visible_entities e WHERE e.id=? AND e.agent_id=?`,
+		[
+			...plan.params,
+			entityId,
+			agentId,
+			entityId,
+			agentId,
+			agentId,
+			entityId,
+			agentId,
+			agentId,
+			entityId,
+			entityId,
+			agentId,
+			entityId,
+			agentId,
+		],
 		{ operation: "knowledge.structural-density", deadlineMs: DB_OWNER_READ_DEADLINE_MS, estimatedWorkUnits: 4 },
 	);
 	return {
