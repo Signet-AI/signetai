@@ -60,6 +60,10 @@ test("desktop main-process remote boundary completes device login, shares CLI cr
 		const shared = await cli.load();
 		expect(shared?.source).toBe("keychain");
 		if (!shared) throw new Error("CLI did not observe desktop login");
+		expect(await desktop.sessionStatus()).toMatchObject({
+			organizationName: "Desktop Fixture",
+			expiresAt: shared.credential.accessExpiresAt,
+		});
 		const response = await desktop.proxy(new Request("app://signet/api/auth/whoami"));
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({ authenticated: true, user: { displayName: "Alice" } });

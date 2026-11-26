@@ -54,6 +54,8 @@ export interface RemoteStatus {
 	readonly state: "signed-out" | "signed-in" | "pending" | "expired" | "unreachable" | "forbidden" | "blocked";
 	readonly origin: string;
 	readonly message: string;
+	readonly organizationName?: string;
+	readonly expiresAt?: string | null;
 }
 
 const PRIVATE_AUTH_PATHS = new Set([
@@ -86,8 +88,18 @@ export class RemoteWorkspace {
 		this.transport = new SignetTransport({ baseUrl: this.origin, retries: 0 });
 		this.statusValue = { state: "signed-out", origin: this.origin, message: "Signed out" };
 	}
-	private status(state: RemoteStatus["state"], message: string): RemoteStatus {
-		this.statusValue = { state, origin: this.origin, message };
+	private status(
+		state: RemoteStatus["state"],
+		message: string,
+		session?: { organizationName: string; expiresAt: string | null },
+	): RemoteStatus {
+		this.statusValue = {
+			...(state === "signed-out" || state === "pending" ? {} : this.statusValue),
+			...session,
+			state,
+			origin: this.origin,
+			message,
+		};
 		return this.statusValue;
 	}
 	private failure(error: unknown): RemoteStatus {
@@ -194,7 +206,16 @@ export class RemoteWorkspace {
 		if (who.mode !== "team")
 			return this.status("blocked", "This instance is not an authenticated organization workspace.");
 		const user = object(who.user);
-		return this.status("signed-in", `Signed in as ${text(user.displayName)} at ${this.origin}`);
+		const organization = object(who.organization);
+		const credential = object(who.credential);
+		const expiresAt =
+			typeof credential.expiresAt === "string" && Number.isFinite(Date.parse(credential.expiresAt))
+				? credential.expiresAt
+				: null;
+		return this.status("signed-in", `Signed in as ${text(user.displayName)}`, {
+			organizationName: text(organization.name),
+			expiresAt,
+		});
 	}
 	async signOut(all = false): Promise<RemoteStatus> {
 		if (this.polling) throw new Error("Wait for the pending sign-in request before signing out");

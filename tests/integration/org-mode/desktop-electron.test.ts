@@ -172,6 +172,8 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 			expect(
 				await cdp.evaluate("document.querySelector('[data-mode=organization]').getAttribute('aria-checked')"),
 			).toBe("true");
+			expect(await cdp.evaluate("document.getElementById('signout').hidden")).toBe(true);
+			expect(await cdp.evaluate("document.getElementById('signin').hidden")).toBe(false);
 			const screenDir = process.env.SIGNET_DESKTOP_SCREEN_DIR;
 			if (screenDir) {
 				await mkdir(screenDir, { recursive: true });
@@ -212,6 +214,14 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 			await until(
 				async () => (await page.evaluate("document.getElementById('status').dataset.state")) === "signed-in",
 				"Signed-in workspace rendered",
+			);
+			expect(await cdp.evaluate("document.getElementById('signin').hidden")).toBe(true);
+			expect(await cdp.evaluate("document.getElementById('signout').hidden")).toBe(false);
+			expect(await cdp.evaluate("document.getElementById('signout').dataset.variant")).toBe("outline");
+			expect(await cdp.evaluate("document.getElementById('dashboard').dataset.variant")).toBe("default");
+			expect(await cdp.evaluate("document.getElementById('session-heading').textContent")).toBe("Desktop Fixture");
+			expect(await cdp.evaluate("document.getElementById('session-expiry').dateTime")).toBe(
+				saved.credential.accessExpiresAt,
 			);
 			if (screenDir) await cdp.screenshot(join(screenDir, "signed-in-remote-workspace.png"));
 			await cdp.evaluate("window.signetDesktop.openDashboard()");
