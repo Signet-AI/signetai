@@ -74,6 +74,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		pairLimits = new AuthRateLimiter(60_000, 5),
 		deviceLimits = new AuthRateLimiter(60_000, 20);
 	const openAuthPaths = new Set([
+		"/api/auth/handoff/redeem",
 		"/api/auth/login",
 		"/api/org/claim",
 		"/api/auth/refresh",

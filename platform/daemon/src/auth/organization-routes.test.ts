@@ -65,6 +65,35 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("dashboard handoff is single-use, cookie-only and bound to a live session", async () => {
+		await claim();
+		const issued = await call("/api/auth/handoff", "POST", {});
+		expect(issued.status).toBe(200);
+		const handoff = await issued.json();
+		expect(Date.parse(handoff.expiresAt) - Date.now()).toBeLessThanOrEqual(60_000);
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		expect(redeemed.status).toBe(200);
+		expect(
+			redeemed.headers
+				.getSetCookie()
+				.some((value) => value.startsWith("signet_session=") && value.includes("HttpOnly")),
+		).toBe(true);
+		expect(await redeemed.json()).not.toHaveProperty("accessToken");
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "")).status).toBe(401);
+		const device = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "handoff" }, "")
+		).json();
+		await call("/api/auth/device/approve", "POST", { userCode: device.userCode, decision: "approve" });
+		const login = await (await call("/api/auth/device/token", "POST", { deviceCode: device.deviceCode }, "")).json();
+		const key = await (
+			await call("/api/auth/connector-keys", "POST", { harness: "codex", deviceId: login.deviceId }, login.accessToken)
+		).json();
+		expect((await call("/api/auth/handoff", "POST", {}, key.secret)).status).toBe(403);
+		const revoked = await (await call("/api/auth/handoff", "POST", {})).json();
+		await call("/api/auth/logout", "POST", {});
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: revoked.code }, "")).status).toBe(401);
+	});
+
 	test("R6 POST recalls audit the published resolved agent and result count", async () => {
 		await claim();
 		const { registerGlobalMiddleware } = await import("../middleware");

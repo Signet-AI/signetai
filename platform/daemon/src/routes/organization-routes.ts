@@ -235,7 +235,19 @@ export function registerOrganizationRoutes(
 		"/api/auth/api-keys/:id",
 		active(async (c) => c.json(await operations.revokeKey(user(c), c.req.param("id") ?? ""))),
 	);
-	for (const path of ["/api/auth/token", "/api/auth/session", "/api/auth/handoff", "/api/auth/handoff/redeem"])
+	app.post(
+		"/api/auth/handoff",
+		active(async (c) => c.json(await operations.createDashboardHandoff(user(c)))),
+	);
+	app.post(
+		"/api/auth/handoff/redeem",
+		active(async (c) => {
+			const result = await operations.redeemDashboardHandoff(await body(c));
+			sessionCookies(c, result, c.get("organization"));
+			return c.json(browserResult(result));
+		}),
+	);
+	for (const path of ["/api/auth/token", "/api/auth/session"])
 		app.post(
 			path,
 			active(async () => {

@@ -29,6 +29,61 @@ import {
 import type { Principal } from "./principal";
 import { PERMISSIONS, type Permission } from "./types";
 
+interface DashboardHandoff {
+	readonly sessionId: string;
+	readonly userId: string;
+	readonly deviceId: string | null;
+	readonly expiresAt: number;
+}
+const dashboardHandoffs = new Map<string, DashboardHandoff>();
+export async function createDashboardHandoff(p: Principal) {
+	const user = requireUser(p);
+	if (p.credential.kind !== "session" || !p.sessionId)
+		throw new IdentityError(403, "permission", "Requires a signed-in user session");
+	const now = Date.now();
+	for (const [key, entry] of dashboardHandoffs) {
+		if (entry.expiresAt <= now) dashboardHandoffs.delete(key);
+	}
+	const pending = [...dashboardHandoffs.values()].filter((entry) => entry.sessionId === p.sessionId).length;
+	if (dashboardHandoffs.size >= 1000 || pending >= 5) throw new IdentityError(429, "rate_limit");
+	const code = secret();
+	const expiresAt = now + 60_000;
+	await organizationWrite([auditStatement(p, "session.handoff_created", "session", p.sessionId)]);
+	dashboardHandoffs.set(digest(code), { sessionId: p.sessionId, userId: user.userId, deviceId: p.deviceId, expiresAt });
+	return { code, expiresAt: new Date(expiresAt).toISOString() };
+}
+export async function redeemDashboardHandoff(input: unknown) {
+	const { code } = z
+		.object({ code: z.string().min(20).max(256) })
+		.strict()
+		.parse(input);
+	const key = digest(code);
+	const entry = dashboardHandoffs.get(key);
+	dashboardHandoffs.delete(key);
+	if (!entry || entry.expiresAt <= Date.now()) throw new IdentityError(401, "invalid_credential");
+	const user = await activeUser(entry.userId, entry.deviceId);
+	const material = sessionMaterial(user.id, "browser", entry.deviceId, await readOrganization());
+	await organizationWrite(
+		[
+			{
+				...statement(
+					"UPDATE auth_sessions SET last_used_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL AND access_expires_at>?",
+					[new Date().toISOString(), entry.sessionId, user.id, new Date().toISOString()],
+				),
+				requireChanges: true,
+			},
+			...material.statements,
+			auditStatement(null, "session.handoff_redeemed", "session", material.sessionId, {
+				userId: user.id,
+				sourceSessionId: entry.sessionId,
+			}),
+		],
+		401,
+	);
+	const { statements: _statements, ...result } = material;
+	return { ...result, user: userView(user) };
+}
+
 export const roleSchema = z.enum(["admin", "operator", "member", "readonly"]);
 const text = z.string().trim().min(1).max(128);
 export function requireUser(p: Principal | undefined): Principal & { userId: string } {
