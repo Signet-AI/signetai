@@ -69,6 +69,7 @@ test("A21 delivers a 10 MiB staged session-end with byte-exact evidence", async 
 				sessionKey,
 				reason: "session_shutdown",
 				transcriptUpload: { uploadId },
+				lastAssistantMessage: "Fallback reply must not supplement uploaded evidence.",
 			}),
 			"POST /api/hooks/session-end",
 		);

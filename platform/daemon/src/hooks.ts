@@ -2015,7 +2015,7 @@ async function appendSessionEndAssistantTurn(
 	sessionKey: string | undefined,
 	agentId: string,
 ): Promise<void> {
-	if (!sessionKey || req.transcriptPath || req.transcript?.trim()) return;
+	if (!sessionKey || req.transcriptUpload || req.transcriptPath || req.transcript?.trim()) return;
 	try {
 		await appendLiveAssistantTurn({
 			harness: req.harness,
