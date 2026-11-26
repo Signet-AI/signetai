@@ -92,6 +92,21 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 		expect(await session.signInWithPassword("alice", "password")).toEqual({ ok: true });
 		expect(localStorage.getItem("signet-token")).toBeNull();
 	});
+	test("content reads follow agent context without rewriting mutations", async () => {
+		const { getJSONResult } = await import("./api");
+		const { selectAgent } = await import("./agent-context");
+		const { scopedQueryKey } = await import("./query-cache");
+		const before = scopedQueryKey("memories");
+		selectAgent("eng-agent");
+		expect(scopedQueryKey("memories")).not.toBe(before);
+		await getJSONResult("/api/dream/status?agent_id=default");
+		expect(calls.at(-1)?.path).toBe("/api/dream/status?agentId=eng-agent");
+		await getJSONResult("/api/agents");
+		expect(calls.at(-1)?.path).toBe("/api/agents");
+		await getJSONResult("/api/memory/remember", { method: "POST", body: JSON.stringify({ agentId: "named-target" }) });
+		expect(calls.at(-1)?.init?.body).toBe(JSON.stringify({ agentId: "named-target" }));
+	});
+
 	test("organization permission checks fail closed when identity is unavailable", () => {
 		expect(session.can({ kind: "checking" }, "admin")).toBe(false);
 		expect(session.can({ kind: "unreachable", error: "offline" }, "admin")).toBe(false);

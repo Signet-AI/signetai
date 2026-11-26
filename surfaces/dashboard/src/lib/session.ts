@@ -53,6 +53,7 @@ export type Session =
 			readonly mode: string;
 			readonly providers: readonly SignInProvider[];
 			readonly organizationName?: string;
+			readonly whoami?: Whoami;
 			readonly reason: string | null;
 			readonly expired: boolean;
 			readonly renewal: boolean;
@@ -147,7 +148,9 @@ async function request(
 ): Promise<{ readonly status: number; readonly body: unknown; readonly retryAfter: string | null } | null> {
 	try {
 		const headers = new Headers(authHeaders());
-		new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+		new Headers(init.headers).forEach((value, key) => {
+			headers.set(key, value);
+		});
 		const res = await fetch(path, {
 			...init,
 			credentials: "same-origin",
@@ -215,7 +218,9 @@ function readWhoami(value: Record<string, unknown>): Whoami | undefined {
 
 export function useWhoami(): Whoami | null {
 	const session = useSession();
-	return session.kind === "signed-in" ? (session.whoami ?? null) : null;
+	return session.kind === "signed-in" || (session.kind === "signed-out" && session.expired)
+		? (session.whoami ?? null)
+		: null;
 }
 
 function readIdentity(value: unknown): Identity | null {
@@ -292,6 +297,7 @@ async function check(retry = true): Promise<void> {
 		expired: signedInOnce,
 		renewal: false,
 		permissions: knownPermissions(),
+		...(current.kind === "signed-in" && current.whoami ? { whoami: current.whoami } : {}),
 	});
 }
 
@@ -341,7 +347,7 @@ export function noteUnauthorized(): void {
 
 async function adopt(res: Awaited<ReturnType<typeof request>>): Promise<SignInResult> {
 	const token = res?.status === 200 && isRecord(res.body) ? text(res.body.token) : null;
-	if (!res || res.status !== 200) return { ok: false, error: "Signet did not return a session." };
+	if (res?.status !== 200) return { ok: false, error: "Signet did not return a session." };
 	writeToken(token);
 	await refreshSession();
 	return current.kind === "signed-in"
@@ -399,6 +405,7 @@ export function requestRenewal(): void {
 			mode: current.mode,
 			providers,
 			reason: "Sign in again to start a new session.",
+			...(current.whoami ? { whoami: current.whoami, organizationName: current.whoami.organization.name } : {}),
 			expired: true,
 			renewal: true,
 			permissions: current.permissions,

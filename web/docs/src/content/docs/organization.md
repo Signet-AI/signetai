@@ -86,6 +86,37 @@ Signet rejects disabling password login until an OIDC provider is configured. Ne
 
 Keep password login enabled until SSO is working. `requireSso` prevents password sign-in. Changing authentication policy does not revoke existing sessions; use session or device revocation when needed.
 
+## Organization commands
+
+The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL` and credentials, then the stored `daemon.url` from login. `--org` requires an organization target. `--local` ignores organization credentials and selects the loopback daemon. Switching targets does not rebind connected harnesses.
+
+Local filesystem and process commands (`start`, `stop`, `install`, `setup`, `migrate-schema`, `migrate-vectors`, `git`, `sync`, and `workspace`) refuse against a remote target. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
+
+Administrators can use:
+
+```bash
+signet org users list --json
+signet org users invite --email bob@example.com --role member --team grp_engineering --json
+signet org users role usr_bob readonly
+signet org users deactivate usr_bob
+signet org users deactivate usr_bob --mode transfer --transfer-to usr_alice --confirm --wait
+signet org users reactivate usr_bob
+signet org teams list
+signet org teams create payments
+signet org teams add grp_payments usr_bob --role owner
+signet org teams remove grp_payments usr_bob
+signet org teams show grp_payments
+signet org teams rename grp_payments billing
+signet org teams delete grp_payments
+signet org access usr_bob --json
+signet org jobs job_id --json
+signet audit --actor usr_bob --action user.deactivated --since 2026-11-01T00:00:00Z --json
+```
+
+Use server IDs for users and teams. Deactivation prints a plan unless `--confirm` is supplied. `--wait` follows the job for up to five minutes; a timeout does not cancel server work. Inspect its job ID before retrying.
+
+`signet classify memory:<id> --agent <agent-id> --as HR --wait` previews readable impact before submitting a classification job. Targets also accept `session:<key>`, `source:<id>`, and `agent:<id>`. `--json` returns the preview, job ID, and terminal job when waiting. Without `--json`, the preview is printed before dispatch. Classification authority and audience visibility are checked by the daemon, not inferred by the CLI.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.

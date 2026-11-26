@@ -23,6 +23,13 @@ export function describeTarget(mode: string): string {
 }
 
 function SignInForm({ session }: { session: SignedOut }) {
+	const providers = session.providers.filter(
+		(provider) =>
+			provider.enabled &&
+			provider.type !== "password" &&
+			provider.startPath?.startsWith("/api/auth/") &&
+			!provider.startPath.includes("\\"),
+	);
 	const password = session.providers.find((provider) => provider.type === "password" && provider.enabled);
 	const [useKey, setUseKey] = useState(!password);
 	const [username, setUsername] = useState(password?.username ?? "");
@@ -70,7 +77,9 @@ function SignInForm({ session }: { session: SignedOut }) {
 					{session.expired ? "Sign in again" : "Sign in to Signet"}
 				</h1>
 				<p className="m-0 rounded-full border px-2.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-					{describeTarget(session.mode)}
+					{session.organizationName
+						? `${session.organizationName} · ${typeof location === "undefined" ? "" : location.origin}`
+						: describeTarget(session.mode)}
 				</p>
 			</div>
 			{message && (
@@ -78,6 +87,11 @@ function SignInForm({ session }: { session: SignedOut }) {
 					{message}
 				</p>
 			)}
+			{providers.map((provider) => (
+				<Button key={provider.id} asChild variant="outline">
+					<a href={provider.startPath}>{provider.label ?? "Continue with SSO"}</a>
+				</Button>
+			))}
 			{useKey ? (
 				<FormField
 					id="signet-sign-in-key"
@@ -247,7 +261,16 @@ export function SessionChip({ session }: { session: Session }) {
 		<Popover.Root>
 			<Popover.Trigger asChild>
 				<Button variant="ghost" size="xs" className="sig-no-drag font-mono text-[10px] text-muted-foreground">
-					{describeTarget(session.mode)}
+					{session.whoami ? (
+						<>
+							<span className="flex size-5 items-center justify-center rounded-full border" aria-hidden="true">
+								{identity.name?.slice(0, 1)}
+							</span>
+							<span className="max-w-24 truncate">{identity.name}</span>
+						</>
+					) : (
+						describeTarget(session.mode)
+					)}
 				</Button>
 			</Popover.Trigger>
 			<Popover.Portal>
@@ -261,14 +284,53 @@ export function SessionChip({ session }: { session: Session }) {
 						<dd className="m-0 truncate font-mono" title={identity.sub}>
 							{identity.name ?? identity.sub}
 						</dd>
+						{session.whoami && (
+							<>
+								<dt className="text-muted-foreground">Organization</dt>
+								<dd className="m-0">{session.whoami.organization.name}</dd>
+								<dt className="text-muted-foreground">Instance</dt>
+								<dd className="m-0 break-all">{location.origin}</dd>
+							</>
+						)}
 						<dt className="text-muted-foreground">Role</dt>
 						<dd className="m-0 font-mono">{identity.role}</dd>
 						<dt className="text-muted-foreground">Expires</dt>
 						<dd className="m-0">{formatExpiry(identity.expiresAt)}</dd>
 					</dl>
-					<Button variant="secondary" size="sm" onClick={() => void signOut()}>
+					{session.whoami && (
+						<>
+							<Button asChild variant="outline" size="sm">
+								<a href="#account">My account</a>
+							</Button>
+							<Button asChild variant="outline" size="sm">
+								<a href="#account/devices">Devices and connectors</a>
+							</Button>
+						</>
+					)}
+					<Button
+						variant="secondary"
+						size="sm"
+						onClick={() =>
+							void signOut().catch((error: unknown) =>
+								toast.error(error instanceof Error ? error.message : "Sign-out failed."),
+							)
+						}
+					>
 						Sign out of this browser
 					</Button>
+					{session.whoami && (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() =>
+								void signOut(true).catch((error: unknown) =>
+									toast.error(error instanceof Error ? error.message : "Sign-out failed."),
+								)
+							}
+						>
+							Sign out everywhere
+						</Button>
+					)}
 				</Popover.Content>
 			</Popover.Portal>
 		</Popover.Root>

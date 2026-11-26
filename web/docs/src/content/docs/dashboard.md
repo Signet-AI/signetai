@@ -28,7 +28,21 @@ The dashboard asks `GET /api/auth/whoami` which permissions the signed-in creden
 
 Admins manage keys under **Settings → API keys**: list keys with role, agent, last use, and expiry; create a key, which is shown once with a copy button; and revoke a key after confirming. See [Teams](/teams/#4-create-a-key-for-each-teammate).
 
-Signing out clears the session from this browser only. Sessions are signed tokens that the daemon does not track, so revoking an API key stops new sign-ins with it but does not end dashboard sessions already started from it. Those sessions end when they expire.
+In organization mode, browser sessions use HttpOnly cookies and CSRF protection. The dashboard does not persist bearer credentials in browser storage. **Sign out of this browser** revokes the current session on the daemon. **Sign out everywhere** revokes all of your sessions. Neither action revokes connector keys; revoke a connector key or its device to stop capture. Legacy, unclaimed team deployments still use short-lived bearer sessions held only in browser memory.
+
+## Your organization account
+
+The identity menu shows your name, role, organization, instance origin, and session expiry. Open **My account** to inspect your profile and memberships, revoke sessions, manage devices and connector keys, create personal API keys, or create personal agents. Local mode shows none of these account screens.
+
+- **Devices and connectors** lists devices and their connector keys. Revoking a device also revokes its sessions and keys. **Connect a harness** provides commands to sign in from your computer and then connect a harness.
+- **Personal API keys** asks for a name, agent, expiry, and a subset of your permissions. Copy a new key immediately; dismissing it or leaving the page removes it from view. It cannot be revealed again.
+- **My agents** creates personal agents when organization policy allows it. Profile editing, identity-provider management markers, recent connector error history, and owner-only agent renaming require daemon support and are not yet available on this screen.
+
+The global agent switcher offers the organization agent, your team agents, and your personal agents. Content reads in Home, Memory, and Dreams follow this context. A denied panel explains its missing requirement without signing you out or replacing the rest of the page.
+
+For a new instance, open `/auth/claim` and paste the setup token printed by the daemon. Supply the organization name and first administrator’s details. Keep the bootstrap password until SSO is configured and verified.
+
+Open `/auth/device` while signed in, enter the code from the CLI or desktop app, and review the device name before approving or denying it. `/auth/invite` accepts an invitation token and lets password accounts choose their credentials. SSO invitation continuation requires a token-free handoff from the daemon; this screen reports that limitation instead of putting the invitation token into an SSO URL.
 
 ## Navigation and cached data
 
@@ -49,7 +63,7 @@ The cache retains at most 48 results and 12 MiB of serialized payloads, with a
 inactive results expire after five minutes. These are payload bounds, not a
 measurement of JavaScript heap usage. Parameterized reads, including constellation
 snapshots, memory searches, and individual Dreaming passes, have separate keys.
-The cache is scoped to the daemon origin and authentication token, and is
+The cache is scoped to the daemon origin, credential, and selected agent, and is
 cleared when the daemon rejects a request as unauthenticated (401). A refused
 request (403) leaves other cached panels in place. Successful dashboard mutations invalidate the affected
 queries for background refresh. The cache is never

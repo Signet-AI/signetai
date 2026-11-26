@@ -1,4 +1,5 @@
 import { dashboardQueryCache } from "./query-cache";
+import { selectedAgentId } from "./agent-context";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
@@ -37,15 +38,33 @@ function invalidateMutation(path: string): void {
 	);
 }
 
+function agentReadPath(path: string): string {
+	const agentId = selectedAgentId();
+	if (
+		!agentId ||
+		!/^\/api\/(?:status|memory|memories|knowledge|ontology|dream|reflections|sessions|sources|analytics)(?:[/?]|$)/.test(
+			path,
+		)
+	)
+		return path;
+	const url = new URL(path, "http://dashboard.invalid");
+	url.searchParams.delete("agent_id");
+	url.searchParams.set("agentId", agentId);
+	return `${url.pathname}${url.search}`;
+}
+
 export async function dashboardFetch(path: string, init?: RequestInit): Promise<Response> {
 	if (onboardingPreview) return onboardingPreviewFetch(path, init);
 	const method = init?.method?.toUpperCase() ?? "GET";
+	if (method === "GET") path = agentReadPath(path);
 	const accept = new Headers(init?.headers).get("accept") ?? "";
 	const isEventStream = accept.includes("text/event-stream");
 	const deadline = method === "GET" && !isEventStream ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
 	const headers = new Headers(authHeaders());
-	new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+	new Headers(init?.headers).forEach((value, key) => {
+		headers.set(key, value);
+	});
 	const response = await fetch(path, { ...init, credentials: "same-origin", headers, signal });
 	if (response.status === 401) {
 		noteUnauthorized();
@@ -133,6 +152,7 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 }
 let constellation: { readonly path: string; readonly etag: string; readonly data: KnowledgeConstellation } | undefined;
 async function getConstellation(path: string): Promise<KnowledgeConstellation | null> {
+	path = agentReadPath(path);
 	const known = constellation?.path === path ? constellation : undefined;
 	const res = await dashboardFetch(`${API_BASE}${path}`, {
 		cache: "no-store",

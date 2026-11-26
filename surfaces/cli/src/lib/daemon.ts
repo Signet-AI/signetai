@@ -4,6 +4,7 @@ import { formatYaml } from "@signet/core";
 import { join } from "node:path";
 import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
+import { cliAgent, cliTransport } from "./organization-target.js";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 
@@ -125,6 +126,23 @@ export function createDaemonClient(
 		opts?: RequestInit & { timeout?: number },
 	): Promise<DaemonFetchResult<T>> => {
 		const { timeout, ...fetchOpts } = opts || {};
+		const remote = cliTransport();
+		if (remote) {
+			if (fetchOpts.body !== undefined && typeof fetchOpts.body !== "string")
+				throw new Error("This organization operation requires a JSON request body");
+			return {
+				ok: true,
+				data: await remote.request<T>(fetchOpts.method ?? "GET", path, {
+					body: typeof fetchOpts.body === "string" ? JSON.parse(fetchOpts.body) : undefined,
+					headers: {
+						...Object.fromEntries(new Headers(fetchOpts.headers)),
+						...(cliAgent() ? { "x-signet-agent-id": cliAgent() } : {}),
+					},
+					signal: fetchOpts.signal ?? undefined,
+					timeoutMs: timeout ?? 5000,
+				}),
+			};
+		}
 		try {
 			const res = await fetch(`${url}${path}`, {
 				...fetchOpts,
@@ -190,6 +208,8 @@ export function createDaemonClient(
 		body?: unknown,
 		timeoutMs = 5_000,
 	): Promise<{ readonly ok: boolean; readonly data: unknown }> => {
+		const remote = cliTransport();
+		if (remote) return { ok: true, data: await remote.request(method, path, { body, timeoutMs }) };
 		try {
 			const res = await fetch(`${url}${path}`, {
 				method,

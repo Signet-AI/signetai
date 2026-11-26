@@ -34,11 +34,42 @@ if (!process.env.SIGNET_SIGN_IN_FORM_CHILD) {
 		restore();
 	});
 
+	test("organization sign-in names the organization and offers configured SSO", async () => {
+		const { createRoot } = await import("react-dom/client");
+		const { SignInScreen } = await import("./sign-in");
+		await act(async () => root?.unmount());
+		const container = document.createElement("div");
+		document.body.replaceChildren(container);
+		root = createRoot(container);
+		await act(async () =>
+			root?.render(
+				<SignInScreen
+					session={{
+						kind: "signed-out",
+						mode: "team",
+						organizationName: "Acme",
+						providers: [
+							{ id: "oidc", type: "oidc", enabled: true, label: "Company SSO", startPath: "/api/auth/sso/start" },
+						],
+						reason: null,
+						expired: false,
+						renewal: false,
+						permissions: [],
+					}}
+				/>,
+			),
+		);
+		expect(container.textContent).toContain("Acme");
+		expect(container.querySelector('a[href="/api/auth/sso/start"]')?.textContent).toBe("Company SSO");
+	});
+
 	const wait = (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
 	const submit = () => document.querySelector<HTMLButtonElement>("button[type=submit]");
 	const alertText = () => document.querySelector("[role=alert]")?.textContent ?? null;
 
 	test("a rate-limited sign-in counts down, then clears and re-enables", async () => {
+		await act(async () => root?.unmount());
+		document.body.replaceChildren();
 		const { createRoot } = await import("react-dom/client");
 		const { SignInScreen } = await import("./sign-in");
 		const container = document.createElement("div");
