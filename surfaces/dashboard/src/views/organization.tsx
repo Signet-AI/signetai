@@ -166,7 +166,7 @@ function UsersSection() {
 	for (const [key, value] of Object.entries({ q, status, role, group })) if (value) query.set(key, value);
 	return (
 		<div className="flex flex-col gap-6">
-			<div className="grid gap-3 sm:grid-cols-2">
+			<div className="flex flex-col gap-3">
 				<TextField label="Search people" value={q} onChange={setQ} />
 				<Choice
 					label="User status"
@@ -184,7 +184,19 @@ function UsersSection() {
 					onChange={setRole}
 					options={[{ value: "", label: "All roles" }, ...ORGANIZATION_ROLES.map((value) => ({ value, label: value }))]}
 				/>
-				<TextField label="Team ID filter" value={group} onChange={setGroup} />
+				<OrganizationResource<{ groups: readonly OrganizationGroup[] }> path="/api/org/groups">
+					{(data) => (
+						<Choice
+							label="Team"
+							value={group}
+							onChange={setGroup}
+							options={[
+								{ value: "", label: "All teams" },
+								...data.groups.map((team) => ({ value: team.id, label: team.name })),
+							]}
+						/>
+					)}
+				</OrganizationResource>
 			</div>
 			<OrganizationResource<{ users: readonly OrganizationUserRow[] }>
 				path={`/api/org/users?${query}`}

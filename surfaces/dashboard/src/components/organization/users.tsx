@@ -1,4 +1,13 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { displayLabel } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import {
 	ORGANIZATION_PERMISSIONS,
@@ -135,26 +144,61 @@ export function OffboardingWizard({
 	);
 }
 
+function UserActions({
+	user,
+	busy,
+	onRole,
+	onOffboard,
+	onReactivate,
+}: {
+	user: OrganizationUser;
+	busy: boolean;
+	onRole: () => void;
+	onOffboard: () => void;
+	onReactivate: () => void;
+}) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button variant="ghost" size="compact" aria-label={`Actions for ${user.displayName}`} disabled={busy}>
+					⋯
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				<DropdownMenuItem onSelect={onRole}>Change role…</DropdownMenuItem>
+				{user.status === "active" ? (
+					<DropdownMenuItem variant="destructive" onSelect={onOffboard}>
+						Offboard…
+					</DropdownMenuItem>
+				) : (
+					<DropdownMenuItem onSelect={onReactivate}>Reactivate</DropdownMenuItem>
+				)}
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
 export function UsersContent({ users, refresh }: { users: readonly OrganizationUser[]; refresh: () => void }) {
 	const [selected, setSelected] = useState<OrganizationUser | null>(null);
+	const [roleUser, setRoleUser] = useState<OrganizationUser | null>(null);
+	const [nextRole, setNextRole] = useState("member");
 	const [email, setEmail] = useState("");
 	const [role, setRole] = useState("member");
 	const [invite, setInvite] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
-	const update = async (user: OrganizationUser, nextRole?: string) => {
+	const update = async (user: OrganizationUser, newRole?: string) => {
 		setBusy(true);
-		const result = await getJSONResult(
-			`/api/org/users/${encodeURIComponent(user.id)}${nextRole ? "" : "/reactivate"}`,
-			{
-				method: nextRole ? "PATCH" : "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(nextRole ? { role: nextRole } : {}),
-			},
-		);
+		const result = await getJSONResult(`/api/org/users/${encodeURIComponent(user.id)}${newRole ? "" : "/reactivate"}`, {
+			method: newRole ? "PATCH" : "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(newRole ? { role: newRole } : {}),
+		});
 		setBusy(false);
 		setError(result.error);
-		if (result.data) refresh();
+		if (result.data) {
+			setRoleUser(null);
+			refresh();
+		}
 	};
 	const createInvite = async () => {
 		setBusy(true);
@@ -168,10 +212,22 @@ export function UsersContent({ users, refresh }: { users: readonly OrganizationU
 		setError(result.error);
 		setInvite(result.data?.inviteUrl ?? null);
 	};
+	const actions = (user: OrganizationUser) => (
+		<UserActions
+			user={user}
+			busy={busy}
+			onRole={() => {
+				setRoleUser(user);
+				setNextRole(user.role);
+			}}
+			onOffboard={() => setSelected(user)}
+			onReactivate={() => void update(user)}
+		/>
+	);
 	return (
 		<div className="flex flex-col gap-6">
 			<Message error={error} />
-			{selected ? (
+			{selected && (
 				<OffboardingWizard
 					user={selected}
 					users={users}
@@ -180,81 +236,119 @@ export function UsersContent({ users, refresh }: { users: readonly OrganizationU
 						refresh();
 					}}
 				/>
-			) : (
-				<>
-					<OrganizationBlock title="People">
-						<OrganizationTable columns={["Person", "Role", "Status", "Last active", "Actions"]}>
-							{users.map((user) => (
-								<tr key={user.id} className={rowClass}>
-									<td className={cellClass}>
-										<div>{user.displayName}</div>
-										<div className="text-muted-foreground">
-											{user.username} · {user.email}
-										</div>
-									</td>
-									<td className={cellClass}>
-										<Choice
-											label={`Role for ${user.username}`}
-											value={user.role}
-											onChange={(value) => void update(user, value)}
-											options={ORGANIZATION_ROLES.map((value) => ({ value, label: value }))}
-										/>
-									</td>
-									<td className={cellClass}>
-										{user.status}
-										{user.compliance ? " · compliance" : ""}
-									</td>
-									<td className={cellClass}>
-										<DateValue value={user.lastActiveAt} />
-									</td>
-									<td className={cellClass}>
-										<Action
-											secondary
-											disabled={busy}
-											onClick={() => (user.status === "active" ? setSelected(user) : void update(user))}
-										>
-											{user.status === "active" ? "Offboard…" : "Reactivate"}
-										</Action>
-									</td>
-								</tr>
-							))}
-						</OrganizationTable>
-					</OrganizationBlock>
-					<OrganizationBlock title="Invite a person">
-						<div className="grid gap-3 sm:grid-cols-2">
-							<TextField label="Invitation email" type="email" value={email} onChange={setEmail} />
-							<Choice
-								label="Invitation role"
-								value={role}
-								onChange={setRole}
-								options={ORGANIZATION_ROLES.map((value) => ({ value, label: value }))}
-							/>
-						</div>
-						<Action disabled={busy} onClick={() => void createInvite()}>
-							Create invitation
-						</Action>
-						{invite && (
-							<div role="status" className="flex flex-col gap-2">
-								<p>This invitation is shown once. Copy it now.</p>
-								<code className="break-all select-all">{invite}</code>
-								<Action
-									secondary
-									onClick={() => {
-										void navigator.clipboard
-											.writeText(invite)
-											.catch(() => setError("Copy failed. Select the invitation manually."));
-									}}
-								>
-									Copy invitation
-								</Action>
-								<Action secondary onClick={() => setInvite(null)}>
-									Dismiss invitation
-								</Action>
-							</div>
-						)}
-					</OrganizationBlock>
-				</>
 			)}
+			<OrganizationBlock title="People">
+				<div className="hidden sm:block">
+					<OrganizationTable columns={["Person", "Role", "Status", "Last active", ""]}>
+						{users.map((user) => (
+							<tr key={user.id} className={rowClass}>
+								<td className={cellClass}>
+									<div>{user.displayName}</div>
+									<div className="text-muted-foreground">{[user.username, user.email].filter(Boolean).join(" · ")}</div>
+								</td>
+								<td className={cellClass}>{displayLabel(user.role)}</td>
+								<td className={cellClass}>
+									{displayLabel(user.status)}
+									{user.compliance ? " · Compliance" : ""}
+								</td>
+								<td className={cellClass}>
+									<DateValue value={user.lastActiveAt} />
+								</td>
+								<td className={cellClass}>{actions(user)}</td>
+							</tr>
+						))}
+					</OrganizationTable>
+				</div>
+				<ul className="m-0 list-none divide-y p-0 sm:hidden">
+					{users.map((user) => (
+						<li key={user.id} className="py-4">
+							<div className="flex items-start justify-between gap-3">
+								<div className="min-w-0">
+									<p className="m-0 font-medium">{user.displayName}</p>
+									<p className="m-0 break-words text-small text-muted-foreground">
+										{[user.username, user.email].filter(Boolean).join(" · ")}
+									</p>
+								</div>
+								{actions(user)}
+							</div>
+							<dl className="mt-3 grid grid-cols-2 gap-2 text-small">
+								<dt className="text-muted-foreground">Role</dt>
+								<dd>{displayLabel(user.role)}</dd>
+								<dt className="text-muted-foreground">Status</dt>
+								<dd>
+									{displayLabel(user.status)}
+									{user.compliance ? " · Compliance" : ""}
+								</dd>
+								<dt className="text-muted-foreground">Last active</dt>
+								<dd>
+									<DateValue value={user.lastActiveAt} />
+								</dd>
+							</dl>
+						</li>
+					))}
+				</ul>
+			</OrganizationBlock>
+			<ConfirmationDialog
+				open={roleUser !== null}
+				onOpenChange={(open) => {
+					if (!open && !busy) setRoleUser(null);
+				}}
+				title={`Change ${roleUser?.displayName ?? "user"}'s role`}
+				description={`Change from ${displayLabel(roleUser?.role ?? "")} to ${displayLabel(nextRole)}. This changes their organization permissions.`}
+				actions={
+					<>
+						<Action secondary disabled={busy} onClick={() => setRoleUser(null)}>
+							Cancel
+						</Action>
+						<Action
+							disabled={busy || nextRole === roleUser?.role}
+							onClick={() => {
+								if (roleUser) void update(roleUser, nextRole);
+							}}
+						>
+							Confirm role change
+						</Action>
+					</>
+				}
+			>
+				<Choice
+					label="New role"
+					value={nextRole}
+					onChange={setNextRole}
+					options={ORGANIZATION_ROLES.map((value) => ({ value, label: displayLabel(value) }))}
+				/>
+			</ConfirmationDialog>
+			<OrganizationBlock title="Invite a person">
+				<TextField label="Email" type="email" value={email} onChange={setEmail} />
+				<Choice
+					label="Invitation role"
+					value={role}
+					onChange={setRole}
+					options={ORGANIZATION_ROLES.map((value) => ({ value, label: displayLabel(value) }))}
+				/>
+				<Action disabled={busy} onClick={() => void createInvite()}>
+					Create invitation
+				</Action>
+				{invite && (
+					<div role="status" className="flex flex-col gap-2">
+						<p>This invitation is shown once. Copy it now.</p>
+						<code className="break-all select-all">{invite}</code>
+						<Action
+							secondary
+							onClick={() => {
+								void navigator.clipboard
+									.writeText(invite)
+									.catch(() => setError("Copy failed. Select the invitation manually."));
+							}}
+						>
+							Copy invitation
+						</Action>
+						<Action secondary onClick={() => setInvite(null)}>
+							Dismiss invitation
+						</Action>
+					</div>
+				)}
+			</OrganizationBlock>
 		</div>
 	);
 }

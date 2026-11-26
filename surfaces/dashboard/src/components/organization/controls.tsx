@@ -1,8 +1,24 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect } from "@/components/ui/field";
+import { Input } from "@/components/ui/field";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { GroupLabel } from "@/components/settings/controls";
 
+export function displayLabel(value: string): string {
+	const labels: Readonly<Record<string, string>> = {
+		admin: "Administrator",
+		readonly: "Read only",
+		apiKeys: "API keys",
+		sessions: "Active sessions",
+		memories: "Memories",
+		transcripts: "Transcripts",
+		agents: "Agents",
+		keep: "Keep",
+		transfer: "Transfer",
+		purge: "Purge",
+	};
+	return labels[value] ?? value.replaceAll(/[_-]/g, " ").replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
+}
 export function OrganizationBlock({
 	title,
 	description,
@@ -33,19 +49,30 @@ export function TextField({
 	type?: string;
 	required?: boolean;
 }) {
-	const id = `org-${label.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
+	const id = useId();
 	return (
-		<Field label={label} htmlFor={id}>
-			<Input id={id} type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} />
-		</Field>
+		<div className="settings-row">
+			<label className="settings-row-title" htmlFor={id}>
+				{label}
+			</label>
+			<div className="settings-control">
+				<Input
+					id={id}
+					type={type}
+					value={value}
+					required={required}
+					onChange={(event) => onChange(event.target.value)}
+				/>
+			</div>
+		</div>
 	);
 }
+const NONE = "__none__";
 export function Choice({
 	label,
 	value,
 	onChange,
 	options,
-	required = false,
 }: {
 	label: string;
 	value: string;
@@ -53,23 +80,25 @@ export function Choice({
 	options: readonly { value: string; label: string }[];
 	required?: boolean;
 }) {
-	const id = `org-${label.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
+	const id = useId();
 	return (
-		<Field label={label} htmlFor={id}>
-			<NativeSelect
-				id={id}
-				aria-label={label}
-				value={value}
-				required={required}
-				onChange={(event) => onChange(event.target.value)}
-			>
-				{options.map((option) => (
-					<option key={option.value} value={option.value}>
-						{option.label}
-					</option>
-				))}
-			</NativeSelect>
-		</Field>
+		<div className="settings-row">
+			<label className="settings-row-title" htmlFor={id}>
+				{label}
+			</label>
+			<Select value={value || NONE} onValueChange={(next) => onChange(next === NONE ? "" : next)}>
+				<SelectTrigger id={id} size="compact" aria-label={label} className="settings-control">
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent position="popper" align="start" className="ui-select-menu max-h-80">
+					{options.map((option) => (
+						<SelectItem key={option.value || NONE} value={option.value || NONE}>
+							{option.label}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+		</div>
 	);
 }
 export function Action({
@@ -77,17 +106,20 @@ export function Action({
 	onClick,
 	disabled = false,
 	secondary = false,
+	destructive = false,
 }: {
 	children: ReactNode;
 	onClick: () => void;
 	disabled?: boolean;
 	secondary?: boolean;
+	destructive?: boolean;
 }) {
 	return (
 		<Button
+			className="self-start"
 			type="button"
 			size="compact"
-			variant={secondary ? "outline" : "default"}
+			variant={destructive ? "destructive" : secondary ? "outline" : "default"}
 			disabled={disabled}
 			onClick={onClick}
 		>
@@ -101,8 +133,12 @@ export function OrganizationTable({ columns, children }: { columns: readonly str
 			<table className="w-full min-w-xl text-left text-small">
 				<thead>
 					<tr className="border-b">
-						{columns.map((column) => (
-							<th key={column} scope="col" className="px-2 py-2 font-medium text-muted-foreground">
+						{columns.map((column, index) => (
+							<th
+								key={column || `actions-${index}`}
+								scope="col"
+								className="px-2 py-2 font-medium text-muted-foreground"
+							>
 								{column}
 							</th>
 						))}
@@ -113,7 +149,7 @@ export function OrganizationTable({ columns, children }: { columns: readonly str
 		</div>
 	);
 }
-export const cellClass = "px-2 py-2 align-top";
+export const cellClass = "px-2 py-3 align-top";
 export const rowClass = "border-b hover:bg-muted/50";
 export function Message({ error }: { error: string | null }) {
 	return error ? (

@@ -1,6 +1,30 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OffboardingWizard, RolesMatrix } from "./users";
+import { OffboardingWizard, RolesMatrix, UsersContent } from "./users";
+
+test("people use explicit row actions and stacked mobile cards", () => {
+	const html = renderToStaticMarkup(
+		<UsersContent
+			users={[
+				{
+					id: "usr_bob",
+					username: "bob",
+					displayName: "Bob",
+					email: null,
+					role: "member",
+					compliance: false,
+					status: "active",
+				},
+			]}
+			refresh={() => {}}
+		/>,
+	);
+	expect(html).not.toContain("Role for bob");
+	expect(html).not.toContain("bob ·");
+	expect(html).toContain("Actions for Bob");
+	expect(html).toContain("sm:hidden");
+	expect(html).toContain("Member");
+});
 
 test("offboarding starts with preview, not a destructive submit", () => {
 	const html = renderToStaticMarkup(
