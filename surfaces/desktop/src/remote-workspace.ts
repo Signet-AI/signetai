@@ -187,20 +187,26 @@ export class RemoteWorkspace {
 		const response = await this.proxy(new Request("app://signet/api/auth/whoami"));
 		if (!response.ok) return this.statusValue;
 		const who = object(await response.json());
-		if (who.authenticated !== true || who.mode !== "team")
+		if (who.authenticated !== true) return this.status("expired", "Session expired or revoked. Sign in again.");
+		if (who.mode !== "team")
 			return this.status("blocked", "This instance is not an authenticated organization workspace.");
 		const user = object(who.user);
 		return this.status("signed-in", `Signed in as ${text(user.displayName)} at ${this.origin}`);
 	}
-	async signOut(): Promise<RemoteStatus> {
+	async signOut(all = false): Promise<RemoteStatus> {
 		if (this.polling) throw new Error("Wait for the pending sign-in request before signing out");
 		this.flow = null;
-		const token = await this.login.accessToken();
+		let token: string | null = null;
+		try {
+			token = await this.login.accessToken();
+		} catch (error) {
+			if (!(error instanceof SignetUnauthorizedError)) throw error;
+		}
 		if (token) {
 			const response = await fetch(`${this.origin}/api/auth/logout`, {
 				method: "POST",
 				headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-				body: "{}",
+				body: JSON.stringify({ all }),
 				redirect: "error",
 				signal: AbortSignal.timeout(10_000),
 			});
@@ -216,6 +222,26 @@ export class RemoteWorkspace {
 			path = decodeURIComponent(new URL(request.url).pathname).replace(/\/+$/, "");
 		} catch {
 			return Response.json({ error: "Invalid route" }, { status: 400 });
+		}
+		if (path === "/api/auth/logout") {
+			if (request.method !== "POST") return Response.json({ error: "Use POST" }, { status: 405 });
+			let all = false;
+			try {
+				const encoded = await request.text();
+				if (encoded.length > 1024) throw new Error("Logout body is too large");
+				const payload = object(encoded ? JSON.parse(encoded) : {});
+				if (payload.all !== undefined && typeof payload.all !== "boolean") throw new Error("Invalid logout scope");
+				all = payload.all === true;
+			} catch {
+				return Response.json({ error: "Invalid logout request" }, { status: 400 });
+			}
+			try {
+				await this.signOut(all);
+				return Response.json({ ok: true });
+			} catch (error) {
+				const status = this.failure(error);
+				return Response.json({ error: status.message }, { status: 502 });
+			}
 		}
 		if (
 			PRIVATE_AUTH_PATHS.has(path) ||
@@ -261,11 +287,17 @@ export class RemoteWorkspace {
 			const responseHeaders = new Headers(response.headers);
 			responseHeaders.delete("set-cookie");
 			if (response.status === 401) this.status("expired", "Session expired or revoked. Sign in again.");
+			if (response.status >= 500) this.status("unreachable", `Instance returned HTTP ${response.status}. Try again.`);
 			if (response.status === 403) {
-				const denied = object(await response.clone().json());
+				const denied: unknown = await response
+					.clone()
+					.json()
+					.catch(() => null);
 				this.status(
 					"forbidden",
-					typeof denied.required === "string" ? denied.required : "Signed in, but not permitted (403).",
+					typeof denied === "object" && denied !== null && "required" in denied && typeof denied.required === "string"
+						? denied.required
+						: "Signed in, but not permitted (403).",
 				);
 			}
 			return new Response(response.body, {

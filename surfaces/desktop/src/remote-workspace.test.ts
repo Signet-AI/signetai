@@ -110,6 +110,104 @@ describe("desktop remote workspace", () => {
 		}
 	});
 
+	test("HTTP failures stay honest and offline logout retains retryable shared credentials", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-failures-"));
+		let status = 503;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				return new Response("Instance proxy failure", { status });
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			await login.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			expect(await desktop.sessionStatus()).toMatchObject({ state: "unreachable" });
+			status = 403;
+			expect(await desktop.sessionStatus()).toMatchObject({ state: "forbidden" });
+			status = 401;
+			expect(await desktop.sessionStatus()).toMatchObject({ state: "expired" });
+			server.stop(true);
+			await expect(desktop.signOut()).rejects.toThrow();
+			expect((await login.load())?.credential).toEqual(credential);
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("expired or revoked sessions remain distinguishable and can be signed out", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-expired-"));
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				return Response.json({ authenticated: false, mode: "team" });
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			await login.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			expect(await desktop.sessionStatus()).toMatchObject({ state: "expired" });
+			await login.save({
+				...credential,
+				accessExpiresAt: "2000-01-01T00:00:00Z",
+				refreshExpiresAt: "2000-02-01T00:00:00Z",
+			});
+			expect(await desktop.signOut()).toMatchObject({ state: "signed-out" });
+			expect(await login.load()).toBeNull();
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("dashboard logout revokes through the owner and clears the CLI login", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-logout-"));
+		let revoked = false;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (new URL(request.url).pathname !== "/api/auth/logout") return new Response(null, { status: 404 });
+				revoked =
+					request.headers.get("authorization") === `Bearer ${credential.accessToken}` &&
+					(await request.text()) === JSON.stringify({ all: true });
+				return Response.json({ ok: true });
+			},
+		});
+		try {
+			const options = { env: { HOME: root, APPDATA: root }, keyring: disposableKeyring() };
+			const cli = new LoginStore(server.url.origin, options);
+			await cli.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, {
+				login: new LoginStore(server.url.origin, options),
+				openExternal: async () => {},
+			});
+			expect(
+				(
+					await desktop.proxy(
+						new Request("app://signet/api/auth/logout", { method: "POST", body: JSON.stringify({ all: true }) }),
+					)
+				).status,
+			).toBe(200);
+			expect(revoked).toBe(true);
+			expect(await cli.load()).toBeNull();
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	test("CLI and desktop share the same credential and proxy hides tokens", async () => {
 		const root = await mkdtemp(join(tmpdir(), "desktop-login-"));
 		const server = Bun.serve({

@@ -143,7 +143,14 @@ function dashboardFile(url: string): string {
 }
 
 async function proxyDaemonRoute(request: Request): Promise<Response> {
-	if (remoteWorkspace) return remoteWorkspace.proxy(request);
+	if (remoteWorkspace) {
+		const response = await remoteWorkspace.proxy(request);
+		if (new URL(request.url).pathname === "/api/auth/logout" && response.ok) {
+			dashboardHasLoaded = false;
+			showDashboard();
+		}
+		return response;
+	}
 	if (!selectedWorkspace) return Response.json({ error: "Workspace is not ready" }, { status: 503 });
 	const target = daemonRouteTarget(daemon.baseUrl, request.url);
 	const headers = new Headers(request.headers);
