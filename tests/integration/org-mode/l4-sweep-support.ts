@@ -146,11 +146,13 @@ export class WriteSweep {
 		await this.daemon.start();
 		await until(
 			async () => {
-				return this.read(
-					(db) => !db.query("SELECT 1 FROM session_recall_events WHERE session_key='l4-expired-telemetry'").get(),
+				const output = `${this.daemon.stdout}\n${this.daemon.stderr}`.replace(
+					new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"),
+					"",
 				);
+				return /\[document-worker\]\s+Worker started/.test(output) && /\[retention\]\s+Worker started/.test(output);
 			},
-			"seeded telemetry retention completed",
+			"document and retention workers started",
 			60_000,
 		);
 	}
