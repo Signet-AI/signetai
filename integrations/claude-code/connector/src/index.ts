@@ -1,5 +1,5 @@
 import { NodeTransport, resolveTarget } from "@signet/sdk/node";
-import { SignetUnauthorizedError } from "@signet/sdk";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -157,16 +157,26 @@ export async function dispatchSessionEndFireAndForget(
 	payload: SessionEndFireAndForgetPayload,
 ): Promise<boolean> {
 	try {
-		const target = await resolveTarget({ harness: "claude-code", configUrl: daemonUrl });
-		const transport = new NodeTransport(target, { headers: { "x-signet-runtime-path": "legacy" } });
-		await transport.post("/api/hooks/session-end", payload);
-		return true;
-	} catch (error) {
-		console.warn(
-			error instanceof SignetUnauthorizedError
-				? "Signet session expired, run `signet login`"
-				: "[signet] session-end delivery failed; inspect the connector outbox",
-		);
+		const launcher = resolveSignetCliCommand();
+		const env = { ...process.env };
+		if (!env.SIGNET_DAEMON_URL && !env.SIGNET_HOST && !env.SIGNET_PORT) env.SIGNET_DAEMON_URL = daemonUrl;
+		const child = spawn(launcher.command, [...launcher.args, "hook", "session-end", "--harness", "claude-code"], {
+			detached: true,
+			stdio: ["pipe", "ignore", "ignore"],
+			env,
+		});
+		child.stdin.on("error", () => console.warn("[signet] session-end dispatch input failed"));
+		child.stdin.end(JSON.stringify(payload));
+		child.unref();
+		return await new Promise<boolean>((resolve) => {
+			child.once("spawn", () => resolve(true));
+			child.once("error", () => {
+				console.warn("[signet] session-end dispatch startup failed");
+				resolve(false);
+			});
+		});
+	} catch {
+		console.warn("[signet] session-end dispatch startup failed");
 		return false;
 	}
 }

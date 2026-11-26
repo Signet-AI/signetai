@@ -33,7 +33,62 @@ afterEach(() => {
 });
 
 describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => {
+	it("returns before a stalled daemon acknowledges session-end", async () => {
+		let release = () => {};
+		let requested = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const received = new Promise<void>((resolve) => {
+			requested = resolve;
+		});
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (request.method === "POST") {
+					requested();
+					await gate;
+				}
+				return Response.json({ success: true });
+			},
+		});
+		const previousLauncher = process.env.SIGNET_HOOK_COMMAND;
+		process.env.SIGNET_HOOK_COMMAND = JSON.stringify([
+			process.execPath,
+			new URL("../../../surfaces/cli/dist/cli.js", import.meta.url).pathname,
+		]);
+		const script = `import { ClaudeCodeConnector } from ${JSON.stringify(new URL("./src/index.ts", import.meta.url).pathname)}; await new ClaudeCodeConnector({ daemonUrl: ${JSON.stringify(server.url.origin)} }).onSessionEnd({ sessionId: "nonblocking-exit" });`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			env: { ...process.env },
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		try {
+			await Promise.race([
+				received,
+				Bun.sleep(3000).then(() => {
+					throw new Error("Detached delivery never arrived");
+				}),
+			]);
+			const winner = await Promise.race([child.exited.then(() => "exited"), Bun.sleep(300).then(() => "blocked")]);
+			expect(winner).toBe("exited");
+			expect(await child.exited).toBe(0);
+		} finally {
+			release();
+			await child.exited;
+			server.stop(true);
+			if (previousLauncher === undefined) delete process.env.SIGNET_HOOK_COMMAND;
+			else process.env.SIGNET_HOOK_COMMAND = previousLauncher;
+		}
+	});
+
 	it.each([false, true])("delivers session-end through the canonical transport; credential=%s", async (remote) => {
+		const previousLauncher = process.env.SIGNET_HOOK_COMMAND;
+		process.env.SIGNET_HOOK_COMMAND = JSON.stringify([
+			process.execPath,
+			new URL("../../../surfaces/cli/dist/cli.js", import.meta.url).pathname,
+		]);
 		const requests: unknown[] = [];
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -59,17 +114,23 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 				transcriptPath: join(tmpRoot, "transcript.jsonl"),
 			};
 			expect(await dispatchSessionEndFireAndForget(server.url.origin, payload)).toBe(true);
+			const deadline = Date.now() + 3000;
+			while (!requests.length && Date.now() < deadline) await Bun.sleep(5);
 			expect(requests).toEqual([
 				{
 					path: "/api/hooks/session-end",
 					contentType: "application/json",
-					body: remote
-						? { harness: "claude-code", sessionId: "session-real-transport", transcript: "session evidence" }
-						: payload,
+					body: expect.objectContaining(
+						remote
+							? { harness: "claude-code", sessionId: "session-real-transport", transcript: "session evidence" }
+							: payload,
+					),
 				},
 			]);
 		} finally {
 			server.stop(true);
+			if (previousLauncher === undefined) delete process.env.SIGNET_HOOK_COMMAND;
+			else process.env.SIGNET_HOOK_COMMAND = previousLauncher;
 		}
 	});
 
