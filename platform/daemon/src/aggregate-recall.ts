@@ -508,14 +508,15 @@ function loadAggregateByKey(
 			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
 			 FROM memories
 			 WHERE idempotency_key = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND agent_id = ?
+			   AND project IS ?
 			   AND source_type = 'aggregate-recall'
 			   AND visibility = ?
 			   AND scope IS NULL
 			   AND is_deleted = 0 ${boundary.sql}
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.project, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
 	if (!row || row.stale_at !== null) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return rowToRecallResult(row);
@@ -532,7 +533,8 @@ function loadStaleAggregateByKey(
 			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
 			 FROM memories
 			 WHERE idempotency_key = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND agent_id = ?
+			   AND project IS ?
 			   AND source_type = 'aggregate-recall'
 			   AND visibility = ?
 			   AND scope IS NULL
@@ -540,29 +542,31 @@ function loadStaleAggregateByKey(
 			   AND stale_at IS NOT NULL
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.project, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return row;
 }
 
-function loadMemoryByContentHash(
+function loadMemoryByDedupeKey(
 	db: WriteDb,
-	contentHash: string,
-	input: { readonly agentId: string; readonly project: string | null },
+	column: "content_hash" | "idempotency_key",
+	value: string,
+	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
 	boundary: ReturnType<typeof memoryWriteDedupeSql>,
 ): ContentHashMatch | null {
 	const row = db
 		.prepare(
 			`SELECT id, content, source_type, source_id, type, tags, pinned, importance, who, project, visibility, created_at
 			 FROM memories
-			 WHERE content_hash = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			 WHERE ${column} = ?
+			   AND agent_id = ?
+			   AND project IS ? AND visibility=?
 			   AND scope IS NULL
 			   AND is_deleted = 0 ${boundary.sql}
 			 LIMIT 1`,
 		)
-		.get(contentHash, input.agentId, ...boundary.params) as AggregateMemoryRow | undefined;
+		.get(value, input.agentId, input.project, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	return {
 		row: rowToRecallResult(row),
@@ -718,15 +722,10 @@ function resolveAggregateDuplicate(
 			refreshed: true,
 		};
 	}
-	const duplicateContent = loadMemoryByContentHash(
-		db,
-		input.contentHash,
-		{
-			agentId: input.agentId,
-			project: input.project,
-		},
-		boundary,
-	);
+	const duplicateScope = { agentId: input.agentId, project: input.project, visibility: input.saveVisibility };
+	const duplicateContent =
+		loadMemoryByDedupeKey(db, "content_hash", input.contentHash, duplicateScope, boundary) ??
+		loadMemoryByDedupeKey(db, "idempotency_key", input.key, duplicateScope, boundary);
 	if (!duplicateContent) return null;
 	if (
 		duplicateContent.row.visibility !== input.saveVisibility ||
@@ -738,10 +737,6 @@ function resolveAggregateDuplicate(
 	linkAggregateEvidenceSources(db, duplicateContent.row.id, input.evidenceSources, input.agentId, input.now);
 	linkAggregateQueryHint(db, duplicateContent.row.id, input.agentId, input.query, input.now);
 	return { row: duplicateContent.row, saved: true };
-}
-
-function isUniqueConstraintError(err: unknown): boolean {
-	return err instanceof Error && /UNIQUE constraint failed|constraint failed/i.test(err.message);
 }
 
 async function embedAggregateMemory(
@@ -1075,34 +1070,7 @@ export async function aggregateRecall(
 							visibility: saveVisibility,
 							createdAt: now,
 						};
-						try {
-							ingestEnvelope(db, envelope);
-						} catch (err) {
-							if (!isUniqueConstraintError(err)) throw err;
-							const racedDuplicate = resolveAggregateDuplicate(db, {
-								author,
-								sessionKey: params.sessionKey,
-								key,
-								agentId,
-								project,
-								query: params.query,
-								contentHash: normalized.contentHash,
-								normalizedContent: normalized.normalizedContent || normalized.hashBasis,
-								storageContent: normalized.storageContent,
-								answer,
-								evidenceSources,
-								saveVisibility,
-								now,
-							});
-							if (!racedDuplicate) {
-								deduped = true;
-								saved = false;
-								return unsavedAggregateResult(answer, key, project);
-							}
-							deduped = racedDuplicate.refreshed !== true;
-							saved = racedDuplicate.saved;
-							return racedDuplicate.row;
-						}
+						ingestEnvelope(db, envelope);
 						linkAggregateEvidenceSources(db, id, evidenceSources, agentId, now);
 						linkAggregateQueryHint(db, id, agentId, params.query, now);
 						saved = true;

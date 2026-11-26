@@ -1251,7 +1251,7 @@ memory:
 		expect(router.prompts[1]).not.toContain("Stale synthesized aggregate");
 	});
 
-	it("returns unsaved aggregate when content hash conflicts with an inaccessible memory", async () => {
+	it("A18 ignores aggregate hash matches outside the destination project and visibility", async () => {
 		const answer = "Aggregate answer from memory evidence.";
 		const normalized = normalizeAndHashContent(answer);
 		const now = "2026-05-20T12:00:00.000Z";
@@ -1296,17 +1296,17 @@ memory:
 		);
 
 		expect(result.results).toHaveLength(1);
-		expect(result.results[0].id).toStartWith("aggregate-recall:");
+		expect(result.results[0].id).toBe("aggregate-conflict");
 		expect(result.aggregate).toMatchObject({
-			savedMemoryId: null,
-			saved: false,
-			deduped: true,
+			savedMemoryId: "aggregate-conflict",
+			saved: true,
+			deduped: false,
 			stoppedReason: "complete",
 		});
 		const aggregateRows = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-conflict"),
 		) as { n: number };
-		expect(aggregateRows.n).toBe(0);
+		expect(aggregateRows.n).toBe(1);
 	});
 
 	it("does not reuse visible ordinary memories as saved aggregate dedupes", async () => {
@@ -1454,58 +1454,37 @@ memory:
 		expect(rows.aggregate_link_count).toBe(0);
 	});
 
-	it("dedupes when a concurrent aggregate insert wins the content-hash race", async () => {
-		let raced = false;
-		const result = await aggregateRecall(
-			{
-				query: "what happened",
-				aggregate: true,
-				agentId: "agent-a",
-				readPolicy: "isolated",
-				project: "current-project",
-			},
-			loadMemoryConfig(dir),
-			{
-				author: { userId: null, credential: "system" },
-				router: new StaticRouter(),
-				embedFn: async () => null,
-				idFactory: () => "aggregate-loser",
-				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
-				ingestEnvelope: (db, mem) => {
-					if (!raced) {
-						raced = true;
-						txIngestEnvelope(db, {
-							author: { userId: null, credential: "system" },
-							...mem,
-							id: "aggregate-race-winner",
-						});
-					}
-					return txIngestEnvelope(db, mem);
+	it("serializes concurrent aggregate retries without unique evidence keys", async () => {
+		let nextId = 0;
+		const recall = () =>
+			aggregateRecall(
+				{
+					query: "what happened",
+					aggregate: true,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					project: "current-project",
 				},
-			},
-		);
-
-		expect(result.results).toHaveLength(1);
-		expect(result.results[0].id).toBe("aggregate-race-winner");
-		expect(result.aggregate).toMatchObject({
-			savedMemoryId: "aggregate-race-winner",
-			saved: true,
-			deduped: true,
-			stoppedReason: "complete",
-		});
-		const rows = getDbAccessor().withReadDb((db) =>
-			db
-				.prepare(
-					`SELECT
-						(SELECT COUNT(*) FROM memories WHERE id = 'aggregate-loser') AS loser_count,
-						(SELECT COUNT(*) FROM derived_memory_sources WHERE derived_memory_id = 'aggregate-race-winner') AS link_count,
-						(SELECT COUNT(*) FROM memory_jobs WHERE memory_id = 'aggregate-race-winner' AND job_type = 'extract' AND status = 'pending') AS pending_extract_count`,
-				)
-				.get(),
-		) as { loser_count: number; link_count: number; pending_extract_count: number };
-		expect(rows.loser_count).toBe(0);
-		expect(rows.link_count).toBe(1);
-		expect(rows.pending_extract_count).toBe(0);
+				loadMemoryConfig(dir),
+				{
+					author: { userId: null, credential: "system" },
+					router: new StaticRouter(),
+					embedFn: async () => null,
+					idFactory: () => `aggregate-race-${++nextId}`,
+					hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+				},
+			);
+		const results = await Promise.all([recall(), recall()]);
+		const winner = results[0].results[0]?.id;
+		expect(winner).toBeDefined();
+		expect(results[1].results[0]?.id).toBe(winner);
+		expect(results.filter((result) => result.aggregate?.deduped)).toHaveLength(1);
+		expect(results.every((result) => result.aggregate?.saved)).toBe(true);
+		const counts = await getDbAccessor().withReadDbAsync((db) => ({
+			memories: db.prepare("SELECT count(*) n FROM memories WHERE source_type='aggregate-recall'").get()?.n,
+			links: db.prepare("SELECT count(*) n FROM derived_memory_sources WHERE derived_memory_id=?").get(winner)?.n,
+		}));
+		expect(counts).toEqual({ memories: 1, links: 1 });
 	});
 
 	it("returns structured no-hit metadata when aggregate recall has no evidence", async () => {
