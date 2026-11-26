@@ -310,8 +310,9 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 	}
 	const nowMs = Date.now();
 	const now = new Date(nowMs).toISOString();
-	if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
-	if (row.expires_at && row.expires_at <= now) return { authenticated: false, claims: null, error: "api key expired" };
+	if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked", verifiedKeyId: row.id };
+	if (row.expires_at && row.expires_at <= now)
+		return { authenticated: false, claims: null, error: "api key expired", verifiedKeyId: row.id };
 
 	const staleBefore = new Date(nowMs - LAST_USED_WRITE_INTERVAL_MS).toISOString();
 	if (!row.last_used_at || row.last_used_at <= staleBefore) {
@@ -329,9 +330,10 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 	if (!current || current.id !== row.id || current.key_hash !== row.key_hash) {
 		return { authenticated: false, claims: null, error: "invalid api key" };
 	}
-	if (current.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
+	if (current.revoked_at)
+		return { authenticated: false, claims: null, error: "api key revoked", verifiedKeyId: row.id };
 	if (current.expires_at && current.expires_at <= new Date().toISOString()) {
-		return { authenticated: false, claims: null, error: "api key expired" };
+		return { authenticated: false, claims: null, error: "api key expired", verifiedKeyId: row.id };
 	}
 	const role = normalizeRole(current.role);
 	const scope = safeJsonObject(current.scope_json);
