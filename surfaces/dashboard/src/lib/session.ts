@@ -264,7 +264,7 @@ async function check(retry = true): Promise<void> {
 		if (typeof localStorage !== "undefined") localStorage.removeItem(TOKEN_KEY);
 	}
 	const identity =
-		body.authenticated === true
+		body.authenticated === true && (!isRecord(body.organization) || body.accessMode === "authenticated")
 			? whoami
 				? {
 						sub: whoami.user.id,
@@ -283,7 +283,8 @@ async function check(retry = true): Promise<void> {
 		set({ kind: "signed-in", mode, identity, permissions, expiresSoon: false, ...(whoami ? { whoami } : {}) });
 		return;
 	}
-	if (body.effectiveAccess === true || body.effectiveAccess === "open") {
+	if (isRecord(body.organization) ? body.accessMode === "open" : body.effectiveAccess === true) {
+		lastWhoami = null;
 		set({ kind: "open", mode, permissions });
 		return;
 	}

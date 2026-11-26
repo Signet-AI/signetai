@@ -99,6 +99,7 @@ export interface UserRow {
 	compliance: number;
 	status: "active" | "deactivated";
 	password_hash: string | null;
+	oidc_issuer?: string | null;
 	personal_agent_id: string | null;
 	default_read_agent_id: string | null;
 }
@@ -132,6 +133,7 @@ export function userView(u: UserRow) {
 		displayName: u.display_name,
 		role: u.role,
 		compliance: Boolean(u.compliance),
+		ssoManaged: Boolean(u.oidc_issuer),
 	};
 }
 export function auditStatement(
@@ -562,6 +564,16 @@ async function rotateSession(
 		user: userView(user),
 	};
 }
+export async function recordConnectorError(keyId: string, status: 401 | 403, reason: string): Promise<void> {
+	const safeReason = /^[a-z_]{1,64}$/.test(reason) ? reason : "request_denied";
+	await organizationWrite([
+		statement(
+			"INSERT INTO audit_events (id,at,actor_user_id,actor_credential,action,target_kind,target_id,outcome,detail_json) SELECT ?,?,user_id,?,'connector.error','key',id,'denied',? FROM api_keys WHERE id=? AND kind='connector'",
+			[id("aud"), new Date().toISOString(), `api_key:${keyId}`, JSON.stringify({ status, reason: safeReason }), keyId],
+		),
+	]);
+}
+
 export interface BoundKeyRow {
 	id: string;
 	user_id: string | null;

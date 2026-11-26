@@ -23,7 +23,21 @@ CLI and desktop sessions use the device-code flow and rotating refresh tokens. R
 
 The `member` role has core memory and document permissions. Admin adds administration and audit, not classification authority. A compliance flag adds `classify` and `audit`. Connector permissions are bounded by their user and their enforced agent, harness, device, and project bindings. Actor headers cannot change the authenticated user.
 
-Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. A write to a destination whose classifications you cannot read returns `403` with reason `classified_destination`, even if you can act as its agent. Signet refuses the write before capturing content or looking for duplicates. `whoami.effectiveAccess` is `open`, `authenticated`, or `none`.
+Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. A write to a destination whose classifications you cannot read returns `403` with reason `classified_destination`, even if you can act as its agent. Signet refuses the write before capturing content or looking for duplicates. `whoami.effectiveAccess` remains a boolean: local mode, trusted loopback access, or a valid authenticated credential makes it `true`. The additive `whoami.accessMode` field distinguishes `open`, `authenticated`, and `none`.
+
+## Your profile and personal agent
+
+`GET /api/auth/profile` returns your user, identity-provider ownership, and editable fields. Signed-in user sessions can send `PATCH /api/auth/profile` with `displayName` and `email`; neither endpoint accepts another user's identity. OIDC-managed names and email addresses are read-only. `whoami.user.ssoManaged` identifies an OIDC-managed profile, and each `whoami.user.groups` membership includes `managedBy` (`idp` or `signet`).
+
+A member can rename their own active personal agent through `PATCH /api/agents/:id` with `{ name }`. This does not allow renaming another person's agent, transferring ownership, or archiving it. Agent-bound credentials cannot update a different agent. Profile and agent changes are audited.
+
+SSO invitation acceptance returns an `ssoStartPath` containing only a single-use continuation code with a 60-second lifetime. The invitation token stays on the server through the OIDC flow. Submit invitation tokens in the acceptance JSON body, never as an SSO query parameter; interrupted continuations can be restarted by accepting the still-valid invitation again.
+
+## Connector errors
+
+`GET /api/auth/connector-keys/:id/errors` returns the owner's latest 10 authenticated connector failures from the past seven days as `{ keyId, since, limit, errors: [{ at, status, reason }] }`. It requires the owner's signed-in session; another user, including an administrator, cannot inspect that key through this account endpoint. Audit-authorized administrators can use the separate audit API.
+
+The summary is backed by durable audit records and survives daemon restarts. It contains no request bodies, credential secrets, URLs, or prompt content. A guessed key prefix with an invalid secret cannot add failures to another user's history. Key expiry, revocation, binding conflicts, and authorization failures are recorded only after the key secret has been verified.
 
 ## Agent preference
 

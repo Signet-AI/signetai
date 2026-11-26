@@ -41,6 +41,7 @@ export interface AuthResult {
 	readonly claims: TokenClaims | null;
 	readonly error?: string;
 	readonly trustedLocal?: boolean;
+	readonly verifiedKeyId?: string;
 }
 
 export interface PolicyDecision {

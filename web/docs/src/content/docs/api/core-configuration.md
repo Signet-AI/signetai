@@ -18,9 +18,10 @@ Returns the identity and claims of the current request's credential. This route
 is open so the dashboard can determine whether to show the login screen; if an
 `Authorization` header is present, the signed token or API key is validated the
 same way protected routes validate it. In `local` mode, `authenticated` is
-always `false` and `claims` is `null`. `effectiveAccess` is `open` for local or
-trusted hybrid requests, `authenticated` for a valid credential, and `none` when
-sign-in is required. Organization sessions report `organization`, `user`,
+always `false` and `claims` is `null`. `effectiveAccess` remains a boolean: it is
+`true` when this request has access, including local and trusted hybrid requests.
+`accessMode` is `open`, `authenticated`, or `none`; organization clients use this
+field to distinguish trusted access, an authenticated identity, and sign-in. Organization sessions report `organization`, `user`,
 `credential`, and default read/write `agents`; legacy token claims are not the
 organization user record. `error` is the reason a presented
 credential was rejected, such as `token expired`, `invalid api key`,
@@ -48,7 +49,8 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
     "exp": 1740086400
   },
   "trustedLocal": false,
-  "effectiveAccess": "authenticated",
+  "effectiveAccess": true,
+  "accessMode": "authenticated",
   "error": null,
   "permissions": ["remember", "recall", "modify", "forget", "recover", "documents", "connectors", "diagnostics", "analytics"],
   "mode": "team",

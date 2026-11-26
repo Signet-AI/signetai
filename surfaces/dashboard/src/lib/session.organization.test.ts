@@ -18,6 +18,7 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 	const originalFetch = globalThis.fetch;
 	const calls: { path: string; init?: RequestInit }[] = [];
 	let authenticated = true;
+	let whoamiOverride: Record<string, unknown> = {};
 	const expiresAt = new Date(Date.now() + 600_000).toISOString();
 	beforeAll(async () => {
 		restore = installDashboardDomGlobals(new Window({ url: "https://org.example/" }));
@@ -33,7 +34,8 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 					? {
 							mode: "team",
 							authenticated,
-							effectiveAccess: authenticated ? "authenticated" : "none",
+							effectiveAccess: authenticated,
+							accessMode: authenticated ? "authenticated" : "none",
 							organization: { name: "Acme", agentModel: "personal" },
 							user: authenticated
 								? {
@@ -52,6 +54,7 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 							agents: { defaultRead: "default", defaultWrite: "alice" },
 							permissions: ["recall"],
 							providers: [{ id: "password" }],
+							...whoamiOverride,
 						}
 					: { expiresAt, csrf: "csrf-secret" },
 			);
@@ -110,6 +113,28 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 		expect(calls.at(-1)?.path).toBe("/api/agents");
 		await getJSONResult("/api/memory/remember", { method: "POST", body: JSON.stringify({ agentId: "named-target" }) });
 		expect(calls.at(-1)?.init?.body).toBe(JSON.stringify({ agentId: "named-target" }));
+	});
+
+	test("organization accessMode and local boolean contracts stay separate", async () => {
+		whoamiOverride = { authenticated: false, effectiveAccess: true, accessMode: "none" };
+		await session.refreshSession();
+		expect(session.currentSession().kind).toBe("signed-out");
+		whoamiOverride = {
+			mode: "local",
+			authenticated: false,
+			organization: null,
+			user: null,
+			credential: null,
+			effectiveAccess: false,
+			accessMode: "open",
+		};
+		await session.refreshSession();
+		expect(session.currentSession().kind).not.toBe("open");
+		whoamiOverride = { ...whoamiOverride, effectiveAccess: true, accessMode: "none" };
+		await session.refreshSession();
+		expect(session.currentSession().kind).toBe("open");
+		whoamiOverride = {};
+		await session.refreshSession();
 	});
 
 	test("organization permission checks fail closed when identity is unavailable", () => {
