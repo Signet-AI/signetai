@@ -8,6 +8,8 @@ import { authConfig } from "./state";
 import { resolveScopedAgentId } from "./utils";
 import {
 	createHookUpload,
+	createHookUploadAdmission,
+	HOOK_TRANSCRIPT_BYTES,
 	getHookUpload,
 	hookUploadScope,
 	hookUploadStaging,
@@ -74,7 +76,7 @@ async function chunkBytes(request: Request): Promise<Uint8Array> {
 	}
 }
 export function registerHookUploadRoutes(app: Hono): void {
-	let transfers = 0;
+	const acquireTransfer = createHookUploadAdmission();
 	app.use("/api/hooks/session-end/uploads", requirePermission("remember", authConfig));
 	app.use("/api/hooks/session-end/uploads/*", requirePermission("remember", authConfig));
 	app.post("/api/hooks/session-end/uploads", async (c) => {
@@ -103,6 +105,8 @@ export function registerHookUploadRoutes(app: Hono): void {
 			return c.json({ error: "Invalid upload declaration" }, 400);
 		if (principal.harness !== null && principal.harness !== raw.harness)
 			return c.json({ error: "Harness binding conflict", reason: "harness_binding_conflict" }, 403);
+		if (raw.totalBytes > HOOK_TRANSCRIPT_BYTES)
+			return c.json({ error: "Transcript exceeds upload byte limit", reason: "upload_too_large" }, 413);
 		const agent = resolveScopedAgentId(c, c.get("requestedOrganizationAgent"), resolveDaemonAgentId());
 		if (agent.error) return c.json({ error: agent.error }, 403);
 		try {
@@ -140,8 +144,8 @@ export function registerHookUploadRoutes(app: Hono): void {
 	app.patch("/api/hooks/session-end/uploads/:id", async (c) => {
 		const principal = c.get("principal");
 		if (!principal) return c.json({ error: "Authentication required" }, 401);
-		if (transfers >= 16) return c.json({ error: "Upload capacity unavailable", reason: "busy" }, 503);
-		transfers++;
+		const release = acquireTransfer(principal);
+		if (!release) return c.json({ error: "Upload capacity unavailable", reason: "busy" }, 503);
 		try {
 			const row = await getHookUpload(principal, c.req.param("id"));
 			const offset = c.req.header("upload-offset"),
@@ -159,7 +163,7 @@ export function registerHookUploadRoutes(app: Hono): void {
 		} catch (error) {
 			return hookUploadErrorResponse(c, error);
 		} finally {
-			transfers--;
+			release();
 		}
 	});
 }

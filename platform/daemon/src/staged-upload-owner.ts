@@ -43,6 +43,7 @@ interface ReadScope {
 export interface StagingStore<Read extends ReadScope, Write extends Read & { readonly generation: number }> {
 	readonly get: (scope: Read) => Promise<TranscriptUpload>;
 	readonly databasePath: () => Promise<string>;
+	readonly reservationBytes?: (size: number) => number;
 	readonly declare: (scope: Write, size: number, reservation: number, available: number) => Promise<void>;
 	readonly append: (
 		scope: Write,
@@ -78,7 +79,7 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 		const disk = await statfs(dirname(await store.databasePath()));
 		const available = disk.bavail * disk.bsize;
 		if (!Number.isSafeInteger(available) || available <= 0) throw new Error("available disk space is unknown");
-		const reservation = size * 3 + 64 * 1024 ** 2;
+		const reservation = store.reservationBytes?.(size) ?? size * 3 + 64 * 1024 ** 2;
 		try {
 			await store.declare(scope, size, reservation, Math.max(0, available - 1024 ** 3));
 		} catch (error) {

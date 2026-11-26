@@ -265,7 +265,7 @@ perform this transfer automatically for remote transcript-file capture.
 }
 ```
 
-`totalBytes` is the exact file length, from 1 byte through 64 GiB. `sha256`
+`totalBytes` is the exact file length, from 1 byte through 256 MiB; larger declarations return `413`. `sha256`
 is the SHA-256 digest of the complete original bytes. The resolved agent and
 connector's harness binding must match. Repeating a declaration for the same
 principal, harness, session, and digest returns the same upload under its
@@ -332,6 +332,10 @@ current offset and resumes there. Keep the original client file until handoff
 is acknowledged; if it changes during an interrupted transfer, delivery fails
 and the outbox retains the original reference rather than sending replacement
 bytes as the original evidence.
+
+Hook staging reserves the declared size plus 4 KiB per 64 KiB storage chunk.
+A principal can hold at most eight open uploads and four concurrent PATCHes.
+The global PATCH limit remains sixteen; a full pool returns `503 busy`.
 
 ### DELETE /api/hooks/session-end/uploads/:id
 

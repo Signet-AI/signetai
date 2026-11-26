@@ -9,7 +9,7 @@ import {
 	stagedChunkStatements,
 	readStagedChunks,
 	purgeStagedChunkBatch,
-	TRANSCRIPT_FILE_BYTES,
+	TRANSCRIPT_CHUNK_BYTES,
 	UploadOffsetConflict,
 	type TranscriptUpload,
 	type StagedChunk,
@@ -17,7 +17,8 @@ import {
 	type StagedChunkScope,
 } from "./staged-upload-owner";
 
-export const HOOK_TRANSCRIPT_BYTES = TRANSCRIPT_FILE_BYTES;
+export const HOOK_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
+export const HOOK_TRANSCRIPT_CHUNK_OVERHEAD_BYTES = 4096;
 export class HookUploadMissing extends Error {}
 export class HookUploadChecksumMismatch extends Error {}
 export class HookUploadBusy extends Error {}
@@ -43,6 +44,26 @@ const read = { operation: "hooks.upload.read", lane: "read" } as const;
 const write = { operation: "hooks.upload.write", lane: "write" } as const;
 function principalId(principal: Principal): string {
 	return JSON.stringify([principal.kind, principal.userId ?? principal.credential.id]);
+}
+export function createHookUploadAdmission(): (principal: Principal) => (() => void) | null {
+	let active = 0;
+	const principals = new Map<string, number>();
+	return (principal) => {
+		const key = principalId(principal),
+			count = principals.get(key) ?? 0;
+		if (active >= 16 || count >= 4) return null;
+		active++;
+		principals.set(key, count + 1);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			active--;
+			const remaining = (principals.get(key) ?? 1) - 1;
+			if (remaining) principals.set(key, remaining);
+			else principals.delete(key);
+		};
+	};
 }
 function requireUploadAgent(principal: Principal, agentId: string): void {
 	const access = principalAccess(principal);
@@ -217,6 +238,7 @@ export async function abortHookUpload(principal: Principal, id: string): Promise
 }
 export const hookUploadStaging = createStagingOwner<HookUploadScope, WriteScope>({
 	get: metadata,
+	reservationBytes: (size) => size + Math.ceil(size / TRANSCRIPT_CHUNK_BYTES) * HOOK_TRANSCRIPT_CHUNK_OVERHEAD_BYTES,
 	databasePath,
 	declare,
 	append,
@@ -380,7 +402,7 @@ export async function createHookUpload(
 	await dbOwnerTransaction(
 		[
 			{
-				sql: "INSERT INTO hook_transcript_uploads (id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256) SELECT ?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM (SELECT id FROM hook_transcript_uploads WHERE principal_id = ? AND storage_state IN ('uploading','sealed','purging') LIMIT 32)) < 32 AND (SELECT COUNT(*) FROM (SELECT id FROM hook_transcript_uploads WHERE storage_state IN ('uploading','sealed','purging') LIMIT 256)) < 256 ON CONFLICT DO NOTHING",
+				sql: "INSERT INTO hook_transcript_uploads (id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256) SELECT ?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM (SELECT id FROM hook_transcript_uploads WHERE principal_id = ? AND storage_state IN ('uploading','sealed','purging') LIMIT 8)) < 8 AND (SELECT COUNT(*) FROM (SELECT id FROM hook_transcript_uploads WHERE storage_state IN ('uploading','sealed','purging') LIMIT 256)) < 256 ON CONFLICT DO NOTHING",
 				params: [
 					id,
 					agentId,

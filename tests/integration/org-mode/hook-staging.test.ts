@@ -243,3 +243,102 @@ test(
 		}),
 	180000,
 );
+
+test(
+	"A21 hook upload cap is 256 MiB at declaration",
+	() =>
+		withUpload(async (daemon, fixture) => {
+			const user = fixture.user("alice");
+			const reply = await request(daemon.origin, "/api/hooks/session-end/uploads", user.connector, "POST", {
+				harness: "codex",
+				sessionKey: "oversized",
+				totalBytes: 256 * 1024 * 1024 + 1,
+				sha256: "a".repeat(64),
+			});
+			assert.equal(reply.status, 413);
+		}),
+	180000,
+);
+
+test(
+	"A21 hook reservations contain declared bytes plus chunk overhead and cap open uploads at eight",
+	() =>
+		withUpload(async (daemon, fixture) => {
+			const user = fixture.user("alice");
+			for (let index = 0; index < 8; index++) await declare(daemon, user, Buffer.alloc(65536, index + 65));
+			const db = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+			try {
+				assert.deepEqual(db.prepare("SELECT MIN(reserved_bytes) AS reservation FROM hook_transcript_uploads").get(), {
+					reservation: 65536 + 4096,
+				});
+			} finally {
+				db.close();
+			}
+			const ninth = await request(daemon.origin, "/api/hooks/session-end/uploads", user.connector, "POST", {
+				harness: "codex",
+				sessionKey: "ninth",
+				totalBytes: 1,
+				sha256: digest(Buffer.from("z")),
+			});
+			assert.equal(ninth.status, 503);
+			assert.equal(record(ninth.body).reason, "busy");
+		}),
+	180000,
+);
+
+test(
+	"A21 four slow PATCHes cannot monopolize another principal",
+	() =>
+		withUpload(async (daemon, fixture) => {
+			const alice = fixture.user("alice"),
+				bob = fixture.user("bob"),
+				bytes = Buffer.from("a");
+			const a = await declare(daemon, alice, bytes),
+				b = await declare(daemon, bob, bytes);
+			assert(alice.connector.bearer);
+			const controllers: Array<AbortController> = [];
+			const requests: Array<Promise<Response>> = [];
+			let timeout: ReturnType<typeof setTimeout> | undefined;
+			try {
+				for (let index = 0; index < 5; index++) {
+					const controller = new AbortController();
+					controllers.push(controller);
+					const body = new ReadableStream<Uint8Array>({
+						start(stream) {
+							stream.enqueue(bytes);
+						},
+					});
+					requests.push(
+						fetch(`${daemon.origin}/api/hooks/session-end/uploads/${text(a.uploadId)}`, {
+							method: "PATCH",
+							headers: {
+								authorization: `Bearer ${alice.connector.bearer}`,
+								"content-type": "application/octet-stream",
+								"upload-offset": "0",
+								"upload-checksum": digest(bytes),
+							},
+							body,
+							signal: controller.signal,
+						}),
+					);
+				}
+				const first = await Promise.race([
+					...requests,
+					new Promise<null>((resolve) => {
+						timeout = setTimeout(() => resolve(null), 2500);
+					}),
+				]);
+				assert(first, "One principal must not admit five slow PATCHes");
+				assert.equal(first.status, 503);
+				await first.arrayBuffer();
+				const other = await append(daemon, bob, text(b.uploadId), 0, bytes);
+				assert.equal(other.status, 200);
+				await other.arrayBuffer();
+			} finally {
+				if (timeout) clearTimeout(timeout);
+				for (const controller of controllers) controller.abort();
+				await Promise.allSettled(requests);
+			}
+		}),
+	180000,
+);
