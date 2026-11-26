@@ -1,5 +1,7 @@
 import { useWhoami } from "@/lib/session";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { Panel } from "@/components/shell/panel";
+import { usePanelQuery } from "@/lib/use-panel-query";
 import { getJSONResult } from "@/lib/api";
 import type { ClassificationPrincipal, ClassificationTarget, OrganizationClassification } from "@/lib/organization";
 import {
@@ -31,25 +33,12 @@ export function ClassifyAction({ target }: { target: ClassificationTarget }) {
 	);
 }
 function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClose: () => void }) {
-	const [classifications, setClassifications] = useState<readonly OrganizationClassification[]>([]);
+	const classifications = usePanelQuery<readonly OrganizationClassification[]>("/api/classifications");
 	const [classificationId, setClassificationId] = useState("");
 	const [preview, setPreview] = useState<{ evidence: number; derived: number } | null>(null);
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [loading, setLoading] = useState(true);
 	const [busy, setBusy] = useState(false);
-	useEffect(() => {
-		const controller = new AbortController();
-		void getJSONResult<readonly OrganizationClassification[]>("/api/classifications", {
-			signal: controller.signal,
-		}).then((result) => {
-			if (controller.signal.aborted) return;
-			setLoading(false);
-			setError(result.error);
-			setClassifications(result.data ?? []);
-		});
-		return () => controller.abort();
-	}, []);
 	const execute = async (apply: boolean) => {
 		setBusy(true);
 		setError(null);
@@ -82,24 +71,29 @@ function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClo
 				<TrackedJob id={jobId} />
 			) : (
 				<>
-					{loading ? (
-						<p role="status">Loading classifications…</p>
-					) : (
-						<Choice
-							label="Classification"
-							value={classificationId}
-							onChange={(value) => {
-								setClassificationId(value);
-								setPreview(null);
-							}}
-							options={[
-								{ value: "", label: "Select a classification" },
-								...classifications
-									.filter((item) => !item.archived_at)
-									.map((item) => ({ value: item.id, label: item.name })),
-							]}
-						/>
-					)}
+					<Panel
+						result={classifications.result}
+						empty={classifications.result?.data?.length === 0}
+						emptyMessage="No classifications available."
+						onRetry={classifications.refresh}
+					>
+						{(definitions) => (
+							<Choice
+								label="Classification"
+								value={classificationId}
+								onChange={(value) => {
+									setClassificationId(value);
+									setPreview(null);
+								}}
+								options={[
+									{ value: "", label: "Select a classification" },
+									...definitions
+										.filter((item) => !item.archived_at)
+										.map((item) => ({ value: item.id, label: item.name })),
+								]}
+							/>
+						)}
+					</Panel>
 					<Action disabled={busy || !classificationId} onClick={() => void execute(false)}>
 						Preview impact
 					</Action>

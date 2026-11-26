@@ -7,7 +7,6 @@ import { type AuditPage, AuditContent, HealthContent, KeysContent } from "@/comp
 import { CreateTeam, TeamContent, TeamDirectory } from "@/components/organization/teams";
 import { AccessContent, type EffectiveAccess, RolesMatrix, UsersContent } from "@/components/organization/users";
 import { Panel } from "@/components/shell/panel";
-import { getJSONResult } from "@/lib/api";
 import {
 	ORGANIZATION_ROLES,
 	type OrganizationAgent,
@@ -20,7 +19,8 @@ import {
 	organizationUser,
 } from "@/lib/organization";
 import { useSession } from "@/lib/session";
-import { useAsync } from "@/lib/use-async";
+import { usePanelQuery } from "@/lib/use-panel-query";
+import { useAgentContext } from "@/lib/agent-context";
 
 export const ORGANIZATION_NAV = [
 	{ id: "teams", label: "My teams", group: "Teams" },
@@ -46,13 +46,29 @@ export function OrganizationResource<T>({
 	empty?: (data: T) => boolean;
 	children: (data: T, refresh: () => void) => ReactNode;
 }) {
-	const resource = useAsync(() => getJSONResult<T>(path), { deps: [path] });
+	const agentId = useAgentContext();
 	return (
-		<Panel result={resource.data} onRetry={() => void resource.refresh()}>
+		<OrganizationResourceContent key={agentId ?? "local"} path={path} empty={empty}>
+			{children}
+		</OrganizationResourceContent>
+	);
+}
+function OrganizationResourceContent<T>({
+	path,
+	empty,
+	children,
+}: {
+	path: string;
+	empty?: (data: T) => boolean;
+	children: (data: T, refresh: () => void) => ReactNode;
+}) {
+	const resource = usePanelQuery<T>(path);
+	return (
+		<Panel result={resource.result} onRetry={resource.refresh}>
 			{(data) => (
 				<>
 					{empty?.(data) && (
-						<Panel result={resource.data} empty emptyMessage="No matching records.">
+						<Panel result={resource.result} empty emptyMessage="No matching records.">
 							{() => null}
 						</Panel>
 					)}

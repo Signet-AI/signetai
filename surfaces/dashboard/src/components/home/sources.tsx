@@ -1,3 +1,5 @@
+import { ClassifyAction } from "@/components/organization/classifications";
+import { useAgentContext } from "@/lib/agent-context";
 import { LoadingRows } from "@/components/ui/skeleton";
 import { SectionAction, type StatusTone, StatusLabel } from "@/components/dashboard/heading";
 import { SetupRow } from "@/components/home/setup-row";
@@ -206,6 +208,7 @@ export function HomeSourcesPanel({
 }
 
 function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
+	const agentId = useAgentContext();
 	const health = source.health?.status ?? "empty";
 	const failures = source.health?.failures?.total ?? 0;
 	const {
@@ -243,6 +246,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/source:rotate-90" />
 			</summary>
 			<div className="pb-2.5 pl-6.5">
+				{agentId && <ClassifyAction target={{ kind: "source", id: source.id, agentId }} />}
 				{issue && (
 					<p className="home-source-reason" data-tone={issue.tone}>
 						<span>{issue.title}.</span>
