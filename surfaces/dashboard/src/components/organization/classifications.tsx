@@ -279,6 +279,11 @@ function ClassificationItems({ classification }: { classification: OrganizationC
 			>
 				{(data) => (
 					<EvidenceList
+						noun={
+							data.items.every((item) => item.target_kind === data.items[0]?.target_kind)
+								? displayLabel(data.items[0]?.target_kind ?? "item")
+								: "Item"
+						}
 						rows={data.items.map((item) => ({
 							key: `${item.target_kind}:${item.agent_id}:${item.target_id}`,
 							title: item.memory?.content.slice(0, 180) ?? `${displayLabel(item.target_kind)} material`,

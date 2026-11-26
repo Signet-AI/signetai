@@ -24,7 +24,7 @@ export function FilterToolbar({ children }: { children: ReactNode }) {
 				</Button>
 			</div>
 			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="top-0 right-0 left-auto flex h-dvh w-full max-w-sm translate-x-0 translate-y-0 flex-col rounded-none">
+				<DialogContent className="[&_.home-source-filter]:w-full! top-0 right-0 left-auto flex h-dvh w-full max-w-sm translate-x-0 translate-y-0 flex-col rounded-none">
 					<DialogTitle>Filters</DialogTitle>
 					<DialogDescription className="sr-only">Filter the items in this list.</DialogDescription>
 					<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">{children}</div>

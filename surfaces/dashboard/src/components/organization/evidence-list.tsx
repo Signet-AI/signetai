@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Panel } from "@/components/shell/panel";
 import { OrganizationTable, cellClass, rowClass, displayLabel } from "./controls";
 
 export interface EvidenceListRow {
@@ -13,7 +14,17 @@ export interface EvidenceListRow {
 	readonly badges?: ReactNode;
 	readonly onOpen?: () => void;
 }
-export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
+export function EvidenceList({ rows, noun = "Item" }: { rows: readonly EvidenceListRow[]; noun?: string }) {
+	if (!rows.length)
+		return (
+			<Panel
+				result={{ data: rows, error: null, status: 200 }}
+				empty
+				emptyMessage={`No ${noun === "Memory" ? "memories" : `${noun.toLowerCase()}s`} yet`}
+			>
+				{() => null}
+			</Panel>
+		);
 	const author = (row: EvidenceListRow) =>
 		row.authorUnavailable ? (
 			<span className="italic text-muted-foreground" title="The author’s name is not available in this view.">
@@ -41,7 +52,7 @@ export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
 	return (
 		<>
 			<div className="hidden sm:block">
-				<OrganizationTable columns={["Material", "Kind", "Author", "Agent", ...(hasTeam ? ["Team"] : [])]}>
+				<OrganizationTable columns={[noun, "Kind", "Author", "Agent", ...(hasTeam ? ["Team"] : [])]}>
 					{rows.map((row) => (
 						<tr key={row.key} className={rowClass}>
 							<td className={cellClass}>{title(row)}</td>

@@ -128,6 +128,7 @@ export function OrganizationMemory() {
 			>
 				{() => (
 					<EvidenceList
+						noun="Memory"
 						rows={visible.map((row) => ({
 							key: row.id,
 							title: row.content.slice(0, 180),
