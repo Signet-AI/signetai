@@ -246,7 +246,7 @@ export async function requestDreamingReviewedEvidenceRequeue(
 	return await runWriteTxAsync(
 		accessor,
 		(db) => requestDreamingReviewedEvidenceRequeueInTx(db, agentId, sourceKind, sourceId, callerReadScope),
-		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:253" },
+		{ siteToken: "db:dreaming.evidence.reviewed-requeue" },
 	);
 }
 
