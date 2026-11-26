@@ -208,13 +208,7 @@ export function HomeSourcesPanel({
 }
 
 export function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
-	const selectedAgentId = useAgentContext();
-	const agentId =
-		source.kind === "import"
-			? typeof source.providerSettings?.agentId === "string"
-				? source.providerSettings.agentId
-				: undefined
-			: selectedAgentId;
+	const agentId = useAgentContext();
 	const health = source.health?.status ?? "empty";
 	const failures = source.health?.failures?.total ?? 0;
 	const {
