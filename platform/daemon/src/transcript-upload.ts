@@ -5,7 +5,7 @@ import type { DbAccessor } from "./db-accessor";
 import {
 	dbOwnerCommitTranscriptUpload,
 	dbOwnerDrainTranscriptUploadPurges,
-	dbOwnerReadTranscriptUploadState,
+	dbOwnerReadTranscriptUploadScope,
 	getDbOwner,
 	getDbOwnerForAccessor,
 } from "./db-owner-runtime";
@@ -18,6 +18,7 @@ import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsR
 
 export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
 const TAIL_HASH_BYTES = 64 * 1024;
+const MAX_PURGE_PASSES = 64;
 
 export interface TranscriptUploadRequest {
 	readonly basePath: string;
@@ -63,12 +64,12 @@ export async function uploadTranscriptRange(
 	return await withTranscriptImportOperationLock(`upload\0${input.agentId}\0${input.sessionKey}`, async () => {
 		const owner = await getDbOwnerForAccessor(accessor);
 		const options = { operation: "transcript-upload", signal: input.signal };
-		const current = await dbOwnerReadTranscriptUploadState(
+		const scope = await dbOwnerReadTranscriptUploadScope(
 			owner,
 			{ agentId: input.agentId, sessionKey: input.sessionKey },
 			options,
 		);
-		const conflict = transcriptUploadConflict(current, input);
+		const conflict = transcriptUploadConflict(scope, input);
 		if (conflict) return conflict;
 		const root = transcriptUploadsRoot(input.basePath);
 		const path = transcriptUploadFilePath(input.basePath, input.agentId, input.sessionKey, input.generation);
@@ -148,17 +149,16 @@ export async function drainTranscriptUploadPurges(
 ): Promise<TranscriptUploadPurgeResult> {
 	try {
 		const owner = await getDbOwner();
-		let previous = Number.POSITIVE_INFINITY;
-		for (;;) {
-			const { pending } = await dbOwnerDrainTranscriptUploadPurges(
+		for (let pass = 0; pass < MAX_PURGE_PASSES; pass++) {
+			const { pending, progressed } = await dbOwnerDrainTranscriptUploadPurges(
 				owner,
 				{ basePath },
 				{ operation: "transcript-upload.purge", signal },
 			);
 			if (pending === 0) return { status: "removed" };
-			if (pending >= previous) return { status: "pending" };
-			previous = pending;
+			if (!progressed) return { status: "pending" };
 		}
+		return { status: "pending" };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logger.warn("transcripts", "Transcript upload purge failed", { error: message });

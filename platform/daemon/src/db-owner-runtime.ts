@@ -26,7 +26,7 @@ import type {
 	TranscriptTurnBackfillOptions,
 	TranscriptUploadCommit,
 	TranscriptUploadCommitResult,
-	TranscriptUploadState,
+	TranscriptUploadScope,
 } from "./session-transcripts";
 import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
@@ -218,9 +218,9 @@ async function executeInlineOwnerRequest(
 		);
 	}
 	if (request.kind === "session_transcript_upload_state") {
-		const { readTranscriptUploadStateInDb } = await import("./session-transcripts");
+		const { readTranscriptUploadScopeInDb } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
-			readTranscriptUploadStateInDb(db, request.input.agentId, request.input.sessionKey),
+			readTranscriptUploadScopeInDb(db, request.input.agentId, request.input.sessionKey),
 		);
 	}
 	if (request.kind === "session_transcript_upload_purge") {
@@ -623,11 +623,11 @@ export async function dbOwnerWriteSessionTranscript(
 	);
 }
 
-export async function dbOwnerReadTranscriptUploadState(
+export async function dbOwnerReadTranscriptUploadScope(
 	owner: DbOwnerClient,
 	input: { readonly agentId: string; readonly sessionKey: string },
 	options: DbOwnerSqlOptions,
-): Promise<TranscriptUploadState | null> {
+): Promise<TranscriptUploadScope> {
 	return await submitWithAdmission(
 		owner,
 		{ kind: "session_transcript_upload_state", input },
@@ -651,7 +651,7 @@ export async function dbOwnerDrainTranscriptUploadPurges(
 	owner: DbOwnerClient,
 	input: { readonly basePath: string },
 	options: DbOwnerSqlOptions,
-): Promise<{ readonly pending: number }> {
+): Promise<{ readonly pending: number; readonly progressed: boolean }> {
 	return await submitWithAdmission(
 		owner,
 		{ kind: "session_transcript_upload_purge", input },

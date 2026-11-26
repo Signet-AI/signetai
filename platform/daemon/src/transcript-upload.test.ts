@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, prepareTypedStatement } from "./db-accessor";
@@ -180,6 +180,50 @@ describe("transcript upload ranges", () => {
 		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", "sess-1"))).toBe(false);
 		expect(await accessor.withReadDbAsync((db) => readTranscriptUploadStateInDb(db, "noam", "sess-1"))).toBeNull();
 		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
+	});
+
+	it("removes captured upload files when the session is deleted", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"role":"user","content":"hello upload"}\n', { harness: "pi" }));
+		expect(await runTranscriptCaptureOnce(accessor, dir)).toBe(true);
+		let result = await deleteSessionTranscript({
+			agentId: "noam",
+			sessionKey: "sess-1",
+			hard: false,
+			changedBy: "test",
+		});
+		for (let i = 0; result.status === "pending" && i < 20; i++)
+			result = await deleteSessionTranscript({ agentId: "noam", sessionKey: "sess-1", hard: false, changedBy: "test" });
+		expect(result.status).toBe("complete");
+		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", "sess-1"))).toBe(false);
+	});
+
+	it("refuses ranges while a purge of the same agent is pending", async () => {
+		init();
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, created_at) VALUES (?, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		expect(await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'))).toEqual({ status: "purge_pending" });
+		expect(existsSync(file())).toBe(false);
+		expect(await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n', { agentId: "other" }))).toMatchObject({
+			status: "committed",
+		});
+	});
+
+	it("keeps draining while each pass removes part of a large tree", async () => {
+		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
+		for (let generation = 1; generation <= 600; generation++) writeFileSync(file(generation), "x\n");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, created_at) VALUES (?, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(false);
 	});
 
 	it("records a durable purge intent with the agent purge and removes the agent's upload files on drain", async () => {

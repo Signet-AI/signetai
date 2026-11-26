@@ -862,6 +862,25 @@ describe("transcript upload state", () => {
 		expect((await state())?.committedOffset).toBe(120);
 	});
 
+	it("rejects a first upload from another harness than the stored transcript", async () => {
+		init();
+		await upsertSessionTranscriptAsync("sess-1", "User: hello", "codex", "/repo", "noam");
+		expect(await commit(upload({ committedOffset: 120, harness: "claude-code" }))).toEqual({
+			status: "harness_mismatch",
+		});
+		expect(await state()).toBeNull();
+	});
+
+	it("keeps the first project an upload commits", async () => {
+		init();
+		await commit(upload({ committedOffset: 120, project: null }));
+		expect((await commit(upload({ expectedOffset: 120, committedOffset: 200 }))).status).toBe("committed");
+		expect((await state())?.project).toBe("/repo");
+		expect(await commit(upload({ expectedOffset: 200, committedOffset: 300, project: "/other" }))).toEqual({
+			status: "project_mismatch",
+		});
+	});
+
 	it("rejects a session whose stored transcript belongs to another project", async () => {
 		init();
 		await upsertSessionTranscriptAsync("sess-1", "User: hello", "codex", "/other", "noam");

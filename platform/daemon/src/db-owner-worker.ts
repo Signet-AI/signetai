@@ -1177,8 +1177,8 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "session_compaction_summary")
 			return await executeSessionCompactionSummary(job.request, context);
 		if (job.request.kind === "session_transcript_upload_state") {
-			const { readTranscriptUploadStateInDb } = await import("./session-transcripts");
-			return readTranscriptUploadStateInDb(db, job.request.input.agentId, job.request.input.sessionKey);
+			const { readTranscriptUploadScopeInDb } = await import("./session-transcripts");
+			return readTranscriptUploadScopeInDb(db, job.request.input.agentId, job.request.input.sessionKey);
 		}
 		if (job.request.kind === "session_transcript_upload_purge") {
 			const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");

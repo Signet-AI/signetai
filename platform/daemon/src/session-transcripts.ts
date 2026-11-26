@@ -10,6 +10,7 @@ import { type TranscriptCaptureSource, upsertTranscriptCaptureJobInTx } from "./
 import {
 	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
 	removeTranscriptUploadTree,
+	transcriptUploadAgentRelativePath,
 	transcriptUploadSessionDirectory,
 	transcriptUploadsRoot,
 } from "./transcript-upload-paths";
@@ -2012,7 +2013,14 @@ export type TranscriptUploadCommitResult =
 	| { readonly status: "bypassed" }
 	| { readonly status: "project_mismatch" }
 	| { readonly status: "harness_mismatch" }
+	| { readonly status: "purge_pending" }
 	| { readonly status: "offset_mismatch"; readonly state: TranscriptUploadState | null };
+
+export interface TranscriptUploadScope {
+	readonly state: TranscriptUploadState | null;
+	readonly stored: { readonly harness: string | null; readonly project: string | null } | null;
+	readonly purgePending: boolean;
+}
 
 export function readTranscriptUploadStateInDb(
 	db: ReadDb,
@@ -2039,11 +2047,46 @@ export function readTranscriptUploadStateInDb(
 	};
 }
 
-export function transcriptUploadConflict(
-	current: TranscriptUploadState | null,
-	request: { readonly harness: string; readonly generation: number; readonly offset: number },
+export function readTranscriptUploadScopeInDb(db: ReadDb, agentId: string, sessionKey: string): TranscriptUploadScope {
+	const stored = prepareTypedStatement<{ harness: string | null; project: string | null }>(
+		db,
+		"SELECT harness, project FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
+	).get(agentId, sessionKey);
+	const purge = prepareTypedStatement<{ found: number }>(
+		db,
+		"SELECT 1 AS found FROM session_transcript_upload_purges WHERE path = ?",
+	).get(transcriptUploadAgentRelativePath(agentId));
+	return {
+		state: readTranscriptUploadStateInDb(db, agentId, sessionKey),
+		stored: stored ?? null,
+		purgePending: Boolean(purge),
+	};
+}
+
+export function transcriptUploadScopeConflict(
+	scope: TranscriptUploadScope,
+	request: { readonly harness: string; readonly project: string | null },
 ): TranscriptUploadCommitResult | null {
-	if (current && current.harness !== request.harness) return { status: "harness_mismatch" };
+	if (scope.purgePending) return { status: "purge_pending" };
+	const harness = scope.state?.harness ?? scope.stored?.harness;
+	if (harness != null && harness !== request.harness) return { status: "harness_mismatch" };
+	if ([scope.state?.project, scope.stored?.project].some((project) => project != null && project !== request.project))
+		return { status: "project_mismatch" };
+	return null;
+}
+
+export function transcriptUploadConflict(
+	scope: TranscriptUploadScope,
+	request: {
+		readonly harness: string;
+		readonly project: string | null;
+		readonly generation: number;
+		readonly offset: number;
+	},
+): TranscriptUploadCommitResult | null {
+	const conflict = transcriptUploadScopeConflict(scope, request);
+	if (conflict) return conflict;
+	const current = scope.state;
 	const advances =
 		current?.generation === request.generation
 			? current.committedOffset === request.offset
@@ -2054,20 +2097,16 @@ export function transcriptUploadConflict(
 export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadCommit): TranscriptUploadCommitResult {
 	if (input.source.sizeBytes <= input.expectedOffset) throw new Error("Transcript upload range is empty");
 	if (!admitSessionTranscriptInDb(db, input)) return { status: "bypassed" };
-	const current = readTranscriptUploadStateInDb(db, input.agentId, input.sessionKey);
-	const conflict = transcriptUploadConflict(current, { ...input, offset: input.expectedOffset });
+	const conflict = transcriptUploadConflict(readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey), {
+		...input,
+		offset: input.expectedOffset,
+	});
 	if (conflict) return conflict;
-	const stored = prepareTypedStatement<{ project: string | null }>(
-		db,
-		"SELECT project FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
-	).get(input.agentId, input.sessionKey);
-	if ([current?.project, stored?.project].some((project) => project != null && project !== input.project))
-		return { status: "project_mismatch" };
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(agent_id, session_key) DO UPDATE SET generation = excluded.generation, committed_offset = excluded.committed_offset, tail_sha256 = excluded.tail_sha256, updated_at = excluded.updated_at`,
+		 ON CONFLICT(agent_id, session_key) DO UPDATE SET project = COALESCE(session_transcript_uploads.project, excluded.project), generation = excluded.generation, committed_offset = excluded.committed_offset, tail_sha256 = excluded.tail_sha256, updated_at = excluded.updated_at`,
 	).run(
 		input.agentId,
 		input.sessionKey,
@@ -2112,7 +2151,7 @@ export async function drainTranscriptUploadPurgesOwned(
 	db: WriteDb,
 	basePath: string,
 	transact: (operation: () => void) => Promise<void>,
-): Promise<{ readonly pending: number }> {
+): Promise<{ readonly pending: number; readonly progressed: boolean }> {
 	const budget = { remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES };
 	const intents = prepareTypedStatement<{ path: string }>(
 		db,
@@ -2133,5 +2172,8 @@ export async function drainTranscriptUploadPurgesOwned(
 		db,
 		"SELECT COUNT(*) AS count FROM session_transcript_upload_purges",
 	).get();
-	return { pending: left?.count ?? 0 };
+	return {
+		pending: left?.count ?? 0,
+		progressed: removed.length > 0 || budget.remaining < TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
+	};
 }

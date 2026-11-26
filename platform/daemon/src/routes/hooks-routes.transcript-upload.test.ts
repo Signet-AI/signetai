@@ -123,6 +123,12 @@ describe("transcript upload route", () => {
 		expect(await harness.json()).toEqual({ error: "harness_mismatch" });
 	});
 
+	it("hides the committed state from another project", async () => {
+		await patch('{"a":1}\n');
+		expect((await app.request(query({ cwd: "/other" }))).status).toBe(403);
+		expect((await app.request(query())).status).toBe(200);
+	});
+
 	it("uses the token agent and rejects another agent in team mode", async () => {
 		const previousMode = authConfig.mode;
 		authConfig.mode = "team";

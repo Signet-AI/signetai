@@ -2,14 +2,14 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { commitCompactionSummary } from "../session-transcripts";
+import { commitCompactionSummary, transcriptUploadScopeConflict } from "../session-transcripts";
 import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
 
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
 	dbOwnerQuery,
-	dbOwnerReadTranscriptUploadState,
+	dbOwnerReadTranscriptUploadScope,
 	getDbOwnerForAccessor,
 	ownerStatement,
 } from "../db-owner-runtime";
@@ -109,7 +109,7 @@ import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
-import { MAX_TRANSCRIPT_UPLOAD_BYTES, uploadTranscriptRange } from "../transcript-upload";
+import { MAX_TRANSCRIPT_UPLOAD_BYTES, type TranscriptUploadResult, uploadTranscriptRange } from "../transcript-upload";
 import type { TranscriptUploadState } from "../session-transcripts";
 import { claimBoardActivityNotices } from "../board";
 import {
@@ -1022,17 +1022,37 @@ function uploadStateBody(state: TranscriptUploadState | null): {
 	};
 }
 
+function transcriptUploadResponse(c: Context, result: TranscriptUploadResult): Response {
+	switch (result.status) {
+		case "committed":
+			return c.json({ ...uploadStateBody(result.state), jobId: result.jobId });
+		case "invalid":
+			return c.json({ error: `invalid upload body: ${result.reason}` }, 400);
+		case "offset_mismatch":
+			return c.json({ error: "offset_mismatch", ...uploadStateBody(result.state) }, 409);
+		case "harness_mismatch":
+			return c.json({ error: "harness_mismatch" }, 409);
+		case "project_mismatch":
+			return c.json({ error: "session transcript is outside the project scope" }, 403);
+		case "purge_pending":
+			c.header("Retry-After", "1");
+			return c.json({ error: "purge_pending", retryable: true }, 503);
+		case "bypassed":
+			return c.json({ bypassed: true });
+	}
+}
+
 function registerTranscriptUpload(app: Hono): void {
 	app.get("/api/hooks/transcript-upload", async (c) => {
 		const scope = await resolveTranscriptUploadScope(c);
 		if (scope instanceof Response) return scope;
-		const state = await dbOwnerReadTranscriptUploadState(
+		const upload = await dbOwnerReadTranscriptUploadScope(
 			await getDbOwnerForAccessor(getDbAccessor()),
 			{ agentId: scope.agentId, sessionKey: scope.sessionKey },
 			{ operation: "transcript-upload.state" },
 		);
-		if (state && state.harness !== scope.harness) return c.json({ error: "harness_mismatch" }, 409);
-		return c.json(uploadStateBody(state));
+		const conflict = transcriptUploadScopeConflict(upload, scope);
+		return conflict ? transcriptUploadResponse(c, conflict) : c.json(uploadStateBody(upload.state));
 	});
 	app.patch(
 		"/api/hooks/transcript-upload",
@@ -1077,20 +1097,7 @@ function registerTranscriptUpload(app: Hono): void {
 					capturedAt: new Date().toISOString(),
 					signal: c.req.raw.signal,
 				});
-				switch (result.status) {
-					case "committed":
-						return c.json({ ...uploadStateBody(result.state), jobId: result.jobId });
-					case "invalid":
-						return c.json({ error: `invalid upload body: ${result.reason}` }, 400);
-					case "offset_mismatch":
-						return c.json({ error: "offset_mismatch", ...uploadStateBody(result.state) }, 409);
-					case "harness_mismatch":
-						return c.json({ error: "harness_mismatch" }, 409);
-					case "project_mismatch":
-						return c.json({ error: "session transcript is outside the project scope" }, 403);
-					case "bypassed":
-						return c.json({ bypassed: true });
-				}
+				return transcriptUploadResponse(c, result);
 			} catch (e) {
 				if (isRetryableWritePressure(e)) {
 					c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));

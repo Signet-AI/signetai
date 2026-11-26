@@ -286,21 +286,26 @@ purging its agent, removes every generation file.
 - `400`: a missing parameter or header, an empty body, a body without a final
   newline, a checksum mismatch, or no agent.
 - `403`: an agent scope, project scope, or session-binding violation, or a
-  session whose stored transcript belongs to another project.
+  session whose upload or stored transcript belongs to another project. The
+  first range that names a project fixes it for the session.
 - `409`: `{ "error": "offset_mismatch", "committedOffset", "generation",
   "tailSha256" }` when the offset or generation does not continue the
-  committed state, or `{ "error": "harness_mismatch" }` when another harness
-  owns the session's upload.
+  committed state, or `{ "error": "harness_mismatch" }` when the session's
+  upload or stored transcript belongs to another harness.
 - `413`: a body larger than 1 MiB.
-- `503`: more than 8 uploads in flight (`Retry-After: 1`), or database write
-  pressure (`retryable: true` and a `Retry-After` header).
+- `503`: more than 8 uploads in flight (`Retry-After: 1`), database write
+  pressure (`retryable: true` and a `Retry-After` header), or
+  `{ "error": "purge_pending" }` while the daemon still removes the files of
+  an earlier purge of the same agent.
 
 ### GET /api/hooks/transcript-upload
 
 Returns the committed upload state for the same query parameters:
 `{ "committedOffset", "generation", "tailSha256" }`. Before the first range it
 returns `{ "committedOffset": 0, "generation": null, "tailSha256": null }`. A
-connector calls it after a restart or a `409` to find where to resume.
+connector calls it after a restart or a `409` to find where to resume. It
+returns the same `403`, `409` and `503` errors as `PATCH` for another project,
+another harness, or a pending purge.
 
 ### POST /api/hooks/remember
 
