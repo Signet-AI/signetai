@@ -954,14 +954,14 @@ function sessionReadOwners(scope: ReadScope, keys: readonly string[] = []): { ct
 	const blocked =
 		scope.compartments === "all"
 			? ""
-			: ` AND (t.is_claim=0 OR NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=t.agent_id AND (ca.target_kind='agent' OR (ca.target_kind='session' AND ca.target_id=t.session_key)) AND NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=ca.classification_id AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN(SELECT group_id FROM group_members WHERE user_id=?))))))`;
+			: ` AND (t.is_claim=0 OR NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=t.agent_id AND (ca.target_kind='agent' OR (ca.target_kind='session' AND ca.target_id=t.session_key)) AND NOT EXISTS(SELECT 1 FROM compartment_members readable_label WHERE readable_label.classification_id=ca.classification_id AND readable_label.compartment_id IN (${scope.compartments.map(() => "?").join(",") || "NULL"}))))`;
 	const cte = `WITH known_owners AS (SELECT session_key,agent_id FROM session_transcripts${keyWhere()} UNION SELECT session_key,agent_id FROM session_claims${keyWhere()} UNION SELECT session_key,agent_id FROM session_summaries${keyWhere()}), owners AS (SELECT session_key,agent_id,compartment_id,project,source_id,0 AS is_claim FROM session_transcripts${keyWhere()} UNION ALL SELECT session_key,agent_id,NULL,NULL,NULL,1 FROM session_claims${keyWhere()} UNION ALL SELECT session_key,agent_id,compartment_id,project,NULL,0 FROM session_summaries${keyWhere()} UNION ALL SELECT c.session_key,COALESCE(c.agent_id,k.agent_id),c.compartment_id,c.project,NULL,0 FROM session_checkpoints c LEFT JOIN known_owners k ON c.agent_id IS NULL AND k.session_key=c.session_key${keyWhere("c.")}),readable AS (SELECT t.session_key,t.agent_id,t.compartment_id,t.project,t.source_id,t.is_claim FROM owners t WHERE 1=1${access.sql}${blocked}),readable_sessions AS (SELECT DISTINCT t.session_key FROM readable t WHERE NOT EXISTS(SELECT 1 FROM owners o WHERE o.session_key=t.session_key AND NOT EXISTS(SELECT 1 FROM readable r WHERE r.session_key=o.session_key AND r.agent_id IS o.agent_id AND r.compartment_id IS o.compartment_id AND r.project IS o.project AND r.source_id IS o.source_id AND r.is_claim=o.is_claim)))`;
 	return {
 		cte,
 		args: [
 			...Array.from({ length: 7 }, () => keys).flat(),
 			...access.args,
-			...(blocked ? [scope.inFlightUserId ?? null, scope.inFlightUserId ?? null] : []),
+			...(blocked && scope.compartments !== "all" ? scope.compartments : []),
 		],
 	};
 }
