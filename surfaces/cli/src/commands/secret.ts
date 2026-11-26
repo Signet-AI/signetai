@@ -1,3 +1,4 @@
+import { SignetError } from "../../../../libs/sdk/src/index.js";
 import { readSecretFromStdin } from "../lib/stdin-secret.js";
 import { confirm, password } from "@inquirer/prompts";
 import chalk from "chalk";
@@ -23,6 +24,23 @@ function append(value: string, previous: string[]): string[] {
 
 export function registerSecretCommands(program: Command, deps: SecretDeps): void {
 	const secretCmd = program.command("secret").description("Manage encrypted secrets").enablePositionalOptions();
+	secretCmd.hook("preAction", (_root, command) => {
+		const options = command.optsWithGlobals();
+		if (!options.nonInteractive) return;
+		const name = command.name();
+		const prompt =
+			name === "delete" ||
+			name === "disconnect" ||
+			(name === "put" && command.args.length < 2) ||
+			(name === "connect" &&
+				(command.parent?.name() === "bitwarden" ? !options.sessionStdin : command.args.length === 0)) ||
+			options.deleteLocal === true;
+		if (prompt)
+			throw new SignetError(
+				"This secret operation requires interactive input or confirmation; use a stdin-capable command or run interactively",
+				"interactive_required",
+			);
+	});
 
 	secretCmd
 		.command("put <name> [value]")
