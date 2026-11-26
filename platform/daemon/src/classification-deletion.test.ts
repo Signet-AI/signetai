@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { purgeMemoryInTx, purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { removeAgentInTx } from "./agent-removal";
 import { compartmentFor } from "@signet/core";
 function assigned() {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.exec("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')");
 	return db;
 }
