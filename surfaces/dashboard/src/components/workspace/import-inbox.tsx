@@ -3,6 +3,9 @@ import { GroupLabel, SettingsGroup } from "@/components/settings/controls";
 import { Button } from "@/components/ui/button";
 import { api, type SourceImportJob } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
+import { useWhoami } from "@/lib/session";
+import { useAgentContext } from "@/lib/agent-context";
+import { displayLabel } from "@/components/organization/controls";
 import { useState } from "react";
 
 const JOB_STATES: Record<string, string> = {
@@ -22,6 +25,7 @@ const JOB_STATES: Record<string, string> = {
 const PAGE_SIZE = 5;
 
 function ImportJob({ job }: { job: SourceImportJob }) {
+	const whoami = useWhoami();
 	const [expanded, setExpanded] = useState(false);
 	const detail = useAsync(() => (expanded ? api.getSourceImport(job.id, job.agent_id) : Promise.resolve(null)), {
 		key: expanded ? `source-import:${job.agent_id}:${job.id}` : undefined,
@@ -61,9 +65,13 @@ function ImportJob({ job }: { job: SourceImportJob }) {
 					<ul className="space-y-2">
 						{files.map((file) => (
 							<li key={file.id} className="flex flex-wrap justify-between gap-2">
-								<span className="min-w-0 break-all">{file.name || file.id}</span>
+								<span className="min-w-0 break-all">{file.name || (whoami ? "File" : file.id)}</span>
 								<span className="text-muted-foreground">
-									{file.state?.replaceAll("_", " ") || "Status unavailable"}
+									{whoami
+										? file.state
+											? (JOB_STATES[file.state] ?? displayLabel(file.state))
+											: "Status unavailable"
+										: file.state?.replaceAll("_", " ") || "Status unavailable"}
 								</span>
 							</li>
 						))}
@@ -77,7 +85,13 @@ function ImportJob({ job }: { job: SourceImportJob }) {
 }
 
 export function DurableImportStatus() {
-	const imports = useAsync(() => api.getSourceImports(), { key: "source-imports", intervalMs: 5000 });
+	const whoami = useWhoami();
+	const agentId = useAgentContext();
+	const imports = useAsync(() => api.getSourceImports(whoami ? agentId : undefined), {
+		key: whoami ? `source-imports:${agentId}` : "source-imports",
+		deps: [whoami?.user.id, agentId],
+		intervalMs: 5000,
+	});
 	const jobs = imports.data?.data?.imports;
 	const { page, pages, visible, setPage } = usePagination(jobs ?? [], PAGE_SIZE);
 	return (
@@ -89,8 +103,9 @@ export function DurableImportStatus() {
 				</Button>
 			</div>
 			<p className="settings-row-description mb-2">
-				Track uploads and imports into Signet. Expand an import to see its files. Add new files through Connect a source
-				on Home.
+				{whoami
+					? "Track uploads and imports into Signet. Choose an agent in the switcher to follow its jobs. Add files using the import button above."
+					: "Track uploads and imports into Signet. Expand an import to see its files. Add new files through Connect a source on Home."}
 			</p>
 			{imports.loading && !jobs ? (
 				<p className="settings-row-description">Loading imports…</p>
