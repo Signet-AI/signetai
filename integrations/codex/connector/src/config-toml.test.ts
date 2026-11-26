@@ -486,9 +486,11 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 			}
 			const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 			expect(wrapper).toBeDefined();
-			expect(readFileSync(wrapper as string, "utf-8")).toContain(
-				'set "SIGNET_DAEMON_URL=http://daemon.example.test:3850"',
-			);
+			if (typeof wrapper !== "string") throw new Error("Codex Windows hook wrapper was not written");
+			const command = readFileSync(wrapper, "utf-8");
+			expect(command).toContain("signet %*");
+			expect(command).not.toContain("SIGNET_DAEMON_URL");
+			expect(command).not.toContain("daemon.example.test");
 		} else {
 			expect(selectedHookCommand(startHandler)).toBe("signet hook session-start -H codex --codex-json");
 			expect(selectedHookCommand(promptHandler)).toBe("signet hook user-prompt-submit -H codex --codex-json");
