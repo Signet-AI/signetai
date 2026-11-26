@@ -218,6 +218,7 @@ async function postSourceImport(
 	agentId: string,
 	files: readonly File[],
 	duplicateMode: "skip" | "replace" | "reimport" = "skip",
+	classificationId?: string,
 ): Promise<ApiReadResult<SourceImportJob>> {
 	const descriptors = files.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
 	try {
@@ -225,7 +226,7 @@ async function postSourceImport(
 			method: "POST",
 			signal: AbortSignal.timeout(30_000),
 			headers: { "Content-Type": "application/json", Accept: "application/json", ...authHeaders() },
-			body: JSON.stringify({ schemaId: "signet-export", duplicateMode, files: descriptors }),
+			body: JSON.stringify({ schemaId: "signet-export", duplicateMode, files: descriptors, classificationId }),
 		});
 		const body = await res.json().catch(() => null);
 		return res.ok
@@ -1361,7 +1362,8 @@ export const api = {
 		agentId: string,
 		files: readonly File[],
 		duplicateMode: "skip" | "replace" | "reimport" = "skip",
-	) => postSourceImport(agentId, files, duplicateMode),
+		classificationId?: string,
+	) => postSourceImport(agentId, files, duplicateMode, classificationId),
 	uploadSourceImportFile: async (
 		agentId: string,
 		jobId: string,
@@ -1502,13 +1504,15 @@ export const api = {
 		files: readonly File[],
 		duplicateMode: "skip" | "replace" | "reimport" = "skip",
 		paths: readonly string[] = [],
+		options?: { readonly agentId: string; readonly classificationId?: string },
 	): Promise<{ ok: boolean; data?: ImportSourcesResponse; error?: string }> => {
 		try {
 			const form = new FormData();
 			for (const file of files) form.append("files", file, file.name);
 			for (const path of paths) form.append("paths", path);
 			form.set("duplicateMode", duplicateMode);
-			const res = await dashboardFetch(`${API_BASE}/api/sources/import`, {
+			if (options?.classificationId) form.set("classificationId", options.classificationId);
+			const res = await dashboardFetch(`${API_BASE}/api/sources/import${agentQuery(options?.agentId)}`, {
 				method: "POST",
 				headers: authHeaders(),
 				body: form,

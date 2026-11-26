@@ -1,3 +1,5 @@
+import { OrganizationImportFields } from "@/components/organization/import-fields";
+import { useWhoami } from "@/lib/session";
 import { ModalHeading } from "@/components/ui/modal-heading";
 import { Input, NativeSelect } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
@@ -130,6 +132,9 @@ export function ConnectSourceDialog({
 	initialKind?: SourceKind;
 	onBusyChange?: (busy: boolean) => void;
 }) {
+	const whoami = useWhoami();
+	const [importAgent, setImportAgent] = useState("");
+	const [importClassification, setImportClassification] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [kind, setKind] = useState<SourceKind>("files");
 	const [target, setTarget] = useState("");
@@ -187,16 +192,18 @@ export function ConnectSourceDialog({
 	}, []);
 
 	useEffect(() => {
-		if (!open) return;
+		if (!open || whoami) return;
 		void loadAgents();
 		return () => {
 			agentLoadRequest.current += 1;
 		};
-	}, [loadAgents, open]);
+	}, [loadAgents, open, whoami]);
 
 	useEffect(() => {
 		if (!open) return;
 		setKind(initialKind ?? "files");
+		setImportAgent("");
+		setImportClassification("");
 		setTarget("");
 		setName("");
 		setTokenRef("");
@@ -246,12 +253,17 @@ export function ConnectSourceDialog({
 	};
 
 	const importFiles = async (targetFiles: readonly File[], targetPaths: readonly string[] = []) => {
+		if (whoami && (!importAgent || !importClassification)) {
+			setError("Choose an agent and classification before importing.");
+			return;
+		}
+		const classificationId = whoami && importClassification !== "none" ? importClassification : undefined;
 		if (kind === "transcripts") {
 			if (!targetFiles.length) {
 				setError("Choose one or more JSONL transcript files");
 				return;
 			}
-			const selectedAgent = target.trim();
+			const selectedAgent = whoami ? importAgent : target.trim();
 			const problem = validate(kind, selectedAgent, "");
 			if (problem) {
 				setError(problem);
@@ -266,7 +278,7 @@ export function ConnectSourceDialog({
 							? { jobId: response.data.job.id, id: response.data.job.id, files: response.data.files }
 							: undefined,
 					}))
-				: await api.createSourceImport(selectedAgent, targetFiles, duplicateMode);
+				: await api.createSourceImport(selectedAgent, targetFiles, duplicateMode, classificationId);
 			if (!created.data) {
 				setBusy(false);
 				setError(created.error ?? "Could not create import job");
@@ -307,7 +319,12 @@ export function ConnectSourceDialog({
 		setBusy(true);
 		setError(null);
 		setResult(null);
-		const response = await api.importSources(targetFiles, duplicateMode, targetPaths);
+		const response = await api.importSources(
+			targetFiles,
+			duplicateMode,
+			targetPaths,
+			whoami ? { agentId: importAgent, classificationId } : undefined,
+		);
 		setBusy(false);
 		if (!response.ok || !response.data) {
 			setError(response.error ?? "Unable to import files. Try again.");
@@ -387,8 +404,9 @@ export function ConnectSourceDialog({
 	const selectedCount = files.length + desktopPaths.length;
 	const submitDisabled =
 		busy ||
+		Boolean(whoami && (kind === "files" || kind === "transcripts") && (!importAgent || !importClassification)) ||
 		(kind === "files" && selectedCount === 0) ||
-		(kind === "transcripts" && (selectedCount === 0 || !target.trim())) ||
+		(kind === "transcripts" && (selectedCount === 0 || !(whoami ? importAgent : target.trim()))) ||
 		(kind === "web" && !target.trim());
 
 	const Panel = embedded ? "div" : "dialog";
@@ -458,6 +476,21 @@ export function ConnectSourceDialog({
 							</aside>
 						)}
 						<section className="cs-options" aria-label={`${sourceLabel(kind)} options`}>
+							{whoami && (kind === "files" || kind === "transcripts") && (
+								<OrganizationImportFields
+									agentId={importAgent}
+									classification={importClassification}
+									disabled={busy}
+									onAgentChange={(value) => {
+										setImportAgent(value);
+										setTranscriptJobId(null);
+									}}
+									onClassificationChange={(value) => {
+										setImportClassification(value);
+										setTranscriptJobId(null);
+									}}
+								/>
+							)}
 							<div className="cs-options__head">
 								<div className="cs-options__title">
 									{kind === "files" ? "Import files" : `Connect ${sourceLabel(kind)}`}
@@ -479,7 +512,7 @@ export function ConnectSourceDialog({
 											{kind === "transcripts" ? "Signet export JSONL" : "JSON · Markdown · CSV · HTML · documents"}
 										</span>
 									</button>
-									{kind === "files" && (
+									{kind === "files" && !whoami && (
 										<Button
 											variant="ghost"
 											size="compact"
@@ -503,7 +536,7 @@ export function ConnectSourceDialog({
 										}
 										onChange={(event) => choose(event.target.files)}
 									/>
-									{kind === "transcripts" && (
+									{kind === "transcripts" && !whoami && (
 										<label className="ui-field-label">
 											<span id="source-target-label">Target agent</span>
 											<Select value={target} onValueChange={setTarget} disabled={busy}>

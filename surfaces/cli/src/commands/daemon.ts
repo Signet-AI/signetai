@@ -12,9 +12,9 @@ import {
 } from "./shared.js";
 
 interface DaemonDeps {
-	readonly doPause: (options?: PathOptions) => Promise<void>;
+	readonly doPause: (options?: StatusOptions) => Promise<void>;
 	readonly doRestart: (options?: RestartOptions) => Promise<void>;
-	readonly doResume: (options?: PathOptions) => Promise<void>;
+	readonly doResume: (options?: StatusOptions) => Promise<void>;
 	readonly doStart: (options?: StartOptions) => Promise<void>;
 	readonly doStop: (options?: PathOptions) => Promise<void>;
 	readonly showLogs: (options: LogOptions) => Promise<void>;
@@ -42,13 +42,13 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 		.command("pause")
 		.description("Pause extraction workers and free local pipeline resources")
 		.action(deps.doPause);
-	withPath(pause);
+	withJson(withPath(pause));
 
 	const resume = daemonCmd
 		.command("resume")
 		.description("Resume extraction workers after a pause")
 		.action(deps.doResume);
-	withPath(resume);
+	withJson(withPath(resume));
 
 	const status = daemonCmd.command("status").description("Show daemon status").action(deps.showStatus);
 	withJson(withPath(status));
@@ -80,13 +80,13 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 		.command("pause")
 		.description("Pause extraction workers (alias for: signet daemon pause)")
 		.action(deps.doPause);
-	withPath(pauseAlias);
+	withJson(withPath(pauseAlias));
 
 	const resumeAlias = program
 		.command("resume")
 		.description("Resume extraction workers (alias for: signet daemon resume)")
 		.action(deps.doResume);
-	withPath(resumeAlias);
+	withJson(withPath(resumeAlias));
 
 	const logsAlias = program
 		.command("logs")

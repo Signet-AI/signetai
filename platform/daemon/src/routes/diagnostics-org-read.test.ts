@@ -172,6 +172,8 @@ test("unlabelled telemetry is absent unless the reader has all agent and compart
 });
 
 test("admin diagnostics exclude hidden inserts and edits, audience reads them, and reclassification hides them", async () => {
+	const structuralEntities = await body("/api/diagnostics/database/tables/entities/sample");
+	if (typeof structuralEntities.rowCount !== "number") throw new Error("missing structural entity count");
 	await write(
 		"INSERT INTO embeddings(id,content_hash,chunk_text,source_type,source_id,vector,dimensions,created_at,agent_id) VALUES('visible-e','visible-h','chunk','memory','visible',?,2,'2026-01-01','default')",
 		[{ type: "bytes", base64: Buffer.from(new Float32Array([1, 0]).buffer).toString("base64") }],
@@ -248,16 +250,10 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 	await write(
 		"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('memory','visible','default','cls_secret','audience','2026-01-01')",
 	);
-	expect(await body("/api/diagnostics/database/tables/entities/sample")).toMatchObject({
-		rows: expect.arrayContaining([
-			expect.objectContaining({ canonical_name: "person:reader", entity_type: "person" }),
-			expect.objectContaining({ canonical_name: "person:audience", entity_type: "person" }),
-		]),
-		rowCount: 2,
-	});
+	expect(await body("/api/diagnostics/database/tables/entities/sample")).toEqual(structuralEntities);
 	expect(await body("/api/diagnostics/database/tables/entities/sample", true)).toMatchObject({
 		rows: expect.arrayContaining([expect.objectContaining({ id: "cited-entity" })]),
-		rowCount: 3,
+		rowCount: structuralEntities.rowCount + 1,
 	});
 	expect(await body("/api/telemetry/memory-search")).toMatchObject({ count: 0, items: [] });
 	expect(await body("/api/diagnostics/queue")).toMatchObject({
@@ -268,10 +264,24 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 	await write("UPDATE memories SET compartment_id=1 WHERE id='visible'");
 });
 
+test("organization log diagnostics expose only redacted operational fields", async () => {
+	const { logger } = await import("../logger");
+	logger.info("api", "confidential diagnostic body", { content: "confidential diagnostic metadata" });
+	const response = await app.request("/api/logs");
+	expect(response.status).toBe(200);
+	const result = await response.json();
+	expect(result.redacted).toBe(true);
+	expect(result.logs.length).toBeGreaterThan(0);
+	expect(JSON.stringify(result)).not.toContain("confidential diagnostic");
+	const denied = await app.request("/api/logs", { headers: { "x-test-empty-permissions": "1" } });
+	expect(denied.status).toBe(403);
+	const streamed = await app.request("/api/logs/stream");
+	expect(streamed.status).toBe(200);
+	await streamed.body?.cancel();
+});
+
 test("organization permissions do not bypass unavailable unlabelled diagnostics or leak into other routes", async () => {
 	for (const path of [
-		"/api/logs",
-		"/api/logs/stream",
 		"/api/config",
 		"/api/identity",
 		"/api/telemetry/events",

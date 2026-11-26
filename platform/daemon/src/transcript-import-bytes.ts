@@ -1,4 +1,5 @@
 import { loadSourcesConfig, resolveDefaultBasePath } from "@signet/core";
+import { importClassificationRequest } from "./classifications";
 import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
 import {
 	createStagingOwner,
@@ -175,18 +176,17 @@ export const sealTranscriptUpload = async (...args: Parameters<typeof staging.se
 export const uploadTranscriptStream = staging.upload;
 export const purgeTranscriptBytes = staging.purge;
 
-export async function bindTranscriptSource(scope: TranscriptUploadScope, sourceId: string): Promise<void> {
-	await dbOwnerTransaction(
-		[
-			{
-				sql: "UPDATE source_import_files SET source_id = ?,state = 'ready',error = NULL,updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ? AND upload_generation = ? AND storage_state = 'sealed' AND state IN ('staging','ready') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state IN ('staging','cancelled'))",
-				params: [sourceId, scope.fileId, scope.jobId, scope.agentId, scope.generation, scope.jobId, scope.agentId],
-				result: "run",
-				requireChanges: true,
-			},
-		],
-		write,
-	);
+export async function bindTranscriptSource(
+	scope: TranscriptUploadScope,
+	sourceId: string,
+	duplicateSourceId?: string,
+): Promise<void> {
+	await importClassificationRequest({
+		op: "import-bind",
+		scope: { agentId: scope.agentId, jobId: scope.jobId, fileId: scope.fileId, generation: scope.generation },
+		sourceId,
+		duplicateSourceId,
+	});
 }
 export async function cleanupCancelledTranscriptImport(
 	agentId: string,

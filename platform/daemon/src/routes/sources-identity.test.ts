@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { addObsidianSource, addImportedSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { bindPrincipalAccess } from "../auth/agent-access";
-import { readOrganization } from "../auth/organization-store";
+import { readOrganization, organizationWrite, statement } from "../auth/organization-store";
 import { localPrincipal, type Principal } from "../auth/principal";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { clearSourceIndexProgressForTests } from "../source-index-progress";
@@ -204,6 +204,17 @@ it("redacts identity from source creation and deletion responses", async () => {
 });
 
 it("document imports persist their admitted source identity", async () => {
+	const now = new Date().toISOString();
+	await organizationWrite([
+		statement("INSERT INTO users(id,username,display_name,role) VALUES (?,?,?,'member')", ["alice", "alice", "Alice"]),
+		statement("INSERT INTO agents(id,name,kind,owner_user_id,created_at,updated_at) VALUES (?,?,'personal',?,?,?)", [
+			"alice-agent",
+			"Alice",
+			"alice",
+			now,
+			now,
+		]),
+	]);
 	const instance = app("member");
 	registerImportRoutes(instance, {
 		durableImportAdmission: {
@@ -219,7 +230,8 @@ it("document imports persist their admitted source identity", async () => {
 	});
 	const form = new FormData();
 	form.append("files", new File(["# Evidence\n\nImported evidence."], "note.md"));
-	expect((await instance.request("/api/sources/import", { method: "POST", body: form })).status).toBe(201);
+	const uploaded = await instance.request("/api/sources/import", { method: "POST", body: form });
+	expect(uploaded.status, await uploaded.clone().text()).toBe(201);
 	expect(loadSourcesConfig(dir).sources[0]?.writeIdentity).toEqual({
 		agentId: "alice-agent",
 		authorUserId: "alice",

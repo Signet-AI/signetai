@@ -7,7 +7,24 @@ import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import type { NamedContentReadRequest } from "./named-content-reads";
 type FtsBase = Parameters<typeof ftsShardTables>[0];
 export type AuthoredExportTable = "memories" | "session_transcripts" | "memory_artifacts";
+export interface DreamPassReview {
+	readonly id: string;
+	readonly author: { readonly kind: "system"; readonly name: "Dreaming" };
+	readonly team: { readonly id: string; readonly name: string } | null;
+	readonly classifications?: readonly { readonly id: string; readonly name: string }[];
+}
 export type ContentReadRequest =
+	| { readonly op: "dream_pass_review"; readonly scope: ReadScope; readonly ids: readonly string[] }
+	| {
+			readonly op: "memory_list";
+			readonly scope: ReadScope;
+			readonly limit: number;
+			readonly offset: number;
+			readonly type?: string;
+			readonly author?: string;
+			readonly team?: string;
+			readonly classification?: string;
+	  }
 	| {
 			readonly op: "export_content";
 			readonly table: AuthoredExportTable;
@@ -199,6 +216,8 @@ function estimatedReadWork(request: ContentReadRequest): number {
 			return request.references.length;
 		case "projection_rows":
 			return (request.query.limit ?? 100) + (request.query.offset ?? 0);
+		case "dream_pass_review":
+			return Math.max(1, request.ids.length);
 		case "forget_candidates":
 			return Math.min(request.request.limit, 200);
 		case "documents":

@@ -327,6 +327,10 @@ export function registerOrganizationRoutes(
 		active(async (c) => c.json(await admin.deleteInvite(user(c), c.req.param("id") ?? ""))),
 	);
 	app.get(
+		"/api/org/users/lookup",
+		active(async (c) => c.json(await admin.lookupUsers(user(c), c.req.query()))),
+	);
+	app.get(
 		"/api/org/users",
 		active(async (c) => c.json(await operations.listUsers(user(c), c.req.query()))),
 	);

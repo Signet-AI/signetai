@@ -1444,6 +1444,10 @@ export function runDbOwnerWorker(): void {
 			const input = job.request.input;
 			return withBusyRetry(() => txAnswerReflection(db, input), context);
 		}
+		if (job.request.kind === "organization_purge_plan") {
+			const { planOffboardPurgeInTx } = await import("./auth/organization-purge");
+			return planOffboardPurgeInTx(db, job.request.userId, job.request.scope);
+		}
 		if (job.request.kind === "organization_memory_purge") {
 			const { purgeAuthoredMemoryBatchInTx } = await import("./auth/organization-purge");
 			const userId = job.request.userId;

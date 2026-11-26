@@ -1,3 +1,6 @@
+import { OrganizationMemory } from "@/components/organization/memory";
+import { Action } from "@/components/organization/controls";
+import { useWhoami } from "@/lib/session";
 import { MemoryChat } from "@/components/memory-chat";
 import { sourceDocumentTitle } from "@/lib/constellation-display";
 import { categoryColor, ENTITY_CATEGORIES, entityCategory } from "@/lib/entity-category";
@@ -137,6 +140,26 @@ function provenanceLabel(
 	return null;
 }
 export function GraphView() {
+	const whoami = useWhoami();
+	const [graph, setGraph] = useState(false);
+	if (!whoami) return <LegacyGraphView />;
+	return graph ? (
+		<>
+			<Action secondary onClick={() => setGraph(false)}>
+				Back to memory
+			</Action>
+			<LegacyGraphView />
+		</>
+	) : (
+		<div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+			<OrganizationMemory />
+			<Action secondary onClick={() => setGraph(true)}>
+				Open knowledge graph
+			</Action>
+		</div>
+	);
+}
+function LegacyGraphView() {
 	const entityLimit = ENTITY_LIMIT;
 	const canViewAll = viewsAllAgents(useSession());
 	const [selectedAgent, setAgentScope] = useState(ALL_AGENTS);

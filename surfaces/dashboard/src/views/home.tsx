@@ -1,3 +1,6 @@
+import { OrganizationHome } from "@/components/organization/home";
+import { useWhoami } from "@/lib/session";
+import { OrganizationSessions } from "@/components/organization/sessions";
 import { PageHeading, SectionAction, SectionHeading, type StatusTone } from "@/components/dashboard/heading";
 import { DailyBrief } from "@/components/home/daily-brief";
 import { HomeAgentsPanel } from "@/components/home/agents";
@@ -14,6 +17,9 @@ import { HomeSourcesPanel, sourceIssue } from "@/components/home/sources";
 import { useEffect, useMemo, useState } from "react";
 
 export function HomeView() {
+	return useWhoami() ? <OrganizationHome /> : <LocalHomeView />;
+}
+function LocalHomeView() {
 	const status = useAsync(() => api.getStatus(), { key: "status", intervalMs: 30000 });
 	const stats = useAsync(() => api.getKnowledgeStats(), { key: "knowledge-stats", intervalMs: 30000 }).data;
 	const sourcesQuery = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30000 });
@@ -58,6 +64,7 @@ export function HomeView() {
 					<PageHeading id="today-title" title="Today" description={today} />
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
 					<HomeRecentMemories />
+					<OrganizationSessions />
 					<div className="home-activity">
 						<ActivityHeatmap days={days} heading={<SectionHeading title="Activity" />} />
 					</div>

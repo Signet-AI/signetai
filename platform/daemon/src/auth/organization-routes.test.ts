@@ -88,6 +88,372 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("classified transcript material includes source IDs only inside read scope", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("import-reviewer");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin", compliance: true });
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Imported HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement("INSERT INTO compartments(key) VALUES(?)", [label.id]),
+			statement(
+				"INSERT INTO compartment_members(compartment_id,classification_id) SELECT id,? FROM compartments WHERE key=?",
+				[label.id, label.id],
+			),
+			statement(
+				"INSERT INTO session_transcripts(agent_id,session_key,source_id,content,harness,project,compartment_id,created_at) SELECT ?,'imported-session','imported-source','classified transcript','codex','review',id,'2026-11-26' FROM compartments WHERE key=?",
+				[bob.agentId, label.id],
+			),
+			statement(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('source','imported-source',?,?,?,'2026-11-26')",
+				[bob.agentId, label.id, bob.userId],
+			),
+		]);
+		const path = `/api/classifications/${label.id}/items`;
+		const result = await (await call(path, "GET", undefined, bob.token)).json();
+		expect(result.items).toContainEqual({ target_kind: "source", target_id: "imported-source", agent_id: bob.agentId });
+		expect((await call(path)).status).toBe(404);
+		const otherAgent = await (
+			await call("/api/agents", "POST", { name: "Outside import scope", kind: "personal" }, bob.token)
+		).json();
+		for (const limits of [{ agentId: otherAgent.agentId }, { allowedProjects: ["unrelated"] }]) {
+			const key = await (
+				await call(
+					"/api/auth/api-keys",
+					"POST",
+					{
+						name: "restricted-import-review",
+						permissions: ["recall"],
+						expiresAt: new Date(Date.now() + 60_000).toISOString(),
+						...limits,
+					},
+					bob.token,
+				)
+			).json();
+			const denied = await call(path, "GET", undefined, key.secret);
+			expect(denied.status).toBe(200);
+			expect((await denied.json()).items).toEqual([]);
+		}
+	});
+	test("Dreaming review metadata follows pass audience and agent scope", async () => {
+		const { registerPipelineRoutes } = await import("../routes/pipeline-routes");
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerPipelineRoutes(app);
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("dream-reviewer");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin", compliance: true });
+		const team = await (await call("/api/org/groups", "POST", { name: "Dream review" })).json();
+		await call(`/api/org/groups/${team.id}/members/${bob.userId}`, "PUT", { role: "member" });
+		const agent = await (
+			await call("/api/agents", "POST", { name: "Dream team", kind: "team", ownerGroupId: team.id })
+		).json();
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Dream HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO dreaming_passes(id,agent_id,mode,status,started_at,created_at) VALUES('review-dream-public',?,'content','running','2026-11-26','2026-11-26')",
+				[agent.agentId],
+			),
+			statement("INSERT INTO compartments(key) VALUES(?)", [label.id]),
+			statement(
+				"INSERT INTO compartment_members(compartment_id,classification_id) SELECT id,? FROM compartments WHERE key=?",
+				[label.id, label.id],
+			),
+		]);
+		const path = `/api/dream/status?agentId=${agent.agentId}`;
+		const before = await (await call(path)).json();
+		expect(before.passes[0].author).toEqual({ kind: "system", name: "Dreaming" });
+		expect(before.passes[0].team).toEqual({ id: team.id, name: "Dream review" });
+		expect(before.passes[0]).not.toHaveProperty("classifications");
+		await organizationWrite([
+			statement(
+				"INSERT INTO dreaming_passes(id,agent_id,compartment_id,mode,status,started_at,created_at) SELECT 'review-dream-hr',?,id,'content','running','2026-11-26','2026-11-26' FROM compartments WHERE key=?",
+				[agent.agentId, label.id],
+			),
+		]);
+		expect(await (await call(path)).json()).toEqual(before);
+		const allowedResponse = await call(path, "GET", undefined, bob.token);
+		expect(allowedResponse.status, await allowedResponse.clone().text()).toBe(200);
+		const allowed = await allowedResponse.json();
+		expect(allowed.passes.find((pass: { id: string }) => pass.id === "review-dream-hr").classifications).toEqual([
+			{ id: label.id, name: "Dream HR" },
+		]);
+		const active = await (
+			await call(`/api/dream/passes/active?agentId=${agent.agentId}`, "GET", undefined, bob.token)
+		).json();
+		expect(active.items.find((pass: { id: string }) => pass.id === "review-dream-hr").classifications).toEqual([
+			{ id: label.id, name: "Dream HR" },
+		]);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{
+					name: "bound-dream-review",
+					agentId: bob.agentId,
+					permissions: ["recall"],
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				bob.token,
+			)
+		).json();
+		expect((await call(path, "GET", undefined, key.secret)).status).toBe(403);
+	});
+	test("memory review filters and totals stay inside audience and agent scope", async () => {
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerMemoryRoutes(app);
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("bob");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
+		const team = await (await call("/api/org/groups", "POST", { name: "Review" })).json();
+		await call(`/api/org/groups/${team.id}/members/${bob.userId}`, "PUT", { role: "member" });
+		const agent = await (
+			await call("/api/agents", "POST", { name: "Review agent", kind: "team", ownerGroupId: team.id })
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		for (const id of ["review-public", "review-hr"])
+			await organizationWrite([
+				statement(
+					"INSERT INTO memories(id,content,agent_id,author_user_id,memory_kind,type,created_at,updated_at) VALUES (?, 'review evidence',?,?,'episodic','fact',datetime('now'),datetime('now'))",
+					[id, agent.agentId, bob.userId],
+				),
+			]);
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{
+					name: "HR review",
+					audience: [{ kind: "user", id: bob.userId }],
+					appliers: [{ kind: "user", id: bob.userId }],
+				},
+				bob.token,
+			)
+		).json();
+		expect(
+			(
+				await call(
+					`/api/classifications/${label.id}/apply?wait=1`,
+					"POST",
+					{ target: { kind: "memory", id: "review-hr", agentId: agent.agentId } },
+					bob.token,
+				)
+			).status,
+		).toBe(202);
+		const path = `/api/memories?agentId=${agent.agentId}&author=${bob.userId}&team=${team.id}`;
+		const publicView = await (await call(path)).json();
+		expect(publicView.stats.total).toBe(1);
+		expect(publicView.memories.map((m: { id: string }) => m.id)).toEqual(["review-public"]);
+		expect(publicView.memories[0]).not.toHaveProperty("classifications");
+		expect((await (await call(`${path}&classification=${label.id}`)).json()).stats.total).toBe(0);
+		const audience = await (await call(`${path}&classification=${label.id}`, "GET", undefined, bob.token)).json();
+		expect(audience.stats.total).toBe(1);
+		expect(audience.memories[0].id).toBe("review-hr");
+		expect(audience.memories[0].classifications).toEqual([{ id: label.id, name: "HR review" }]);
+		expect((await (await call(`${path}&limit=1&offset=1`, "GET", undefined, bob.token)).json()).stats.total).toBe(2);
+		expect((await (await call(`/api/memories?agentId=${agent.agentId}&author=unknown`)).json()).stats.total).toBe(0);
+		expect((await (await call(`/api/memories?agentId=${agent.agentId}&team=unknown`)).json()).stats.total).toBe(0);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{
+					name: "bound-review",
+					agentId: bob.agentId,
+					permissions: ["recall"],
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				bob.token,
+			)
+		).json();
+		expect((await call(path, "GET", undefined, key.secret)).status).toBe(403);
+	});
+	test("bounded user lookup serves compliance without widening the directory", async () => {
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, bob.token)).status).toBe(403);
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
+		const found = await call("/api/org/users/lookup?q=alice&limit=1", "GET", undefined, bob.token);
+		expect(found.status).toBe(200);
+		expect((await found.json()).users).toEqual([{ id: alice.userId, displayName: "alice", email: null }]);
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([statement("UPDATE users SET email=? WHERE id=?", ["alice@example.test", alice.userId])]);
+		expect(
+			(await (await call("/api/org/users/lookup?q=%40example.test", "GET", undefined, bob.token)).json()).users,
+		).toEqual([{ id: alice.userId, displayName: "alice", email: "alice@example.test" }]);
+		expect((await (await call("/api/org/users/lookup?q=%25", "GET", undefined, bob.token)).json()).users).toEqual([]);
+		const page = await (await call("/api/org/users/lookup?q=a&limit=1", "GET", undefined, bob.token)).json();
+		expect(page.users).toHaveLength(1);
+		expect(typeof page.nextCursor).toBe("string");
+		const next = await (
+			await call(`/api/org/users/lookup?q=a&limit=1&cursor=${page.nextCursor}`, "GET", undefined, bob.token)
+		).json();
+		expect(next.users).toHaveLength(1);
+		expect(next.users[0].id).not.toBe(page.users[0].id);
+		expect(next.nextCursor).toBeNull();
+		expect((await call("/api/org/users", "GET", undefined, bob.token)).status).toBe(403);
+		expect((await call("/api/org/users/lookup?q=alice&limit=51", "GET", undefined, bob.token)).status).toBe(400);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{ name: "narrowed-lookup", permissions: ["recall"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+				bob.token,
+			)
+		).json();
+		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, key.secret)).status).toBe(403);
+		const scoped = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{
+					name: "scoped-lookup",
+					agentId: bob.agentId,
+					permissions: ["classify"],
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				bob.token,
+			)
+		).json();
+		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, scoped.secret)).status).toBe(403);
+	});
+	test("operator log streams are scoped, content-free and cancelled cleanly", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		const { logger } = await import("../logger");
+		registerMiscRoutes(app);
+		await claim();
+		const alice = await member("alice");
+		expect((await call("/api/logs", "GET", undefined, alice.token)).status).toBe(403);
+		logger.info("api", "classified-log-marker", { content: "private-log-detail" });
+		const recent = await call("/api/logs?limit=5");
+		expect(recent.status).toBe(200);
+		const snapshot = await recent.json();
+		expect(snapshot.redacted).toBe(true);
+		expect(JSON.stringify(snapshot)).not.toContain("classified-log-marker");
+		const listeners = logger.listenerCount("log");
+		const controller = new AbortController();
+		const response = await app.request("/api/logs/stream", {
+			headers: { authorization: `Bearer ${admin}` },
+			signal: controller.signal,
+		});
+		expect(response.status).toBe(200);
+		expect(logger.listenerCount("log")).toBe(listeners + 1);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing log stream");
+		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"redacted":true');
+		logger.info("api", "classified-log-marker", { content: "private-log-detail" });
+		const event = new TextDecoder().decode((await reader.read()).value);
+		expect(event).not.toContain("classified-log-marker");
+		expect(event).not.toContain("private-log-detail");
+		controller.abort();
+		await reader.cancel();
+		expect(logger.listenerCount("log")).toBe(listeners);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM audit_events WHERE action='operator.logs_opened'", [], "get"),
+			),
+		).toEqual({ n: 2 });
+		expect((await call(`/api/org/users/${alice.userId}`, "PATCH", { role: "operator" })).status).toBe(200);
+		expect((await call("/api/logs", "GET", undefined, alice.token)).status).toBe(403);
+		const identity = await (await call("/api/auth/whoami")).json();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "scoped-logs",
+				agentId: identity.agents.defaultWrite,
+				permissions: ["admin", "diagnostics"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		expect((await call("/api/logs", "GET", undefined, key.secret)).status).toBe(403);
+		expect((await call("/api/logs?limit=501")).status).toBe(400);
+		const bounded = await app.request("/api/logs/stream?limit=1", { headers: { authorization: `Bearer ${admin}` } });
+		const boundedReader = bounded.body?.getReader();
+		if (!boundedReader) throw new Error("missing bounded log stream");
+		await boundedReader.read();
+		logger.info("api", "bounded event");
+		expect((await boundedReader.read()).done).toBe(false);
+		expect((await boundedReader.read()).done).toBe(true);
+		expect(logger.listenerCount("log")).toBe(listeners);
+		const first = await app.request("/api/logs/stream", { headers: { authorization: `Bearer ${admin}` } });
+		const second = await app.request("/api/logs/stream", { headers: { authorization: `Bearer ${admin}` } });
+		expect((await app.request("/api/logs/stream", { headers: { authorization: `Bearer ${admin}` } })).status).toBe(429);
+		await first.body?.cancel();
+		await second.body?.cancel();
+		expect(logger.listenerCount("log")).toBe(listeners);
+	});
+	test("classified import admission is atomic and hidden staging jobs stay absent", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		const { registerTranscriptImportRoutes } = await import("../routes/transcript-import-routes");
+		registerClassificationRoutes(app);
+		registerTranscriptImportRoutes(app);
+		await claim();
+		const bob = await member("bob");
+		const alice = await member("alice");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Import HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const denied = await call(
+			"/api/sources/imports",
+			"POST",
+			{ classificationId: label.id, files: [{ name: "classified.jsonl" }] },
+			alice.token,
+		);
+		expect({ status: denied.status, body: await denied.json() }).toMatchObject({ status: 403 });
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM source_import_jobs", [], "get"))).toEqual({
+			n: 0,
+		});
+		const created = await call(
+			"/api/sources/imports",
+			"POST",
+			{ classificationId: label.id, files: [{ name: "classified.jsonl" }] },
+			bob.token,
+		);
+		expect({ status: created.status, body: await created.clone().json() }).toMatchObject({ status: 201 });
+		const job = await created.json();
+		expect(
+			await organizationQuery(statement("SELECT labels_json FROM source_import_jobs WHERE id=?", [job.id], "get")),
+		).toEqual({ labels_json: JSON.stringify([label.id]) });
+		expect(
+			(
+				await organizationQuery<{ n: number }>(
+					statement(
+						"SELECT COUNT(*) AS n FROM classification_assignments WHERE target_kind='source' AND agent_id=? AND classification_id=?",
+						[bob.agentId, label.id],
+						"get",
+					),
+				)
+			).n,
+		).toBe(1);
+		const hidden = await call(`/api/sources/imports?agentId=${bob.agentId}`, "GET", undefined, alice.token);
+		expect(hidden.status).toBe(200);
+		expect(JSON.stringify(await hidden.json())).not.toContain(job.id);
+	});
 	test("personal-key cookie sessions retain durable permission, agent and expiry ceilings", async () => {
 		const root = await claim();
 		const bob = await member("bob");
@@ -101,7 +467,10 @@ describe("organization HTTP flows", () => {
 				expiresAt,
 			})
 		).json();
-		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		const exchanged = await app.request("/api/auth/session", {
+			method: "POST",
+			headers: { authorization: `Bearer ${issued.secret}` },
+		});
 		expect(exchanged.status).toBe(200);
 		const payload = await exchanged.json();
 		expect(payload).not.toHaveProperty("accessToken");
@@ -156,7 +525,10 @@ describe("organization HTTP flows", () => {
 				expiresAt,
 			})
 		).json();
-		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		const exchanged = await app.request("/api/auth/session", {
+			method: "POST",
+			headers: { authorization: `Bearer ${issued.secret}` },
+		});
 		expect(exchanged.status).toBe(200);
 		const initial = await exchanged.json();
 		const cookie = exchanged.headers
@@ -477,6 +849,16 @@ describe("organization HTTP flows", () => {
 				),
 			]);
 		}
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories(id,content,agent_id,memory_kind,type,visibility,created_at,updated_at) VALUES ('hr-child','derived private',?,'semantic','fact','private',?,?),('hr-grandchild','copied private',?,'semantic','fact','private',?,?)",
+				[hrAgent.agentId, now, now, hrAgent.agentId, now, now],
+			),
+			statement(
+				"INSERT INTO derived_memory_sources(agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'hr-child','memory','memory-hr',?),(?,'hr-grandchild','memory','hr-child',?)",
+				[hrAgent.agentId, now, hrAgent.agentId, now],
+			),
+		]);
 		const expired = await issueSession(bob.userId, "cli");
 		await organizationWrite([
 			statement(
@@ -535,13 +917,37 @@ describe("organization HTTP flows", () => {
 		).toBe(200);
 		const authorized = await (await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "keep" })).json();
 		expect(authorized.plan.counts).toMatchObject({
-			memories: 2,
+			memories: 4,
 			transcripts: 2,
 			artifacts: 2,
 			documents: 2,
 			sessions: 1,
 			agents: 2,
 		});
+		expect(
+			(await call(`/api/classifications/${hr.id}/audience`, "PUT", [{ kind: "user", id: bob.userId }], bob.token))
+				.status,
+		).toBe(200);
+		const purged = await (
+			await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "purge", dryRun: false })
+		).json();
+		let status = await (await call(`/api/org/jobs/${purged.jobId}`)).json();
+		for (let attempt = 0; status.status === "running" && attempt < 100; attempt++) {
+			await Bun.sleep(25);
+			status = await (await call(`/api/org/jobs/${purged.jobId}`)).json();
+		}
+		expect(status.status).toBe("complete");
+		expect(JSON.parse(status.progress_json).removed).toMatchObject({
+			memories: 1,
+			documents: 1,
+			memory_artifacts: 1,
+			session_transcripts: 1,
+		});
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [bob.userId], "get"),
+			),
+		).toEqual({ n: 0 });
 	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
@@ -1222,6 +1628,7 @@ describe("organization HTTP flows", () => {
 				["purge-target", departing.user.id],
 				["keep-other", root.user.id],
 				["purge-derived", root.user.id],
+				["purge-grandchild", root.user.id],
 			])
 				txIngestEnvelope(db, {
 					id: memoryId,
@@ -1250,6 +1657,10 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([
 			statement(
 				"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-derived','memory','purge-target',?)",
+				[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
+			),
+			statement(
+				"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-grandchild','memory','purge-derived',?)",
 				[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
 			),
 			statement(
@@ -1308,6 +1719,19 @@ describe("organization HTTP flows", () => {
 				],
 			),
 		]);
+		const preview = await (
+			await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", { mode: "purge" })
+		).json();
+		expect(preview.plan.counts).toMatchObject({
+			memories: 3,
+			summaries: 3,
+			artifacts: 1,
+			documents: 1,
+			transcripts: 1,
+		});
+		const beforeMemories = await organizationQuery<{ n: number }>(
+			statement("SELECT COUNT(*) AS n FROM memories", [], "get"),
+		);
 		const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
 			mode: "purge",
 			dryRun: false,
@@ -1334,7 +1758,12 @@ describe("organization HTTP flows", () => {
 			),
 		).toBeNull();
 		const progress = JSON.parse(status.progress_json);
-		expect(progress.removed.session_summaries).toBe(3);
+		const afterMemories = await organizationQuery<{ n: number }>(
+			statement("SELECT COUNT(*) AS n FROM memories", [], "get"),
+		);
+		expect(beforeMemories.n - afterMemories.n).toBe(preview.plan.counts.memories);
+		expect(progress.removed.memories).toBe(preview.plan.counts.memories);
+		expect(progress.removed.session_summaries).toBe(preview.plan.counts.summaries);
 		expect(progress.residual).toBeDefined();
 		expect(Object.values(progress.residual).every((n) => n === 0)).toBe(true);
 

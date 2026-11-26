@@ -413,6 +413,41 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	};
 	registerMcpTool(
 		server,
+		"signet_operator_logs",
+		{
+			title: "Operator Log Metadata",
+			description:
+				"Read bounded redacted log metadata. Requires unscoped admin and diagnostics permissions; message bodies are never returned.",
+			inputSchema: z
+				.object({
+					limit: z.number().int().min(1).max(500).optional(),
+					level: z.enum(["debug", "info", "warn", "error"]).optional(),
+					category: z
+						.string()
+						.regex(/^[a-z][a-z-]{0,63}$/)
+						.optional(),
+				})
+				.strict(),
+		},
+		async (input) => {
+			const query = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) if (value !== undefined) query.set(key, String(value));
+			return organizationResult(`/api/logs${query.size ? `?${query}` : ""}`);
+		},
+	);
+	registerMcpTool(
+		server,
+		"signet_pipeline_pause",
+		{
+			title: "Pause or Resume Pipeline Workers",
+			description:
+				"Persist the instance worker pause state. Requires an administrator without agent or project restrictions.",
+			inputSchema: z.object({ paused: z.boolean() }).strict(),
+		},
+		async ({ paused }) => organizationResult(`/api/pipeline/${paused ? "pause" : "resume"}`, "POST", {}),
+	);
+	registerMcpTool(
+		server,
 		"signet_org_access",
 		{
 			title: "Inspect Organization Access",
@@ -420,6 +455,27 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({ userId: z.string().min(1).max(128) }).strict(),
 		},
 		async ({ userId }) => organizationResult(`/api/org/access/${encodeURIComponent(userId)}`),
+	);
+	registerMcpTool(
+		server,
+		"signet_org_user_lookup",
+		{
+			title: "Look Up Organization Users",
+			description:
+				"Search a bounded page of names and emails. Requires admin or compliance access without agent or project restrictions.",
+			inputSchema: z
+				.object({
+					q: z.string().trim().min(1).max(128),
+					limit: z.number().int().min(1).max(50).optional(),
+					cursor: z.string().min(1).max(128).optional(),
+				})
+				.strict(),
+		},
+		async (input) => {
+			const query = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) if (value !== undefined) query.set(key, String(value));
+			return organizationResult(`/api/org/users/lookup?${query}`);
+		},
 	);
 	registerMcpTool(
 		server,
@@ -921,6 +977,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				limit: z.number().optional().describe("Max results (default 100)"),
 				offset: z.number().optional().describe("Pagination offset"),
 				type: z.string().optional().describe("Filter by memory type"),
+				author: z.string().min(1).max(200).optional().describe("Author user ID"),
+				team: z.string().min(1).max(200).optional().describe("Owning team ID"),
+				classification: z.string().min(1).max(200).optional().describe("Classification ID within your audience"),
 				agent_id: z
 					.string()
 					.refine((value) => value.trim() !== "all", "agent_id must name one agent")
@@ -928,11 +987,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.describe("Agent ID whose read scope applies"),
 			}),
 		},
-		async ({ limit, offset, type, agent_id }) => {
+		async ({ limit, offset, type, agent_id, author, team, classification }) => {
 			const params = new URLSearchParams();
 			if (limit !== undefined) params.set("limit", String(limit));
 			if (offset !== undefined) params.set("offset", String(offset));
 			if (type !== undefined) params.set("type", type);
+			for (const [key, value] of Object.entries({ author, team, classification }))
+				if (value !== undefined) params.set(key, value);
 			const agentId = agentFor(agent_id);
 			if (agentId === "all") return errorResult("List failed: agent_id must name one agent");
 			if (agentId) params.set("agentId", agentId);

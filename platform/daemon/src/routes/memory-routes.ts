@@ -1064,43 +1064,27 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const type = parseOptionalString(c.req.query("type"));
 			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true, current: true });
 			if (scope instanceof Response) return scope;
-			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 ${scope.sql}${type ? " AND m.type = ?" : ""}`;
-			const whereArgs = [...scope.args, ...(type ? [type] : [])];
-
-			const memories = await dbOwnerQuery<Array<{ content: string; project: string | null }>>(
-				{
-					sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id, m.project
-					 FROM memories m
-					 ${whereSql}
-					 ORDER BY m.created_at DESC,m.id
-					 LIMIT ? OFFSET ?`,
-					params: [...whereArgs, limit, offset],
-					result: "all",
-				},
-				{ operation: "memory.list", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
-			);
-			const stats = await dbOwnerQuery<{ total: number; critical: number; with_embeddings: number } | undefined>(
-				{
-					sql: `SELECT COUNT(*) AS total,
-					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
-					        COALESCE(SUM(CASE WHEN
-					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id AND e.agent_id=m.agent_id)
-					        THEN 1 ELSE 0 END), 0) AS with_embeddings
-					 FROM memories m
-					 ${whereSql}`,
-					params: whereArgs,
-					result: "get",
-				},
-				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
-			);
-
+			const filters = {
+				author: c.req.query("author"),
+				team: c.req.query("team"),
+				classification: c.req.query("classification"),
+			};
+			if (Object.values(filters).some((value) => value !== undefined && (!value.length || value.length > 200)))
+				return c.json({ error: "Invalid memory review filter", reason: "invalid_filter" }, 400);
+			const result = await contentRead<{
+				memories: Array<{ content: string }>;
+				stats: { total: number; critical: number; withEmbeddings: number };
+			}>({
+				op: "memory_list",
+				scope: scope.readScope,
+				limit,
+				offset,
+				type,
+				...filters,
+			});
 			return c.json({
-				memories: memories.map((row) => ({ ...row, content: redactCredentials(row.content) })),
-				stats: {
-					total: stats?.total ?? 0,
-					withEmbeddings: stats?.with_embeddings ?? 0,
-					critical: stats?.critical ?? 0,
-				},
+				...result,
+				memories: result.memories.map((row) => ({ ...row, content: redactCredentials(row.content) })),
 			});
 		} catch (e) {
 			const tooLarge = isOwnerResultTooLarge(e);

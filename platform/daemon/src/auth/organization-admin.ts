@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { readableClassificationsFor } from "../classification-access";
-import { audienceSubjectFromPrincipal, inFlightClassificationSql, readScopeSql, resolveReadScope } from "../read-scope";
+import { audienceSubjectFromPrincipal, inFlightClassificationSql, resolveReadScope } from "../read-scope";
+import { dbOwnerOrganizationPurgePlan } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import { logger } from "../logger";
 import { type AgentRecord, canActAs } from "./agent-access";
@@ -21,6 +22,27 @@ import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 
 const text = z.string().trim().min(1).max(128);
+export async function lookupUsers(p: Principal, input: unknown) {
+	if (!(p.permissions.has("admin") || (p.compliance && p.permissions.has("classify"))))
+		throw new IdentityError(403, "permission", "Requires admin or compliance access");
+	if (p.boundAgentId !== null) throw new IdentityError(403, "agent_not_permitted");
+	if (p.allowedProjects !== null) throw new IdentityError(403, "project_not_permitted");
+	const data = z
+		.object({ q: text, limit: z.coerce.number().int().min(1).max(50).default(20), cursor: text.optional() })
+		.strict()
+		.parse(input);
+	const pattern = `%${data.q.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+	const rows = await organizationQuery<readonly { id: string; displayName: string; email: string | null }[]>(
+		statement(
+			"SELECT id,display_name AS displayName,email FROM users WHERE status='active' AND (? IS NULL OR id>?) AND (display_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\') ORDER BY id LIMIT ?",
+			[data.cursor ?? null, data.cursor ?? null, pattern, pattern, data.limit + 1],
+			"all",
+		),
+	);
+	const users = rows.slice(0, data.limit);
+	await organizationWrite([auditStatement(p, "user.lookup", "user", null, { count: users.length })]);
+	return { users, nextCursor: rows.length > data.limit ? (users.at(-1)?.id ?? null) : null };
+}
 export async function invites(p: Principal) {
 	requireAdmin(p);
 	return {
@@ -598,43 +620,21 @@ export async function deactivate(p: Principal, userId: string, input: unknown, b
 		{ reach: p.boundAgentId ? { kind: "own", agentId: p.boundAgentId } : { kind: "all" }, projects: p.allowedProjects },
 		audienceSubjectFromPrincipal(p),
 	);
-	const memories = readScopeSql("m", scope);
-	const transcripts = readScopeSql("t", scope, {
-		visibility: null,
-		memory: null,
-		session: "session_key",
-		source: "source_id",
-	});
-	const artifacts = readScopeSql("a", scope, {
-		visibility: null,
-		memory: null,
-		session: "session_key",
-		source: "source_id",
-	});
-	const documents = readScopeSql("d", scope, { visibility: null, memory: null, session: null, source: null });
+	let impact: Record<string, number>;
+	try {
+		impact = await dbOwnerOrganizationPurgePlan(userId, scope);
+	} catch (error) {
+		if (error instanceof Error && error.message === "plan_limit")
+			throw new IdentityError(400, "plan_limit", "Narrow the offboarding preview to an agent");
+		throw error;
+	}
 	const visibleAgents = `WITH visible_agents AS (SELECT a.id,a.name,a.kind,a.owner_user_id FROM agents a WHERE a.archived_at IS NULL${p.boundAgentId ? " AND a.id=?" : ""} AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.target_kind='agent' AND ca.target_id=a.id AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))) AND NOT EXISTS(SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} AND json_extract(j.params_json,'$.target.kind')='agent' AND json_extract(j.params_json,'$.target.agentId')=a.id))`;
 	const agentArgs = [...(p.boundAgentId ? [p.boundAgentId] : []), p.userId, p.userId, p.userId, p.userId];
 	const at = new Date().toISOString();
 	const counts = await organizationQuery<Record<string, number>>(
 		statement(
-			`${visibleAgents} SELECT (SELECT COUNT(*) FROM memories m WHERE m.author_user_id=? AND COALESCE(m.is_deleted,0)=0${memories.sql}) AS memories,(SELECT COUNT(*) FROM session_transcripts t WHERE t.speaker_user_id=?${transcripts.sql}) AS transcripts,(SELECT COUNT(*) FROM memory_artifacts a WHERE a.author_user_id=?${artifacts.sql}) AS artifacts,(SELECT COUNT(*) FROM documents d WHERE d.author_user_id=? AND d.status!='deleted'${documents.sql}) AS documents,(SELECT COUNT(*) FROM api_keys k WHERE k.user_id=? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?) AND (k.agent_id IS NULL OR k.agent_id IN (SELECT id FROM visible_agents))) AS keys,(SELECT COUNT(*) FROM auth_sessions WHERE user_id=? AND revoked_at IS NULL AND (access_expires_at>? OR refresh_expires_at>?)) AS sessions,(SELECT COUNT(*) FROM visible_agents WHERE owner_user_id=?) AS agents`,
-			[
-				...agentArgs,
-				userId,
-				...memories.args,
-				userId,
-				...transcripts.args,
-				userId,
-				...artifacts.args,
-				userId,
-				...documents.args,
-				userId,
-				at,
-				userId,
-				at,
-				at,
-				userId,
-			],
+			`${visibleAgents} SELECT (SELECT COUNT(*) FROM api_keys k WHERE k.user_id=? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?) AND (k.agent_id IS NULL OR k.agent_id IN (SELECT id FROM visible_agents))) AS keys,(SELECT COUNT(*) FROM auth_sessions WHERE user_id=? AND revoked_at IS NULL AND (access_expires_at>? OR refresh_expires_at>?)) AS sessions,(SELECT COUNT(*) FROM visible_agents WHERE owner_user_id=?) AS agents`,
+			[...agentArgs, userId, at, userId, at, at, userId],
 			"get",
 		),
 	);
@@ -650,7 +650,7 @@ export async function deactivate(p: Principal, userId: string, input: unknown, b
 		userId,
 		mode: data.mode,
 		transferTo: data.transferTo ?? null,
-		counts,
+		counts: { ...counts, ...impact },
 		ownedAgents: owned.map((agent) => ({ ...agent, transferTo: transferTarget })),
 	};
 	if (data.dryRun) {

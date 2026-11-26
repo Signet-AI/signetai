@@ -1,3 +1,5 @@
+import { OrganizationDreams } from "@/components/organization/dreams";
+import { useWhoami } from "@/lib/session";
 import { MarkdownSummary, markdownSummaryPreview } from "@/components/dreams/summary";
 import { PageHeading, SectionAction, SectionHeading, StatusLabel } from "@/components/dashboard/heading";
 import { Button } from "@/components/ui/button";
@@ -62,6 +64,9 @@ interface OntologyOp {
 	payload?: Record<string, unknown>;
 }
 export function DreamsView() {
+	return useWhoami() ? <OrganizationDreams /> : <LocalDreamsView />;
+}
+function LocalDreamsView() {
 	if (!useCan("admin")) {
 		return (
 			<div className="dreams-page">

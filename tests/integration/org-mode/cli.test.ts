@@ -28,6 +28,64 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		expect(
+			(await request(daemon.origin, "/api/pipeline/pause", fixture.user("alice").session, "POST", {})).status,
+		).toBe(403);
+		const scopedOperator = success(
+			await request(daemon.origin, "/api/auth/api-keys", admin.credential, "POST", {
+				name: "scoped-operator",
+				agentId: record(status.identity.agents).defaultWrite,
+				permissions: ["admin", "diagnostics"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			}),
+			"create scoped operator key",
+		);
+		expect(
+			(await request(daemon.origin, "/api/pipeline/pause", { bearer: text(scopedOperator.secret) }, "POST", {})).status,
+		).toBe(403);
+		const paused = success(
+			await request(daemon.origin, "/api/pipeline/pause", admin.credential, "POST", {}),
+			"pause organization workers",
+		);
+		expect(paused.paused).toBe(true);
+		const pauseAudit = success(
+			await request(daemon.origin, "/api/org/audit?action=operator.pipeline_paused", admin.credential),
+			"read pause audit",
+		);
+		expect(Array.isArray(pauseAudit.events) && pauseAudit.events.length > 0).toBe(true);
+		await daemon.restart();
+		expect(
+			success(await request(daemon.origin, "/api/pipeline/pause", admin.credential, "POST", {}), "verify durable pause")
+				.changed,
+		).toBe(false);
+		expect((await cli(["resume", "--json"])).paused).toBe(false);
+		expect((await cli(["daemon", "pause", "--json"])).paused).toBe(true);
+		expect((await cli(["daemon", "resume", "--json"])).paused).toBe(false);
+		const browserKey = success(
+			await request(daemon.origin, "/api/auth/api-keys", admin.credential, "POST", {
+				name: "browser-ceiling-proof",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			}),
+			"create browser key",
+		);
+		const exchanged = await request(
+			daemon.origin,
+			"/api/auth/session",
+			{ bearer: text(browserKey.secret) },
+			"POST",
+			{},
+		);
+		const exchangedBody = success(exchanged, "exchange browser key");
+		expect(exchangedBody).not.toHaveProperty("accessToken");
+		const keyBrowser = browser(exchanged);
+		const keyIdentity = success(await request(daemon.origin, "/api/auth/whoami", keyBrowser), "key browser identity");
+		expect(keyIdentity.permissions).toEqual(["recall"]);
+		success(
+			await request(daemon.origin, `/api/auth/api-keys/${text(record(browserKey.key).id)}`, admin.credential, "DELETE"),
+			"revoke browser parent",
+		);
+		expect((await request(daemon.origin, "/api/agents", keyBrowser)).status).toBe(401);
 		const definition = await cli(
 			["classification", "create", "CLI-private", "--audience", `group:${fixture.hrGroupId}`, "--json"],
 			fixture.user("cora").session.bearer,
