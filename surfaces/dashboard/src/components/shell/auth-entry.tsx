@@ -1,3 +1,4 @@
+import { attempt } from "@signet/core/attempt";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { SignetMark } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -268,6 +269,23 @@ export function ClaimPage() {
 	);
 }
 
+export function invitationContinuationHref(path: string, origin: string): string | null {
+	if (!path.startsWith("/api/auth/sso/start?")) return null;
+	const url = attempt(() => new URL(path, origin));
+	if (
+		!url ||
+		url.origin !== origin ||
+		url.pathname !== "/api/auth/sso/start" ||
+		url.hash ||
+		url.username ||
+		url.password ||
+		Array.from(url.searchParams.keys()).length !== 1 ||
+		!url.searchParams.get("continuation")
+	)
+		return null;
+	return path;
+}
+
 export function InvitationPage() {
 	const [token, setToken] = useState(() => {
 		const value = location.pathname.startsWith("/auth/invite/") ? location.pathname.slice("/auth/invite/".length) : "";
@@ -307,9 +325,14 @@ export function InvitationPage() {
 			return;
 		}
 		if (response.data?.ssoStartPath) {
-			setError(
-				"Continue with your administrator’s SSO invitation flow. This instance has not enabled a token-free SSO invitation handoff.",
-			);
+			const path = invitationContinuationHref(response.data.ssoStartPath, location.origin);
+			if (!path) {
+				setError("The instance returned an unsafe SSO continuation. Request a new invitation.");
+				return;
+			}
+			setToken("");
+			setPassword("");
+			location.assign(path);
 			return;
 		}
 		setToken("");

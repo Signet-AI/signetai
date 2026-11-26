@@ -31,7 +31,13 @@ export interface Whoami {
 		readonly email: string | null;
 		readonly role: string;
 		readonly compliance: boolean;
-		readonly groups: readonly { readonly id: string; readonly name: string; readonly role: string }[];
+		readonly ssoManaged?: boolean;
+		readonly groups: readonly {
+			readonly id: string;
+			readonly name: string;
+			readonly role: string;
+			readonly managedBy?: string;
+		}[];
 	};
 	readonly agents: { readonly defaultRead: string; readonly defaultWrite: string | null };
 	readonly credential: { readonly id: string; readonly kind: string; readonly expiresAt: string | null };
@@ -208,12 +214,23 @@ function readWhoami(value: Record<string, unknown>): Whoami | undefined {
 				const id = text(group.id);
 				const name = text(group.name);
 				const role = text(group.role);
-				return id && name && role ? [{ id, name, role }] : [];
+				return id && name && role
+					? [{ id, name, role, ...(text(group.managedBy) ? { managedBy: String(group.managedBy) } : {}) }]
+					: [];
 			})
 		: [];
 	return {
 		organization: { name, agentModel },
-		user: { id, username, displayName, email: text(user.email), role, compliance: user.compliance === true, groups },
+		user: {
+			id,
+			username,
+			displayName,
+			email: text(user.email),
+			role,
+			compliance: user.compliance === true,
+			ssoManaged: user.ssoManaged === true,
+			groups,
+		},
 		credential: { id: credentialId, kind, expiresAt: text(credential.expiresAt) },
 		agents: { defaultRead, defaultWrite: text(agents.defaultWrite) },
 	};
