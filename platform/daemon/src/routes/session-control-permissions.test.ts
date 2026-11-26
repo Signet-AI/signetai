@@ -158,6 +158,7 @@ afterAll(async () => {
 describe("session control permissions in team mode", () => {
 	it("forgets only attributable memories and retains mixed and pinned evidence", async () => {
 		await seed("delete-lineage", "User: lineage");
+		await seed("unrelated-session", "User: retained independent evidence");
 		await getDbAccessor().withWriteTxAsync((db) => {
 			for (const [id, pinned] of [
 				["delete-single", 0],
