@@ -568,7 +568,7 @@
 	@container home (max-width: 600px) {
 		.home-today, .home-system { padding-block: 20px 28px; }
 		.home-daily-brief { padding: 16px 16px 12px; margin-block-end: 24px; border-radius: 14px; }
-		.home-memory-summary { gap: 10px; align-items: flex-start; padding-block: 10px; }
+		.home-memory-summary { flex-shrink: 0; gap: 10px; align-items: flex-start; padding-block: 10px; }
 		.home-memory-summary p { -webkit-line-clamp: 2; }
 		.home-recent-list { max-block-size: 340px; }
 		.home-source-filter { width: 112px; }
