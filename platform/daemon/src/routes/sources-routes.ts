@@ -241,8 +241,9 @@ async function sourceReadable(
 	return contentRead<boolean>({
 		op: "source_access",
 		sourceId: source.id,
-		agentId:
-			source.kind === "import" && typeof source.providerSettings?.agentId === "string"
+		agentId: source.writeIdentity?.agentId
+			? source.writeIdentity.agentId
+			: source.kind === "import" && typeof source.providerSettings?.agentId === "string"
 				? source.providerSettings.agentId
 				: agentId,
 		scope,
