@@ -1,3 +1,4 @@
+import { localAllReadScope } from "@signet/core";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,6 +80,7 @@ describe("knowledge feedback", () => {
 
 		const resolved = getDbAccessor().withReadDb((db) =>
 			resolveFocalEntities(db, "default", {
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 				project: "/tmp/other-project",
 			}),
 		);
@@ -112,6 +114,7 @@ describe("knowledge feedback", () => {
 
 		const resolved = getDbAccessor().withReadDb((db) =>
 			resolveFocalEntities(db, "default", {
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 				project: "/tmp/no-match-here",
 				sessionKey: "session-1",
 			}),

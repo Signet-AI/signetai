@@ -156,6 +156,7 @@ test("hybrid recall and prompt injection cannot observe hidden corpus mutations"
 		const prompt = async (readScope: ReadScope) => {
 			const response = await handleUserPromptSubmit(
 				{
+					author: { userId: null, credential: "local" },
 					harness: "codex",
 					agentId: "default",
 					sessionKey: `proof-${promptSequence++}`,

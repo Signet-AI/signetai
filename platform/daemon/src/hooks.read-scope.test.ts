@@ -171,16 +171,26 @@ function promptDeps() {
 
 async function sessionStart(sessionKey: string, scope: ReadScope): Promise<string> {
 	const result = await handleSessionStart(
-		{ harness: "codex", sessionKey, project: "/repo", parentSessionKey: "hidden-session" },
+		{
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey,
+			project: "/repo",
+			parentSessionKey: "hidden-session",
+		},
 		scope,
 	);
 	return result.inject.replaceAll(sessionKey, "<session>");
 }
 
 async function prompt(sessionKey: string, userMessage: string, scope: ReadScope) {
-	return await handleUserPromptSubmit({ harness: "codex", sessionKey, userMessage }, promptDeps(), {
-		readScope: scope,
-	});
+	return await handleUserPromptSubmit(
+		{ author: { userId: null, credential: "local" }, harness: "codex", sessionKey, userMessage },
+		promptDeps(),
+		{
+			readScope: scope,
+		},
+	);
 }
 
 const organization: OrganizationRow = {
@@ -236,7 +246,10 @@ function organizationApp(principal: Principal | null, org: OrganizationRow | nul
 	const app = new Hono();
 	app.use(async (c, next) => {
 		c.set("organization", org);
-		if (principal) c.set("principal", principal);
+		if (principal) {
+			c.set("principal", principal);
+			c.set("author", { userId: principal.userId, credential: principal.credential.id });
+		}
 		await next();
 	});
 	app.get("/scope/:agent", async (c) =>
@@ -317,12 +330,21 @@ describe("hook injection read scope", () => {
 	});
 
 	it("scopes pre-compaction recent memories", async () => {
-		const outsidePrompt = (await handlePreCompaction({ harness: "codex", sessionKey: "compact-outside" }, outside()))
-			.summaryPrompt;
+		const outsidePrompt = (
+			await handlePreCompaction(
+				{ author: { userId: null, credential: "local" }, harness: "codex", sessionKey: "compact-outside" },
+				outside(),
+			)
+		).summaryPrompt;
 		expect(outsidePrompt).toContain("Atlas launch is planned for spring.");
 		expect(outsidePrompt).not.toContain("HRSECRET");
 		expect(
-			(await handlePreCompaction({ harness: "codex", sessionKey: "compact-inside" }, inside())).summaryPrompt,
+			(
+				await handlePreCompaction(
+					{ author: { userId: null, credential: "local" }, harness: "codex", sessionKey: "compact-inside" },
+					inside(),
+				)
+			).summaryPrompt,
 		).toContain("HRSECRET");
 	});
 

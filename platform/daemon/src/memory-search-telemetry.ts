@@ -32,7 +32,6 @@ export interface MemorySearchTelemetryQuery {
 	readonly noHits?: boolean;
 	readonly limit?: number;
 	readonly offset?: number;
-	readonly readScope?: ReadScope;
 }
 
 export interface MemorySearchTelemetryCursor {

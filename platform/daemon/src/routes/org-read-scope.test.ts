@@ -103,7 +103,14 @@ beforeAll(async () => {
 	registerTelemetryRoutes(app);
 	const vault = join(directory, "vault");
 	mkdirSync(vault);
-	const source = addObsidianSource({ root: vault, name: "Atlas" }, directory);
+	const source = addObsidianSource(
+		{
+			root: vault,
+			name: "Atlas",
+			writeIdentity: { agentId: "beta", authorUserId: "bob", authorCredential: "session:bob" },
+		},
+		directory,
+	);
 	if (!source.ok) throw new Error(source.error);
 	sourceId = source.source.id;
 	registerSourcesRoutes(app, { agentsDir: directory });

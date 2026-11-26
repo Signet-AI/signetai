@@ -421,7 +421,7 @@ describe("knowledge and ontology organization reads", () => {
 				{ operation: "test.knowledge.fts" },
 			);
 			expect(fts.map((row) => row.id)).toContain("hidden");
-			const focal = await resolveFocalEntitiesViaOwner(owner, "default", { queryTokens: ["needle"] });
+			const focal = await resolveFocalEntitiesViaOwner(owner, "default", { queryTokens: ["needle"], readScope: scope });
 			expect(focal.entityIds).toContain("hidden");
 		}
 		const reader = await appFor("reader", "peer");

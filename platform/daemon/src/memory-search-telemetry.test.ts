@@ -34,7 +34,7 @@ describe("memory search telemetry", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		await getDbAccessor().withWriteTxAsync((db) =>
 			db.exec(
-				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('mem-1','Recall QA context','ant','now','now'); INSERT INTO compartments(id,key) VALUES(1,'telemetry-fixture')",
+				"INSERT INTO agents(id,name,created_at,updated_at) VALUES('ant','Ant','now','now'); INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('mem-1','Recall QA should preserve enough context for manual review.','ant','now','now'); INSERT INTO compartments(id,key) VALUES(1,'telemetry-fixture')",
 			),
 		);
 	});
@@ -89,11 +89,6 @@ describe("memory search telemetry", () => {
 	}
 
 	it("stores query text, filters, timings, and result snapshots for QA", async () => {
-		await getDbAccessor().withWriteTxAsync((db) =>
-			db.exec(
-				"INSERT INTO agents(id,name,created_at,updated_at) VALUES('ant','Ant','now','now'); INSERT INTO memories(id,agent_id,content,created_at,updated_at) VALUES('mem-1','ant','Recall QA should preserve enough context for manual review.','now','now')",
-			),
-		);
 		await recordMemorySearchTelemetry(getDbAccessor(), {
 			route: "POST /api/memory/recall",
 			agentId: "ant",
@@ -165,7 +160,7 @@ describe("memory search telemetry", () => {
 				retentionDays: 90,
 			});
 		}
-		expect(await listMemorySearchTelemetry(getDbAccessor(), {})).toEqual([]);
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { scope })).toEqual([]);
 	});
 
 	it("resolves telemetry project from effective recall params", () => {
@@ -314,7 +309,7 @@ describe("memory search telemetry", () => {
 			});
 			await record(["mem-open"]);
 			expect(stored().compartment).toBe(hr);
-			expect(await listMemorySearchTelemetry(getDbAccessor(), { readScope: scope })).toEqual([]);
+			expect(await listMemorySearchTelemetry(getDbAccessor(), { scope: scope })).toEqual([]);
 		});
 
 		it("takes the union label of every returned result and cites each one", async () => {
@@ -343,9 +338,9 @@ describe("memory search telemetry", () => {
 			const { hr } = seed();
 			await record(["mem-open"]);
 			await record(["mem-hr"]);
-			const outside = await listMemorySearchTelemetry(getDbAccessor(), { readScope: scope });
+			const outside = await listMemorySearchTelemetry(getDbAccessor(), { scope: scope });
 			expect(outside.map((item) => item.results.map((row) => row.id))).toEqual([["mem-open"]]);
-			const inside = await listMemorySearchTelemetry(getDbAccessor(), { readScope: { ...scope, compartments: [hr] } });
+			const inside = await listMemorySearchTelemetry(getDbAccessor(), { scope: { ...scope, compartments: [hr] } });
 			expect(inside).toHaveLength(2);
 		});
 

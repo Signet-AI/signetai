@@ -94,6 +94,11 @@ function ownedEmbeddingFixture(db: Database): Database {
 		if (columns.length > 0 && !columns.some((row) => row.name === "agent_id"))
 			db.exec(`ALTER TABLE ${table} ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'`);
 	}
+	for (const table of ["embeddings", "embeddings_staging"]) {
+		db.exec(
+			`UPDATE ${table} SET agent_id=(SELECT agent_id FROM memories WHERE memories.id=${table}.source_id) WHERE agent_id IS NULL AND source_type='memory'`,
+		);
+	}
 	return db;
 }
 
@@ -434,6 +439,7 @@ describe("staging promotion", () => {
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
 		addScopeColumns(raw);
+		classificationSchema(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, db, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
@@ -483,6 +489,7 @@ describe("staging promotion", () => {
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
 		addScopeColumns(raw);
+		classificationSchema(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, db, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
@@ -540,6 +547,7 @@ describe("staging promotion", () => {
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
 		addScopeColumns(raw);
+		classificationSchema(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, db, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
@@ -607,6 +615,7 @@ describe("staging promotion", () => {
 
 		const failingDb = failIndexStateUpdateOnce(raw);
 		addScopeColumns(raw);
+		classificationSchema(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, failingDb, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, failingDb, fn),

@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Hono } from "hono";
+import { bindPrincipalAccess } from "./auth/agent-access";
+import { readOrganization } from "./auth/organization-store";
 import { localPrincipal, type Principal } from "./auth/principal";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
@@ -91,7 +93,17 @@ function seedWorld(name: string, hiddenArtifacts: number): number {
 function appFor(principal: Principal): Hono {
 	const app = new Hono();
 	app.use("*", async (c, next) => {
+		bindPrincipalAccess(principal, {
+			agentModel: "single",
+			personalAgentsSelfService: true,
+			organizationAgentId: "default",
+			personalAgentId: null,
+			defaultReadAgentId: null,
+			agents: [{ id: "default", kind: "organization", owner_user_id: null, owner_group_id: null, archived_at: null }],
+		});
+		c.set("organization", await readOrganization());
 		c.set("principal", principal);
+		c.set("author", { userId: principal.userId, credential: principal.credential.id });
 		await next();
 	});
 	registerMemoryRoutes(app, { fetchEmbedding: async () => null });
