@@ -229,8 +229,8 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			{ answer: "The reflected answer belongs to Alice." },
 			alice.accessToken,
 		);
-		if (reflected.status !== 200) throw new Error(`Reflection failed ${reflected.status}: ${await reflected.text()}`);
-		const reflection = z.object({ memoryId: z.string() }).parse(await reflected.json());
+		expect(reflected.status).toBe(403);
+		expect(await reflected.json()).toMatchObject({ reason: "agent_binding_conflict" });
 		const compacted = await request(
 			"/api/hooks/compaction-complete",
 			"POST",
@@ -254,7 +254,10 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		}
 		const beforePurge = new Database(join(root, "before-purge.db"), { readonly: true });
 		try {
-			for (const id of [memory.id, hookMemory.id, reflection.memoryId])
+			expect(
+				beforePurge.query("SELECT answer,answer_memory_id FROM daily_reflections WHERE id='smoke-reflection'").get(),
+			).toEqual({ answer: null, answer_memory_id: null });
+			for (const id of [memory.id, hookMemory.id])
 				expect(beforePurge.query("SELECT author_user_id,agent_id FROM memories WHERE id=?").get(id)).toEqual({
 					author_user_id: alice.user.id,
 					agent_id: key.key.agentId,

@@ -193,6 +193,8 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 			return c.json({ success: true, memoryId });
 		} catch (e) {
+			if (e instanceof Error && e.message === "reflection_agent_conflict")
+				return c.json({ error: "Reflection belongs to another write agent", reason: "agent_binding_conflict" }, 403);
 			logger.error("reflections", "Failed to save answer", e instanceof Error ? e : undefined);
 			return c.json({ error: "Failed to save answer" }, 500);
 		}
