@@ -421,7 +421,7 @@ describe("migration framework", () => {
 
 		expect(db.query(legacyIndex).get()).toEqual({ count: 0 });
 		expect(db.query("SELECT cursor, end_rowid FROM session_transcript_turns_backfill").get()).toEqual({
-			cursor: 0,
+			cursor: null,
 			end_rowid: 2,
 		});
 		expect(db.query("SELECT COUNT(*) AS count FROM session_transcript_turns").get()).toEqual({ count: 0 });
@@ -458,22 +458,24 @@ describe("migration framework", () => {
 		expect(db.query(stale).get()).toEqual({ count: 0 });
 		expect(db.query("SELECT COUNT(*) AS count FROM session_transcript_turns").get()).toEqual({ count: 0 });
 		expect(db.query("SELECT cursor, end_rowid FROM session_transcript_turns_backfill").get()).toEqual({
-			cursor: 0,
+			cursor: null,
 			end_rowid: 2,
 		});
 		db.exec("UPDATE session_transcripts SET content = 'User: redacted again' WHERE session_key = 'sess-a'");
 		expect(db.query("SELECT text FROM session_transcript_turns").all()).toEqual([{ text: "User: redacted again" }]);
 	});
 
-	test("176 queues a transcript stored at a negative rowid and marks an empty table ready", () => {
+	test("176 queues a transcript stored at the minimum rowid and marks an empty table ready", () => {
 		db = createFreshDb();
 		runMigrations(db);
 		db.exec("DROP TRIGGER session_transcript_turns_ai");
 		db.prepare(
-			"INSERT INTO session_transcripts (rowid, session_key, content, harness, agent_id, created_at) VALUES (-5, 'sess-a', 'User: alpha', 'codex', 'agent-a', '2026-11-25T00:00:00Z')",
+			"INSERT INTO session_transcripts (rowid, session_key, content, harness, agent_id, created_at) VALUES (-9223372036854775808, 'sess-a', 'User: alpha', 'codex', 'agent-a', '2026-11-25T00:00:00Z')",
 		).run();
 		runMigrations(db);
-		expect(db.query("SELECT cursor < end_rowid AS pending FROM session_transcript_turns_backfill").get()).toEqual({
+		expect(
+			db.query("SELECT cursor IS NULL OR cursor < end_rowid AS pending FROM session_transcript_turns_backfill").get(),
+		).toEqual({
 			pending: 1,
 		});
 

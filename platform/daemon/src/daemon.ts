@@ -3383,6 +3383,7 @@ async function main() {
 					publishStatus: publishMigrationVerifyStatus,
 					logWarn: (message, details): void => logger.warn("startup-recovery", message, details),
 					logError: (message, error, details): void => logger.error("startup-recovery", message, error, details),
+					onRetryCapReached: (): void => deferredRuntimeGate.completeMigrationBackup(false),
 				});
 				setupRetry.run();
 			}

@@ -1906,16 +1906,16 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 	db: WriteDb,
 	options: TranscriptTurnBackfillOptions = {},
 ): TranscriptTurnBackfillChunk {
-	const state = prepareTypedStatement<{ readonly cursor: number; readonly end_rowid: number }>(
+	const state = prepareTypedStatement<{ readonly cursor: number | null; readonly end_rowid: number }>(
 		db,
 		"SELECT cursor, end_rowid FROM session_transcript_turns_backfill WHERE id = 1",
 	).get();
 	if (!state) throw new Error("Transcript turn backfill state is missing");
-	if (state.cursor >= state.end_rowid) return { complete: true, indexed: 0 };
+	if (state.cursor !== null && state.cursor >= state.end_rowid) return { complete: true, indexed: 0 };
 	const maxRows = Math.max(1, Math.floor(options.maxRows ?? TRANSCRIPT_TURN_BACKFILL_ROWS));
 	const candidates = prepareTypedStatement<{ readonly rowid: number }>(
 		db,
-		"SELECT rowid FROM session_transcripts WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?",
+		"SELECT rowid FROM session_transcripts WHERE rowid >= COALESCE(?1 + 1, -9223372036854775808) AND rowid <= ?2 ORDER BY rowid LIMIT ?3",
 	).all(state.cursor, state.end_rowid, maxRows);
 	const rowBytes = prepareTypedStatement<{ readonly bytes: number }>(
 		db,
@@ -1943,22 +1943,23 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 		last = row.rowid;
 	}
 	const next = consumedAll && candidates.length < maxRows ? state.end_rowid : last;
-	if (next < state.end_rowid) {
+	if (next === null || next < state.end_rowid) {
 		db.prepare("UPDATE session_transcript_turns_backfill SET cursor = ? WHERE id = 1").run(next);
 		return { complete: false, indexed };
 	}
-	const unindexed = prepareTypedStatement<{ readonly first: number | null; readonly last: number | null }>(
+	const unindexed = prepareTypedStatement<{ readonly cursor: number | null; readonly last: number }>(
 		db,
-		`SELECT
-			(SELECT MIN(+st.rowid) FROM session_transcripts st WHERE NOT EXISTS (
-				SELECT 1 FROM session_transcript_turns turn
-				WHERE turn.agent_id = st.agent_id AND turn.session_key = st.session_key
-			)) AS first,
-			(SELECT MAX(rowid) FROM session_transcripts) AS last`,
+		`SELECT CASE WHEN first > -9223372036854775808 THEN first - 1 END AS cursor,
+			(SELECT MAX(rowid) FROM session_transcripts) AS last
+		FROM (SELECT MIN(+st.rowid) AS first FROM session_transcripts st WHERE NOT EXISTS (
+			SELECT 1 FROM session_transcript_turns turn
+			WHERE turn.agent_id = st.agent_id AND turn.session_key = st.session_key
+		))
+		WHERE first IS NOT NULL`,
 	).get();
-	if (typeof unindexed?.first === "number" && typeof unindexed.last === "number") {
+	if (unindexed) {
 		db.prepare("UPDATE session_transcript_turns_backfill SET cursor = ?, end_rowid = ? WHERE id = 1").run(
-			unindexed.first - 1,
+			unindexed.cursor,
 			unindexed.last,
 		);
 		return { complete: false, indexed };

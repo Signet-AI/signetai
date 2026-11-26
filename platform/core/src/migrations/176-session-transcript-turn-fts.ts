@@ -46,11 +46,11 @@ export function up(db: MigrationDb): void {
 
 		CREATE TABLE session_transcript_turns_backfill (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
-			cursor INTEGER NOT NULL,
+			cursor INTEGER,
 			end_rowid INTEGER NOT NULL
 		);
 		INSERT INTO session_transcript_turns_backfill (id, cursor, end_rowid)
-		SELECT 1, COALESCE(MIN(rowid) - 1, 0), COALESCE(MAX(rowid), 0) FROM session_transcripts;
+		SELECT 1, CASE WHEN MAX(rowid) IS NULL THEN 0 END, COALESCE(MAX(rowid), 0) FROM session_transcripts;
 
 		CREATE TRIGGER session_transcript_turns_fts_ai AFTER INSERT ON session_transcript_turns BEGIN
 			INSERT INTO session_transcript_turns_fts(rowid, text) VALUES (new.id, new.text);

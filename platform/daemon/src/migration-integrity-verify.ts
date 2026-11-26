@@ -221,6 +221,7 @@ export interface MigrationVerifySetupRetryOptions {
 	readonly scheduleNextAttempt?: (callback: () => void, delayMs: number) => void;
 	readonly logWarn?: (message: string, details: Record<string, unknown>) => void;
 	readonly logError?: (message: string, error: Error, details: Record<string, unknown>) => void;
+	readonly onRetryCapReached?: () => void;
 }
 
 export interface MigrationVerifySetupRetryController {
@@ -243,6 +244,7 @@ export function createMigrationVerifySetupRetry(
 				attemptCount,
 				maxAttempts: MIGRATION_VERIFY_SETUP_REJECTION_MAX_ATTEMPTS,
 			});
+			options.onRetryCapReached?.();
 			return;
 		}
 		options.logWarn?.("Migration integrity verify setup rejected; retry scheduled", {

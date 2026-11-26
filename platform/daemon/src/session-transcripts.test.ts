@@ -166,6 +166,27 @@ describe("session transcript turn index", () => {
 		expect(hits.every((hit) => hit.rank < 0)).toBe(true);
 	});
 
+	it("indexes a transcript stored at the minimum rowid when the backfill has not started", async () => {
+		init();
+		await write(
+			"INSERT INTO session_transcripts (rowid, session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (-9223372036854775808, ?, ?, ?, ?, ?, ?, ?)",
+			"sess-a",
+			"User: kilo boundary",
+			"codex",
+			"/repo",
+			"noam",
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
+		);
+		await write("DELETE FROM session_transcript_turns");
+		await write(
+			"UPDATE session_transcript_turns_backfill SET cursor = NULL, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+		);
+
+		expect(await backfillChunk()).toEqual({ complete: true, indexed: 1 });
+		expect(await indexedTurns("sess-a")).toEqual(["User: kilo boundary"]);
+	});
+
 	it("never returns another agent's session and honors the project and current-session scope", async () => {
 		init();
 		upsertSessionTranscript("sess-a", "User: foxtrot plan", "codex", "/repo", "noam");
