@@ -1,20 +1,13 @@
+import { resolveReadScope } from "./read-scope";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { compartmentFor } from "@signet/core";
+import { type ReadScope, compartmentFor } from "@signet/core";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, initDbAccessorAsync } from "./db-accessor";
 import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
 import { getDbOwner } from "./db-owner-runtime";
-import { matchPromptEntities as providerMatchPromptEntities, promptPhraseSpan } from "./prompt-entity-context";
-
-async function matchPromptEntities(path: string, agentId: string, prompt: string) {
-	return providerMatchPromptEntities(path, agentId, prompt, undefined, {
-		reach: { kind: "own", agentId },
-		compartments: "all",
-		projects: null,
-	});
-}
+import { matchPromptEntities, promptPhraseSpan } from "./prompt-entity-context";
 
 let dir = "";
 let prev: string | undefined;
@@ -283,6 +276,68 @@ describe("matchPromptEntities", () => {
 		await expect(
 			Reflect.apply(matchPromptEntities, undefined, [DB_PATH(), "default", "Tell me about Nicholai"]),
 		).rejects.toThrow("readScope is required");
+	});
+
+	it("hides classified aliases and parents in the owner scan before paging", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`INSERT INTO classifications(id,name) VALUES ('prompt-secret','Prompt Secret');
+				INSERT INTO compartments(id,key) VALUES (9101,'prompt-secret');
+				INSERT INTO compartment_members(compartment_id,classification_id) VALUES (9101,'prompt-secret');
+				INSERT INTO classification_audience(classification_id,principal_kind,principal_id)
+				VALUES ('prompt-secret','user','prompt-audience');
+				UPDATE entities SET compartment_id=9101 WHERE id='ent-nicholai';
+				UPDATE entity_aliases SET compartment_id=9101 WHERE id='alias-signetai';
+				INSERT INTO entity_aliases(id,entity_id,agent_id,alias,canonical_alias,status)
+				VALUES ('public-parent-alias','ent-nicholai','default','Public Persona','public persona','active')`);
+		});
+		const scopeFor = (userId: string) =>
+			resolveReadScope(
+				{ reach: { kind: "own", agentId: "default" }, projects: null },
+				{ userId, groupIds: [], local: false },
+			);
+		const reader = await scopeFor("prompt-reader");
+		const audience = await scopeFor("prompt-audience");
+		const match = (prompt: string, scope: ReadScope) =>
+			matchPromptEntities(DB_PATH(), "default", prompt, undefined, scope);
+		expect((await match("How is SignetAI doing?", audience)).map((row) => row.entityName)).toEqual(["Signet"]);
+		expect(await match("How is SignetAI doing?", reader)).toEqual([]);
+		expect(await match("Tell me about Nicholai", reader)).toEqual([]);
+		expect(await match("Tell me about Public Persona", reader)).toEqual([]);
+		expect((await match("Tell me about Public Persona", audience)).map((row) => row.entityName)).toEqual(["Nicholai"]);
+		expect((await match("Tell me about Signet", reader)).map((row) => row.entityName)).toEqual(["Signet"]);
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		const disclosed: string[] = [];
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			if (!/^user-prompt-submit.entity-(names|aliases)$/.test(options.operation)) return handle;
+			return {
+				...handle,
+				result: handle.result.then((value) => {
+					disclosed.push(JSON.stringify(value));
+					return value;
+				}),
+			};
+		};
+		await match("Tell me about Signet", reader).finally(() => {
+			owner.submit = submit;
+		});
+		expect(disclosed.join("\n")).not.toContain("SignetAI");
+		expect(disclosed.join("\n")).not.toContain("Nicholai");
+		expect(await match("Tell me about Signet", { ...reader, projects: ["restricted"] })).toEqual([]);
+	});
+
+	it("rejects missing read authorization before opening the owner", async () => {
+		await expect(
+			matchPromptEntities(DB_PATH(), "default", "Tell me about Signet", undefined, undefined),
+		).rejects.toThrow("readScope is required");
+		expect(
+			await matchPromptEntities(DB_PATH(), "default", "What is Compass?", undefined, {
+				reach: { kind: "own", agentId: "default" },
+				compartments: "all",
+				projects: null,
+			}),
+		).toEqual([]);
 	});
 
 	it("never matches another agent's entities", async () => {

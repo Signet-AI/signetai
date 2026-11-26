@@ -1,3 +1,4 @@
+import { audienceSubjectFromPrincipal, resolveReadScope } from "./read-scope";
 import { localPrincipal } from "./auth/principal";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
@@ -191,18 +192,36 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			userId,
 			credential: { kind: "api_key" as const, id: `credential-${userId}` },
 		});
-		const req = { harness: "codex", sessionKey: "principal-alias", userMessage: "Tell me about SignetAI architecture" };
-		const audience = await handleUserPromptSubmit(req, makeDeps(), { principal: principal("hook-audience") });
+		const req = {
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey: "principal-alias",
+			userMessage: "Tell me about SignetAI architecture",
+		};
+		const audience = await handleUserPromptSubmit(req, makeDeps(), {
+			principal: principal("hook-audience"),
+			readScope: await resolveReadScope(
+				{ reach: { kind: "own", agentId: "default" }, projects: null },
+				audienceSubjectFromPrincipal(principal("hook-audience")),
+			),
+		});
 		expect(audience.memoryCount).toBeGreaterThan(0);
 		expect(audience.inject).toContain("Relevant Memory: Signet");
-		const reader = await handleUserPromptSubmit(req, makeDeps(), { principal: principal("hook-reader") });
+		const reader = await handleUserPromptSubmit(req, makeDeps(), {
+			principal: principal("hook-reader"),
+			readScope: await resolveReadScope(
+				{ reach: { kind: "own", agentId: "default" }, projects: null },
+				audienceSubjectFromPrincipal(principal("hook-reader")),
+			),
+		});
 		expect(reader).toMatchObject({ engine: "no-entity", inject: "", memoryCount: 0 });
-		const missing = await handleUserPromptSubmit(
-			{ ...req, context: { userId: "hook-audience", role: "admin" } },
-			makeDeps(),
-		);
-		expect(missing).toMatchObject({ engine: "provider-error", inject: "", memoryCount: 0 });
-		expect(missing.warnings).toContain("Prompt recall unavailable");
+		await expect(
+			Reflect.apply(handleUserPromptSubmit, undefined, [
+				{ ...req, context: { userId: "hook-audience", role: "admin" } },
+				makeDeps(),
+				{},
+			]),
+		).rejects.toThrow("read scope required");
 	});
 
 	it("computes one clock per request without changing the memory context hash", async () => {
