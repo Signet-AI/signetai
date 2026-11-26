@@ -13,6 +13,10 @@ test("real organization Dreaming routes scope durable passes and SSE across rest
 		});
 		success(claimed, "claim");
 		const credential = browser(claimed);
+		success(
+			await request(daemon.origin, "/api/org/settings", credential, "PATCH", { agentModel: "single" }),
+			"enable organization Dreaming store",
+		);
 		const seed = async (audience: boolean) => {
 			await daemon.stop();
 			const code = `const {initDbAccessor,getDbAccessor,closeDbAccessor}=await import(${JSON.stringify(join(repo, "platform/daemon/src/db-accessor.ts"))});initDbAccessor(${JSON.stringify(join(daemon.workspace, "data/signet.db"))},{agentsDir:${JSON.stringify(daemon.workspace)}});await getDbAccessor().withWriteTxAsync(db=>{${audience ? `db.prepare("INSERT INTO classification_audience(classification_id,principal_kind,principal_id) SELECT 'cls_live','user',id FROM users WHERE username='admin'").run();` : `db.prepare("INSERT INTO classifications(id,name,created_at) VALUES('cls_live','Live hidden','now')").run();db.prepare("INSERT INTO compartments(id,key) VALUES(1,'cls_live')").run();db.prepare("INSERT INTO compartment_members(compartment_id,classification_id) VALUES(1,'cls_live')").run();db.prepare("INSERT INTO dreaming_passes(id,agent_id,status,mode,compartment_id) VALUES('live-public','default','completed','incremental',NULL),('live-hidden','default','completed','incremental',1)").run();`}});await closeDbAccessor();process.exit(0);`;

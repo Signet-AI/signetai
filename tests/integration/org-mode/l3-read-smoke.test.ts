@@ -88,6 +88,10 @@ test("real organization reads and MCP preserve hidden-row noninterference across
 		});
 		const claimed = success(claim, "claim L3 fixture");
 		const admin = browser(claim);
+		success(
+			await request(daemon.origin, "/api/org/settings", admin, "PATCH", { agentModel: "single" }),
+			"enable organization Dreaming store",
+		);
 		const userId = text(record(claimed.user).id);
 		await daemon.stop();
 		seed(daemon, false);

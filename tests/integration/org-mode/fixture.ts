@@ -72,7 +72,14 @@ export async function captureThread(
 	for (const [event, extra] of [
 		["session-start", {}],
 		["user-prompt-submit", { userMessage: content }],
-		["session-end", { transcript: `User: ${content}\nAssistant: Recorded.`, lastAssistantMessage: "Recorded." }],
+		[
+			"session-end",
+			{
+				reason: "session_shutdown",
+				transcript: `User: ${content}\nAssistant: Recorded.`,
+				lastAssistantMessage: "Recorded.",
+			},
+		],
 	] as const) {
 		success(
 			await request(daemon.origin, `/api/hooks/${event}`, user.connector, "POST", { ...body, ...extra }),
@@ -85,7 +92,11 @@ export async function captureThread(
 			`/api/sessions/${encodeURIComponent(sessionKey)}/transcript?agent_id=${user.agentId}`,
 			user.session,
 		);
-		return transcript.status === 200 && JSON.stringify(transcript.body).includes(content);
+		return (
+			transcript.status === 200 &&
+			typeof record(transcript.body).completedAt === "string" &&
+			JSON.stringify(transcript.body).includes(content)
+		);
 	}, "GET /api/sessions/:key/transcript fixture capture");
 }
 
@@ -230,6 +241,13 @@ export class Fixture {
 					`Project atlas rankprobe atlasrankpublic${index} release planning uses a visible checkpoint.`,
 				),
 			);
+		await deriveClaim(
+			this,
+			this.user("alice").agentId,
+			this.publicRankingMemories[0],
+			"Project atlas rankprobe atlasrankpublic0 release planning uses a visible checkpoint.",
+			rankingQuery,
+		);
 		await this.growHiddenRanking();
 		await this.thread(
 			this.user("carol"),

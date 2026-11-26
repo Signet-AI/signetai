@@ -44,7 +44,7 @@ export function seedDerived(input: DerivedSeed) {
 	);
 	const compartment = memory.compartment_id;
 	const now = new Date().toISOString();
-	const date = now.slice(0, 10);
+	const date = new Intl.DateTimeFormat("en-CA").format(new Date(now));
 	const content = `${input.marker} seeded derived-read fixture generation ${input.generation}`;
 	const passId = "org-hr-pass";
 	const summaryId = "org-hr-summary";
@@ -52,14 +52,17 @@ export function seedDerived(input: DerivedSeed) {
 	const reflectionId = "org-hr-reflection";
 	const sourceRoot = join(input.root, input.marker);
 	mkdirSync(sourceRoot, { recursive: true });
-	const source = addObsidianSource(
-		{
-			root: sourceRoot,
-			name: input.marker,
-			writeIdentity: { agentId: input.agentId, authorUserId: input.userId, authorCredential: "derived-fixture" },
-		},
-		input.workspace,
-	);
+	const existingSource = loadSourcesConfig(input.workspace).sources.find((entry) => entry.root === sourceRoot);
+	const source = existingSource
+		? { ok: true as const, source: existingSource }
+		: addObsidianSource(
+				{
+					root: sourceRoot,
+					name: input.marker,
+					writeIdentity: { agentId: input.agentId, authorUserId: input.userId, authorCredential: "derived-fixture" },
+				},
+				input.workspace,
+			);
 	assert(source.ok, "Failed to configure isolated managed source");
 	const config = loadSourcesConfig(input.workspace);
 	saveSourcesConfig(
@@ -73,12 +76,15 @@ export function seedDerived(input: DerivedSeed) {
 	writeFileSync(sourcePath, content);
 	db.transaction(() => {
 		db.query(
-			"INSERT OR REPLACE INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,source_id,source_external_id,session_id,session_token,content,captured_at,updated_at,project,author_user_id,compartment_id) VALUES (?,?,?,'obsidian',?,'fixture.md','org-hr-source','org-hr-source',?,?,?,'atlas',?,?)",
+			"INSERT OR REPLACE INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,source_id,source_external_id,session_id,session_key,session_token,content,captured_at,updated_at,project,author_user_id,compartment_id) VALUES (?,?,?,'obsidian',?,'fixture.md',?,?,?,?,?,?,'atlas',?,?)",
 		).run(
 			input.agentId,
 			join(sourceRoot, "fixture.md"),
 			createHash("sha256").update(content).digest("hex"),
 			source.source.id,
+			input.sessionKey,
+			input.sessionKey,
+			input.sessionKey,
 			content,
 			now,
 			now,
@@ -88,10 +94,10 @@ export function seedDerived(input: DerivedSeed) {
 		db.query(
 			"INSERT OR REPLACE INTO entity_communities (id,agent_id,name,member_count,compartment_id) VALUES (?,?,?,1,?)",
 		).run("org-hr-community", input.agentId, content, compartment);
-		db.query("UPDATE entities SET community_id=? WHERE id=? AND agent_id=?").run(
+		db.query("UPDATE entities SET community_id=? WHERE agent_id=? AND name LIKE ?").run(
 			"org-hr-community",
-			input.entityId,
 			input.agentId,
+			`${input.marker}%`,
 		);
 		db.query(
 			"INSERT OR REPLACE INTO epistemic_assertions (id,agent_id,subject_entity_id,claim_attribute_id,predicate,content,normalized_content,asserted_at,compartment_id) VALUES (?,?,?,?,'claims',?,?,?,?)",

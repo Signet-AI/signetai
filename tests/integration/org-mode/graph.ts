@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { Fixture } from "./fixture";
 import { record, request, success, text } from "./http";
 
-type GraphFixture = Pick<Fixture, "daemon" | "admin"> & Partial<Pick<Fixture, "users">>;
+type GraphFixture = Pick<Fixture, "daemon" | "admin"> & Partial<Pick<Fixture, "users" | "engAgent">>;
 
 export interface Evidence {
 	source_ref: string;
@@ -25,7 +25,7 @@ export async function dreamOperation(
 	);
 	const reply = await request(fixture.daemon.origin, endpoint, user?.session ?? fixture.admin, "POST", {
 		agentId,
-		input: { agentId, operations: [{ operation, payload, evidence, reason: record(payload).reason }] },
+		input: { agentId, operations: [{ operation, payload, evidence, reason: record(payload).reason, confidence: 0.9 }] },
 	});
 	assert(reply.status >= 200 && reply.status < 300, `${operation}: ${JSON.stringify(reply.body)}`);
 	const body = success(reply, `POST ${endpoint}: ${operation}`);
@@ -51,7 +51,7 @@ export async function deriveClaim(
 		fixture,
 		agentId,
 		"add_claim_value",
-		{ entityId, aspectId: text(aspect.aspectId), group_key: "compensation", claimKey: "award", value },
+		{ entityId, aspectId: text(aspect.aspectId), claimKey: "award", value },
 		evidence,
 	);
 	return {

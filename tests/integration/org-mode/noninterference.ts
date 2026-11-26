@@ -1,3 +1,8 @@
+import { Database } from "bun:sqlite";
+import { copyFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { findSqliteVecExtension } from "../../../platform/core/dist/index";
+import { OrgDaemon } from "./daemon";
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { type Fixture, hrMarker, rankingQuery } from "./fixture";
@@ -59,7 +64,7 @@ export interface Surface {
 	path: string;
 	method?: "GET" | "POST";
 	body?: object;
-	positive: "content" | "change";
+	positive: "content" | "change" | "unavailable";
 	needles?: string[];
 	adminOnly?: boolean;
 	audienceBody?: object;
@@ -94,7 +99,7 @@ export function catalogue(fixture: Fixture): Surface[] {
 	const session = encodeURIComponent(fixture.hrSession);
 	const query = encodeURIComponent(hrMarker);
 	const sharedQuery = encodeURIComponent(rankingQuery);
-	const claim = `entity=${query}&aspect=HR&group=compensation&claim=award`;
+	const claim = `entity=${query}&aspect=HR&group=general&claim=award`;
 	const get = (name: string, path: string, positive: "content" | "change" = "content"): Surface => ({
 		name,
 		path: `${path}${path.includes("?") ? "&" : "?"}agent_id=default`,
@@ -162,11 +167,11 @@ export function catalogue(fixture: Fixture): Surface[] {
 		get("dream pass events", "/api/dream/passes/org-hr-completed-pass/events"),
 		get("dream pass tools", `/api/dream/passes/${fixture.hrPass}/tools`),
 		get("dream pass policy", `/api/dream/passes/${fixture.hrPass}/policy`),
-		get("dream quality", "/api/dream/quality", "change"),
-		get("dream evidence coverage", "/api/dream/evidence/coverage", "change"),
+		{ ...get("dream quality", "/api/dream/quality", "change"), positive: "unavailable" },
+		{ ...get("dream evidence coverage", "/api/dream/evidence/coverage", "change"), positive: "unavailable" },
 		post("dream history", "/api/dream/tools/zoom_history", {
-			agentId: "default",
-			input: { agentId: "default", id: 0, n: 1 },
+			agentId: fixture.user("carol").agentId,
+			input: { agentId: fixture.user("carol").agentId, id: 0, n: 1 },
 		}),
 		get("reflections", "/api/reflections"),
 		get("reflection today", "/api/reflections/today"),
@@ -200,28 +205,30 @@ export function catalogue(fixture: Fixture): Surface[] {
 		adminOnly: surface.name.startsWith("dream") || surface.name === "embedding projection",
 		...rankingControls(surface),
 		needles:
-			surface.name.startsWith("dream") || surface.name.startsWith("reflection") || surface.name === "session summaries"
+			surface.name.startsWith("dream") || surface.name.startsWith("reflection")
 				? [hrMarker]
-				: surface.name === "documents" || surface.name === "document detail"
-					? [fixture.hrDocument]
-					: surface.name.startsWith("source")
-						? [fixture.hrSource]
-						: surface.name.startsWith("session")
-							? [fixture.hrSession, "73000", "74000"]
-							: surface.name.includes("aspects")
-								? [fixture.hrAspect, "HR"]
-								: surface.name === "navigation groups"
-									? ["compensation"]
-									: surface.name === "document chunks"
-										? [fixture.hrMemory]
-										: [
-												fixture.hrMemory,
-												fixture.hrEntity,
-												fixture.hrRelatedEntity,
-												fixture.hrAttribute,
-												"73000",
-												"74000",
-											],
+				: surface.name === "session summaries"
+					? ["org-hr-summary"]
+					: surface.name === "documents" || surface.name === "document detail"
+						? [fixture.hrDocument]
+						: surface.name.startsWith("source")
+							? [fixture.hrSource]
+							: surface.name.startsWith("session")
+								? [fixture.hrSession, "73000", "74000"]
+								: surface.name.includes("aspects")
+									? [fixture.hrAspect, "HR"]
+									: surface.name === "navigation groups"
+										? ["general"]
+										: surface.name === "document chunks"
+											? [fixture.hrMemory]
+											: [
+													fixture.hrMemory,
+													fixture.hrEntity,
+													fixture.hrRelatedEntity,
+													fixture.hrAttribute,
+													"73000",
+													"74000",
+												],
 	}));
 }
 export interface Observation {
@@ -230,12 +237,37 @@ export interface Observation {
 	etag: string | null;
 }
 export type Snapshot = Record<string, Observation>;
+async function isolatedPrompt(workspace: string, path: string, credential: Credential, body: object) {
+	const clone = await OrgDaemon.create();
+	try {
+		await clone.stop();
+		const target = join(clone.workspace, "data/signet.db");
+		await rm(target);
+		const db = new Database(join(workspace, "data/signet.db"), { readonly: true });
+		try {
+			const extension = findSqliteVecExtension();
+			assert(extension);
+			db.loadExtension(extension);
+			db.prepare("VACUUM INTO ?").run(target);
+		} finally {
+			db.close();
+		}
+		for (const name of ["agent.yaml", "runtime/auth-secret"])
+			await copyFile(join(workspace, name), join(clone.workspace, name));
+		await clone.start();
+		return await request(clone.origin, path, credential, "POST", { ...body, sessionKey: "org-read-probe-prompt" });
+	} finally {
+		await clone.dispose();
+	}
+}
+
 export async function snapshot(
 	origin: string,
 	surfaces: Surface[],
 	credential: Credential,
 	userId = "baseline",
 	audience = false,
+	workspace?: string,
 ): Promise<Snapshot> {
 	const result: Snapshot = {};
 	for (const surface of surfaces) {
@@ -246,7 +278,10 @@ export async function snapshot(
 		const input = audience ? (surface.audienceBody ?? surface.body) : surface.body;
 		const body = input ? { ...input } : undefined;
 		if (body && "sessionKey" in body && body.sessionKey === "__PROBE__") delete body.sessionKey;
-		const reply = await request(origin, path, credential, surface.method, body);
+		const reply =
+			workspace && surface.name === "prompt-submit injection" && body
+				? await isolatedPrompt(workspace, path, credential, body)
+				: await request(origin, path, credential, surface.method, body);
 		assert(reply.status < 500, `${surface.name}: ${surface.path} returned HTTP ${reply.status}`);
 		let payload = surface.name === "MCP memory_search" ? normalizeMcp(reply.body) : normalize(reply.body);
 		if (surface.name === "prompt-submit injection") {
@@ -342,11 +377,32 @@ export async function checkNoninterference(fixture: Fixture): Promise<void> {
 	}
 	const baselines: { before: Snapshot; audienceBefore: Snapshot }[] = [];
 	for (const cohort of cohorts) {
-		const before = await snapshot(fixture.daemon.origin, cohort.surfaces, cohort.outside, cohort.outsideId);
-		const audienceBefore = await snapshot(fixture.daemon.origin, cohort.surfaces, cohort.inside, cohort.insideId, true);
+		const before = await snapshot(
+			fixture.daemon.origin,
+			cohort.surfaces,
+			cohort.outside,
+			cohort.outsideId,
+			false,
+			fixture.daemon.workspace,
+		);
+		const audienceBefore = await snapshot(
+			fixture.daemon.origin,
+			cohort.surfaces,
+			cohort.inside,
+			cohort.insideId,
+			true,
+			fixture.daemon.workspace,
+		);
 		assertUnchanged(
 			before,
-			await snapshot(fixture.daemon.origin, cohort.surfaces, cohort.outside, cohort.outsideId),
+			await snapshot(
+				fixture.daemon.origin,
+				cohort.surfaces,
+				cohort.outside,
+				cohort.outsideId,
+				false,
+				fixture.daemon.workspace,
+			),
 			`${cohort.name} baseline stability without hidden perturbation`,
 		);
 		baselines.push({ before, audienceBefore });
@@ -357,8 +413,22 @@ export async function checkNoninterference(fixture: Fixture): Promise<void> {
 	for (const [index, cohort] of cohorts.entries()) {
 		const baseline = baselines[index];
 		assert(baseline);
-		const after = await snapshot(fixture.daemon.origin, cohort.surfaces, cohort.outside, cohort.outsideId);
-		const audienceAfter = await snapshot(fixture.daemon.origin, cohort.surfaces, cohort.inside, cohort.insideId, true);
+		const after = await snapshot(
+			fixture.daemon.origin,
+			cohort.surfaces,
+			cohort.outside,
+			cohort.outsideId,
+			false,
+			fixture.daemon.workspace,
+		);
+		const audienceAfter = await snapshot(
+			fixture.daemon.origin,
+			cohort.surfaces,
+			cohort.inside,
+			cohort.insideId,
+			true,
+			fixture.daemon.workspace,
+		);
 		for (const surface of cohort.surfaces) {
 			try {
 				const before = baseline.before[surface.name];
@@ -379,7 +449,14 @@ export async function checkNoninterference(fixture: Fixture): Promise<void> {
 					);
 				const missing = absentSurface(surface, tokens);
 				if (missing) {
-					const control = await snapshot(fixture.daemon.origin, [missing], cohort.outside, cohort.outsideId);
+					const control = await snapshot(
+						fixture.daemon.origin,
+						[missing],
+						cohort.outside,
+						cohort.outsideId,
+						false,
+						fixture.daemon.workspace,
+					);
 					assertUnchanged(
 						replaceTokens(JSON.stringify(control[surface.name]), tokens, true),
 						replaceTokens(JSON.stringify(outside), tokens, false),
@@ -396,7 +473,19 @@ export async function checkNoninterference(fixture: Fixture): Promise<void> {
 					positive && positive.status >= 200 && positive.status < 300,
 					`${surface.name}: HR audience positive control failed at ${surface.path} (HTTP ${positive?.status})`,
 				);
-				if (surface.positive === "content")
+				if (surface.positive === "unavailable") {
+					assert.equal(positive.status, 200);
+					const diagnostic = record(positive.body);
+					assert(
+						diagnostic.unavailable === true ||
+							(diagnostic.status === "unavailable" && diagnostic.reason === "scoped_totals_omitted"),
+					);
+					assertUnchanged(
+						baseline.audienceBefore[surface.name],
+						positive,
+						`${surface.name}: unavailable diagnostics must be invariant for the audience too`,
+					);
+				} else if (surface.positive === "content")
 					assert(
 						(surface.needles ?? [hrMarker]).some((needle) => JSON.stringify(positive.body).includes(needle)),
 						`${surface.name}: positive control lacks HR fixture content at ${surface.path}`,
