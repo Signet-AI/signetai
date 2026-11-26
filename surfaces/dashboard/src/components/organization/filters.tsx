@@ -9,6 +9,7 @@ import type { LookupPerson } from "./user-lookup";
 export interface AuthorOption {
 	readonly value: string;
 	readonly label: string;
+	readonly unavailable?: boolean;
 }
 export function FilterToolbar({ children }: { children: ReactNode }) {
 	const [open, setOpen] = useState(false);
@@ -98,7 +99,7 @@ export function AuthorFilter({
 					className={`flex w-full items-center justify-between gap-2 rounded px-3 py-2 text-left text-small ${active === index ? "bg-muted" : "hover:bg-muted"}`}
 					onClick={() => select(option)}
 				>
-					<span>{option.label}</span>
+					<span className={option.unavailable ? "italic text-muted-foreground" : undefined}>{option.label}</span>
 					{option.person?.email && <span className="text-muted-foreground">{option.person.email}</span>}
 				</button>
 			))}
@@ -126,7 +127,12 @@ export function AuthorFilter({
 					aria-haspopup="listbox"
 					className="home-source-filter justify-between"
 				>
-					{options.find((option) => option.value === value)?.label ?? "All authors"}
+					{options.find((option) => option.value === value)?.unavailable ||
+					(value && !options.some((option) => option.value === value)) ? (
+						<span className="italic text-muted-foreground">Another person</span>
+					) : (
+						(options.find((option) => option.value === value)?.label ?? "All authors")
+					)}
 					<span aria-hidden="true">⌄</span>
 				</Button>
 			</Popover.Trigger>

@@ -76,7 +76,7 @@ export function OrganizationMemory() {
 			...rows.flatMap((row) => (row.authorUserId ? [row.authorUserId] : [])),
 			...(person ? [person.id] : []),
 		]),
-	).map((id) => ({ value: id, label: personName(id) }));
+	).map((id) => ({ value: id, label: personName(id), unavailable: id !== whoami.user.id && person?.id !== id }));
 	return (
 		<OrganizationBlock title="Memory">
 			<FilterToolbar>
@@ -134,6 +134,8 @@ export function OrganizationMemory() {
 							kind: row.type ?? "memory",
 							agent: agentDisplayName(agents.result?.data?.agents.find((agent) => agent.id === row.agent_id)),
 							author: row.authorUserId ? personName(row.authorUserId) : undefined,
+							authorUnavailable:
+								!!row.authorUserId && row.authorUserId !== whoami.user.id && person?.id !== row.authorUserId,
 							badges: row.classifications?.length ? (
 								<ClassificationBadges
 									classifications={row.classifications}

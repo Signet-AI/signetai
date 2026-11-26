@@ -7,12 +7,21 @@ export interface EvidenceListRow {
 	readonly kind: string;
 	readonly agent: string;
 	readonly author?: string;
+	readonly authorUnavailable?: boolean;
 	readonly team?: string;
 	readonly identifier?: string;
 	readonly badges?: ReactNode;
 	readonly onOpen?: () => void;
 }
 export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
+	const author = (row: EvidenceListRow) =>
+		row.authorUnavailable ? (
+			<span className="italic text-muted-foreground" title="The author’s name is not available in this view.">
+				Another person
+			</span>
+		) : (
+			(row.author ?? "Not recorded")
+		);
 	const hasTeam = rows.some((row) => row.team !== undefined);
 	const title = (row: EvidenceListRow) => (
 		<div className="min-w-0">
@@ -37,7 +46,7 @@ export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
 						<tr key={row.key} className={rowClass}>
 							<td className={cellClass}>{title(row)}</td>
 							<td className={cellClass}>{displayLabel(row.kind)}</td>
-							<td className={cellClass}>{row.author ?? "Not recorded"}</td>
+							<td className={cellClass}>{author(row)}</td>
 							<td className={cellClass}>{row.agent}</td>
 							{hasTeam && <td className={cellClass}>{row.team ?? "Not recorded"}</td>}
 						</tr>
@@ -49,7 +58,7 @@ export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
 					<li key={row.key} className="py-4">
 						{title(row)}
 						<p className="m-0 mt-2 text-small text-muted-foreground">
-							{displayLabel(row.kind)} · {row.author ?? "Not recorded"} · {row.agent}
+							{displayLabel(row.kind)} · {author(row)} · {row.agent}
 							{row.team !== undefined ? ` · ${row.team}` : ""}
 						</p>
 					</li>
