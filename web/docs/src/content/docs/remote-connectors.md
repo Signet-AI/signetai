@@ -124,6 +124,12 @@ complete. Capture failures exit `1` and include a reason with `--json`.
 on other devices too. Use disconnect to remove an installed integration and its
 connector key.
 
+If the daemon cannot be reached, logout still clears the local login credential.
+It exits nonzero and reports that server revocation was not confirmed;
+`--json` includes `authenticated: false` and `revocationConfirmed: false`.
+For `--all`, sessions on other devices might still be active until revocation
+can be completed from an authenticated client.
+
 ## Troubleshooting
 
 - **Unavailable:** check the registered URL, server, TLS, firewall, and private

@@ -12,6 +12,40 @@ afterEach(async () => {
 	for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
 });
 
+for (const all of [false, true]) {
+	test(`offline logout clears local credentials and reports unconfirmed revocation; all=${all}`, async () => {
+		const home = await mkdtemp(join(tmpdir(), "signet-logout-offline-"));
+		homes.push(home);
+		const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({}) });
+		const url = server.url.origin;
+		server.stop(true);
+		const env = { HOME: home };
+		const keyring = {
+			get: async () => ({ state: "unsupported" as const }),
+			set: async () => ({ state: "unsupported" as const }),
+		};
+		const store = new LoginStore(url, { env, keyring });
+		await store.save({
+			accessToken: "fixture-access",
+			refreshToken: "fixture-refresh",
+			accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
+			refreshExpiresAt: new Date(Date.now() + 120000).toISOString(),
+		});
+		const output: string[] = [];
+		const program = new Command();
+		registerAuthCommands(program, { env, keyring, flagUrl: url, print: (value) => output.push(value) });
+		process.exitCode = 0;
+		try {
+			await program.parseAsync(["logout", "--json", ...(all ? ["--all"] : [])], { from: "user" });
+			expect(await store.load()).toBeNull();
+			expect(JSON.parse(output[0] ?? "null")).toMatchObject({ authenticated: false, revocationConfirmed: false });
+			expect(process.exitCode).toBe(1);
+		} finally {
+			process.exitCode = 0;
+		}
+	});
+}
+
 test("device login stores credentials and logout revokes before clearing", async () => {
 	const home = await mkdtemp(join(tmpdir(), "signet-auth-"));
 	homes.push(home);
