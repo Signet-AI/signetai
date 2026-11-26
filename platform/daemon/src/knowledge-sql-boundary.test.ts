@@ -25,6 +25,11 @@ afterEach(async () => {
 test("knowledge prepare rejects uncovered comma joins, schema-qualified tables and subqueries", () => {
 	for (const sql of [
 		"SELECT e.id FROM entities e, embeddings x",
+		"SELECT * FROM (memory_jobs)",
+		"SELECT e.id FROM entities e JOIN (memory_jobs) j ON 1=1",
+		"SELECT * FROM (entities), (memory_jobs)",
+		"SELECT * FROM ((memory_jobs))",
+		"SELECT * FROM (entities JOIN memory_jobs ON 1=1)",
 		"SELECT * FROM entities_fts",
 		"SELECT * FROM main.entities_fts",
 		"SELECT * FROM entities_fts__c9",

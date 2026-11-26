@@ -1384,9 +1384,11 @@ function scopedSqlInput(
 			tables.add(lower);
 		}
 		if (word === "(") {
+			const groupedSource: boolean =
+				expected && !["SELECT", "WITH", "VALUES"].includes(tokens[index + 1]?.toUpperCase() ?? "");
 			depth++;
-			fromDepth[depth] = false;
-			expected = false;
+			fromDepth[depth] = groupedSource;
+			expected = groupedSource;
 			continue;
 		}
 		if (word === ")") {
