@@ -1919,12 +1919,12 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 	).all(state.cursor, state.end_rowid, maxRows);
 	const rowBytes = prepareTypedStatement<{ readonly bytes: number }>(
 		db,
-		"SELECT length(CAST(content AS BLOB)) AS bytes FROM session_transcripts WHERE rowid = ?",
+		"SELECT length(CAST(content AS BLOB)) AS bytes FROM session_transcripts WHERE rowid = CAST(? AS INTEGER)",
 	);
 	const insert = db.prepare(
 		`INSERT INTO session_transcript_turns(agent_id, session_key, text)
 		 SELECT st.agent_id, st.session_key, st.content FROM session_transcripts st
-		 WHERE st.rowid = ? AND NOT EXISTS (
+		 WHERE st.rowid = CAST(? AS INTEGER) AND NOT EXISTS (
 			 SELECT 1 FROM session_transcript_turns turn
 			 WHERE turn.agent_id = st.agent_id AND turn.session_key = st.session_key
 		 )`,
