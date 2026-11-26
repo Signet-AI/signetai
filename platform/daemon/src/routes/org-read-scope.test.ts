@@ -299,7 +299,7 @@ describe("organization source routes", () => {
 		getDbAccessor().withWriteTx((db) =>
 			db
 				.prepare(
-					"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES ('source',?,'default','cls_hr','carol',?)",
+					"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES ('source',?,'beta','cls_hr','carol',?)",
 				)
 				.run(sourceId, at),
 		);

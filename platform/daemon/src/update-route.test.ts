@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -15,18 +16,35 @@ function mustMatch(src: string, pattern: RegExp): string {
 }
 
 describe("Bug 7: /api/update/run accepts targetVersion in body", () => {
-	it("reads targetVersion from request body", () => {
-		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/run"[\s\S]*?\}\);/);
-		expect(routeBody).toContain("targetVersion");
-		expect(routeBody).toContain("c.req.json");
-	});
-
-	it("skips checkForUpdatesImpl when targetVersion is provided", () => {
-		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/run"[\s\S]*?\}\);/);
-		expect(routeBody).toContain("if (!targetVersion)");
-		const conditionalIdx = routeBody.indexOf("if (!targetVersion)");
-		const checkIdx = routeBody.indexOf("checkForUpdatesImpl()");
-		expect(checkIdx).toBeGreaterThan(conditionalIdx);
+	it("reads targetVersion from request body without checking for updates", () => {
+		const script = `
+			import { mock } from "bun:test";
+			import { Hono } from "hono";
+			const updatePath = ${JSON.stringify(join(__dirname, "update-system.ts"))};
+			const actual = await import(updatePath);
+			let checks = 0;
+			mock.module(updatePath, () => ({
+				...actual,
+				checkForUpdates: async () => { checks++; throw new Error("unexpected update lookup"); },
+				runUpdate: async (targetVersion) => ({ success: true, targetVersion }),
+			}));
+			const { registerMiscRoutes } = await import(${JSON.stringify(join(__dirname, "routes/misc-routes.ts"))});
+			const app = new Hono();
+			registerMiscRoutes(app);
+			const response = await app.request("/api/update/run", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ targetVersion: "1.2.3" }),
+			});
+			console.log(JSON.stringify({ status: response.status, body: await response.json(), checks }));
+			process.exit(0);
+		`;
+		const output = execFileSync(process.execPath, ["--eval", script], { encoding: "utf8", timeout: 5000 });
+		expect(JSON.parse(output)).toEqual({
+			status: 200,
+			body: { success: true, targetVersion: "1.2.3" },
+			checks: 0,
+		});
 	});
 });
 

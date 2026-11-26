@@ -258,7 +258,8 @@ export function registerOntologyRoutes(app: Hono): void {
 			return c.json({ item }, 201);
 		} catch (err) {
 			const message = messageForError(err);
-			if (message.includes("UNIQUE")) return c.json({ error: "alias already exists" }, 409);
+			if (message.includes("UNIQUE") || message === "duplicate_entity_alias")
+				return c.json({ error: "alias already exists" }, 409);
 			return c.json({ error: message }, statusForError(err));
 		}
 	});
