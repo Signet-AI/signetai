@@ -323,7 +323,7 @@ async function disconnect(raw: string, options: ConnectorInstallOptions, deps: C
 		const target = await resolveTarget({ ...deps, harness: registryKey, flagUrl: options.url ?? entry?.url });
 		if (entry && target.url !== entry.url)
 			throw new Error("The requested outbox target differs from the connected target");
-		outbox = new DurableOutbox(target.url, { env: deps.env, harness: registryKey });
+		outbox = new DurableOutbox(target.origin, { env: deps.env, harness: registryKey });
 	}
 	const pending = entry?.keyId ? { harness: registryKey, url: entry.url, keyId: entry.keyId } : undefined;
 	if (pending) await new PendingRevokes(deps).add(pending);
@@ -502,7 +502,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 					if (files.inlineKeyFiles.length || files.scanIncomplete) inline.push({ harness, ...files });
 				}
 				for (const [harness, entry] of Object.entries(await new ConnectorRegistry(deps).read())) {
-					const outbox = new DurableOutbox(entry.url, { env: deps.env, harness });
+					const outbox = new DurableOutbox(new URL(entry.url).origin, { env: deps.env, harness });
 					try {
 						if (entry.keyFile) await readKeyFile(entry.keyFile);
 						const transport = new NodeTransport(await resolveTarget({ ...deps, harness }), { env: deps.env });
