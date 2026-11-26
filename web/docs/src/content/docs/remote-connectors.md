@@ -49,7 +49,7 @@ A loopback URL without a credential remains local, including an explicitly
 configured URL or registry entry. Local capture passes the transcript path to
 the daemon rather than uploading its contents. Claude session-end dispatch is
 detached: a stalled daemon does not keep the harness process alive. Dispatch
-acceptance is not confirmation that the daemon has stored the evidence.
+acceptance reports `status: "dispatched"`, not confirmation that the daemon has stored the evidence.
 
 ```bash
 signet connect claude-code
@@ -121,6 +121,7 @@ than presented as a verified last-use time.
 failures, and pending or quarantined outbox entries. It reports whether it could
 inspect unassigned legacy keys. Its configuration scan is bounded and reports
 incomplete scans; unavailable inspection is not proof that nothing is wrong.
+Doctor scans each declared configuration file and its bounded directory tree, without following symbolic links or walking the entire home directory.
 Each connector declares its configuration paths, including Claude’s global
 `~/.claude.json` MCP configuration. Pending revocations are reported and retried;
 an active registry credential is never revoked by that retry.
@@ -149,6 +150,8 @@ protocol in the API reference for transfer bounds and receipt polling.
 `logout` revokes your current login session; `logout --all` revokes your sessions
 on other devices too. Use disconnect to remove an installed integration and its
 connector key.
+
+Logout is idempotent: an absent or already-expired session exits `0`. A `401` during logout does not ask you to sign in again. This does not confirm revocation of other devices; `revocationConfirmed` remains `false`.
 
 If the daemon cannot be reached, logout still clears the local login credential.
 It exits nonzero and reports that server revocation was not confirmed;
