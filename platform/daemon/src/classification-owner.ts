@@ -106,6 +106,16 @@ function definition(db: MigrationDb, classification: string, actor: Classificati
 	if (!row) throw new Error("not_found");
 	return row;
 }
+function definitionView(db: MigrationDb, row: Row, actor: ClassificationActor, includePrincipals: boolean): Row {
+	if (!includePrincipals || (!actor.compliance && !actor.local)) return row;
+	const values = (table: "classification_audience" | "classification_appliers") =>
+		db
+			.prepare(
+				`SELECT p.principal_kind AS kind,p.principal_id AS id,COALESCE(u.display_name,g.name,p.principal_id) AS displayName FROM ${table} p LEFT JOIN users u ON p.principal_kind='user' AND u.id=p.principal_id LEFT JOIN groups g ON p.principal_kind='group' AND g.id=p.principal_id WHERE p.classification_id=? ORDER BY p.principal_kind,p.principal_id LIMIT 1000`,
+			)
+			.all(text(row.id));
+	return { ...row, audience: values("classification_audience"), appliers: values("classification_appliers") };
+}
 function compliance(actor: ClassificationActor): void {
 	if (!actor.compliance && !actor.local) throw new Error("permission");
 }
@@ -1076,8 +1086,15 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 	if (request.op === "list")
 		return db
 			.prepare(`SELECT c.* FROM classifications c WHERE ${DEFINITION_AUDIENCE} ORDER BY c.name`)
-			.all(Number(request.actor.compliance || request.actor.local), request.actor.userId, request.actor.userId);
-	if (request.op === "get") return definition(db, request.id ?? "", request.actor);
+			.all(Number(request.actor.compliance || request.actor.local), request.actor.userId, request.actor.userId)
+			.map((row) => definitionView(db, row, request.actor, request.includePrincipals === true));
+	if (request.op === "get")
+		return definitionView(
+			db,
+			definition(db, request.id ?? "", request.actor),
+			request.actor,
+			request.includePrincipals === true,
+		);
 	if (request.op === "rebuild")
 		return transaction(db, () => {
 			const cursor =

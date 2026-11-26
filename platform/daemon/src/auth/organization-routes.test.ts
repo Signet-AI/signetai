@@ -252,6 +252,45 @@ describe("organization HTTP flows", () => {
 			reason: "revoked",
 		});
 	});
+	test("classification principal metadata is visible only to definition managers", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		expect((await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true })).status).toBe(200);
+		const created = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "HR", audience: [{ kind: "user", id: alice.userId }], appliers: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const managed = await (await call(`/api/classifications/${created.id}`, "GET", undefined, bob.token)).json();
+		expect(managed.audience).toEqual([{ kind: "user", id: alice.userId, displayName: "alice" }]);
+		expect(managed.appliers).toEqual([{ kind: "user", id: bob.userId, displayName: "bob" }]);
+		const readable = await (await call(`/api/classifications/${created.id}`, "GET", undefined, alice.token)).json();
+		expect(readable.id).toBe(created.id);
+		expect(readable).not.toHaveProperty("audience");
+		expect(readable).not.toHaveProperty("appliers");
+		expect((await call(`/api/classifications/${created.id}`)).status).toBe(404);
+		expect(await (await call("/api/classifications")).json()).toEqual([]);
+		expect((await (await call("/api/classifications", "GET", undefined, bob.token)).json())[0].audience).toEqual(
+			managed.audience,
+		);
+		const narrowed = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{ name: "limited", permissions: ["recall"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+				bob.token,
+			)
+		).json();
+		expect(
+			await (await call(`/api/classifications/${created.id}`, "GET", undefined, narrowed.secret)).json(),
+		).not.toHaveProperty("audience");
+	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
 		const agent = await (await call("/api/agents", "POST", { name: "transfer-me", kind: "personal" })).json();

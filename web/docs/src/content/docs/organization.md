@@ -133,6 +133,8 @@ Use server IDs for users and teams. Deactivation prints a plan unless `--confirm
 
 Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_job`, and `signet_classify` (including `preview: true`). They call the same HTTP operations and retain the caller's permissions and scopes; forbidden responses never fall back to local access.
 
+Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.
