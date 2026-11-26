@@ -16,6 +16,8 @@ export interface StatusOptions extends PathOptions {
 }
 
 export interface RestartOptions extends PathOptions, RuntimeOptions {
+	json?: boolean;
+	wait?: boolean;
 	openclaw?: boolean;
 	sync?: boolean;
 }

@@ -41,6 +41,7 @@ export interface OperatorJobRow {
 	readonly finished_at: string | null;
 }
 export type OperatorRequest =
+	| { readonly op: "authorize-global"; readonly actor: OperatorActor; readonly runtimeId?: string }
 	| {
 			readonly op: "create";
 			readonly actor: OperatorActor;

@@ -29,6 +29,10 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		expect((await cli(["restart", "--json"], text(admin.credential.bearer), 1)).reason).toBe("supervisor_required");
+		expect((await cli(["daemon", "restart", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
+			"supervisor_required",
+		);
 		for (const action of ["requeue", "cancel", "prune"]) {
 			const job = await cli(["repair", "queue", action, "--wait", "--json"]);
 			expect(job.kind).toBe("operator");

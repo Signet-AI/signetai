@@ -1,6 +1,22 @@
+import { createHash } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, normalize } from "node:path";
+
+export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
+export function launchdDaemonLabel(agentsDir: string): string {
+	const hash = createHash("sha256")
+		.update(Buffer.from(normalize(agentsDir), "utf8"))
+		.digest("hex")
+		.slice(0, 12);
+	return `${LAUNCHD_DAEMON_LABEL}.${hash}`;
+}
+export function launchdDaemonLegacyPlistPath(home: string = homedir()): string {
+	return join(home, "Library", "LaunchAgents", `${LAUNCHD_DAEMON_LABEL}.plist`);
+}
+export function launchdDaemonPlistPath(agentsDir: string, home: string = homedir()): string {
+	return join(home, "Library", "LaunchAgents", `${launchdDaemonLabel(agentsDir)}.plist`);
+}
 
 const CRITICAL_EXECUTABLES = ["git", "bun", "npx", "python3"] as const;
 

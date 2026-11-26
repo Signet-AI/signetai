@@ -60,7 +60,13 @@ const keySchema = z.object({
 function deny(reason: string): never {
 	throw new Error(`operator:${reason}`);
 }
-function actorScope(db: WriteDb, actor: OperatorActor, original: ReadScope, permission: string): ReadScope {
+function actorScope(
+	db: WriteDb,
+	actor: OperatorActor,
+	original: ReadScope,
+	permission: string,
+	global = false,
+): ReadScope {
 	const user = z
 		.object({ status: z.string(), role: z.string() })
 		.parse(db.prepare("SELECT status,role FROM users WHERE id=?").get(actor.userId));
@@ -85,6 +91,7 @@ function actorScope(db: WriteDb, actor: OperatorActor, original: ReadScope, perm
 			(key.expires_at && key.expires_at <= new Date().toISOString())
 		)
 			deny("permission");
+		if (global && (key.agent_id !== null || key.allowed_projects_json !== null)) deny("permission");
 		if (!z.array(z.string()).parse(JSON.parse(key.permissions_json)).includes(permission)) deny("permission");
 		if (key.agent_id && (original.reach.kind !== "own" || key.agent_id !== original.reach.agentId))
 			deny("agent_not_permitted");
@@ -110,6 +117,7 @@ function actorScope(db: WriteDb, actor: OperatorActor, original: ReadScope, perm
 					expiresAt: z.string(),
 				})
 				.parse(JSON.parse(session.source_key_ceiling_json));
+			if (global && (ceiling.agentId !== null || ceiling.projects !== null)) deny("permission");
 			if (!ceiling.permissions.includes(permission) || ceiling.expiresAt <= new Date().toISOString())
 				deny("permission");
 			if (ceiling.agentId && (original.reach.kind !== "own" || ceiling.agentId !== original.reach.agentId))
@@ -246,6 +254,19 @@ export function executeOperatorJob(db: WriteDb, request: OperatorRequest): unkno
 	}
 }
 function operation(db: WriteDb, request: OperatorRequest): unknown {
+	if (request.op === "authorize-global") {
+		if (request.actor.boundAgentId !== null || request.actor.allowedProjects !== null) deny("permission");
+		const agent = db.prepare("SELECT id FROM agents WHERE kind='organization' AND archived_at IS NULL LIMIT 1").get();
+		const id = z.string().parse(agent?.id);
+		actorScope(
+			db,
+			request.actor,
+			{ reach: { kind: "own", agentId: id }, projects: null, compartments: [] },
+			"admin",
+			true,
+		);
+		return { ok: true };
+	}
 	if (request.op === "list") {
 		const actor = request.actor;
 		const groups = db

@@ -230,6 +230,10 @@ export {
 } from "./daemon-runtime";
 export type { DaemonRuntime } from "./daemon-runtime";
 export {
+	LAUNCHD_DAEMON_LABEL,
+	launchdDaemonLabel,
+	launchdDaemonLegacyPlistPath,
+	launchdDaemonPlistPath,
 	buildLaunchdEnvironment,
 	buildLaunchdPlist,
 	findLaunchdExecutable,

@@ -229,3 +229,19 @@ Pass `--agent` to select an agent; backfill otherwise uses the personal write
 default. Remote embedding-profile migrations remain host operations; run them
 with `--local` on the instance host. A non-preview backfill that needs more than
 one bounded batch reports incomplete coverage, so scripts must inspect its job.
+
+## Supervised restarts
+
+`signet restart --org --wait --json` requests a restart from the instance's
+supervisor. An unrestricted administrator is required. The daemon verifies its
+own systemd service's main PID and control group, or its workspace-specific
+launchd job's PID and `KeepAlive` setting. A daemon started directly refuses;
+the CLI never tries a local restart instead.
+
+`GET /api/org/operator/capabilities` reports whether a verified supervisor is
+available. `POST /api/org/operator/restart` returns HTTP 202 with a durable job
+ID. That response means accepted, not restarted. The old process records the
+request before dispatch; the new process marks the job complete only after it
+is listening. `--wait` tolerates the bounded connection interruption. An
+unconfirmed dispatch remains incomplete. Requests, dispatches, and completion
+are audited. MCP exposes `signet_operator_restart`.

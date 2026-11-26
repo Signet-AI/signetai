@@ -88,6 +88,14 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("restart without a verified supervisor refuses without stopping", async () => {
+		await claim();
+		const bob = await member("restart-member");
+		expect((await call("/api/org/operator/restart", "POST", {}, bob.token)).status).toBe(403);
+		expect((await call("/api/org/operator/restart", "POST", {})).status).toBe(409);
+		expect((await (await call("/api/org/operator/capabilities")).json()).supervisor).toBeNull();
+		expect((await call("/api/auth/whoami")).status).toBe(200);
+	});
 	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);

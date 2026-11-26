@@ -6,6 +6,7 @@ import { authCookies } from "../auth/cookies";
 import { failure } from "../auth/identity-middleware";
 import { hybridProxyDetected } from "../auth/middleware";
 import { oidcCallback, oidcStart } from "../auth/oidc";
+import { operatorRestartCapabilities, restartOrganization } from "../operator-restart";
 import { startOperatorJob } from "../operator-jobs";
 import * as admin from "../auth/organization-admin";
 import * as operations from "../auth/organization-operations";
@@ -435,6 +436,22 @@ export function registerOrganizationRoutes(
 		active(async (c) => {
 			const result = await admin.auditExport(user(c), c.req.query());
 			return new Response(result, { headers: { "Content-Type": "application/x-ndjson" } });
+		}),
+	);
+	app.get(
+		"/api/org/operator/capabilities",
+		active(async (c) => {
+			operations.requireAdmin(user(c));
+			return c.json(operatorRestartCapabilities());
+		}),
+	);
+	app.post(
+		"/api/org/operator/restart",
+		active(async (c) => {
+			z.object({})
+				.strict()
+				.parse(await body(c));
+			return c.json(await restartOrganization(user(c)), 202);
 		}),
 	);
 	app.post(

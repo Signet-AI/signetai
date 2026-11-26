@@ -1,10 +1,14 @@
 import {
+	LAUNCHD_DAEMON_LABEL,
+	launchdDaemonLabel,
+	launchdDaemonLegacyPlistPath,
+	launchdDaemonPlistPath,
 	resolveWorkspaceLayout,
 	spawnHidden as spawn,
 	spawnSyncHidden as spawnSync,
 	type SpawnSyncReturns,
 } from "@signet/core";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -1744,26 +1748,14 @@ export function macOSLaunchAgentAttributionNotice(
 	const signer = runtimeName === "Bun" ? "Bun's signer (for example, Jarred Sumner)" : `${runtimeName}'s signer`;
 	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is started from a source checkout or JavaScript daemon path. The public curl, npm, and Bun installers use the compiled Signet binary instead.`;
 }
-export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
+export { LAUNCHD_DAEMON_LABEL } from "@signet/core";
 
 function currentLaunchdDomain(): string {
 	const uid = typeof process.getuid === "function" ? process.getuid() : null;
 	return uid === null ? "gui/user" : `gui/${uid}`;
 }
 
-export function launchdDaemonLabel(agentsDir: string): string {
-	const workspaceHash = sha256(Buffer.from(normalize(agentsDir), "utf8")).slice(0, 12);
-	return `${LAUNCHD_DAEMON_LABEL}.${workspaceHash}`;
-}
-
-export function launchdDaemonLegacyPlistPath(home: string = homedir()): string {
-	return join(home, "Library", "LaunchAgents", `${LAUNCHD_DAEMON_LABEL}.plist`);
-}
-
-export function launchdDaemonPlistPath(agentsDir: string, home: string = homedir()): string {
-	return join(home, "Library", "LaunchAgents", `${launchdDaemonLabel(agentsDir)}.plist`);
-}
-
+export { launchdDaemonLabel, launchdDaemonLegacyPlistPath, launchdDaemonPlistPath } from "@signet/core";
 export function daemonStartupLogPath(
 	agentsDir: string,
 	platform: NodeJS.Platform = process.platform,
@@ -2333,8 +2325,4 @@ async function waitForPidExit(pid: number): Promise<boolean> {
 		await sleep(250);
 	}
 	return !isAlive(pid);
-}
-
-function sha256(buf: Buffer): string {
-	return createHash("sha256").update(buf).digest("hex");
 }

@@ -63,6 +63,7 @@ import {
 } from "./config-migration";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { readRetainedMigrationVerifyStatus } from "./daemon-migration-startup";
+import { initializeOperatorRestart, reconcileSupervisedRestart } from "./operator-restart";
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
 	closeDbOwnerDuringShutdown,
@@ -3107,6 +3108,7 @@ async function main() {
 		});
 	}
 
+	await initializeOperatorRestart(AGENTS_DIR, () => requestShutdown("operator_restart", 0));
 	const { createServer: nodeCreateServer } = await import("node:http");
 
 	const BIND_MAX_DELAY_MS = 30_000;
@@ -3121,6 +3123,9 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
+		void reconcileSupervisedRestart().catch((error: unknown) =>
+			logger.error("daemon", "Restart completion could not be recorded", error instanceof Error ? error : undefined),
+		);
 		const migrationBackupPendingAtReady = pendingMigrationBackupPath(MEMORY_DB) !== null;
 		if (
 			releaseDeferredRuntimeGateIfSafe(deferredRuntimeGate, {

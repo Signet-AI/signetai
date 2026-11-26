@@ -50,7 +50,12 @@ import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
 import { registerAuthCommands, reportAuthError } from "./commands/auth.js";
 import { registerOrganizationCommands } from "./commands/organization.js";
 import { cliTarget, cliTransport, registerOrganizationTarget } from "./lib/organization-target.js";
-import { organizationDashboard, organizationPause, organizationStatus } from "./commands/organization-client.js";
+import {
+	organizationDashboard,
+	organizationPause,
+	organizationRestart,
+	organizationStatus,
+} from "./commands/organization-client.js";
 import { organizationLogs } from "./commands/organization-logs.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
@@ -1012,7 +1017,10 @@ registerDesktopCommands(program, {
 
 registerDaemonCommands(program, {
 	doPause: (options) => setTargetPause(true, options),
-	doRestart: (options) => doRestart(options, daemonDeps),
+	doRestart: (options) => {
+		const transport = cliTransport();
+		return transport ? organizationRestart(transport, options ?? {}) : doRestart(options ?? {}, daemonDeps);
+	},
 	doResume: (options) => setTargetPause(false, options),
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),

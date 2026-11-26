@@ -1,4 +1,4 @@
-import { SignetError } from "../../../../libs/sdk/src/index.js";
+import { SignetError, SignetNetworkError, SignetTimeoutError } from "../../../../libs/sdk/src/index.js";
 import { Command } from "commander";
 import type { NodeTransport } from "../../../../libs/sdk/src/node.js";
 import { cliTransport } from "../lib/organization-target.js";
@@ -28,9 +28,18 @@ export async function waitForOrganizationJob(
 ): Promise<unknown> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		const job = await transport.get<{ status: string; error?: string }>(`/api/org/jobs/${encodeURIComponent(jobId)}`, {
-			timeoutMs: Math.min(10000, Math.max(1, deadline - Date.now())),
-		});
+		const job = await transport
+			.get<{ status: string; error?: string }>(`/api/org/jobs/${encodeURIComponent(jobId)}`, {
+				timeoutMs: Math.min(10000, Math.max(1, deadline - Date.now())),
+			})
+			.catch((error: unknown) => {
+				if (error instanceof SignetNetworkError || error instanceof SignetTimeoutError) return null;
+				throw error;
+			});
+		if (!job) {
+			await new Promise<void>((resolve) => setTimeout(resolve, 250));
+			continue;
+		}
 		if (job.status === "complete") return job;
 		if (job.status === "failed" || job.status === "cancelled" || job.status === "incomplete")
 			throw new SignetError(

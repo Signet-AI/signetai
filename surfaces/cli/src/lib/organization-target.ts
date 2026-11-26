@@ -94,11 +94,7 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 			throw new Error("Organization imports require --agent <id>.");
 		if (selected.remote && (top.name() === "import" || (top.name() === "export" && command.name() === "bundle")))
 			throw new Error("Remote portable bundles are not available yet. No local database was opened.");
-		if (
-			selected.remote &&
-			(["restart"].includes(top.name()) || (top.name() === "daemon" && ["restart"].includes(command.name())))
-		)
-			throw new Error("This remote operator command is not available yet. No local action was attempted.");
+
 		if (
 			selected.remote &&
 			[

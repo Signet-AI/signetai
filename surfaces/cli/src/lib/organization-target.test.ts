@@ -78,21 +78,6 @@ test("raw organization streams use the resolved credential without local fallbac
 	}
 });
 
-test("unimplemented remote operator paths never execute local process or file actions", async () => {
-	for (const name of ["restart"]) {
-		const program = new Command();
-		registerOrganizationTarget(program, {
-			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
-		});
-		let ran = false;
-		program.command(name).action(() => {
-			ran = true;
-		});
-		await expect(program.parseAsync([name], { from: "user" })).rejects.toThrow("No local action was attempted");
-		expect(ran).toBe(false);
-	}
-});
-
 test("remote portable bundle paths never open a local database", async () => {
 	for (const kind of ["import", "export"]) {
 		const program = new Command();
