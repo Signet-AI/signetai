@@ -6,20 +6,23 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
-import { registerGlobalMiddleware } from "../middleware";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "../transcript-upload";
 import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
+import { transcriptUploadAgentDirectory } from "../transcript-upload-paths";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const suiteDir = mkdtempSync(join(tmpdir(), "signet-transcript-upload-routes-"));
 process.env.SIGNET_PATH = suiteDir;
 const { registerHooksRoutes } = await import("./hooks-routes");
-const { authConfig } = await import("./state");
+const { registerGlobalMiddleware } = await import("../middleware");
+const { AGENTS_DIR, authConfig } = await import("./state");
+const uploadsDir = transcriptUploadAgentDirectory(AGENTS_DIR, "noam");
 
 let dir = "";
 let app: Hono;
 
 beforeEach(() => {
+	rmSync(uploadsDir, { recursive: true, force: true });
 	dir = mkdtempSync(join(suiteDir, "case-"));
 	initDbAccessor(join(dir, "memory.db"), { agentsDir: dir });
 	app = new Hono();
@@ -83,6 +86,7 @@ describe("transcript upload route", () => {
 		expect(first.status).toBe(200);
 		expect(await first.json()).toMatchObject({ committedOffset: 8, generation: 0, tailSha256: sha('{"a":1}\n') });
 		expect((await patch('{"b":2}\n', { offset: 8 })).status).toBe(200);
+		expect(existsSync(uploadsDir)).toBe(true);
 		const state = await app.request(query());
 		expect(state.status).toBe(200);
 		expect(await state.json()).toEqual({
@@ -119,7 +123,7 @@ describe("transcript upload route", () => {
 		expect(await response.json()).toEqual({ error: "purge_pending", retryable: true });
 		const state = await app.request(query());
 		expect(await state.json()).toEqual({ committedOffset: 0, generation: null, tailSha256: null });
-		expect(existsSync(join(dir, "transcripts", "uploads"))).toBe(false);
+		expect(existsSync(uploadsDir)).toBe(false);
 	});
 
 	it("requires an agent instead of falling back to the default agent", async () => {
