@@ -33,6 +33,12 @@ A member can rename their own active personal agent through `PATCH /api/agents/:
 
 SSO invitation acceptance returns an `ssoStartPath` containing only a single-use continuation code with a 60-second lifetime. The invitation token stays on the server through the OIDC flow. Submit invitation tokens in the acceptance JSON body, never as an SSO query parameter; interrupted continuations can be restarted by accepting the still-valid invitation again.
 
+## Connector errors
+
+`GET /api/auth/connector-keys/:id/errors` returns the owner's latest 10 authenticated connector failures from the past seven days as `{ keyId, since, limit, errors: [{ at, status, reason }] }`. It requires the owner's signed-in session; another user, including an administrator, cannot inspect that key through this account endpoint. Audit-authorized administrators can use the separate audit API.
+
+The summary is backed by durable audit records and survives daemon restarts. It contains no request bodies, credential secrets, URLs, or prompt content. A guessed key prefix with an invalid secret cannot add failures to another user's history. Key expiry, revocation, binding conflicts, and authorization failures are recorded only after the key secret has been verified.
+
 ## Agent preference
 
 `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a signed-in user session. It changes only your default read agent, not another user's preference or your default write ownership. The agent must exist and be unarchived; API keys cannot change the account preference. The change is audited and appears in `/api/auth/whoami`.

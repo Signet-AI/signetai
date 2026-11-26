@@ -201,6 +201,57 @@ describe("organization HTTP flows", () => {
 			provider.stop(true);
 		}
 	});
+	test("connector error summaries are bounded and visible only to the key owner", async () => {
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Laptop", platform: "linux" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, alice.token))
+				.status,
+		).toBe(200);
+		const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+		const issued = await (
+			await call("/api/auth/connector-keys", "POST", { harness: "codex", deviceId: cli.deviceId }, cli.accessToken)
+		).json();
+		const path = `/api/auth/connector-keys/${issued.key.id}/errors`;
+		const forged = `${issued.secret.slice(0, -1)}${issued.secret.endsWith("a") ? "b" : "a"}`;
+		expect((await call("/api/auth/devices", "GET", undefined, forged)).status).toBe(401);
+		expect((await (await call(path, "GET", undefined, alice.token)).json()).errors).toEqual([]);
+		for (let i = 0; i < 12; i++) {
+			const rejected = await app.request("http://localhost/api/agents", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${issued.secret}`,
+					"content-type": "application/json",
+					"x-signet-agent-id": bob.agentId,
+				},
+				body: JSON.stringify({ name: "private-request-body" }),
+			});
+			expect(rejected.status).toBe(403);
+		}
+		const result = await call(path, "GET", undefined, alice.token);
+		expect(result.status).toBe(200);
+		const summary = await result.json();
+		expect(summary.errors).toHaveLength(10);
+		expect(summary.errors[0]).toMatchObject({ status: 403, reason: "agent_binding_conflict" });
+		expect(JSON.stringify(summary)).not.toContain("private-request-body");
+		expect(JSON.stringify(summary)).not.toContain(issued.secret);
+		expect((await call(path, "GET", undefined, bob.token)).status).toBe(403);
+		expect((await call(path)).status).toBe(403);
+		expect((await call(`/api/auth/connector-keys/${issued.key.id}`, "DELETE", undefined, alice.token)).status).toBe(
+			200,
+		);
+		expect((await call("/api/auth/devices", "GET", undefined, issued.secret)).status).toBe(401);
+		await closeDbAccessor();
+		initDbAccessor((await import("@signet/core")).resolveWorkspaceLayout(dir).database, { agentsDir: dir });
+		expect((await (await call(path, "GET", undefined, alice.token)).json()).errors[0]).toMatchObject({
+			status: 401,
+			reason: "revoked",
+		});
+	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
 		const agent = await (await call("/api/agents", "POST", { name: "transfer-me", kind: "personal" })).json();

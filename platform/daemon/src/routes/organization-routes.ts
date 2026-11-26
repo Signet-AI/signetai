@@ -235,6 +235,10 @@ export function registerOrganizationRoutes(
 		"/api/auth/connector-keys",
 		active(async (c) => c.json({ keys: await operations.listKeys(user(c), false, "connector") })),
 	);
+	app.get(
+		"/api/auth/connector-keys/:id/errors",
+		active(async (c) => c.json(await operations.connectorErrors(user(c), c.req.param("id") ?? ""))),
+	);
 	app.delete(
 		"/api/auth/connector-keys/:id",
 		active(async (c) => c.json(await operations.revokeKey(user(c), c.req.param("id") ?? ""))),
