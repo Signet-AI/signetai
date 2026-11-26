@@ -1,4 +1,5 @@
 interface SQLiteDatabase {
+	transaction<T>(operation: () => T): () => T;
 	pragma(pragma: string): void;
 	exec(sql: string): void;
 	prepare(sql: string): {

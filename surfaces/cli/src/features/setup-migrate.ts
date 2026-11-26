@@ -9,13 +9,12 @@ import {
 	type SkillsResult,
 	createFreshWorkspaceV2,
 	disableGraphiqState,
-	ensureUnifiedSchema,
+	initializeDatabaseSchema,
 	formatYaml,
 	hasExistingWorkspaceState,
 	importMemoryLogs,
 	resolvePrimaryPackageManager,
 	resolveWorkspaceLayout,
-	runMigrations,
 	unifySkills,
 } from "@signet/core";
 import { readNetworkMode } from "@signet/core";
@@ -441,12 +440,14 @@ export async function runExistingSetupWizard(
 		const dbPath = resolveWorkspaceLayout(basePath).database;
 		mkdirSync(dirname(dbPath), { recursive: true });
 		const db = Database(dbPath);
-		const migrationResult = ensureUnifiedSchema(db);
-		if (migrationResult.migrated) {
-			spinner.text = `Migrated ${migrationResult.memoriesMigrated} memories from ${migrationResult.fromSchema} schema...`;
+		try {
+			const migrationResult = initializeDatabaseSchema(db);
+			if (migrationResult.migrated) {
+				spinner.text = `Migrated ${migrationResult.memoriesMigrated} memories from ${migrationResult.fromSchema} schema...`;
+			}
+		} finally {
+			db.close();
 		}
-		runMigrations(db);
-		db.close();
 
 		let protection = await withSetupPrompt(spinner, () =>
 			enforceSetupProtection({

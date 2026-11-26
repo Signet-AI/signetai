@@ -13,6 +13,7 @@ import { readSetupCorePluginEnabled } from "./setup-plugins.js";
 import { runDashboardSetupBootstrap } from "./setup-fresh.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
+import Database from "../sqlite.js";
 
 const NO_HARNESSES = {
 	claudeCode: false,
@@ -430,6 +431,38 @@ memory:
 		const state = readGraphiqState(basePath);
 		expect(state.enabled).toBe(false);
 		expect(state.activeProject).toBe(projectPath);
+	});
+
+	it("rolls back database initialization when a migration fails", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-atomic-schema-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		const dbPath = join(basePath, "memory", "memories.db");
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		const seed = Database(dbPath);
+		seed.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT);
+			CREATE TRIGGER reject_migration BEFORE INSERT ON schema_migrations WHEN NEW.version = 2
+			BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END;`);
+		seed.close();
+		spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("setup exited");
+		});
+		const deps = stubDeps({ AGENTS_DIR: basePath, getTemplatesDir: mock(() => templatesPath) });
+		await expect(
+			runExistingSetupWizard(basePath, fakeDetection(basePath), {}, deps, {
+				nonInteractive: true,
+				skipGit: true,
+				allowUnprotectedWorkspace: true,
+			}),
+		).rejects.toThrow("setup exited");
+		const reopened = Database(dbPath);
+		try {
+			expect(reopened.prepare("SELECT version FROM schema_migrations").all()).toEqual([]);
+			expect(reopened.prepare("SELECT name FROM sqlite_master WHERE name = 'memories'").all()).toEqual([]);
+		} finally {
+			reopened.close();
+		}
 	});
 
 	it("creates a v2 workspace when migrating an identity-only directory", async () => {
