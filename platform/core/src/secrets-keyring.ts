@@ -115,7 +115,8 @@ function helperCommand(): { readonly command: string; readonly args: readonly st
 	if (process.env.SIGNET_COMPILED_NATIVE === "1")
 		return { command: process.execPath, args: [], deadlineMs: defaultDeadlineMs() };
 	return {
-		command: process.platform === "darwin" && !process.versions.bun ? "bun" : process.execPath,
+		command:
+			process.platform === "darwin" && !process.versions.bun && !process.versions.electron ? "bun" : process.execPath,
 		args: [sourceHelperPath()],
 		deadlineMs: defaultDeadlineMs(),
 	};
@@ -161,6 +162,7 @@ async function invoke(
 		stdio: ["pipe", "pipe", "ignore"],
 		env: {
 			...process.env,
+			...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
 			...(process.env.SIGNET_COMPILED_NATIVE === "1" ? { SIGNET_KEYRING_HELPER: "1" } : {}),
 		},
 	});
