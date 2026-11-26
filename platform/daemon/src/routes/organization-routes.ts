@@ -14,6 +14,7 @@ import {
 	IdentityError,
 	type OrganizationRow,
 	readOrganization,
+	issueKeyBrowserSession,
 	refreshSession,
 } from "../auth/organization-store";
 import { getRequestOrigin } from "../auth/request-network";
@@ -30,24 +31,27 @@ async function body(c: Context): Promise<unknown> {
 }
 function sessionCookies(
 	c: Context,
-	result: { accessToken?: string; csrf?: string | null },
+	result: { accessToken?: string; csrf?: string | null; accessExpiresAt?: string },
 	org: OrganizationRow | null,
 ) {
 	if (!result.accessToken || !result.csrf) return;
+	const maxAge = result.accessExpiresAt
+		? Math.max(0, Math.floor((Date.parse(result.accessExpiresAt) - Date.now()) / 1000))
+		: (org?.session_ttl_seconds ?? 604800);
 	const secure = new URL(c.req.url).protocol === "https:" || org?.public_url?.startsWith("https:") === true;
 	setCookie(c, authCookies(c).session, result.accessToken, {
 		httpOnly: true,
 		sameSite: "Lax",
 		path: "/",
 		secure,
-		maxAge: org?.session_ttl_seconds ?? 604800,
+		maxAge,
 	});
 	setCookie(c, authCookies(c).csrf, result.csrf, {
 		httpOnly: false,
 		sameSite: "Lax",
 		path: "/",
 		secure,
-		maxAge: org?.session_ttl_seconds ?? 604800,
+		maxAge,
 	});
 }
 function endpoint(fn: (c: Context) => Promise<Response>): MiddlewareHandler {
@@ -267,7 +271,18 @@ export function registerOrganizationRoutes(
 			return c.json(browserResult(result));
 		}),
 	);
-	for (const path of ["/api/auth/token", "/api/auth/session"])
+	app.post(
+		"/api/auth/session",
+		active(async (c) => {
+			z.object({})
+				.strict()
+				.parse(await body(c));
+			const result = await issueKeyBrowserSession(user(c));
+			sessionCookies(c, result, c.get("organization"));
+			return c.json(browserResult(result));
+		}),
+	);
+	for (const path of ["/api/auth/token"])
 		app.post(
 			path,
 			active(async () => {

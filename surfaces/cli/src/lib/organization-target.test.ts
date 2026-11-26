@@ -22,6 +22,102 @@ test("local-only commands refuse remotely before running their action and --loca
 	expect(actions).toBe(1);
 });
 
+test("--local routes existing clients to loopback without organization credentials", async () => {
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request) {
+			return Response.json({ authorization: request.headers.get("authorization") });
+		},
+	});
+	try {
+		const client = createDaemonClient(1);
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: {
+				SIGNET_DAEMON_URL: "https://org.example",
+				SIGNET_PORT: String(server.port),
+				SIGNET_API_KEY: "must-not-leak",
+			},
+		});
+		let result: unknown;
+		program.command("recall").action(async () => {
+			result = await client.fetchFromDaemon("/api/memory/recall");
+		});
+		await program.parseAsync(["--local", "recall"], { from: "user" });
+		expect(result).toEqual({ authorization: null });
+		expect(client.url).toBe(server.url.origin);
+	} finally {
+		server.stop(true);
+	}
+});
+
+test("raw organization streams use the resolved credential without local fallback", async () => {
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request) {
+			return new Response(request.headers.get("authorization") ?? "missing");
+		},
+	});
+	try {
+		const client = createDaemonClient(1);
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: server.url.origin, SIGNET_API_KEY: "stream-fixture" },
+		});
+		let text = "";
+		program.command("export").action(async () => {
+			const response = await client.fetchDaemonStream("/api/memory/export");
+			if (response.ok) text = await response.response.text();
+		});
+		await program.parseAsync(["export"], { from: "user" });
+		expect(text).toBe("Bearer stream-fixture");
+	} finally {
+		server.stop(true);
+	}
+});
+
+test("unimplemented remote operator paths never execute local process or file actions", async () => {
+	for (const name of ["restart", "pause", "resume", "logs", "repair", "embed"]) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let ran = false;
+		program.command(name).action(() => {
+			ran = true;
+		});
+		await expect(program.parseAsync([name], { from: "user" })).rejects.toThrow("No local action was attempted");
+		expect(ran).toBe(false);
+	}
+});
+
+test("remote portable bundle paths never open a local database", async () => {
+	for (const kind of ["import", "export"]) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let ran = false;
+		if (kind === "import")
+			program.command("import <path>").action(() => {
+				ran = true;
+			});
+		else
+			program
+				.command("export")
+				.command("bundle")
+				.action(() => {
+					ran = true;
+				});
+		await expect(
+			program.parseAsync(kind === "import" ? ["import", "missing.json"] : ["export", "bundle"], { from: "user" }),
+		).rejects.toThrow(kind === "import" ? "--agent" : "No local database was opened");
+		expect(ran).toBe(false);
+	}
+});
+
 test("existing daemon clients use the resolved organization credential and agent", async () => {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",

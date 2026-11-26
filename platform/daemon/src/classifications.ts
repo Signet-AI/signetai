@@ -25,7 +25,12 @@ export type ClassificationRequest =
 	| { readonly op: "admit-write"; readonly scopes: readonly CompartmentWriteScope[] }
 	| { readonly op: "record-error"; readonly jobId: string; readonly error: string }
 	| { readonly op: "readable" | "visibility"; readonly subject: AudienceSubject }
-	| { readonly op: "list" | "get"; readonly actor: ClassificationActor; readonly id?: string }
+	| {
+			readonly op: "list" | "get";
+			readonly actor: ClassificationActor;
+			readonly id?: string;
+			readonly includePrincipals?: boolean;
+	  }
 	| {
 			readonly op: "create";
 			readonly actor: ClassificationActor;
