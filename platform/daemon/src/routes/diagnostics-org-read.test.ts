@@ -248,10 +248,16 @@ test("admin diagnostics exclude hidden inserts and edits, audience reads them, a
 	await write(
 		"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('memory','visible','default','cls_secret','audience','2026-01-01')",
 	);
-	expect(await body("/api/diagnostics/database/tables/entities/sample")).toMatchObject({ rows: [], rowCount: 0 });
+	expect(await body("/api/diagnostics/database/tables/entities/sample")).toMatchObject({
+		rows: expect.arrayContaining([
+			expect.objectContaining({ canonical_name: "person:reader", entity_type: "person" }),
+			expect.objectContaining({ canonical_name: "person:audience", entity_type: "person" }),
+		]),
+		rowCount: 2,
+	});
 	expect(await body("/api/diagnostics/database/tables/entities/sample", true)).toMatchObject({
-		rows: [{ id: "cited-entity" }],
-		rowCount: 1,
+		rows: expect.arrayContaining([expect.objectContaining({ id: "cited-entity" })]),
+		rowCount: 3,
 	});
 	expect(await body("/api/telemetry/memory-search")).toMatchObject({ count: 0, items: [] });
 	expect(await body("/api/diagnostics/queue")).toMatchObject({

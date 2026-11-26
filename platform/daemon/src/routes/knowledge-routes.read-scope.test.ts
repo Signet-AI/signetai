@@ -425,7 +425,9 @@ describe("knowledge and ontology organization reads", () => {
 			expect(focal.entityIds).toContain("hidden");
 		}
 		const reader = await appFor("reader", "peer");
-		expect(await (await reader.request("/api/knowledge/entities")).json()).toMatchObject({ items: [] });
+		expect(await (await reader.request("/api/knowledge/entities")).json()).toMatchObject({
+			items: [{ entity: { entityType: "person", personUserId: "audience", agentId: "peer" } }],
+		});
 		const restricted = await appFor("audience", "default", ["permitted-project"]);
 		expect(await (await restricted.request("/api/knowledge/entities")).json()).toMatchObject({ items: [] });
 	});
