@@ -109,10 +109,21 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 			);
 		throw error;
 	});
-	app.get("/api/classifications", async (c) => reply(await request({ op: "list", actor: actor(c).actor })));
-	app.get("/api/classifications/:id", async (c) =>
-		reply(await request({ op: "get", actor: actor(c).actor, id: c.req.param("id") })),
-	);
+	app.get("/api/classifications", async (c) => {
+		const principal = actor(c);
+		return reply(await request({ op: "list", actor: principal.actor, includePrincipals: principal.canClassify }));
+	});
+	app.get("/api/classifications/:id", async (c) => {
+		const principal = actor(c);
+		return reply(
+			await request({
+				op: "get",
+				actor: principal.actor,
+				id: c.req.param("id"),
+				includePrincipals: principal.canClassify,
+			}),
+		);
+	});
 	app.post("/api/classifications", async (c) => {
 		const principal = actor(c);
 		if (!principal.canClassify) throw new Error("permission");
