@@ -1,5 +1,6 @@
 import { NodeTransport, resolveTarget } from "@signet/sdk/node";
 import { spawn } from "node:child_process";
+import { SignetUnauthorizedError } from "@signet/sdk";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
