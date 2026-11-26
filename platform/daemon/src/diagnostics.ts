@@ -1,3 +1,4 @@
+import { knowledgeTargetSql } from "./knowledge-graph-hygiene";
 import { isPublicReadField } from "./public-read-response";
 import { z } from "zod";
 import type { DbAccessor } from "./db-accessor";
@@ -967,9 +968,9 @@ export function citedEvidenceReadScopeSql(
 	return {
 		sql: ` AND NOT EXISTS (
 	 WITH RECURSIVE cited_evidence(kind,id,agent_id) AS (
-	 SELECT evidence_kind,evidence_id,agent_id FROM evidence_citations INDEXED BY sqlite_autoindex_evidence_citations_1 WHERE derived_kind=? AND derived_id=${key} AND agent_id=${alias}.agent_id
+	 SELECT evidence_kind,evidence_id,agent_id FROM main.evidence_citations INDEXED BY sqlite_autoindex_evidence_citations_1 WHERE derived_kind=? AND derived_id=${key} AND agent_id=${alias}.agent_id
 	 UNION
-	 SELECT child.evidence_kind,child.evidence_id,child.agent_id FROM evidence_citations child INDEXED BY sqlite_autoindex_evidence_citations_1 JOIN cited_evidence parent ON child.derived_kind=parent.kind AND child.derived_id=parent.id AND child.agent_id=parent.agent_id
+	 SELECT child.evidence_kind,child.evidence_id,child.agent_id FROM main.evidence_citations child INDEXED BY sqlite_autoindex_evidence_citations_1 JOIN cited_evidence parent ON child.derived_kind=parent.kind AND child.derived_id=parent.id AND child.agent_id=parent.agent_id
 	 )
 	 SELECT 1 FROM cited_evidence citation WHERE CASE ${sources.map((source) => `WHEN citation.kind='${source.kind}' THEN NOT EXISTS(SELECT 1 FROM main.${source.table} ${source.alias} WHERE ${source.alias}.${source.key}=citation.id AND ${source.alias}.agent_id=citation.agent_id${source.scope.sql})`).join(" ")} ELSE 1 END
 	 )`,
@@ -977,11 +978,7 @@ export function citedEvidenceReadScopeSql(
 	};
 }
 
-async function telemetrySnapshotReadScopeSql(
-	alias: string,
-	scope: ReadScope,
-): Promise<{ sql: string; args: unknown[] }> {
-	const { knowledgeTargetSql } = await import("./knowledge-graph-hygiene");
+export function telemetrySnapshotReadScopeSql(alias: string, scope: ReadScope): { sql: string; args: unknown[] } {
 	const targets = [
 		{
 			table: "memories",
@@ -1043,6 +1040,7 @@ export function telemetryLabelReadScopeSql(alias: string, scope: ReadScope): { s
 
 async function diagnosticPredicate(table: string, columns: readonly DatabaseColumnInfo[], scope?: ReadScope) {
 	if (!scope || scope.organizationMode === false) return { sql: "", args: [] };
+	if (!(await import("./knowledge-graph-hygiene")).scopedKnowledgeTableSupported(table)) return null;
 	const names = new Set(columns.map((column) => column.name));
 	if (!names.has("agent_id") || !names.has("compartment_id")) return null;
 	const kind = DIAGNOSTIC_DERIVED_KINDS[table];
@@ -1090,14 +1088,17 @@ async function diagnosticCount(
 ): Promise<number | null> {
 	if (!predicate) return null;
 	const rawStatement = {
-		sql: `SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} d WHERE 1=1${predicate.sql}`,
-		params: predicate.args,
+		sql: `SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} d`,
+		params: [],
 	};
 	const statement =
 		scope && scope.organizationMode !== false
 			? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
 			: rawStatement;
-	const rows = await databaseDiagnosticRows(accessor, statement.sql, statement.params);
+	const rows = await databaseDiagnosticRows(accessor, statement.sql + ` WHERE 1=1${predicate.sql}`, [
+		...statement.params,
+		...predicate.args,
+	]);
 	return typeof rows[0]?.count === "number" ? rows[0].count : null;
 }
 
@@ -1197,14 +1198,19 @@ export async function readTableSampleAsync(
 	if (publicColumns.length === 0) return { error: "sample unavailable: no public columns", status: 400 };
 	const identifier = /^[a-z_][a-z0-9_]*$/i.test(table) ? table : quoteIdentifier(table);
 	const rawStatement = {
-		sql: `SELECT ${publicColumns.map((column) => `CASE WHEN typeof(d.${quoteIdentifier(column.name)})='blob' THEN '[blob '||length(d.${quoteIdentifier(column.name)})||' bytes]' ELSE d.${quoteIdentifier(column.name)} END AS ${quoteIdentifier(column.name)}`).join(",")} FROM ${identifier} d WHERE 1=1${predicate.sql} ORDER BY ${[...publicColumns.filter((column) => column.primaryKey), ...publicColumns.filter((column) => !column.primaryKey)].map((column) => `d.${quoteIdentifier(column.name)}`).join(",")} LIMIT ? OFFSET ?`,
-		params: [...predicate.args, limit + 1, offset],
+		sql: `SELECT ${publicColumns.map((column) => `CASE WHEN typeof(d.${quoteIdentifier(column.name)})='blob' THEN '[blob '||length(d.${quoteIdentifier(column.name)})||' bytes]' ELSE d.${quoteIdentifier(column.name)} END AS ${quoteIdentifier(column.name)}`).join(",")} FROM ${identifier} d`,
+		params: [],
 	};
 	const statement =
 		scope && scope.organizationMode !== false
 			? (await import("./knowledge-graph-hygiene")).scopedKnowledgeStatement(rawStatement, scope)
 			: rawStatement;
-	const rows = await databaseDiagnosticRows(accessor, statement.sql, statement.params);
+	const rows = await databaseDiagnosticRows(
+		accessor,
+		statement.sql +
+			` WHERE 1=1${predicate.sql} ORDER BY ${[...publicColumns.filter((column) => column.primaryKey), ...publicColumns.filter((column) => !column.primaryKey)].map((column) => `d.${quoteIdentifier(column.name)}`).join(",")} LIMIT ? OFFSET ?`,
+		[...statement.params, ...predicate.args, limit + 1, offset],
+	);
 	return {
 		table,
 		columns: publicColumns.map((col) => col.name),

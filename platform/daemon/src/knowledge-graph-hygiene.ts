@@ -1,4 +1,5 @@
-import { citedEvidenceReadScopeSql } from "./diagnostics";
+import { COMPARTMENT_TABLES } from "@signet/core";
+import { citedEvidenceReadScopeSql, telemetryLabelReadScopeSql, telemetrySnapshotReadScopeSql } from "./diagnostics";
 import { z } from "zod";
 import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import type { DbOwnerParameter } from "./db-owner-protocol";
@@ -563,6 +564,8 @@ const KNOWLEDGE_CONTENT_TABLES = [
 	"session_summaries",
 	"entity_communities",
 	"dreaming_passes",
+	"dreaming_attention",
+	"memory_search_telemetry",
 ] as const;
 
 function knowledgeScopeForTable(scope: ReadScope, table: string): ReadScope {
@@ -570,7 +573,13 @@ function knowledgeScopeForTable(scope: ReadScope, table: string): ReadScope {
 	return {
 		...scope,
 		reach: !memory && scope.reach.kind === "shared" ? { kind: "own", agentId: scope.reach.agentId } : scope.reach,
-		projects: ["memories", "memory_artifacts", "session_transcripts", "session_summaries"].includes(table)
+		projects: [
+			"memories",
+			"memory_artifacts",
+			"session_transcripts",
+			"session_summaries",
+			"memory_search_telemetry",
+		].includes(table)
 			? scope.projects
 			: scope.projects === null
 				? null
@@ -579,6 +588,54 @@ function knowledgeScopeForTable(scope: ReadScope, table: string): ReadScope {
 }
 
 const KNOWLEDGE_READ_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+	memory_search_telemetry: [
+		"id",
+		"created_at",
+		"route",
+		"agent_id",
+		"session_key",
+		"project",
+		"query",
+		"keyword_query",
+		"filters_json",
+		"method",
+		"result_count",
+		"top_score",
+		"no_hits",
+		"duration_ms",
+		"timings_json",
+		"results_json",
+		"sources_json",
+		"compartment_id",
+	],
+	dreaming_attention: [
+		"id",
+		"agent_id",
+		"kind",
+		"subject_ref",
+		"details_json",
+		"priority",
+		"created_at",
+		"generation",
+		"resolved_at",
+		"resolved_by_pass_id",
+		"compartment_id",
+	],
+	dreaming_state: [
+		"agent_id",
+		"tokens_since_last_pass",
+		"consecutive_failures",
+		"last_pass_at",
+		"last_pass_id",
+		"last_pass_mode",
+		"created_at",
+		"updated_at",
+		"evidence_cursor",
+		"last_failure_at",
+	],
+	derived_memory_sources: ["derived_memory_id", "source_kind", "source_id", "source_path", "agent_id", "created_at"],
+	evidence_citations: ["derived_kind", "derived_id", "agent_id", "evidence_kind", "evidence_id"],
+
 	entities: [
 		"id",
 		"name",
@@ -1142,6 +1199,7 @@ function knowledgeReadableProjection(table: string, scope: ReadScope): { sql: st
 	};
 	const targets: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 		entities: { proposal_id: "ontology_proposals" },
+		dreaming_attention: { resolved_by_pass_id: "dreaming_passes" },
 		entity_aspects: { proposal_id: "ontology_proposals" },
 		entity_attributes: {
 			memory_id: "memories",
@@ -1156,6 +1214,10 @@ function knowledgeReadableProjection(table: string, scope: ReadScope): { sql: st
 		session_summaries: { session_key: "session_transcripts" },
 	};
 	const projection = columns.map((column) => {
+		if (table === "memory_search_telemetry" && column === "sources_json") return "NULL AS sources_json";
+		if (table === "memory_search_telemetry" && column === "results_json")
+			return "(SELECT json_group_array(json(json_remove(item.value,'$.source_id','$.session_id','$.source_path'))) FROM json_each(CASE WHEN json_valid(r.results_json) THEN r.results_json ELSE '[]' END) item) AS results_json";
+
 		if (["proposal_evidence", "evidence", "payload", "result"].includes(column)) {
 			const json = knowledgeJsonProjection(column, scope);
 			args.push(...json.args);
@@ -1214,15 +1276,180 @@ function knowledgeReadableProjection(table: string, scope: ReadScope): { sql: st
 	return { sql: projection.join(", "), args };
 }
 
+const knowledgeChildTables = [
+	"entity_aliases",
+	"task_meta",
+	"memory_entity_mentions",
+	"session_summary_memories",
+	"predictor_comparisons",
+	"derived_memory_sources",
+	"evidence_citations",
+	"dreaming_state",
+];
+const shadowedKnowledgeTables = new Set<string>([...KNOWLEDGE_CONTENT_TABLES, ...knowledgeChildTables]);
+const classifiedKnowledgeTables = new Set<string>(COMPARTMENT_TABLES);
+const metadataKnowledgeTables = new Set([
+	"agents",
+	"sqlite_master",
+	"sqlite_schema",
+	"json_each",
+	"json_tree",
+	"pragma_table_info",
+	"pragma_index_list",
+	"pragma_index_info",
+	"pragma_foreign_key_list",
+]);
+
+export function scopedKnowledgeTableSupported(table: string): boolean {
+	return shadowedKnowledgeTables.has(table.toLowerCase());
+}
+
+function scopedSqlInput(
+	input: string,
+	readScope: ReadScope,
+): { sql: string; tables: Set<string>; restore: (sql: string) => string } {
+	if (input.includes("__signet_sql_literal_")) throw new Error("scoped_sql_reserved_identifier");
+	const literals: string[] = [];
+	const sql = input.replace(
+		/--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[(?:\]\]|[^\]])*\]/g,
+		(token) => {
+			if (token.startsWith("--") || token.startsWith("/*")) return " ";
+			if (token.startsWith("'")) {
+				const index = literals.push(token) - 1;
+				return `__signet_sql_literal_${index}__`;
+			}
+			const name = token.slice(1, -1).replace(/""/g, '"').replace(/``/g, "`").replace(/\]\]/g, "]");
+			if (!/^[a-z_][a-z_0-9]*$/i.test(name)) throw new Error("scoped_sql_quoted_identifier");
+			return name;
+		},
+	);
+	const tokens = sql.match(/[a-z_][a-z_0-9]*|[(),.;]/gi) ?? [];
+	if (tokens.length > 65536) throw new Error("scoped_sql_limit");
+	if (!/^(SELECT|WITH|PRAGMA|EXPLAIN)$/i.test(tokens[0] ?? "")) throw new Error("scoped_sql_read_only");
+	if (tokens[0]?.toUpperCase() === "PRAGMA") {
+		const name = tokens[tokens[2] === "." ? 3 : 1]?.toLowerCase();
+		if (!name || !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list"].includes(name))
+			throw new Error("scoped_sql_pragma");
+		return {
+			sql,
+			tables: new Set(),
+			restore: (value) =>
+				value.replace(
+					/\b__signet_sql_literal_(\d+)__\b/g,
+					(_token, index: string) => literals[Number(index)] ?? "NULL",
+				),
+		};
+	}
+	const ctes = new Set<string>();
+	for (let index = 0; index < tokens.length; index++) {
+		const name = tokens[index]?.toLowerCase();
+		if (!name || !/^[a-z_]/i.test(name)) continue;
+		let next = index + 1;
+		if (tokens[next] === "(") {
+			let nesting = 1;
+			next++;
+			while (next < tokens.length && nesting) {
+				if (tokens[next] === "(") nesting++;
+				if (tokens[next] === ")") nesting--;
+				next++;
+			}
+		}
+		if (tokens[next]?.toUpperCase() === "AS") {
+			next++;
+			if (tokens[next]?.toUpperCase() === "NOT") next++;
+			if (tokens[next]?.toUpperCase() === "MATERIALIZED") next++;
+			if (tokens[next] !== "(") continue;
+			if (classifiedKnowledgeTables.has(name) || shadowedKnowledgeTables.has(name) || metadataKnowledgeTables.has(name))
+				throw new Error("scoped_sql_shadow_collision");
+			ctes.add(name);
+		}
+	}
+	const tables = new Set<string>();
+	const fromDepth: boolean[] = [false];
+	let depth = 0;
+	let expected = false;
+	for (let index = 0; index < tokens.length; index++) {
+		const word = tokens[index] ?? "",
+			upper = word.toUpperCase(),
+			lower = word.toLowerCase();
+		if (word === ";" && index < tokens.length - 1) throw new Error("scoped_sql_batch");
+		if (
+			["INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "ATTACH", "DETACH", "VACUUM", "REINDEX"].includes(upper)
+		)
+			throw new Error("scoped_sql_read_only");
+		if (classifiedKnowledgeTables.has(lower) || shadowedKnowledgeTables.has(lower)) {
+			if (!shadowedKnowledgeTables.has(lower)) throw new Error(`scoped_sql_uncovered:${lower}`);
+			if (tokens[index - 1] === "." && ["main", "temp"].includes(tokens[index - 2]?.toLowerCase() ?? ""))
+				throw new Error(`scoped_sql_qualified:${lower}`);
+			tables.add(lower);
+		}
+		if (word === "(") {
+			depth++;
+			fromDepth[depth] = false;
+			expected = false;
+			continue;
+		}
+		if (word === ")") {
+			fromDepth.length = depth;
+			depth = Math.max(0, depth - 1);
+			expected = false;
+			continue;
+		}
+		if (["WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "UNION", "INTERSECT", "EXCEPT", "RETURNING"].includes(upper)) {
+			fromDepth[depth] = false;
+			expected = false;
+			continue;
+		}
+		if (upper === "FROM" || upper === "JOIN" || (word === "," && fromDepth[depth])) {
+			fromDepth[depth] = true;
+			expected = true;
+			continue;
+		}
+		if (!expected) continue;
+		expected = false;
+		let table = lower;
+		if (tokens[index + 1] === ".") {
+			table = tokens[index + 2]?.toLowerCase() ?? "";
+			if (
+				shadowedKnowledgeTables.has(table) ||
+				classifiedKnowledgeTables.has(table) ||
+				lower !== "main" ||
+				!metadataKnowledgeTables.has(table)
+			)
+				throw new Error(`scoped_sql_qualified:${table}`);
+			index += 2;
+		}
+		if (shadowedKnowledgeTables.has(table)) tables.add(table);
+		else if (/^entities_fts(?:__c[0-9]+)?$/.test(table)) {
+			const shape = sql.trim().replace(/\s+/g, " ");
+			if (
+				!/^SELECT e\.id(?:, (?:length\(e\.name\)|rank) AS knowledge_rank)? FROM (entities_fts(?:__c[0-9]+)?) (?:CROSS )?JOIN entities e ON e\.rowid\s*=\s*\1\.rowid WHERE \1 MATCH \? AND e\.agent_id\s*=\s*\? ORDER BY (?:rank|length\(e\.name\), e\.id) LIMIT 20$/i.test(
+					shape,
+				)
+			)
+				throw new Error("scoped_sql_fts_shape");
+
+			const match = /__c([0-9]+)$/.exec(table);
+			if (match && readScope.compartments !== "all" && !readScope.compartments.includes(Number(match[1])))
+				throw new Error("scoped_sql_unreadable_shard");
+		} else if (!metadataKnowledgeTables.has(table) && !ctes.has(table))
+			throw new Error(`scoped_sql_uncovered:${table}`);
+	}
+	return {
+		sql,
+		tables,
+		restore: (value) =>
+			value.replace(/\b__signet_sql_literal_(\d+)__\b/g, (_token, index: string) => literals[Number(index)] ?? "NULL"),
+	};
+}
+
 export function scopedKnowledgeStatement<T extends { readonly sql: string; readonly params?: readonly unknown[] }>(
 	statement: T,
 	readScope: ReadScope | undefined,
 ): T & { readonly params: readonly unknown[] } {
 	if (!readScope) return { ...statement, params: statement.params ?? [] };
-	const tables = new Set<string>();
-	for (const match of statement.sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)\b/gi)) {
-		if (match[1]) tables.add(match[1]);
-	}
+	const input = scopedSqlInput(statement.sql, readScope);
+	const tables = input.tables;
 	const parents: Readonly<Record<string, readonly string[]>> = {
 		entity_aspects: ["entities"],
 		entity_communities: ["entities", "entity_dependencies"],
@@ -1236,6 +1463,21 @@ export function scopedKnowledgeStatement<T extends { readonly sql: string; reado
 		ontology_contradictions: ["entity_attributes"],
 		ontology_proposals: ["entity_attributes"],
 		predictor_comparisons: ["entities"],
+		derived_memory_sources: ["memories", "session_transcripts", "memory_artifacts", "session_summaries"],
+		evidence_citations: [
+			"memories",
+			"session_transcripts",
+			"memory_artifacts",
+			"session_summaries",
+			"entities",
+			"entity_aspects",
+			"entity_attributes",
+			"entity_dependencies",
+			"epistemic_assertions",
+			"ontology_proposals",
+			"ontology_contradictions",
+		],
+		dreaming_state: ["dreaming_passes"],
 	};
 	const addParents = (table: string): void => {
 		for (const parent of parents[table] ?? []) {
@@ -1246,7 +1488,9 @@ export function scopedKnowledgeStatement<T extends { readonly sql: string; reado
 	};
 	for (const table of tables) addParents(table);
 	const derivedKinds: Readonly<Record<string, string>> = {
+		memories: "memory",
 		entities: "entity",
+		memory_search_telemetry: "telemetry",
 		entity_aspects: "aspect",
 		entity_attributes: "attribute",
 		entity_dependencies: "dependency",
@@ -1299,18 +1543,17 @@ export function scopedKnowledgeStatement<T extends { readonly sql: string; reado
 		});
 
 		const derivedKind = derivedKinds[table];
-		const copyCitation = ["ontology_proposals", "ontology_contradictions"].includes(table)
-			? " OR (citation.evidence_kind='attribute' AND NOT EXISTS (SELECT 1 FROM entity_attributes evidence WHERE evidence.id=citation.evidence_id AND evidence.agent_id=r.agent_id))"
-			: "";
-		const citations = derivedKind
-			? ` AND NOT EXISTS (SELECT 1 FROM evidence_citations citation WHERE citation.agent_id=r.agent_id AND citation.derived_kind='${derivedKind}' AND citation.derived_id=r.id AND ((citation.evidence_kind='memory' AND NOT EXISTS (SELECT 1 FROM memories evidence WHERE evidence.id=citation.evidence_id AND evidence.agent_id=r.agent_id)) OR (citation.evidence_kind='transcript' AND NOT EXISTS (SELECT 1 FROM session_transcripts evidence WHERE evidence.session_key=citation.evidence_id AND evidence.agent_id=r.agent_id)) OR (citation.evidence_kind='artifact' AND NOT EXISTS (SELECT 1 FROM memory_artifacts evidence WHERE evidence.source_path=citation.evidence_id AND evidence.agent_id=r.agent_id)) OR (citation.evidence_kind='summary' AND NOT EXISTS (SELECT 1 FROM session_summaries evidence WHERE evidence.id=citation.evidence_id AND evidence.agent_id=r.agent_id))${copyCitation} ))`
-			: "";
+		const citations = derivedKind ? citedEvidenceReadScopeSql("r", readScope, derivedKind) : { sql: "", args: [] };
+		const telemetry =
+			table === "memory_search_telemetry" ? telemetrySnapshotReadScopeSql("r", readScope) : { sql: "", args: [] };
+		const label =
+			table === "memory_search_telemetry" ? telemetryLabelReadScopeSql("r", readScope) : { sql: "", args: [] };
 		const projection = knowledgeReadableProjection(table, readScope);
 		ctes.push(
-			`${table} AS NOT MATERIALIZED (SELECT r.rowid AS rowid, ${projection.sql} FROM main.${table} r WHERE 1${scope.sql}${relations[table] ? ` AND ${relations[table]}` : ""}${citations})`,
+			`${table} AS NOT MATERIALIZED (SELECT r.rowid AS rowid, ${projection.sql} FROM main.${table} r WHERE 1${scope.sql}${relations[table] ? ` AND ${relations[table]}` : ""}${citations.sql}${label.sql}${telemetry.sql})`,
 		);
 
-		args.push(...projection.args, ...scope.args);
+		args.push(...projection.args, ...scope.args, ...citations.args, ...label.args, ...telemetry.args);
 	}
 	for (const table of [
 		"entity_aliases",
@@ -1319,10 +1562,74 @@ export function scopedKnowledgeStatement<T extends { readonly sql: string; reado
 		"session_summary_memories",
 		"predictor_comparisons",
 	]) {
-		if (tables.has(table))
-			ctes.push(`${table} AS NOT MATERIALIZED (SELECT r.* FROM main.${table} r WHERE ${relations[table]})`);
+		if (tables.has(table)) {
+			const own = classifiedKnowledgeTables.has(table)
+				? readScopeSql("r", knowledgeScopeForTable(readScope, table), {
+						visibility: null,
+						memory: null,
+						session: null,
+						source: null,
+					})
+				: { sql: "", args: [] };
+			ctes.push(`${table} AS NOT MATERIALIZED (SELECT r.* FROM main.${table} r WHERE ${relations[table]}${own.sql})`);
+			args.push(...own.args);
+		}
 	}
-	let sql = statement.sql.replace(/\bINDEXED\s+BY\s+[a-z_][a-z_0-9]*\b/gi, "");
+	const referencePredicate = (kind: string, id: string, agent: string) => {
+		const targets = [
+			{ kind: "memory", table: "memories", key: "id" },
+			{ kind: "transcript", table: "session_transcripts", key: "session_key" },
+			{ kind: "artifact", table: "memory_artifacts", key: "source_path" },
+			{ kind: "summary", table: "session_summaries", key: "id" },
+			{ kind: "entity", table: "entities", key: "id" },
+			{ kind: "aspect", table: "entity_aspects", key: "id" },
+			{ kind: "attribute", table: "entity_attributes", key: "id" },
+			{ kind: "dependency", table: "entity_dependencies", key: "id" },
+			{ kind: "assertion", table: "epistemic_assertions", key: "id" },
+			{ kind: "proposal", table: "ontology_proposals", key: "id" },
+			{ kind: "contradiction", table: "ontology_contradictions", key: "id" },
+		];
+		const parameters: unknown[] = [];
+		const sql = targets
+			.map((target) => {
+				const allowed = knowledgeTargetSql(target.table, "citation_target", readScope);
+				parameters.push(...allowed.args);
+				return `(${kind}='${target.kind}' AND EXISTS(SELECT 1 FROM main.${target.table} citation_target WHERE citation_target.${target.key}=${id} AND citation_target.agent_id=${agent}${allowed.sql}))`;
+			})
+			.join(" OR ");
+		return { sql: `(${sql})`, args: parameters };
+	};
+	if (tables.has("derived_memory_sources")) {
+		const source = referencePredicate("r.source_kind", "r.source_id", "r.agent_id");
+		const parent = knowledgeTargetSql("memories", "lineage_parent", readScope);
+		ctes.push(
+			`derived_memory_sources AS NOT MATERIALIZED (SELECT r.derived_memory_id,r.source_kind,r.source_id,r.source_path,r.agent_id,r.created_at FROM main.derived_memory_sources r WHERE EXISTS(SELECT 1 FROM main.memories lineage_parent WHERE lineage_parent.id=r.derived_memory_id AND lineage_parent.agent_id=r.agent_id${parent.sql}) AND ${source.sql})`,
+		);
+		args.push(...parent.args, ...source.args);
+	}
+	if (tables.has("evidence_citations")) {
+		const derived = referencePredicate("r.derived_kind", "r.derived_id", "r.agent_id"),
+			source = referencePredicate("r.evidence_kind", "r.evidence_id", "r.agent_id");
+		ctes.push(
+			`evidence_citations AS NOT MATERIALIZED (SELECT r.derived_kind,r.derived_id,r.agent_id,r.evidence_kind,r.evidence_id FROM main.evidence_citations r WHERE ${derived.sql} AND ${source.sql})`,
+		);
+		args.push(...derived.args, ...source.args);
+	}
+	if (tables.has("dreaming_state")) {
+		const allowed =
+			readScope.organizationMode === false ||
+			(readScope.reach.kind === "all" && readScope.compartments === "all" && readScope.projects === null);
+		const agent =
+			readScope.reach.kind === "all"
+				? "r.agent_id IN (SELECT id FROM agents WHERE archived_at IS NULL)"
+				: "r.agent_id=?";
+		const columns = KNOWLEDGE_READ_COLUMNS.dreaming_state ?? [];
+		ctes.push(
+			`dreaming_state AS NOT MATERIALIZED (SELECT ${columns.map((column) => `r.${column}`).join(",")} FROM main.dreaming_state r WHERE ${allowed ? agent : "0"})`,
+		);
+		if (allowed && readScope.reach.kind !== "all") args.push(readScope.reach.agentId);
+	}
+	let sql = input.sql.replace(/\bINDEXED\s+BY\s+[a-z_][a-z_0-9]*\b/gi, "");
 	const aliases = new Map<string, string>();
 	for (const match of sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)(?:\s+(?:AS\s+)?([a-z_][a-z_0-9]*))?/gi)) {
 		const table = match[1];
@@ -1361,7 +1668,7 @@ export function scopedKnowledgeStatement<T extends { readonly sql: string; reado
 		sql = /^\s*WITH\s/i.test(sql)
 			? sql.replace(/^(\s*WITH\s+)(RECURSIVE\s+)?/i, `$1$2${ctes.join(", ")}, `)
 			: `WITH ${ctes.join(", ")} ${sql}`;
-	return { ...statement, sql, params: [...args, ...(statement.params ?? [])] };
+	return { ...statement, sql: input.restore(sql), params: [...args, ...(statement.params ?? [])] };
 }
 
 export function knowledgeReadDb(readScope?: ReadScope): KnowledgeReadDb {
@@ -1373,6 +1680,7 @@ export function knowledgeReadDb(readScope?: ReadScope): KnowledgeReadDb {
 	return {
 		readScope,
 		prepare(sql) {
+			scopedKnowledgeStatement({ sql }, readScope);
 			const query = (result: "all" | "get", params: readonly unknown[]) => {
 				const statement = scopedKnowledgeStatement({ sql, params, result }, readScope);
 				return dbOwnerQuery(
