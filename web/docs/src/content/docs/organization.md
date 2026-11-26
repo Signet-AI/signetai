@@ -262,3 +262,25 @@ errors retain exit codes 3 and 4.
 `GET /api/org/operator/doctor` requires `diagnostics` and audits the inspection.
 It returns an explicit server timestamp and identity, not global content counts.
 MCP exposes `signet_operator_doctor`.
+
+## Exporting organization evidence
+
+`signet export --org --output my-evidence.ndjson --json` exports your authored
+memories, transcripts, and artifacts through your current agent, project, and
+classification read scope. Administrators can select `--author <user-id>` or
+`--all`; whole-organization exports require an unrestricted administrator and
+still exclude classifications outside that administrator's audience.
+
+Organization exports use NDJSON evidence records, not local workspace bundles.
+They contain no regenerated embedding vectors or local identity/configuration
+files. Without `--output`, records stream to stdout. File outputs use private
+permissions, publish only after successful completion, and never overwrite an
+existing file. A server-side terminal error, truncated record, cancellation, or
+byte-limit failure exits unsuccessfully without publishing a completed file.
+The default byte limit is 64 MiB; `--max-bytes` accepts up to 1 GiB. Individual
+records are limited to 64 MiB and each request has a two-minute deadline.
+
+Legacy local bundle imports remain refused against an organization. They can
+otherwise overwrite author identity and restore derived rows without source
+provenance. Use the classified document/transcript import API for source evidence;
+do not stop the organization instance or open its database from a client.

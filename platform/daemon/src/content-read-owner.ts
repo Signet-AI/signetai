@@ -746,12 +746,13 @@ export function executeContentRead(
 		return (
 			db
 				.prepare(
-					`SELECT hex(substr(CAST(r.content AS BLOB),?,?)) AS content FROM ${request.table} r WHERE r.rowid=? AND r.${author}=? AND length(CAST(r.content AS BLOB))=? AND r.updated_at IS ?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${access.sql}`,
+					`SELECT hex(substr(CAST(r.content AS BLOB),?,?)) AS content FROM ${request.table} r WHERE r.rowid=? AND (? IS NULL OR r.${author}=?) AND length(CAST(r.content AS BLOB))=? AND r.updated_at IS ?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${access.sql}`,
 				)
 				.get(
 					request.offset + 1,
 					request.length,
 					request.row,
+					request.author,
 					request.author,
 					request.expectedBytes,
 					request.expectedUpdatedAt,
@@ -775,7 +776,7 @@ export function executeContentRead(
 			? "r.session_key AS sessionKey,r.agent_id AS agentId,r.project,r.harness,r.created_at AS createdAt,r.updated_at AS updatedAt"
 			: "r.agent_id AS agentId,r.source_kind AS sourceKind,r.source_path AS sourcePath,r.captured_at AS capturedAt,r.updated_at AS updatedAt";
 	const statement = db.prepare(
-		`SELECT ${columns},r.content,r.rowid AS exportCursor,r.${author} AS authorUserId FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+		`SELECT ${columns},r.content,r.rowid AS exportCursor,r.${author} AS authorUserId FROM ${request.table} r WHERE (? IS NULL OR r.${author}=?) AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
 	);
 	const rows: Record<string, unknown>[] = [];
 	let cursor = request.cursor,
@@ -784,20 +785,20 @@ export function executeContentRead(
 		check();
 		const meta = db
 			.prepare(
-				`SELECT length(CAST(r.content AS BLOB)) AS bytes FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+				`SELECT length(CAST(r.content AS BLOB)) AS bytes FROM ${request.table} r WHERE (? IS NULL OR r.${author}=?) AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
 			)
-			.get(request.author, cursor, ...predicate.args);
+			.get(request.author, request.author, cursor, ...predicate.args);
 		if (typeof meta?.bytes === "number" && meta.bytes > 4 * 1024 * 1024) {
 			if (rows.length) break;
 			const large = db
 				.prepare(
-					`SELECT ${columns},r.rowid AS exportCursor,r.${author} AS authorUserId,length(CAST(r.content AS BLOB)) AS exportContentBytes FROM ${request.table} r WHERE r.${author}=? AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
+					`SELECT ${columns},r.rowid AS exportCursor,r.${author} AS authorUserId,length(CAST(r.content AS BLOB)) AS exportContentBytes FROM ${request.table} r WHERE (? IS NULL OR r.${author}=?) AND r.rowid>?${memory || request.table === "memory_artifacts" ? " AND COALESCE(r.is_deleted,0)=0" : ""}${predicate.sql} ORDER BY r.rowid LIMIT 1`,
 				)
-				.get(request.author, cursor, ...predicate.args);
+				.get(request.author, request.author, cursor, ...predicate.args);
 			return large ? [large] : [];
 		}
 
-		const row = statement.get(request.author, cursor, ...predicate.args);
+		const row = statement.get(request.author, request.author, cursor, ...predicate.args);
 		check();
 		if (!row) break;
 		const size = Buffer.byteLength(JSON.stringify(row));

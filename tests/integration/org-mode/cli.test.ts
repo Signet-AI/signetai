@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { OrgDaemon, repo } from "./daemon";
 import { Fixture, device } from "./fixture";
@@ -66,6 +66,20 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		expect((await cli(["embed", "backfill", "--wait", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
 			"job_failed",
 		);
+		const exportedPath = join(daemon.root, "organization-export.ndjson");
+		const exported = await cli(["export", "bundle", "--all", "--output", exportedPath, "--json"]);
+		expect(exported.exported).toBe(true);
+		const exportedText = await readFile(exportedPath, "utf8");
+		expect(exportedText).toContain("Operator backfill proof");
+		expect(
+			(
+				await cli(
+					["export", "bundle", "--all", "--output", join(daemon.root, "forbidden.ndjson"), "--json"],
+					text(fixture.user("alice").session.bearer),
+					4,
+				)
+			).reason,
+		).toBe("not_owner");
 		expect(
 			(await cli(["repair", "queue", "requeue", "--wait", "--json"], text(fixture.user("alice").session.bearer), 4))
 				.reason,

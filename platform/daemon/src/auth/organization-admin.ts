@@ -516,6 +516,9 @@ export async function bulkRevoke(p: Principal, input: unknown) {
 	]);
 	return { jobId };
 }
+export async function auditOrgExport(p: Principal, author: string | null, all: boolean) {
+	await organizationWrite([auditStatement(p, "organization.export", "user", author, { all })]);
+}
 export async function organizationDoctor(
 	p: Principal,
 	org: import("./organization-store").OrganizationRow,

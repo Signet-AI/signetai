@@ -92,7 +92,7 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;
 		if (selected.remote && top.name() === "import" && !selectedAgent)
 			throw new Error("Organization imports require --agent <id>.");
-		if (selected.remote && (top.name() === "import" || (top.name() === "export" && command.name() === "bundle")))
+		if (selected.remote && top.name() === "import")
 			throw new Error("Remote portable bundles are not available yet. No local database was opened.");
 
 		if (

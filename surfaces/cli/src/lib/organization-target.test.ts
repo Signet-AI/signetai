@@ -79,7 +79,7 @@ test("raw organization streams use the resolved credential without local fallbac
 });
 
 test("remote portable bundle paths never open a local database", async () => {
-	for (const kind of ["import", "export"]) {
+	for (const kind of ["import"]) {
 		const program = new Command();
 		registerOrganizationTarget(program, {
 			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },

@@ -1,3 +1,5 @@
+import { cliTarget } from "../lib/organization-target.js";
+import { exportOrganizationData } from "./organization-export.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import {
@@ -25,9 +27,19 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 	const bundleCmd = new Command("bundle")
 		.description("Export agent identity, memories, and skills to a portable bundle")
 		.option("-o, --output <path>", "Output file path")
+		.option("--author <id>", "Organization export author (default: yourself)")
+		.option("--all", "Export all readable organization evidence (admin only)")
+		.option("--max-bytes <n>", "Organization export byte limit (default: 64 MiB)")
 		.option("--include-embeddings", "Include embedding vectors (can be regenerated)")
 		.option("--json", "Output as JSON instead of ZIP")
 		.action(async (options) => {
+			if (cliTarget()?.remote) {
+				if (!deps.fetchDaemonStream) throw new Error("Organization streaming transport is unavailable");
+				if (options.includeEmbeddings)
+					throw new Error("Organization exports contain evidence, not derived embedding vectors");
+				await exportOrganizationData(deps.fetchDaemonStream, options);
+				return;
+			}
 			const agentsDir = deps.AGENTS_DIR;
 			const dbPath = resolveWorkspaceLayout(agentsDir).database;
 
