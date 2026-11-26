@@ -21,7 +21,7 @@ import {
 	stopTranscriptUploadPurges,
 	uploadTranscriptRange,
 } from "./transcript-upload";
-import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
+import { TranscriptUploadAdmission, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import {
 	readTranscriptUploadPrefix,
 	transcriptUploadAgentDirectory,
@@ -55,9 +55,12 @@ describe("transcript upload ranges", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	}
 
-	function request(body: string, overrides: Partial<TranscriptUploadRequest> = {}): TranscriptUploadRequest {
+	function request(
+		body: string,
+		overrides: Partial<Omit<TranscriptUploadRequest, "admission">> = {},
+	): TranscriptUploadRequest {
 		const bytes = Buffer.from(body);
-		return {
+		const input = {
 			basePath: dir,
 			agentId: "noam",
 			sessionKey: "sess-1",
@@ -72,6 +75,7 @@ describe("transcript upload ranges", () => {
 			capturedAt: "2026-11-26T10:00:00.000Z",
 			...overrides,
 		};
+		return { admission: TranscriptUploadAdmission.admit(input.agentId), ...input };
 	}
 
 	async function uploadPurges(): Promise<string[]> {

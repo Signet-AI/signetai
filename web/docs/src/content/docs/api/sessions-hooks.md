@@ -297,9 +297,10 @@ purging its agent, removes every generation file.
 - `413`: a body larger than 1 MiB.
 - `503`: more than 8 uploads in flight (`Retry-After: 1`), database write
   pressure (`retryable: true` and a `Retry-After` header), or
-  `{ "error": "purge_pending" }` for a range that started before a purge of
-  its agent. That range commits nothing; retry it, then call `GET` to find
-  where to resume.
+  `{ "error": "purge_pending" }` for a range whose request passed
+  authentication before a purge of its agent finished, even if its body was
+  still arriving. That range commits nothing; retry it, then call `GET` to
+  find where to resume.
 
 ### GET /api/hooks/transcript-upload
 

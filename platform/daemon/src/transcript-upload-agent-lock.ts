@@ -23,8 +23,22 @@ function pump(gate: Gate): void {
 	}
 }
 
-export function transcriptUploadAgentExclusiveHolds(agentId: string): number {
-	return finishedExclusiveHolds.get(agentId) ?? 0;
+export class TranscriptUploadAdmission {
+	readonly agentId: string;
+	readonly #purges: number;
+
+	private constructor(agentId: string) {
+		this.agentId = agentId;
+		this.#purges = finishedExclusiveHolds.get(agentId) ?? 0;
+	}
+
+	static admit(agentId: string): TranscriptUploadAdmission {
+		return new TranscriptUploadAdmission(agentId);
+	}
+
+	purgedSince(): boolean {
+		return (finishedExclusiveHolds.get(this.agentId) ?? 0) !== this.#purges;
+	}
 }
 
 export async function withTranscriptUploadAgentLock<Result>(
@@ -44,7 +58,7 @@ export async function withTranscriptUploadAgentLock<Result>(
 	} finally {
 		if (exclusive) {
 			gate.writer = false;
-			finishedExclusiveHolds.set(agentId, transcriptUploadAgentExclusiveHolds(agentId) + 1);
+			finishedExclusiveHolds.set(agentId, (finishedExclusiveHolds.get(agentId) ?? 0) + 1);
 		} else gate.readers -= 1;
 		pump(gate);
 		if (!gate.writer && gate.readers === 0 && gate.queue.length === 0) gates.delete(agentId);

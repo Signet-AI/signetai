@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { transcriptUploadAgentExclusiveHolds, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
+import { TranscriptUploadAdmission, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 
 function gate(): { readonly opened: Promise<void>; readonly open: () => void } {
 	let open = (): void => {};
@@ -76,28 +76,31 @@ describe("transcript upload agent lock", () => {
 		expect(events).toEqual(["ada purge", "noam upload"]);
 	});
 
-	it("counts each finished exclusive hold per agent before a waiting shared holder runs", async () => {
-		const before = transcriptUploadAgentExclusiveHolds("noam");
-		const seen: number[] = [];
+	it("marks an admission once an exclusive hold of its agent finishes", async () => {
+		const admission = TranscriptUploadAdmission.admit("noam");
+		const other = TranscriptUploadAdmission.admit("ada");
+		const seen: boolean[] = [];
 		const purge = gate();
 		const exclusive = withTranscriptUploadAgentLock("noam", "exclusive", () => purge.opened);
 		const waited = withTranscriptUploadAgentLock("noam", "shared", async () => {
-			seen.push(transcriptUploadAgentExclusiveHolds("noam") - before);
+			seen.push(admission.purgedSince());
 		});
+		expect(admission.purgedSince()).toBe(false);
 		purge.open();
 		await Promise.all([exclusive, waited]);
-		expect(seen).toEqual([1]);
-		expect(transcriptUploadAgentExclusiveHolds("ada-never-purged")).toBe(0);
+		expect(seen).toEqual([true]);
+		expect(other.purgedSince()).toBe(false);
+		expect(TranscriptUploadAdmission.admit("noam").purgedSince()).toBe(false);
 	});
 
 	it("releases the lock and counts the hold when the exclusive holder throws", async () => {
-		const before = transcriptUploadAgentExclusiveHolds("noam");
+		const admission = TranscriptUploadAdmission.admit("noam");
 		await expect(
 			withTranscriptUploadAgentLock("noam", "exclusive", async () => {
 				throw new Error("boom");
 			}),
 		).rejects.toThrow("boom");
-		expect(transcriptUploadAgentExclusiveHolds("noam") - before).toBe(1);
+		expect(admission.purgedSince()).toBe(true);
 		expect(await withTranscriptUploadAgentLock("noam", "shared", async () => "ran")).toBe("ran");
 	});
 });

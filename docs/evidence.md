@@ -58,7 +58,7 @@ Owner: `platform/daemon/src/memory-lineage.ts`.
 
 ## Upload files live under a purge epoch
 
-Hook transcript uploads write to `transcripts/uploads/<agent>/e<epoch>/<session>/<generation>.jsonl`. An agent purge bumps the epoch in `session_transcript_upload_purges`, and the drain removes only directories of older epochs. An upload holds its agent's lock in shared mode from its scope read to its commit, and the purge holds it exclusively around the epoch bump. So every byte an upload writes lands before the bump, and the drain after the bump removes it, whatever the commit outcome was. The commit keeps an epoch fence that returns `purge_pending` if the lock is ever bypassed.
+Hook transcript uploads write to `transcripts/uploads/<agent>/e<epoch>/<session>/<generation>.jsonl`. An agent purge bumps the epoch in `session_transcript_upload_purges`, and the drain removes only directories of older epochs. An upload holds its agent's lock in shared mode from its scope read to its commit, and the purge holds it exclusively around the epoch bump. So every byte an upload writes lands before the bump, and the drain after the bump removes it, whatever the commit outcome was. An upload also records how many purges of its agent have finished before it reads its body or waits for its session lock, and returns `purge_pending` if that count changed by the time it holds the agent lock. The commit keeps an epoch fence that returns `purge_pending` if the lock is ever bypassed.
 
 Trap: deleting the whole agent directory also deletes files of a new agent with the same id. Without the lock, an upload that read the old epoch could write into a directory the drain had already cleared.
 

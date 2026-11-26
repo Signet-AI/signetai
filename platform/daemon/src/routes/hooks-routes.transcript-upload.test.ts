@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "../transcript-upload";
+import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const suiteDir = mkdtempSync(join(tmpdir(), "signet-transcript-upload-routes-"));
@@ -60,6 +61,7 @@ async function patch(
 		readonly checksum?: string;
 		readonly query?: Readonly<Record<string, string | null>>;
 		readonly target?: Hono;
+		readonly stream?: ReadableStream<Uint8Array>;
 	} = {},
 ): Promise<Response> {
 	return await (options.target ?? app).request(query(options.query), {
@@ -70,7 +72,7 @@ async function patch(
 			"Upload-Offset": String(options.offset ?? 0),
 			"Upload-Checksum": options.checksum ?? sha(body),
 		},
-		body,
+		body: options.stream ?? body,
 	});
 }
 
@@ -94,6 +96,28 @@ describe("transcript upload route", () => {
 		expect(await state.json()).toEqual({ committedOffset: 0, generation: null, tailSha256: null });
 	});
 
+	it("refuses a range whose body was still arriving when a purge of its agent finished", async () => {
+		const body = '{"a":1}\n';
+		const arrival = Promise.withResolvers<void>();
+		const stream = new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				await arrival.promise;
+				controller.enqueue(new TextEncoder().encode(body));
+				controller.close();
+			},
+		});
+		const pending = patch(body, { stream });
+		await Bun.sleep(20);
+		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {});
+		arrival.resolve();
+		const response = await pending;
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: "purge_pending", retryable: true });
+		const state = await app.request(query());
+		expect(await state.json()).toEqual({ committedOffset: 0, generation: null, tailSha256: null });
+		expect(existsSync(join(dir, "transcripts", "uploads"))).toBe(false);
+	});
+
 	it("requires an agent instead of falling back to the default agent", async () => {
 		expect((await patch('{"a":1}\n', { query: { agentId: null } })).status).toBe(400);
 		expect((await app.request(query({ agentId: null }))).status).toBe(400);
@@ -105,7 +129,9 @@ describe("transcript upload route", () => {
 		expect((await patch('{"a":1}')).status).toBe(400);
 		expect((await patch('{"a":1}\n', { offset: -1 })).status).toBe(400);
 		expect((await patch('{"a":1}\n', { query: { harness: null } })).status).toBe(400);
-		expect((await patch(`${"x".repeat(MAX_TRANSCRIPT_UPLOAD_BYTES)}\n`)).status).toBe(413);
+		const large = `${"x".repeat(MAX_TRANSCRIPT_UPLOAD_BYTES)}\n`;
+		expect((await patch(large)).status).toBe(413);
+		expect((await patch(large, { stream: new Blob([large]).stream() })).status).toBe(413);
 	});
 
 	it("returns the committed state on a stale offset or another harness", async () => {

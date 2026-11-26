@@ -110,6 +110,8 @@ import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES, type TranscriptUploadResult, uploadTranscriptRange } from "../transcript-upload";
+import { TranscriptUploadAdmission } from "../transcript-upload-agent-lock";
+import { readBoundedBody } from "./request-body";
 import type { TranscriptUploadState } from "../session-transcripts";
 import { claimBoardActivityNotices } from "../board";
 import {
@@ -1069,15 +1071,18 @@ function registerTranscriptUpload(app: Hono): void {
 				transcriptUploadAdmission.release();
 			}
 		},
-		bodyLimit({
-			maxSize: MAX_TRANSCRIPT_UPLOAD_BYTES,
-			onError: (c) => c.json({ error: "payload too large" }, 413),
-		}),
+		async (c, next) => {
+			if (Number(c.req.header("content-length")) > MAX_TRANSCRIPT_UPLOAD_BYTES) {
+				return c.json({ error: "payload too large" }, 413);
+			}
+			await next();
+		},
 		async (c) => {
 			if (isInternalCall(c)) return c.json({ bypassed: true });
 			try {
 				const scope = await resolveTranscriptUploadScope(c);
 				if (scope instanceof Response) return scope;
+				const admission = TranscriptUploadAdmission.admit(scope.agentId);
 				const generation = parseOptionalNonNegativeInt(c.req.header("upload-generation"));
 				const offset = parseOptionalNonNegativeInt(c.req.header("upload-offset"));
 				const checksum = c.req.header("upload-checksum")?.trim() ?? "";
@@ -1089,13 +1094,16 @@ function registerTranscriptUpload(app: Hono): void {
 				}
 				if (isSessionBypassed(scope.sessionKey, scope.agentId)) return c.json({ bypassed: true });
 				stampHarness(scope.harness);
+				const body = await readBoundedBody(c.req.raw, MAX_TRANSCRIPT_UPLOAD_BYTES);
+				if (!body.ok) return c.json({ error: "payload too large" }, 413);
 				const result = await uploadTranscriptRange(getDbAccessor(), {
 					basePath: AGENTS_DIR,
 					...scope,
 					generation,
 					offset,
 					checksum,
-					body: new Uint8Array(await c.req.arrayBuffer()),
+					admission,
+					body: body.bytes,
 					capturedAt: new Date().toISOString(),
 					signal: c.req.raw.signal,
 				});
