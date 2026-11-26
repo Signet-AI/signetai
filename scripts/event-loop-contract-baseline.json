@@ -2436,56 +2436,64 @@
       "line": 626,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.proposal-row.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3190,
       "api": "withReadDbAsync",
       "source": "const items = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.proposal-evidence.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3207,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.proposal-list.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3239,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.proposal-conflicts.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3323,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.claim-versions.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3803,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.entity-duplicates.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3814,
       "api": "withReadDbAsync",
       "source": "const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.duplicate-proposals.read"
     },
     {
       "path": "ontology-proposals.ts",
       "line": 3865,
       "api": "withReadDbAsync",
       "source": "const plan = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.entity-merge-plan.read"
     },
     {
       "path": "path-feedback.ts",
@@ -3405,28 +3413,32 @@
       "line": 356,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:knowledge.communities.read"
     },
     {
       "path": "routes/knowledge-routes.ts",
       "line": 542,
       "api": "withReadDbAsync",
       "source": "const hasSessionSummaries = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:knowledge.summary-table.read"
     },
     {
       "path": "routes/knowledge-routes.ts",
       "line": 559,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:knowledge.entity-summaries.read"
     },
     {
       "path": "routes/knowledge-routes.ts",
       "line": 661,
       "api": "withReadDbAsync",
       "source": "const result = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:knowledge.impact.read"
     },
     {
       "path": "routes/marketplace-reviews.ts",

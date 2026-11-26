@@ -226,29 +226,30 @@ export function insertHistoryEvent(
 			dreamingPassPartitionInDb(db, args.passId, args.agentId),
 		);
 	}
-	db.prepare(
-		`INSERT INTO memory_history
+	const result = db
+		.prepare(
+			`INSERT INTO memory_history
 		 (id, memory_id, event, old_content, new_content, changed_by, reason,
 		  metadata, created_at, actor_type, session_id, request_id, agent_id, compartment_id, dreaming_pass_id)
 		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, m.agent_id, m.compartment_id, ? FROM ${source} m ${filter}`,
-	).run(
-		id,
-		args.memoryId,
-		args.event,
-		args.oldContent,
-		args.newContent,
-		args.changedBy,
-		args.reason,
-		args.metadata,
-		args.createdAt,
-		args.actorType ?? null,
-		args.sessionId ?? null,
-		args.requestId ?? null,
-		args.passId ?? null,
-		...sourceArgs,
-	);
-	const inserted = db.prepare("SELECT id FROM memory_history WHERE id=?").get(id);
-	if (inserted?.id !== id) throw new Error("history_memory_scope_missing");
+		)
+		.run(
+			id,
+			args.memoryId,
+			args.event,
+			args.oldContent,
+			args.newContent,
+			args.changedBy,
+			args.reason,
+			args.metadata,
+			args.createdAt,
+			args.actorType ?? null,
+			args.sessionId ?? null,
+			args.requestId ?? null,
+			args.passId ?? null,
+			...sourceArgs,
+		);
+	if (result.changes !== 1) throw new Error("history_memory_scope_missing");
 	auditAuthoredWriteInTx(db, args.author, `memory.${args.event}`, "memory", args.memoryId, args.agentId ?? null);
 }
 

@@ -3778,30 +3778,33 @@ function entityMergeImpact(
 	const memoryScope = readScopeSql("memory", scope);
 	const mentionScope = readScopeSql("mention", scope, { visibility: null });
 	const relationScope = readScopeSql("relation", scope, { visibility: null });
-	const count = (sql: string, args: readonly unknown[]): number =>
-		prepareTypedStatement<{ count: number }>(db, sql).get(...args)?.count ?? 0;
 	return {
 		sourceMentions: sources.reduce((sum, source) => sum + source.mentions, 0),
-		aspects: count(
-			`SELECT COUNT(*) AS count FROM entity_aspects asp WHERE asp.agent_id = ? AND asp.entity_id IN (${placeholders}) ${aspectScope.sql}`,
-			[agentId, ...ids, ...aspectScope.args],
-		),
-		attributes: count(
-			`SELECT COUNT(*) AS count FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id WHERE attr.agent_id = ? AND asp.entity_id IN (${placeholders}) ${attributeScope.sql} ${aspectScope.sql}`,
-			[agentId, ...ids, ...attributeScope.args, ...aspectScope.args],
-		),
-		dependencies: count(
-			`SELECT COUNT(*) AS count FROM entity_dependencies dep WHERE dep.agent_id = ? AND (dep.source_entity_id IN (${placeholders}) OR dep.target_entity_id IN (${placeholders})) ${dependencyScope.sql}`,
-			[agentId, ...ids, ...ids, ...dependencyScope.args],
-		),
-		relations: count(
-			`SELECT COUNT(*) AS count FROM relations relation JOIN entities source ON source.id = relation.source_entity_id JOIN entities target ON target.id = relation.target_entity_id WHERE (relation.source_entity_id IN (${placeholders}) OR relation.target_entity_id IN (${placeholders})) ${sourceScope.sql} ${targetScope.sql} ${relationScope.sql}`,
-			[...ids, ...ids, ...sourceScope.args, ...targetScope.args, ...relationScope.args],
-		),
-		memoryMentions: count(
-			`SELECT COUNT(*) AS count FROM memory_entity_mentions mention JOIN memories memory ON memory.id = mention.memory_id WHERE mention.entity_id IN (${placeholders}) ${memoryScope.sql} ${mentionScope.sql}`,
-			[...ids, ...memoryScope.args, ...mentionScope.args],
-		),
+		aspects:
+			prepareTypedStatement<{ count: number }>(
+				db,
+				`SELECT COUNT(*) AS count FROM entity_aspects asp WHERE asp.agent_id = ? AND asp.entity_id IN (${placeholders}) ${aspectScope.sql}`,
+			).get(agentId, ...ids, ...aspectScope.args)?.count ?? 0,
+		attributes:
+			prepareTypedStatement<{ count: number }>(
+				db,
+				`SELECT COUNT(*) AS count FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id WHERE attr.agent_id = ? AND asp.entity_id IN (${placeholders}) ${attributeScope.sql} ${aspectScope.sql}`,
+			).get(agentId, ...ids, ...attributeScope.args, ...aspectScope.args)?.count ?? 0,
+		dependencies:
+			prepareTypedStatement<{ count: number }>(
+				db,
+				`SELECT COUNT(*) AS count FROM entity_dependencies dep WHERE dep.agent_id = ? AND (dep.source_entity_id IN (${placeholders}) OR dep.target_entity_id IN (${placeholders})) ${dependencyScope.sql}`,
+			).get(agentId, ...ids, ...ids, ...dependencyScope.args)?.count ?? 0,
+		relations:
+			prepareTypedStatement<{ count: number }>(
+				db,
+				`SELECT COUNT(*) AS count FROM relations relation JOIN entities source ON source.id = relation.source_entity_id JOIN entities target ON target.id = relation.target_entity_id WHERE (relation.source_entity_id IN (${placeholders}) OR relation.target_entity_id IN (${placeholders})) ${sourceScope.sql} ${targetScope.sql} ${relationScope.sql}`,
+			).get(...ids, ...ids, ...sourceScope.args, ...targetScope.args, ...relationScope.args)?.count ?? 0,
+		memoryMentions:
+			prepareTypedStatement<{ count: number }>(
+				db,
+				`SELECT COUNT(*) AS count FROM memory_entity_mentions mention JOIN memories memory ON memory.id = mention.memory_id WHERE mention.entity_id IN (${placeholders}) ${memoryScope.sql} ${mentionScope.sql}`,
+			).get(...ids, ...memoryScope.args, ...mentionScope.args)?.count ?? 0,
 	};
 }
 

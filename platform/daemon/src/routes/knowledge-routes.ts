@@ -393,7 +393,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:356" },
+			{ siteToken: "db:knowledge.communities.read" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -568,7 +568,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:542" },
+			{ siteToken: "db:knowledge.summary-table.read" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -657,7 +657,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: rows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:559" },
+			{ siteToken: "db:knowledge.entity-summaries.read" },
 		);
 	});
 
@@ -682,7 +682,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:661" },
+			{ siteToken: "db:knowledge.impact.read" },
 		);
 		return c.json(result);
 	});
