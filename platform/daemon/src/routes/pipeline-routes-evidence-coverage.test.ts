@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims, TokenRole } from "../auth/types";
+import { legacyPrincipal, localPrincipal } from "../auth/principal";
 import { DbOwnerDiedError } from "../db-owner-client";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { authConfig } from "./state";
@@ -24,6 +25,7 @@ function createPipelineApp(role: TokenRole = "admin", agentScope = "agent-a"): H
 	};
 	app.use("*", async (c, next) => {
 		c.set("auth", { authenticated: true, claims });
+		c.set("principal", authConfig.mode === "local" ? localPrincipal() : legacyPrincipal(claims));
 		await next();
 	});
 	registerPipelineRoutes(app);
@@ -110,7 +112,7 @@ describe("GET /api/dream/evidence/coverage", () => {
 		expect(body.error).toContain("agent-ghost");
 	});
 
-	it("lets an admin-scoped token read another agent's coverage, like GET /api/dream/status", async () => {
+	it("lets a local administrator read another agent's coverage, like GET /api/dream/status", async () => {
 		const app = createPipelineApp("admin", "agent-a");
 		const response = await app.request("/api/dream/evidence/coverage?agentId=agent-b");
 		expect(response.status).toBe(200);
@@ -131,6 +133,22 @@ describe("GET /api/dream/evidence/coverage", () => {
 			expect(body.error.length).toBeGreaterThan(0);
 		} finally {
 			(authConfig as { mode: typeof previousMode }).mode = previousMode;
+		}
+	});
+
+	it("does not expose unscoped totals to a restricted legacy credential", async () => {
+		const previousMode = authConfig.mode;
+		Reflect.set(authConfig, "mode", "team");
+		try {
+			const response = await createPipelineApp().request("/api/dream/evidence/coverage?agentId=agent-a");
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				agentId: "agent-a",
+				status: "unavailable",
+				reason: "scoped_totals_omitted",
+			});
+		} finally {
+			Reflect.set(authConfig, "mode", previousMode);
 		}
 	});
 

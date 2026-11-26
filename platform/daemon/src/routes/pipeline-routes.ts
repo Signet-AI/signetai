@@ -793,7 +793,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (!registered) {
 			return c.json({ error: `Agent not found: ${scopedAgent.agentId}` }, 404);
 		}
-		if (scopedAgent.readScope)
+		if (!scopedAgent.local)
 			return c.json({ agentId: scopedAgent.agentId, status: "unavailable", reason: "scoped_totals_omitted" });
 		const coverage = await getDreamingEvidenceCoverage(getDbAccessor(), scopedAgent.agentId);
 		return c.json(coverage);
