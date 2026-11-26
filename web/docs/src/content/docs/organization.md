@@ -143,6 +143,12 @@ Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_jo
 
 Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
 
+## Operator log feeds
+
+Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Both are audited. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Local-mode logging is unchanged.
+
+A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge publishes removed counts only after durable deletion and cleanup complete. Running jobs report their phase; an incomplete job does not claim completed removal counts. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its readable residuals instead of assuming it completed.

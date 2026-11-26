@@ -88,6 +88,70 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("operator log streams are scoped, content-free and cancelled cleanly", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		const { logger } = await import("../logger");
+		registerMiscRoutes(app);
+		await claim();
+		const alice = await member("alice");
+		expect((await call("/api/logs", "GET", undefined, alice.token)).status).toBe(403);
+		logger.info("api", "classified-log-marker", { content: "private-log-detail" });
+		const recent = await call("/api/logs?limit=5");
+		expect(recent.status).toBe(200);
+		const snapshot = await recent.json();
+		expect(snapshot.redacted).toBe(true);
+		expect(JSON.stringify(snapshot)).not.toContain("classified-log-marker");
+		const listeners = logger.listenerCount("log");
+		const controller = new AbortController();
+		const response = await app.request("/api/logs/stream", {
+			headers: { authorization: `Bearer ${admin}` },
+			signal: controller.signal,
+		});
+		expect(response.status).toBe(200);
+		expect(logger.listenerCount("log")).toBe(listeners + 1);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing log stream");
+		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"redacted":true');
+		logger.info("api", "classified-log-marker", { content: "private-log-detail" });
+		const event = new TextDecoder().decode((await reader.read()).value);
+		expect(event).not.toContain("classified-log-marker");
+		expect(event).not.toContain("private-log-detail");
+		controller.abort();
+		await reader.cancel();
+		expect(logger.listenerCount("log")).toBe(listeners);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM audit_events WHERE action='operator.logs_opened'", [], "get"),
+			),
+		).toEqual({ n: 2 });
+		expect((await call(`/api/org/users/${alice.userId}`, "PATCH", { role: "operator" })).status).toBe(200);
+		expect((await call("/api/logs", "GET", undefined, alice.token)).status).toBe(403);
+		const identity = await (await call("/api/auth/whoami")).json();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "scoped-logs",
+				agentId: identity.agents.defaultWrite,
+				permissions: ["admin", "diagnostics"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		expect((await call("/api/logs", "GET", undefined, key.secret)).status).toBe(403);
+		expect((await call("/api/logs?limit=501")).status).toBe(400);
+		const bounded = await app.request("/api/logs/stream?limit=1", { headers: { authorization: `Bearer ${admin}` } });
+		const boundedReader = bounded.body?.getReader();
+		if (!boundedReader) throw new Error("missing bounded log stream");
+		await boundedReader.read();
+		logger.info("api", "bounded event");
+		expect((await boundedReader.read()).done).toBe(false);
+		expect((await boundedReader.read()).done).toBe(true);
+		expect(logger.listenerCount("log")).toBe(listeners);
+		const first = await app.request("/api/logs/stream", { headers: { authorization: `Bearer ${admin}` } });
+		const second = await app.request("/api/logs/stream", { headers: { authorization: `Bearer ${admin}` } });
+		expect((await app.request("/api/logs/stream", { headers: { authorization: `Bearer ${admin}` } })).status).toBe(429);
+		await first.body?.cancel();
+		await second.body?.cancel();
+		expect(logger.listenerCount("log")).toBe(listeners);
+	});
 	test("classified import admission is atomic and hidden staging jobs stay absent", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		const { registerTranscriptImportRoutes } = await import("../routes/transcript-import-routes");

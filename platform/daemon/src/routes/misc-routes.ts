@@ -10,6 +10,8 @@ import {
 import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
 import type { AgentRemovalResult } from "../agent-removal.js";
+import { IdentityError } from "../auth/organization-store";
+import { operatorLogSnapshot, operatorLogStream } from "../operator-logs";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
 import { DB_OWNER_READ_DEADLINE_MS, dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
@@ -60,11 +62,25 @@ interface AgentRow {
 
 export function registerMiscRoutes(app: Hono): void {
 	app.use("*", async (c, next) => {
-		if (
-			c.get("organization") &&
-			["/api/logs", "/api/logs/stream", "/api/config", "/api/identity"].includes(c.req.path) &&
-			c.req.method === "GET"
-		) {
+		if (c.get("organization") && c.req.method === "GET" && ["/api/logs", "/api/logs/stream"].includes(c.req.path)) {
+			const p = c.get("principal");
+			if (!p) return c.json({ error: "authentication required", reason: "missing_credential" }, 401);
+			try {
+				const expiry = c.get("auth")?.claims?.exp;
+				return c.req.path === "/api/logs/stream"
+					? await operatorLogStream(
+							p,
+							c.req.query(),
+							c.req.raw.signal,
+							expiry === undefined ? undefined : expiry * 1000,
+						)
+					: c.json(await operatorLogSnapshot(p, c.req.query()));
+			} catch (error) {
+				if (error instanceof IdentityError) return c.json({ error: error.message, reason: error.reason }, error.status);
+				throw error;
+			}
+		}
+		if (c.get("organization") && ["/api/config", "/api/identity"].includes(c.req.path) && c.req.method === "GET") {
 			return c.json({ error: "This diagnostic has no content read scope", reason: "org_policy" }, 403);
 		}
 		return next();

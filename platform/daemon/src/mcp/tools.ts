@@ -413,6 +413,30 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	};
 	registerMcpTool(
 		server,
+		"signet_operator_logs",
+		{
+			title: "Operator Log Metadata",
+			description:
+				"Read bounded redacted log metadata. Requires unscoped admin and diagnostics permissions; message bodies are never returned.",
+			inputSchema: z
+				.object({
+					limit: z.number().int().min(1).max(500).optional(),
+					level: z.enum(["debug", "info", "warn", "error"]).optional(),
+					category: z
+						.string()
+						.regex(/^[a-z][a-z-]{0,63}$/)
+						.optional(),
+				})
+				.strict(),
+		},
+		async (input) => {
+			const query = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) if (value !== undefined) query.set(key, String(value));
+			return organizationResult(`/api/logs${query.size ? `?${query}` : ""}`);
+		},
+	);
+	registerMcpTool(
+		server,
 		"signet_org_access",
 		{
 			title: "Inspect Organization Access",
