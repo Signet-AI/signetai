@@ -110,7 +110,10 @@ export function telemetryEvidenceInTx(
 		const value = Number(id);
 		return /^\d+$/.test(id) && Number.isSafeInteger(value) ? [value] : [];
 	});
-	const base = compartmentForWrite(db, { agentId: input.agentId, sessionKey: input.sessionKey });
+	const base = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sessionKey: input.sessionKey?.split("\0", 1)[0] ?? null,
+	});
 	const evidenceQuery = db.prepare(
 		`SELECT h.result_id, h.kind, h.evidence_id, h.agent_id, h.memory_id, cm.classification_id
 			 FROM (

@@ -313,6 +313,35 @@ describe("session recall dedupe", () => {
 		).toEqual([{ derived_id: '["s",0,"memory","mem-1"]', evidence_kind: "memory", evidence_id: "mem-1" }]);
 	});
 
+	it.each(["classified-session", "classified-session\0codex"])(
+		"inherits the classified session label for ledger key %s",
+		async (sessionKey) => {
+			await accessor.withWriteTxAsync((db) =>
+				db.exec(
+					"INSERT INTO classifications(id,name) VALUES('cls_session','Session'); INSERT INTO classification_assignments VALUES('session','classified-session','agent-a','cls_session','alice','now')",
+				),
+			);
+			await applyRecallDedupeAsync({
+				sessionKey,
+				agentId: "agent-a",
+				surface: "test",
+				mode: "direct",
+				claim: true,
+				items: [{ id: "mem-1" }],
+			});
+			expect(
+				await accessor.withReadDbAsync((db) =>
+					db.prepare("SELECT session_key,compartment_id FROM session_recall_events").get(),
+				),
+			).toEqual({ session_key: sessionKey, compartment_id: expect.any(Number) });
+			expect(
+				await accessor.withReadDbAsync((db) =>
+					db.prepare("SELECT compartment_id FROM memories WHERE id='mem-1'").get(),
+				),
+			).toEqual({ compartment_id: null });
+		},
+	);
+
 	it("keeps the async path aligned with batch dedupe", async () => {
 		const result = await applyRecallDedupeAsync({
 			sessionKey: "sess-async-duplicate",
