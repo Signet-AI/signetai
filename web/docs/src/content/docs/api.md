@@ -429,15 +429,11 @@ without hiding setup affordances).
 
 ### Supervised organization operations
 
-- `POST /api/org/agents/:id/purge`: empty body; archived non-organization agent; unrestricted admin; returns HTTP 202 `{jobId}`. Poll `/api/org/jobs/:id`. MCP: `signet_agent_purge` with `confirm: true`.
-
-- `POST /api/org/bootstrap`: unclaimed team instance only; setup nonce and validated public URL.
-
-- `GET /api/org/operator/doctor`: audited identity, clock, and DB-owner diagnostics.
-
-- `GET /api/org/operator/capabilities`: verified supervisor availability, admin only.
-- `POST /api/org/operator/restart`: unrestricted admin; empty JSON body; HTTP 202
-  with `{accepted, jobId, status, supervisor}`. Poll the job for actual readiness.
-- `POST /api/org/operator/jobs`: scoped queue repair, embedding audit, and
-  embedding backfill jobs. Returns HTTP 202 with `{jobId}`. See Organization for
-  action schemas, admission limits, and incomplete-job semantics.
+| Method | Endpoint | Behavior |
+|--------|----------|----------|
+| POST | `/api/org/agents/:id/purge` | Empty body; archived non-organization agent; unrestricted admin. Returns HTTP 202 `{jobId}`. Poll `/api/org/jobs/:id`. MCP: `signet_agent_purge` with `confirm: true`. |
+| POST | `/api/org/bootstrap` | Unclaimed team instance only; setup nonce and validated public URL. |
+| GET | `/api/org/operator/doctor` | Audited identity, clock, and DB-owner diagnostics. |
+| GET | `/api/org/operator/capabilities` | Verified supervisor availability, admin only. |
+| POST | `/api/org/operator/restart` | Unrestricted admin; empty JSON body; HTTP 202 with `{accepted, jobId, status, supervisor}`. Poll the job for actual readiness. |
+| POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill jobs. Returns HTTP 202 with `{jobId}`. See Organization for action schemas, admission limits, and incomplete-job semantics. |
