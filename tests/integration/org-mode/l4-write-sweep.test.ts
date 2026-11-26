@@ -523,8 +523,20 @@ test("classified evidence HTTP write sweep preserves compartments and principal 
 			});
 			sweep.assertMemory(text(result.memoryId), sessionLabels);
 		});
-		await sweep.check("configured telemetry retention", async () => {
-			await sweep.post("/api/repair/retention-sweep", { agentId: sweep.agentId });
+		await sweep.check("configured scheduled telemetry retention", async () => {
+			const manual = await request(sweep.daemon.origin, "/api/repair/retention-sweep", sweep.credential, "POST", {
+				agentId: sweep.agentId,
+			});
+			assert.equal(manual.status, 409);
+			assert.equal(record(manual.body).reason, "tracked_job_required");
+			await until(
+				async () =>
+					sweep.read((db) =>
+						db.query("SELECT 1 FROM session_recall_events WHERE session_key='l4-expired-telemetry'").get(),
+					) === null,
+				"scheduled retention deletes expired telemetry",
+				70_000,
+			);
 			assert.equal(
 				sweep.read((db) =>
 					db.query("SELECT 1 FROM session_recall_events WHERE session_key='l4-expired-telemetry'").get(),
