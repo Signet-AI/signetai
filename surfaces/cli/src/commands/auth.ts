@@ -88,7 +88,10 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 				});
 				if (
 					!device.deviceCode ||
-					!device.userCode ||
+					typeof device.userCode !== "string" ||
+					device.userCode.length === 0 ||
+					device.userCode.length > 64 ||
+					/[^A-Z0-9-]/.test(device.userCode) ||
 					!Number.isFinite(device.expiresIn) ||
 					device.expiresIn <= 0 ||
 					!Number.isFinite(device.interval) ||
@@ -96,7 +99,13 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 				)
 					throw new Error("Invalid device authorization response");
 				const approval = new URL(device.verificationUriComplete);
-				if (!["https:", "http:"].includes(approval.protocol)) throw new Error("Invalid device approval URL");
+				if (
+					!["https:", "http:"].includes(approval.protocol) ||
+					approval.origin !== target.origin ||
+					approval.username ||
+					approval.password
+				)
+					throw new Error("Device approval URL must match the Signet instance origin and contain no credentials");
 				print(`Open ${approval.href}\nEnter code: ${device.userCode}`);
 				if (!opts.deviceCode) {
 					try {

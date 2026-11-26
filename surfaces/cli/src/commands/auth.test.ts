@@ -46,11 +46,66 @@ for (const all of [false, true]) {
 	});
 }
 
+for (const fixture of [
+	{ name: "foreign approval origin", code: "ABCD-EFGH", foreign: true },
+	{ name: "lowercase code", code: "abcd-efgh", foreign: false },
+	{ name: "terminal controls", code: "ABCD\u001b[31m", foreign: false },
+	{ name: "unbounded code", code: "A".repeat(65), foreign: false },
+	{ name: "non-string code", code: 42, foreign: false },
+]) {
+	test(`device flow refuses ${fixture.name} before printing, opening or polling`, async () => {
+		const home = await mkdtemp(join(tmpdir(), "signet-device-response-"));
+		homes.push(home);
+		let polls = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname.endsWith("/start"))
+					return Response.json({
+						deviceCode: "fixture-device",
+						userCode: fixture.code,
+						verificationUriComplete: fixture.foreign
+							? "https://other.example/approve"
+							: new URL("/approve", request.url).href,
+						interval: 0,
+						expiresIn: 1,
+					});
+				polls++;
+				return Response.json({ reason: "invalid_credential" }, { status: 401 });
+			},
+		});
+		const printed: string[] = [];
+		const opened: string[] = [];
+		const program = new Command();
+		registerAuthCommands(program, {
+			env: { HOME: home },
+			flagUrl: server.url.origin,
+			print: (value) => printed.push(value),
+			openBrowser: async (url) => {
+				opened.push(url);
+			},
+		});
+		process.exitCode = 0;
+		try {
+			await program.parseAsync(["login"], { from: "user" });
+			expect(opened).toEqual([]);
+			expect(printed).toEqual([]);
+			expect(polls).toBe(0);
+			expect(process.exitCode).toBe(1);
+		} finally {
+			server.stop(true);
+			process.exitCode = 0;
+		}
+	});
+}
+
 test("device login stores credentials and logout revokes before clearing", async () => {
 	const home = await mkdtemp(join(tmpdir(), "signet-auth-"));
 	homes.push(home);
 	const calls: string[] = [];
 	const server = Bun.serve({
+		hostname: "127.0.0.1",
 		port: 0,
 		fetch(request) {
 			const path = new URL(request.url).pathname;
@@ -59,7 +114,7 @@ test("device login stores credentials and logout revokes before clearing", async
 				return Response.json({
 					deviceCode: "private-device-code",
 					userCode: "ABCD-EFGH",
-					verificationUriComplete: "https://example.invalid/approve",
+					verificationUriComplete: new URL("/approve", request.url).href,
 					interval: 0,
 					expiresIn: 10,
 				});
@@ -98,7 +153,7 @@ test("device login stores credentials and logout revokes before clearing", async
 		await program.parseAsync(["login"], { from: "user" });
 		const store = new LoginStore(server.url.origin, { env, keyring });
 		expect((await store.load())?.credential.refreshToken).toBe("private-refresh");
-		expect(opened).toBe("https://example.invalid/approve");
+		expect(opened).toBe(`${server.url.origin}/approve`);
 		expect(output.join("\n")).toContain("ABCD-EFGH");
 		expect(output.join("\n")).not.toContain("private-");
 		await writeFile(`${store.path}.state`, JSON.stringify({ state: "dead", reason: "revoked" }), { mode: 0o600 });

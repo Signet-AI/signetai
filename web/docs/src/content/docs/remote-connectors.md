@@ -30,6 +30,9 @@ signet connector list --json
 `login` prints a user code and opens the approval page in your browser. On a
 headless machine, add `--device-code` and open the printed URL on another device.
 Signet saves the refresh credential through its login store; it never prints it.
+Approval links must use the same origin as the selected daemon. Signet rejects
+codes outside the bounded uppercase-letter, digit, and hyphen format before
+printing them or opening a browser.
 
 `connect` uses your signed-in session to request a separate device-bound key for
 the harness. The key goes in an owner-only key file. The registry records its
