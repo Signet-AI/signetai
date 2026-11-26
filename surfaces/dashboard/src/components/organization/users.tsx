@@ -483,6 +483,17 @@ export function AccessContent({
 	groups?: readonly OrganizationGroup[];
 	agents?: readonly OrganizationAgent[];
 }) {
+	const why = (row: EffectiveAccess["actAs"][number]) => {
+		if (row.why === "active user") return "Every active user can act as the organization agent";
+		if (row.why === "personal owner") return "Owns this personal agent";
+		if (row.why === "administrator") return "Administrator";
+		if (row.why === "group membership") {
+			const owner = agents.find((agent) => agent.id === row.agentId)?.ownerGroupId;
+			const team = groups.find((group) => group.id === owner);
+			return team ? `Member of team ${team.name}` : "Member of the owning team";
+		}
+		return "Access granted by the daemon";
+	};
 	return (
 		<div className="flex flex-col gap-6">
 			<OrganizationBlock
@@ -510,7 +521,7 @@ export function AccessContent({
 												<div className="break-all text-xs text-muted-foreground">{agent.agentId}</div>
 											</td>
 											<td className={cellClass}>{displayLabel(agent.kind)}</td>
-											<td className={cellClass}>{displayLabel(agent.why)}</td>
+											<td className={cellClass}>{why(agent)}</td>
 										</tr>
 									))}
 								</OrganizationTable>
@@ -526,7 +537,7 @@ export function AccessContent({
 											<dt className="text-muted-foreground">Kind</dt>
 											<dd>{displayLabel(agent.kind)}</dd>
 											<dt className="text-muted-foreground">Why</dt>
-											<dd>{displayLabel(agent.why)}</dd>
+											<dd>{why(agent)}</dd>
 										</dl>
 									</li>
 								))}

@@ -25,7 +25,12 @@ test("effective access uses named mobile cards and an explicit classifications e
 				role: "member",
 				permissions: ["recall"],
 				groups: ["grp_eng"],
-				actAs: [{ agentId: "agent_eng", kind: "team", why: "group membership" }],
+				actAs: [
+					{ agentId: "agent_eng", kind: "team", why: "group membership" },
+					{ agentId: "default", kind: "organization", why: "active user" },
+					{ agentId: "personal", kind: "personal", why: "personal owner" },
+					{ agentId: "admin-team", kind: "team", why: "administrator" },
+				],
 				readableClassifications: [],
 			}}
 			groups={[{ id: "grp_eng", name: "Engineering", description: null, managed_by: "signet" }]}
@@ -44,7 +49,11 @@ test("effective access uses named mobile cards and an explicit classifications e
 	);
 	expect(html).toContain("Engineering assistant");
 	expect(html).toContain("Teams: Engineering");
-	expect(html).toContain("Group Membership");
+	expect(html).toContain("Member of team Engineering");
+	expect(html).toContain("Every active user can act as the organization agent");
+	expect(html).toContain("Owns this personal agent");
+	expect(html).toContain("Administrator");
+	expect(html).not.toContain("transferred from");
 	expect(html).toContain("sm:hidden");
 	expect(html).toContain("No readable classifications.");
 });
