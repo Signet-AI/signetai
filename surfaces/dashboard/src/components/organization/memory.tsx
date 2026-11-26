@@ -48,7 +48,7 @@ export function OrganizationMemory() {
 		setHistory([]);
 		setSelected(null);
 	}, [agentId]);
-	const memories = usePanelQuery<{ memories: readonly MemoryRow[]; total: number }>(
+	const memories = usePanelQuery<{ memories: readonly MemoryRow[]; stats: { readonly total: number } }>(
 		whoami
 			? `/api/memories?limit=100&offset=${offset}&agentId=${encodeURIComponent(agentId ?? whoami.agents.defaultRead)}`
 			: null,
@@ -184,7 +184,9 @@ export function OrganizationMemory() {
 				<Action
 					secondary
 					disabled={
-						classification ? !assignments.result?.data?.nextCursor : offset + 100 >= (memories.result?.data?.total ?? 0)
+						classification
+							? !assignments.result?.data?.nextCursor
+							: offset + 100 >= (memories.result?.data?.stats.total ?? 0)
 					}
 					onClick={() => {
 						if (classification) {
