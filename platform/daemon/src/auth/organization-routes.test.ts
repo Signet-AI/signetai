@@ -65,6 +65,20 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
+		await claim();
+		const agent = await (await call("/api/agents", "POST", { name: "transfer-me", kind: "personal" })).json();
+		const group = await (await call("/api/org/groups", "POST", { name: "eng" })).json();
+		expect((await call(`/api/agents/${agent.agentId}`, "PATCH", { ownerGroupId: group.id })).status).toBe(200);
+		const inventory = await (await call("/api/agents")).json();
+		expect(inventory.agents.find((item: { id: string }) => item.id === agent.agentId)).toMatchObject({
+			kind: "team",
+			ownerUserId: null,
+			ownerGroupId: group.id,
+		});
+		expect((await call("/api/agents/default", "PATCH", { ownerGroupId: group.id })).status).toBe(403);
+	});
+
 	test("agent preference persists a readable default without changing write ownership", async () => {
 		const claimed = await claim();
 		const created = await (await call("/api/agents", "POST", { name: "my-notes", kind: "personal" })).json();
