@@ -15,8 +15,10 @@ export function OrganizationHome() {
 			<div className="home-workspace">
 				<section className="home-today" aria-labelledby="today-title">
 					<PageHeading id="today-title" title="Today" description="Memories and sessions for the selected agent." />
-					<OrganizationMemory />
-					<OrganizationSessions />
+					<div className="flex min-w-0 flex-col gap-6">
+						<OrganizationMemory />
+						<OrganizationSessions />
+					</div>
 				</section>
 				<section className="home-system" aria-labelledby="system-title">
 					<PageHeading

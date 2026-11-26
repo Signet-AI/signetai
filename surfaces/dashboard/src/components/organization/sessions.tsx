@@ -21,13 +21,11 @@ export function OrganizationSessions() {
 	if (!whoami) return null;
 	return (
 		<OrganizationBlock title="Sessions">
-			<OrganizationResource<{ sessions: readonly SessionRecord[]; count: number }>
-				path="/api/sessions"
-				empty={(data) => data.count === 0}
-			>
+			<OrganizationResource<{ sessions: readonly SessionRecord[]; count: number }> path="/api/sessions">
 				{(data) => (
 					<>
 						<EvidenceList
+							noun="Session"
 							rows={data.sessions.map((session) => ({
 								key: `${session.agentId}:${session.sessionKey}`,
 								title: `${displayLabel(session.harness)} session`,
@@ -44,7 +42,7 @@ export function OrganizationSessions() {
 								onOpen: () => setSelected(session),
 							}))}
 						/>
-						{selected && (
+						{data.sessions.length > 0 && selected && (
 							<OrganizationBlock title={`${displayLabel(selected.harness)} session`}>
 								<p className="text-xs text-muted-foreground">{selected.sessionKey}</p>
 								<ClassifyAction target={{ kind: "session", id: selected.sessionKey, agentId: selected.agentId }} />

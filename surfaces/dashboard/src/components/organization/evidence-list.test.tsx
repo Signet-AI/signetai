@@ -25,3 +25,20 @@ test("unavailable author names are placeholders, not styled like a person's name
 	expect(cells[1]?.querySelector("span")).toBeNull();
 	expect(dom.document.querySelectorAll("ul .italic")).toHaveLength(1);
 });
+
+test.each(["Memory", "Session", "Source", "Pass"])("%s lists name their first column after their rows", (noun) => {
+	const dom = new Window();
+	dom.document.body.innerHTML = renderToStaticMarkup(
+		<EvidenceList
+			noun={noun}
+			rows={[{ key: "one", title: "Visible item", kind: noun.toLowerCase(), agent: "Engineering" }]}
+		/>,
+	);
+	expect(dom.document.querySelector("thead th")?.textContent).toBe(noun);
+});
+test("empty Sessions shows only the shared empty state, without an orphan table header", () => {
+	const dom = new Window();
+	dom.document.body.innerHTML = renderToStaticMarkup(<EvidenceList noun="Session" rows={[]} />);
+	expect(dom.document.querySelector('[data-panel-state="empty"]')?.textContent).toBe("No sessions yet");
+	expect(dom.document.querySelector("table")).toBeNull();
+});

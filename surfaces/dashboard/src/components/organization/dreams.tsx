@@ -128,6 +128,7 @@ export function OrganizationDreams() {
 					>
 						{() => (
 							<EvidenceList
+								noun="Pass"
 								rows={rows.map((pass) => ({
 									key: pass.id,
 									title: `${displayLabel(pass.mode)} pass`,
