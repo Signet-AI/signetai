@@ -134,13 +134,13 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 		}
 	});
 
-	it("reports session-end dispatch startup failures", async () => {
+	it.each([true, false])("reports session-end dispatch startup status; dispatched=%s", async (dispatched) => {
 		class TestConnector extends ClaudeCodeConnector {
 			lastPayload: SessionEndFireAndForgetPayload | undefined;
 
 			protected override dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
 				this.lastPayload = payload;
-				return false;
+				return dispatched;
 			}
 		}
 
@@ -150,7 +150,11 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 			transcriptPath: "/tmp/failed-dispatch.jsonl",
 		});
 
-		expect(result).toEqual({ success: false, memoriesExtracted: 0 });
+		expect(result).toEqual({
+			success: dispatched,
+			status: dispatched ? "dispatched" : "dispatch_failed",
+			memoriesExtracted: 0,
+		});
 		expect(connector.lastPayload).toEqual({
 			harness: "claude-code",
 			sessionId: "session-failed-dispatch",

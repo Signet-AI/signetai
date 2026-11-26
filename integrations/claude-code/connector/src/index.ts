@@ -144,6 +144,7 @@ export interface SessionStartResult {
 
 export interface SessionEndResult {
 	success: boolean;
+	status: "dispatched" | "dispatch_failed";
 	memoriesExtracted: number;
 }
 
@@ -301,12 +302,12 @@ export class ClaudeCodeConnector extends BaseConnector {
 		return dispatchSessionEndFireAndForget(this.daemonUrl, payload);
 	}
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
-		const delivered = await this.dispatchSessionEnd({
+		const dispatched = await this.dispatchSessionEnd({
 			harness: "claude-code",
 			sessionId: ctx.sessionId,
 			transcriptPath: ctx.transcriptPath,
 		});
-		return { success: delivered, memoriesExtracted: 0 };
+		return { success: dispatched, status: dispatched ? "dispatched" : "dispatch_failed", memoriesExtracted: 0 };
 	}
 
 	private configureHooks(
