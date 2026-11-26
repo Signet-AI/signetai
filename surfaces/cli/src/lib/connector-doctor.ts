@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
-import { readdir, open, lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { opendir, open, lstat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 export async function inspectConnectorFiles(
 	configPaths: readonly string[],
@@ -27,7 +28,11 @@ export async function inspectConnectorFiles(
 					scanIncomplete = true;
 					return;
 				}
-				for (const entry of await readdir(path, { withFileTypes: true })) {
+				for await (const entry of await opendir(path)) {
+					if (seen.size >= 2048 || Date.now() >= deadline) {
+						scanIncomplete = true;
+						break;
+					}
 					if (["node_modules", "sessions", "projects", ".git", "skills", "cache", "__pycache__"].includes(entry.name))
 						continue;
 					await visit(join(path, entry.name), depth - 1);
@@ -72,6 +77,10 @@ export async function inspectConnectorFiles(
 			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) scanIncomplete = true;
 		}
 	}
-	for (const path of configPaths) await visit(path, 3, true);
+	for (const path of configPaths) {
+		await visit(path, 3, true);
+		const directory = dirname(path);
+		if (directory !== homedir()) await visit(directory, 3);
+	}
 	return { inlineKeyFiles: [...inlineKeyFiles].sort(), scanIncomplete };
 }

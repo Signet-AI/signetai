@@ -7,42 +7,45 @@ import { inspectConnectorFiles } from "../lib/connector-doctor";
 import { Command } from "commander";
 import { registerConnectorCommands } from "./connector.js";
 
-test("doctor finds credentials in Claude global MCP configuration", async () => {
-	const home = homedir();
-	expect(home).not.toBe("/home/nicholai");
-	const previousHome = process.env.HOME;
-	const previousLog = console.log;
-	const lines: string[] = [];
-	const secret = `sig_sk_${crypto.randomUUID()}`;
-	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ keys: [] }) });
-	const keyring = {
-		get: async () => ({ state: "unsupported" as const }),
-		set: async () => ({ state: "unsupported" as const }),
-	};
-	try {
-		process.env.HOME = home;
-		console.log = (...values: unknown[]) => {
-			lines.push(values.map(String).join(" "));
+for (const relativePath of [".claude.json", ".claude/hooks/x.sh"]) {
+	test(`doctor finds credentials in ${relativePath}`, async () => {
+		const home = homedir();
+		expect(home).not.toBe("/home/nicholai");
+		const previousHome = process.env.HOME;
+		const previousLog = console.log;
+		const lines: string[] = [];
+		const secret = `sig_sk_${crypto.randomUUID()}`;
+		const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ keys: [] }) });
+		const keyring = {
+			get: async () => ({ state: "unsupported" as const }),
+			set: async () => ({ state: "unsupported" as const }),
 		};
-		await writeFile(
-			join(home, ".claude.json"),
-			JSON.stringify({ mcpServers: { signet: { env: { SIGNET_API_KEY: secret } } } }),
-		);
-		const program = new Command();
-		registerConnectorCommands(program, { agentsDir: home, env: { HOME: home }, keyring, flagUrl: server.url.origin });
-		await program.parseAsync(["connector", "doctor", "--json"], { from: "user" });
-		expect(lines.join("\n")).toContain(join(home, ".claude.json"));
-		expect(lines.join("\n")).not.toContain(secret);
-		expect(process.exitCode).toBe(1);
-	} finally {
-		server.stop(true);
-		console.log = previousLog;
-		process.exitCode = 0;
-		if (previousHome === undefined) delete process.env.HOME;
-		else process.env.HOME = previousHome;
-		await rm(join(home, ".claude.json"), { force: true });
-	}
-});
+		try {
+			process.env.HOME = home;
+			console.log = (...values: unknown[]) => {
+				lines.push(values.map(String).join(" "));
+			};
+			await mkdir(join(home, ".claude/hooks"), { recursive: true });
+			await writeFile(
+				join(home, relativePath),
+				JSON.stringify({ mcpServers: { signet: { env: { SIGNET_API_KEY: secret } } } }),
+			);
+			const program = new Command();
+			registerConnectorCommands(program, { agentsDir: home, env: { HOME: home }, keyring, flagUrl: server.url.origin });
+			await program.parseAsync(["connector", "doctor", "--json"], { from: "user" });
+			expect(lines.join("\n")).toContain(join(home, relativePath));
+			expect(lines.join("\n")).not.toContain(secret);
+			expect(process.exitCode).toBe(1);
+		} finally {
+			server.stop(true);
+			console.log = previousLog;
+			process.exitCode = 0;
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			await rm(join(home, relativePath), { force: true });
+		}
+	});
+}
 
 test.each(["sig_sk_", "legacy-"])(
 	"connector doctor identifies %s credentials without returning their values",
