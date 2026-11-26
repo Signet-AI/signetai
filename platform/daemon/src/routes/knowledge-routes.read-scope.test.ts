@@ -283,6 +283,33 @@ describe("knowledge and ontology organization reads", () => {
 		expect(await query()).toEqual(before);
 	});
 
+	test("named resolution ignores hidden mentions and global rank metadata", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec(
+				"UPDATE entities SET name='candidate alpha',canonical_name='candidate alpha',mentions=0 WHERE id='public'; INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,mentions,created_at,updated_at) SELECT 'candidate-beta','candidate beta','candidate beta','project',agent_id,0,created_at,updated_at FROM entities WHERE id='public'",
+			),
+		);
+		const app = await appFor();
+		const paths = ["/api/knowledge/navigation/entity?name=candidate"];
+		const before = await capture(app, paths);
+		expect(JSON.stringify(before)).toContain("candidate alpha");
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO memories(id,agent_id,content,created_at,updated_at,compartment_id) VALUES('hidden-mention','default','hidden mention','2099-01-01','2099-01-01',9); INSERT INTO memory_entity_mentions(memory_id,entity_id) VALUES('hidden-mention','candidate-beta'); UPDATE entities SET mentions=99999,updated_at='2099-01-01' WHERE id='candidate-beta'",
+			),
+		);
+		expect(await capture(app, paths)).toEqual(before);
+		expect(JSON.stringify(await capture(await appFor("audience"), paths))).toContain("candidate beta");
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec("UPDATE entities SET mentions=999999 WHERE id='candidate-beta'"),
+		);
+		expect(await capture(app, paths)).toEqual(before);
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec("UPDATE memories SET compartment_id=NULL WHERE id='hidden-mention'"),
+		);
+		expect(JSON.stringify(await capture(app, paths))).toContain("candidate beta");
+	});
+
 	test("mixed-label community and mention aggregates ignore hidden members", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.exec(

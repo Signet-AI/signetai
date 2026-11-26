@@ -609,7 +609,7 @@ export async function resolveNamedEntity(
 						OR COALESCE(canonical_name, LOWER(name)) LIKE ? ESCAPE '\\'
 						OR LOWER(name) LIKE ? ESCAPE '\\'
 				   )
-				 ORDER BY match_rank ASC, mentions DESC, updated_at DESC, name ASC
+				 ORDER BY match_rank ASC, mentions DESC, ${readScope && readScope.organizationMode !== false ? "name ASC, id ASC" : "updated_at DESC, name ASC"}
 				 LIMIT 1`,
 			params: [
 				canonical,
