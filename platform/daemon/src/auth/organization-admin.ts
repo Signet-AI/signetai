@@ -592,7 +592,7 @@ export async function jobs(p: Principal, kind?: string) {
 			).filter(() => !kind || kind === "operator"),
 			...(await organizationQuery<readonly import("../operator-job-contract").OperatorJobRow[]>(
 				statement(
-					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (kind<>'restart' OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
+					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
 					[p.boundAgentId, p.allowedProjects === null ? null : "restricted", kind ?? null, kind ?? null],
 					"all",
 				),
@@ -607,8 +607,10 @@ export async function job(p: Principal, jobId: string) {
 		statement("SELECT * FROM org_jobs WHERE id = ?", [jobId], "get"),
 	);
 	if (!result) throw new IdentityError(404, "not_found");
-	if (result.kind === "restart" && (p.boundAgentId !== null || p.allowedProjects !== null))
+	if (["restart", "agent_purge"].includes(result.kind) && (p.boundAgentId !== null || p.allowedProjects !== null))
 		throw new IdentityError(404, "not_found");
+	if (result.kind === "agent_purge")
+		return operatorRequest({ op: "agent-purge", stage: "read", actor: operatorActor(p), jobId, runtimeId: "" });
 	if (result.kind === "operator") return operatorRequest({ op: "get", actor: operatorActor(p), jobId });
 	if (result.created_by !== p.userId) requireAdmin(p);
 	return result;

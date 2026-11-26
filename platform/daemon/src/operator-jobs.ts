@@ -39,7 +39,16 @@ export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
 	} catch (error) {
 		if (error instanceof DbOwnerError && error.message.startsWith("operator:")) {
 			const reason = error.message.slice("operator:".length);
-			throw new IdentityError(reason === "not_found" ? 404 : reason === "capacity" ? 429 : 403, reason);
+			throw new IdentityError(
+				reason === "not_found"
+					? 404
+					: reason === "capacity"
+						? 429
+						: ["purge_requires_archive", "purge_limit", "protected_agent", "purge_blocked"].includes(reason)
+							? 409
+							: 403,
+				reason,
+			);
 		}
 		throw error;
 	}

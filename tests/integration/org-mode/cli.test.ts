@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { OrgDaemon, repo } from "./daemon";
-import { Fixture, device } from "./fixture";
+import { canonicalTranscriptPath } from "../../../platform/daemon/src/transcript-jsonl";
+import { Fixture, device, connector, captureThread } from "./fixture";
 import { browser, record, request, success, text } from "./http";
 
 test("CLI organization admin flow uses the real isolated daemon", async () => {
@@ -66,6 +67,42 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		expect((await cli(["embed", "backfill", "--wait", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
 			"job_failed",
 		);
+
+		const purgedAgent = await cli(["agent", "add", "purge-proof", "--team", fixture.engId, "--json"]);
+		expect(typeof purgedAgent.agentId).toBe("string");
+		success(
+			await request(
+				daemon.origin,
+				`/api/org/groups/${fixture.engId}/members/${status.identity.user.id}`,
+				admin.credential,
+				"PUT",
+				{ role: "owner" },
+			),
+			"grant admin explicit team act-as",
+		);
+		const purgeKey = await connector(daemon, admin.credential, admin.deviceId, purgedAgent.agentId);
+		await captureThread(
+			daemon,
+			{ agentId: purgedAgent.agentId, connector: purgeKey.credential, session: admin.credential },
+			"purge-proof-thread",
+			"agentPurgeEvidenceMarker",
+		);
+		const transcriptFile = canonicalTranscriptPath(daemon.workspace, "codex");
+		expect(await readFile(transcriptFile, "utf8")).toContain("agentPurgeEvidenceMarker");
+		await cli(["agent", "remove", purgedAgent.agentId, "--json"]);
+		const purged = await cli(["agent", "purge", purgedAgent.agentId, "--confirm", "--wait", "--json"]);
+		expect(purged.status).toBe("complete");
+		let remainingTranscript = "";
+		try {
+			remainingTranscript = await readFile(transcriptFile, "utf8");
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		}
+		expect(remainingTranscript).not.toContain("agentPurgeEvidenceMarker");
+		const agentInventory = await cli(["agent", "list", "--json"]);
+		expect(agentInventory.agents.some((agent: { id: string }) => agent.id === purgedAgent.agentId)).toBe(false);
+		expect((await request(daemon.origin, "/api/agents", purgeKey.credential)).status).toBe(401);
+		expect((await cli(["audit", "--action", "agent.purged", "--json"])).events.length).toBe(1);
 		const exportedPath = join(daemon.root, "organization-export.ndjson");
 		const exported = await cli(["export", "bundle", "--all", "--output", exportedPath, "--json"]);
 		expect(exported.exported).toBe(true);

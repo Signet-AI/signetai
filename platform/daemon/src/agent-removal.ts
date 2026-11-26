@@ -188,6 +188,7 @@ function agentScopedTables(db: WriteDb): string[] {
 		.all() as Array<{ name: string }>;
 	return tables
 		.map((row) => row.name)
+		.filter((name) => name !== "audit_events")
 		.filter((name) =>
 			(db.prepare(`PRAGMA table_info("${name}")`).all() as Array<{ name: string }>).some(
 				(column) => column.name === "agent_id",

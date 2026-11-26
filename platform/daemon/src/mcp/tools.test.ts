@@ -212,6 +212,8 @@ describe("createMcpServer", () => {
 		expect((await callTool(server, "signet_org_user_lookup", { q: "alice" })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/org/users/lookup?q=alice");
 		mockFetch(200, { actAs: [] }, capture);
+		await callTool(server, "signet_agent_purge", { agentId: "agent-purge", confirm: true });
+		expect(capture.url).toBe("http://localhost:3850/api/org/agents/agent-purge/purge");
 		await callTool(server, "signet_org_access", { userId: "usr_alice" });
 		expect(capture.url).toBe("http://localhost:3850/api/org/access/usr_alice");
 		await callTool(server, "signet_org_job", { jobId: "job_123" });

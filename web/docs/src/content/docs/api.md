@@ -429,6 +429,8 @@ without hiding setup affordances).
 
 ### Supervised organization operations
 
+- `POST /api/org/agents/:id/purge`: empty body; archived non-organization agent; unrestricted admin; returns HTTP 202 `{jobId}`. Poll `/api/org/jobs/:id`. MCP: `signet_agent_purge` with `confirm: true`.
+
 - `POST /api/org/bootstrap`: unclaimed team instance only; setup nonce and validated public URL.
 
 - `GET /api/org/operator/doctor`: audited identity, clock, and DB-owner diagnostics.

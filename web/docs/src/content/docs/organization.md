@@ -322,3 +322,20 @@ Signing in does not create `~/.agents`, rewrite a personal workspace's `agent.ya
 or start local services. An existing workspace `daemon.url` remains readable for
 compatibility until a client target is saved. Flags and environment credentials
 still take precedence.
+
+## Permanently purging an agent
+
+Archive with `signet agent remove <agent>` first. Then an unrestricted admin can
+run `signet agent purge <agent> --confirm --wait --json`. This destroys the archived
+agent's evidence, derived memory, and connector credentials through an audited
+owner job. It never deletes files in your local workspace. The organization agent
+is protected; agent-bound and project-restricted credentials cannot start or read
+this instance-wide job. Audit history is retained.
+
+Purge admission is limited to 1,000 agent-scoped rows. Evidence is removed in
+bounded batches, and transcript deletion follows its durable cleanup phases before
+completion is reported. Pinned or over-limit data, owner interruption, a revoked
+operator, or cleanup that exceeds the one-minute deadline leaves a refused or
+incomplete result rather than claiming successful deletion. Use the job ID to
+inspect the result; resolve the blocker before retrying. Purge responses never
+include counts of content outside the caller's audience.

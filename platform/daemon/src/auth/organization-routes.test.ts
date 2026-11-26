@@ -88,6 +88,47 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("agent purge is an audited owner job and refuses narrowed credentials", async () => {
+		await claim();
+		const alice = await member("purge-alice");
+		const group = await (await call("/api/org/groups", "POST", { name: "purge-team" })).json();
+		const agent = await (
+			await call("/api/agents", "POST", { name: "purge-target", kind: "team", ownerGroupId: group.id })
+		).json();
+		expect(typeof agent.agentId).toBe("string");
+		expect((await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {}, alice.token)).status).toBe(403);
+		expect((await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {})).status).toBe(409);
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "narrow purge",
+				kind: "shared",
+				agentId: agent.agentId,
+				permissions: ["admin"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		expect(typeof key.secret).toBe("string");
+		expect((await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {}, key.secret)).status).toBe(403);
+		expect((await call("/api/org/agents/default/purge", "POST", {})).status).toBe(409);
+		expect((await call(`/api/agents/${agent.agentId}`, "PATCH", { archived: true })).status).toBe(200);
+		const result = await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {});
+		expect(result.status).toBe(202);
+		const started = await result.json();
+		let job: { status: string } = { status: "running" };
+		for (let i = 0; i < 100; i++) {
+			job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+			if (job.status !== "running") break;
+			await Bun.sleep(20);
+		}
+		expect(job.status).toBe("complete");
+		expect(
+			(await (await call("/api/agents")).json()).agents.some((row: { id: string }) => row.id === agent.agentId),
+		).toBe(false);
+		const events = (await (await call("/api/org/audit?action=agent.created")).json()).events;
+		expect(events.some((row: { target_id: string }) => row.target_id === agent.agentId)).toBe(true);
+		expect((await (await call("/api/org/audit?action=agent.purged")).json()).events.length).toBe(1);
+	});
+
 	test("host bootstrap requires the setup nonce and preserves the checked public URL", async () => {
 		expect((await (await call("/api/auth/methods")).json()).organization.claimed).toBe(false);
 		const bad = await call(

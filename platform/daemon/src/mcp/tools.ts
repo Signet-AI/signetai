@@ -425,6 +425,17 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 	registerMcpTool(
 		server,
+		"signet_agent_purge",
+		{
+			title: "Purge an Archived Agent",
+			description:
+				"Permanently purge an archived agent through a bounded owner job. Requires unrestricted admin and explicit confirmation. Poll signet_org_job; acceptance is not completion.",
+			inputSchema: z.object({ agentId: z.string().min(1).max(200), confirm: z.literal(true) }).strict(),
+		},
+		async ({ agentId }) => organizationResult(`/api/org/agents/${encodeURIComponent(agentId)}/purge`, "POST", {}),
+	);
+	registerMcpTool(
+		server,
 		"signet_operator_restart",
 		{
 			title: "Request Supervised Restart",

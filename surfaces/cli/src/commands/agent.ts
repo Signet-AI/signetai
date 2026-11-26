@@ -12,9 +12,16 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
 import type { DaemonFetch } from "../lib/daemon.js";
+import { waitForOrganizationJob } from "./organization.js";
+import { SignetError } from "../../../../libs/sdk/src/index.js";
 import { cliTransport } from "../lib/organization-target.js";
 
-async function organizationAgent(action: string, name?: string, input?: unknown): Promise<boolean> {
+async function organizationAgent(
+	action: string,
+	name?: string,
+	input?: unknown,
+	options?: { force?: boolean; confirm?: boolean; wait?: boolean; json?: boolean },
+): Promise<boolean> {
 	const transport = cliTransport();
 	if (!transport) return false;
 	if (action === "add") {
@@ -53,8 +60,21 @@ async function organizationAgent(action: string, name?: string, input?: unknown)
 		console.log(
 			JSON.stringify(await transport.request("PATCH", `/api/agents/${encodeURIComponent(agent.id)}`, { body: input })),
 		);
-	else if (action === "purge") throw new Error("Organization agent purge is unavailable; no local files were changed");
-	else console.log(JSON.stringify(agent, null, 2));
+	else if (action === "purge") {
+		if (!options?.confirm && !options?.force)
+			throw new SignetError(
+				"Archive the agent first, then pass --confirm to permanently purge its evidence. No local files will be changed.",
+				"confirmation_required",
+			);
+		const result = await transport.post<{ jobId: string }>(`/api/org/agents/${encodeURIComponent(agent.id)}/purge`, {});
+		console.log(
+			JSON.stringify(
+				options.wait ? await waitForOrganizationJob(transport, result.jobId) : result,
+				null,
+				options.json ? undefined : 2,
+			),
+		);
+	} else console.log(JSON.stringify(agent, null, 2));
 	return true;
 }
 
@@ -270,8 +290,11 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.command("purge <name>")
 		.description("Permanently delete an agent and all their memories")
 		.option("--force", "Skip confirmation prompt")
-		.action(async (name: string, options: { force?: boolean }) => {
-			if (await organizationAgent("purge", name)) return;
+		.option("--confirm", "Confirm permanent organization evidence purge")
+		.option("--wait", "Wait for durable purge completion")
+		.option("--json", "Machine-readable output")
+		.action(async (name: string, options: { force?: boolean; confirm?: boolean; wait?: boolean; json?: boolean }) => {
+			if (await organizationAgent("purge", name, undefined, options)) return;
 			if (name === "default") {
 				console.log(chalk.red("  Cannot purge the default agent"));
 				process.exit(1);

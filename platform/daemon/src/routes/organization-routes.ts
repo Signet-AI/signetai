@@ -1,3 +1,4 @@
+import { startAgentPurge } from "../agent-purge";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
@@ -395,6 +396,25 @@ export function registerOrganizationRoutes(
 	app.post(
 		"/api/agents",
 		active(async (c) => c.json(await admin.createAgent(user(c), await body(c)), 201)),
+	);
+	app.post(
+		"/api/org/agents/:id/purge",
+		active(async (c) => {
+			z.object({})
+				.strict()
+				.parse(await body(c));
+			return c.json(await startAgentPurge(user(c), c.req.param("id") ?? "", c.req.header("x-signet-agent-id")), 202);
+		}),
+	);
+	app.delete(
+		"/api/agents/:id",
+		active(async () => {
+			throw new IdentityError(
+				409,
+				"org_policy",
+				"Use agent remove to archive, then agent purge --confirm for an audited purge job",
+			);
+		}),
 	);
 	app.patch(
 		"/api/agents/:id",

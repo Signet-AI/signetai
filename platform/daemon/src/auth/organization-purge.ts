@@ -41,7 +41,7 @@ function purgeReadClause(
 function planAuthoredMemoryPurgeInTx(
 	db: WriteDb,
 	userId: string,
-	options: { readonly scope?: ReadScope; readonly preview?: boolean } = {},
+	options: { readonly scope?: ReadScope; readonly preview?: boolean; readonly agentId?: string } = {},
 ) {
 	const memoryScope = purgeReadClause(options.scope, "memory", "m");
 	const documentScope = purgeReadClause(options.scope, "document", "d");
@@ -49,27 +49,28 @@ function planAuthoredMemoryPurgeInTx(
 	const summaryScope = purgeReadClause(options.scope, "summary", "s");
 	const transcriptScope = purgeReadClause(options.scope, "transcript", "t");
 	const rootLimit = options.preview ? 1001 : 50;
+	const agentId = options.agentId;
 	const evidenceLimit = options.preview ? 1001 : 1;
 	const roots = prepareTypedStatement<{ id: string }>(
 		db,
-		`SELECT m.id FROM memories m WHERE (m.author_user_id=? OR EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=m.agent_id AND m.source_id IN (t.session_key,'session:'||t.session_key) AND (m.type='session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))${transcriptScope.sql}))${memoryScope.sql} LIMIT ?`,
-	).all(userId, userId, ...transcriptScope.args, ...memoryScope.args, rootLimit);
+		`SELECT m.id FROM memories m WHERE ${agentId ? "m.agent_id=?" : `(m.author_user_id=? OR EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=m.agent_id AND m.source_id IN (t.session_key,'session:'||t.session_key) AND (m.type='session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))${transcriptScope.sql}))`}${memoryScope.sql} LIMIT ?`,
+	).all(...(agentId ? [agentId] : [userId, userId, ...transcriptScope.args]), ...memoryScope.args, rootLimit);
 	const transcripts = prepareTypedStatement<{ agent_id: string; session_key: string }>(
 		db,
-		`SELECT t.agent_id,t.session_key FROM session_transcripts t WHERE t.speaker_user_id=?${transcriptScope.sql} LIMIT ?`,
-	).all(userId, ...transcriptScope.args, rootLimit);
+		`SELECT t.agent_id,t.session_key FROM session_transcripts t WHERE t.${agentId ? "agent_id" : "speaker_user_id"}=?${transcriptScope.sql} LIMIT ?`,
+	).all(agentId ?? userId, ...transcriptScope.args, rootLimit);
 	const documents = prepareTypedStatement<{ id: string; agent_id: string }>(
 		db,
-		`SELECT d.id,d.agent_id FROM documents d WHERE d.author_user_id=?${documentScope.sql} LIMIT ?`,
-	).all(userId, ...documentScope.args, evidenceLimit);
+		`SELECT d.id,d.agent_id FROM documents d WHERE d.${agentId ? "agent_id" : "author_user_id"}=?${documentScope.sql} LIMIT ?`,
+	).all(agentId ?? userId, ...documentScope.args, evidenceLimit);
 	const artifacts = prepareTypedStatement<{ source_path: string; source_id: string | null; agent_id: string }>(
 		db,
-		`SELECT a.source_path,a.source_id,a.agent_id FROM memory_artifacts a WHERE (a.author_user_id=? OR (a.source_kind IN ('transcript','summary','compaction','manifest') AND EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=a.agent_id AND COALESCE(NULLIF(a.session_key,''),a.session_id) IN (t.session_key,'session:'||t.session_key)${transcriptScope.sql})))${artifactScope.sql} LIMIT ?`,
-	).all(userId, userId, ...transcriptScope.args, ...artifactScope.args, evidenceLimit);
+		`SELECT a.source_path,a.source_id,a.agent_id FROM memory_artifacts a WHERE ${agentId ? "a.agent_id=?" : `(a.author_user_id=? OR (a.source_kind IN ('transcript','summary','compaction','manifest') AND EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=a.agent_id AND COALESCE(NULLIF(a.session_key,''),a.session_id) IN (t.session_key,'session:'||t.session_key)${transcriptScope.sql})))`}${artifactScope.sql} LIMIT ?`,
+	).all(...(agentId ? [agentId] : [userId, userId, ...transcriptScope.args]), ...artifactScope.args, evidenceLimit);
 	const summaries = prepareTypedStatement<{ id: string; agent_id: string }>(
 		db,
-		`SELECT s.id,s.agent_id FROM session_summaries s WHERE (s.author_user_id=? OR EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=s.agent_id AND s.session_key IN (t.session_key,'session:'||t.session_key)${transcriptScope.sql}))${summaryScope.sql} LIMIT ?`,
-	).all(userId, userId, ...transcriptScope.args, ...summaryScope.args, evidenceLimit);
+		`SELECT s.id,s.agent_id FROM session_summaries s WHERE ${agentId ? "s.agent_id=?" : `(s.author_user_id=? OR EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=s.agent_id AND s.session_key IN (t.session_key,'session:'||t.session_key)${transcriptScope.sql}))`}${summaryScope.sql} LIMIT ?`,
+	).all(...(agentId ? [agentId] : [userId, userId, ...transcriptScope.args]), ...summaryScope.args, evidenceLimit);
 	const exceeded =
 		options.preview &&
 		[roots.length, documents.length, artifacts.length, summaries.length, transcripts.length].some((n) => n > 1000);
@@ -131,24 +132,28 @@ export function planOffboardPurgeInTx(db: WriteDb, userId: string, scope: ReadSc
 		transcripts: plan.transcripts.length,
 	};
 }
-export function purgeAuthoredMemoryBatchInTx(db: WriteDb, userId: string, author: WriteAuthor): PurgeBatchResult {
+export function purgeAuthoredMemoryBatchInTx(
+	db: WriteDb,
+	userId: string,
+	author: WriteAuthor,
+	options: { readonly agentId?: string } = {},
+): PurgeBatchResult {
 	const count = (sql: string, ...args: string[]) => prepareTypedStatement<{ n: number }>(db, sql).get(...args)?.n ?? 0;
-	const { rows, documents, artifacts, affectedSummaries, blocked } = planAuthoredMemoryPurgeInTx(db, userId);
+	const { rows, documents, artifacts, affectedSummaries, blocked } = planAuthoredMemoryPurgeInTx(db, userId, options);
+	const detail = options.agentId ? { purgedAgentId: options.agentId } : { offboardUserId: userId };
 	const counts: Record<string, number> = { memories: 0, documents: 0, memory_artifacts: 0, session_summaries: 0 };
 	if (!blocked) {
 		for (const row of rows) {
 			purgeMemoryEmbeddingsInTx(db, row.id);
 			purgeMemoryInTx(db, row.id);
-			auditAuthoredWriteInTx(db, author, "memory.purged", "memory", row.id, row.agent_id, { offboardUserId: userId });
+			auditAuthoredWriteInTx(db, author, "memory.purged", "memory", row.id, row.agent_id, detail);
 			counts.memories = (counts.memories ?? 0) + 1;
 		}
 		for (const doc of documents)
 			if (!count("SELECT COUNT(*) AS n FROM document_memories WHERE document_id=?", doc.id)) {
 				purgeDocumentRecordInTx(db, doc.id);
 				counts.documents = (counts.documents ?? 0) + 1;
-				auditAuthoredWriteInTx(db, author, "document.purged", "document", doc.id, doc.agent_id, {
-					offboardUserId: userId,
-				});
+				auditAuthoredWriteInTx(db, author, "document.purged", "document", doc.id, doc.agent_id, detail);
 			}
 		for (const artifact of artifacts)
 			if (
@@ -160,24 +165,30 @@ export function purgeAuthoredMemoryBatchInTx(db: WriteDb, userId: string, author
 			) {
 				purgeArtifactRecordInTx(db, artifact);
 				counts.memory_artifacts = (counts.memory_artifacts ?? 0) + 1;
-				auditAuthoredWriteInTx(db, author, "artifact.purged", "artifact", artifact.source_path, artifact.agent_id, {
-					offboardUserId: userId,
-				});
+				auditAuthoredWriteInTx(
+					db,
+					author,
+					"artifact.purged",
+					"artifact",
+					artifact.source_path,
+					artifact.agent_id,
+					detail,
+				);
 			}
 		for (const summary of affectedSummaries) {
 			purgeSummaryRecordInTx(db, summary.id, summary.agent_id);
 			counts.session_summaries = (counts.session_summaries ?? 0) + 1;
-			auditAuthoredWriteInTx(db, author, "summary.purged", "summary", summary.id, summary.agent_id, {
-				offboardUserId: userId,
-			});
+			auditAuthoredWriteInTx(db, author, "summary.purged", "summary", summary.id, summary.agent_id, detail);
 		}
 	}
+	const column = options.agentId ? "agent_id" : "author_user_id";
+	const target = options.agentId ?? userId;
 	const remaining = count(
-		"SELECT (SELECT COUNT(*) FROM memories WHERE author_user_id=?)+(SELECT COUNT(*) FROM documents WHERE author_user_id=?)+(SELECT COUNT(*) FROM memory_artifacts WHERE author_user_id=?)+(SELECT COUNT(*) FROM session_summaries WHERE author_user_id=?) AS n",
-		userId,
-		userId,
-		userId,
-		userId,
+		`SELECT (SELECT COUNT(*) FROM memories WHERE ${column}=?)+(SELECT COUNT(*) FROM documents WHERE ${column}=?)+(SELECT COUNT(*) FROM memory_artifacts WHERE ${column}=?)+(SELECT COUNT(*) FROM session_summaries WHERE ${column}=?) AS n`,
+		target,
+		target,
+		target,
+		target,
 	);
 	return { removed: counts.memories ?? 0, remaining, counts, blocked };
 }

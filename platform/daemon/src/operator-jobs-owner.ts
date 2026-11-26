@@ -1,3 +1,5 @@
+import { removeAgentInTx } from "./agent-removal";
+import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { canActAs, type AgentRecord } from "./auth/agent-access";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -254,6 +256,7 @@ export function executeOperatorJob(db: WriteDb, request: OperatorRequest): unkno
 	}
 }
 function operation(db: WriteDb, request: OperatorRequest): unknown {
+	if (request.op === "agent-purge") return agentPurge(db, request);
 	if (request.op === "authorize-global") {
 		if (request.actor.boundAgentId !== null || request.actor.allowedProjects !== null) deny("permission");
 		const agent = db.prepare("SELECT id FROM agents WHERE kind='organization' AND archived_at IS NULL LIMIT 1").get();
@@ -446,4 +449,143 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 		row.id,
 	);
 	return { ok: true };
+}
+
+function purgeAdmission(db: WriteDb, agentId: string) {
+	const tables = db
+		.prepare(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%' LIMIT 513",
+		)
+		.all<{ name: string }>();
+	if (tables.length > 512) deny("purge_limit");
+	let count = 0;
+	for (const { name } of tables) {
+		if (name === "audit_events") continue;
+		if (!/^[a-zA-Z0-9_]+$/.test(name)) deny("purge_limit");
+		if (
+			!db
+				.prepare(`PRAGMA table_info("${name}")`)
+				.all<{ name: string }>()
+				.some((column) => column.name === "agent_id")
+		)
+			continue;
+		count += db.prepare(`SELECT 1 FROM "${name}" WHERE agent_id=? LIMIT ?`).all(agentId, 1001 - count).length;
+		if (count > 1000) deny("purge_limit");
+	}
+}
+function agentPurge(db: WriteDb, request: Extract<OperatorRequest, { op: "agent-purge" }>) {
+	if (request.stage !== "fail") operation(db, { op: "authorize-global", actor: request.actor });
+	const now = new Date().toISOString();
+	if (request.stage === "create") {
+		const agentId = z.string().min(1).max(200).parse(request.agentId);
+		const agent = prepareTypedStatement<AgentRecord>(db, "SELECT * FROM agents WHERE id=?").get(agentId);
+		if (!agent) deny("not_found");
+		if (agentId === "default" || agent.kind === "organization") deny("protected_agent");
+		if (!agent.archived_at) deny("purge_requires_archive");
+
+		const pending = db
+			.prepare("SELECT id,params_json,created_at FROM org_jobs WHERE kind='agent_purge' AND status='running' LIMIT 3")
+			.all<{ id: string; params_json: string; created_at: string }>();
+		let live = 0;
+		for (const row of pending) {
+			const plan = z.object({ runtimeId: z.string() }).parse(JSON.parse(row.params_json));
+			if (plan.runtimeId !== request.runtimeId || Date.now() - Date.parse(row.created_at) > 60_000) {
+				db.prepare("UPDATE org_jobs SET status='incomplete',error='purge_interrupted',finished_at=? WHERE id=?").run(
+					now,
+					row.id,
+				);
+				audit(db, request.actor, row.id, "agent.purge_incomplete", null, { status: "interrupted" });
+			} else live++;
+		}
+		if (live >= 2) deny("capacity");
+		if (
+			db
+				.prepare(
+					"SELECT 1 FROM org_jobs WHERE kind='agent_purge' AND status='running' AND json_extract(params_json,'$.agentId')=? LIMIT 1",
+				)
+				.get(agentId)
+		)
+			deny("capacity");
+		purgeAdmission(db, agentId);
+		const jobId = `job_${randomUUID().replaceAll("-", "")}`;
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,created_by,params_json,progress_json,created_at) VALUES(?,'agent_purge','running',?,?,'{}',?)",
+		).run(jobId, request.actor.userId, JSON.stringify({ agentId, runtimeId: request.runtimeId }), now);
+		audit(db, request.actor, jobId, "agent.purge_started", null, { agentId });
+		return { jobId };
+	}
+	const row = prepareTypedStatement<OperatorJobRow>(db, "SELECT * FROM org_jobs WHERE id=? AND kind='agent_purge'").get(
+		request.jobId ?? "",
+	);
+	if (!row) deny("not_found");
+	const plan = z.object({ agentId: z.string(), runtimeId: z.string() }).parse(JSON.parse(row.params_json));
+	const settle = (status: string, error: string | null) => {
+		db.prepare("UPDATE org_jobs SET status=?,error=?,finished_at=? WHERE id=? AND status='running'").run(
+			status,
+			error,
+			now,
+			row.id,
+		);
+		audit(db, request.actor, row.id, status === "complete" ? "agent.purged" : "agent.purge_incomplete", null, {
+			agentId: plan.agentId,
+			status,
+		});
+		return { ...row, status, error, finished_at: now, params_json: JSON.stringify({ agentId: plan.agentId }) };
+	};
+	if (request.stage === "fail") {
+		if (row.created_by !== request.actor.userId || plan.runtimeId !== request.runtimeId) deny("permission");
+		return row.status === "running" ? settle("incomplete", "purge_incomplete") : row;
+	}
+	if (request.stage === "read") {
+		if (
+			row.status === "running" &&
+			(plan.runtimeId !== request.runtimeId || Date.now() - Date.parse(row.created_at) > 60_000)
+		)
+			return settle("incomplete", "purge_interrupted");
+		return { ...row, params_json: JSON.stringify({ agentId: plan.agentId }) };
+	}
+	if (
+		row.status !== "running" ||
+		row.created_by !== request.actor.userId ||
+		plan.runtimeId !== request.runtimeId ||
+		Date.now() - Date.parse(row.created_at) > 60_000
+	)
+		deny("permission");
+	const agent = prepareTypedStatement<AgentRecord>(db, "SELECT * FROM agents WHERE id=?").get(plan.agentId);
+	if (!agent?.archived_at) deny("purge_requires_archive");
+	if (request.stage === "next") {
+		const batch = purgeAuthoredMemoryBatchInTx(
+			db,
+			request.actor.userId,
+			{ userId: request.actor.userId, credential: `${request.actor.credentialKind}:${request.actor.credentialId}` },
+			{ agentId: plan.agentId },
+		);
+		if (batch.blocked) deny("purge_blocked");
+		if (Object.values(batch.counts).some((n) => n > 0)) return { more: true };
+		const transcript = prepareTypedStatement<{ session_key: string }>(
+			db,
+			"SELECT session_key FROM session_transcripts WHERE agent_id=? UNION SELECT session_key FROM session_transcript_deletions WHERE agent_id=? AND phase<>'complete' LIMIT 1",
+		).get(plan.agentId, plan.agentId);
+		return { more: false, sessionKey: transcript?.session_key, agentId: plan.agentId };
+	}
+	if (
+		db
+			.prepare(
+				"SELECT 1 FROM session_transcripts WHERE agent_id=? UNION SELECT 1 FROM session_transcript_deletions WHERE agent_id=? AND phase<>'complete' LIMIT 1",
+			)
+			.get(plan.agentId, plan.agentId)
+	)
+		deny("purge_blocked");
+	purgeAdmission(db, plan.agentId);
+	db.prepare(
+		"UPDATE users SET personal_agent_id=CASE WHEN personal_agent_id=? THEN NULL ELSE personal_agent_id END,default_read_agent_id=CASE WHEN default_read_agent_id=? THEN NULL ELSE default_read_agent_id END WHERE personal_agent_id=? OR default_read_agent_id=?",
+	).run(plan.agentId, plan.agentId, plan.agentId, plan.agentId);
+	const result = removeAgentInTx(db, {
+		agentId: plan.agentId,
+		mode: "purge",
+		changedBy: `user:${request.actor.userId}`,
+		changedAt: now,
+	});
+	if (result.status !== "removed") deny("not_found");
+	return settle("complete", null);
 }
