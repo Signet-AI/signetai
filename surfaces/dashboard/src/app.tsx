@@ -3,6 +3,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
 import { SessionExpiryToast, SignInDialog, SignInScreen } from "@/components/shell/sign-in";
+import { AccountView } from "@/views/account";
+import { ClaimPage, InvitationPage, DeviceApprovalPage } from "@/components/shell/auth-entry";
+import { useAgentContext } from "@/lib/agent-context";
 import { Topbar } from "@/components/shell/topbar";
 import { useSession } from "@/lib/session";
 import { type ViewId, useView } from "@/lib/view-context";
@@ -18,13 +21,19 @@ import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
 	const session = useSession();
+	const team = "mode" in session && session.mode === "team";
+	const path = location.pathname;
 	return (
 		<TooltipProvider delayDuration={200}>
-			{session.kind === "checking" ? null : session.kind === "signed-out" && !session.expired ? (
+			{session.kind === "checking" ? null : team && path === "/auth/claim" ? (
+				<ClaimPage />
+			) : team && path.startsWith("/auth/invite") ? (
+				<InvitationPage />
+			) : session.kind === "signed-out" && !session.expired ? (
 				<SignInScreen session={session} />
 			) : (
 				<>
-					<Shell />
+					{team && path === "/auth/device" ? <DeviceApprovalPage /> : <Shell />}
 					{session.kind === "signed-out" && <SignInDialog session={session} />}
 					<SessionExpiryToast session={session} />
 				</>
@@ -36,6 +45,7 @@ export function App() {
 
 function Shell() {
 	useSettingsHotkey();
+	useAgentContext();
 	const { view, setView, setSetupComplete } = useView();
 	const contentRef = useRef<HTMLDivElement>(null);
 	const [sidebarOpen, toggleSidebar] = useSidebarOpen();
@@ -54,7 +64,7 @@ function Shell() {
 					<SidebarNav open={sidebarOpen} />
 					<div
 						ref={contentRef}
-						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "board" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
+						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "board" || view === "settings" || view === "account" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
 					>
 						{view === "setup" ? (
 							<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
@@ -76,7 +86,9 @@ function Shell() {
 
 function ViewSwitch({ view }: { view: ViewId }) {
 	const page =
-		view === "graph" ? (
+		view === "account" ? (
+			<AccountView />
+		) : view === "graph" ? (
 			<GraphView />
 		) : view === "dreaming" ? (
 			<DreamsView />

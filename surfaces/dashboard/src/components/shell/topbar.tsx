@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { dashboardQueryCache } from "@/lib/query-cache";
 import { SignetMark } from "@/components/icons";
+import { AgentContextSwitcher } from "@/components/shell/agent-switcher";
 import { SessionChip } from "@/components/shell/sign-in";
 import { getDesktopBridge } from "@/lib/desktop";
 import { useSession } from "@/lib/session";
@@ -28,6 +29,7 @@ export function Topbar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean;
 							Updates unavailable
 						</span>
 					)}
+					<AgentContextSwitcher />
 					<SessionChip session={session} />
 				</div>
 				<SignetMark className="sig-topbar-brand" aria-label="Signet" aria-hidden={false} role="img" />

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { SETTINGS_SECTIONS, type SettingsSection } from "./settings-sections";
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-export type ViewId = "home" | "memory" | "graph" | "dreaming" | "skills" | "board" | "settings" | "setup";
+export type ViewId = "home" | "memory" | "graph" | "dreaming" | "skills" | "board" | "settings" | "setup" | "account";
 
 const VIEW_LABELS: Record<ViewId, string> = {
 	home: "Home",
@@ -14,11 +14,13 @@ const VIEW_LABELS: Record<ViewId, string> = {
 	board: "Board",
 	settings: "Settings",
 	setup: "Setup",
+	account: "My account",
 };
 function routeFromHash(): { view: ViewId; settingsSection?: SettingsSection } | null {
 	if (typeof window === "undefined") return null;
 	const raw = window.location.hash.replace(/^#\/?/, "").trim();
 	if (raw === "memory") return { view: "graph" };
+	if (raw === "account" || raw.startsWith("account/")) return { view: "account" };
 	if (raw === "settings" || raw.startsWith("settings/")) {
 		const section = raw.split("/")[1];
 		return { view: "settings", settingsSection: SETTINGS_SECTIONS.find((item) => item === section) ?? "network" };
@@ -53,7 +55,12 @@ export function ViewProvider({ children }: { children: ReactNode }) {
 	const commitRoute = useCallback((next: ViewId, section?: SettingsSection) => {
 		const canonical = next === "memory" ? "graph" : next;
 		setRoute({ view: canonical, settingsSection: section });
-		const hash = canonical === "settings" ? `#settings/${section ?? "network"}` : `#${canonical}`;
+		const hash =
+			canonical === "settings"
+				? `#settings/${section ?? "network"}`
+				: canonical === "account" && window.location.hash.startsWith("#account/")
+					? window.location.hash
+					: `#${canonical}`;
 		if (typeof window !== "undefined" && window.location.hash !== hash) history.replaceState(null, "", hash);
 	}, []);
 	const navigate = useCallback(
