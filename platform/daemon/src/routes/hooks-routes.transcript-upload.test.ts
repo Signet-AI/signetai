@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { registerGlobalMiddleware } from "../middleware";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "../transcript-upload";
 import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
 
@@ -97,6 +98,9 @@ describe("transcript upload route", () => {
 	});
 
 	it("refuses a range whose body was still arriving when a purge of its agent finished", async () => {
+		const daemon = new Hono();
+		registerGlobalMiddleware(daemon);
+		registerHooksRoutes(daemon);
 		const body = '{"a":1}\n';
 		const arrival = Promise.withResolvers<void>();
 		const stream = new ReadableStream<Uint8Array>({
@@ -106,7 +110,7 @@ describe("transcript upload route", () => {
 				controller.close();
 			},
 		});
-		const pending = patch(body, { stream });
+		const pending = patch(body, { stream, target: daemon });
 		await Bun.sleep(20);
 		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {});
 		arrival.resolve();
