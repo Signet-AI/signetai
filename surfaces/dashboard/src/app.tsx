@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
 import { SessionExpiryToast, SignInDialog, SignInScreen } from "@/components/shell/sign-in";
 import { AccountView } from "@/views/account";
-import { ClaimPage, InvitationPage, DeviceApprovalPage } from "@/components/shell/auth-entry";
+import { ClaimPage, InvitationPage, DeviceApprovalPage, authEntryKind } from "@/components/shell/auth-entry";
 import { useAgentContext } from "@/lib/agent-context";
 import { Topbar } from "@/components/shell/topbar";
 import { useSession, useWhoami } from "@/lib/session";
@@ -22,19 +22,18 @@ import { OnboardingPage } from "@/components/onboarding/page";
 export function App() {
 	const session = useSession();
 	const whoami = useWhoami();
-	const team = "mode" in session && session.mode === "team";
-	const path = location.pathname;
+	const entry = authEntryKind(location.pathname, "mode" in session ? session.mode : whoami ? "team" : "");
 	return (
 		<TooltipProvider delayDuration={200}>
-			{session.kind === "checking" ? null : team && path === "/auth/claim" ? (
+			{session.kind === "checking" ? null : entry === "claim" ? (
 				<ClaimPage />
-			) : team && path.startsWith("/auth/invite") ? (
+			) : entry === "invite" ? (
 				<InvitationPage />
 			) : session.kind === "signed-out" && !session.expired ? (
 				<SignInScreen session={session} />
 			) : (
 				<>
-					{team && path === "/auth/device" ? <DeviceApprovalPage /> : <Shell key={whoami?.user.id} />}
+					{entry === "device" ? <DeviceApprovalPage /> : <Shell key={whoami?.user.id} />}
 					{session.kind === "signed-out" && <SignInDialog session={session} />}
 					<SessionExpiryToast session={session} />
 				</>

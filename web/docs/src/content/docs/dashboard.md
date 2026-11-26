@@ -40,7 +40,7 @@ The identity menu shows your name, role, organization, instance origin, and sess
 
 The global agent switcher offers the organization agent, your team agents, and your personal agents. Content reads in Home, Memory, and Dreams follow this context. A denied panel explains its missing requirement without signing you out or replacing the rest of the page.
 
-For a new instance, open `/auth/claim` and paste the setup token printed by the daemon. Supply the organization name and first administrator’s details. Keep the bootstrap password until SSO is configured and verified.
+For a new instance, open the printed `/auth/setup` URL (or `/auth/claim`) and paste the setup token printed by the daemon. Supply the organization name and first administrator’s details. Keep the bootstrap password until SSO is configured and verified.
 
 Open `/auth/device` while signed in, enter the code from the CLI or desktop app, and review the device name before approving or denying it. `/auth/invite` accepts an invitation token and lets password accounts choose their credentials. SSO invitation continuation requires a token-free handoff from the daemon; this screen reports that limitation instead of putting the invitation token into an SSO URL.
 

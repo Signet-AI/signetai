@@ -7,6 +7,13 @@ import { getJSONResult } from "@/lib/api";
 import { refreshSession } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
 
+export function authEntryKind(path: string, mode: string): "claim" | "invite" | "device" | null {
+	if (mode !== "team") return null;
+	if (path === "/auth/setup" || path === "/auth/claim") return "claim";
+	if (path === "/auth/invite" || path.startsWith("/auth/invite/")) return "invite";
+	return path === "/auth/device" ? "device" : null;
+}
+
 export function AuthPage({
 	title,
 	description,
