@@ -419,9 +419,11 @@ describe("integrated incremental reclaim resume (#1667)", () => {
 		const directory = mkdtempSync(join(tmpdir(), "signet-vacuum-reclaim-test-"));
 		const dbPath = join(directory, "memories.db");
 		const seed = new Database(dbPath);
-		seed.exec("PRAGMA auto_vacuum = INCREMENTAL; CREATE TABLE reclaim_bloat (data BLOB)");
+		seed.exec("PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; CREATE TABLE reclaim_bloat (data BLOB)");
 		const insert = seed.prepare("INSERT INTO reclaim_bloat (data) VALUES (?)");
-		for (let index = 0; index < 100; index++) insert.run(Buffer.alloc(4096, 0x42));
+		seed.transaction(() => {
+			for (let index = 0; index < 100; index++) insert.run(Buffer.alloc(4096, 0x42));
+		})();
 		seed.exec("DROP TABLE reclaim_bloat");
 		const freeBefore = (seed.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
 		seed.close();

@@ -26,7 +26,7 @@ async function setupDb(): Promise<Database> {
 	}
 
 	const db = new Database(dbPath);
-	db.exec("PRAGMA busy_timeout = 5000");
+	db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000");
 	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 
 	const now = new Date().toISOString();
