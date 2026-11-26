@@ -3901,7 +3901,9 @@ describe("local agent fallback scope regression tests", () => {
 
 	it("falls back to isolated scope when policy is 'group' but policyGroup is null", () => {
 		const result = localScope("group", null);
-		expect(result.sql).toBe(" AND m.scope IS NULL AND m.agent_id = ? AND m.visibility != 'archived'");
+		expect(result.sql).toBe(
+			" AND m.scope IS NULL AND m.agent_id = ? AND COALESCE(m.visibility,'global') != 'archived'",
+		);
 		expect(result.args).toEqual(["agent-x"]);
 	});
 

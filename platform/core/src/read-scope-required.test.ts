@@ -46,7 +46,7 @@ describe("read scope constructors", () => {
 	it("readScopeSql fails closed for an omitted scope", () => {
 		expect(() => Reflect.apply(readScopeSql, undefined, ["m"])).toThrow("read scope required");
 		expect(readScopeSql("m", localAllReadScope({ kind: "own", agentId: "a" }))).toEqual({
-			sql: " AND m.agent_id = ? AND m.visibility != 'archived'",
+			sql: " AND m.agent_id = ? AND COALESCE(m.visibility,'global') != 'archived'",
 			args: ["a"],
 		});
 	});
