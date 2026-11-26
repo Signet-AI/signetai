@@ -101,7 +101,10 @@ describe("organization HTTP flows", () => {
 				expiresAt,
 			})
 		).json();
-		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		const exchanged = await app.request("/api/auth/session", {
+			method: "POST",
+			headers: { authorization: `Bearer ${issued.secret}` },
+		});
 		expect(exchanged.status).toBe(200);
 		const payload = await exchanged.json();
 		expect(payload).not.toHaveProperty("accessToken");
@@ -156,7 +159,10 @@ describe("organization HTTP flows", () => {
 				expiresAt,
 			})
 		).json();
-		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		const exchanged = await app.request("/api/auth/session", {
+			method: "POST",
+			headers: { authorization: `Bearer ${issued.secret}` },
+		});
 		expect(exchanged.status).toBe(200);
 		const initial = await exchanged.json();
 		const cookie = exchanged.headers
