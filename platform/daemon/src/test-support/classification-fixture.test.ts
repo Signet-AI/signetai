@@ -13,3 +13,8 @@ export function classificationFixture() {
 	);
 	return db;
 }
+export function currentClassificationFixture() {
+	const db = classificationFixture();
+	for (const migration of MIGRATIONS) if (migration.version > 177) migration.up(db);
+	return db;
+}

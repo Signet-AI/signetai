@@ -1,14 +1,12 @@
 import { expect, test } from "bun:test";
 import { compartmentFor } from "../../core/src/compartment-shards";
-import { up } from "../../core/src/migrations/178-write-inheritance";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { txAnswerReflection, txCreateDailyReflections } from "./reflection-owner";
 import { txInsertMemoryTemporalEdges } from "./temporal-edges";
 
 function fixture() {
-	const db = classificationFixture();
-	up(db);
+	const db = currentClassificationFixture();
 	db.exec("INSERT INTO classifications(id,name) VALUES('cls_a','A'),('cls_b','B')");
 	const a = compartmentFor(db, ["cls_a"]);
 	const b = compartmentFor(db, ["cls_b"]);

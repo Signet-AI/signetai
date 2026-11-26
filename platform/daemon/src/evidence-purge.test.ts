@@ -1,6 +1,6 @@
 import { up as up178 } from "../../core/src/migrations/178-write-inheritance";
 import { expect, test } from "bun:test";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { classificationFixture, currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { writeCommunityProjectionInTx } from "./db-helpers";
 
 test("missing community evidence fails only its item and removes stale citations", () => {
@@ -87,7 +87,7 @@ test("message sender agent and session classification guard is enforced", () => 
 test("purge recompute relabels surviving derivatives", async () => {
 	const { executeClassification } = await import("./classification-owner");
 	const { compartmentFor } = await import("@signet/core");
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.exec("INSERT INTO classifications(id,name) VALUES('cls_secret','Secret')");
 	const label = compartmentFor(db, ["cls_secret"]);
 	db.prepare("UPDATE memories SET compartment_id=? WHERE id='m'").run(label);

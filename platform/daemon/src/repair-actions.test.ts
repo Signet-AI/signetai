@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { compartmentFor, findSqliteVecExtension } from "@signet/core";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
@@ -3426,7 +3426,7 @@ describe("resyncVectorIndex", () => {
 });
 
 it("classified FTS consistency compares the base partition and repairs its shards", async () => {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	try {
 		db.exec("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')");
 		const c = compartmentFor(db, ["cls_hr"]);

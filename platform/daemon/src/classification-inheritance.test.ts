@@ -2,7 +2,7 @@ import { executeClassification } from "./classification-owner";
 import { up as writeMigration } from "../../core/src/migrations/178-write-inheritance";
 import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { classificationFixture, currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { txIngestEnvelope, txModifyMemory } from "./transactions";
 import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
 import { upsertMemoryArtifactInTx } from "./memory-lineage";
@@ -30,7 +30,7 @@ test("migration upgrades legacy message compartments and installs message guards
 });
 
 function assigned() {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.exec(
 		"INSERT INTO classifications(id,name) VALUES('cls_hr','HR');INSERT INTO classification_assignments VALUES('agent','default','default','cls_hr','carol','now')",
 	);
@@ -57,8 +57,7 @@ test("A18 equal evidence survives convergence into the same compartment", () => 
 });
 
 test("A14 embedding hashes coexist for separate classified evidence parents", () => {
-	const db = classificationFixture();
-	writeMigration(db);
+	const db = currentClassificationFixture();
 	db.exec(
 		"INSERT INTO classifications(id,name) VALUES('cls_hidden','Hidden');INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('visible','Visible','default','now','now')",
 	);
@@ -418,8 +417,7 @@ test("transcript imports inherit source assignments and retain the admitted auth
 });
 
 test("A18 classification apply and unapply finish with equal evidence intact", () => {
-	const db = classificationFixture();
-	writeMigration(db);
+	const db = currentClassificationFixture();
 	db.exec("INSERT INTO classifications(id,name) VALUES('cls_equal','Equal')");
 	const compartment = shards.compartmentFor(db, ["cls_equal"]);
 	db.prepare(

@@ -313,7 +313,7 @@ test("head, review attention, and graph capabilities preserve visible results wh
 			"INSERT INTO entities(id,agent_id,name,canonical_name,entity_type,created_at,updated_at,compartment_id) VALUES('public-entity','agent-b','Public System','public system','project','now','now',NULL),('secret-entity','agent-b','Secret System','secret system','project','now','now',1)",
 		).run();
 		db.prepare(
-			"INSERT INTO memory_head_entries(agent_id,entry_id,canonical_text,entry_hash,status,first_revision,last_revision,created_at,updated_at,compartment_id) VALUES('agent-b','public-head','Public head','a','active',1,1,'now','now',NULL),('agent-b','secret-head','Secret head','b','active',1,1,'now','now',1)",
+			"INSERT INTO memory_head_entries(id,agent_id,entry_id,canonical_text,entry_hash,status,first_revision,last_revision,created_at,updated_at,compartment_id) VALUES('public-head-row','agent-b','public-head','Public head','a','active',1,1,'now','now',NULL),('secret-head-row','agent-b','secret-head','Secret head','b','active',1,1,'now','now',1)",
 		).run();
 	});
 	const invoke = async (readScope: ReadScope, id: string, input: Record<string, unknown> = {}) => {
