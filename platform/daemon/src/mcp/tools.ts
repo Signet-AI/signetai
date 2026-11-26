@@ -1,3 +1,4 @@
+import { operatorInputSchema } from "../operator-job-contract";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
@@ -411,6 +412,17 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		const result = await fetchDaemon<unknown>(baseUrl, path, { method, body });
 		return result.ok ? textResult(result.data) : errorResult(result.error);
 	};
+	registerMcpTool(
+		server,
+		"signet_operator_job",
+		{
+			title: "Start a Scoped Operator Job",
+			description:
+				"Run a bounded queue repair, embedding audit, or embedding backfill. Dry-run is the default. Poll signet_org_job for durable completion.",
+			inputSchema: operatorInputSchema,
+		},
+		async (input) => organizationResult("/api/org/operator/jobs", "POST", input),
+	);
 	registerMcpTool(
 		server,
 		"signet_operator_logs",

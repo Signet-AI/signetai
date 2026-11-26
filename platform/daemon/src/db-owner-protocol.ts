@@ -386,6 +386,7 @@ export type DbOwnerRequest =
 			readonly kind: "embedding_projection";
 			readonly request: import("./embedding-projection").EmbeddingProjectionRequest;
 	  }
+	| { readonly kind: "operator_job"; readonly request: import("./operator-job-contract").OperatorRequest }
 	| { readonly kind: "classification"; readonly request: import("./classifications").ClassificationRequest }
 	| { readonly kind: "memory_head"; readonly request: MemoryHeadRequest }
 	| { readonly kind: "initialize"; readonly agentsDir?: string }

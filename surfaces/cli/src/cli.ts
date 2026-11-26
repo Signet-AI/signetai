@@ -51,6 +51,7 @@ import { registerAuthCommands, reportAuthError } from "./commands/auth.js";
 import { registerOrganizationCommands } from "./commands/organization.js";
 import { cliTarget, cliTransport, registerOrganizationTarget } from "./lib/organization-target.js";
 import { organizationDashboard, organizationPause, organizationStatus } from "./commands/organization-client.js";
+import { organizationLogs } from "./commands/organization-logs.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -1015,7 +1016,11 @@ registerDaemonCommands(program, {
 	doResume: (options) => setTargetPause(false, options),
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),
-	showLogs: (options) => showLogs(options, daemonDeps),
+	showLogs: async (options) => {
+		if (cliTransport()) return organizationLogs(fetchDaemonStream, options);
+		if (options.json) throw new Error("JSON log output requires an organization target");
+		return showLogs(options, daemonDeps);
+	},
 	showStatus: (options) => showTargetStatus(options),
 });
 

@@ -88,6 +88,113 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("repair-owner");
+		const who = await (await call("/api/auth/whoami")).json();
+		const myAgent = who.agents.defaultWrite;
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories(id,agent_id,content,type,memory_kind,created_at,updated_at) VALUES('operator-memory',?,'repair source','fact','episodic','2020','2020')",
+				[myAgent],
+			),
+			statement(
+				"INSERT INTO memory_jobs(id,memory_id,job_type,status,created_at,updated_at) VALUES('operator-dead','operator-memory','hints','dead','2020','2020')",
+				[],
+			),
+		]);
+		expect(
+			(
+				await call(
+					"/api/org/operator/jobs",
+					"POST",
+					{ action: "queue.requeue", agentId: myAgent, options: { dryRun: false } },
+					bob.token,
+				)
+			).status,
+		).toBe(403);
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin", compliance: true });
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Repair HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		await organizationWrite([
+			statement("INSERT INTO compartments(key) VALUES(?)", [label.id]),
+			statement(
+				"INSERT INTO compartment_members(compartment_id,classification_id) SELECT id,? FROM compartments WHERE key=?",
+				[label.id, label.id],
+			),
+			statement(
+				"INSERT INTO memories(id,agent_id,content,type,memory_kind,compartment_id,created_at,updated_at) SELECT 'operator-hidden',?,'hidden repair source','fact','episodic',id,'2020','2020' FROM compartments WHERE key=?",
+				[myAgent, label.id],
+			),
+			statement(
+				"INSERT INTO memory_jobs(id,memory_id,job_type,status,created_at,updated_at) VALUES('operator-hidden-dead','operator-hidden','hints','dead','2020','2020')",
+				[],
+			),
+		]);
+		const started = await call("/api/org/operator/jobs", "POST", {
+			action: "queue.requeue",
+			agentId: myAgent,
+			options: { dryRun: false },
+		});
+		expect(started.status).toBe(202);
+		const job = await started.json();
+		const state = await (await call(`/api/org/jobs/${job.jobId}`)).json();
+		expect(state.status).toBe("complete");
+		expect(JSON.parse(state.progress_json).affected).toBe(1);
+		expect(
+			await organizationQuery(statement("SELECT status FROM memory_jobs WHERE id='operator-dead'", [], "get")),
+		).toEqual({ status: "pending" });
+		const audit = await call("/api/org/operator/jobs", "POST", { action: "embed.audit", agentId: myAgent });
+		expect(audit.status).toBe(202);
+		const auditJob = await audit.json();
+		const auditState = await (await call(`/api/org/jobs/${auditJob.jobId}`)).json();
+		expect(auditState.status).toBe("complete");
+		expect(JSON.parse(auditState.progress_json).total).toBe(1);
+		expect(
+			await organizationQuery(statement("SELECT status FROM memory_jobs WHERE id='operator-hidden-dead'", [], "get")),
+		).toEqual({ status: "dead" });
+		const backfill = await (
+			await call("/api/org/operator/jobs", "POST", {
+				action: "embed.backfill",
+				agentId: myAgent,
+				options: { dryRun: true },
+			})
+		).json();
+		const preview = await (await call(`/api/org/jobs/${backfill.jobId}`)).json();
+		expect(preview.status).toBe("complete");
+		expect(JSON.parse(preview.progress_json)).toMatchObject({
+			total: 1,
+			missing: 1,
+			selected: 1,
+			affected: 0,
+			dryRun: true,
+		});
+		const log = await (await call("/api/org/audit?action=operator.job_completed")).json();
+		expect(JSON.stringify(log)).toContain(job.jobId);
+		const other = await (await call("/api/agents", "POST", { name: "Restricted operator", kind: "personal" })).json();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "bound-operator",
+				agentId: other.agentId,
+				permissions: ["admin", "diagnostics"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		expect(
+			(await call("/api/org/operator/jobs", "POST", { action: "queue.requeue", agentId: myAgent }, key.secret)).status,
+		).toBe(403);
+		expect((await call(`/api/org/jobs/${job.jobId}`, "GET", undefined, key.secret)).status).toBe(404);
+	});
 	test("classified transcript material includes source IDs only inside read scope", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);

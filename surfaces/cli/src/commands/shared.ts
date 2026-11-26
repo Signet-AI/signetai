@@ -21,6 +21,7 @@ export interface RestartOptions extends PathOptions, RuntimeOptions {
 }
 
 export interface LogOptions extends PathOptions {
+	json?: boolean;
 	lines?: string;
 	follow?: boolean;
 	level?: string;
@@ -43,6 +44,7 @@ export function withJson(cmd: Command): Command {
 
 export function withLogOptions(cmd: Command): Command {
 	return withPath(cmd)
+		.option("--json", "Output organization logs as JSON (NDJSON with --follow)")
 		.option("-n, --lines <lines>", "Number of lines to show", "50")
 		.option("-f, --follow", "Follow log output in real-time")
 		.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")

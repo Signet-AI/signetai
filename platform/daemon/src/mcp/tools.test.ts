@@ -203,6 +203,9 @@ describe("createMcpServer", () => {
 		expect(capture.url).toBe("http://localhost:3850/api/org/audit?actor=usr_alice");
 		expect((await callTool(server, "signet_operator_logs", { limit: 5 })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/logs?limit=5");
+		expect((await callTool(server, "signet_operator_job", { action: "embed.audit" })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/operator/jobs");
+		expect(capture.method).toBe("POST");
 		expect((await callTool(server, "signet_pipeline_pause", { paused: true })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/pipeline/pause");
 		expect(capture.method).toBe("POST");

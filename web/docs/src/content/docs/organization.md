@@ -108,7 +108,7 @@ The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL`
 
 Local filesystem and process commands (`start`, `stop`, `install`, `setup`, `migrate-schema`, `migrate-vectors`, `git`, `sync`, and `workspace`) refuse against a remote target. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
 
-Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`logs`, `restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
+Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
 
 Administrators can use:
 
@@ -144,6 +144,8 @@ Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_jo
 Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
 
 ## Operator log feeds
+
+`signet logs` (also `signet daemon logs`) reads a bounded snapshot from the selected organization. Use `--follow` to stream new events; Ctrl-C cancels the request, releases the server subscription, and exits cleanly. `--lines` accepts 1–500 events (default 50); `--level` and `--category` filter the feed. `--json` returns one JSON snapshot, or newline-delimited JSON when following, starting with a `connected` record. A stream ends after at most 60 seconds; it does not reconnect automatically. Authentication and permission failures are returned without reading local log files or starting a daemon. JSON log output is organization-only; existing local text logging behavior is unchanged.
 
 Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Both are audited. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Local-mode logging is unchanged.
 
@@ -194,3 +196,36 @@ Open authentication endpoints are rate-limited by client address. Login allows f
 Claiming does not delete or remap old data. Existing agents are marked `legacy`; administrators can inspect and map them through `/api/org/agents/legacy` and `/api/org/agents/:id/map`.
 
 Existing API keys receive a migration grace period of fourteen days after claim. Inspect them with `/api/org/keys?legacy=1`, assign them to active users, or revoke them before the deadline. Administrators can adjust `legacyKeyDeadline`. Legacy signed tokens do not authenticate after claim; replace them with user sessions or owned API keys.
+
+## Tracked operator jobs
+
+`POST /api/org/operator/jobs` accepts `action`, an optional `agentId`, and
+`options`. Actions are `queue.requeue`, `queue.cancel`, `queue.prune`,
+`embed.audit`, and `embed.backfill`. Queue changes require `admin`; embedding
+audits require `diagnostics`. These organization operations are available to
+administrators. A bound credential cannot select a different agent or project.
+Reads and mutations exclude classifications outside the caller's audience,
+including previews and totals.
+
+The response is HTTP 202 with `{jobId}`. Poll `/api/org/jobs/:id` for durable
+completion. The job and its audit events are committed with each owner batch;
+acceptance is not completion. Queue repairs share the existing repair owner
+implementation. Legacy unscoped repair endpoints refuse organization requests.
+MCP exposes `signet_operator_job` and `signet_org_job`.
+
+Queue actions default to a dry run, 20 rows, with a maximum of 100. Embedding
+backfill defaults to a dry run through the API and selects at most 20 memories,
+32 KiB each. It runs at most two jobs concurrently, with a 60-second deadline
+and a 10-second deadline per provider request. It rechecks live user, credential,
+agent, project, audience, source hash, and active embedding profile before writes.
+An interrupted run reports `failed` after restart; unfinished coverage reports
+`incomplete`, never success. Source contents and provider secrets are not stored
+in job parameters. Scoped job reads omit the internal authorization snapshot.
+
+`signet repair queue requeue|cancel|prune --wait --json` follows the remote job.
+Without `--apply`, queue repair is a preview. `signet embed audit --wait --json`
+and `signet embed backfill --dry-run --wait --json` use the same job interface.
+Pass `--agent` to select an agent; backfill otherwise uses the personal write
+default. Remote embedding-profile migrations remain host operations; run them
+with `--local` on the instance host. A non-preview backfill that needs more than
+one bounded batch reports incomplete coverage, so scripts must inspect its job.

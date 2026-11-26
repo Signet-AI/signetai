@@ -1217,6 +1217,12 @@ export function runDbOwnerWorker(): void {
 				throw error;
 			}
 		}
+		if (job.request.kind === "operator_job") {
+			const { executeOperatorJob } = await import("./operator-jobs-owner");
+			const result = executeOperatorJob(db, job.request.request);
+			context.committed = true;
+			return result;
+		}
 		if (job.request.kind === "classification") {
 			const { executeClassification } = await import("./classification-owner");
 			const result = executeClassification(db, job.request.request);

@@ -6,6 +6,8 @@ import {
 	activeVectorProjectionTable,
 } from "@signet/core";
 import { readMemoriesFtsCanonicalRowCount, inheritEmbeddingCompartment } from "@signet/core";
+import type { ReadScope } from "./read-scope";
+import { readableJobPredicate } from "./diagnostics-queue";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, SyncDbCallSiteToken, WriteDb } from "./db-accessor";
@@ -81,6 +83,7 @@ export interface RepairResult {
 	readonly details?: Readonly<Record<string, unknown>>;
 }
 export interface JobFilterOptions {
+	readonly readScope?: ReadScope;
 	readonly dryRun?: boolean;
 	readonly ids?: readonly string[];
 	readonly tables?: readonly ("memory" | "summary")[];
@@ -240,7 +243,6 @@ export async function requeueDeadJobs(
 	const action = "requeueDeadJobs";
 	const options: JobFilterOptions =
 		typeof maxBatchOrOptions === "number" ? { maxBatch: maxBatchOrOptions } : maxBatchOrOptions;
-	const maxBatch = options.maxBatch ?? DEFAULT_REQUEUE_BATCH;
 	const dryRun = options.dryRun === true;
 	const retired = rejectRetiredSummaryRepair(action, options);
 	if (retired) return retired;
@@ -252,32 +254,7 @@ export async function requeueDeadJobs(
 
 	const result = await withRepairWriteTx(
 		accessor,
-		(db) => {
-			const wantsMemory = !options.tables || options.tables.includes("memory");
-			const selected = wantsMemory
-				? buildDeadRequeueSql(db, "memory_jobs", maxBatch, options)
-				: { sql: "", params: [], ids: [], totalMatching: 0 };
-			const ids = selected.ids;
-			if (dryRun) {
-				return {
-					affected: 0,
-					preview: ids.map((row) => row.id).slice(0, PREVIEW_CAP),
-					totalMatching: selected.totalMatching,
-				};
-			}
-			if (ids.length === 0)
-				return { affected: 0, preview: [] as readonly string[], totalMatching: selected.totalMatching };
-			const placeholders = ids.map(() => "?").join(", ");
-			const now = new Date().toISOString();
-			const changed = db
-				.prepare(
-					`UPDATE memory_jobs SET status = 'pending', attempts = 0, updated_at = ? WHERE id IN (${placeholders})`,
-				)
-				.run(now, ...ids.map((row) => row.id));
-			const affected = countChanges(changed);
-			writeRepairAudit(db, action, ctx, affected, `requeued ${affected} dead memory job(s) to pending`);
-			return { affected, preview: [] as readonly string[], totalMatching: selected.totalMatching };
-		},
+		(db) => requeueDeadJobsInTx(db, ctx, options),
 		"db:repair.requeue-dead.write",
 	);
 
@@ -937,117 +914,7 @@ async function reembedMissingMemoriesBatchForRows(
 
 	const writeOutcome = await withRepairWriteTx(
 		accessor,
-		(db) => {
-			if (repairLease !== undefined && !isEmbeddingRepairLeaseActive(db, repairLease)) {
-				return {
-					count: 0,
-					stale: 0,
-					crossAgentHashConflicts: 0,
-					profileChanged: false,
-					leaseLost: true,
-					successful: [],
-				};
-			}
-			if (!isActiveEmbeddingConfig(db, embeddingCfg)) {
-				return {
-					count: 0,
-					stale: 0,
-					crossAgentHashConflicts: 0,
-					profileChanged: true,
-					leaseLost: false,
-					successful: [],
-				};
-			}
-			const now = new Date().toISOString();
-			let count = 0;
-			let stale = 0;
-			const crossAgentHashConflicts = 0;
-			const successful: EmbeddingRepairKey[] = [];
-			const readCurrentMemory = db.prepare(
-				"SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0",
-			);
-			const writeHash = db.prepare("UPDATE memories SET content_hash = ? WHERE id = ? AND content_hash IS NULL");
-			const readEmbeddingByHash = db.prepare(
-				"SELECT id, agent_id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND (agent_id=? OR agent_id IS NULL) LIMIT 1",
-			);
-
-			for (const { memory, vector } of results) {
-				const current = readCurrentMemory.get(memory.id) as
-					| { content: string; content_hash: string | null; agent_id: string | null }
-					| null
-					| undefined;
-				if (current == null) {
-					stale++;
-					continue;
-				}
-				if (current.content !== memory.content || current.content_hash !== memory.contentHash) {
-					stale++;
-					continue;
-				}
-				if (
-					!current.agent_id?.trim() ||
-					normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)
-				) {
-					stale++;
-					continue;
-				}
-
-				const contentHash =
-					typeof current.content_hash === "string" && current.content_hash.trim().length > 0
-						? current.content_hash
-						: normalizeAndHashContent(current.content).contentHash;
-				const memoryAgentId = normalizeRepairAgentId(current.agent_id);
-				if (current.content_hash == null) {
-					writeHash.run(contentHash, memory.id);
-				}
-				const existing = readEmbeddingByHash.get(contentHash, memory.id, memoryAgentId) as { id: string } | undefined;
-				if (existing) inheritEmbeddingCompartment(db, "embeddings", existing.id);
-
-				const embId = existing?.id ?? crypto.randomUUID();
-				const blob = vectorToBlob(vector);
-				syncVecDeleteBySourceExceptHash(db, "memory", memory.id, contentHash);
-				db.prepare(
-					`DELETE FROM embeddings
-				 WHERE source_type = 'memory' AND source_id = ?
-				   AND content_hash <> ?`,
-				).run(memory.id, contentHash);
-				db.prepare(
-					`INSERT INTO embeddings
-					 (id, content_hash, vector, dimensions, source_type,
-					  source_id, chunk_text, created_at, agent_id, compartment_id)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
-					 ON CONFLICT(id) DO UPDATE SET
-					   vector = excluded.vector,
-					   dimensions = excluded.dimensions,
-					   source_type = excluded.source_type,
-					   chunk_text = excluded.chunk_text,
-					   created_at = excluded.created_at,
-					   compartment_id = excluded.compartment_id`,
-				).run(
-					embId,
-					contentHash,
-					blob,
-					vector.length,
-					memory.id,
-					memory.content,
-					now,
-					memoryAgentId,
-					evidenceCompartmentInTx(db, memoryAgentId, [{ kind: "memory", id: memory.id }]),
-				);
-				const actualRow = db
-					.prepare(
-						"SELECT id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND agent_id=?",
-					)
-					.get(contentHash, memory.id, memoryAgentId) as { id: string } | undefined;
-				if (actualRow) {
-					syncVecInsert(db, actualRow.id, vector);
-					count++;
-					successful.push({ id: memory.id, contentHash });
-				}
-			}
-
-			return { count, stale, crossAgentHashConflicts, profileChanged: false, leaseLost: false, successful };
-		},
+		(db) => commitRepairEmbeddingsInTx(db, results, embeddingCfg, repairLease),
 		"db:repair.reembed-missing.write",
 	);
 
@@ -1066,6 +933,123 @@ async function reembedMissingMemoriesBatchForRows(
 		failedKeys,
 	};
 }
+export function commitRepairEmbeddingsInTx(
+	db: WriteDb,
+	results: readonly { memory: UnembeddedRow; vector: readonly number[] }[],
+	embeddingCfg: EmbeddingConfig,
+	repairLease?: EmbeddingRepairLease,
+) {
+	if (repairLease !== undefined && !isEmbeddingRepairLeaseActive(db, repairLease)) {
+		return {
+			count: 0,
+			stale: 0,
+			crossAgentHashConflicts: 0,
+			profileChanged: false,
+			leaseLost: true,
+			successful: [],
+		};
+	}
+	if (!isActiveEmbeddingConfig(db, embeddingCfg)) {
+		return {
+			count: 0,
+			stale: 0,
+			crossAgentHashConflicts: 0,
+			profileChanged: true,
+			leaseLost: false,
+			successful: [],
+		};
+	}
+	const now = new Date().toISOString();
+	let count = 0;
+	let stale = 0;
+	const crossAgentHashConflicts = 0;
+	const successful: EmbeddingRepairKey[] = [];
+	const readCurrentMemory = db.prepare(
+		"SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0",
+	);
+	const writeHash = db.prepare("UPDATE memories SET content_hash = ? WHERE id = ? AND content_hash IS NULL");
+	const readEmbeddingByHash = db.prepare(
+		"SELECT id, agent_id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND (agent_id=? OR agent_id IS NULL) LIMIT 1",
+	);
+
+	for (const { memory, vector } of results) {
+		const current = readCurrentMemory.get(memory.id) as
+			| { content: string; content_hash: string | null; agent_id: string | null }
+			| null
+			| undefined;
+		if (current == null) {
+			stale++;
+			continue;
+		}
+		if (current.content !== memory.content || current.content_hash !== memory.contentHash) {
+			stale++;
+			continue;
+		}
+		if (
+			!current.agent_id?.trim() ||
+			normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)
+		) {
+			stale++;
+			continue;
+		}
+
+		const contentHash =
+			typeof current.content_hash === "string" && current.content_hash.trim().length > 0
+				? current.content_hash
+				: normalizeAndHashContent(current.content).contentHash;
+		const memoryAgentId = normalizeRepairAgentId(current.agent_id);
+		if (current.content_hash == null) {
+			writeHash.run(contentHash, memory.id);
+		}
+		const existing = readEmbeddingByHash.get(contentHash, memory.id, memoryAgentId) as { id: string } | undefined;
+		if (existing) inheritEmbeddingCompartment(db, "embeddings", existing.id);
+
+		const embId = existing?.id ?? crypto.randomUUID();
+		const blob = vectorToBlob(vector);
+		syncVecDeleteBySourceExceptHash(db, "memory", memory.id, contentHash);
+		db.prepare(
+			`DELETE FROM embeddings
+				 WHERE source_type = 'memory' AND source_id = ?
+				   AND content_hash <> ?`,
+		).run(memory.id, contentHash);
+		db.prepare(
+			`INSERT INTO embeddings
+					 (id, content_hash, vector, dimensions, source_type,
+					  source_id, chunk_text, created_at, agent_id, compartment_id)
+					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+					 ON CONFLICT(id) DO UPDATE SET
+					   vector = excluded.vector,
+					   dimensions = excluded.dimensions,
+					   source_type = excluded.source_type,
+					   chunk_text = excluded.chunk_text,
+					   created_at = excluded.created_at,
+					   compartment_id = excluded.compartment_id`,
+		).run(
+			embId,
+			contentHash,
+			blob,
+			vector.length,
+			memory.id,
+			memory.content,
+			now,
+			memoryAgentId,
+			evidenceCompartmentInTx(db, memoryAgentId, [{ kind: "memory", id: memory.id }]),
+		);
+		const actualRow = db
+			.prepare(
+				"SELECT id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND agent_id=?",
+			)
+			.get(contentHash, memory.id, memoryAgentId) as { id: string } | undefined;
+		if (actualRow) {
+			syncVecInsert(db, actualRow.id, vector);
+			count++;
+			successful.push({ id: memory.id, contentHash });
+		}
+	}
+
+	return { count, stale, crossAgentHashConflicts, profileChanged: false, leaseLost: false, successful };
+}
+
 export async function reembedMissingMemories(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -2940,6 +2924,203 @@ export async function rebuildDerivedIndexes(
 	};
 }
 
+export function requeueDeadJobsInTx(db: WriteDb, ctx: RepairContext, options: JobFilterOptions = {}) {
+	const action = "requeueDeadJobs";
+	const dryRun = options.dryRun === true;
+	const maxBatch = options.maxBatch ?? DEFAULT_REQUEUE_BATCH;
+
+	const wantsMemory = !options.tables || options.tables.includes("memory");
+	const selected = wantsMemory
+		? buildDeadRequeueSql(db, "memory_jobs", maxBatch, options)
+		: { sql: "", params: [], ids: [], totalMatching: 0 };
+	const ids = selected.ids;
+	if (dryRun) {
+		return {
+			affected: 0,
+			preview: ids.map((row) => row.id).slice(0, PREVIEW_CAP),
+			totalMatching: selected.totalMatching,
+		};
+	}
+	if (ids.length === 0) return { affected: 0, preview: [] as readonly string[], totalMatching: selected.totalMatching };
+	const placeholders = ids.map(() => "?").join(", ");
+	const now = new Date().toISOString();
+	const changed = db
+		.prepare(`UPDATE memory_jobs SET status = 'pending', attempts = 0, updated_at = ? WHERE id IN (${placeholders})`)
+		.run(now, ...ids.map((row) => row.id));
+	const affected = countChanges(changed);
+	writeRepairAudit(db, action, ctx, affected, `requeued ${affected} dead memory job(s) to pending`);
+	return { affected, preview: [] as readonly string[], totalMatching: selected.totalMatching };
+}
+
+export function cancelObsoleteJobsInTx(db: WriteDb, ctx: RepairContext, options: JobFilterOptions = {}) {
+	const action = "cancelObsoleteJobs";
+	const dryRun = options.dryRun === true;
+	const olderThanMs = options.olderThanMs ?? 30 * 24 * 60 * 60 * 1000;
+	const wantsMemory = !options.tables || options.tables.includes("memory");
+
+	if (!tableExists(db, "job_cancellations")) {
+		throw new Error("job_cancellations table missing; run migrations");
+	}
+
+	const selection = {
+		...options,
+		olderThanMs,
+		maxBatch: options.maxBatch ?? MAX_BATCH_HARD_CAP,
+	};
+	const targets: Array<{
+		readonly table: "memory_jobs";
+		readonly rows: readonly CancelPruneMatchRow[];
+		readonly totalMatching: number;
+	}> = [];
+	const remaining = Math.min(selection.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
+	if (wantsMemory) {
+		const r = buildCancelPruneSql(db, "memory_jobs", ["dead", "completed"], {
+			...selection,
+			maxBatch: remaining,
+		});
+		targets.push({ table: "memory_jobs", rows: r.rows, totalMatching: r.totalMatching });
+	}
+
+	const totalMatching = targets.reduce((acc, t) => acc + t.totalMatching, 0);
+
+	if (dryRun) {
+		const previewIds: string[] = [];
+		for (const t of targets) {
+			for (const r of t.rows) previewIds.push(`${t.table}:${r.id}`);
+			if (previewIds.length >= PREVIEW_CAP) break;
+		}
+		return {
+			affected: 0,
+			preview: previewIds.slice(0, PREVIEW_CAP),
+			totalMatching,
+		};
+	}
+
+	let affected = 0;
+	const previewIds: string[] = [];
+	for (const t of targets) {
+		for (const row of t.rows) {
+			const cancellationId = `cancel-${t.table}-${row.id}-${Date.now()}`;
+			const now = new Date().toISOString();
+			db.prepare(
+				`INSERT INTO job_cancellations
+					 (id, source_table, source_id, status_before, payload_json,
+					  reason, actor, actor_type, request_id, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				cancellationId,
+				t.table,
+				row.id,
+				String(row.payload.status ?? ""),
+				JSON.stringify(row.payload),
+				ctx.reason,
+				ctx.actor,
+				ctx.actorType,
+				ctx.requestId ?? null,
+				now,
+			);
+
+			db.prepare(`UPDATE ${t.table} SET status = 'cancelled' WHERE id = ?`).run(row.id);
+			affected += 1;
+			if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
+		}
+	}
+	writeRepairAudit(db, action, ctx, affected, `cancelled ${affected} obsolete job(s)`);
+	return { affected, preview: previewIds, totalMatching };
+}
+
+export function pruneTerminalJobsInTx(db: WriteDb, ctx: RepairContext, options: JobFilterOptions = {}) {
+	const action = "pruneTerminalJobs";
+	const dryRun = options.dryRun === true;
+	const wantsMemory = !options.tables || options.tables.includes("memory");
+
+	if (!tableExists(db, "job_archive")) {
+		throw new Error("job_archive table missing; run migrations");
+	}
+
+	const targets: Array<{
+		readonly table: "memory_jobs";
+		readonly statusList: readonly string[];
+		readonly cutoff: number;
+	}> = [];
+	if (wantsMemory) {
+		targets.push({
+			table: "memory_jobs",
+			statusList: ["dead", "cancelled", "completed"],
+			cutoff: options.retentionMs ?? 90 * 24 * 60 * 60 * 1000,
+		});
+	}
+
+	const perTable: Array<{
+		readonly rows: readonly CancelPruneMatchRow[];
+		readonly totalMatching: number;
+	}> = [];
+	let totalMatching = 0;
+	let remaining = Math.min(options.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
+	for (const t of targets) {
+		const selection: JobFilterOptions = {
+			...options,
+			olderThanMs: t.cutoff,
+			maxBatch: remaining,
+		};
+		const r = buildCancelPruneSql(db, t.table, t.statusList, selection);
+		perTable.push({ rows: r.rows, totalMatching: r.totalMatching });
+		totalMatching += r.totalMatching;
+		remaining = Math.max(0, remaining - r.rows.length);
+	}
+
+	if (dryRun) {
+		const previewIds: string[] = [];
+		for (let i = 0; i < perTable.length; i += 1) {
+			const t = targets[i];
+			if (!t) continue;
+			const pt = perTable[i];
+			if (!pt) continue;
+			for (const row of pt.rows) previewIds.push(`${t.table}:${row.id}`);
+			if (previewIds.length >= PREVIEW_CAP) break;
+		}
+		return {
+			affected: 0,
+			preview: previewIds.slice(0, PREVIEW_CAP),
+			totalMatching,
+		};
+	}
+
+	let affected = 0;
+	const previewIds: string[] = [];
+	for (let i = 0; i < perTable.length; i += 1) {
+		const t = targets[i];
+		if (!t) continue;
+		const pt = perTable[i];
+		if (!pt) continue;
+		for (const row of pt.rows) {
+			const archiveId = `archive-${t.table}-${row.id}-${Date.now()}`;
+			const now = new Date().toISOString();
+			db.prepare(
+				`INSERT INTO job_archive
+					 (id, source_table, source_id, status, payload_json,
+					  archived_at, archived_by, reason, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				archiveId,
+				t.table,
+				row.id,
+				String(row.payload.status ?? ""),
+				JSON.stringify(row.payload),
+				now,
+				ctx.actor,
+				ctx.reason,
+				now,
+			);
+			db.prepare(`DELETE FROM ${t.table} WHERE id = ?`).run(row.id);
+			affected += 1;
+			if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
+		}
+	}
+	writeRepairAudit(db, action, ctx, affected, `pruned ${affected} terminal job(s)`);
+	return { affected, preview: previewIds, totalMatching };
+}
+
 interface DeadMatchRow {
 	readonly id: string;
 }
@@ -2961,6 +3142,11 @@ function buildDeadRequeueWhere(
 
 	const where: string[] = ["status = 'dead'"];
 	const params: unknown[] = [];
+	if (options.readScope) {
+		const scope = readableJobPredicate(options.readScope);
+		where.push(`1=1 ${scope.sql}`);
+		params.push(...scope.args);
+	}
 	if (table === "memory_jobs") {
 		where.push("job_type <> 'extract'");
 	}
@@ -3029,6 +3215,11 @@ function buildCancelPruneSql(
 	const placeholders = statusList.map(() => "?").join(", ");
 	const where: string[] = [`status IN (${placeholders})`];
 	const params: unknown[] = [...statusList];
+	if (options.readScope) {
+		const scope = readableJobPredicate(options.readScope);
+		where.push(`1=1 ${scope.sql}`);
+		params.push(...scope.args);
+	}
 
 	if (options.ids && options.ids.length > 0) {
 		const ph = options.ids.map(() => "?").join(", ");
@@ -3088,81 +3279,9 @@ export async function cancelObsoleteJobs(
 		};
 	}
 
-	const olderThanMs = options.olderThanMs ?? 30 * 24 * 60 * 60 * 1000;
-	const wantsMemory = !options.tables || options.tables.includes("memory");
 	const result = await withRepairWriteTx<CancelResultMeta>(
 		accessor,
-		(db) => {
-			if (!tableExists(db, "job_cancellations")) {
-				throw new Error("job_cancellations table missing; run migrations");
-			}
-
-			const selection = {
-				...options,
-				olderThanMs,
-				maxBatch: options.maxBatch ?? MAX_BATCH_HARD_CAP,
-			};
-			const targets: Array<{
-				readonly table: "memory_jobs";
-				readonly rows: readonly CancelPruneMatchRow[];
-				readonly totalMatching: number;
-			}> = [];
-			const remaining = Math.min(selection.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
-			if (wantsMemory) {
-				const r = buildCancelPruneSql(db, "memory_jobs", ["dead", "completed"], {
-					...selection,
-					maxBatch: remaining,
-				});
-				targets.push({ table: "memory_jobs", rows: r.rows, totalMatching: r.totalMatching });
-			}
-
-			const totalMatching = targets.reduce((acc, t) => acc + t.totalMatching, 0);
-
-			if (dryRun) {
-				const previewIds: string[] = [];
-				for (const t of targets) {
-					for (const r of t.rows) previewIds.push(`${t.table}:${r.id}`);
-					if (previewIds.length >= PREVIEW_CAP) break;
-				}
-				return {
-					affected: 0,
-					preview: previewIds.slice(0, PREVIEW_CAP),
-					totalMatching,
-				};
-			}
-
-			let affected = 0;
-			const previewIds: string[] = [];
-			for (const t of targets) {
-				for (const row of t.rows) {
-					const cancellationId = `cancel-${t.table}-${row.id}-${Date.now()}`;
-					const now = new Date().toISOString();
-					db.prepare(
-						`INSERT INTO job_cancellations
-					 (id, source_table, source_id, status_before, payload_json,
-					  reason, actor, actor_type, request_id, created_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					).run(
-						cancellationId,
-						t.table,
-						row.id,
-						String(row.payload.status ?? ""),
-						JSON.stringify(row.payload),
-						ctx.reason,
-						ctx.actor,
-						ctx.actorType,
-						ctx.requestId ?? null,
-						now,
-					);
-
-					db.prepare(`UPDATE ${t.table} SET status = 'cancelled' WHERE id = ?`).run(row.id);
-					affected += 1;
-					if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
-				}
-			}
-			writeRepairAudit(db, action, ctx, affected, `cancelled ${affected} obsolete job(s)`);
-			return { affected, preview: previewIds, totalMatching };
-		},
+		(db) => cancelObsoleteJobsInTx(db, ctx, options),
 		"db:repair.cancel-obsolete-jobs.write",
 	);
 
@@ -3216,96 +3335,9 @@ export async function pruneTerminalJobs(
 		};
 	}
 
-	const wantsMemory = !options.tables || options.tables.includes("memory");
 	const result = await withRepairWriteTx<PruneResultMeta>(
 		accessor,
-		(db) => {
-			if (!tableExists(db, "job_archive")) {
-				throw new Error("job_archive table missing; run migrations");
-			}
-
-			const targets: Array<{
-				readonly table: "memory_jobs";
-				readonly statusList: readonly string[];
-				readonly cutoff: number;
-			}> = [];
-			if (wantsMemory) {
-				targets.push({
-					table: "memory_jobs",
-					statusList: ["dead", "cancelled", "completed"],
-					cutoff: options.retentionMs ?? 90 * 24 * 60 * 60 * 1000,
-				});
-			}
-
-			const perTable: Array<{
-				readonly rows: readonly CancelPruneMatchRow[];
-				readonly totalMatching: number;
-			}> = [];
-			let totalMatching = 0;
-			let remaining = Math.min(options.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
-			for (const t of targets) {
-				const selection: JobFilterOptions = {
-					...options,
-					olderThanMs: t.cutoff,
-					maxBatch: remaining,
-				};
-				const r = buildCancelPruneSql(db, t.table, t.statusList, selection);
-				perTable.push({ rows: r.rows, totalMatching: r.totalMatching });
-				totalMatching += r.totalMatching;
-				remaining = Math.max(0, remaining - r.rows.length);
-			}
-
-			if (dryRun) {
-				const previewIds: string[] = [];
-				for (let i = 0; i < perTable.length; i += 1) {
-					const t = targets[i];
-					if (!t) continue;
-					const pt = perTable[i];
-					if (!pt) continue;
-					for (const row of pt.rows) previewIds.push(`${t.table}:${row.id}`);
-					if (previewIds.length >= PREVIEW_CAP) break;
-				}
-				return {
-					affected: 0,
-					preview: previewIds.slice(0, PREVIEW_CAP),
-					totalMatching,
-				};
-			}
-
-			let affected = 0;
-			const previewIds: string[] = [];
-			for (let i = 0; i < perTable.length; i += 1) {
-				const t = targets[i];
-				if (!t) continue;
-				const pt = perTable[i];
-				if (!pt) continue;
-				for (const row of pt.rows) {
-					const archiveId = `archive-${t.table}-${row.id}-${Date.now()}`;
-					const now = new Date().toISOString();
-					db.prepare(
-						`INSERT INTO job_archive
-					 (id, source_table, source_id, status, payload_json,
-					  archived_at, archived_by, reason, created_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					).run(
-						archiveId,
-						t.table,
-						row.id,
-						String(row.payload.status ?? ""),
-						JSON.stringify(row.payload),
-						now,
-						ctx.actor,
-						ctx.reason,
-						now,
-					);
-					db.prepare(`DELETE FROM ${t.table} WHERE id = ?`).run(row.id);
-					affected += 1;
-					if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
-				}
-			}
-			writeRepairAudit(db, action, ctx, affected, `pruned ${affected} terminal job(s)`);
-			return { affected, preview: previewIds, totalMatching };
-		},
+		(db) => pruneTerminalJobsInTx(db, ctx, options),
 		"db:repair.prune-terminal-jobs.write",
 	);
 

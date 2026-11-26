@@ -9,7 +9,7 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 	try {
 		const fixture = await Fixture.create(daemon, "personal", false);
 		const admin = await device(daemon, fixture.admin, "cli-admin");
-		const cli = async (args: readonly string[], bearer = admin.credential.bearer ?? "") => {
+		const cli = async (args: readonly string[], bearer = admin.credential.bearer ?? "", expectedCode = 0) => {
 			const env: NodeJS.ProcessEnv = { ...daemon.env, SIGNET_API_KEY: bearer };
 			delete env.SIGNET_DAEMON_ENTRYPOINT;
 			const child = Bun.spawn([process.execPath, join(repo, "surfaces/cli/src/cli.ts"), ...args], {
@@ -23,11 +23,74 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 				new Response(child.stderr).text(),
 				child.exited,
 			]);
-			expect(code, stderr).toBe(0);
-			return JSON.parse(stdout);
+			expect(code, stderr).toBe(expectedCode);
+			if (expectedCode !== 0) expect(stdout).toBe("");
+			return JSON.parse(expectedCode === 0 ? stdout : stderr);
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		for (const action of ["requeue", "cancel", "prune"]) {
+			const job = await cli(["repair", "queue", action, "--wait", "--json"]);
+			expect(job.kind).toBe("operator");
+			expect(job.status).toBe("complete");
+		}
+		const embeddingAudit = await cli(["embed", "audit", "--wait", "--json"]);
+		expect(embeddingAudit.status).toBe("complete");
+		const embeddingPreview = await cli(["embed", "backfill", "--dry-run", "--wait", "--json"]);
+		expect(embeddingPreview.status).toBe("complete");
+		expect(JSON.parse(embeddingPreview.progress_json).dryRun).toBe(true);
+		success(
+			await request(daemon.origin, "/api/memory/remember", admin.credential, "POST", {
+				content: "Operator backfill proof without a configured embedding provider",
+				agentId: record(status.identity.agents).defaultWrite,
+			}),
+			"write backfill source",
+		);
+		expect((await cli(["embed", "backfill", "--wait", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
+			"job_failed",
+		);
+		expect(
+			(await cli(["repair", "queue", "requeue", "--wait", "--json"], text(fixture.user("alice").session.bearer), 4))
+				.reason,
+		).toBe("permission");
+		expect((await cli(["logs", "--json", "--lines", "5"])).redacted).toBe(true);
+		expect((await cli(["logs", "--local", "--json"], text(admin.credential.bearer), 1)).error).toBe(
+			"JSON log output requires an organization target",
+		);
+		expect((await cli(["logs", "--follow", "--json"], text(fixture.user("alice").session.bearer), 4)).reason).toBe(
+			"permission",
+		);
+		for (let iteration = 0; iteration < 3; iteration++) {
+			const env: NodeJS.ProcessEnv = { ...daemon.env, SIGNET_API_KEY: admin.credential.bearer };
+			delete env.SIGNET_DAEMON_ENTRYPOINT;
+			const child = Bun.spawn([process.execPath, join(repo, "surfaces/cli/src/cli.ts"), "logs", "--follow", "--json"], {
+				env,
+				cwd: repo,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const errors = new Response(child.stderr).text();
+			const reader = child.stdout.getReader();
+			const deadline = setTimeout(() => child.kill("SIGKILL"), 10_000);
+			let output = "";
+			try {
+				while (!output.includes("\n")) {
+					const chunk = await reader.read();
+					if (chunk.done) throw new Error(`Log stream closed before connection: ${await errors}`);
+					output += new TextDecoder().decode(chunk.value);
+				}
+				expect(JSON.parse(output.split("\n")[0] ?? "").type).toBe("connected");
+				child.kill("SIGINT");
+				expect(await child.exited, await errors).toBe(0);
+				expect(output).not.toContain(text(admin.credential.bearer));
+			} finally {
+				clearTimeout(deadline);
+				if (child.exitCode === null) child.kill("SIGKILL");
+				await child.exited;
+				await reader.cancel();
+				reader.releaseLock();
+			}
+		}
 		expect(
 			(await request(daemon.origin, "/api/pipeline/pause", fixture.user("alice").session, "POST", {})).status,
 		).toBe(403);
