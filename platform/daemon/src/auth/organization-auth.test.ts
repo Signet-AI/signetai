@@ -743,16 +743,23 @@ describe("organization credential boundary", () => {
 				userId,
 			]),
 		]);
+		const startedAt = Date.now();
 		const res = await app.request("/private", { headers: { cookie: `signet_session=${token}; signet_csrf=${csrf}` } });
+		const finishedAt = Date.now();
 		expect(res.status).toBe(200);
-		expect(
-			res.headers
-				.getSetCookie()
-				.some(
-					(cookie) =>
-						cookie.startsWith("signet_session=") && cookie.includes("HttpOnly") && cookie.includes("Max-Age=604800"),
-				),
-		).toBe(true);
+		const cookie = res.headers.getSetCookie().find((value) => value.startsWith("signet_session="));
+		if (!cookie) throw new Error("Sliding session cookie missing");
+		expect(cookie).toContain("HttpOnly");
+		const maxAge = Number(/Max-Age=(\d+)/.exec(cookie)?.[1]);
+		const renewed = await organizationQuery<{ access_expires_at: string } | null>(
+			statement("SELECT access_expires_at FROM auth_sessions WHERE user_id=?", [userId], "get"),
+		);
+		if (!renewed) throw new Error("Sliding session row missing");
+		const expiresAt = Date.parse(renewed.access_expires_at);
+		expect(expiresAt).toBeGreaterThanOrEqual(startedAt + 604800_000);
+		expect(expiresAt).toBeLessThanOrEqual(finishedAt + 604800_000);
+		expect(maxAge).toBeGreaterThanOrEqual(Math.floor((expiresAt - finishedAt) / 1000));
+		expect(maxAge).toBeLessThanOrEqual(Math.floor((expiresAt - startedAt) / 1000));
 	});
 	test("read audit is bounded, durable after flush, and prunes expired rows in batches", async () => {
 		const { bufferReadAudit, flushReadAudit, auditRuntimeStatus, pruneAudit } = await import("./organization-runtime");
