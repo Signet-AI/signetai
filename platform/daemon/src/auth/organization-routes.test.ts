@@ -291,6 +291,104 @@ describe("organization HTTP flows", () => {
 			await (await call(`/api/classifications/${created.id}`, "GET", undefined, narrowed.secret)).json(),
 		).not.toHaveProperty("audience");
 	});
+	test("offboarding preview excludes HR evidence and reports only active sessions", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		const root = await claim();
+		const bob = await member("bob");
+		expect((await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true })).status).toBe(200);
+		const hrAgent = await (await call("/api/agents", "POST", { name: "HR notes", kind: "personal" }, bob.token)).json();
+		const { organizationWrite, issueSession } = await import("./organization-store");
+		const now = new Date().toISOString();
+		for (const [suffix, agentId] of [
+			["public", bob.agentId],
+			["hr", hrAgent.agentId],
+		]) {
+			await organizationWrite([
+				statement(
+					"INSERT INTO memories(id,content,agent_id,memory_kind,type,visibility,created_at,updated_at,author_user_id) VALUES (?, 'offboarding evidence',?,'episodic','fact','private',?,?,?)",
+					[`memory-${suffix}`, agentId, now, now, bob.userId],
+				),
+				statement(
+					"INSERT INTO session_transcripts(agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'offboarding transcript','test',?,?)",
+					[agentId, `session-${suffix}`, now, bob.userId],
+				),
+				statement(
+					"INSERT INTO documents(id,agent_id,source_type,raw_content,created_at,updated_at,author_user_id) VALUES (?,?,'text','offboarding document',?,?,?)",
+					[`doc-${suffix}`, agentId, now, now, bob.userId],
+				),
+				statement(
+					"INSERT INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,session_id,session_token,captured_at,updated_at,author_user_id) VALUES (?,?,'hash','summary','unbound','unbound',?,?,?)",
+					[agentId, `artifact-${suffix}`, now, now, bob.userId],
+				),
+			]);
+		}
+		const expired = await issueSession(bob.userId, "cli");
+		await organizationWrite([
+			statement(
+				"UPDATE auth_sessions SET access_expires_at='2000-01-01T00:00:00.000Z',refresh_expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+				[expired.sessionId],
+			),
+		]);
+		const hr = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "HR offboarding", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		expect(
+			(
+				await call(
+					`/api/classifications/${hr.id}/apply?wait=1`,
+					"POST",
+					{ target: { kind: "agent", id: hrAgent.agentId, agentId: hrAgent.agentId } },
+					bob.token,
+				)
+			).status,
+		).toBe(202);
+		const preview = await (
+			await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "transfer", transferTo: root.user.id })
+		).json();
+		expect(preview.plan.counts).toMatchObject({
+			memories: 1,
+			transcripts: 1,
+			artifacts: 1,
+			documents: 1,
+			sessions: 1,
+			agents: 1,
+		});
+		expect(preview.plan.ownedAgents).toEqual([
+			{ id: bob.agentId, name: "bob", kind: "personal", transferTo: { userId: root.user.id, displayName: "Admin" } },
+		]);
+		expect(JSON.stringify(preview)).not.toContain(hrAgent.agentId);
+		expect((await call(`/api/org/users/${root.user.id}/deactivate`, "POST", { mode: "keep" }, bob.token)).status).toBe(
+			403,
+		);
+		expect(
+			(
+				await call(
+					`/api/classifications/${hr.id}/audience`,
+					"PUT",
+					[
+						{ kind: "user", id: bob.userId },
+						{ kind: "user", id: root.user.id },
+					],
+					bob.token,
+				)
+			).status,
+		).toBe(200);
+		const authorized = await (await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "keep" })).json();
+		expect(authorized.plan.counts).toMatchObject({
+			memories: 2,
+			transcripts: 2,
+			artifacts: 2,
+			documents: 2,
+			sessions: 1,
+			agents: 2,
+		});
+	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
 		const agent = await (await call("/api/agents", "POST", { name: "transfer-me", kind: "personal" })).json();

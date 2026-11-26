@@ -139,6 +139,8 @@ Classification definition reads (`GET /api/classifications` and `GET /api/classi
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.
 
+Offboarding previews include readable impact counts for memories, transcripts, artifacts, documents, active keys and sessions, and owned agents. `ownedAgents` lists each readable agent and its transfer recipient. Counts respect the requesting administrator's agent, project, and classification scope: content outside an HR audience does not contribute, and no hidden totals are returned. Expired sessions without a valid refresh token do not count as active. Previewing is audited without deactivating the user.
+
 Deactivation revokes credentials before returning. The next request from a deactivated user fails, including a previously valid connector request. Reactivation does not restore revoked sessions or keys.
 
 Credential and administrative changes are audited with their transaction. Read events are buffered and flushed every two seconds; the buffer is capped at 10,000 events. Overflow is visible in status and an `audit.dropped` event. Audit queries require `audit`; exports use NDJSON. Administrators can configure audit retention.
