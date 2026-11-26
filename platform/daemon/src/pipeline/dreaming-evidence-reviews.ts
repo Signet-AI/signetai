@@ -1,4 +1,4 @@
-import { z } from "zod";
+import type { DreamingReviewedEvidence } from "../content-read-owner";
 import type { ReadScope } from "../read-scope";
 import { dreamingReadPredicate } from "./dreaming-read-scope";
 import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "../classification-owner";
@@ -18,18 +18,6 @@ export interface DreamingReviewedExcludedEvidenceEntry {
 	readonly agentId: string;
 	readonly sourceRef: string;
 	readonly reason: string;
-}
-
-export interface DreamingReviewedEvidence {
-	readonly agentId: string;
-	readonly sourceKind: EpisodicSourceKind;
-	readonly sourceId: string;
-	readonly sourceCapturedAt: string;
-	readonly sourceEntryId: string;
-	readonly sourceRevision: string;
-	readonly reason: string;
-	readonly passId: string;
-	readonly reviewedAt: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -191,19 +179,6 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 	return recorded;
 }
 
-const reviewedEvidenceRows = z.array(
-	z.object({
-		agentId: z.string(),
-		sourceKind: z.enum(["memory", "artifact", "transcript", "summary"]),
-		sourceId: z.string(),
-		sourceCapturedAt: z.string(),
-		sourceEntryId: z.string(),
-		sourceRevision: z.string(),
-		reason: z.string(),
-		passId: z.string(),
-		reviewedAt: z.string(),
-	}),
-);
 export async function getDreamingReviewedEvidence(
 	accessor: DbAccessor,
 	agentId: string,
@@ -211,30 +186,6 @@ export async function getDreamingReviewedEvidence(
 ): Promise<readonly DreamingReviewedEvidence[]> {
 	const { dbOwnerReviewedEvidence } = await import("../db-owner-runtime");
 	return dbOwnerReviewedEvidence(accessor, agentId, readScope);
-}
-export function readDreamingReviewedEvidenceInOwner(
-	db: ReadDb,
-	agentId: string,
-	readScope?: ReadScope,
-): readonly DreamingReviewedEvidence[] {
-	if (!tableExists(db)) return [];
-	const predicate = dreamingReadPredicate("p", readScope);
-	const row = dreamingReadPredicate(
-		"",
-		readScope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null },
-	);
-	return reviewedEvidenceRows.parse(
-		db
-			.prepare(`SELECT agent_id AS agentId, source_kind AS sourceKind, source_id AS sourceId,
-		        source_captured_at AS sourceCapturedAt, source_entry_id AS sourceEntryId,
-		        source_revision AS sourceRevision, reason, pass_id AS passId,
-		        reviewed_at AS reviewedAt
-		 FROM dreaming_evidence_reviews
-		 WHERE ${readScope ? "1=1" : "agent_id = ?"} ${row.sql}
- ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_reviews.pass_id AND p.agent_id = dreaming_evidence_reviews.agent_id ${predicate.sql})` : ""}
-		 ORDER BY reviewed_at DESC, source_kind ASC, source_id ASC LIMIT 500`)
-			.all(...(readScope ? [] : [agentId]), ...row.args, ...predicate.args),
-	);
 }
 export async function requestDreamingReviewedEvidenceRequeue(
 	accessor: DbAccessor,

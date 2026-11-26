@@ -1426,7 +1426,7 @@ export function runDbOwnerWorker(): void {
 			});
 
 		if (job.request.kind === "dreaming_reviewed_read")
-			return (await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
+			return (await import("./content-read-owner")).readDreamingReviewedEvidenceInOwner(
 				db,
 				job.request.agentId,
 				job.request.scope,
