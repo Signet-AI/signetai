@@ -25,37 +25,43 @@ export async function runUploadResume(runtime: string, name: string): Promise<vo
 			interrupted = false;
 		const resumedOffsets: number[] = [];
 		const calls: string[] = [];
+		let proxyFailure: Error | undefined;
 		server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			async fetch(req) {
-				const url = new URL(req.url),
-					body = await req.arrayBuffer();
-				calls.push(
-					req.method +
-						" " +
-						url.pathname +
-						" " +
-						(req.headers.get("content-type") === "application/json"
-							? Object.keys(record(JSON.parse(new TextDecoder().decode(body)))).join(",")
-							: String(body.byteLength)),
-				);
-				if (!paused && req.method === "PATCH") resumedOffsets.push(Number(req.headers.get("upload-offset")));
-				const reply = await fetch(daemon.origin + url.pathname, {
-					method: req.method,
-					headers: req.headers,
-					body: body.byteLength ? body : undefined,
-					redirect: "error",
-				});
-				const bytes = await reply.arrayBuffer();
-				if (paused && req.method === "PATCH" && ++patches === scenario.interruptAfterChunks) {
-					assert.equal(reply.status, 200);
-					interrupted = true;
-					await new Promise<void>((done) => {
-						release = done;
+				try {
+					const url = new URL(req.url),
+						body = await req.arrayBuffer();
+					calls.push(
+						req.method +
+							" " +
+							url.pathname +
+							" " +
+							(req.headers.get("content-type") === "application/json"
+								? Object.keys(record(JSON.parse(new TextDecoder().decode(body)))).join(",")
+								: String(body.byteLength)),
+					);
+					if (!paused && req.method === "PATCH") resumedOffsets.push(Number(req.headers.get("upload-offset")));
+					const reply = await fetch(daemon.origin + url.pathname, {
+						method: req.method,
+						headers: req.headers,
+						body: body.byteLength ? body : undefined,
+						redirect: "error",
 					});
+					const bytes = await reply.arrayBuffer();
+					if (paused && req.method === "PATCH" && ++patches === scenario.interruptAfterChunks) {
+						assert.equal(reply.status, 200);
+						interrupted = true;
+						await new Promise<void>((done) => {
+							release = done;
+						});
+					}
+					return new Response(bytes, { status: reply.status, headers: reply.headers });
+				} catch (error) {
+					proxyFailure = error instanceof Error ? error : new Error(String(error));
+					return new Response("Upload conformance proxy failed", { status: 500 });
 				}
-				return new Response(bytes, { status: reply.status, headers: reply.headers });
 			},
 		});
 		const origin = `http://127.0.0.1:${server.port}`;
@@ -78,6 +84,7 @@ export async function runUploadResume(runtime: string, name: string): Promise<vo
 		first = Bun.spawn([...client, config, "initial"], { env: daemon.env, stdout: "pipe", stderr: "pipe" });
 		await until(
 			async () => {
+				if (proxyFailure) throw proxyFailure;
 				if (first && first.exitCode !== null) {
 					if (typeof first.stderr === "number" || first.stderr === undefined)
 						throw new Error("Client stderr is unavailable");
