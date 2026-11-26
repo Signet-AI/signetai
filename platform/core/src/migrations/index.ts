@@ -176,6 +176,7 @@ import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-boa
 import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
+import { SESSION_TRANSCRIPT_TURN_TRIGGERS, up as sessionTranscriptTurnFts } from "./176-session-transcript-turn-fts";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -513,7 +514,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "lossless-working-memory-hardening",
 		up: losslessWorkingMemoryHardening,
 		artifacts: {
-			tables: ["session_transcripts_fts", "memory_md_heads"],
+			tables: ["memory_md_heads"],
 			columns: [
 				{ table: "session_transcripts", column: "updated_at" },
 				{ table: "summary_jobs", column: "agent_id" },
@@ -1627,6 +1628,15 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-artifact-manifest-path-repair",
 		up: memoryArtifactManifestPathRepair,
 	},
+	{
+		version: 176,
+		name: "session-transcript-turn-fts",
+		up: sessionTranscriptTurnFts,
+		artifacts: {
+			tables: ["session_transcript_turns", "session_transcript_turns_fts", "session_transcript_turns_backfill"],
+			triggers: SESSION_TRANSCRIPT_TURN_TRIGGERS,
+		},
+	},
 ];
 function checksum(m: Migration): string {
 	let h = 0;
@@ -1674,12 +1684,8 @@ function hasStringName(row: Record<string, unknown>): row is { name: string } {
 function hasNumericVersion(row: Record<string, unknown>): row is { version: number } {
 	return typeof row.version === "number";
 }
-function existingTables(db: MigrationDb): Set<string> {
-	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
-	return new Set(rows.filter(hasStringName).map((r) => r.name));
-}
-function existingIndexes(db: MigrationDb): Set<string> {
-	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all();
+function existingSchemaNames(db: MigrationDb, type: "table" | "index" | "trigger"): Set<string> {
+	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = ?").all(type);
 	return new Set(rows.filter(hasStringName).map((r) => r.name));
 }
 function tableColumns(db: MigrationDb, table: string, cache: Map<string, Set<string>>): Set<string> {
@@ -1696,6 +1702,7 @@ function missingArtifact(
 	artifacts: MigrationArtifacts,
 	tables: Set<string>,
 	indexes: Set<string>,
+	triggers: Set<string>,
 	colCache: Map<string, Set<string>>,
 ): string | undefined {
 	for (const table of artifacts.tables ?? []) {
@@ -1714,11 +1721,15 @@ function missingArtifact(
 	for (const index of artifacts.indexes ?? []) {
 		if (!indexes.has(index)) return `index "${index}"`;
 	}
+	for (const trigger of artifacts.triggers ?? []) {
+		if (!triggers.has(trigger)) return `trigger "${trigger}"`;
+	}
 	return undefined;
 }
 function findPhantomVersions(db: MigrationDb, precomputedApplied?: Set<number>): Set<number> {
-	const tables = existingTables(db);
-	const indexes = existingIndexes(db);
+	const tables = existingSchemaNames(db, "table");
+	const indexes = existingSchemaNames(db, "index");
+	const triggers = existingSchemaNames(db, "trigger");
 	const colCache = new Map<string, Set<string>>();
 	const phantoms = new Set<number>();
 	const applied = precomputedApplied ?? appliedVersions(db);
@@ -1729,7 +1740,7 @@ function findPhantomVersions(db: MigrationDb, precomputedApplied?: Set<number>):
 			artifacts &&
 			migration.version !== 1 &&
 			applied.has(migration.version) &&
-			missingArtifact(db, artifacts, tables, indexes, colCache)
+			missingArtifact(db, artifacts, tables, indexes, triggers, colCache)
 		)
 			phantoms.add(migration.version);
 	}
@@ -1760,7 +1771,14 @@ function appliedVersions(db: MigrationDb): Set<number> {
 function verifyArtifacts(db: MigrationDb, migration: Migration): void {
 	const artifacts = migration.artifacts;
 	if (!artifacts) return;
-	const missing = missingArtifact(db, artifacts, existingTables(db), existingIndexes(db), new Map());
+	const missing = missingArtifact(
+		db,
+		artifacts,
+		existingSchemaNames(db, "table"),
+		existingSchemaNames(db, "index"),
+		existingSchemaNames(db, "trigger"),
+		new Map(),
+	);
 	if (missing)
 		throw new Error(
 			`Post-DDL verification failed: migration ${migration.version} (${migration.name}) declares ${missing} but it was not created`,

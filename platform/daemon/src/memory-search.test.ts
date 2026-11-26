@@ -24,6 +24,7 @@ import {
 	MAX_LEXICAL_FALLBACK_SCAN_ROWS,
 	ownerVectorPageRows,
 	readOwnerVectorsBySource,
+	sanitizeFtsQuery,
 	TRANSCRIPT_EVIDENCE_MAX_PAGES,
 	TRANSCRIPT_PAGE_BYTES,
 	transcriptExcerpt,
@@ -3840,6 +3841,13 @@ assistant: John Mulaney's Kid Gorgeous is an excellent example. Hasan Minhaj: Ho
 		const ids = result.results.map((row) => row.id);
 		expect(ids).not.toContain("mem-like-escape");
 		expect(ids).not.toContain("mem-like-other");
+	});
+});
+
+describe("sanitizeFtsQuery", () => {
+	it("drops punctuation-only words and splits on control characters", () => {
+		expect(sanitizeFtsQuery("papa -> quebec")).toBe('"papa" "quebec"');
+		expect(sanitizeFtsQuery("papa\u0000quebec")).toBe('"papa" "quebec"');
 	});
 });
 

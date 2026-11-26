@@ -1176,6 +1176,11 @@ export function runDbOwnerWorker(): void {
 			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "session_compaction_summary")
 			return await executeSessionCompactionSummary(job.request, context);
+		if (job.request.kind === "session_transcript_turn_backfill") {
+			const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
+			const input = job.request.input;
+			return withBusyRetry(() => backfillTranscriptTurnsFtsChunkInDb(db, input), context);
+		}
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);

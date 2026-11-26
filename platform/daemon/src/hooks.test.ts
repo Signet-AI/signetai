@@ -284,40 +284,6 @@ function createMemoryDb(
 	`);
 
 	db.exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS session_transcripts_fts USING fts5(
-			content,
-			content='session_transcripts',
-			content_rowid='rowid'
-		)
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS session_transcripts_fts_ai AFTER INSERT ON session_transcripts
-		BEGIN
-			INSERT INTO session_transcripts_fts(rowid, content)
-			VALUES (new.rowid, new.content);
-		END
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS session_transcripts_fts_ad AFTER DELETE ON session_transcripts
-		BEGIN
-			INSERT INTO session_transcripts_fts(session_transcripts_fts, rowid, content)
-			VALUES('delete', old.rowid, old.content);
-		END
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS session_transcripts_fts_au AFTER UPDATE ON session_transcripts
-		BEGIN
-			INSERT INTO session_transcripts_fts(session_transcripts_fts, rowid, content)
-			VALUES('delete', old.rowid, old.content);
-			INSERT INTO session_transcripts_fts(rowid, content)
-			VALUES (new.rowid, new.content);
-		END
-	`);
-
-	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summaries (
 			id TEXT PRIMARY KEY,
 			project TEXT,

@@ -20,7 +20,11 @@ import {
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
-import type { CompactionSummaryInput } from "./session-transcripts";
+import type {
+	CompactionSummaryInput,
+	TranscriptTurnBackfillChunk,
+	TranscriptTurnBackfillOptions,
+} from "./session-transcripts";
 import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
@@ -208,6 +212,12 @@ async function executeInlineOwnerRequest(
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			writeSessionTranscriptRow(db as WriteDb, request.input),
+		);
+	}
+	if (request.kind === "session_transcript_turn_backfill") {
+		const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			backfillTranscriptTurnsFtsChunkInDb(db as WriteDb, request.input),
 		);
 	}
 	if (request.kind === "session_compaction_summary") {
@@ -583,6 +593,24 @@ export async function dbOwnerWriteSessionTranscript(
 		owner,
 		{ kind: "session_transcript_write", input },
 		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerBackfillTranscriptTurns(
+	owner: DbOwnerClient,
+	input: TranscriptTurnBackfillOptions,
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptTurnBackfillChunk> {
+	const { transcriptTurnBackfillWorkUnits } = await import("./session-transcripts");
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_turn_backfill", input },
+		{
+			...options,
+			lane: "write",
+			workloadClass: "maintenance",
+			estimatedWorkUnits: transcriptTurnBackfillWorkUnits(input),
+		},
 	);
 }
 

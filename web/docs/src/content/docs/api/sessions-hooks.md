@@ -799,10 +799,25 @@ Results are agent-scoped and require `recall` permission.
 }
 ```
 
-`query` is required. `limit` is clamped to `1..20`. If `sessionKey` is absent
-and `currentSessionKey` encodes OpenClaw sub-agent lineage, Signet defaults the
-search to the inferred parent session. Otherwise, Signet searches transcripts
-in the requested agent and project scope while excluding `currentSessionKey`.
+`query` is required and holds at most 2000 characters. `limit` is clamped to
+`1..20`. If `sessionKey` is absent and `currentSessionKey` encodes OpenClaw
+sub-agent lineage, Signet defaults the search to the inferred parent session.
+Otherwise, Signet searches transcripts in the requested agent and project scope
+while excluding `currentSessionKey`.
+
+A query that exactly matches a stored session key or session id returns that
+session with `rank` 0. Otherwise full-text search runs. Signet indexes each
+transcript turn by turn and returns one hit per session. Signet ignores
+stopwords and one-letter words. When at most three search words remain, a
+session matches only when every word appears somewhere in it, even in different
+turns. `rank` is then the full-text score of
+the best matching turn, where lower is better.
+
+When full-text search finds nothing, Signet scans the transcript text for any
+query word of three or more characters, including inside longer words. For
+example, `deploy` also matches `deployment`. Scan hits count the matched words
+in `rank`, where higher is better. Search also uses the scan after an upgrade,
+while Signet indexes existing transcripts in the background.
 
 **Response**
 

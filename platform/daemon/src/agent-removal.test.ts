@@ -188,6 +188,14 @@ describe("DELETE /api/agents/:name", () => {
 			expect(db.prepare("SELECT COUNT(*) AS n FROM memory_history WHERE memory_id LIKE 'keeper-%'").get()).toEqual({
 				n: 2,
 			});
+			expect(db.prepare("SELECT agent_id FROM session_transcript_turns").all()).toEqual([{ agent_id: "keeper" }]);
+			expect(
+				db
+					.prepare(
+						"SELECT COUNT(*) AS n FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH 'transcript'",
+					)
+					.get(),
+			).toEqual({ n: 1 });
 		});
 	});
 

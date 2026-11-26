@@ -392,6 +392,10 @@ export type DbOwnerRequest =
 			readonly kind: "session_compaction_summary";
 			readonly input: import("./session-transcripts").CompactionSummaryInput;
 	  }
+	| {
+			readonly kind: "session_transcript_turn_backfill";
+			readonly input: import("./session-transcripts").TranscriptTurnBackfillOptions;
+	  }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }

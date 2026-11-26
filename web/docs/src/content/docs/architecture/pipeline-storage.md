@@ -127,6 +127,22 @@ The table includes `session_key`, `content`, `harness`, `project`, `agent_id`,
 `created_at`, `updated_at`, `completed_at`, and `content_hash`. Reads and writes
 are agent-scoped.
 
+Transcript search reads `session_transcript_turns`, a derived copy of the
+transcript text split by turn and keyed by `agent_id` and `session_key`, with
+the full-text index `session_transcript_turns_fts` over it. Triggers on
+`session_transcripts` keep the copy in step inside the same write. When new
+content extends the old content at a whitespace boundary, only the new text is
+indexed. Any other change reindexes the whole session. The copy adds roughly
+the size of the transcript text to the database. It replaces the whole-row
+`session_transcripts_fts` index, which reindexed the full transcript on every
+live append.
+
+The copy is rebuildable. Migration 176 declares its triggers as schema
+artifacts, so a missing trigger re-runs the migration at startup. The migration
+clears the copy and resets `session_transcript_turns_backfill`. A background
+DB-owner job then copies existing rows in bounded chunks, and search scans the
+transcript text until that job finishes.
+
 Imported completed transcripts additionally carry `source_id`,
 `source_record_id`, and bounded `source_meta_json`. The importer writes a
 lossless typed message representation directly; it does not round-trip through

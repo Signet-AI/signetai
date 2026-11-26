@@ -114,7 +114,7 @@ import {
 	forceExitDuringShutdownFlush,
 	runShutdownCleanup,
 } from "./daemon-shutdown";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { dbOwnerBackfillTranscriptTurns, dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
@@ -628,6 +628,7 @@ let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 const ingestedMemoryFiles = new Map<string, string>();
 const LEGACY_MARKDOWN_IMPORTER_VERSION = 1;
 const MEMORY_IMPORT_POLL_MS = 30_000;
+const TRANSCRIPT_TURN_BACKFILL_MAX_FAILURES = 5;
 const STALE_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const ACP_DELIVERY_RECONCILIATION_INTERVAL_MS = 30_000;
 const STALE_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -3127,6 +3128,69 @@ async function main() {
 				if (vacuumConversionHandle === null) {
 					vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner });
 				}
+			});
+			deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+				const integrityHealthy = await deferredRuntimeGate.waitForVerifiedIntegrity();
+				let indexed = 0;
+				let failures = 0;
+				for (;;) {
+					const owner = dbOwnerClient;
+					const migrationBackupPending = pendingMigrationBackupPath(MEMORY_DB) !== null;
+					if (
+						!integrityHealthy ||
+						migrationIntegrityWritesBlocked ||
+						shuttingDown ||
+						migrationBackupPending ||
+						owner === null
+					) {
+						logger.warn(
+							"startup-recovery",
+							"Transcript turn index backfill stopped; search uses the scan fallback until restart",
+							{
+								indexed,
+								integrityHealthy,
+								migrationIntegrityWritesBlocked,
+								migrationBackupPending,
+								shuttingDown,
+								ownerAvailable: owner !== null,
+							},
+						);
+						return;
+					}
+					const chunk = await dbOwnerBackfillTranscriptTurns(
+						owner,
+						{},
+						{ operation: "maintenance.transcripts.turn-index.backfill", deadlineMs: 10_000 },
+					).then(
+						(value) => ({ ok: true as const, value }),
+						(failure: unknown) => ({ ok: false as const, failure }),
+					);
+					if (!chunk.ok) {
+						failures += 1;
+						const error = chunk.failure instanceof Error ? chunk.failure.message : String(chunk.failure);
+						if (failures >= TRANSCRIPT_TURN_BACKFILL_MAX_FAILURES) {
+							logger.error(
+								"startup-recovery",
+								"Transcript turn index backfill gave up; search uses the scan fallback until restart",
+								undefined,
+								{ indexed, failures, error },
+							);
+							return;
+						}
+						logger.warn("startup-recovery", "Transcript turn index backfill chunk failed; retrying", {
+							indexed,
+							failures,
+							error,
+						});
+						await sleep(1_000 * 2 ** failures);
+						continue;
+					}
+					failures = 0;
+					indexed += chunk.value.indexed;
+					if (chunk.value.complete) break;
+					await sleep(1_000);
+				}
+				if (indexed > 0) logger.info("daemon", "Transcript turn index backfill finished", { indexed });
 			});
 		}
 		let retainedCorruptMaintenanceLogged = false;

@@ -1,7 +1,7 @@
 import { redactCredentials } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-import { sanitizeFtsQuery } from "./memory-search";
+import { searchTranscriptTurns } from "./session-transcripts";
 
 const OMP_UUID_LIKE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}[:-][0-9a-f]{4}[:-][0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -312,50 +312,22 @@ export function searchSessionTranscripts(params: {
 		}));
 	}
 
-	if (tableExists(params.db, "session_transcripts_fts")) {
-		const fts = sanitizeFtsQuery(query);
-		if (fts.length > 0) {
-			const parts = [
-				`SELECT st.session_key, st.project, ${seen} AS updated_at, st.content,`,
-				"snippet(session_transcripts_fts, 0, '', '', ' ... ', 24) AS excerpt,",
-				"bm25(session_transcripts_fts) AS rank",
-				"FROM session_transcripts_fts",
-				"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
-				"WHERE session_transcripts_fts MATCH ?",
-				"AND st.agent_id = ?",
-			];
-			const args: unknown[] = [fts, params.agentId];
-			if (targetSessionKey) {
-				parts.push("AND st.session_key = ?");
-				args.push(targetSessionKey);
-			} else if (params.currentSessionKey) {
-				parts.push("AND st.session_key != ?");
-				args.push(params.currentSessionKey);
-			}
-			if (params.project) {
-				parts.push("AND st.project = ?");
-				args.push(params.project);
-			}
-			parts.push(`ORDER BY rank ASC, ${seen} DESC LIMIT ?`);
-			args.push(limit);
-			const rows = params.db.prepare(parts.join("\n")).all(...args) as Array<{
-				readonly session_key: string;
-				readonly project: string | null;
-				readonly updated_at: string;
-				readonly content: string;
-				readonly excerpt: string | null;
-				readonly rank: number;
-			}>;
-			if (rows.length > 0) {
-				return rows.map((row) => ({
-					sessionKey: row.session_key,
-					project: row.project,
-					updatedAt: row.updated_at,
-					excerpt: excerptFor(row.content || row.excerpt || "", query),
-					rank: row.rank,
-				}));
-			}
-		}
+	const turnHits = searchTranscriptTurns(params.db, {
+		query,
+		agentId: params.agentId,
+		sessionKey: targetSessionKey,
+		excludeSessionKey: params.currentSessionKey,
+		project: params.project,
+		limit,
+	});
+	if (turnHits.length > 0) {
+		return turnHits.map((hit) => ({
+			sessionKey: hit.sessionKey,
+			project: hit.project,
+			updatedAt: hit.updatedAt,
+			excerpt: excerptFor(hit.content, query),
+			rank: hit.rank,
+		}));
 	}
 
 	const words = query

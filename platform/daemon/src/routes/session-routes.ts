@@ -26,6 +26,8 @@ import {
 	validateSessionControl,
 } from "./utils.js";
 
+const SESSION_SEARCH_MAX_QUERY_CHARS = 2000;
+
 function listLiveSessions(agentId: string): Array<{
 	key: string;
 	runtimePath: string;
@@ -150,6 +152,9 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const query = typeof body.query === "string" ? body.query.trim() : "";
 		if (query.length === 0) return c.json({ error: "query is required" }, 400);
+		if (query.length > SESSION_SEARCH_MAX_QUERY_CHARS) {
+			return c.json({ error: `query exceeds ${SESSION_SEARCH_MAX_QUERY_CHARS} characters` }, 413);
+		}
 
 		const rawAgentId =
 			(typeof body.agentId === "string" ? body.agentId : undefined) ??
@@ -190,7 +195,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:182",
+			"routes/session-routes.ts:187",
 		);
 		return c.json({ query, hits, count: hits.length });
 	});
@@ -425,7 +430,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:425",
+			"routes/session-routes.ts:430",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -476,7 +481,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:435");
+		}, "routes/session-routes.ts:440");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {

@@ -2,20 +2,21 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor, prepareTypedStatement } from "./db-accessor";
 import {
 	appendSessionTranscriptAsync,
+	backfillTranscriptTurnsFtsChunkInDb,
 	ensureCanonicalTranscriptHistory,
 	getStoredSessionTranscriptInfoAsync,
-	searchTranscriptFallback,
 	upsertSessionTranscript,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
+import { searchSessionTranscripts } from "./subagent-context";
 import { canonicalTranscriptPath } from "./transcript-jsonl";
 
 let dir = "";
 
-describe("session transcript lookup", () => {
+describe("session transcript turn index", () => {
 	afterEach(async () => {
 		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
@@ -28,45 +29,278 @@ describe("session transcript lookup", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	}
 
-	it("exact query with colon alias returns hyphen stored session key", () => {
-		init();
-		upsertSessionTranscript(
-			"019f3a7a-218f-7000-b6a3-0dcc8801a625",
-			"User: asked about mesh PR 9147 and 9146. Assistant: gave answer.",
-			"oh-my-pi",
-			"/repo-a",
-			"noam",
+	async function indexedTurns(sessionKey: string): Promise<string[]> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ text: string }>(
+				db,
+				"SELECT text FROM session_transcript_turns WHERE session_key = ? AND agent_id = ? ORDER BY id",
+			)
+				.all(sessionKey, "noam")
+				.map((row) => row.text),
 		);
+	}
 
-		const hits = searchTranscriptFallback({
-			query: "019f3a7a-218f:7000:b6a3-0dcc8801a625",
-			agentId: "noam",
-			limit: 5,
+	async function indexedMatches(term: string): Promise<number> {
+		const row = await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ count: number }>(
+				db,
+				"SELECT COUNT(*) AS count FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH ?",
+			).get(term),
+		);
+		return row?.count ?? 0;
+	}
+
+	async function searchHits(
+		query: string,
+		scope: { project?: string; currentSessionKey?: string } = {},
+	): Promise<Array<{ sessionKey: string; rank: number }>> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			searchSessionTranscripts({ db, query, agentId: "noam", limit: 10, ...scope }),
+		);
+	}
+
+	async function search(
+		query: string,
+		scope: { project?: string; currentSessionKey?: string } = {},
+	): Promise<string[]> {
+		return (await searchHits(query, scope)).map((hit) => hit.sessionKey).sort();
+	}
+
+	async function backfillChunk(maxRows?: number): Promise<{ complete: boolean; indexed: number }> {
+		return await getDbAccessor().withWriteTxAsync((db) =>
+			backfillTranscriptTurnsFtsChunkInDb(db, maxRows === undefined ? {} : { maxRows }),
+		);
+	}
+
+	async function resetTurnIndex(): Promise<void> {
+		await write("DELETE FROM session_transcript_turns");
+		await write(
+			"UPDATE session_transcript_turns_backfill SET cursor = 0, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+		);
+	}
+
+	async function write(sql: string, ...params: Array<string | number>): Promise<void> {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(sql).run(...params);
 		});
+	}
 
-		expect(hits).toHaveLength(1);
-		expect(hits[0]?.sessionKey).toBe("019f3a7a-218f-7000-b6a3-0dcc8801a625");
+	async function append(sessionKey: string, transcript: string): Promise<void> {
+		await appendSessionTranscriptAsync({ sessionKey, agentId: "noam", harness: "codex", project: "/repo", transcript });
+	}
+
+	it("indexes only the new text when a live turn is appended", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question", "\nAssistant: bravo answer"]);
 	});
 
-	it("exact query returns row when params sessionKey equals query", () => {
+	it("keeps the indexed turns when only the row metadata changes", async () => {
 		init();
-		upsertSessionTranscript(
-			"same-session",
-			"User: exact same session lookup should return stored content. Assistant: yes.",
-			"oh-my-pi",
-			"/repo-a",
-			"noam",
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		await write(
+			"UPDATE session_transcripts SET completed_at = ? WHERE session_key = ?",
+			"2026-11-25T10:00:00.000Z",
+			"sess-a",
 		);
 
-		const hits = searchTranscriptFallback({
-			query: "same-session",
-			agentId: "noam",
-			sessionKey: "same-session",
-			limit: 5,
-		});
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question", "\nAssistant: bravo answer"]);
+	});
 
-		expect(hits).toHaveLength(1);
-		expect(hits[0]?.sessionKey).toBe("same-session");
+	it("reindexes the whole session when its content is rewritten", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		upsertSessionTranscript("sess-a", "User: charlie rewrite", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: charlie rewrite"]);
+		expect(await indexedMatches("alpha")).toBe(0);
+		expect(await search("charlie")).toEqual(["sess-a"]);
+	});
+
+	it("drops the indexed turns of a deleted transcript row", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		upsertSessionTranscript("sess-b", "User: alpha other", "codex", "/repo", "noam");
+		await write("DELETE FROM session_transcripts WHERE agent_id = ?", "noam");
+		upsertSessionTranscript("sess-c", "User: delta fresh", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-c")).toEqual(["User: delta fresh"]);
+		expect(await indexedMatches("alpha OR bravo")).toBe(0);
+		expect(await indexedMatches("delta")).toBe(1);
+	});
+
+	it("matches a session when the query terms sit in different turns", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: alpha bravo answer");
+		upsertSessionTranscript("sess-b", "User: alpha only", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-c", "User: bravo only", "codex", "/repo", "noam");
+
+		expect(await search("alpha bravo")).toEqual(["sess-a"]);
+		expect(await search("alpha")).toEqual(["sess-a", "sess-b"]);
+	});
+
+	it("searches with LIKE until the backfill indexes rows written before the index", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: charlie legacy", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: charlie second", "codex", "/repo", "noam");
+		await resetTurnIndex();
+		await append("sess-b", "Assistant: echo reply");
+
+		expect((await searchHits("charlie")).map((hit) => hit.rank)).toEqual([1, 1]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: charlie second\nAssistant: echo reply"]);
+
+		expect((await backfillChunk(1)).complete).toBe(false);
+		expect((await backfillChunk(1)).complete).toBe(true);
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: charlie legacy"]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: charlie second\nAssistant: echo reply"]);
+		expect((await searchHits("charlie")).every((hit) => hit.rank < 0)).toBe(true);
+	});
+
+	it("never returns another agent's session and honors the project and current-session scope", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: foxtrot plan", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: foxtrot other", "codex", "/other", "noam");
+		upsertSessionTranscript("sess-x", "User: foxtrot plan", "codex", "/repo", "intruder");
+		upsertSessionTranscript("sess-a", "User: foxtrot secretword", "codex", "/repo", "intruder");
+
+		expect(await search("secretword")).toEqual([]);
+		expect((await searchHits("foxtrot secretword")).filter((hit) => hit.rank < 0)).toEqual([]);
+		expect(await search("foxtrot plan")).toEqual(["sess-a"]);
+		expect(await search("foxtrot")).toEqual(["sess-a", "sess-b"]);
+		expect(await search("foxtrot", { project: "/other" })).toEqual(["sess-b"]);
+		expect(await search("foxtrot", { currentSessionKey: "sess-a" })).toEqual(["sess-b"]);
+		await write("DELETE FROM session_transcripts WHERE agent_id = ?", "intruder");
+		expect(await indexedMatches("foxtrot")).toBe(2);
+	});
+
+	it("replaces the indexed turns when a row is replaced or moves to another session key", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: quartz original", "codex", "/repo", "noam");
+		await write(
+			"INSERT OR REPLACE INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			"sess-a",
+			"User: romeo replaced",
+			"codex",
+			"/repo",
+			"noam",
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
+		);
+		expect(await indexedTurns("sess-a")).toEqual(["User: romeo replaced"]);
+
+		await write("UPDATE session_transcripts SET session_key = ? WHERE session_key = ?", "sess-b", "sess-a");
+		expect(await indexedTurns("sess-a")).toEqual([]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: romeo replaced"]);
+		expect(await search("romeo")).toEqual(["sess-b"]);
+	});
+
+	it("keeps the indexed turns when the same content is stored again", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: sierra question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: tango answer");
+		const stored = "User: sierra question\nAssistant: tango answer";
+		upsertSessionTranscript("sess-a", stored, "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: sierra question", "\nAssistant: tango answer"]);
+	});
+
+	it("splits on whitespace at the end of the old text and reindexes a word continued with a multibyte letter", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: uniform ", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-a", "User: uniform victor", "codex", "/repo", "noam");
+		expect(await indexedTurns("sess-a")).toEqual(["User: uniform ", "victor"]);
+
+		upsertSessionTranscript("sess-a", "User: uniform victoré", "codex", "/repo", "noam");
+		expect(await indexedTurns("sess-a")).toEqual(["User: uniform victoré"]);
+	});
+
+	it("reindexes the whole session when the old content was empty", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-a", "whiskey first", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["whiskey first"]);
+	});
+
+	it("returns the stored session for an exact session key, including its colon alias", async () => {
+		init();
+		const key = "019f3a7a-218f-7000-b6a3-0dcc8801a625";
+		upsertSessionTranscript(key, "User: asked about mesh PR 9147. Assistant: answer.", "oh-my-pi", "/repo-a", "noam");
+
+		expect(await searchHits("019f3a7a-218f:7000:b6a3-0dcc8801a625")).toMatchObject([{ sessionKey: key, rank: 0 }]);
+		expect(await searchHits(key)).toMatchObject([{ sessionKey: key, rank: 0 }]);
+	});
+
+	it("matches any word when the query has more than three words", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: golf only", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: hotel only", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-c", "User: unrelated", "codex", "/repo", "noam");
+
+		expect(await search("golf hotel india juliet")).toEqual(["sess-a", "sess-b"]);
+		expect((await searchHits("golf hotel india juliet")).every((hit) => hit.rank < 0)).toBe(true);
+	});
+
+	it("keeps turns attached to their session when transcript rowids change", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: kilo question", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: lima question", "codex", "/repo", "noam");
+		await write("UPDATE session_transcripts SET rowid = rowid + 1000");
+		await write("UPDATE session_transcripts SET rowid = 1 WHERE session_key = ?", "sess-b");
+
+		expect(await search("kilo")).toEqual(["sess-a"]);
+		expect(await search("lima")).toEqual(["sess-b"]);
+		await append("sess-b", "Assistant: mike reply");
+		expect(await indexedTurns("sess-b")).toEqual(["User: lima question", "\nAssistant: mike reply"]);
+	});
+
+	it("indexes a session that moved below the backfill cursor before reporting completion", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: november first", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: november second", "codex", "/repo", "noam");
+		await resetTurnIndex();
+
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
+		await write("UPDATE session_transcripts SET rowid = -5 WHERE session_key = ?", "sess-b");
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 0 });
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
+		expect(await backfillChunk(1)).toEqual({ complete: true, indexed: 0 });
+		expect(await indexedTurns("sess-b")).toEqual(["User: november second"]);
+	});
+
+	it("stops a backfill chunk at the byte budget and finishes on the next chunk", async () => {
+		init();
+		const large = `User: oscar ${"x".repeat(5 * 1024 * 1024)}`;
+		upsertSessionTranscript("sess-a", large, "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", large, "codex", "/repo", "noam");
+		await resetTurnIndex();
+
+		expect(await backfillChunk()).toEqual({ complete: false, indexed: 1 });
+		expect(await backfillChunk()).toEqual({ complete: true, indexed: 1 });
+	});
+
+	it("reindexes the whole session when new text continues the last word", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "Assistant: deploy the kuber", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-a", "Assistant: deploy the kubernetes cluster", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["Assistant: deploy the kubernetes cluster"]);
+		expect(await indexedMatches("kubernetes")).toBe(1);
+	});
+
+	it("ignores punctuation-only and control characters in the query", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: papa then quebec", "codex", "/repo", "noam");
+
+		expect((await searchHits("papa -> quebec")).map((hit) => hit.rank < 0)).toEqual([true]);
+		expect((await searchHits("papa\u0000quebec")).map((hit) => hit.rank < 0)).toEqual([true]);
 	});
 });
 
@@ -227,6 +461,51 @@ describe("session transcript live append", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		return getDbAccessor();
 	}
+
+	it("backfills the turn index through the database owner without a local write", async () => {
+		const accessor = init();
+		const { dbOwnerBackfillTranscriptTurns, dbOwnerBatch, dbOwnerQuery, getDbOwner, ownerStatement } = await import(
+			"./db-owner-runtime"
+		);
+		await upsertSessionTranscriptAsync("owner-a", "User: echo first", "claude-code", "/repo", "agent-a");
+		await upsertSessionTranscriptAsync("owner-b", "User: echo second", "claude-code", "/repo", "agent-a");
+		await dbOwnerBatch(
+			[
+				ownerStatement("DELETE FROM session_transcript_turns", [], "run"),
+				ownerStatement(
+					"UPDATE session_transcript_turns_backfill SET cursor = 0, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+					[],
+					"run",
+				),
+			],
+			{ operation: "test.transcript.turns.reset" },
+		);
+		const owner = await getDbOwner();
+		const local = spyOn(accessor, "withWriteTxAsync").mockImplementation(() => {
+			throw new Error("request-thread backfill write");
+		});
+		try {
+			const chunk = () => dbOwnerBackfillTranscriptTurns(owner, { maxRows: 1 }, { operation: "test.transcript.turns" });
+			const first = await chunk();
+			const second = await chunk();
+			expect([first, second]).toEqual([
+				{ complete: false, indexed: 1 },
+				{ complete: true, indexed: 1 },
+			]);
+			expect(local).not.toHaveBeenCalled();
+		} finally {
+			local.mockRestore();
+		}
+		const indexed = await dbOwnerQuery<{ count: number }>(
+			ownerStatement(
+				"SELECT COUNT(*) AS count FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH 'echo'",
+				[],
+				"get",
+			),
+			{ operation: "test.transcript.turns.readback" },
+		);
+		expect(indexed.count).toBe(2);
+	});
 
 	it("appends to the stored row inside one write transaction", async () => {
 		const accessor = init();

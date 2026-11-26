@@ -159,6 +159,17 @@ describe("session API", () => {
 		}
 	});
 
+	it("rejects a session search query longer than the limit", async () => {
+		const res = await app.request("http://localhost/api/sessions/search", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({ query: "a".repeat(2001), limit: 5 }),
+		});
+
+		expect(res.status).toBe(413);
+		expect(await res.json()).toEqual({ error: "query exceeds 2000 characters" });
+	});
+
 	it("filters summaries by session_key", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

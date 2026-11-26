@@ -10,6 +10,7 @@ export interface MigrationDb {
 export interface MigrationArtifacts {
 	readonly tables?: readonly string[];
 	readonly indexes?: readonly string[];
+	readonly triggers?: readonly string[];
 	readonly columns?: readonly {
 		readonly table: string;
 		readonly column: string;
