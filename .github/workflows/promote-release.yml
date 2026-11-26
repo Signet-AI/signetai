@@ -34,6 +34,7 @@ jobs:
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           required_packages=(
             "@signetai/core"
+            "@signetai/sdk"
             "@signetai/connector-base"
             "@signetai/connector-claude-code"
             "@signetai/connector-codex"
