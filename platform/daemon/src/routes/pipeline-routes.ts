@@ -1217,7 +1217,8 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "passId must be a non-empty string" }, 400);
 		}
 		if (passId !== undefined && (!readOnly || !c.get("organization"))) {
-			if (foreign) return c.json(scopeError, 403);
+			if (requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId)
+				return c.json(scopeError, 403);
 			const outcome = await callDreamingPassTool({
 				passId,
 				agentId: scopedAgent.agentId,
