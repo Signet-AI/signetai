@@ -85,6 +85,11 @@ describe("organization HTTP flows", () => {
 		const response = await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: created.agentId });
 		expect(response.status).toBe(200);
 		const identity = await (await call("/api/auth/whoami")).json();
+		expect(identity).toMatchObject({ effectiveAccess: true, accessMode: "authenticated" });
+		expect(await (await call("/api/auth/whoami", "GET", undefined, "")).json()).toMatchObject({
+			effectiveAccess: false,
+			accessMode: "none",
+		});
 		expect(identity.agents.defaultRead).toBe(created.agentId);
 		expect(identity.agents.defaultWrite).not.toBe(created.agentId);
 		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();

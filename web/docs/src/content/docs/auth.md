@@ -23,7 +23,7 @@ CLI and desktop sessions use the device-code flow and rotating refresh tokens. R
 
 The `member` role has core memory and document permissions. Admin adds administration and audit, not classification authority. A compliance flag adds `classify` and `audit`. Connector permissions are bounded by their user and their enforced agent, harness, device, and project bindings. Actor headers cannot change the authenticated user.
 
-Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. A write to a destination whose classifications you cannot read returns `403` with reason `classified_destination`, even if you can act as its agent. Signet refuses the write before capturing content or looking for duplicates. `whoami.effectiveAccess` is `open`, `authenticated`, or `none`.
+Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. A write to a destination whose classifications you cannot read returns `403` with reason `classified_destination`, even if you can act as its agent. Signet refuses the write before capturing content or looking for duplicates. `whoami.effectiveAccess` remains a boolean: local mode, trusted loopback access, or a valid authenticated credential makes it `true`. The additive `whoami.accessMode` field distinguishes `open`, `authenticated`, and `none`.
 
 ## Agent preference
 

@@ -161,7 +161,8 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 	return {
 		authenticated: Boolean(p),
 		mode: "team",
-		effectiveAccess: p ? "authenticated" : "none",
+		effectiveAccess: Boolean(p),
+		accessMode: p ? "authenticated" : "none",
 		organization: { name: org.name, agentModel: org.agent_model },
 		user: u ? { ...userView(u), groups } : null,
 		credential: p
