@@ -234,5 +234,5 @@ it("rejects organization source reads without an admitted principal", async () =
 		await next();
 	});
 	registerSourcesRoutes(instance, { agentsDir: dir });
-	expect((await instance.request("/api/sources")).status).toBe(403);
+	expect((await instance.request("/api/sources")).status).toBe(401);
 });
