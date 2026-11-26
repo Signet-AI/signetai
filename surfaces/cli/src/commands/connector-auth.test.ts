@@ -412,13 +412,17 @@ test.each([false, true])("disconnect explicitly retains or purges only its outbo
 		lines.push(values.map(String).join(" "));
 	};
 	try {
-		for (const box of [outbox, outbox, other])
+		const poison = await outbox.enqueue({
+			method: "POST",
+			path: "/api/hooks/session-end",
+			body: { transcript: "quarantined evidence" },
+		});
+		await writeFile(join(outbox.directory, `${poison.id}.json`), JSON.stringify({ ...poison, attempts: 20 }));
+		for (const box of [outbox, other])
 			await box.enqueue({ method: "POST", path: "/api/hooks/session-end", body: { transcript: "retained evidence" } });
-		let calls = 0;
 		await outbox.flush(
 			async () => {
-				calls++;
-				throw Object.assign(new Error("fixture"), { status: calls === 1 ? 403 : 401 });
+				throw Object.assign(new Error("fixture"), { status: 401 });
 			},
 			{ force: true },
 		);
