@@ -1,4 +1,5 @@
-import { readToken } from "./session";
+import { currentSession, readToken } from "./session";
+import { selectedAgentId } from "./agent-context";
 interface Entry {
 	value: unknown;
 	updatedAt: number;
@@ -166,7 +167,10 @@ function readFailure(value: unknown): string | null {
 export const dashboardQueryCache = new QueryCache();
 let scope: string | undefined;
 export function scopedQueryKey(key: string): string {
-	const current = `${typeof location === "undefined" ? "" : location.origin}:${readToken() ?? ""}`;
+	const session = currentSession();
+	const identity =
+		session.kind === "signed-in" ? (session.whoami?.credential.id ?? session.identity.sub) : session.kind;
+	const current = `${typeof location === "undefined" ? "" : location.origin}:${identity}:${selectedAgentId() ?? ""}:${readToken() ?? ""}`;
 	if (scope !== current) {
 		scope = current;
 		dashboardQueryCache.clear(false, false);
