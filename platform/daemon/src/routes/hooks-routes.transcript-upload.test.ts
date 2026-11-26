@@ -16,13 +16,11 @@ process.env.SIGNET_PATH = suiteDir;
 const { registerHooksRoutes } = await import("./hooks-routes");
 const { registerGlobalMiddleware } = await import("../middleware");
 const { AGENTS_DIR, authConfig } = await import("./state");
-const uploadsDir = transcriptUploadAgentDirectory(AGENTS_DIR, "noam");
 
 let dir = "";
 let app: Hono;
 
 beforeEach(() => {
-	rmSync(uploadsDir, { recursive: true, force: true });
 	dir = mkdtempSync(join(suiteDir, "case-"));
 	initDbAccessor(join(dir, "memory.db"), { agentsDir: dir });
 	app = new Hono();
@@ -86,7 +84,7 @@ describe("transcript upload route", () => {
 		expect(first.status).toBe(200);
 		expect(await first.json()).toMatchObject({ committedOffset: 8, generation: 0, tailSha256: sha('{"a":1}\n') });
 		expect((await patch('{"b":2}\n', { offset: 8 })).status).toBe(200);
-		expect(existsSync(uploadsDir)).toBe(true);
+		expect(existsSync(transcriptUploadAgentDirectory(AGENTS_DIR, "noam"))).toBe(true);
 		const state = await app.request(query());
 		expect(state.status).toBe(200);
 		expect(await state.json()).toEqual({
@@ -114,16 +112,17 @@ describe("transcript upload route", () => {
 				controller.close();
 			},
 		});
-		const pending = patch(body, { stream, target: daemon });
+		const purged = { agentId: "purge-race" };
+		const pending = patch(body, { stream, target: daemon, query: purged });
 		await Bun.sleep(20);
-		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {});
+		await withTranscriptUploadAgentLock(purged.agentId, "exclusive", async () => {});
 		arrival.resolve();
 		const response = await pending;
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ error: "purge_pending", retryable: true });
-		const state = await app.request(query());
+		const state = await app.request(query(purged));
 		expect(await state.json()).toEqual({ committedOffset: 0, generation: null, tailSha256: null });
-		expect(existsSync(uploadsDir)).toBe(false);
+		expect(existsSync(transcriptUploadAgentDirectory(AGENTS_DIR, purged.agentId))).toBe(false);
 	});
 
 	it("requires an agent instead of falling back to the default agent", async () => {
