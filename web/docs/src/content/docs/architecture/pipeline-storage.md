@@ -130,9 +130,13 @@ are agent-scoped.
 Transcript search reads `session_transcript_turns`, a derived copy of the
 transcript text split by turn and keyed by `agent_id` and `session_key`, with
 the full-text index `session_transcript_turns_fts` over it. Triggers on
-`session_transcripts` keep the copy in step inside the same write. When new
-content extends the old content at a whitespace boundary, only the new text is
-indexed. Any other change reindexes the whole session. The copy adds roughly
+`session_transcripts` keep the copy in step inside the same write. Each turn
+row carries `seq` and `byte_offset`, so the rows in `seq` order join to exactly
+the stored content. On a change, the trigger keeps the rows that still match
+the new content, deletes the rest, and indexes the new text from that point.
+An append indexes only the new turn, and a rewritten last turn reindexes only
+that turn. When the new text continues the last word of a row, the cut moves
+back one row, so a word is never split across two rows. The copy adds roughly
 the size of the transcript text to the database. It replaces the whole-row
 `session_transcripts_fts` index, which reindexed the full transcript on every
 live append.

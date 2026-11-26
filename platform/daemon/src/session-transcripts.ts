@@ -1922,8 +1922,8 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 		"SELECT length(CAST(content AS BLOB)) AS bytes FROM session_transcripts WHERE rowid = CAST(? AS INTEGER)",
 	);
 	const insert = db.prepare(
-		`INSERT INTO session_transcript_turns(agent_id, session_key, text)
-		 SELECT st.agent_id, st.session_key, st.content FROM session_transcripts st
+		`INSERT INTO session_transcript_turns(agent_id, session_key, seq, byte_offset, text)
+		 SELECT st.agent_id, st.session_key, 1, 0, st.content FROM session_transcripts st
 		 WHERE st.rowid = CAST(? AS INTEGER) AND NOT EXISTS (
 			 SELECT 1 FROM session_transcript_turns turn
 			 WHERE turn.agent_id = st.agent_id AND turn.session_key = st.session_key

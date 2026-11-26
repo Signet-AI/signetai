@@ -1634,7 +1634,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: sessionTranscriptTurnFts,
 		artifacts: {
 			tables: ["session_transcript_turns", "session_transcript_turns_fts", "session_transcript_turns_backfill"],
-			indexes: ["idx_session_transcript_turns_session"],
+			indexes: ["idx_session_transcript_turns_seq"],
+			columns: [
+				{ table: "session_transcript_turns", column: "seq" },
+				{ table: "session_transcript_turns", column: "byte_offset" },
+			],
 			triggers: SESSION_TRANSCRIPT_TURN_TRIGGERS,
 		},
 	},

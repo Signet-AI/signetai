@@ -30,13 +30,17 @@ describe("session transcript turn index", () => {
 	}
 
 	async function indexedTurns(sessionKey: string): Promise<string[]> {
+		return (await turnRows(sessionKey)).map((row) => row.text);
+	}
+
+	async function turnRows(
+		sessionKey: string,
+	): Promise<Array<{ id: number; seq: number; byte_offset: number; text: string }>> {
 		return await getDbAccessor().withReadDbAsync((db) =>
-			prepareTypedStatement<{ text: string }>(
+			prepareTypedStatement<{ id: number; seq: number; byte_offset: number; text: string }>(
 				db,
-				"SELECT text FROM session_transcript_turns WHERE session_key = ? AND agent_id = ? ORDER BY id",
-			)
-				.all(sessionKey, "noam")
-				.map((row) => row.text),
+				"SELECT id, seq, byte_offset, text FROM session_transcript_turns WHERE session_key = ? AND agent_id = ? ORDER BY seq",
+			).all(sessionKey, "noam"),
 		);
 	}
 
@@ -184,7 +188,9 @@ describe("session transcript turn index", () => {
 
 		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
 		expect(await backfillChunk(1)).toEqual({ complete: true, indexed: 1 });
-		expect(await indexedTurns("sess-a")).toEqual(["User: kilo boundary"]);
+		expect(await turnRows("sess-a")).toEqual([
+			expect.objectContaining({ seq: 1, byte_offset: 0, text: "User: kilo boundary" }),
+		]);
 		expect(await indexedTurns("sess-b")).toEqual(["User: lima second"]);
 	});
 
@@ -243,7 +249,7 @@ describe("session transcript turn index", () => {
 		expect(await indexedTurns("sess-a")).toEqual(["User: uniform ", "victor"]);
 
 		upsertSessionTranscript("sess-a", "User: uniform victoré", "codex", "/repo", "noam");
-		expect(await indexedTurns("sess-a")).toEqual(["User: uniform victoré"]);
+		expect(await indexedTurns("sess-a")).toEqual(["User: uniform ", "victoré"]);
 	});
 
 	it("reindexes the whole session when the old content was empty", async () => {
@@ -321,13 +327,84 @@ describe("session transcript turn index", () => {
 		expect(await backfillChunk()).toEqual({ complete: true, indexed: 1 });
 	});
 
-	it("reindexes the whole session when new text continues the last word", async () => {
+	it("reindexes from the last turn when new text continues its last word", async () => {
 		init();
 		upsertSessionTranscript("sess-a", "Assistant: deploy the kuber", "codex", "/repo", "noam");
 		upsertSessionTranscript("sess-a", "Assistant: deploy the kubernetes cluster", "codex", "/repo", "noam");
-
 		expect(await indexedTurns("sess-a")).toEqual(["Assistant: deploy the kubernetes cluster"]);
-		expect(await indexedMatches("kubernetes")).toBe(1);
+
+		upsertSessionTranscript("sess-b", "User: alpha", "codex", "/repo", "noam");
+		await append("sess-b", "Assistant: deploy the kuber");
+		const [first] = await turnRows("sess-b");
+		upsertSessionTranscript("sess-b", "User: alpha\nAssistant: deploy the kubernetes", "codex", "/repo", "noam");
+
+		expect(await turnRows("sess-b")).toEqual([
+			{ id: first?.id, seq: 1, byte_offset: 0, text: "User: alpha" },
+			expect.objectContaining({ seq: 2, byte_offset: 11, text: "\nAssistant: deploy the kubernetes" }),
+		]);
+		expect(await indexedMatches("kubernetes")).toBe(2);
+		expect(await indexedMatches("kuber")).toBe(0);
+	});
+
+	it("reindexes only from the first changed turn when a later turn is rewritten", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		await append("sess-a", "User: charlie next");
+		const [first] = await turnRows("sess-a");
+		upsertSessionTranscript(
+			"sess-a",
+			"User: alpha question\nAssistant: delta answer\nUser: charlie next",
+			"codex",
+			"/repo",
+			"noam",
+		);
+
+		expect(await turnRows("sess-a")).toEqual([
+			{ id: first?.id, seq: 1, byte_offset: 0, text: "User: alpha question" },
+			expect.objectContaining({ seq: 2, byte_offset: 20, text: "\nAssistant: delta answer\nUser: charlie next" }),
+		]);
+		expect(await indexedMatches("bravo")).toBe(0);
+		expect(await search("delta charlie")).toEqual(["sess-a"]);
+	});
+
+	it("drops the trailing turns when the content shrinks to a turn boundary", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question"]);
+		expect(await indexedMatches("bravo")).toBe(0);
+	});
+
+	it("keeps turn rows that rebuild the stored content through appends, rewrites and renames", async () => {
+		init();
+		const steps = [
+			"User: one",
+			"User: one\nAssistant: two",
+			"User: one\nAssistant: two\nUser: thrée",
+			"User: one\nAssistant: twofold\nUser: thrée",
+			"User: one\nAssistant: twofold",
+			"User: oné",
+			"",
+			"User: five six",
+		];
+		upsertSessionTranscript("sess-a", steps[0] ?? "", "codex", "/repo", "noam");
+		for (const content of steps) {
+			await write("UPDATE session_transcripts SET content = ? WHERE session_key = ?", content, "sess-a");
+			const rows = await turnRows("sess-a");
+			expect(rows.map((row) => row.text).join("")).toBe(content);
+			expect(rows.map((row) => row.seq)).toEqual(rows.map((_, index) => index + 1));
+			let offset = 0;
+			for (const row of rows) {
+				expect(row.byte_offset).toBe(offset);
+				offset += Buffer.byteLength(row.text);
+			}
+		}
+		await write("UPDATE session_transcripts SET session_key = ? WHERE session_key = ?", "sess-b", "sess-a");
+		expect(await turnRows("sess-a")).toEqual([]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: five six"]);
 	});
 
 	it("ignores punctuation-only and control characters in the query", async () => {

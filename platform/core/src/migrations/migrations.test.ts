@@ -434,6 +434,9 @@ describe("migration framework", () => {
 				)
 				.get(),
 		).toEqual({ count: 1 });
+		expect(db.query("SELECT seq, byte_offset, text FROM session_transcript_turns").all()).toEqual([
+			{ seq: 1, byte_offset: 0, text: "User: charlie" },
+		]);
 	});
 
 	test("a missing transcript turn trigger re-runs 176 and requeues every session for the turn backfill", () => {
@@ -489,14 +492,14 @@ describe("migration framework", () => {
 	test("a missing transcript turn lookup index re-runs 176", () => {
 		db = createFreshDb();
 		runMigrations(db);
-		db.exec("DROP INDEX idx_session_transcript_turns_session");
+		db.exec("DROP INDEX idx_session_transcript_turns_seq");
 		expect(hasPendingMigrations(db)).toBe(true);
 		runMigrations(db);
 		expect(
 			db
-				.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_transcript_turns_session'")
+				.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_transcript_turns_seq'")
 				.get(),
-		).toEqual({ name: "idx_session_transcript_turns_session" });
+		).toEqual({ name: "idx_session_transcript_turns_seq" });
 	});
 
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {
