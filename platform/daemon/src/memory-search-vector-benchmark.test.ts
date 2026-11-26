@@ -4,18 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ReadScope, vectorSearchWithMetadata } from "@signet/core";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
-import { type ReadDb, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { loadMemoryConfig } from "./memory-config";
 import { buildSourceChunkVectorHits, hybridRecall } from "./memory-search";
 import { checkNativeProvider, shutdownNativeProvider } from "./native-embedding";
-
-type CoreVectorSearch = (
-	db: ReadDb,
-	query: Float32Array,
-	options: Record<string, unknown>,
-) => { readonly results: ReadonlyArray<{ readonly id: string }> };
 
 const FIXTURE_ROWS = 20_000;
 const DIMENSIONS = 768;
@@ -36,22 +30,6 @@ const BASES = [
 	"Notes on onboarding a new contributor to the daemon codebase.",
 ] as const;
 const OWN: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null };
-
-function isCoreVectorSearch(value: unknown): value is CoreVectorSearch {
-	return typeof value === "function";
-}
-
-async function importBaseline(envName: string): Promise<CoreVectorSearch> {
-	const path = process.env[envName];
-	if (!path) throw new Error(`${envName} must name a baseline core search module`);
-	const module: unknown = await import(path);
-	const candidate =
-		typeof module === "object" && module !== null && "vectorSearchWithMetadata" in module
-			? module.vectorSearchWithMetadata
-			: undefined;
-	if (!isCoreVectorSearch(candidate)) throw new Error(`${path} does not export vectorSearchWithMetadata`);
-	return candidate;
-}
 
 function positiveInteger(name: string, fallback: number): number {
 	const value = Number(process.env[name] ?? fallback);
@@ -92,10 +70,6 @@ function percentiles(samples: readonly number[]): { readonly p50: number; readon
 		const modelCache = process.env.SIGNET_RECALL_BENCH_MODEL_CACHE;
 		if (!modelCache || !existsSync(modelCache))
 			throw new Error("SIGNET_RECALL_BENCH_MODEL_CACHE must name a model cache");
-		const oldPostfilter = await importBaseline("SIGNET_RECALL_BENCH_OLD_POSTFILTER_CORE");
-		const scopedBeforeReview = await importBaseline("SIGNET_RECALL_BENCH_SCOPED_BEFORE_REVIEW_CORE");
-		const finalCore: CoreVectorSearch = (db, query, options) =>
-			vectorSearchWithMetadata(db, query, { ...options, readScope: OWN });
 		const warmups = positiveInteger("SIGNET_RECALL_BENCH_WARMUPS", 10);
 		const samples = positiveInteger("SIGNET_RECALL_BENCH_SAMPLES", 100);
 		const coreSamples = positiveInteger("SIGNET_RECALL_BENCH_CORE_SAMPLES", samples);
@@ -174,21 +148,22 @@ function percentiles(samples: readonly number[]): { readonly p50: number; readon
 				});
 			seedRows(0, FIXTURE_ROWS, "memory");
 
-			const coreCases: ReadonlyArray<readonly [string, CoreVectorSearch]> = [
-				["oldPostfilter", oldPostfilter],
-				["scopedBeforeReview", (db, query, options) => scopedBeforeReview(db, query, { ...options, readScope: OWN })],
-				["finalCore", finalCore],
-			];
-			const coreDurations = new Map<string, number[]>(coreCases.map(([name]) => [name, []]));
+			expect(config.search.top_k).toBe(20);
+			const coreLimits = [10, 20, 40];
+			const coreDurations = new Map<number, number[]>(coreLimits.map((limit) => [limit, []]));
 			for (let index = 0; index < warmups + coreSamples; index++) {
 				const query = queryVectors[index % queryVectors.length] ?? queryVectors[0];
 				if (!query) throw new Error("missing query vector");
-				for (const [name, search] of coreCases) {
+				const offset = index % coreLimits.length;
+				const order = [...coreLimits.slice(offset), ...coreLimits.slice(0, offset)];
+				for (const limit of order) {
 					const start = performance.now();
-					const response = getSyncDbAccessor().withReadDb((db) => search(db, query, { limit: 10 }));
+					const response = getSyncDbAccessor().withReadDb((db) =>
+						vectorSearchWithMetadata(db, query, { limit, readScope: OWN }),
+					);
 					const elapsed = performance.now() - start;
-					expect(response.results.length).toBe(10);
-					if (index >= warmups) coreDurations.get(name)?.push(elapsed);
+					expect(response.results.length).toBe(limit);
+					if (index >= warmups) coreDurations.get(limit)?.push(elapsed);
 				}
 			}
 
@@ -251,6 +226,10 @@ function percentiles(samples: readonly number[]): { readonly p50: number; readon
 				},
 				provider: { name: "native", model: "nomic-ai/nomic-embed-text-v1.5", status: provider },
 				runtime: `bun ${Bun.version}`,
+				revision: process.env.SIGNET_RECALL_BENCH_REVISION,
+				coreModule: import.meta.resolve("@signet/core"),
+				searchTopK: config.search.top_k,
+				resultLimit: 10,
 				warmups,
 				samples,
 				coreSamples,
