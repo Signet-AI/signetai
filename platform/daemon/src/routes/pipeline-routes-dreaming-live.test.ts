@@ -371,7 +371,7 @@ describe("Dreaming live routes", () => {
 		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "1";
 		try {
-			const app = createPipelineApp();
+			const app = createPipelineApp(true);
 			const before = getSseDiagnosticsSnapshot();
 			dreamingLiveEvents.startPass({ passId: "live-pass-a", agentId: "agent-a", mode: "incremental" });
 			for (let index = 0; index < 120; index += 1) {

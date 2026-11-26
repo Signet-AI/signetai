@@ -259,15 +259,53 @@ function resolveScopedDreamAgent(
 	return resolveScopedAgentId(c, requestedDreamAgentId(c, body), resolveDaemonAgentId());
 }
 
-async function resolveDreamRead(
+async function resolveScopedDreamRead(
 	c: Context,
 	body: Readonly<Record<string, unknown>> = {},
-): Promise<{ readonly agentId: string; readonly error?: string; readonly readScope?: ReadScope }> {
-	if (!c.get("organization")) return resolveScopedDreamAgent(c, body);
-	const readScope = await resolveKnowledgeReadScope(c, requestedDreamAgentId(c, body));
-	const agentId: unknown = c.get("readAuditAgent");
-	if (typeof agentId !== "string") throw new Error("Dreaming read agent is unresolved");
-	return { agentId, readScope };
+): Promise<
+	| { readonly agentId: string; readonly readScope: ReadScope; readonly local: boolean }
+	| { readonly error: string; readonly status: 400 | 401 | 403 }
+> {
+	const principal: Principal | undefined = c.get("principal");
+	if (!principal || !["local", "user", "legacy"].includes(principal.kind))
+		return { error: "unauthorized", status: 401 };
+	const requested = reconcileAgentSources([
+		readString(body, "agentId"),
+		readString(body, "agent_id"),
+		c.req.query("agentId"),
+		c.req.query("agent_id"),
+		c.req.header("x-signet-agent-id"),
+	]);
+	if (!requested.ok) return { error: requested.error.reason, status: requested.error.status };
+	if (principal.boundAgentId && requested.value && requested.value !== principal.boundAgentId)
+		return { error: "agent_binding_conflict", status: 403 };
+	if (c.get("organization")) {
+		const readScope = await resolveKnowledgeReadScope(c, requested.value);
+		const agentId: unknown = c.get("readAuditAgent");
+		if (typeof agentId !== "string") throw new Error("Dreaming read agent is unresolved");
+		return { agentId, readScope, local: false };
+	}
+	const access = principalAccess(principal);
+	const resolved = access
+		? resolveReadAgent(principal, requested.value)
+		: resolveScopedDreamAgent(c, { ...body, agentId: requested.value ?? principal.boundAgentId ?? undefined });
+	if ("ok" in resolved && !resolved.ok) return { error: resolved.error.reason, status: resolved.error.status };
+	if (!("ok" in resolved) && resolved.error) return { error: resolved.error, status: 403 };
+	if (principal.kind === "user" && !access) return { error: "org_policy", status: 403 };
+	const agentId = "ok" in resolved ? resolved.value : resolved.agentId;
+	const legacyProject = c.get("auth")?.claims?.scope.project;
+	const projects = legacyProject
+		? principal.allowedProjects === null || principal.allowedProjects.includes(legacyProject)
+			? [legacyProject]
+			: []
+		: principal.allowedProjects;
+	const reach = { kind: "own" as const, agentId };
+	if (principal.kind === "legacy" && !access && !principal.boundAgentId && !c.get("auth")?.claims)
+		return { error: "unauthorized", status: 401 };
+	if (principal.kind === "legacy") return { agentId, local: false, readScope: { reach, compartments: [], projects } };
+	if (principal.kind === "user" && !principal.userId) return { error: "unauthorized", status: 401 };
+	const readScope = await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal));
+	return { agentId, readScope, local: principal.kind === "local" };
 }
 
 function parseDreamingCursor(value: string | undefined): number | null | "invalid" {
@@ -741,8 +779,8 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	app.get("/api/dream/evidence/coverage", async (c) => {
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		let registered: boolean;
 		try {
 			registered = await isAgentRegistered(scopedAgent.agentId);
@@ -763,45 +801,43 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/dream/status", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = getDbAccessor();
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const agentId = scopedAgent.agentId;
 
-		const readScope = scopedAgent.readScope;
-		const state = readScope ? null : await getDreamingState(accessor, agentId);
+		const state = await getDreamingState(accessor, agentId, null, scopedAgent.readScope);
 		const probe =
-			!readScope && c.req.query("measure") === "1"
+			scopedAgent.local && c.req.query("measure") === "1"
 				? await probeDreamingEpisodicBacklog(accessor, agentId, cfg.dreaming.tokenThreshold)
 				: null;
-		const episodicTokensPending = readScope
-			? null
-			: probe === null
-				? getDreamingEpisodicTokenBacklogCachedOrNull(agentId)
+		const episodicTokensPending =
+			probe === null
+				? scopedAgent.local
+					? getDreamingEpisodicTokenBacklogCachedOrNull(agentId)
+					: null
 				: probe.kind === "exact"
 					? probe.tokens
 					: null;
-		const passes = await getDreamingPasses(accessor, agentId, 10, readScope);
-		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId, readScope);
-		const reviewedEvidence = await getDreamingReviewedEvidence(accessor, agentId, readScope);
-		const attention = readScope
-			? await listDreamingAttention(accessor, { readScope })
-			: getDreamingAttention(accessor, agentId);
+		const passes = await getDreamingPasses(accessor, agentId, 10, scopedAgent.readScope);
+		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId, scopedAgent.readScope);
+		const reviewedEvidence = await getDreamingReviewedEvidence(accessor, agentId, scopedAgent.readScope);
+		const attention = await getDreamingAttentionScoped(accessor, agentId, {
+			limit: 20,
+			readScope: scopedAgent.readScope,
+		});
 		const worker = getDreamingWorker();
-		const storedActivePasses = readScope ? await getActiveDreamingPasses(accessor, agentId, { readScope }) : null;
-		const activePasses = storedActivePasses
-			? storedActivePasses.map((pass) => ({ passId: pass.id, mode: pass.mode }))
-			: (worker?.activePasses ?? [])
-					.filter((pass) => pass.agentId === agentId || pass.scopes.includes(agentId))
-					.map((pass) => ({ passId: pass.passId, mode: pass.mode }));
+		const activePasses = (
+			await getActiveDreamingPasses(accessor, agentId, { readScope: scopedAgent.readScope, signal: c.req.raw.signal })
+		).map((pass) => ({ passId: pass.id, mode: pass.mode }));
 
 		return c.json({
 			worker: {
 				running: worker !== null,
-				active: storedActivePasses ? storedActivePasses.length > 0 : worker?.activeAgentId === agentId,
-				activeAgentId: !readScope && worker?.activeAgentId === agentId ? agentId : null,
+				active: activePasses.length > 0,
+				activeAgentId: activePasses.length > 0 ? agentId : null,
 				activePasses,
 			},
-			scheduler: readScope ? null : (worker?.scheduler ?? null),
+			scheduler: scopedAgent.local ? (worker?.scheduler ?? null) : null,
 			state,
 			episodicTokensPending,
 			config: {
@@ -825,8 +861,8 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 	app.get("/api/dream/passes/active", async (c) => {
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const requestSignal = c.req.raw.signal;
 		try {
 			return c.json({
@@ -842,8 +878,8 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 	});
 	app.get("/api/dream/passes/:passId/events", async (c) => {
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const passId = c.req.param("passId").trim();
 		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
 		const requestSignal = c.req.raw.signal;
@@ -916,7 +952,12 @@ export function registerPipelineRoutes(app: Hono): void {
 							const event = pending.shift();
 							if (!event) break;
 							pendingBytes -= Buffer.byteLength(JSON.stringify(event));
-							const currentScope = await resolveKnowledgeReadScope(c, requestedDreamAgentId(c));
+							const current = await resolveScopedDreamRead(c);
+							if ("error" in current) {
+								finishScoped("scope_changed");
+								return;
+							}
+							const currentScope = current.readScope;
 							const visible = await getDreamingPass(getDbAccessor(), scopedAgent.agentId, passId, {
 								readScope: currentScope,
 								signal: producer.signal,
@@ -940,7 +981,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					}
 				};
 				const writeLiveEvent = (event: DreamingLiveEvent): void => {
-					if (!scopedAgent.readScope) {
+					if (scopedAgent.local && scopedAgent.readScope.projects === null) {
 						send(event);
 						return;
 					}
@@ -1006,8 +1047,8 @@ export function registerPipelineRoutes(app: Hono): void {
 		return sse.response;
 	});
 	app.get("/api/dream/passes/:passId/tools", async (c) => {
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const passId = c.req.param("passId").trim();
 		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
 		return c.json({
@@ -1017,8 +1058,8 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 	app.get("/api/dream/passes/:passId/policy", async (c) => {
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const passId = c.req.param("passId").trim();
 		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
 		const found = await getDreamingPassPolicy(getDbAccessor(), scopedAgent.agentId, passId, scopedAgent.readScope);
@@ -1026,8 +1067,10 @@ export function registerPipelineRoutes(app: Hono): void {
 		return c.json({ agentId: scopedAgent.agentId, passId, policy: found.policy });
 	});
 	app.get("/api/dream/quality", async (c) => {
-		const scopedAgent = await resolveDreamRead(c);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
+		if (!scopedAgent.local || scopedAgent.readScope.projects !== null)
+			return c.json({ agentId: scopedAgent.agentId, unavailable: true });
 		return c.json(await getDreamingQualityReport(getDbAccessor(), scopedAgent.agentId, scopedAgent.readScope));
 	});
 
@@ -1046,8 +1089,8 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 		const sourceId = readString(body, "sourceId");
 		if (!sourceId) return c.json({ error: "Missing episodic source id" }, 400);
-		const scopedAgent = await resolveDreamRead(c, body);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = await resolveScopedDreamRead(c, body);
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const agentId = scopedAgent.agentId;
 		if (sourceKind === "summary") {
 			const accessor = getDbAccessor();
@@ -1151,10 +1194,15 @@ export function registerPipelineRoutes(app: Hono): void {
 		const body = asRecord(raw);
 		const readOnly =
 			getDreamingCapabilityManifest().find((item) => item.id === c.req.param("capability"))?.readOnly === true;
-		const scopedAgent: { readonly agentId: string; readonly error?: string; readonly readScope?: ReadScope } = readOnly
-			? await resolveDreamRead(c, body)
-			: resolveScopedDreamAgent(c, body);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedAgent = readOnly
+			? await resolveScopedDreamRead(c, body)
+			: (() => {
+					const write = resolveScopedDreamAgent(c, body);
+					return write.error
+						? { error: write.error, status: 403 as const }
+						: { agentId: write.agentId, readScope: undefined, local: false };
+				})();
+		if ("error" in scopedAgent) return c.json({ error: scopedAgent.error }, scopedAgent.status);
 		const input = asRecord(body.input);
 		const requestedInputAgent = readString(input, "agentId");
 		const foreign =
