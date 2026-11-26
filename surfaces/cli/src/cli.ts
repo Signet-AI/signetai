@@ -56,6 +56,7 @@ import {
 	organizationRestart,
 	organizationStatus,
 } from "./commands/organization-client.js";
+import { organizationDoctor } from "./commands/organization-doctor.js";
 import { organizationLogs } from "./commands/organization-logs.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
@@ -1003,7 +1004,13 @@ registerAppCommands(program, {
 	launchDashboard: (options) => showTargetDashboard(options),
 	migrateSchema: (options) => migrateSchema(options, daemonDeps),
 	setupWizard: (options) => setupWizard(options, setupDeps),
-	showDoctor: (options) => showDoctor(options, healthDeps),
+	showDoctor: (options) => {
+		const transport = cliTransport();
+		const target = cliTarget();
+		return transport && target
+			? organizationDoctor(transport, target.url, options.json)
+			: showDoctor(options, healthDeps);
+	},
 	showStatus: (options) => showTargetStatus(options),
 	syncTemplates: () => runSyncTemplates(),
 });

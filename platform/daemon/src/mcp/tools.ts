@@ -414,6 +414,17 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	};
 	registerMcpTool(
 		server,
+		"signet_operator_doctor",
+		{
+			title: "Inspect Instance Health",
+			description:
+				"Inspect identity, server clock, and database-owner availability. Requires diagnostics. Content totals are unavailable rather than global.",
+			inputSchema: z.object({}).strict(),
+		},
+		async () => organizationResult("/api/org/operator/doctor"),
+	);
+	registerMcpTool(
+		server,
 		"signet_operator_restart",
 		{
 			title: "Request Supervised Restart",

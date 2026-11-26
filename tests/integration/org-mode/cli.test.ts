@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { OrgDaemon, repo } from "./daemon";
 import { Fixture, device } from "./fixture";
@@ -23,12 +24,24 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 				new Response(child.stderr).text(),
 				child.exited,
 			]);
-			expect(code, stderr).toBe(expectedCode);
-			if (expectedCode !== 0) expect(stdout).toBe("");
-			return JSON.parse(expectedCode === 0 ? stdout : stderr);
+			expect(code, args[0] === "doctor" ? `${stderr}\n${stdout}` : stderr).toBe(expectedCode);
+			if (expectedCode !== 0 && expectedCode !== 2) expect(stdout).toBe("");
+			return JSON.parse(expectedCode === 0 || expectedCode === 2 ? stdout : stderr);
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		const doctor = await cli(["doctor", "--json"]);
+		expect(doctor.identity.organization.name).toBe("Org acceptance");
+		expect(doctor.diagnostics.database).toBe("ready");
+		expect(Math.abs(doctor.clock.skewMs)).toBeLessThan(30_000);
+		const inlinePath = join(daemon.home, ".gemini", "settings.json");
+		await mkdir(join(daemon.home, ".gemini"), { recursive: true });
+		await writeFile(inlinePath, JSON.stringify({ SIGNET_API_KEY: "fixture-inline-only" }));
+		const degraded = await cli(["doctor", "--json"], text(admin.credential.bearer), 2);
+		expect(degraded.findings.some((finding: { reason: string }) => finding.reason === "inline_key")).toBe(true);
+		expect(JSON.stringify(degraded)).not.toContain("fixture-inline-only");
+		await rm(inlinePath);
+		expect((await cli(["doctor", "--json"], text(fixture.user("alice").session.bearer), 4)).reason).toBe("permission");
 		expect((await cli(["restart", "--json"], text(admin.credential.bearer), 1)).reason).toBe("supervisor_required");
 		expect((await cli(["daemon", "restart", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
 			"supervisor_required",

@@ -88,6 +88,18 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("organization doctor requires diagnostics and reports an explicit server clock", async () => {
+		await claim();
+		const bob = await member("doctor-member");
+		expect((await call("/api/org/operator/doctor", "GET", undefined, bob.token)).status).toBe(403);
+		const response = await call("/api/org/operator/doctor");
+		expect(response.status).toBe(200);
+		const result = await response.json();
+		expect(result.identity.user.username).toBe("admin");
+		expect(Number.isFinite(Date.parse(result.serverTime))).toBe(true);
+		expect(result.diagnostics.database).toBe("ready");
+		expect(result.diagnostics.content).toBe("unavailable");
+	});
 	test("restart without a verified supervisor refuses without stopping", async () => {
 		await claim();
 		const bob = await member("restart-member");

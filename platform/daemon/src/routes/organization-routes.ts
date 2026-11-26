@@ -439,6 +439,14 @@ export function registerOrganizationRoutes(
 		}),
 	);
 	app.get(
+		"/api/org/operator/doctor",
+		active(async (c) => {
+			const org = c.get("organization");
+			if (!org) throw new IdentityError(401, "missing_credential");
+			return c.json(await admin.organizationDoctor(user(c), org, hybridProxyDetected));
+		}),
+	);
+	app.get(
 		"/api/org/operator/capabilities",
 		active(async (c) => {
 			operations.requireAdmin(user(c));

@@ -1,4 +1,5 @@
 import { operatorActor, operatorRequest } from "../operator-jobs";
+import { attemptAsync } from "@signet/core";
 import { z } from "zod";
 import { readableClassificationsFor } from "../classification-access";
 import { audienceSubjectFromPrincipal, inFlightClassificationSql, resolveReadScope } from "../read-scope";
@@ -6,7 +7,7 @@ import { dbOwnerOrganizationPurgePlan } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import { logger } from "../logger";
 import { type AgentRecord, canActAs } from "./agent-access";
-import { groupOwner, requireAdmin, requireAudit } from "./organization-operations";
+import { groupOwner, requireAdmin, requireAudit, whoami } from "./organization-operations";
 import {
 	auditStatement,
 	IdentityError,
@@ -514,6 +515,24 @@ export async function bulkRevoke(p: Principal, input: unknown) {
 		auditStatement(p, "key.bulk_revoked", "job", jobId, { ids: data.ids }),
 	]);
 	return { jobId };
+}
+export async function organizationDoctor(
+	p: Principal,
+	org: import("./organization-store").OrganizationRow,
+	proxy: boolean,
+) {
+	if (!p.permissions.has("diagnostics")) throw new IdentityError(403, "permission", "Requires diagnostics permission");
+	const database = await attemptAsync(() =>
+		organizationQuery<{ available: number }>(statement("SELECT 1 AS available", [], "get")),
+	);
+	const identity = await whoami(p, org, proxy);
+	await organizationWrite([auditStatement(p, "operator.doctor", "instance", null)]);
+	return {
+		identity,
+		serverTime: new Date().toISOString(),
+		diagnostics: { database: database?.available === 1 ? "ready" : "unavailable", content: "unavailable" },
+		status: database?.available === 1 ? "healthy" : "degraded",
+	};
 }
 export async function beginSupervisedRestart(p: Principal, supervisor: string) {
 	requireAdmin(p);

@@ -245,3 +245,20 @@ request before dispatch; the new process marks the job complete only after it
 is listening. `--wait` tolerates the bounded connection interruption. An
 unconfirmed dispatch remains incomplete. Requests, dispatches, and completion
 are audited. MCP exposes `signet_operator_restart`.
+
+## Organization doctor
+
+`signet doctor --org --json` reports your identity, credential expiry, the
+instance's database-owner availability, and estimated clock skew with its
+round-trip uncertainty. It inspects local harness configurations for inline
+keys and validates protected connector key files. Only connectors targeting
+this instance are probed; other instances are never contacted. Recent 401/403
+history is shown when your user session owns that connector key. Unavailable
+history and incomplete local scans are labeled explicitly. No key value is
+printed, no local daemon starts, and no local database is opened. Findings
+include suggested fixes and produce exit code 2; authentication and permission
+errors retain exit codes 3 and 4.
+
+`GET /api/org/operator/doctor` requires `diagnostics` and audits the inspection.
+It returns an explicit server timestamp and identity, not global content counts.
+MCP exposes `signet_operator_doctor`.

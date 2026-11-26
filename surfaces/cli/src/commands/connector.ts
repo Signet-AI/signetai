@@ -64,7 +64,7 @@ export const supportedHarnesses = [
 	"oh-my-pi",
 	"pi",
 ] as const;
-function connectorFor(harness: string, profile?: string) {
+export function connectorFor(harness: string, profile?: string) {
 	switch (harness) {
 		case "claude-code":
 			return new ClaudeCodeConnector();

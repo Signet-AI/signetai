@@ -429,6 +429,8 @@ without hiding setup affordances).
 
 ### Supervised organization operations
 
+- `GET /api/org/operator/doctor`: audited identity, clock, and DB-owner diagnostics.
+
 - `GET /api/org/operator/capabilities`: verified supervisor availability, admin only.
 - `POST /api/org/operator/restart`: unrestricted admin; empty JSON body; HTTP 202
   with `{accepted, jobId, status, supervisor}`. Poll the job for actual readiness.
