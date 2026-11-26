@@ -42,6 +42,7 @@ export function OrganizationMemory() {
 	const [history, setHistory] = useState<readonly string[]>([]);
 	const [selected, setSelected] = useState<MemoryRow | null>(null);
 	useEffect(() => {
+		if (!agentId) return;
 		setOffset(0);
 		setCursor("");
 		setHistory([]);
