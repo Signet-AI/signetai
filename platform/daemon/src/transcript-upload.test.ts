@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, prepareTypedStatement } from "./db-accessor";
+import * as runtime from "./db-owner-runtime";
 import { dbOwnerAgentRemove, dbOwnerCommitTranscriptUpload, getDbOwnerForAccessor } from "./db-owner-runtime";
 import { deleteSessionTranscript } from "./session-transcript-lifecycle";
 import {
@@ -276,6 +277,72 @@ describe("transcript upload ranges", () => {
 		expect(await drainTranscriptUploadPurges(dir, { reopen: true })).toEqual({ status: "removed" });
 		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
 		expect(readFileSync(transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0), "utf8")).toBe('{"new":1}\n');
+	});
+
+	it("removes the bytes of a range whose commit fails while the daemon keeps running", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"keep":1}\n', { sessionKey: "sess-2", sessionId: "sess-2" }));
+		const failing = spyOn(runtime, "dbOwnerCommitTranscriptUpload").mockRejectedValueOnce(new Error("owner down"));
+		try {
+			await expect(uploadTranscriptRange(accessor, request('{"lost":1}\n'))).rejects.toThrow("owner down");
+		} finally {
+			failing.mockRestore();
+		}
+		expect(existsSync(file())).toBe(false);
+		expect(readFileSync(transcriptUploadFilePath(dir, "noam", 0, "sess-2", 0), "utf8")).toBe('{"keep":1}\n');
+	});
+
+	it("keeps the bytes of a range that committed before the owner reply was lost", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		const commit = runtime.dbOwnerCommitTranscriptUpload;
+		const lost = spyOn(runtime, "dbOwnerCommitTranscriptUpload").mockImplementationOnce(
+			async (owner, input, options) => {
+				await commit(owner, input, options);
+				throw new Error("owner reply lost");
+			},
+		);
+		try {
+			await expect(uploadTranscriptRange(accessor, request('{"b":2}\n', { offset: 8 }))).rejects.toThrow(
+				"owner reply lost",
+			);
+		} finally {
+			lost.mockRestore();
+		}
+		expect(readFileSync(file(), "utf8")).toBe('{"a":1}\n{"b":2}\n');
+		expect(await uploadTranscriptRange(accessor, request('{"c":3}\n', { offset: 16 }))).toMatchObject({
+			status: "committed",
+		});
+	});
+
+	it("stops at its deadline when another request arrives during a pass and runs that request next", async () => {
+		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO session_transcript_upload_purges (path, epoch, requested_at, drained_at) VALUES (?, 1, 'now', 'now')",
+			).run(transcriptUploadAgentRelativePath("noam"));
+		});
+		const drain = runtime.dbOwnerDrainTranscriptUploadPurges;
+		let overlapped = false;
+		const spy = spyOn(runtime, "dbOwnerDrainTranscriptUploadPurges").mockImplementation(
+			async (owner, input, options) => {
+				if (!overlapped) {
+					overlapped = true;
+					void drainTranscriptUploadPurges(dir, { reopen: true });
+				}
+				return await drain(owner, input, options);
+			},
+		);
+		try {
+			expect(await drainTranscriptUploadPurges(dir, { deadlineMs: 0 })).toEqual({ status: "pending" });
+			for (let i = 0; i < 100 && existsSync(transcriptUploadEpochDirectory(dir, "noam", 0)); i++) await Bun.sleep(100);
+		} finally {
+			spy.mockRestore();
+		}
+		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
 	});
 
 	it("removes more files than the old pass cap in one drain request", async () => {

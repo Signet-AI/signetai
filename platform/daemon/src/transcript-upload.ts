@@ -114,28 +114,54 @@ export async function uploadTranscriptRange(
 			await handle.close();
 		}
 		if (input.offset === 0) await syncDirectory(root, dirname(path));
-		const result = await dbOwnerCommitTranscriptUpload(
-			owner,
-			{
-				agentId: input.agentId,
-				sessionKey: input.sessionKey,
-				sessionId: input.sessionId,
-				harness: input.harness,
-				project: input.project,
-				projectScoped: input.projectScoped,
-				purgeEpoch: scope.purgeEpoch,
-				generation: input.generation,
-				expectedOffset: input.offset,
-				tailSha256,
-				source: { path, sizeBytes: end, mtimeMs },
-				capturedAt: input.capturedAt,
-			},
-			options,
-		);
+		let result: TranscriptUploadCommitResult;
+		try {
+			result = await dbOwnerCommitTranscriptUpload(
+				owner,
+				{
+					agentId: input.agentId,
+					sessionKey: input.sessionKey,
+					sessionId: input.sessionId,
+					harness: input.harness,
+					project: input.project,
+					projectScoped: input.projectScoped,
+					purgeEpoch: scope.purgeEpoch,
+					generation: input.generation,
+					expectedOffset: input.offset,
+					tailSha256,
+					source: { path, sizeBytes: end, mtimeMs },
+					capturedAt: input.capturedAt,
+				},
+				options,
+			);
+		} catch (error) {
+			if (await rangeAbsent(owner, input, scope.purgeEpoch, end)) {
+				await discardUncommittedRange(root, path, input.offset);
+			}
+			throw error;
+		}
 		if (result.status !== "committed") await discardUncommittedRange(root, path, input.offset);
 		if (result.status === "purge_pending") void drainTranscriptUploadPurges(input.basePath);
 		return result;
 	});
+}
+
+async function rangeAbsent(
+	owner: Awaited<ReturnType<typeof getDbOwnerForAccessor>>,
+	input: TranscriptUploadRequest,
+	purgeEpoch: number,
+	end: number,
+): Promise<boolean> {
+	const scope = await attemptAsync(() =>
+		dbOwnerReadTranscriptUploadScope(
+			owner,
+			{ agentId: input.agentId, sessionKey: input.sessionKey },
+			{ operation: "transcript-upload" },
+		),
+	);
+	if (!scope) return false;
+	const state = scope.state;
+	return !(scope.purgeEpoch === purgeEpoch && state?.generation === input.generation && state.committedOffset >= end);
 }
 
 async function discardUncommittedRange(root: string, path: string, offset: number): Promise<void> {
@@ -240,14 +266,15 @@ async function runTranscriptUploadPurges(
 				{ basePath, reopen },
 				{ operation: "transcript-upload.purge", signal },
 			);
+			const more = state.requested || (pending > 0 && progressed);
+			if (more && Date.now() >= deadline) {
+				continuePending = true;
+				return { status: "pending" };
+			}
 			if (state.requested) continue;
 			if (pending === 0) return { status: "removed" };
 			if (!progressed) {
 				logger.warn("transcripts", "Transcript upload purge stopped without progress", { pending });
-				return { status: "pending" };
-			}
-			if (Date.now() >= deadline) {
-				continuePending = true;
 				return { status: "pending" };
 			}
 		}
