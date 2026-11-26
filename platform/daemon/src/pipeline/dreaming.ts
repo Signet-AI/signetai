@@ -793,7 +793,7 @@ export async function getActiveDreamingPasses(
 		"dreaming.passes.active",
 		`${dreamingPassSelect(true)} WHERE status = 'running' ${predicate.sql} ORDER BY started_at ASC, id ASC`,
 		[...predicate.args],
-		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
+		{ deadlineMs: 30_000, estimatedWorkUnits: 10, signal: options.signal },
 	);
 }
 

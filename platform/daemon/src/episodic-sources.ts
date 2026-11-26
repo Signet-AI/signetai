@@ -1263,10 +1263,10 @@ function selectEpisodicSourceRefs(
 	const rows = db
 		.prepare(
 			`SELECT kind, id
-			 FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY kind,id ORDER BY label_rank ASC, julianday(captured_at) DESC) AS selection_rank FROM (
+			 FROM (
 			 ${union}
-			 ))
-			 WHERE match_score > 0 AND selection_rank = 1
+			 )
+			 WHERE match_score > 0
 			 ${params.preferredCompartment === undefined ? orderBy : orderBy ? orderBy.replace("ORDER BY ", "ORDER BY label_rank ASC, ") : "ORDER BY label_rank ASC"}
 			 LIMIT ${limit === null ? -1 : "?"}`,
 		)

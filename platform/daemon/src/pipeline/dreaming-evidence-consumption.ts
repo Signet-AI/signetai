@@ -610,7 +610,7 @@ export function recordDreamingEvidenceConsumptionInTx(
 		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now'), 'review', 1, ?)
 		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, COALESCE(compartment_id,0)) DO UPDATE SET
 		   stalled_passes = dreaming_evidence_consumption.stalled_passes + 1,
- pass_id = excluded.pass_id, updated_at = excluded.updated_at`,
+ updated_at = excluded.updated_at`,
 	);
 	const attention = tableExists(db, "dreaming_attention");
 	const raiseStall = db.prepare(

@@ -1677,6 +1677,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				"idx_dreaming_history_nodes_pass",
 				"idx_dreaming_state_partition",
 				"idx_memory_artifacts_dreaming_partition_path",
+				"idx_memory_artifacts_dreaming_partition_sha",
 				"idx_memory_entity_mentions_compartment",
 				"idx_derived_memory_sources_compartment",
 				"idx_memory_history_compartment",

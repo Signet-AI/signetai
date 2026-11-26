@@ -1053,9 +1053,12 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(true);
+		expect(result.items?.[1]).toMatchObject({ ok: true });
 		expect(
-			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-source")),
-		).toBeNull();
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT status, archive_reason FROM entities WHERE id = ?").get("e-source"),
+			),
+		).toEqual({ status: "archived", archive_reason: "merged" });
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-target")),
 		).not.toBeNull();
@@ -1277,9 +1280,12 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(true);
+		expect(result.items?.[1]).toMatchObject({ ok: true });
 		expect(
-			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-source")),
-		).toBeNull();
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT status, archive_reason FROM entities WHERE id = ?").get("e-source"),
+			),
+		).toEqual({ status: "archived", archive_reason: "merged" });
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-target")),
 		).not.toBeNull();

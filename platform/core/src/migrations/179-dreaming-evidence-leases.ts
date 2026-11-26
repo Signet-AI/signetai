@@ -443,6 +443,9 @@ export function up(db: MigrationDb): void {
 	db.exec(
 		"CREATE INDEX IF NOT EXISTS idx_memory_artifacts_dreaming_partition_path ON memory_artifacts(agent_id,compartment_id,source_path)",
 	);
+	db.exec(
+		"CREATE INDEX IF NOT EXISTS idx_memory_artifacts_dreaming_partition_sha ON memory_artifacts(agent_id,compartment_id,source_sha256,COALESCE(source_id,''),COALESCE(is_deleted,0),captured_at DESC,source_path)",
+	);
 	partitionDreamingState(db);
 	partitionEvidenceProgress(db);
 	upgradeDreamingChildren(db);

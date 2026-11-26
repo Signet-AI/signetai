@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth/types";
+import { legacyPrincipal, localPrincipal } from "../auth/principal";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { DbOwnerAdmissionError, DbOwnerDeadlineError } from "../db-owner-client";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
@@ -36,7 +37,7 @@ async function ownerStateMatchesWithin(predicate: () => boolean, timeoutMs: numb
 	return true;
 }
 
-function createPipelineApp(): Hono {
+function createPipelineApp(local = false): Hono {
 	const app = new Hono();
 	const now = Math.floor(Date.now() / 1000);
 	const claims: TokenClaims = {
@@ -48,6 +49,7 @@ function createPipelineApp(): Hono {
 	};
 	app.use("*", async (c, next) => {
 		c.set("auth", { authenticated: true, claims });
+		c.set("principal", local ? { ...localPrincipal(), boundAgentId: "agent-a" } : legacyPrincipal(claims));
 		await next();
 	});
 	registerPipelineRoutes(app);
@@ -191,7 +193,7 @@ describe("Dreaming live routes", () => {
 
 	it("reads the cached backlog in the status response", async () => {
 		recordDreamingEpisodicTokenBacklog("agent-a", 12345);
-		const app = createPipelineApp();
+		const app = createPipelineApp(true);
 
 		const response = await app.request("/api/dream/status");
 		expect(response.status).toBe(200);
@@ -256,6 +258,9 @@ describe("Dreaming live routes", () => {
 	});
 
 	it("reports another agent's running pass without naming that agent", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.prepare("UPDATE dreaming_passes SET status='completed' WHERE agent_id='agent-a'").run(),
+		);
 		const worker = {
 			running: true,
 			activeAgentId: "agent-other",
@@ -273,7 +278,19 @@ describe("Dreaming live routes", () => {
 		}
 	});
 
-	it("reports running passes that cover the scoped agent without leaking other scopes", async () => {
+	it("reports only durable running passes owned by the scoped agent", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("UPDATE dreaming_passes SET status='completed'").run();
+			for (const [id, agentId, scope] of [
+				["p-own", "agent-a", ["agent-a"]],
+				["p-member", "agent-b", ["agent-a", "agent-b"]],
+				["p-other", "agent-b", ["agent-b"]],
+			] as const) {
+				db.prepare(
+					"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES(?,?,?,'incremental','running')",
+				).run(id, agentId, JSON.stringify(scope));
+			}
+		});
 		const worker = {
 			running: true,
 			activeAgentId: "agent-a",
@@ -288,10 +305,7 @@ describe("Dreaming live routes", () => {
 			const response = await createPipelineApp().request("/api/dream/status");
 			expect(response.status).toBe(200);
 			const body = (await response.json()) as { worker: { activePasses: unknown[] } };
-			expect(body.worker.activePasses).toEqual([
-				{ passId: "p-own", mode: "incremental" },
-				{ passId: "p-member", mode: "incremental" },
-			]);
+			expect(body.worker.activePasses).toEqual([{ passId: "p-own", mode: "incremental" }]);
 			expect(JSON.stringify(body.worker)).not.toContain("agent-y");
 			expect(JSON.stringify(body.worker)).not.toContain("agent-z");
 		} finally {
@@ -299,7 +313,10 @@ describe("Dreaming live routes", () => {
 		}
 	});
 
-	it("reports no active passes when no worker is running", async () => {
+	it("reports no active passes when the scoped durable queue is drained", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.prepare("UPDATE dreaming_passes SET status='completed' WHERE agent_id='agent-a'").run(),
+		);
 		setDreamingWorker(null);
 		const body = (await (await createPipelineApp().request("/api/dream/status")).json()) as {
 			worker: { activePasses: unknown[] };
@@ -318,8 +335,7 @@ describe("Dreaming live routes", () => {
 
 	it("measures the backlog on request instead of reporting the empty cache", async () => {
 		invalidateDreamingEpisodicTokenBacklog("agent-a");
-		const app = new Hono();
-		registerPipelineRoutes(app);
+		const app = createPipelineApp(true);
 		const pending = async (query: string) =>
 			((await (await app.request(`/api/dream/status${query}`)).json()) as { episodicTokensPending: number | null })
 				.episodicTokensPending;
