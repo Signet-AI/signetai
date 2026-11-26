@@ -144,21 +144,22 @@ function text(value: unknown): string | null {
 	return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+export function sessionFetch(path: string, init: RequestInit = {}): Promise<Response> {
+	if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\"))
+		throw new Error("Dashboard requests must stay on this instance.");
+	const headers = new Headers(authHeaders());
+	new Headers(init.headers).forEach((value, key) => {
+		headers.set(key, value);
+	});
+	return fetch(path, { ...init, credentials: "same-origin", headers });
+}
+
 async function request(
 	path: string,
 	init: RequestInit,
 ): Promise<{ readonly status: number; readonly body: unknown; readonly retryAfter: string | null } | null> {
 	try {
-		const headers = new Headers(authHeaders());
-		new Headers(init.headers).forEach((value, key) => {
-			headers.set(key, value);
-		});
-		const res = await fetch(path, {
-			...init,
-			credentials: "same-origin",
-			headers,
-			signal: AbortSignal.timeout(15_000),
-		});
+		const res = await sessionFetch(path, { ...init, signal: AbortSignal.timeout(15_000) });
 		const body: unknown = await res.json().catch(() => null);
 		return { status: res.status, body, retryAfter: res.headers.get("Retry-After") };
 	} catch {
@@ -430,6 +431,7 @@ function knownPermissions(): readonly string[] | null {
 
 export function can(session: Session, permission: string): boolean {
 	if (session.kind === "checking" || session.kind === "unreachable") return false;
+	if ("whoami" in session && session.whoami && session.permissions === null) return false;
 	return session.permissions === null || session.permissions.includes(permission);
 }
 
@@ -448,6 +450,7 @@ export async function signOut(all = false): Promise<void> {
 	}
 	writeToken(null);
 	signedInOnce = false;
+	lastWhoami = null;
 	return refreshSession();
 }
 
