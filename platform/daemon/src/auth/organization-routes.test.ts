@@ -88,6 +88,78 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("Dreaming review metadata follows pass audience and agent scope", async () => {
+		const { registerPipelineRoutes } = await import("../routes/pipeline-routes");
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerPipelineRoutes(app);
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("dream-reviewer");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin", compliance: true });
+		const team = await (await call("/api/org/groups", "POST", { name: "Dream review" })).json();
+		await call(`/api/org/groups/${team.id}/members/${bob.userId}`, "PUT", { role: "member" });
+		const agent = await (
+			await call("/api/agents", "POST", { name: "Dream team", kind: "team", ownerGroupId: team.id })
+		).json();
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Dream HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO dreaming_passes(id,agent_id,mode,status,started_at,created_at) VALUES('review-dream-public',?,'content','running','2026-11-26','2026-11-26')",
+				[agent.agentId],
+			),
+			statement("INSERT INTO compartments(key) VALUES(?)", [label.id]),
+			statement(
+				"INSERT INTO compartment_members(compartment_id,classification_id) SELECT id,? FROM compartments WHERE key=?",
+				[label.id, label.id],
+			),
+		]);
+		const path = `/api/dream/status?agentId=${agent.agentId}`;
+		const before = await (await call(path)).json();
+		expect(before.passes[0].author).toEqual({ kind: "system", name: "Dreaming" });
+		expect(before.passes[0].team).toEqual({ id: team.id, name: "Dream review" });
+		expect(before.passes[0]).not.toHaveProperty("classifications");
+		await organizationWrite([
+			statement(
+				"INSERT INTO dreaming_passes(id,agent_id,compartment_id,mode,status,started_at,created_at) SELECT 'review-dream-hr',?,id,'content','running','2026-11-26','2026-11-26' FROM compartments WHERE key=?",
+				[agent.agentId, label.id],
+			),
+		]);
+		expect(await (await call(path)).json()).toEqual(before);
+		const allowedResponse = await call(path, "GET", undefined, bob.token);
+		expect(allowedResponse.status, await allowedResponse.clone().text()).toBe(200);
+		const allowed = await allowedResponse.json();
+		expect(allowed.passes.find((pass: { id: string }) => pass.id === "review-dream-hr").classifications).toEqual([
+			{ id: label.id, name: "Dream HR" },
+		]);
+		const active = await (
+			await call(`/api/dream/passes/active?agentId=${agent.agentId}`, "GET", undefined, bob.token)
+		).json();
+		expect(active.items.find((pass: { id: string }) => pass.id === "review-dream-hr").classifications).toEqual([
+			{ id: label.id, name: "Dream HR" },
+		]);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{
+					name: "bound-dream-review",
+					agentId: bob.agentId,
+					permissions: ["recall"],
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				bob.token,
+			)
+		).json();
+		expect((await call(path, "GET", undefined, key.secret)).status).toBe(403);
+	});
 	test("memory review filters and totals stay inside audience and agent scope", async () => {
 		const { registerMemoryRoutes } = await import("../routes/memory-routes");
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");

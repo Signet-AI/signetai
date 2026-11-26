@@ -153,6 +153,10 @@ A stream ends after at most 60 seconds or the requested event limit (1–500, de
 
 `GET /api/memories` accepts `author` (user ID), `team` (owning team ID), and `classification` (classification ID), together with the existing type, agent, and pagination options. Filters are combined before pagination in the read owner. `stats.total`, `stats.critical`, and `stats.withEmbeddings` describe only matching readable memories, not hidden material. Unknown and unreadable classifications both return no matches. Classified rows include `classifications: [{ id, name }]` only for audience members; unclassified rows and existing local responses do not gain that key. The MCP `memory_list` tool accepts the same filters.
 
+## Dreaming review metadata
+
+Organization Dreaming status and pass responses include the system author (`{ kind: "system", name: "Dreaming" }`) and the owning `team` (`{ id, name }`, or `null`). A visible classified pass also includes `classifications: [{ id, name }]`. These labels come from the pass's inherited compartment and are returned only to its audience. Hidden passes remain absent without hidden counts or placeholder metadata. Local responses are unchanged. Metadata lookup is capped at 100 passes per request and rechecks the read scope inside the owner.
+
 ## User lookup for compliance
 
 `GET /api/org/users/lookup?q=<name-or-email>` lets administrators and compliance officers find active people without granting the full user directory. Results contain only `id`, `displayName`, and `email`. Search is literal, case-insensitive, and bounded to 128 characters. Pages default to 20 people with a maximum `limit` of 50; pass the returned `nextCursor` as `cursor` for the next page. Agent- or project-restricted credentials cannot search this organization-wide directory. Queries are audited without recording the search text. `GET /api/org/users` remains admin-only. Agents can use the same operation through `signet_org_user_lookup`.

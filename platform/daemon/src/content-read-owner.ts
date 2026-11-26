@@ -168,6 +168,30 @@ export function executeContentRead(
 	check: () => void = () => {},
 ): unknown {
 	check();
+	if (request.op === "dream_pass_review") {
+		if (request.ids.length > 100) throw new Error("Dream pass review admission limit exceeded");
+		if (request.scope.projects !== null) return [];
+		const predicate = readScopeSql("p", request.scope, { visibility: null, memory: null, source: null, session: null });
+		const rows = db
+			.prepare(
+				`SELECT p.id,p.compartment_id,g.id AS teamId,g.name AS teamName FROM dreaming_passes p LEFT JOIN agents a ON a.id=p.agent_id LEFT JOIN groups g ON g.id=a.owner_group_id WHERE p.id IN (SELECT value FROM json_each(?)) ${predicate.sql}`,
+			)
+			.all(JSON.stringify(request.ids), ...predicate.args);
+		return rows.map((row) => {
+			check();
+			const labels = db
+				.prepare(
+					"SELECT c.id,c.name FROM classifications c JOIN compartment_members cm ON cm.classification_id=c.id WHERE cm.compartment_id=? ORDER BY c.id",
+				)
+				.all(row.compartment_id);
+			return {
+				id: row.id,
+				author: { kind: "system", name: "Dreaming" },
+				team: row.teamId === null ? null : { id: row.teamId, name: row.teamName },
+				...(labels.length ? { classifications: labels } : {}),
+			};
+		});
+	}
 	if (request.op === "memory_list") {
 		const predicate = readScopeSql("m", request.scope, { current: true });
 		const args: unknown[] = [...predicate.args];

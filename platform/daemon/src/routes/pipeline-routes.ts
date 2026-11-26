@@ -797,7 +797,13 @@ export function registerPipelineRoutes(app: Hono): void {
 		const worker = getDreamingWorker();
 		const activePasses = (
 			await getActiveDreamingPasses(accessor, agentId, { readScope: scopedAgent.readScope, signal: c.req.raw.signal })
-		).map((pass) => ({ passId: pass.id, mode: pass.mode }));
+		).map((pass) => ({
+			passId: pass.id,
+			mode: pass.mode,
+			...(pass.author ? { author: pass.author } : {}),
+			...(pass.team !== undefined ? { team: pass.team } : {}),
+			...(pass.classifications ? { classifications: pass.classifications } : {}),
+		}));
 
 		return c.json({
 			worker: {
