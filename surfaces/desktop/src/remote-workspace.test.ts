@@ -110,6 +110,43 @@ describe("desktop remote workspace", () => {
 		}
 	});
 
+	test("device polling preserves a pending authorization across instance outages", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-device-outage-"));
+		let tokenStatus = 503;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === "/api/auth/device/start")
+					return Response.json({
+						deviceCode: "disposable-device",
+						userCode: "ABCD-EFGH",
+						verificationUriComplete: `${new URL(request.url).origin}/auth/device?user_code=ABCD-EFGH`,
+					});
+				return Response.json(
+					{ reason: tokenStatus === 503 ? "unavailable" : "authorization_pending" },
+					{ status: tokenStatus },
+				);
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			await desktop.signIn();
+			await Bun.sleep(2050);
+			expect(await desktop.pollSignIn()).toMatchObject({ state: "unreachable" });
+			tokenStatus = 428;
+			await Bun.sleep(2050);
+			expect(await desktop.pollSignIn()).toMatchObject({ state: "pending" });
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	}, 10_000);
+
 	test("HTTP failures stay honest and offline logout retains retryable shared credentials", async () => {
 		const root = await mkdtemp(join(tmpdir(), "desktop-failures-"));
 		let status = 503;

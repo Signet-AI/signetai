@@ -159,6 +159,8 @@ export class RemoteWorkspace {
 				signal: AbortSignal.timeout(10_000),
 			});
 			if (this.flow !== flow) return this.statusValue;
+			if (response.status >= 500)
+				return this.status("unreachable", `Instance returned HTTP ${response.status}. Waiting to retry sign-in.`);
 			if (response.status === 428) return this.status("pending", "Waiting for approval in your browser.");
 			if (response.status === 429) {
 				flow.interval = Math.min(flow.interval + 5000, 30_000);
