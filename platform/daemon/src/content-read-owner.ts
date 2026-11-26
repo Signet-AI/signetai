@@ -70,9 +70,10 @@ function scopedContentDb(
 						subject?.local || scope.compartments === "all"
 							? ""
 							: ` AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.agent_id=_content.agent_id AND (ca.target_kind='agent'${columns.has("source_id") ? " OR (ca.target_kind='source' AND ca.target_id=_content.source_id)" : ""}${columns.has("canonical_key") ? " OR (ca.target_kind='session' AND (ca.target_id=_content.canonical_key OR 'session:'||ca.target_id=_content.canonical_key OR ca.target_id='session:'||_content.canonical_key))" : ""}) AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?)))))`;
-					args.push(...access.args, ...(audience ? [subject?.userId, subject?.userId] : []));
-					if (scope.compartments === "all")
+					if (scope.compartments === "all") {
+						args.push(...access.args);
 						return `${table} AS (SELECT ${[...columns].map((column) => `_content.${column}`).join(",")} FROM (SELECT raw.*,NULL AS compartment_id FROM main.${table} raw) _content WHERE 1=1${access.sql}${scope.projects !== null ? " AND 0" : ""})`;
+					}
 					const projected = [...columns]
 						.filter(
 							(column) =>
@@ -102,14 +103,27 @@ function scopedContentDb(
 					}
 					if (table === "source_import_files") {
 						projected.push(`${counts()} AS record_count`);
-						for (const size of ["size_bytes", "upload_size", "upload_offset"])
-							projected.push(
-								`(SELECT COALESCE(SUM(readable.byte_length),0) FROM source_import_records readable WHERE readable.file_id=_content.id) AS ${size}`,
-							);
+						for (const size of ["size_bytes", "upload_size", "upload_offset"]) {
+							const readableSize = `(SELECT COALESCE(SUM(readable.byte_length),0) FROM source_import_records readable WHERE readable.file_id=_content.id)`;
+							if (subject?.userId) {
+								projected.push(
+									`CASE WHEN EXISTS(SELECT 1 FROM main.source_import_jobs upload_owner WHERE upload_owner.id=_content.job_id AND upload_owner.agent_id=_content.agent_id AND upload_owner.author_user_id=?) THEN _content.${size} ELSE ${readableSize} END AS ${size}`,
+								);
+								args.push(subject.userId);
+							} else projected.push(`${readableSize} AS ${size}`);
+						}
 					}
 					if (columns.has("updated_at")) projected.push("_content.created_at AS updated_at");
-					for (const column of ["error", "lease_token", "content_hash", "upload_digest"])
-						if (columns.has(column)) projected.push(`NULL AS ${column}`);
+					for (const column of ["error", "lease_token", "content_hash", "upload_digest"]) {
+						if (!columns.has(column)) continue;
+						if (table === "source_import_files" && column === "upload_digest" && subject?.userId) {
+							projected.push(
+								`CASE WHEN EXISTS(SELECT 1 FROM main.source_import_jobs upload_owner WHERE upload_owner.id=_content.job_id AND upload_owner.agent_id=_content.agent_id AND upload_owner.author_user_id=?) THEN _content.upload_digest ELSE NULL END AS upload_digest`,
+							);
+							args.push(subject.userId);
+						} else projected.push(`NULL AS ${column}`);
+					}
+					args.push(...access.args, ...(audience ? [subject?.userId, subject?.userId] : []));
 					const hasFiles =
 						table === "source_import_jobs"
 							? " AND EXISTS(SELECT 1 FROM source_import_files readable WHERE readable.job_id=_content.id)"
@@ -884,7 +898,7 @@ function namedReadStatement(request: NamedContentReadRequest): {
 			};
 		case "sources.import.files":
 			return {
-				sql: `SELECT id,job_id,source_id,agent_id,ordinal,name,size_bytes,state,record_count,created_at,updated_at,upload_generation,upload_offset,upload_size,storage_state FROM source_import_files WHERE job_id = ? AND ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} ORDER BY ordinal`,
+				sql: `SELECT id,job_id,source_id,agent_id,ordinal,name,size_bytes,state,record_count,created_at,updated_at,upload_generation,upload_offset,upload_size,upload_digest,storage_state FROM source_import_files WHERE job_id = ? AND ${request.scope.reach.kind === "all" ? "? IS NOT NULL" : "agent_id = ?"} ORDER BY ordinal`,
 				tables: ["source_import_records", "source_import_files", "source_import_jobs"],
 				result: "all",
 			};
