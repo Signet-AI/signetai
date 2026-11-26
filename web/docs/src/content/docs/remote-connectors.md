@@ -8,6 +8,12 @@ Signet connector registry, not in hook commands, MCP configuration, or harness
 environment assignments. A remote connection never silently switches to the
 local daemon when the remote daemon is unavailable.
 
+At harness runtime, the registry target takes precedence over
+`SIGNET_DAEMON_URL`, then `SIGNET_HOST`/`SIGNET_PORT`, then the loopback default.
+An explicit CLI URL flag remains a manual override. Credentials associated with
+one origin are not borrowed for an override to another origin. Hermes freezes
+these inputs when its client starts; later environment changes do not retarget it.
+
 ## Sign in and connect
 
 Your administrator supplies the URL of a reachable team daemon and authorizes

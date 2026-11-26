@@ -4,6 +4,7 @@ import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConnectorRegistry, DurableOutbox, LoginStore, readKeyFile, resolveTarget, writeKeyFile } from "../node.js";
+import conformance from "../../../../tests/fixtures/connector-conformance.json";
 
 let home: string;
 let env: Record<string, string | undefined>;
@@ -18,6 +19,42 @@ const absentKeyring = {
 	get: async () => ({ state: "unavailable" as const }),
 	set: async (_value: string) => ({ state: "unavailable" as const }),
 };
+
+for (const fixture of conformance.targets) {
+	test(`shared target conformance: ${fixture.name}`, async () => {
+		const fixtureEnv = { ...env, ...fixture.env };
+		const registry = fixture.registry;
+		if (registry) {
+			const keyFile = registry.key
+				? await writeKeyFile(registry.url, conformance.harness, registry.key, { env: fixtureEnv })
+				: undefined;
+			await new ConnectorRegistry({ env: fixtureEnv }).set(conformance.harness, {
+				url: registry.url,
+				...(keyFile ? { keyFile } : {}),
+			});
+		}
+		const target = await resolveTarget({
+			harness: conformance.harness,
+			env: fixtureEnv,
+			keyring: absentKeyring,
+			flagUrl: fixture.flagUrl ?? undefined,
+			flagKey: fixture.flagKey ?? undefined,
+			configUrl: fixture.configUrl ?? undefined,
+		});
+		expect(target.url).toBe(fixture.expected.url);
+		expect(target.credential.source).toBe(fixture.expected.source);
+		expect(await target.credential.get()).toBe(fixture.expected.credential);
+		expect(target.remote).toBe(fixture.expected.remote);
+	});
+}
+
+test("shared outbox record conformance", async () => {
+	const box = new DurableOutbox(conformance.outbox.origin, { env, harness: conformance.harness });
+	await box.enqueue(conformance.outbox.request);
+	const entry = (await box.entries())[0];
+	expect(entry).toMatchObject(conformance.outbox.record);
+	expect(Object.keys(entry ?? {}).sort()).toEqual(conformance.outbox.recordKeys);
+});
 
 test("target and credential precedence is origin-bound and uses core host semantics", async () => {
 	const registry = new ConnectorRegistry({ env });
@@ -44,9 +81,9 @@ test("target and credential precedence is origin-bound and uses core host semant
 		],
 		[
 			{ env: { ...env, SIGNET_DAEMON_URL: "https://env.example", SIGNET_API_KEY: "env" } },
-			"https://env.example",
-			"env",
-			"env",
+			"https://org.example",
+			"key-file",
+			"connector",
 		],
 		[{ flagUrl: "https://other.example" }, "https://other.example", "none", null],
 	] as const) {

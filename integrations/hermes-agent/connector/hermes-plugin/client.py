@@ -112,7 +112,7 @@ class SignetClient:
     """HTTP client for the Signet daemon API."""
 
     def __init__(self, agent_id: str = "", harness: str = "hermes-agent", *, env=None):
-        self._env = dict(env) if env is not None else {key: os.environ[key] for key in ("HOME", "APPDATA", "HERMES_HOME") if key in os.environ}
+        self._env = dict(env) if env is not None else {key: os.environ[key] for key in ("HOME", "APPDATA", "HERMES_HOME", "XDG_CONFIG_HOME", "SIGNET_DAEMON_URL", "SIGNET_HOST", "SIGNET_PORT", "SIGNET_API_KEY", "SIGNET_API_KEY_FILE") if key in os.environ}
         registry_harness = harness
         profile_home = self._env.get("HERMES_HOME")
         default_home = os.path.join(self._env.get("HOME") or os.path.expanduser("~"), ".hermes")

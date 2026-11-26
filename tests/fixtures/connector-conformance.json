@@ -1,0 +1,319 @@
+{
+  "version": 1,
+  "harness": "hermes-agent",
+  "targets": [
+    {
+      "name": "default-loopback",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": null,
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "http://127.0.0.1:3850",
+        "source": "none",
+        "credential": null,
+        "remote": false
+      }
+    },
+    {
+      "name": "host-port",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "127.0.0.2",
+        "SIGNET_PORT": "4141",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": null,
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "http://127.0.0.2:4141",
+        "source": "none",
+        "credential": null,
+        "remote": false
+      }
+    },
+    {
+      "name": "environment-url",
+      "env": {
+        "SIGNET_DAEMON_URL": "https://environment.example",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": null,
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "https://environment.example",
+        "source": "none",
+        "credential": null,
+        "remote": true
+      }
+    },
+    {
+      "name": "registry-before-environment",
+      "env": {
+        "SIGNET_DAEMON_URL": "https://environment.example",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": {
+        "url": "https://registry.example",
+        "key": "registry-fixture"
+      },
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "https://registry.example",
+        "source": "key-file",
+        "credential": "registry-fixture",
+        "remote": true
+      }
+    },
+    {
+      "name": "registry-before-environment-key",
+      "env": {
+        "SIGNET_DAEMON_URL": "https://environment.example",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": "environment-fixture"
+      },
+      "registry": {
+        "url": "https://registry.example",
+        "key": "registry-fixture"
+      },
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "https://registry.example",
+        "source": "key-file",
+        "credential": "registry-fixture",
+        "remote": true
+      }
+    },
+    {
+      "name": "registry-loopback",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": {
+        "url": "http://127.0.0.1:4141",
+        "key": null
+      },
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "http://127.0.0.1:4141",
+        "source": "none",
+        "credential": null,
+        "remote": false
+      }
+    },
+    {
+      "name": "flag-never-borrows-registry-key",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": {
+        "url": "https://registry.example",
+        "key": "registry-fixture"
+      },
+      "flagUrl": "https://other.example",
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "https://other.example",
+        "source": "none",
+        "credential": null,
+        "remote": true
+      }
+    },
+    {
+      "name": "local-flag-never-borrows-registry-key",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": {
+        "url": "https://registry.example",
+        "key": "registry-fixture"
+      },
+      "flagUrl": "http://127.0.0.1:4141",
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "http://127.0.0.1:4141",
+        "source": "none",
+        "credential": null,
+        "remote": false
+      }
+    },
+    {
+      "name": "flag-never-borrows-environment-key",
+      "env": {
+        "SIGNET_DAEMON_URL": "https://environment.example",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": "environment-fixture"
+      },
+      "registry": null,
+      "flagUrl": "https://flag.example",
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "https://flag.example",
+        "source": "none",
+        "credential": null,
+        "remote": true
+      }
+    },
+    {
+      "name": "explicit-flag-credential",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": {
+        "url": "https://registry.example",
+        "key": "registry-fixture"
+      },
+      "flagUrl": "https://flag.example",
+      "flagKey": "flag-fixture",
+      "configUrl": null,
+      "expected": {
+        "url": "https://flag.example",
+        "source": "flag",
+        "credential": "flag-fixture",
+        "remote": true
+      }
+    },
+    {
+      "name": "credentialed-loopback",
+      "env": {
+        "SIGNET_DAEMON_URL": "http://127.0.0.1:4141",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": "environment-fixture"
+      },
+      "registry": null,
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "http://127.0.0.1:4141",
+        "source": "env",
+        "credential": "environment-fixture",
+        "remote": true
+      }
+    },
+    {
+      "name": "host-before-legacy-config",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "localhost",
+        "SIGNET_PORT": "4141",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": null,
+      "flagUrl": null,
+      "flagKey": null,
+      "configUrl": "https://config.example",
+      "expected": {
+        "url": "http://127.0.0.1:4141",
+        "source": "none",
+        "credential": null,
+        "remote": false
+      }
+    },
+    {
+      "name": "mapped-loopback",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": ""
+      },
+      "registry": null,
+      "flagUrl": "http://[::ffff:127.0.0.2]:4141",
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "http://[::ffff:7f00:2]:4141",
+        "source": "none",
+        "credential": null,
+        "remote": false
+      }
+    }
+  ],
+  "outbox": {
+    "origin": "https://registry.example",
+    "request": {
+      "method": "POST",
+      "path": "/api/hooks/session-end",
+      "body": {
+        "agentId": "alice",
+        "sessionKey": "fixture-session",
+        "transcriptPath": "/fixture/transcript.jsonl"
+      },
+      "idempotencyKey": "fixture-idempotency",
+      "headers": {
+        "x-signet-runtime-path": "plugin"
+      }
+    },
+    "record": {
+      "version": 1,
+      "harness": "hermes-agent",
+      "origin": "https://registry.example",
+      "headers": {
+        "x-signet-runtime-path": "plugin"
+      },
+      "method": "POST",
+      "path": "/api/hooks/session-end",
+      "body": {
+        "agentId": "alice",
+        "sessionKey": "fixture-session",
+        "transcriptPath": "/fixture/transcript.jsonl"
+      },
+      "idempotencyKey": "fixture-idempotency",
+      "attempts": 0,
+      "lastError": null
+    },
+    "recordKeys": [
+      "attempts",
+      "body",
+      "createdAt",
+      "harness",
+      "headers",
+      "id",
+      "idempotencyKey",
+      "lastError",
+      "method",
+      "origin",
+      "path",
+      "version"
+    ]
+  }
+}

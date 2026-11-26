@@ -2,6 +2,7 @@
 	"extends": "../../tsconfig.json",
 	"compilerOptions": {
 		"rootDir": "src",
+		"resolveJsonModule": true,
 		"outDir": "dist",
 		"types": ["bun", "node"],
 		"lib": ["ES2023", "DOM", "DOM.Iterable"]

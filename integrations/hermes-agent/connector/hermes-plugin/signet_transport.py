@@ -858,9 +858,9 @@ def resolve_target(*, harness=None, flag_url=None, flag_key=None, config_url=Non
     if flag_url is not None and not flag_url:
         raise ValueError("flag_url cannot be empty")
     env_url = env.get("SIGNET_DAEMON_URL", "").strip()
-    has_credential = flag_key is not None or bool(env.get("SIGNET_API_KEY", "").strip()) or bool(env.get("SIGNET_API_KEY_FILE", "").strip())
-    entry = ConnectorRegistry(env=env).read().get(harness) if harness and not ((flag_url or env_url) and has_credential) else None
-    explicit = (flag_url or env_url or (entry or {}).get("url") or config_url or "").strip()
+    entry = ConnectorRegistry(env=env).read().get(harness) if harness and not (flag_url and flag_key is not None) else None
+    environment_binding = bool(env.get("SIGNET_HOST", "").strip() or env.get("SIGNET_PORT", "").strip())
+    explicit = (flag_url or (entry or {}).get("url") or env_url or (config_url if not environment_binding else None) or "").strip()
     if explicit:
         url = _url(explicit)
     else:
@@ -872,15 +872,17 @@ def resolve_target(*, harness=None, flag_url=None, flag_key=None, config_url=Non
         if not re.fullmatch(r"[0-9]+", port) or not 1 <= int(port) <= 65535:
             raise ValueError("SIGNET_PORT must be between 1 and 65535")
         url = _url("http://%s:%s" % ("[%s]" % host if ":" in host and not host.startswith("[") else host, int(port)))
+    environment_credential = bool(env.get("SIGNET_API_KEY", "").strip() or env.get("SIGNET_API_KEY_FILE", "").strip())
+    environment_credential_applies = flag_key is not None or not environment_credential or not env_url or _url(env_url) == url
     if flag_key is not None:
         if not flag_key.strip():
             raise ValueError("flag_key cannot be empty")
         credential = Credential("flag", lambda deadline, cancel: flag_key.strip())
-    elif env.get("SIGNET_API_KEY", "").strip():
+    elif environment_credential_applies and env.get("SIGNET_API_KEY", "").strip():
         key = env["SIGNET_API_KEY"].strip()
         credential = Credential("env", lambda deadline, cancel: key)
     else:
-        key_file = env.get("SIGNET_API_KEY_FILE", "").strip() or (entry.get("keyFile") if entry and _url(entry["url"]) == url else None)
+        key_file = (env.get("SIGNET_API_KEY_FILE", "").strip() if environment_credential_applies else None) or (entry.get("keyFile") if entry and _url(entry["url"]) == url else None)
         if key_file:
             read_key_file(key_file)
             credential = Credential("key-file", lambda deadline, cancel: read_key_file(key_file))
@@ -889,7 +891,18 @@ def resolve_target(*, harness=None, flag_url=None, flag_key=None, config_url=Non
             saved = _bounded(lambda: store.load(end, cancel), end, cancel, workers=_CREDENTIAL_WORKERS)
             credential = Credential(saved["source"] if saved else "none", store.get, store.refresh, lambda: store.source, lambda: store.reason)
     _check_control(end, cancel)
-    return ResolvedTarget(url, url, credential, bool(explicit) or urllib.parse.urlsplit(url).hostname not in ("localhost", "127.0.0.1", "::1"), selected_harness)
+    host = urllib.parse.urlsplit(url).hostname
+    if host is None:
+        raise ValueError("Resolved target has no hostname")
+    loopback = host == "localhost"
+    if host != "localhost":
+        try:
+            address = ipaddress.ip_address(host)
+            mapped = getattr(address, "ipv4_mapped", None)
+            loopback = address.is_loopback or bool(mapped and mapped.is_loopback)
+        except ValueError:
+            loopback = False
+    return ResolvedTarget(url, url, credential, credential.source != "none" or not loopback, selected_harness)
 
 
 _CREDENTIAL_WORKERS = threading.BoundedSemaphore(4)

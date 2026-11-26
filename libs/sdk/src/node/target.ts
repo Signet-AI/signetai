@@ -30,30 +30,31 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 	const flagUrl = options.flagUrl?.trim();
 	if (options.flagUrl !== undefined && !flagUrl) throw new TypeError("flagUrl cannot be empty");
 	const envUrl = env.SIGNET_DAEMON_URL?.trim();
-	const hasExplicitCredential =
-		options.flagKey !== undefined || Boolean(env.SIGNET_API_KEY?.trim()) || Boolean(env.SIGNET_API_KEY_FILE?.trim());
 	const entries =
-		options.harness && !((flagUrl || envUrl) && hasExplicitCredential)
-			? await new ConnectorRegistry(options).read()
-			: {};
+		options.harness && !(flagUrl && options.flagKey !== undefined) ? await new ConnectorRegistry(options).read() : {};
 	const registry = options.harness && Object.hasOwn(entries, options.harness) ? entries[options.harness] : undefined;
 
-	const url = resolveSignetDaemonUrl({
-		env: { ...env, SIGNET_DAEMON_URL: flagUrl || envUrl },
-		configUrl: registry?.url ?? options.configUrl,
-	});
+	const hasEnvironmentBinding = Boolean(env.SIGNET_HOST?.trim() || env.SIGNET_PORT?.trim());
+	const selectedUrl = flagUrl || registry?.url || envUrl || (!hasEnvironmentBinding ? options.configUrl : undefined);
+	const url = resolveSignetDaemonUrl({ env: { ...env, SIGNET_DAEMON_URL: selectedUrl } });
 	const origin = new URL(url).origin;
+	const hasEnvironmentCredential = Boolean(env.SIGNET_API_KEY?.trim() || env.SIGNET_API_KEY_FILE?.trim());
+	const environmentCredentialApplies =
+		options.flagKey !== undefined ||
+		!hasEnvironmentCredential ||
+		!envUrl ||
+		new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: envUrl } })).origin === origin;
 	let credential: TargetCredential;
 	if (options.flagKey !== undefined) {
 		if (!options.flagKey.trim()) throw new TypeError("flagKey cannot be empty");
 		const key = options.flagKey.trim();
 		credential = { source: "flag", get: async () => key };
-	} else if (env.SIGNET_API_KEY?.trim()) {
+	} else if (environmentCredentialApplies && env.SIGNET_API_KEY?.trim()) {
 		const key = env.SIGNET_API_KEY.trim();
 		credential = { source: "env", get: async () => key };
 	} else {
 		const keyFile =
-			env.SIGNET_API_KEY_FILE?.trim() ||
+			(environmentCredentialApplies ? env.SIGNET_API_KEY_FILE?.trim() : undefined) ||
 			(registry && new URL(registry.url).origin === origin ? registry.keyFile : undefined);
 		if (keyFile) {
 			await readKeyFile(keyFile);
