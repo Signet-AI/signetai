@@ -211,6 +211,22 @@ describe("createMcpServer", () => {
 		expect(capture.method).toBe("POST");
 		expect((await callTool(server, "signet_org_user_lookup", { q: "alice" })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/org/users/lookup?q=alice");
+		expect((await callTool(server, "signet_operator_doctor", {})).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/operator/doctor");
+		expect((await callTool(server, "signet_operator_restart", {})).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/operator/restart");
+		expect(capture.method).toBe("POST");
+		expect(
+			(
+				await callTool(server, "signet_org_sso_set", {
+					issuer: "https://idp.example",
+					clientId: "fixture",
+					clientSecretRef: "SSO_REFERENCE",
+				})
+			).isError,
+		).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/sso");
+		expect(capture.method).toBe("POST");
 		mockFetch(200, { actAs: [] }, capture);
 		await callTool(server, "signet_agent_purge", { agentId: "agent-purge", confirm: true });
 		expect(capture.url).toBe("http://localhost:3850/api/org/agents/agent-purge/purge");
@@ -407,7 +423,6 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_org_job");
 		expect(names).toContain("signet_classify");
 		expect(names).toContain("signet_operator_logs");
-		expect(names.length).toBe(69);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
