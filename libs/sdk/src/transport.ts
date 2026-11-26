@@ -1,3 +1,4 @@
+import { attemptAsync } from "@signet/core/attempt";
 import {
 	SignetError,
 	SignetCredentialError,
@@ -254,7 +255,7 @@ async function parseResponseBody(response: Response) {
 			text = new TextDecoder().decode(combined);
 		}
 	} catch (error) {
-		await response.body?.cancel().catch(() => undefined);
+		await attemptAsync(async () => response.body?.cancel());
 		if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) throw error;
 		throw new SignetResponseError(
 			"Response body read failed",
