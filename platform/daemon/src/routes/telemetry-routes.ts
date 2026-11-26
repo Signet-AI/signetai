@@ -1,3 +1,4 @@
+import { readPointerMiddleware } from "../read-pointers";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { AccountingSummaryProvenance } from "@signet/core";
@@ -9,7 +10,9 @@ import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { addResourceUtilizationSample, emptyResourceUtilizationStats } from "../resource-telemetry.js";
-import { getCheckpointsByProject, getCheckpointsBySessionAsync, redactCheckpointRow } from "../session-checkpoints.js";
+import { type CheckpointRow, redactCheckpointRow } from "../session-checkpoints.js";
+import { contentRead } from "../content-read";
+import { resolveRouteReadScope } from "./read-scope";
 import type { TelemetryEventType } from "../telemetry.js";
 import { type TimelineSources, buildTimeline } from "../timeline.js";
 import {
@@ -153,6 +156,7 @@ function boundedTelemetryLimit(raw: string | undefined, fallback: number, maximu
 }
 
 export function registerTelemetryRoutes(app: Hono): void {
+	app.use("*", readPointerMiddleware);
 	app.use("/api/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
@@ -200,7 +204,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const mutationHealth = getDbAccessor().withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				getDiagnostics(db, providerTracker, getUpdateState(), undefined, getDiagnosticsOptions()),
-			"routes/telemetry-routes.ts:200",
+			"routes/telemetry-routes.ts:204",
 		);
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",
@@ -213,36 +217,16 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/analytics/continuity", (c) => {
+	app.get("/api/analytics/continuity", async (c) => {
 		const project = c.req.query("project");
 		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const scores: Array<Record<string, unknown>> = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-			if (project) {
-				return db
-					.prepare(
-						`SELECT id, session_key, project, harness, score,
-					        memories_recalled, memories_used, novel_context_count,
-					        reasoning, created_at
-					 FROM session_scores
-					 WHERE project = ?
-					 ORDER BY created_at DESC
-					 LIMIT ?`,
-					)
-					.all(project, limit) as Array<Record<string, unknown>>;
-			}
-			return db
-				.prepare(
-					`SELECT id, session_key, project, harness, score,
-					        memories_recalled, memories_used, novel_context_count,
-					        reasoning, created_at
-					 FROM session_scores
-					 ORDER BY created_at DESC
-					 LIMIT ?`,
-				)
-				.all(limit) as Array<Record<string, unknown>>;
-		}, "routes/telemetry-routes.ts:221");
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const scores = await contentRead<Array<Record<string, unknown>>>(
+			{ op: "continuity", scope: resolved.scope, latest: false, project, limit },
+			c.req.raw.signal,
+		);
 
 		const scoreValues = scores.map((s) => s.score as number).reverse();
 		const trend = scoreValues.length >= 2 ? scoreValues[scoreValues.length - 1] - scoreValues[0] : 0;
@@ -259,30 +243,13 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/analytics/continuity/latest", (c) => {
-		const scores: Array<Record<string, unknown>> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb(
-				(db: import("../db-accessor").ReadDb) =>
-					db
-						.prepare(
-							`SELECT project, score, created_at
-					 FROM session_scores
-					 WHERE id IN (
-					   SELECT id FROM session_scores s2
-					   WHERE s2.project = session_scores.project
-					   ORDER BY s2.created_at DESC
-					   LIMIT 1
-					 )
-					 ORDER BY created_at DESC`,
-						)
-						.all() as Array<{
-						project: string | null;
-						score: number;
-						created_at: string;
-					}>,
-				"routes/telemetry-routes.ts:265",
-			);
+	app.get("/api/analytics/continuity/latest", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const scores = await contentRead<Array<Record<string, unknown>>>(
+			{ op: "continuity", scope: resolved.scope, latest: true, limit: 500 },
+			c.req.raw.signal,
+		);
 
 		return c.json({ scores });
 	});
@@ -803,7 +770,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/checkpoints", (c) => {
+	app.get("/api/checkpoints", async (c) => {
 		const project = c.req.query("project");
 		const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 
@@ -816,14 +783,29 @@ export function registerTelemetryRoutes(app: Hono): void {
 			projectNormalized = realpathSync(project);
 		} catch {}
 
-		const rows = getCheckpointsByProject(getDbAccessor(), projectNormalized, Math.min(limit, 100));
+		const resolved = await resolveRouteReadScope(c);
+		if (resolved instanceof Response) return resolved;
+		const rows = await contentRead<CheckpointRow[]>(
+			{
+				op: "checkpoints",
+				scope: resolved.scope,
+				project: projectNormalized,
+				limit: Number.isFinite(limit) ? Math.max(1, Math.min(limit, 100)) : 10,
+			},
+			c.req.raw.signal,
+		);
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});
 
 	app.get("/api/checkpoints/:sessionKey", async (c) => {
 		const sessionKey = c.req.param("sessionKey");
-		const rows = await getCheckpointsBySessionAsync(getDbAccessor(), sessionKey);
+		const resolved = await resolveRouteReadScope(c);
+		if (resolved instanceof Response) return resolved;
+		const rows = await contentRead<CheckpointRow[]>(
+			{ op: "checkpoints", scope: resolved.scope, sessionKey, limit: 500 },
+			c.req.raw.signal,
+		);
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});

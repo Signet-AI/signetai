@@ -2,9 +2,21 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBlackBoxSession, listBlackBoxSessions } from "./black-box";
+import { buildBlackBoxSessionInDb, listBlackBoxSessionsInDb } from "./black-box";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 
+async function buildBlackBoxSession(
+	accessor: ReturnType<typeof getDbAccessor>,
+	input: Parameters<typeof buildBlackBoxSessionInDb>[1],
+) {
+	return accessor.withReadDbAsync((db) => buildBlackBoxSessionInDb(db, input));
+}
+async function listBlackBoxSessions(
+	accessor: ReturnType<typeof getDbAccessor>,
+	input: Parameters<typeof listBlackBoxSessionsInDb>[1],
+) {
+	return accessor.withReadDbAsync((db) => listBlackBoxSessionsInDb(db, input));
+}
 let dir: string;
 
 function insertSearchTelemetry(input: {
@@ -77,7 +89,7 @@ afterEach(async () => {
 });
 
 describe("black box session replay", () => {
-	it("builds an ordered frame from recall telemetry and session artifacts", () => {
+	it("builds an ordered frame from recall telemetry and session artifacts", async () => {
 		insertSearchTelemetry({
 			agentId: "default",
 			sessionKey: "session-a",
@@ -107,7 +119,7 @@ describe("black box session replay", () => {
 			path: "memory/sessions/session-a.md",
 		});
 
-		const replay = buildBlackBoxSession(getDbAccessor(), { agentId: "default", sessionKey: "session-a" });
+		const replay = await buildBlackBoxSession(getDbAccessor(), { agentId: "default", sessionKey: "session-a" });
 
 		expect(replay.eventCount).toBe(4);
 		expect(replay.events.map((event) => event.kind)).toEqual([
@@ -120,7 +132,7 @@ describe("black box session replay", () => {
 		expect(replay.frame.likelyInfluences[0]?.refs[0]?.id).toBe("mem-1");
 	});
 
-	it("shows recall deliveries recorded under every harness of the session", () => {
+	it("shows recall deliveries recorded under every harness of the session", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			const event = db.prepare(
 				`INSERT INTO session_recall_events
@@ -132,14 +144,14 @@ describe("black box session replay", () => {
 			event.run("session-ab\0codex", "mem-other-session", "2026-06-20T10:00:03.000Z");
 		});
 
-		const replay = buildBlackBoxSession(getDbAccessor(), { agentId: "default", sessionKey: "session-a" });
+		const replay = await buildBlackBoxSession(getDbAccessor(), { agentId: "default", sessionKey: "session-a" });
 
 		expect(
 			replay.events.filter((event) => event.kind === "context.recalled").map((event) => event.refs[0]?.id),
 		).toEqual(["mem-codex", "mem-claude"]);
 	});
 
-	it("keeps sessions scoped by agent", () => {
+	it("keeps sessions scoped by agent", async () => {
 		insertSearchTelemetry({
 			agentId: "alice",
 			sessionKey: "shared-session-key",
@@ -153,13 +165,13 @@ describe("black box session replay", () => {
 			results: [{ id: "bob-memory", content: "bob", score: 0.7 }],
 		});
 
-		const replay = buildBlackBoxSession(getDbAccessor(), { agentId: "alice", sessionKey: "shared-session-key" });
+		const replay = await buildBlackBoxSession(getDbAccessor(), { agentId: "alice", sessionKey: "shared-session-key" });
 
 		expect(replay.events.flatMap((event) => event.refs).map((ref) => ref.id)).toContain("alice-memory");
 		expect(replay.events.flatMap((event) => event.refs).map((ref) => ref.id)).not.toContain("bob-memory");
 	});
 
-	it("lists sessions from telemetry and artifact lineage", () => {
+	it("lists sessions from telemetry and artifact lineage", async () => {
 		insertSearchTelemetry({
 			agentId: "default",
 			sessionKey: "telemetry-session",
@@ -172,14 +184,14 @@ describe("black box session replay", () => {
 			path: "memory/sessions/artifact-session.md",
 		});
 
-		const sessions = listBlackBoxSessions(getDbAccessor(), { agentId: "default" });
+		const sessions = await listBlackBoxSessions(getDbAccessor(), { agentId: "default" });
 
 		expect(sessions.map((session) => session.sessionKey)).toEqual(["artifact-session", "telemetry-session"]);
 		expect(sessions[0]?.artifactEvents).toBe(1);
 		expect(sessions[1]?.recallEvents).toBe(1);
 	});
 
-	it("merges typed telemetry and artifact aggregates for one session", () => {
+	it("merges typed telemetry and artifact aggregates for one session", async () => {
 		insertSearchTelemetry({
 			agentId: "default",
 			sessionKey: "combined-session",
@@ -192,7 +204,7 @@ describe("black box session replay", () => {
 			path: "memory/sessions/combined-session.md",
 		});
 
-		const [session] = listBlackBoxSessions(getDbAccessor(), { agentId: "default" });
+		const [session] = await listBlackBoxSessions(getDbAccessor(), { agentId: "default" });
 
 		expect(session).toMatchObject({
 			sessionKey: "combined-session",
@@ -202,7 +214,7 @@ describe("black box session replay", () => {
 		});
 	});
 
-	it("filters replay data by project when project scope is supplied", () => {
+	it("filters replay data by project when project scope is supplied", async () => {
 		insertSearchTelemetry({
 			agentId: "default",
 			sessionKey: "shared-session",
@@ -226,7 +238,7 @@ describe("black box session replay", () => {
 			).run();
 		});
 
-		const replay = buildBlackBoxSession(getDbAccessor(), {
+		const replay = await buildBlackBoxSession(getDbAccessor(), {
 			agentId: "default",
 			sessionKey: "shared-session",
 			project: "/allowed",

@@ -3188,6 +3188,13 @@ describe("deduplicateMemories", () => {
 			.prepare("SELECT id FROM memories WHERE content_hash = 'hash-dup' AND is_deleted = 1")
 			.all() as Array<{ id: string }>;
 		expect(deleted).toHaveLength(2);
+		const loserReason = db
+			.query<{ reason: string; metadata: string }, []>(
+				"SELECT reason,metadata FROM memory_history WHERE event='deleted' LIMIT 1",
+			)
+			.get();
+		expect(loserReason?.reason).not.toContain("high-importance");
+		expect(loserReason?.metadata).toContain('"duplicateOf":"high-importance"');
 	});
 
 	it("merges tags from all duplicates into the keeper", async () => {
@@ -3247,10 +3254,13 @@ describe("deduplicateMemories", () => {
 		expect(keeperHistory.some((h) => h.event === "merged")).toBe(true);
 
 		const loserHistory = db
-			.prepare("SELECT event, reason FROM memory_history WHERE memory_id = 'audit-loser'")
-			.all() as Array<{ event: string; reason: string }>;
+			.query<{ event: string; reason: string; metadata: string | null }, []>(
+				"SELECT event,reason,metadata FROM memory_history WHERE memory_id='audit-loser'",
+			)
+			.all();
 		expect(loserHistory.some((h) => h.event === "deleted")).toBe(true);
-		expect(loserHistory.some((h) => h.reason.includes("audit-keeper"))).toBe(true);
+		expect(loserHistory.every((h) => !h.reason.includes("audit-keeper"))).toBe(true);
+		expect(loserHistory.some((h) => h.metadata?.includes('"duplicateOf":"audit-keeper"'))).toBe(true);
 	});
 
 	it("respects dry-run mode", async () => {

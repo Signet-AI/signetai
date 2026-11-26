@@ -178,6 +178,7 @@ describe("GET /api/memories agent scope", () => {
 		const group = await list(app, "?agentId=team-a");
 		expect(ids(group.body)).toEqual(["team-b-global"]);
 		expect(group.body.memories[0]?.agent_id).toBe("team-b");
+		expect(group.body.stats.withEmbeddings).toBe(0);
 	});
 
 	it("counts only a memory with its own parent-scoped embedding", async () => {
@@ -361,7 +362,7 @@ describe("memory read routes apply agent scope in local mode", () => {
 
 		expect((await get(app, "/api/memory/beta-private?agentId=alpha")).status).toBe(404);
 		expect((await get(app, "/api/memory/beta-private/history?agentId=alpha")).status).toBe(404);
-		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).body.count).toBe(0);
+		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).status).toBe(404);
 
 		expect((await get(app, "/api/memory/beta-private?agentId=beta")).body.id).toBe("beta-private");
 		expect((await get(app, "/api/memory/beta-private/history?agentId=beta")).body.count).toBe(1);
@@ -552,7 +553,7 @@ describe("memory routes keep a scoped credential to its own agent's memories by 
 
 		expect((await get(app, "/api/memory/beta-private", headers)).status).toBe(404);
 		expect((await get(app, "/api/memory/beta-private/history", headers)).status).toBe(404);
-		expect((await get(app, "/api/memory/beta-private/lineage", headers)).body.count).toBe(0);
+		expect((await get(app, "/api/memory/beta-private/lineage", headers)).status).toBe(404);
 		expect((await get(app, "/memory/similar?id=beta-global", headers)).status).toBe(404);
 		expect((await get(app, "/api/memory/alpha-private", headers)).status).toBe(200);
 	});
@@ -1026,7 +1027,7 @@ describe("scope boundaries around memory routes", () => {
 		expect((await get(app, "/api/memory/jobs/alpha-job", headers)).body.memory_id).toBe("alpha-private");
 	});
 
-	it("marks a similarity result truncated when out-of-scope neighbors fill the candidate window", async () => {
+	it("does not let out-of-scope neighbors fill the candidate window", async () => {
 		const app = await makeApp("team");
 		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
 		const vector = (values: number[]) => new Uint8Array(new Float32Array(values).buffer);
@@ -1049,6 +1050,7 @@ describe("scope boundaries around memory routes", () => {
 		const res = await get(app, "/memory/similar?id=alpha-global&k=1", headers);
 		expect(res.status).toBe(200);
 		expect(JSON.stringify(res.body.results)).not.toContain("beta-near");
-		expect(res.body.truncated).toBe(true);
+		expect(rowIds(res.body.results)).toEqual(["alpha-neighbor"]);
+		expect(res.body.truncated).toBeUndefined();
 	});
 });

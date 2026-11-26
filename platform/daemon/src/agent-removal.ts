@@ -100,7 +100,7 @@ function archiveAgentRowsInTx(db: WriteDb, input: AgentRemovalInput, rows: Rows)
 		 WHERE ${unarchived}`,
 	).run(input.changedAt, input.changedBy, input.agentId);
 	record(rows, "memories", memories);
-	const reason = `agent ${input.agentId} archived`;
+	const reason = "agent archived";
 	for (const table of ONTOLOGY_ARCHIVE_TABLES) {
 		const count = countWhere(db, table, "agent_id = ? AND status = 'active'", [input.agentId]);
 		db.prepare(

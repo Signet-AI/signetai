@@ -1,7 +1,13 @@
+import { encodeTranscriptExport } from "../projection-worker-client";
+import { namedReadOperation } from "../named-content-reads";
+import { readPointerMiddleware } from "../read-pointers";
+import { contentRead } from "../content-read";
+import { type ReadScope, audienceSubjectFromPrincipal } from "../read-scope";
+import { resolveRouteReadScope } from "./read-scope";
 import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
-	buildExportTranscriptRecord,
+	type buildExportTranscriptRecord,
 	deterministicImportedSourceId,
 	loadSourcesConfig,
 	resolveDefaultBasePath,
@@ -45,6 +51,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isDuplicateMode(value: unknown): value is ImportDuplicateMode {
 	return typeof value === "string" && (IMPORT_DUPLICATE_MODES as readonly string[]).includes(value);
 }
+const importReadScopes = new WeakMap<Context, ReadScope>();
+async function readImportQuery<T>(
+	c: Context,
+	operation: string,
+	parameters: readonly import("../db-owner-protocol").DbOwnerParameter[],
+): Promise<T> {
+	const scope = importReadScopes.get(c);
+	if (!scope) throw new Error("Import read scope missing");
+	const principal = c.get("principal");
+	const harnesses = c.req.queries("harness")?.length ?? 0,
+		since = Boolean(c.req.query("since")),
+		until = Boolean(c.req.query("until"));
+	return contentRead<T>(
+		{
+			op: namedReadOperation(operation),
+			scope,
+			parameters,
+			subject: principal ? audienceSubjectFromPrincipal(principal) : { local: true, userId: null, groupIds: [] },
+			filters: {
+				offset: Number(c.req.query("offset") ?? 0),
+				harnesses,
+				since,
+				until,
+				cursor: parameters.length > 1 + harnesses + Number(since) + Number(until),
+			},
+		},
+		c.req.raw.signal,
+	);
+}
+
 export function resolveTranscriptImportAgent(
 	claims: TokenClaims | null,
 	authMode: AuthMode,
@@ -69,6 +105,11 @@ export function resolveTranscriptImportAgent(
 
 function agent(c: Context): string | null {
 	if (c.get("organization")) {
+		const principal = c.get("principal");
+		if (c.req.method === "GET" && c.get("requestedOrganizationAgent") === "all")
+			return principal?.role === "admin" && principal.permissions.has("admin") && !principal.boundAgentId
+				? "all"
+				: null;
 		const resolved = resolveScopedAgentId(c, undefined);
 		return resolved.error ? null : resolved.agentId;
 	}
@@ -123,6 +164,7 @@ function permission(name: "modify" | "recall" | "admin") {
 
 export function registerTranscriptImportRoutes(parent: Hono): void {
 	const app = new Hono();
+	app.use("*", readPointerMiddleware);
 	app.onError((error, c) => {
 		const code = error instanceof DbOwnerError ? String(error.code) : "transcript_import_conflict";
 		const status =
@@ -153,6 +195,16 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 	});
 	app.use("/api/sources/imports", permission("modify"));
 	app.use("/api/sources/imports/*", permission("modify"));
+	const bindRead = async (c: Context, next: () => Promise<void>) => {
+		if (c.req.method === "GET") {
+			const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+			if (resolved instanceof Response) return resolved;
+			importReadScopes.set(c, resolved.scope);
+		}
+		await next();
+	};
+	app.use("/api/sources/imports", bindRead);
+	app.use("/api/sources/imports/*", bindRead);
 	app.post("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
@@ -182,15 +234,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 	app.get("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
-		const rows = await dbOwnerQuery(
-			{
-				sql: "SELECT * FROM source_import_jobs WHERE agent_id = ? ORDER BY created_at DESC LIMIT 100",
-				params: [agentId],
-				result: "all",
-				readonly: true,
-			},
-			{ operation: "sources.import.list", lane: "read" },
-		);
+		const rows = await readImportQuery(c, "sources.import.list", [agentId]);
 		return c.json({ imports: rows });
 	});
 
@@ -201,28 +245,30 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		const limit = Number(c.req.query("limit") ?? Number.MAX_SAFE_INTEGER),
 			skip = Number(c.req.query("offset") ?? 0);
 		const harnesses = c.req.queries("harness") ?? [];
-		if (!Number.isSafeInteger(limit) || limit < 0 || !Number.isSafeInteger(skip) || skip < 0 || harnesses.length > 25)
+		if (
+			!Number.isSafeInteger(limit) ||
+			limit < 0 ||
+			!Number.isSafeInteger(skip) ||
+			skip < 0 ||
+			skip > 10000 ||
+			harnesses.length > 25
+		)
 			return c.json({ error: "invalid export bounds" }, 400);
 		const since = c.req.query("since"),
 			until = c.req.query("until");
-		const where = ["agent_id = ?"];
 		const params: Array<string | number> = [agentId];
 		if (harnesses.length) {
-			where.push(`harness IN (${harnesses.map(() => "?").join(",")})`);
 			params.push(...harnesses);
 		}
 		if (since) {
-			where.push("created_at >= ?");
 			params.push(since);
 		}
 		if (until) {
-			where.push("created_at <= ?");
 			params.push(/^\d{4}-\d{2}-\d{2}$/.test(until) ? `${until}T23:59:59.999Z` : until);
 		}
 		const json = c.req.query("json") === "true",
 			messagesOnly = c.req.query("messagesOnly") === "true";
-		let cursor: [string, string] | undefined,
-			visited = 0,
+		let cursor: [string, string, string] | undefined,
 			emitted = 0,
 			opened = false;
 		const encoder = new TextEncoder();
@@ -241,55 +287,41 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 							controller.close();
 							return;
 						}
-						const row = await dbOwnerQuery<
-							Omit<Parameters<typeof buildExportTranscriptRecord>[0], "content"> & { bytes: number }
-						>(
-							{
-								sql: `SELECT session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${where.join(" AND ")} ${cursor ? "AND (created_at,session_key) > (?,?)" : ""} ORDER BY created_at,session_key LIMIT 1`,
-								params: [...params, ...(cursor ?? [])],
-								result: "get",
-								readonly: true,
-							},
-							{ operation: "sources.import.export", lane: "read" },
-						);
+						const row = await readImportQuery<
+							Omit<Parameters<typeof buildExportTranscriptRecord>[0], "content"> & {
+								bytes: number;
+								speaker_user_id: string | null;
+							}
+						>(c, "sources.import.export", [...params, ...(cursor ?? [])]);
 						if (!row) {
 							if (json) controller.enqueue(encoder.encode("]\n"));
 							controller.close();
 							return;
 						}
-						cursor = [row.created_at, row.session_key];
-						if (visited++ < skip) {
-							controller.enqueue(new Uint8Array());
-							return;
-						}
-						if (row.bytes > 16 * 1024 ** 2) throw new Error("Transcript exceeds the 16 MiB export record limit");
+						cursor = [row.created_at, row.session_key, row.agent_id];
 						const parts: Buffer[] = [];
-						for (let offset = 0; offset < row.bytes; offset += 64 * 1024) {
+						for (let offset = 0; offset < row.bytes; offset += 1024 * 1024) {
 							c.req.raw.signal.throwIfAborted();
-							const part = await dbOwnerQuery<{ content: string }>(
-								{
-									sql: "SELECT hex(substr(CAST(content AS BLOB),?,65536)) AS content FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND created_at = ? AND length(CAST(content AS BLOB)) = ?",
-									params: [offset + 1, agentId, row.session_key, row.created_at, row.bytes],
-									result: "get",
-									readonly: true,
-								},
-								{ operation: "sources.import.export.content", lane: "read" },
-							);
+							const part = await readImportQuery<{ content: string }>(c, "sources.import.export.content", [
+								offset + 1,
+								row.agent_id,
+								row.session_key,
+								row.created_at,
+								row.bytes,
+							]);
 							if (!part) throw new Error("Transcript changed during export; retry the export");
 							parts.push(Buffer.from(part.content, "hex"));
 						}
-						const record = buildExportTranscriptRecord({ ...row, content: Buffer.concat(parts).toString("utf8") });
-						const messages = messagesOnly
-							? record.messages.filter((message) => message.role === "user" || message.role === "assistant")
-							: record.messages;
+						const encoded = await encodeTranscriptExport(row, parts, messagesOnly, c.req.raw.signal);
+						controller.enqueue(encoder.encode(`${json && emitted ? "," : ""}${encoded}${json ? "" : "\n"}`));
+						emitted++;
+					} catch {
 						controller.enqueue(
 							encoder.encode(
-								`${json && emitted ? "," : ""}${JSON.stringify({ ...record, messages, message_count: messages.length })}${json ? "" : "\n"}`,
+								`${json && emitted ? "," : ""}${JSON.stringify({ kind: "error", error: "Transcript export failed" })}${json ? "]\n" : "\n"}`,
 							),
 						);
-						emitted++;
-					} catch (error) {
-						controller.error(error);
+						controller.close();
 					}
 				},
 			}),
@@ -300,25 +332,9 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 		const jobId = c.req.param("jobId");
-		const job = await dbOwnerQuery(
-			{
-				sql: "SELECT * FROM source_import_jobs WHERE id = ? AND agent_id = ?",
-				params: [jobId, agentId],
-				result: "get",
-				readonly: true,
-			},
-			{ operation: "sources.import.status", lane: "read" },
-		);
+		const job = await readImportQuery(c, "sources.import.status", [jobId, agentId]);
 		if (job == null) return c.json({ error: "import not found" }, 404);
-		const files = await dbOwnerQuery(
-			{
-				sql: "SELECT * FROM source_import_files WHERE job_id = ? AND agent_id = ? ORDER BY ordinal",
-				params: [jobId, agentId],
-				result: "all",
-				readonly: true,
-			},
-			{ operation: "sources.import.files", lane: "read" },
-		);
+		const files = await readImportQuery(c, "sources.import.files", [jobId, agentId]);
 		return c.json({ job, files });
 	});
 	const scope = (c: Context): TranscriptUploadScope => {
@@ -450,6 +466,66 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 		}),
 	);
 	app.get("/api/sources/imports/:jobId/files/:fileId/content", async (c) => {
+		if (c.get("organization")) {
+			const readScope = importReadScopes.get(c);
+			const principal = c.get("principal");
+			if (!readScope || !principal) return c.json({ error: "import not found" }, 404);
+			const subject = audienceSubjectFromPrincipal(principal);
+			const jobId = c.req.param("jobId"),
+				fileId = c.req.param("fileId");
+			const file = await contentRead<{ storage_state: string } | null>(
+				{ op: "import_file", scope: readScope, subject, jobId, fileId },
+				c.req.raw.signal,
+			);
+			if (!file) return c.json({ error: "import not found" }, 404);
+			if (file.storage_state !== "sealed") return c.json({ error: "source is not sealed" }, 409);
+			let cursor = -1;
+			let record: { id: string; ordinal: number; byte_offset: number; byte_length: number } | null = null;
+			let position = 0;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					async pull(controller) {
+						try {
+							c.req.raw.signal.throwIfAborted();
+							if (!record) {
+								record = await contentRead(
+									{ op: "import_file", scope: readScope, subject, jobId, fileId, cursor },
+									c.req.raw.signal,
+								);
+								position = 0;
+								if (!record) {
+									controller.close();
+									return;
+								}
+							}
+							const length = Math.min(65536, record.byte_length - position);
+							const hex = await contentRead<string>(
+								{
+									op: "import_bytes",
+									scope: readScope,
+									subject,
+									jobId,
+									fileId,
+									recordId: record.id,
+									offset: record.byte_offset + position,
+									length,
+								},
+								c.req.raw.signal,
+							);
+							controller.enqueue(Buffer.from(hex, "hex"));
+							position += length;
+							if (position >= record.byte_length) {
+								cursor = record.ordinal;
+								record = null;
+							}
+						} catch (error) {
+							controller.error(error);
+						}
+					},
+				}),
+				{ headers: { "content-type": "application/x-ndjson", "x-signet-import-view": "readable-records" } },
+			);
+		}
 		const upload = scope(c);
 		const file = await transcriptUpload(upload);
 		if (file.storage_state !== "sealed") return c.json({ error: "source is not sealed" }, 409);
@@ -495,18 +571,11 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			const agentId = agent(c);
 			if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 			const jobId = c.req.param("jobId");
-			const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
-				{
-					sql:
-						suffix === "rejections"
-							? "SELECT * FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND id > ? ORDER BY id LIMIT 100"
-							: "SELECT total,imported,duplicate,rejected,pending FROM source_import_jobs WHERE id = ? AND agent_id = ?",
-					params: [jobId, agentId, ...(suffix === "rejections" ? [c.req.query("cursor") ?? ""] : [])],
-					result: "all",
-					readonly: true,
-				},
-				{ operation: `sources.import.${suffix}`, lane: "read" },
-			);
+			const rows = await readImportQuery<Array<Record<string, unknown>>>(c, `sources.import.${suffix}`, [
+				jobId,
+				agentId,
+				...(suffix === "rejections" ? [c.req.query("cursor") ?? ""] : []),
+			]);
 			return c.json({
 				jobId,
 				[suffix]:

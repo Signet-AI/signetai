@@ -29,7 +29,8 @@ import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources"
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
-import { buildAgentScopeClause } from "./memory-search";
+import { resolveReadScope, type ReadScope } from "./read-scope";
+import { contentRead } from "./content-read";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { countTokens } from "./pipeline/tokenizer";
 import { withSessionArtifactLease } from "./session-artifact-lease";
@@ -151,7 +152,7 @@ function normalizeLf(text: string): string {
 export function normalizeMarkdownBody(body: string): string {
 	const lines = normalizeLf(body)
 		.split("\n")
-		.map((line) => line.replace(/[ \t]+$/g, ""));
+		.map((line) => line.replace(new RegExp(`[ ${String.fromCharCode(9)}]+$`), ""));
 	while (lines.length > 0 && lines[lines.length - 1] === "") {
 		lines.pop();
 	}
@@ -1805,7 +1806,10 @@ function buildTemporalIndex(
 	});
 }
 
-async function readThreadHeads(agentId: string): Promise<
+async function readThreadHeads(
+	agentId: string,
+	scope: ReadScope,
+): Promise<
 	ReadonlyArray<{
 		readonly label: string;
 		readonly source_type: string;
@@ -1818,29 +1822,11 @@ async function readThreadHeads(agentId: string): Promise<
 	}>
 > {
 	try {
-		const rows = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				return db
-					.prepare(
-						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
-				 FROM memory_thread_heads
-				 WHERE agent_id = ?
-				 ORDER BY latest_at DESC
-				 LIMIT 12`,
-					)
-					.all(agentId) as Array<{
-					label: string;
-					source_type: string;
-					latest_at: string;
-					sample: string;
-					node_id: string;
-					project: string | null;
-					session_key: string | null;
-					harness: string | null;
-				}>;
-			},
-			{ siteToken: "db:memory.projection.thread-heads" },
-		);
+		const rows = await contentRead<Awaited<ReturnType<typeof readThreadHeads>>>({
+			op: "memory.projection.threads",
+			scope,
+			parameters: [agentId],
+		});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1855,7 +1841,7 @@ async function readThreadHeads(agentId: string): Promise<
 	}
 }
 
-async function readTopMemories(agentId: string): Promise<
+async function readTopMemories(scope: ReadScope): Promise<
 	ReadonlyArray<{
 		readonly content: string;
 		readonly type: string;
@@ -1864,35 +1850,21 @@ async function readTopMemories(agentId: string): Promise<
 	}>
 > {
 	try {
-		const scope = await getAgentScope(agentId);
-		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
-		const rows = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				return db
-					.prepare(
-						`SELECT m.id, m.content, m.type, m.importance, m.project
-				 FROM memories m
-				 WHERE m.is_deleted = 0${clause.sql}
-				 ORDER BY m.pinned DESC, m.importance DESC, m.created_at DESC
-				 LIMIT 32`,
-					)
-					.all(...clause.args) as Array<{
-					id: string;
-					content: string;
-					type: string;
-					importance: number;
-					project: string | null;
-				}>;
-			},
-			{ siteToken: "db:memory.projection.top-memories" },
-		);
+		const rows = await contentRead<Awaited<ReturnType<typeof readTopMemories>>>({
+			op: "memory.projection.top",
+			scope,
+			parameters: [],
+		});
 		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
 		return [];
 	}
 }
 
-async function readTemporalNodes(agentId: string): Promise<
+async function readTemporalNodes(
+	agentId: string,
+	scope: ReadScope,
+): Promise<
 	ReadonlyArray<{
 		readonly id: string;
 		readonly kind: string;
@@ -1906,31 +1878,11 @@ async function readTemporalNodes(agentId: string): Promise<
 	}>
 > {
 	try {
-		const rows = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				return db
-					.prepare(
-						`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
-				        project, session_key, source_ref, content
-				 FROM session_summaries
-				 WHERE agent_id = ?
-				 ORDER BY latest_at DESC
-				 LIMIT 20`,
-					)
-					.all(agentId) as Array<{
-					id: string;
-					kind: string;
-					source_type: string;
-					depth: number;
-					latest_at: string;
-					project: string | null;
-					session_key: string | null;
-					source_ref: string | null;
-					content: string;
-				}>;
-			},
-			{ siteToken: "db:memory.projection.temporal-nodes" },
-		);
+		const rows = await contentRead<Awaited<ReturnType<typeof readTemporalNodes>>>({
+			op: "memory.projection.temporal",
+			scope,
+			parameters: [agentId],
+		});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1981,26 +1933,16 @@ function membershipTs(rows: ReadonlyArray<ArtifactRow>): string {
 	return picked.ended_at ?? picked.captured_at;
 }
 
-async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession>> {
+async function buildLedger(agentId: string, scope: ReadScope): Promise<ReadonlyArray<LedgerSession>> {
 	const now = Date.now();
 	const floor = now - 30 * 24 * 60 * 60 * 1000;
 	let rows: ArtifactRow[] = [];
 	try {
-		rows = await getDbAccessor().withReadDbAsync(
-			async (db) =>
-				db
-					.prepare(
-						`SELECT agent_id, source_path, source_sha256, source_kind, session_id, session_key,
-					        session_token, project, harness, captured_at, started_at, ended_at,
-					        source_node_id, memory_sentence, memory_sentence_quality, content
-					 FROM memory_artifacts
-					 WHERE agent_id = ?
-					   AND source_kind IN ('summary', 'transcript', 'compaction', 'manifest')
-					 ORDER BY COALESCE(ended_at, captured_at) DESC, captured_at DESC`,
-					)
-					.all(agentId) as ArtifactRow[],
-			{ siteToken: "db:memory.projection.ledger" },
-		);
+		rows = await contentRead<ArtifactRow[]>({
+			op: "memory.projection.ledger",
+			scope,
+			parameters: [agentId, new Date(floor).toISOString()],
+		});
 	} catch {
 		rows = [];
 	}
@@ -2164,16 +2106,31 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-export async function renderMemoryProjection(agentId = "default"): Promise<{
+export async function renderMemoryProjection(
+	agentId = "default",
+	requestedScope?: ReadScope,
+): Promise<{
 	content: string;
 	fileCount: number;
 	indexBlock: string;
 }> {
 	await reindexMemoryArtifacts(agentId);
-	const memories = await readTopMemories(agentId);
-	const threadHeads = await readThreadHeads(agentId);
-	const nodes = await readTemporalNodes(agentId);
-	const ledger = await buildLedger(agentId);
+	const policy = await getAgentScope(agentId);
+	const reach =
+		policy.readPolicy === "shared"
+			? { kind: "shared" as const, agentId }
+			: policy.readPolicy === "group" && policy.policyGroup
+				? { kind: "group" as const, agentId, group: policy.policyGroup }
+				: { kind: "own" as const, agentId };
+	const scope =
+		requestedScope ??
+		(await resolveReadScope({ reach, projects: null }, { local: true, userId: null, groupIds: [] }, async () => ({
+			compartments: [],
+		})));
+	const memories = await readTopMemories(scope);
+	const threadHeads = await readThreadHeads(agentId, scope);
+	const nodes = await readTemporalNodes(agentId, scope);
+	const ledger = await buildLedger(agentId, scope);
 	const indexBlock = buildTemporalIndex(nodes);
 
 	const globalLines =

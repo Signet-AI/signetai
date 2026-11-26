@@ -12,6 +12,7 @@ export function organizationReadRequest(method: string, path: string): boolean {
 				"/api/memory/search",
 				"/api/search",
 				"/api/sessions/search",
+				"/api/sessions/summaries/expand",
 			].includes(path))
 	);
 }

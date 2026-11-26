@@ -451,7 +451,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		settle(event.jobId, (job) => {
 			if (job.settled) return;
 			job.settled = true;
-			if (event.outcome === "completed") {
+			if (event.outcome === "completed" && job.job.lane === "read" && dbOwnerWallClockNow() >= job.job.deadlineAt) {
+				job.reject(new DbOwnerDeadlineError(event.jobId));
+			} else if (event.outcome === "completed") {
 				job.resolve(event.result as never);
 			} else if (event.outcome === "cancelled") {
 				job.reject(new DbOwnerCancelledError(event.jobId));

@@ -1175,6 +1175,14 @@ export function runDbOwnerWorker(): void {
 				? executeReadOnlyStatement(job.request.statement)
 				: executeStatement(job.request.statement, context);
 		}
+		if (job.request.kind === "content_read") {
+			const { executeContentRead } = await import("./content-read-owner");
+			return executeContentRead(db, job.request.request, () => {
+				if (cancellationRequested(job.id)) throw new DbOwnerCancellationRequested();
+				if (job.lane === "read" && Date.now() >= job.deadlineAt)
+					throw Object.assign(new Error("DB owner content read exceeded its deadline"), { code: "DB_OWNER_DEADLINE" });
+			});
+		}
 		if (job.request.kind === "embedding_projection") {
 			const { executeEmbeddingProjection } = await import("./embedding-projection-owner");
 			const result = executeEmbeddingProjection(db, job.request.request);
@@ -1446,7 +1454,9 @@ export function runDbOwnerWorker(): void {
 					result(job.id, "timed_out");
 				} else {
 					const value = await withWritePrincipal(job.writePrincipal, () => execute(job, context));
-					if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
+					if (job.lane === "read" && Date.now() >= job.deadlineAt && !context.committed)
+						result(job.id, "timed_out", undefined, { startedAt, finishedAt: Date.now() });
+					else if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
 					else
 						result(job.id, "completed", value, {
 							startedAt,

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setSystemTime, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -304,6 +304,53 @@ describe("DB owner client", () => {
 			else process.env.SIGNET_DB_OWNER_TEST_STARTUP_STARTED = previousStarted;
 			if (previousRelease === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_STARTUP_RELEASE");
 			else process.env.SIGNET_DB_OWNER_TEST_STARTUP_RELEASE = previousRelease;
+		}
+	});
+
+	test("B5 late completion rule does not time out a write-lane read-only job", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		await client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1 AS warm", result: "get" } },
+			{ operation: "test.write-lane.warm", lane: "write", deadlineMs: 5000 },
+		).result;
+
+		const original = setTimeout;
+		const delayed = spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) =>
+			original(callback, ms && ms > 0 && ms <= 80 ? 1500 : ms, ...args),
+		);
+		try {
+			const job = client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: {
+						sql: "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<2000000) SELECT MAX(x) AS n FROM n",
+						result: "get",
+					},
+				},
+				{ operation: "test.write-lane.deadline", lane: "write", deadlineMs: 80 },
+			);
+			expect(await job.result).toEqual({ n: 2000000 });
+		} finally {
+			delayed.mockRestore();
+		}
+	});
+	test("A15 read results delivered past their deadline reject even when the timer has not run", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const handle = client.submit(
+			{ kind: "query", statement: { sql: "SELECT content FROM memories WHERE id='m1'", result: "get" } },
+			{ operation: "deadline-at-delivery", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+		);
+		try {
+			setSystemTime(new Date(handle.job.deadlineAt + 1));
+			await expect(handle.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		} finally {
+			setSystemTime();
 		}
 	});
 

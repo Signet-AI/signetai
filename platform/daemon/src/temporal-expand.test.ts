@@ -1,14 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations/index";
-import { expandTemporalNode } from "./temporal-expand";
+import { expandTemporalNodeInDb } from "./temporal-expand";
 
 let db: Database;
-const accessor = {
-	withReadDb<T>(fn: (db: Database) => T): T {
-		return fn(db);
-	},
-};
 
 describe("expandTemporalNode", () => {
 	beforeEach(() => {
@@ -18,6 +13,25 @@ describe("expandTemporalNode", () => {
 
 	afterEach(() => {
 		db.close();
+	});
+
+	it("A15 deleted links retain their placeholder while unreadable links are omitted", () => {
+		const now = "2026-11-25T00:00:00.000Z";
+		db.prepare(
+			"INSERT INTO session_summaries(id,agent_id,depth,kind,content,earliest_at,latest_at,created_at) VALUES ('a15-node','agent-a',0,'session','summary',?,?,?)",
+		).run(now, now, now);
+		db.prepare(
+			"INSERT INTO memories(id,agent_id,type,content,created_at,updated_at,updated_by,is_deleted) VALUES ('a15-deleted','agent-a','fact','old private text',?,?,'test',1),('a15-unreachable','agent-b','fact','unreadable text',?,?,'test',0)",
+		).run(now, now, now, now);
+		db.prepare(
+			"INSERT INTO session_summary_memories(summary_id,memory_id) VALUES ('a15-node','a15-deleted'),('a15-node','a15-unreachable')",
+		).run();
+		const out = expandTemporalNodeInDb(db, "a15-node", "agent-a", {
+			scope: { reach: { kind: "own", agentId: "agent-a" }, projects: null, compartments: "all" },
+		});
+		expect(out?.linkedMemories).toEqual([
+			{ id: "a15-deleted", content: "[deleted memory]", type: "fact", createdAt: now, deleted: true },
+		]);
 	});
 
 	it("returns lineage, linked memories, and transcript context for a temporal node", () => {
@@ -130,7 +144,7 @@ describe("expandTemporalNode", () => {
 			now,
 		);
 
-		const out = expandTemporalNode("node-1", "agent-a", { transcriptCharLimit: 600, accessor });
+		const out = expandTemporalNodeInDb(db, "node-1", "agent-a", { transcriptCharLimit: 600 });
 		expect(out).not.toBeNull();
 		expect(out?.node.id).toBe("node-1");
 		expect(out?.parents.map((row) => row.id)).toEqual(["parent-1"]);
@@ -252,10 +266,9 @@ describe("expandTemporalNode", () => {
 			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		).run("sess-scope", "Off-scope transcript", "opencode", "proj-b", "agent-a", now, now);
 
-		const out = expandTemporalNode("node-scope", "agent-a", {
+		const out = expandTemporalNodeInDb(db, "node-scope", "agent-a", {
 			project: "proj-a",
 			transcriptCharLimit: 600,
-			accessor,
 		});
 		expect(out).not.toBeNull();
 		expect(out?.node.id).toBe("node-scope");

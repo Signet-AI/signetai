@@ -20,6 +20,8 @@ const targets: Array<{
 	{ entrypoint: "./src/embedding-worker.ts", outfile: "./dist/embedding-worker.js" },
 	{ entrypoint: "./src/harness-install-worker.ts", outfile: "./dist/harness-install-worker.js" },
 	{ entrypoint: "./src/harness-health-worker.ts", outfile: "./dist/harness-health-worker.js" },
+	{ entrypoint: "./src/projection-worker.ts", outfile: "./dist/projection-worker.js" },
+	{ entrypoint: "./src/export-worker.ts", outfile: "./dist/export-worker.js" },
 	{ entrypoint: "./src/pipeline/dreaming-token-worker.ts", outfile: "./dist/dreaming-token-worker.js" },
 	{ entrypoint: "./src/pipeline/pi-agent-worker.ts", outfile: "./dist/pi-agent-worker.js" },
 	{ entrypoint: "./src/transcript-recovery-child.ts", outfile: "./dist/transcript-recovery-child.js" },

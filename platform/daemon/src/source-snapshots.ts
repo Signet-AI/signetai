@@ -13,6 +13,8 @@ import { flagDreamingClaimsForMissingSourcePathsInTx } from "./source-claim-revi
 export const SOURCE_SNAPSHOT_VERSION = 1;
 
 export interface SourceSnapshotArtifact {
+	readonly authorUserId?: string | null;
+	readonly agentId?: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;
 	readonly sourceKind: string;
@@ -55,6 +57,7 @@ export interface SourceSnapshot {
 }
 
 export interface ExportSourceSnapshotOptions {
+	readonly scoped?: boolean;
 	readonly source: SignetSourceEntry;
 	readonly agentId: string;
 	readonly includeLocalDiscord?: boolean;
@@ -77,6 +80,8 @@ export type ImportSourceSnapshotResult =
 	| { readonly ok: false; readonly error: string };
 
 interface ArtifactRow {
+	readonly author_user_id?: string | null;
+	readonly agent_id?: string;
 	readonly source_path: string;
 	readonly source_sha256: string;
 	readonly source_kind: string;
@@ -103,49 +108,57 @@ interface ArtifactRow {
 }
 
 export function exportSourceSnapshot(options: ExportSourceSnapshotOptions): SourceSnapshot {
-	const includeLocalDiscord = options.includeLocalDiscord === true;
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-		let skippedLocal = 0;
-		const artifacts = (
-			db
-				.prepare(
-					`SELECT source_path, source_sha256, source_kind, session_id,
+	return getDbAccessor().withReadDb(
+		(db: import("./db-accessor").ReadDb) => exportSourceSnapshotInDb(db, options),
+		"db:sources.snapshot.export.read",
+	);
+}
+export function exportSourceSnapshotInDb(
+	db: import("./db-accessor").ReadDb,
+	options: ExportSourceSnapshotOptions,
+): SourceSnapshot {
+	const includeLocalDiscord = options.includeLocalDiscord === true;
+	let skippedLocal = 0;
+	const rows = db
+		.prepare(
+			`SELECT agent_id, author_user_id, source_path, source_sha256, source_kind, session_id,
 					        session_key, session_token, project, harness, captured_at,
 					        started_at, ended_at, manifest_path, source_node_id,
 					        memory_sentence, memory_sentence_quality, content,
 					        updated_at, source_mtime_ms, source_id, source_root,
 					        source_external_id, source_parent_path, source_meta_json
 					   FROM memory_artifacts
-					  WHERE agent_id = ?
+					  WHERE ${options.scoped ? "? IS NOT NULL" : "agent_id = ?"}
 					    AND source_id = ?
 					    AND COALESCE(is_deleted, 0) = 0
-					  ORDER BY source_path ASC`,
-				)
-				.all(options.agentId, options.source.id) as ArtifactRow[]
-		).flatMap((row) => {
-			const artifact = artifactFromRow(row);
-			if (!includeLocalDiscord && isLocalDiscordArtifact(artifact)) {
-				skippedLocal++;
-				return [];
-			}
-			return [artifact];
-		});
+					  ORDER BY source_path ASC,agent_id${options.scoped ? " LIMIT 1001" : ""}`,
+		)
+		.all(options.agentId, options.source.id) as ArtifactRow[];
+	if (options.scoped && rows.length > 1000)
+		throw new Error("Source snapshot exceeds the 1000-artifact admission limit");
+	const artifacts = rows.flatMap((row) => {
+		const artifact = artifactFromRow(row);
+		if (!includeLocalDiscord && isLocalDiscordArtifact(artifact)) {
+			skippedLocal++;
+			return [];
+		}
+		return [artifact];
+	});
 
-		return {
-			version: SOURCE_SNAPSHOT_VERSION,
-			exportedAt: new Date().toISOString(),
-			source: {
-				id: options.source.id,
-				kind: options.source.kind,
-				name: options.source.name,
-				root: options.source.root,
-			},
-			agentId: options.agentId,
-			artifacts,
-			skipped: { localDiscordArtifacts: skippedLocal },
-		};
-	}, "db:sources.snapshot.export.read");
+	return {
+		version: SOURCE_SNAPSHOT_VERSION,
+		exportedAt: new Date().toISOString(),
+		source: {
+			id: options.source.id,
+			kind: options.source.kind,
+			name: options.source.name,
+			root: options.source.root,
+		},
+		agentId: options.agentId,
+		artifacts,
+		skipped: { localDiscordArtifacts: skippedLocal },
+	};
 }
 
 export async function importSourceSnapshot(options: ImportSourceSnapshotOptions): Promise<ImportSourceSnapshotResult> {
@@ -437,6 +450,8 @@ function sourceArtifactDisplayName(artifact: SourceSnapshotArtifact): string | u
 
 function artifactFromRow(row: ArtifactRow): SourceSnapshotArtifact {
 	return {
+		authorUserId: row.author_user_id ?? null,
+		agentId: row.agent_id,
 		sourcePath: row.source_path,
 		sourceSha256: row.source_sha256,
 		sourceKind: row.source_kind,

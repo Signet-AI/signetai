@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import ts from "typescript";
 
 const SQL_OWNERS = [
+	"platform/daemon/src/content-read-owner.ts",
 	"platform/core/src/database.ts",
 	"platform/core/src/fts-schema.ts",
 	"platform/core/src/compartment-shards.ts",

@@ -52,12 +52,21 @@ test("an unresolved audience identity cannot construct a public organization rea
 	).rejects.toThrow("unauthorized");
 });
 
-test("shared reach rejects absent visibility instead of widening the reader", () => {
-	expect(() =>
-		readScopeSql(
-			"r",
-			{ reach: { kind: "shared", agentId: "a" }, compartments: [], projects: null },
-			{ visibility: null },
-		),
-	).toThrow("visibility");
+test("A14b derived reads without visibility stay within their own agent under shared and group reach", async () => {
+	const db = new Database(":memory:");
+	db.exec(
+		"CREATE TABLE agents(id TEXT,policy_group TEXT,archived_at TEXT); INSERT INTO agents VALUES ('a','g',NULL),('b','g',NULL); CREATE TABLE summaries(id TEXT,agent_id TEXT,compartment_id INTEGER,project TEXT); INSERT INTO summaries VALUES ('own','a',NULL,NULL),('peer','b',NULL,NULL)",
+	);
+	for (const reach of [
+		{ kind: "shared", agentId: "a" },
+		{ kind: "group", agentId: "a", group: "g" },
+		{ kind: "all" },
+	] as const) {
+		const scope = await resolveReadScope({ reach, projects: null }, { local: true, userId: null, groupIds: [] });
+		const access = readScopeSql("r", scope, { visibility: null });
+		expect(db.prepare(`SELECT id FROM summaries r WHERE 1=1${access.sql} ORDER BY id`).all(...access.args)).toEqual(
+			reach.kind === "all" ? [{ id: "own" }, { id: "peer" }] : [{ id: "own" }],
+		);
+	}
+	db.close();
 });

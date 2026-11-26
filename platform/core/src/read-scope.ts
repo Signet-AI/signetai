@@ -71,11 +71,12 @@ export function readScopeSql(
 		project?: string;
 		visibility?: string | null;
 		checkpoint?: boolean;
+		current?: boolean;
 		memory?: string | null;
 		session?: string | null;
 		source?: string | null;
 	},
-): { sql: string; args: unknown[] } {
+): { sql: string; args: (string | number)[] } {
 	requireReadScope(scope);
 	const prefix = alias ? `${identifier(alias)}.` : "";
 	const col = (name: string) => `${prefix}${identifier(name)}`;
@@ -83,7 +84,7 @@ export function readScopeSql(
 	const compartment = col(cols?.compartment ?? "compartment_id");
 	const project = col(cols?.project ?? "project");
 	const visibility = cols?.visibility === null ? null : col(cols?.visibility ?? "visibility");
-	const args: unknown[] = [];
+	const args: (string | number)[] = [];
 	const clauses: string[] = [];
 	const reach = scope.reach;
 	if (reach.kind === "all") {
@@ -93,6 +94,9 @@ export function readScopeSql(
 				? `(${active} OR (${agent} IS NULL AND EXISTS(SELECT 1 FROM session_transcripts t WHERE t.session_key=${col("session_key")}) AND NOT EXISTS(SELECT 1 FROM (SELECT agent_id FROM session_transcripts WHERE session_key=${col("session_key")} UNION SELECT agent_id FROM session_claims WHERE session_key=${col("session_key")}) owners LEFT JOIN agents a ON a.id=owners.agent_id WHERE a.id IS NULL OR a.archived_at IS NOT NULL)))`
 				: active,
 		);
+	} else if (!visibility && (reach.kind === "shared" || reach.kind === "group")) {
+		clauses.push(`${agent} = ?`);
+		args.push(reach.agentId);
 	} else if (reach.kind === "shared") {
 		if (!visibility) throw new Error("shared reach requires visibility");
 		clauses.push(`(${visibility} = 'global' OR ${agent} = ?)`);
@@ -138,6 +142,13 @@ export function readScopeSql(
 			`NOT EXISTS(SELECT 1 FROM org_jobs ${j} WHERE ${inFlightClassificationSql(j)} AND ${matchesAgent} AND (${kind}='agent' OR (${kind}='memory' AND ${target}=${memory}) OR (${kind}='session' AND (${target}=${session} OR 'session:'||${target}=${session} OR ${target}='session:'||${session})) OR (${kind}='source' AND (${target}=${source} OR substr(${source},1,length(${target})+1)=${target}||':'))))`,
 		);
 		args.push(scope.inFlightUserId, scope.inFlightUserId);
+	}
+	if (cols?.current) {
+		const target = readScopeSql("_readable_superseder", scope);
+		clauses.push(
+			`(${col("superseded_by")} IS NULL OR NOT EXISTS(SELECT 1 FROM memories _readable_superseder WHERE _readable_superseder.id=${col("superseded_by")}${target.sql}))`,
+		);
+		args.push(...target.args);
 	}
 	return { sql: clauses.map((c) => ` AND ${c}`).join(""), args };
 }

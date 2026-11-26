@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { computeProjectionForQuery } from "./umap-projection";
 
 const SCHEMA = `
-	CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT, who TEXT, importance REAL,
+	CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT, author_user_id TEXT, who TEXT, importance REAL,
 		type TEXT, tags TEXT, pinned INTEGER, source_type TEXT, source_id TEXT,
 		created_at TEXT, updated_at TEXT);
 	CREATE TABLE embeddings (

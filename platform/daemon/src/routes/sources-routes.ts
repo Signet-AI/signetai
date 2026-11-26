@@ -1,3 +1,8 @@
+import { namedReadOperation, type NamedReadOperation } from "../named-content-reads";
+import { readPointerMiddleware } from "../read-pointers";
+import { contentRead } from "../content-read";
+import { type ReadScope, audienceSubjectFromPrincipal } from "../read-scope";
+import { resolveRouteReadScope } from "./read-scope";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -29,7 +34,7 @@ import { resolveDaemonAgentId } from "../agent-id";
 import { type Permission, requirePermission } from "../auth";
 import { getPeerAddress } from "../auth/middleware";
 import type { DbOwnerParameter } from "../db-owner-protocol";
-import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
+import { type dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import { type ImportExtractionOutcome, readImportedSourceOutcome } from "../imported-source-outcome";
 import { logger } from "../logger";
@@ -83,7 +88,7 @@ import {
 } from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
 import { purgeSourceOwnedRows } from "../source-purge";
-import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
+import { importSourceSnapshot } from "../source-snapshots";
 import { getActiveTelemetry } from "../telemetry";
 import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
 import { authConfig } from "./state.js";
@@ -226,7 +231,39 @@ export async function stopSourceIndexJobs(): Promise<void> {
 	routeSourceJobs.clear();
 }
 
+async function sourceReadable(
+	c: Context,
+	source: SignetSourceEntry,
+	agentId: string,
+	scope: ReadScope,
+): Promise<boolean> {
+	const principal = c.get("principal");
+	return contentRead<boolean>({
+		op: "source_access",
+		sourceId: source.id,
+		agentId:
+			source.kind === "import" && typeof source.providerSettings?.agentId === "string"
+				? source.providerSettings.agentId
+				: agentId,
+		scope,
+		subject: principal ? audienceSubjectFromPrincipal(principal) : { local: true, userId: null, groupIds: [] },
+	});
+}
+
+async function sourceReadQuery<T>(
+	scope: ReadScope | undefined,
+	operation: string,
+	parameters: readonly DbOwnerParameter[],
+	options: { readonly deadlineMs?: number },
+): Promise<T> {
+	if (!scope) throw new Error("Source read scope missing");
+	return contentRead<T>({ op: namedReadOperation(operation), scope, parameters }, undefined, {
+		deadlineMs: options?.deadlineMs,
+	});
+}
+
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
+	app.use("*", readPointerMiddleware);
 	const agentsDir = deps.agentsDir ?? resolveDefaultBasePath();
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
@@ -249,32 +286,36 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		c.req.method === "DELETE" ? requirePermission("connectors", authConfig)(c, next) : next(),
 	);
 	app.get("/api/sources", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
 		const config = loadSourcesConfig(agentsDir);
-		const resolved = resolveSourceAgentId(c);
-		if (resolved.error) return c.json({ error: resolved.error }, 403);
+
 		const agentId = resolved.agentId;
 		const tombstonedSourceGenerations = loadTombstonedSourceGenerations(agentsDir, agentId);
 		const sources = await Promise.all(
 			config.sources
 				.filter(
 					(source) =>
-						isSourceVisibleToAgent(source, agentId) &&
+						(resolved.scope.reach.kind === "all" || isSourceVisibleToAgent(source, agentId)) &&
 						!legacySourceMutationDenied(c, source) &&
 						!isSourceGenerationTombstoned(source, tombstonedSourceGenerations),
 				)
 				.map(async (source) => {
-					const stats = await sourceStats(source, agentId);
+					if (!(await sourceReadable(c, source, agentId, resolved.scope))) return null;
+					const stats = await sourceStats(source, agentId, resolved.scope);
+					const health = await sourceHealth(source, agentId, stats, resolved.scope);
 					return {
 						...publicSource(source),
+						...(c.get("organization") ? { lastIndexedAt: health.latestArtifactAt ?? undefined } : {}),
 						stats,
-						health: await sourceHealth(source, agentId, stats),
-						indexJob: getSourceIndexJob(source.id),
+						health,
+						indexJob: c.get("organization") ? null : getSourceIndexJob(source.id),
 					};
 				}),
 		);
 		return c.json({
 			version: config.version,
-			sources,
+			sources: sources.filter((source) => source !== null),
 		});
 	});
 
@@ -443,31 +484,74 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 	});
 
-	app.get("/api/sources/:sourceId/snapshot", (c) => {
-		const sourceId = c.req.param("sourceId");
-		const resolved = resolveSourceAgentId(c);
-		if (resolved.error) return c.json({ error: resolved.error }, 403);
-		const source = findConfiguredSource(sourceId, agentsDir, resolved.agentId);
-		if (!source || legacySourceMutationDenied(c, source)) return c.json({ error: "Source not found" }, 404);
-		const includeLocalDiscord = c.req.query("includeLocalDiscord") === "true";
+	app.get("/api/sources/:sourceId/snapshot", async (c) => {
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const source = loadSourcesConfig(agentsDir).sources.find(
+			(entry) =>
+				entry.id === c.req.param("sourceId") &&
+				!isSourceGenerationTombstoned(
+					entry,
+					loadTombstonedSourceGenerations(
+						agentsDir,
+						typeof entry.providerSettings?.agentId === "string"
+							? entry.providerSettings.agentId
+							: resolveDaemonAgentId(),
+					),
+				),
+		);
+		if (
+			!source ||
+			legacySourceMutationDenied(c, source) ||
+			!(await sourceReadable(c, source, resolved.agentId, resolved.scope))
+		)
+			return c.json({ error: "Source not found" }, 404);
 		return c.json(
-			exportSourceSnapshot({
-				source,
-				agentId: resolved.agentId,
-				includeLocalDiscord,
-			}),
+			await contentRead<import("../source-snapshots").SourceSnapshot>(
+				{
+					op: "source_snapshot",
+					source,
+					agentId: resolved.agentId,
+					scope: resolved.scope,
+					includeLocalDiscord: c.req.query("includeLocalDiscord") === "true",
+				},
+				c.req.raw.signal,
+			),
 		);
 	});
 
 	app.get("/api/sources/:sourceId/health", async (c) => {
-		const sourceId = c.req.param("sourceId");
-		const resolved = resolveSourceAgentId(c);
-		if (resolved.error) return c.json({ error: resolved.error }, 403);
-		const source = findConfiguredSource(sourceId, agentsDir, resolved.agentId);
-		if (!source || legacySourceMutationDenied(c, source)) return c.json({ error: "Source not found" }, 404);
-		const agentId = resolved.agentId;
-		const stats = await sourceStats(source, agentId);
-		return c.json({ source: publicSource(source), stats, health: await sourceHealth(source, agentId, stats) });
+		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+		if (resolved instanceof Response) return resolved;
+		const source = loadSourcesConfig(agentsDir).sources.find(
+			(entry) =>
+				entry.id === c.req.param("sourceId") &&
+				!isSourceGenerationTombstoned(
+					entry,
+					loadTombstonedSourceGenerations(
+						agentsDir,
+						typeof entry.providerSettings?.agentId === "string"
+							? entry.providerSettings.agentId
+							: resolveDaemonAgentId(),
+					),
+				),
+		);
+		if (
+			!source ||
+			legacySourceMutationDenied(c, source) ||
+			!(await sourceReadable(c, source, resolved.agentId, resolved.scope))
+		)
+			return c.json({ error: "Source not found" }, 404);
+		const stats = await sourceStats(source, resolved.agentId, resolved.scope);
+		const health = await sourceHealth(source, resolved.agentId, stats, resolved.scope);
+		return c.json({
+			source: {
+				...publicSource(source),
+				...(c.get("organization") ? { lastIndexedAt: health.latestArtifactAt ?? undefined } : {}),
+			},
+			stats,
+			health,
+		});
 	});
 
 	app.post("/api/sources/:sourceId/snapshot/import", async (c) => {
@@ -1350,42 +1434,35 @@ interface SourceHealth {
 	};
 }
 
-async function sourceStats(source: SignetSourceEntry, agentId: string): Promise<SourceStats> {
+async function sourceStats(source: SignetSourceEntry, agentId: string, scope?: ReadScope): Promise<SourceStats> {
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 	const chunkPrefix = `${source.id}:`;
 	try {
-		const artifactSql =
-			source.kind === "obsidian"
-				? `SELECT COUNT(*) AS n FROM memory_artifacts
-				 WHERE agent_id = ? AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))
-				   AND COALESCE(is_deleted, 0) = 0`
-				: `SELECT COUNT(*) AS n FROM memory_artifacts
-				 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0`;
 		const artifactParams =
 			source.kind === "obsidian" ? [agentId, source.id, rootPrefix, `${rootPrefix}\uffff`] : [agentId, source.id];
 		const [artifactRow, chunkRow, hasEligibleUnconsumedEvidence] = await Promise.all([
-			dbOwnerQuery<{ n: number }>(
-				{ sql: artifactSql, params: artifactParams, result: "get" },
-				{ operation: "sources.stats_artifacts", lane: "read", deadlineMs: 3_000 },
+			sourceReadQuery<{ n: number }>(scope, "sources.stats_artifacts", artifactParams, { deadlineMs: 3_000 }),
+			sourceReadQuery<{ n: number }>(
+				scope,
+				"sources.stats_chunks",
+				[agentId, SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkPrefix, `${chunkPrefix}\uffff`],
+				{ deadlineMs: 3_000 },
 			),
-			dbOwnerQuery<{ n: number }>(
-				{
-					sql: `SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = ? AND source_type IN (?, ?) AND source_id >= ? AND source_id < ?`,
-					params: [
-						agentId,
-						SOURCE_CHUNK_SOURCE_TYPE,
-						LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-						chunkPrefix,
-						`${chunkPrefix}\uffff`,
-					],
-					result: "get",
-				},
-				{ operation: "sources.stats_chunks", lane: "read", deadlineMs: 3_000 },
-			),
-			dbOwnerSourceEvidenceEligibility(
-				{ agentId, sourceEntryId: source.id, legacyObsidianRoot: source.kind === "obsidian" ? source.root : undefined },
-				{ operation: "sources.stats_evidence", deadlineMs: 3_000 },
-			),
+			scope
+				? contentRead<boolean>({
+						op: "source_eligibility",
+						scope,
+						sourceId: source.id,
+						legacyRoot: source.kind === "obsidian" ? source.root : undefined,
+					})
+				: dbOwnerSourceEvidenceEligibility(
+						{
+							agentId,
+							sourceEntryId: source.id,
+							legacyObsidianRoot: source.kind === "obsidian" ? source.root : undefined,
+						},
+						{ operation: "sources.stats_evidence", deadlineMs: 3_000 },
+					),
 		]);
 		const artifacts = Number(artifactRow?.n ?? 0);
 		const chunks = Number(chunkRow?.n ?? 0);
@@ -1395,7 +1472,12 @@ async function sourceStats(source: SignetSourceEntry, agentId: string): Promise<
 	}
 }
 
-async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceStats): Promise<SourceHealth> {
+async function sourceHealth(
+	source: SignetSourceEntry,
+	agentId: string,
+	stats: SourceStats,
+	scope?: ReadScope,
+): Promise<SourceHealth> {
 	const generatedAt = new Date().toISOString();
 	try {
 		const permission =
@@ -1406,13 +1488,16 @@ async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: S
 					)
 				: { status: "clear" as const, issues: [] };
 		const [artifactSummary, discordSummary, semantic, orphanChunks] = await Promise.all([
-			artifactHealthSummary(source, agentId),
-			discordHealthSummary(source, agentId),
-			semanticHealthSummary(source, agentId),
-			sourceOrphanChunks(source, agentId),
+			artifactHealthSummary(source, agentId, scope),
+			discordHealthSummary(source, agentId, scope),
+			semanticHealthSummary(source, agentId, scope),
+			sourceOrphanChunks(source, agentId, scope),
 		]);
 		const sourceFailures = source.kind === "discord" ? { total: 0, recoverable: 0 } : artifactSummary.failures;
-		const importExtraction = source.kind === "import" ? readImportedSourceOutcome(source.id, agentId) : undefined;
+		const importExtraction =
+			(!scope || scope.compartments === "all") && source.kind === "import"
+				? readImportedSourceOutcome(source.id, agentId)
+				: undefined;
 		const hasDegradation =
 			permission.status === "denied" ||
 			sourceFailures.total > 0 ||
@@ -1471,52 +1556,44 @@ async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: S
 const SOURCE_HEALTH_PAGE_ROWS = 500;
 
 async function pagedSourceHealthRows<Row extends { readonly rowid: number }>(
-	sql: string,
 	params: readonly DbOwnerParameter[],
-	operation: string,
+	operation: NamedReadOperation,
 	visit: (rows: readonly Row[]) => void,
+	scope?: ReadScope,
 ): Promise<void> {
 	let cursor = 0;
-	for (;;) {
-		const rows = await dbOwnerQuery<Row[]>(
-			{ sql, params: [...params, cursor, SOURCE_HEALTH_PAGE_ROWS], result: "all" },
-			{ operation, lane: "read", deadlineMs: 5_000 },
-		);
+	for (let page = 0; page < 20; page++) {
+		const rows = await sourceReadQuery<Row[]>(scope, operation, [...params, cursor, SOURCE_HEALTH_PAGE_ROWS], {
+			deadlineMs: 5_000,
+		});
 		visit(rows);
 		const last = rows.at(-1);
 		if (!last || rows.length < SOURCE_HEALTH_PAGE_ROWS) return;
 		cursor = last.rowid;
 	}
+	throw new Error("Source health exceeds the 10000-row admission limit");
 }
 
-async function sourceOrphanChunks(source: SignetSourceEntry, agentId: string): Promise<number> {
+async function sourceOrphanChunks(source: SignetSourceEntry, agentId: string, scope?: ReadScope): Promise<number> {
 	const chunkPrefix = `${source.id}:`;
-	const livePaths = await liveSourceArtifactPaths(source, agentId);
+	const livePaths = await liveSourceArtifactPaths(source, agentId, scope);
 	let orphans = 0;
 	await pagedSourceHealthRows<SourceChunkHealthRow>(
-		`SELECT rowid, source_id,
-		        CASE WHEN instr(tail, char(10)) > 0 THEN substr(tail, 1, instr(tail, char(10)) - 1) ELSE tail END AS chunk_text
-		 FROM (
-		   SELECT rowid, source_id,
-		          CASE WHEN header_at > 0 THEN substr(framed, header_at + 1, 1024) END AS tail
-		   FROM (
-		     SELECT rowid, source_id, char(10) || chunk_text AS framed,
-		            instr(char(10) || lower(chunk_text), char(10) || 'source_path:') AS header_at
-		     FROM embeddings
-		     WHERE agent_id = ? AND source_type IN (?, ?) AND source_id >= ? AND source_id < ? AND rowid > ?
-		     ORDER BY rowid LIMIT ?
-		   )
-		 )`,
 		[agentId, SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkPrefix, `${chunkPrefix}\uffff`],
 		"sources.health_orphan_chunks",
 		(rows) => {
 			for (const chunk of rows) if (!sourceChunkMatchesLiveArtifact(source, chunk, livePaths)) orphans++;
 		},
+		scope,
 	);
 	return orphans;
 }
 
-async function liveSourceArtifactPaths(source: SignetSourceEntry, agentId: string): Promise<ReadonlySet<string>> {
+async function liveSourceArtifactPaths(
+	source: SignetSourceEntry,
+	agentId: string,
+	scope?: ReadScope,
+): Promise<ReadonlySet<string>> {
 	const paths = new Set<string>();
 	const collect = (rows: readonly SourcePathHealthRow[]): void => {
 		for (const row of rows) paths.add(normalizeSourcePath(row.source_path));
@@ -1524,25 +1601,14 @@ async function liveSourceArtifactPaths(source: SignetSourceEntry, agentId: strin
 	if (source.kind === "obsidian") {
 		const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 		await pagedSourceHealthRows<SourcePathHealthRow>(
-			`SELECT rowid, source_path FROM memory_artifacts
-			 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0
-			   AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))
-			   AND rowid > ?
-			 ORDER BY rowid LIMIT ?`,
 			[agentId, source.id, rootPrefix, `${rootPrefix}\uffff`],
 			"sources.health_live_paths",
 			collect,
+			scope,
 		);
 		return paths;
 	}
-	await pagedSourceHealthRows<SourcePathHealthRow>(
-		`SELECT rowid, source_path FROM memory_artifacts
-		 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0 AND rowid > ?
-		 ORDER BY rowid LIMIT ?`,
-		[agentId, source.id],
-		"sources.health_live_paths",
-		collect,
-	);
+	await pagedSourceHealthRows<SourcePathHealthRow>([agentId, source.id], "sources.health_live_paths", collect, scope);
 	return paths;
 }
 
@@ -1599,6 +1665,7 @@ function normalizeSourcePath(value: string): string {
 async function artifactHealthSummary(
 	source: SignetSourceEntry,
 	agentId: string,
+	scope?: ReadScope,
 ): Promise<{
 	readonly latestArtifactAt: string | null;
 	readonly deletedArtifacts: number;
@@ -1608,23 +1675,11 @@ async function artifactHealthSummary(
 	};
 }> {
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
-	const sql =
-		source.kind === "obsidian"
-			? `SELECT MAX(updated_at) AS latestArtifactAt,
-			        SUM(CASE WHEN COALESCE(is_deleted, 0) = 1 THEN 1 ELSE 0 END) AS deletedArtifacts
-			   FROM memory_artifacts WHERE agent_id = ?
-			     AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))`
-			: `SELECT MAX(updated_at) AS latestArtifactAt,
-			        SUM(CASE WHEN COALESCE(is_deleted, 0) = 1 THEN 1 ELSE 0 END) AS deletedArtifacts
-			   FROM memory_artifacts WHERE agent_id = ? AND source_id = ?`;
 	const params =
 		source.kind === "obsidian" ? [agentId, source.id, rootPrefix, `${rootPrefix}\uffff`] : [agentId, source.id];
 	const [row, failures] = await Promise.all([
-		dbOwnerQuery<HealthAggregateRow | undefined>(
-			{ sql, params, result: "get" },
-			{ operation: "sources.health_artifacts", lane: "read", deadlineMs: 3_000 },
-		),
-		sourceFailureHealthFromDb(source, agentId),
+		sourceReadQuery<HealthAggregateRow | undefined>(scope, "sources.health_artifacts", params, { deadlineMs: 3_000 }),
+		sourceFailureHealthFromDb(source, agentId, scope),
 	]);
 	return {
 		latestArtifactAt: stringOrNull(row?.latestArtifactAt),
@@ -1636,17 +1691,13 @@ async function artifactHealthSummary(
 async function sourceFailureHealthFromDb(
 	source: SignetSourceEntry,
 	agentId: string,
+	scope?: ReadScope,
 ): Promise<{ readonly total: number; readonly recoverable: number }> {
-	const rows = await dbOwnerQuery<Array<{ readonly source_meta_json: string | null }>>(
-		{
-			sql: `SELECT source_meta_json
-			   FROM memory_artifacts
-			  WHERE agent_id = ? AND source_id = ?
-			    AND source_kind = ? AND COALESCE(is_deleted, 0) = 0`,
-			params: [agentId, source.id, `source_${source.kind}_failure`],
-			result: "all",
-		},
-		{ operation: "sources.health_failures", lane: "read", deadlineMs: 3_000 },
+	const rows = await sourceReadQuery<Array<{ readonly source_meta_json: string | null }>>(
+		scope,
+		"sources.health_failures",
+		[agentId, source.id, `source_${source.kind}_failure`],
+		{ deadlineMs: 3_000 },
 	);
 	let recoverable = 0;
 	for (const row of rows) if (parseJsonObject(row.source_meta_json)?.recoverable === true) recoverable++;
@@ -1666,7 +1717,11 @@ interface DiscordHealthSummary {
 	};
 }
 
-async function discordHealthSummary(source: SignetSourceEntry, agentId: string): Promise<DiscordHealthSummary> {
+async function discordHealthSummary(
+	source: SignetSourceEntry,
+	agentId: string,
+	scope?: ReadScope,
+): Promise<DiscordHealthSummary> {
 	if (source.kind !== "discord") {
 		return {
 			latestCheckpointAt: null,
@@ -1674,14 +1729,9 @@ async function discordHealthSummary(source: SignetSourceEntry, agentId: string):
 			checkpoints: { total: 0, partial: 0, stale: 0 },
 		};
 	}
-	const rows = await dbOwnerQuery<DiscordHealthRow[]>(
-		{
-			sql: `SELECT source_kind, source_meta_json, updated_at FROM memory_artifacts WHERE agent_id = ? AND source_id = ? AND source_kind IN ('source_discord_failure', 'source_discord_checkpoint') AND COALESCE(is_deleted, 0) = 0`,
-			params: [agentId, source.id],
-			result: "all",
-		},
-		{ operation: "sources.health_discord", lane: "read", deadlineMs: 5_000 },
-	);
+	const rows = await sourceReadQuery<DiscordHealthRow[]>(scope, "sources.health_discord", [agentId, source.id], {
+		deadlineMs: 5_000,
+	});
 	let failures = 0;
 	let recoverable = 0;
 	let checkpoints = 0;
@@ -1707,56 +1757,20 @@ async function discordHealthSummary(source: SignetSourceEntry, agentId: string):
 	};
 }
 
-async function semanticHealthSummary(source: SignetSourceEntry, agentId: string): Promise<SourceHealth["semantic"]> {
+async function semanticHealthSummary(
+	source: SignetSourceEntry,
+	agentId: string,
+	scope?: ReadScope,
+): Promise<SourceHealth["semantic"]> {
 	const [entityRow, documentEntity, aspectsRow, attributesRow, dependenciesRow, communitiesRow] = await Promise.all([
-		dbOwnerQuery<{ n: number }>(
-			{
-				sql: "SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND source_id = ?",
-				params: [agentId, source.id],
-				result: "get",
-			},
-			{ operation: "sources.health_entities", lane: "read", deadlineMs: 3_000 },
-		),
-		dbOwnerQuery<{ id: string } | undefined>(
-			{
-				sql: "SELECT id FROM entities WHERE agent_id = ? AND source_id = ? AND entity_type = 'source_document' ORDER BY updated_at DESC LIMIT 1",
-				params: [agentId, source.id],
-				result: "get",
-			},
-			{ operation: "sources.health_document_entity", lane: "read", deadlineMs: 3_000 },
-		),
-		dbOwnerQuery<{ n: number }>(
-			{
-				sql: "SELECT COUNT(*) AS n FROM entity_aspects AS a JOIN entities AS e ON e.id = a.entity_id AND e.agent_id = a.agent_id WHERE a.agent_id = ? AND e.source_id = ?",
-				params: [agentId, source.id],
-				result: "get",
-			},
-			{ operation: "sources.health_aspects", lane: "read", deadlineMs: 3_000 },
-		),
-		dbOwnerQuery<{ n: number }>(
-			{
-				sql: "SELECT COUNT(*) AS n FROM entity_attributes WHERE agent_id = ? AND source_id = ?",
-				params: [agentId, source.id],
-				result: "get",
-			},
-			{ operation: "sources.health_attributes", lane: "read", deadlineMs: 3_000 },
-		),
-		dbOwnerQuery<{ n: number }>(
-			{
-				sql: "SELECT COUNT(*) AS n FROM entity_dependencies WHERE agent_id = ? AND source_id = ?",
-				params: [agentId, source.id],
-				result: "get",
-			},
-			{ operation: "sources.health_dependencies", lane: "read", deadlineMs: 3_000 },
-		),
-		dbOwnerQuery<{ n: number }>(
-			{
-				sql: "SELECT COUNT(*) AS n FROM entity_communities WHERE agent_id = ? AND source_id = ?",
-				params: [agentId, source.id],
-				result: "get",
-			},
-			{ operation: "sources.health_communities", lane: "read", deadlineMs: 3_000 },
-		),
+		sourceReadQuery<{ n: number }>(scope, "sources.health_entities", [agentId, source.id], { deadlineMs: 3_000 }),
+		sourceReadQuery<{ id: string } | undefined>(scope, "sources.health_document_entity", [agentId, source.id], {
+			deadlineMs: 3_000,
+		}),
+		sourceReadQuery<{ n: number }>(scope, "sources.health_aspects", [agentId, source.id], { deadlineMs: 3_000 }),
+		sourceReadQuery<{ n: number }>(scope, "sources.health_attributes", [agentId, source.id], { deadlineMs: 3_000 }),
+		sourceReadQuery<{ n: number }>(scope, "sources.health_dependencies", [agentId, source.id], { deadlineMs: 3_000 }),
+		sourceReadQuery<{ n: number }>(scope, "sources.health_communities", [agentId, source.id], { deadlineMs: 3_000 }),
 	]);
 	const entities = Number(entityRow?.n ?? 0);
 	const aspects = Number(aspectsRow?.n ?? 0);
