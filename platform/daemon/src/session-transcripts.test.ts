@@ -75,7 +75,17 @@ describe("session transcript turn index", () => {
 	async function resetTurnIndex(): Promise<void> {
 		await write("DELETE FROM session_transcript_turns");
 		await write(
-			"UPDATE session_transcript_turns_backfill SET cursor = 0, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+			"UPDATE session_transcript_turns_backfill SET cursor = NULL, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+		);
+	}
+
+	async function insertAt(rowid: "-9223372036854775808" | "1", sessionKey: string, content: string): Promise<void> {
+		await write(
+			`INSERT INTO session_transcripts (rowid, session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (${rowid}, ?, ?, 'codex', '/repo', 'noam', ?, ?)`,
+			sessionKey,
+			content,
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
 		);
 	}
 
@@ -166,25 +176,16 @@ describe("session transcript turn index", () => {
 		expect(hits.every((hit) => hit.rank < 0)).toBe(true);
 	});
 
-	it("indexes a transcript stored at the minimum rowid when the backfill has not started", async () => {
+	it("indexes transcripts from the minimum rowid one row per chunk when the backfill has not started", async () => {
 		init();
-		await write(
-			"INSERT INTO session_transcripts (rowid, session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (-9223372036854775808, ?, ?, ?, ?, ?, ?, ?)",
-			"sess-a",
-			"User: kilo boundary",
-			"codex",
-			"/repo",
-			"noam",
-			"2026-11-25T10:00:00.000Z",
-			"2026-11-25T10:00:00.000Z",
-		);
-		await write("DELETE FROM session_transcript_turns");
-		await write(
-			"UPDATE session_transcript_turns_backfill SET cursor = NULL, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
-		);
+		await insertAt("-9223372036854775808", "sess-a", "User: kilo boundary");
+		await insertAt("1", "sess-b", "User: lima second");
+		await resetTurnIndex();
 
-		expect(await backfillChunk()).toEqual({ complete: true, indexed: 1 });
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
+		expect(await backfillChunk(1)).toEqual({ complete: true, indexed: 1 });
 		expect(await indexedTurns("sess-a")).toEqual(["User: kilo boundary"]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: lima second"]);
 	});
 
 	it("never returns another agent's session and honors the project and current-session scope", async () => {

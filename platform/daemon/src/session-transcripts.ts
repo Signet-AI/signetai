@@ -1915,7 +1915,7 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 	const maxRows = Math.max(1, Math.floor(options.maxRows ?? TRANSCRIPT_TURN_BACKFILL_ROWS));
 	const candidates = prepareTypedStatement<{ readonly rowid: number }>(
 		db,
-		"SELECT rowid FROM session_transcripts WHERE rowid >= COALESCE(?1 + 1, -9223372036854775808) AND rowid <= ?2 ORDER BY rowid LIMIT ?3",
+		"SELECT rowid FROM session_transcripts WHERE rowid >= COALESCE(CAST(?1 AS INTEGER) + 1, -9223372036854775808) AND rowid <= ?2 ORDER BY rowid LIMIT ?3",
 	).all(state.cursor, state.end_rowid, maxRows);
 	const rowBytes = prepareTypedStatement<{ readonly bytes: number }>(
 		db,
