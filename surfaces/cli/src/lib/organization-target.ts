@@ -90,6 +90,16 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		selected = await resolveCliTarget(options, deps);
 		selectedAgent = options.agent;
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;
+		if (selected.remote && top.name() === "import" && !selectedAgent)
+			throw new Error("Organization imports require --agent <id>.");
+		if (selected.remote && (top.name() === "import" || (top.name() === "export" && command.name() === "bundle")))
+			throw new Error("Remote portable bundles are not available yet. No local database was opened.");
+		if (
+			selected.remote &&
+			(["restart", "pause", "resume", "logs", "repair", "embed"].includes(top.name()) ||
+				(top.name() === "daemon" && ["restart", "pause", "resume", "logs"].includes(command.name())))
+		)
+			throw new Error("This remote operator command is not available yet. No local action was attempted.");
 		if (
 			selected.remote &&
 			[
