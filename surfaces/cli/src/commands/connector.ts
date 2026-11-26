@@ -64,7 +64,7 @@ export const supportedHarnesses = [
 	"oh-my-pi",
 	"pi",
 ] as const;
-function connectorFor(harness: string, profile?: string) {
+export function connectorFor(harness: string, profile?: string) {
 	switch (harness) {
 		case "claude-code":
 			return new ClaudeCodeConnector();
@@ -150,7 +150,11 @@ async function finishRevocation(
 		return "pending";
 	}
 }
-async function installConnector(raw: string, options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
+export async function installConnector(
+	raw: string,
+	options: ConnectorInstallOptions,
+	deps: ConnectorDeps,
+): Promise<void> {
 	const harness = canonicalHarness(raw);
 	const installer = connectorFor(harness, options.profile);
 	const target = await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl });

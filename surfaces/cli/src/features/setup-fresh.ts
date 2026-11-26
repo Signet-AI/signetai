@@ -45,8 +45,12 @@ function assertNoExistingWorkspaceDatabase(basePath: string): void {
 
 export async function runDashboardSetupBootstrap(
 	basePath: string,
-	options: { readonly allowUnprotectedWorkspace: boolean; readonly createLocalBackup: boolean },
-	deps: SetupDeps,
+	options: {
+		readonly allowUnprotectedWorkspace: boolean;
+		readonly createLocalBackup: boolean;
+		readonly organization?: boolean;
+	},
+	deps: Pick<SetupDeps, "getTemplatesDir">,
 ): Promise<void> {
 	assertNoExistingWorkspaceDatabase(basePath);
 	if (options.createLocalBackup) createFreshWorkspaceV2(basePath);
@@ -70,6 +74,7 @@ export async function runDashboardSetupBootstrap(
 	const config = {
 		version: 1,
 		schema: "signet/v1",
+		...(options.organization ? { auth: { mode: "team" }, harnesses: [] } : {}),
 		capabilities: {
 			memory: { enabled: true, autoInject: true, memoryHead: true },
 			secrets: { enabled: true },

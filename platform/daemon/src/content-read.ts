@@ -28,7 +28,7 @@ export type ContentReadRequest =
 	| {
 			readonly op: "export_content";
 			readonly table: AuthoredExportTable;
-			readonly author: string;
+			readonly author: string | null;
 			readonly scope: ReadScope;
 			readonly row: number;
 			readonly offset: number;
@@ -186,7 +186,7 @@ export type ContentReadRequest =
 	| {
 			readonly op: "export";
 			readonly table: AuthoredExportTable;
-			readonly author: string;
+			readonly author: string | null;
 			readonly scope: ReadScope;
 			readonly cursor: number;
 			readonly limit: number;

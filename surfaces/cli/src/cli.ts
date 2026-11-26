@@ -41,6 +41,8 @@ import {
 import { detectExistingSetup } from "./lib/setup-detection.js";
 import chalk from "chalk";
 import { Command } from "commander";
+import { confirm, isCancel } from "@clack/prompts";
+import { onboardOrganizationHarnesses } from "./features/organization-onboarding.js";
 
 import { registerBrowseCommand } from "./browse.js";
 import { registerAccelerateCommands } from "./commands/accelerate.js";
@@ -50,7 +52,13 @@ import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
 import { registerAuthCommands, reportAuthError } from "./commands/auth.js";
 import { registerOrganizationCommands } from "./commands/organization.js";
 import { cliTarget, cliTransport, registerOrganizationTarget } from "./lib/organization-target.js";
-import { organizationDashboard, organizationPause, organizationStatus } from "./commands/organization-client.js";
+import {
+	organizationDashboard,
+	organizationPause,
+	organizationRestart,
+	organizationStatus,
+} from "./commands/organization-client.js";
+import { organizationDoctor } from "./commands/organization-doctor.js";
 import { organizationLogs } from "./commands/organization-logs.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
@@ -997,8 +1005,15 @@ registerAppCommands(program, {
 	},
 	launchDashboard: (options) => showTargetDashboard(options),
 	migrateSchema: (options) => migrateSchema(options, daemonDeps),
-	setupWizard: (options) => setupWizard(options, setupDeps),
-	showDoctor: (options) => showDoctor(options, healthDeps),
+	setupWizard: (options) =>
+		setupWizard({ ...options, bootstrapUrl: cliTarget()?.remote ? undefined : cliTarget()?.url }, setupDeps),
+	showDoctor: (options) => {
+		const transport = cliTransport();
+		const target = cliTarget();
+		return transport && target
+			? organizationDoctor(transport, target.url, options.json)
+			: showDoctor(options, healthDeps);
+	},
 	showStatus: (options) => showTargetStatus(options),
 	syncTemplates: () => runSyncTemplates(),
 });
@@ -1012,7 +1027,10 @@ registerDesktopCommands(program, {
 
 registerDaemonCommands(program, {
 	doPause: (options) => setTargetPause(true, options),
-	doRestart: (options) => doRestart(options, daemonDeps),
+	doRestart: (options) => {
+		const transport = cliTransport();
+		return transport ? organizationRestart(transport, options ?? {}) : doRestart(options ?? {}, daemonDeps);
+	},
 	doResume: (options) => setTargetPause(false, options),
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),
@@ -1026,7 +1044,19 @@ registerDaemonCommands(program, {
 
 registerAuthCommands(program, {
 	configUrl: readDaemonUrlConfig(AGENTS_DIR),
-	saveUrl: (url) => saveDaemonLoginUrl(AGENTS_DIR, url),
+	saveUrl: (url) => saveDaemonLoginUrl(url),
+	afterLogin: (context) =>
+		onboardOrganizationHarnesses(context, {
+			agentsDir: AGENTS_DIR,
+			interactive: process.stdin.isTTY === true,
+			print: console.log,
+			confirm: async (message) => {
+				const value = await confirm({ message, initialValue: false });
+				if (isCancel(value))
+					throw new Error("Connection cancelled; login was kept and no further harnesses were changed");
+				return value;
+			},
+		}),
 });
 registerConnectorCommands(program, {
 	configUrl: readDaemonUrlConfig(AGENTS_DIR),

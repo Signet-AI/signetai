@@ -1,3 +1,4 @@
+import { operatorRestartCapabilities } from "../operator-restart";
 import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { logger } from "../logger";
 import type { ReadScope } from "../read-scope";
@@ -383,6 +384,7 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/status", async (c) => {
 		if (c.get("organization"))
 			return c.json({
+				...operatorRestartCapabilities(),
 				status: "running",
 				version: CURRENT_VERSION,
 				runtime: DAEMON_RUNTIME,

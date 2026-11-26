@@ -1,3 +1,4 @@
+import { setupTokenPath } from "./setup-token-file";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import { logger } from "../logger";
@@ -120,11 +121,16 @@ export async function pruneAudit(): Promise<void> {
 		pruning = null;
 	}
 }
-export async function startOrganizationRuntime(baseUrl: string): Promise<void> {
+export async function startOrganizationRuntime(baseUrl: string, agentsDir: string): Promise<void> {
 	const org = await readOrganization();
 	if (!org.claimed_at) {
-		const token = await ensureSetupToken();
-		if (token) console.log(`[organization] Setup URL: ${baseUrl}/auth/setup\n[organization] Setup token: ${token}`);
+		const token = await ensureSetupToken(agentsDir);
+		if (token) {
+			console.log(
+				`[organization] Setup URL: ${baseUrl}/auth/setup\n[organization] Read the one-time token on the instance host from ${setupTokenPath(agentsDir)}`,
+			);
+			if (process.stdout.isTTY) console.log(`[organization] Setup token: ${token}`);
+		}
 	}
 	await organizationWrite([
 		statement(

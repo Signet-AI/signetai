@@ -1,3 +1,4 @@
+import { setupOrganizationHost } from "./setup-organization.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
@@ -296,6 +297,10 @@ function hasInteractiveSetupConfiguration(options: SetupWizardOptions): boolean 
 }
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
+	if (options.host) {
+		await setupOrganizationHost(options, deps);
+		return;
+	}
 	if (options.nonInteractive || options.schema || options.file || options.json || options.dryRun) {
 		await applySetupOptions(options, deps);
 		return;

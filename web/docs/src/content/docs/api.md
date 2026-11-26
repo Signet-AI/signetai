@@ -23,7 +23,7 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
 ### Request and response conventions
 
 - JSON is the default request and response format.
-- Authenticated modes use `Authorization: Bearer <token>`.
+- Authenticated modes use `Authorization: Bearer ***
 - Most list endpoints accept `limit` and `offset` or a route-specific bounded
   limit. Out-of-range values return `400` or are clamped where noted.
 - Errors generally use `{ "error": "human-readable message" }`; route-specific
@@ -426,3 +426,18 @@ is installed on the machine, never that Signet was connected to it. Clients
 deciding whether onboarding is still needed must gate on `configuredHarnesses`
 (the field is absent on older daemons; treat absence as unknown and fall back
 without hiding setup affordances).
+
+### Supervised organization operations
+
+- `POST /api/org/agents/:id/purge`: empty body; archived non-organization agent; unrestricted admin; returns HTTP 202 `{jobId}`. Poll `/api/org/jobs/:id`. MCP: `signet_agent_purge` with `confirm: true`.
+
+- `POST /api/org/bootstrap`: unclaimed team instance only; setup nonce and validated public URL.
+
+- `GET /api/org/operator/doctor`: audited identity, clock, and DB-owner diagnostics.
+
+- `GET /api/org/operator/capabilities`: verified supervisor availability, admin only.
+- `POST /api/org/operator/restart`: unrestricted admin; empty JSON body; HTTP 202
+  with `{accepted, jobId, status, supervisor}`. Poll the job for actual readiness.
+- `POST /api/org/operator/jobs`: scoped queue repair, embedding audit, and
+  embedding backfill jobs. Returns HTTP 202 with `{jobId}`. See Organization for
+  action schemas, admission limits, and incomplete-job semantics.

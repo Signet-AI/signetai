@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
+import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { OrgDaemon, repo } from "./daemon";
-import { Fixture, device } from "./fixture";
+import { canonicalTranscriptPath } from "../../../platform/daemon/src/transcript-jsonl";
+import { Fixture, device, connector, captureThread } from "./fixture";
 import { browser, record, request, success, text } from "./http";
 
 test("CLI organization admin flow uses the real isolated daemon", async () => {
@@ -23,12 +25,28 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 				new Response(child.stderr).text(),
 				child.exited,
 			]);
-			expect(code, stderr).toBe(expectedCode);
-			if (expectedCode !== 0) expect(stdout).toBe("");
-			return JSON.parse(expectedCode === 0 ? stdout : stderr);
+			expect(code, args[0] === "doctor" ? `${stderr}\n${stdout}` : stderr).toBe(expectedCode);
+			if (expectedCode !== 0 && expectedCode !== 2) expect(stdout).toBe("");
+			return JSON.parse(expectedCode === 0 || expectedCode === 2 ? stdout : stderr);
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		const doctor = await cli(["doctor", "--json"]);
+		expect(doctor.identity.organization.name).toBe("Org acceptance");
+		expect(doctor.diagnostics.database).toBe("ready");
+		expect(Math.abs(doctor.clock.skewMs)).toBeLessThan(30_000);
+		const inlinePath = join(daemon.home, ".gemini", "settings.json");
+		await mkdir(join(daemon.home, ".gemini"), { recursive: true });
+		await writeFile(inlinePath, JSON.stringify({ SIGNET_API_KEY: "fixture-inline-only" }));
+		const degraded = await cli(["doctor", "--json"], text(admin.credential.bearer), 2);
+		expect(degraded.findings.some((finding: { reason: string }) => finding.reason === "inline_key")).toBe(true);
+		expect(JSON.stringify(degraded)).not.toContain("fixture-inline-only");
+		await rm(inlinePath);
+		expect((await cli(["doctor", "--json"], text(fixture.user("alice").session.bearer), 4)).reason).toBe("permission");
+		expect((await cli(["restart", "--json"], text(admin.credential.bearer), 1)).reason).toBe("supervisor_required");
+		expect((await cli(["daemon", "restart", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
+			"supervisor_required",
+		);
 		for (const action of ["requeue", "cancel", "prune"]) {
 			const job = await cli(["repair", "queue", action, "--wait", "--json"]);
 			expect(job.kind).toBe("operator");
@@ -49,6 +67,56 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		expect((await cli(["embed", "backfill", "--wait", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
 			"job_failed",
 		);
+
+		const purgedAgent = await cli(["agent", "add", "purge-proof", "--team", fixture.engId, "--json"]);
+		expect(typeof purgedAgent.agentId).toBe("string");
+		success(
+			await request(
+				daemon.origin,
+				`/api/org/groups/${fixture.engId}/members/${status.identity.user.id}`,
+				admin.credential,
+				"PUT",
+				{ role: "owner" },
+			),
+			"grant admin explicit team act-as",
+		);
+		const purgeKey = await connector(daemon, admin.credential, admin.deviceId, purgedAgent.agentId);
+		await captureThread(
+			daemon,
+			{ agentId: purgedAgent.agentId, connector: purgeKey.credential, session: admin.credential },
+			"purge-proof-thread",
+			"agentPurgeEvidenceMarker",
+		);
+		const transcriptFile = canonicalTranscriptPath(daemon.workspace, "codex");
+		expect(await readFile(transcriptFile, "utf8")).toContain("agentPurgeEvidenceMarker");
+		await cli(["agent", "remove", purgedAgent.agentId, "--json"]);
+		const purged = await cli(["agent", "purge", purgedAgent.agentId, "--confirm", "--wait", "--json"]);
+		expect(purged.status).toBe("complete");
+		let remainingTranscript = "";
+		try {
+			remainingTranscript = await readFile(transcriptFile, "utf8");
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		}
+		expect(remainingTranscript).not.toContain("agentPurgeEvidenceMarker");
+		const agentInventory = await cli(["agent", "list", "--json"]);
+		expect(agentInventory.agents.some((agent: { id: string }) => agent.id === purgedAgent.agentId)).toBe(false);
+		expect((await request(daemon.origin, "/api/agents", purgeKey.credential)).status).toBe(401);
+		expect((await cli(["audit", "--action", "agent.purged", "--json"])).events.length).toBe(1);
+		const exportedPath = join(daemon.root, "organization-export.ndjson");
+		const exported = await cli(["export", "bundle", "--all", "--output", exportedPath, "--json"]);
+		expect(exported.exported).toBe(true);
+		const exportedText = await readFile(exportedPath, "utf8");
+		expect(exportedText).toContain("Operator backfill proof");
+		expect(
+			(
+				await cli(
+					["export", "bundle", "--all", "--output", join(daemon.root, "forbidden.ndjson"), "--json"],
+					text(fixture.user("alice").session.bearer),
+					4,
+				)
+			).reason,
+		).toBe("not_owner");
 		expect(
 			(await cli(["repair", "queue", "requeue", "--wait", "--json"], text(fixture.user("alice").session.bearer), 4))
 				.reason,

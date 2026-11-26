@@ -414,6 +414,39 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	};
 	registerMcpTool(
 		server,
+		"signet_operator_doctor",
+		{
+			title: "Inspect Instance Health",
+			description:
+				"Inspect identity, server clock, and database-owner availability. Requires diagnostics. Content totals are unavailable rather than global.",
+			inputSchema: z.object({}).strict(),
+		},
+		async () => organizationResult("/api/org/operator/doctor"),
+	);
+	registerMcpTool(
+		server,
+		"signet_agent_purge",
+		{
+			title: "Purge an Archived Agent",
+			description:
+				"Permanently purge an archived agent through a bounded owner job. Requires unrestricted admin and explicit confirmation. Poll signet_org_job; acceptance is not completion.",
+			inputSchema: z.object({ agentId: z.string().min(1).max(200), confirm: z.literal(true) }).strict(),
+		},
+		async ({ agentId }) => organizationResult(`/api/org/agents/${encodeURIComponent(agentId)}/purge`, "POST", {}),
+	);
+	registerMcpTool(
+		server,
+		"signet_operator_restart",
+		{
+			title: "Request Supervised Restart",
+			description:
+				"Request a restart from the daemon's verified supervisor. Requires unrestricted admin. Poll signet_org_job; acceptance is not completion.",
+			inputSchema: z.object({}).strict(),
+		},
+		async () => organizationResult("/api/org/operator/restart", "POST", {}),
+	);
+	registerMcpTool(
+		server,
 		"signet_operator_job",
 		{
 			title: "Start a Scoped Operator Job",

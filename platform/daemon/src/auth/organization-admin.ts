@@ -1,4 +1,5 @@
 import { operatorActor, operatorRequest } from "../operator-jobs";
+import { attemptAsync } from "@signet/core";
 import { z } from "zod";
 import { readableClassificationsFor } from "../classification-access";
 import { audienceSubjectFromPrincipal, inFlightClassificationSql, resolveReadScope } from "../read-scope";
@@ -6,7 +7,7 @@ import { dbOwnerOrganizationPurgePlan } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import { logger } from "../logger";
 import { type AgentRecord, canActAs } from "./agent-access";
-import { groupOwner, requireAdmin, requireAudit } from "./organization-operations";
+import { groupOwner, requireAdmin, requireAudit, whoami } from "./organization-operations";
 import {
 	auditStatement,
 	IdentityError,
@@ -515,6 +516,70 @@ export async function bulkRevoke(p: Principal, input: unknown) {
 	]);
 	return { jobId };
 }
+export async function auditOrgExport(p: Principal, author: string | null, all: boolean) {
+	await organizationWrite([auditStatement(p, "organization.export", "user", author, { all })]);
+}
+export async function organizationDoctor(
+	p: Principal,
+	org: import("./organization-store").OrganizationRow,
+	proxy: boolean,
+) {
+	if (!p.permissions.has("diagnostics")) throw new IdentityError(403, "permission", "Requires diagnostics permission");
+	const database = await attemptAsync(() =>
+		organizationQuery<{ available: number }>(statement("SELECT 1 AS available", [], "get")),
+	);
+	const identity = await whoami(p, org, proxy);
+	await organizationWrite([auditStatement(p, "operator.doctor", "instance", null)]);
+	return {
+		identity,
+		serverTime: new Date().toISOString(),
+		diagnostics: { database: database?.available === 1 ? "ready" : "unavailable", content: "unavailable" },
+		status: database?.available === 1 ? "healthy" : "degraded",
+	};
+}
+export async function beginSupervisedRestart(p: Principal, supervisor: string) {
+	requireAdmin(p);
+	const jobId = id("job"),
+		now = new Date().toISOString();
+	await organizationWrite([
+		statement(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES(?,'restart','pending',?,?,?)",
+			[jobId, JSON.stringify({ supervisor, originPid: process.pid }), p.userId, now],
+		),
+		auditStatement(p, "operator.restart_requested", "job", jobId),
+	]);
+	return jobId;
+}
+export async function settleSupervisedRestart(jobId: string, status: "running" | "incomplete", p: Principal) {
+	await organizationWrite([
+		statement(
+			"UPDATE org_jobs SET status=?,error=?,started_at=coalesce(started_at,?) WHERE id=? AND kind='restart' AND status IN ('pending','running')",
+			[status, status === "incomplete" ? "restart_unconfirmed" : null, new Date().toISOString(), jobId],
+		),
+		auditStatement(p, `operator.restart_${status}`, "job", jobId),
+	]);
+}
+export async function completeSupervisedRestart(supervisor: string) {
+	const rows = await organizationQuery<readonly { id: string }[]>(
+		statement(
+			"SELECT id FROM org_jobs WHERE kind='restart' AND status IN ('pending','running','incomplete') AND json_extract(params_json,'$.supervisor')=? AND json_extract(params_json,'$.originPid')<>? ORDER BY created_at LIMIT 100",
+			[supervisor, process.pid],
+			"all",
+		),
+	);
+	for (const row of rows)
+		await organizationWrite([
+			statement("UPDATE org_jobs SET status='complete',error=NULL,finished_at=? WHERE id=?", [
+				new Date().toISOString(),
+				row.id,
+			]),
+			statement(
+				"INSERT INTO audit_events(id,at,actor_credential,action,target_kind,target_id,outcome) VALUES(?,?,'system','operator.restart_completed','job',?,'ok')",
+				[id("aud"), new Date().toISOString(), row.id],
+			),
+		]);
+}
+
 export async function jobs(p: Principal, kind?: string) {
 	requireAdmin(p);
 	return {
@@ -527,8 +592,8 @@ export async function jobs(p: Principal, kind?: string) {
 			).filter(() => !kind || kind === "operator"),
 			...(await organizationQuery<readonly import("../operator-job-contract").OperatorJobRow[]>(
 				statement(
-					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
-					[kind ?? null, kind ?? null],
+					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
+					[p.boundAgentId, p.allowedProjects === null ? null : "restricted", kind ?? null, kind ?? null],
 					"all",
 				),
 			)),
@@ -542,6 +607,10 @@ export async function job(p: Principal, jobId: string) {
 		statement("SELECT * FROM org_jobs WHERE id = ?", [jobId], "get"),
 	);
 	if (!result) throw new IdentityError(404, "not_found");
+	if (["restart", "agent_purge"].includes(result.kind) && (p.boundAgentId !== null || p.allowedProjects !== null))
+		throw new IdentityError(404, "not_found");
+	if (result.kind === "agent_purge")
+		return operatorRequest({ op: "agent-purge", stage: "read", actor: operatorActor(p), jobId, runtimeId: "" });
 	if (result.kind === "operator") return operatorRequest({ op: "get", actor: operatorActor(p), jobId });
 	if (result.created_by !== p.userId) requireAdmin(p);
 	return result;

@@ -1,3 +1,4 @@
+import { startAgentPurge } from "../agent-purge";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
@@ -6,11 +7,13 @@ import { authCookies } from "../auth/cookies";
 import { failure } from "../auth/identity-middleware";
 import { hybridProxyDetected } from "../auth/middleware";
 import { oidcCallback, oidcStart } from "../auth/oidc";
+import { operatorRestartCapabilities, restartOrganization } from "../operator-restart";
 import { startOperatorJob } from "../operator-jobs";
 import * as admin from "../auth/organization-admin";
 import * as operations from "../auth/organization-operations";
 import {
 	claimOrganization,
+	prepareOrganizationBootstrap,
 	claimSchema,
 	IdentityError,
 	type OrganizationRow,
@@ -80,7 +83,7 @@ export function registerOrganizationRoutes(
 	const getConfig = typeof config === "function" ? config : () => config;
 	app.use("/api/*", async (c, next) => {
 		const isOrg = c.get("organization");
-		if (!isOrg && c.req.path !== "/api/org/claim") return next();
+		if (!isOrg && !["/api/org/claim", "/api/org/bootstrap"].includes(c.req.path)) return next();
 		if (getConfig().mode !== "team")
 			return c.json({ error: "Organization mode requires team mode", reason: "org_policy" }, 403);
 		return next();
@@ -95,21 +98,25 @@ export function registerOrganizationRoutes(
 		"/api/org/claim",
 		endpoint(async (c) => {
 			if (getConfig().mode !== "team") throw new IdentityError(403, "org_policy");
-			const result = await claimOrganization(claimSchema.parse(await body(c)));
+			const result = await claimOrganization(claimSchema.parse(await body(c)), workspaceRoot);
 			sessionCookies(c, result, await readOrganization());
 			return c.json(browserResult(result));
 		}),
 	);
-	app.get(
-		"/api/auth/methods",
-		active(async (c) => {
+	app.get("/api/auth/methods", async (c, next) => {
+		if (getConfig().mode !== "team") return next();
+		return endpoint(async (c) => {
 			const org = await readOrganization();
 			return c.json({
-				mode: getConfig().mode,
-				organization: { name: org.name, claimed: true },
+				mode: "team",
+				organization: { name: org.name, claimed: org.claimed_at !== null },
 				providers: operations.authProviders(org),
 			});
-		}),
+		})(c, next);
+	});
+	app.post(
+		"/api/org/bootstrap",
+		endpoint(async (c) => c.json(await prepareOrganizationBootstrap(await body(c)))),
 	);
 	app.get(
 		"/api/auth/whoami",
@@ -390,6 +397,25 @@ export function registerOrganizationRoutes(
 		"/api/agents",
 		active(async (c) => c.json(await admin.createAgent(user(c), await body(c)), 201)),
 	);
+	app.post(
+		"/api/org/agents/:id/purge",
+		active(async (c) => {
+			z.object({})
+				.strict()
+				.parse(await body(c));
+			return c.json(await startAgentPurge(user(c), c.req.param("id") ?? "", c.req.header("x-signet-agent-id")), 202);
+		}),
+	);
+	app.delete(
+		"/api/agents/:id",
+		active(async () => {
+			throw new IdentityError(
+				409,
+				"org_policy",
+				"Use agent remove to archive, then agent purge --confirm for an audited purge job",
+			);
+		}),
+	);
 	app.patch(
 		"/api/agents/:id",
 		active(async (c) => c.json(await admin.updateAgent(user(c), c.req.param("id") ?? "", await body(c)))),
@@ -435,6 +461,30 @@ export function registerOrganizationRoutes(
 		active(async (c) => {
 			const result = await admin.auditExport(user(c), c.req.query());
 			return new Response(result, { headers: { "Content-Type": "application/x-ndjson" } });
+		}),
+	);
+	app.get(
+		"/api/org/operator/doctor",
+		active(async (c) => {
+			const org = c.get("organization");
+			if (!org) throw new IdentityError(401, "missing_credential");
+			return c.json(await admin.organizationDoctor(user(c), org, hybridProxyDetected));
+		}),
+	);
+	app.get(
+		"/api/org/operator/capabilities",
+		active(async (c) => {
+			operations.requireAdmin(user(c));
+			return c.json(operatorRestartCapabilities());
+		}),
+	);
+	app.post(
+		"/api/org/operator/restart",
+		active(async (c) => {
+			z.object({})
+				.strict()
+				.parse(await body(c));
+			return c.json(await restartOrganization(user(c)), 202);
 		}),
 	);
 	app.post(

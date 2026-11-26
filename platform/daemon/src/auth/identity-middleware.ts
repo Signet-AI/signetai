@@ -80,6 +80,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		"/api/auth/handoff/redeem",
 		"/api/auth/login",
 		"/api/org/claim",
+		"/api/org/bootstrap",
 		"/api/auth/refresh",
 		"/api/auth/device/start",
 		"/api/auth/device/token",

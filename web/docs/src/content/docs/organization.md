@@ -229,3 +229,113 @@ Pass `--agent` to select an agent; backfill otherwise uses the personal write
 default. Remote embedding-profile migrations remain host operations; run them
 with `--local` on the instance host. A non-preview backfill that needs more than
 one bounded batch reports incomplete coverage, so scripts must inspect its job.
+
+## Supervised restarts
+
+`signet restart --org --wait --json` requests a restart from the instance's
+supervisor. An unrestricted administrator is required. The daemon verifies its
+own systemd service's main PID and control group, or its workspace-specific
+launchd job's PID and `KeepAlive` setting. A daemon started directly refuses;
+the CLI never tries a local restart instead.
+
+`GET /api/org/operator/capabilities` reports whether a verified supervisor is
+available. `POST /api/org/operator/restart` returns HTTP 202 with a durable job
+ID. That response means accepted, not restarted. The old process records the
+request before dispatch; the new process marks the job complete only after it
+is listening. `--wait` tolerates the bounded connection interruption. An
+unconfirmed dispatch remains incomplete. Requests, dispatches, and completion
+are audited. MCP exposes `signet_operator_restart`.
+
+## Organization doctor
+
+`signet doctor --org --json` reports your identity, credential expiry, the
+instance's database-owner availability, and estimated clock skew with its
+round-trip uncertainty. It inspects local harness configurations for inline
+keys and validates protected connector key files. Only connectors targeting
+this instance are probed; other instances are never contacted. Recent 401/403
+history is shown when your user session owns that connector key. Unavailable
+history and incomplete local scans are labeled explicitly. No key value is
+printed, no local daemon starts, and no local database is opened. Findings
+include suggested fixes and produce exit code 2; authentication and permission
+errors retain exit codes 3 and 4.
+
+`GET /api/org/operator/doctor` requires `diagnostics` and audits the inspection.
+It returns an explicit server timestamp and identity, not global content counts.
+MCP exposes `signet_operator_doctor`.
+
+## Exporting organization evidence
+
+`signet export --org --output my-evidence.ndjson --json` exports your authored
+memories, transcripts, and artifacts through your current agent, project, and
+classification read scope. Administrators can select `--author <user-id>` or
+`--all`; whole-organization exports require an unrestricted administrator and
+still exclude classifications outside that administrator's audience.
+
+Organization exports use NDJSON evidence records, not local workspace bundles.
+They contain no regenerated embedding vectors or local identity/configuration
+files. Without `--output`, records stream to stdout. File outputs use private
+permissions, publish only after successful completion, and never overwrite an
+existing file. A server-side terminal error, truncated record, cancellation, or
+byte-limit failure exits unsuccessfully without publishing a completed file.
+The default byte limit is 64 MiB; `--max-bytes` accepts up to 1 GiB. Individual
+records are limited to 64 MiB and each request has a two-minute deadline.
+
+Legacy local bundle imports remain refused against an organization. They can
+otherwise overwrite author identity and restore derived rows without source
+provenance. Use the classified document/transcript import API for source evidence;
+do not stop the organization instance or open its database from a client.
+
+## Hosting and joining
+
+On the instance host, run `signet setup --host --local --public-url https://memory.example.com`.
+Use `--path` for a separate workspace and an unused `SIGNET_PORT` if another
+instance is running. Host setup creates a team-mode workspace without installing
+harnesses, starts that workspace's daemon, and checks the public URL with its
+setup nonce. A mismatch or unreachable URL fails rather than silently configuring
+SSO and device-approval links for the wrong host. Rerun against the same unclaimed
+team workspace after fixing connectivity; existing personal workspaces are not
+converted. Configure providers, embeddings, and shared sources after claiming.
+
+The command prints a setup URL and the one-time setup token separately; the token
+is never put in the URL. A service-started daemon stores it in its private runtime
+`setup-token` file instead of printing it into service logs. Claiming revokes the
+token and removes that file. Keep team mode behind reverse proxies; do not expose
+hybrid mode through an untrusted proxy.
+
+Developers run `signet setup --join https://memory.example.com`. This invokes the
+same device sign-in flow as `signet login`, without creating a local workspace,
+configuring local inference providers, or starting a local daemon. `--device-code`
+prints the approval URL instead of opening a browser. `--non-interactive` refuses
+human approval and keychain prompts; use an already provisioned credential for
+unattended commands instead. Connect local harnesses after signing in.
+
+After sign-in, the CLI explains personal-agent visibility, shows the read and
+write defaults, detects installed harnesses, and asks about each one separately.
+An existing personal or other-instance connection is kept unless you explicitly
+approve switching that harness. Nothing is imported automatically. In a pipe or
+JSON mode, detection is reported without changing connectors; use `signet connect`
+explicitly afterward.
+
+The selected instance is saved as `daemon.url` in the client's
+`~/.config/signet/config.yaml` (the Signet application-data directory on Windows).
+Signing in does not create `~/.agents`, rewrite a personal workspace's `agent.yaml`,
+or start local services. An existing workspace `daemon.url` remains readable for
+compatibility until a client target is saved. Flags and environment credentials
+still take precedence.
+
+## Permanently purging an agent
+
+Archive with `signet agent remove <agent>` first. Then an unrestricted admin can
+run `signet agent purge <agent> --confirm --wait --json`. This destroys the archived
+agent's evidence, derived memory, and connector credentials through an audited
+owner job. It never deletes files in your local workspace. The organization agent
+is protected; agent-bound and project-restricted credentials cannot start or read
+this instance-wide job. Audit history is retained.
+
+Purge admission is limited to 1,000 agent-scoped rows. Evidence is removed in
+bounded batches, and transcript deletion follows its durable cleanup phases before
+completion is reported. Pinned or over-limit data, owner interruption, a revoked
+operator, or cleanup that exceeds the one-minute deadline leaves a refused or
+incomplete result rather than claiming successful deletion. Use the job ID to
+inspect the result; resolve the blocker before retrying. Purge responses never
+include counts of content outside the caller's audience.

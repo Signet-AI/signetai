@@ -9,13 +9,26 @@ import {
 	SignetTransport,
 	SignetUnauthorizedError,
 } from "../../../../libs/sdk/src/index.js";
-import { LoginStore, NodeTransport, resolveTarget, type ResolveTargetOptions } from "../../../../libs/sdk/src/node.js";
+import {
+	LoginStore,
+	NodeTransport,
+	resolveTarget,
+	type ResolveTargetOptions,
+	type ResolvedTarget,
+} from "../../../../libs/sdk/src/node.js";
 import { cliTarget, cliTransport } from "../lib/organization-target.js";
 
 export interface AuthCommandDeps extends ResolveTargetOptions {
 	readonly print?: (value: string) => void;
 	readonly openBrowser?: (url: string) => Promise<unknown>;
 	readonly saveUrl?: (url: string) => Promise<void>;
+	readonly afterLogin?: (context: LoginOnboardingContext) => Promise<unknown>;
+}
+export interface LoginOnboardingContext {
+	readonly target: ResolvedTarget;
+	readonly transport: NodeTransport;
+	readonly options: ResolveTargetOptions;
+	readonly json: boolean;
 }
 interface AuthOptions {
 	url?: string;
@@ -128,7 +141,9 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 					approval.password
 				)
 					throw new Error("Device approval URL must match the Signet instance origin and contain no credentials");
-				print(`Open ${approval.href}\nEnter code: ${device.userCode}`);
+				const instructions = `Open ${approval.href}\nEnter code: ${device.userCode}`;
+				if (opts.json) process.stderr.write(`${instructions}\n`);
+				else print(instructions);
 				if (!opts.deviceCode) {
 					try {
 						await (deps.openBrowser ?? open)(approval.href);
@@ -148,11 +163,30 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 						);
 						await new LoginStore(target.origin, deps).save(token);
 						await deps.saveUrl?.(target.url);
-						const authenticated = await authTransport({ url: target.url }, deps);
+						const loginOptions = {
+							...deps,
+							flagUrl: target.url,
+							flagKey: undefined,
+							harness: undefined,
+							env: { ...(deps.env ?? process.env), SIGNET_API_KEY: undefined, SIGNET_API_KEY_FILE: undefined },
+						};
+						const resolved = await resolveTarget(loginOptions);
+						const authenticated = new NodeTransport(resolved, { env: loginOptions.env });
 						await authenticated.flush();
+						const onboarding = await deps.afterLogin?.({
+							target: resolved,
+							transport: authenticated,
+							options: loginOptions,
+							json: opts.json === true,
+						});
 						print(
 							opts.json
-								? JSON.stringify({ authenticated: true, url: target.url, expiresAt: token.accessExpiresAt })
+								? JSON.stringify({
+										authenticated: true,
+										url: target.url,
+										expiresAt: token.accessExpiresAt,
+										...(onboarding === undefined ? {} : { onboarding }),
+									})
 								: `Signed in to ${target.url}`,
 						);
 						return;

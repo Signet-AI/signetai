@@ -36,7 +36,7 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 		.option("--no-sync", "Skip signet sync prompt")
 		.option("--no-openclaw", "Deprecated alias for --no-sync")
 		.action(deps.doRestart);
-	withRuntime(withPath(restart));
+	withJson(withRuntime(withPath(restart))).option("--wait", "Wait for the supervised organization restart");
 
 	const pause = daemonCmd
 		.command("pause")
@@ -74,7 +74,7 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 		.option("--no-sync", "Skip signet sync prompt")
 		.option("--no-openclaw", "Deprecated alias for --no-sync")
 		.action(deps.doRestart);
-	withRuntime(withPath(restartAlias));
+	withJson(withRuntime(withPath(restartAlias))).option("--wait", "Wait for the supervised organization restart");
 
 	const pauseAlias = program
 		.command("pause")

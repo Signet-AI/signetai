@@ -13,6 +13,7 @@ export interface CliTargetOptions {
 	readonly url?: string;
 	readonly agent?: string;
 	readonly nonInteractive?: boolean;
+	readonly join?: string;
 }
 let selected: ResolvedTarget | undefined;
 let transport: NodeTransport | undefined;
@@ -87,18 +88,14 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		while (top.parent && top.parent !== program) top = top.parent;
 		if (["hook", "connect", "disconnect", "connector"].includes(top.name())) return;
 		const options = command.optsWithGlobals<CliTargetOptions>();
-		selected = await resolveCliTarget(options, deps);
+		selected = await resolveCliTarget({ ...options, url: options.join ?? options.url }, deps);
 		selectedAgent = options.agent;
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;
 		if (selected.remote && top.name() === "import" && !selectedAgent)
 			throw new Error("Organization imports require --agent <id>.");
-		if (selected.remote && (top.name() === "import" || (top.name() === "export" && command.name() === "bundle")))
+		if (selected.remote && top.name() === "import")
 			throw new Error("Remote portable bundles are not available yet. No local database was opened.");
-		if (
-			selected.remote &&
-			(["restart"].includes(top.name()) || (top.name() === "daemon" && ["restart"].includes(command.name())))
-		)
-			throw new Error("This remote operator command is not available yet. No local action was attempted.");
+
 		if (
 			selected.remote &&
 			[

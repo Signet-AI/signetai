@@ -88,6 +88,84 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("agent purge is an audited owner job and refuses narrowed credentials", async () => {
+		await claim();
+		const alice = await member("purge-alice");
+		const group = await (await call("/api/org/groups", "POST", { name: "purge-team" })).json();
+		const agent = await (
+			await call("/api/agents", "POST", { name: "purge-target", kind: "team", ownerGroupId: group.id })
+		).json();
+		expect(typeof agent.agentId).toBe("string");
+		expect((await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {}, alice.token)).status).toBe(403);
+		expect((await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {})).status).toBe(409);
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "narrow purge",
+				kind: "shared",
+				agentId: agent.agentId,
+				permissions: ["admin"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		expect(typeof key.secret).toBe("string");
+		expect((await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {}, key.secret)).status).toBe(403);
+		expect((await call("/api/org/agents/default/purge", "POST", {})).status).toBe(409);
+		expect((await call(`/api/agents/${agent.agentId}`, "PATCH", { archived: true })).status).toBe(200);
+		const result = await call(`/api/org/agents/${agent.agentId}/purge`, "POST", {});
+		expect(result.status).toBe(202);
+		const started = await result.json();
+		let job: { status: string } = { status: "running" };
+		for (let i = 0; i < 100; i++) {
+			job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+			if (job.status !== "running") break;
+			await Bun.sleep(20);
+		}
+		expect(job.status).toBe("complete");
+		expect(
+			(await (await call("/api/agents")).json()).agents.some((row: { id: string }) => row.id === agent.agentId),
+		).toBe(false);
+		const events = (await (await call("/api/org/audit?action=agent.created")).json()).events;
+		expect(events.some((row: { target_id: string }) => row.target_id === agent.agentId)).toBe(true);
+		expect((await (await call("/api/org/audit?action=agent.purged")).json()).events.length).toBe(1);
+	});
+
+	test("host bootstrap requires the setup nonce and preserves the checked public URL", async () => {
+		expect((await (await call("/api/auth/methods")).json()).organization.claimed).toBe(false);
+		const bad = await call(
+			"/api/org/bootstrap",
+			"POST",
+			{ setupToken: "invalid-fixture-token-123456", publicUrl: "https://org.example" },
+			"",
+		);
+		expect(bad.status).toBe(401);
+		const good = await call("/api/org/bootstrap", "POST", { setupToken: setup, publicUrl: "https://org.example" }, "");
+		expect(good.status).toBe(200);
+		await claim();
+		expect((await (await call("/api/org/settings")).json()).publicUrl).toBe("https://org.example");
+		expect(
+			(await call("/api/org/bootstrap", "POST", { setupToken: setup, publicUrl: "https://other.example" }, "")).status,
+		).toBe(409);
+	});
+	test("organization doctor requires diagnostics and reports an explicit server clock", async () => {
+		await claim();
+		const bob = await member("doctor-member");
+		expect((await call("/api/org/operator/doctor", "GET", undefined, bob.token)).status).toBe(403);
+		const response = await call("/api/org/operator/doctor");
+		expect(response.status).toBe(200);
+		const result = await response.json();
+		expect(result.identity.user.username).toBe("admin");
+		expect(Number.isFinite(Date.parse(result.serverTime))).toBe(true);
+		expect(result.diagnostics.database).toBe("ready");
+		expect(result.diagnostics.content).toBe("unavailable");
+	});
+	test("restart without a verified supervisor refuses without stopping", async () => {
+		await claim();
+		const bob = await member("restart-member");
+		expect((await call("/api/org/operator/restart", "POST", {}, bob.token)).status).toBe(403);
+		expect((await call("/api/org/operator/restart", "POST", {})).status).toBe(409);
+		expect((await (await call("/api/org/operator/capabilities")).json()).supervisor).toBeNull();
+		expect((await call("/api/auth/whoami")).status).toBe(200);
+	});
 	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
@@ -1193,7 +1271,7 @@ describe("organization HTTP flows", () => {
 		]);
 		const { startOrganizationRuntime, stopOrganizationRuntime } = await import("./organization-runtime");
 		try {
-			await startOrganizationRuntime("http://127.0.0.1");
+			await startOrganizationRuntime("http://127.0.0.1", dir);
 			expect(await organizationQuery(statement("SELECT id,status FROM org_jobs ORDER BY id", [], "all"))).toEqual([
 				{ id: "class-job", status: "running" },
 				{ id: "keys-job", status: "failed" },

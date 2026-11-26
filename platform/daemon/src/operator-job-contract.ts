@@ -42,6 +42,15 @@ export interface OperatorJobRow {
 }
 export type OperatorRequest =
 	| {
+			readonly op: "agent-purge";
+			readonly stage: "create" | "next" | "finish" | "fail" | "read";
+			readonly actor: OperatorActor;
+			readonly agentId?: string;
+			readonly jobId?: string;
+			readonly runtimeId: string;
+	  }
+	| { readonly op: "authorize-global"; readonly actor: OperatorActor; readonly runtimeId?: string }
+	| {
 			readonly op: "create";
 			readonly actor: OperatorActor;
 			readonly input: OperatorInput;

@@ -1,3 +1,4 @@
+import { auditOrgExport } from "../auth/organization-admin";
 import { encodeExportRecord } from "../projection-worker-client";
 import { readPointerMiddleware } from "../read-pointers";
 import { projectVisibleMemories } from "../umap-projection";
@@ -990,26 +991,31 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
 		const principal = c.get("principal");
-		const author = c.req.query("author");
-		if (!author || author.length > 128) return c.json({ error: "author is required" }, 400);
+		const all = c.req.query("all") === "1";
+		const author = all ? null : (c.req.query("author") ?? null);
+		if ((!all && !author) || (author && author.length > 128) || (all && c.req.query("author")))
+			return c.json({ error: "author is required" }, 400);
 		if (
 			!c.get("organization") ||
 			!principal ||
-			(principal.userId !== author && (principal.role !== "admin" || !principal.permissions.has("admin")))
+			((all || principal.userId !== author) && (principal.role !== "admin" || !principal.permissions.has("admin"))) ||
+			(all && principal && (principal.boundAgentId !== null || principal.allowedProjects !== null))
 		)
 			return c.json({ error: "not permitted", reason: "not_owner" }, 403);
 		const resolved = await resolveRouteReadScope(c, { allowAllAgents: true, allReadable: true });
 		if (resolved instanceof Response) return resolved;
+		await auditOrgExport(principal, author ?? null, all);
 		c.header("Content-Type", "application/x-ndjson");
 		c.header("Cache-Control", "no-store");
+		const exportSignal = AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(120_000)]);
 		return stream(c, async (output) => {
 			try {
 				for (const table of ["memories", "session_transcripts", "memory_artifacts"] as const) {
 					let cursor = 0;
-					while (!c.req.raw.signal.aborted) {
+					while (!exportSignal.aborted) {
 						const rows = await contentRead<ReadonlyArray<Record<string, unknown>>>(
 							{ op: "export", table, author, scope: resolved.scope, cursor, limit: 100 },
-							c.req.raw.signal,
+							exportSignal,
 						);
 						for (const { exportCursor, exportContentBytes, ...row } of rows) {
 							if (typeof exportContentBytes !== "number") {
@@ -1021,7 +1027,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							if (typeof exportCursor !== "number") throw new Error("Invalid export cursor");
 							const parts: Uint8Array[] = [];
 							for (let offset = 0; offset < exportContentBytes; offset += 1024 * 1024) {
-								c.req.raw.signal.throwIfAborted();
+								exportSignal.throwIfAborted();
 								const part = await contentRead<{ content: string } | null>(
 									{
 										op: "export_content",
@@ -1034,12 +1040,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 										expectedBytes: exportContentBytes,
 										expectedUpdatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
 									},
-									c.req.raw.signal,
+									exportSignal,
 								);
 								if (!part) throw new Error("Export row changed during streaming");
 								parts.push(Buffer.from(part.content, "hex"));
 							}
-							const encoded = await encodeExportRecord({ kind: table, ...row }, parts, c.req.raw.signal);
+							const encoded = await encodeExportRecord({ kind: table, ...row }, parts, exportSignal);
 							for (let offset = 0; offset < encoded.length; offset += 65536)
 								await output.write(encoded.subarray(offset, offset + 65536));
 						}

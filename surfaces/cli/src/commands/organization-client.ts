@@ -1,5 +1,6 @@
+import { waitForOrganizationJob } from "./organization.js";
 import type { NodeTransport } from "../../../../libs/sdk/src/node.js";
-import { SignetUnauthorizedError } from "../../../../libs/sdk/src/index.js";
+import { SignetError, SignetUnauthorizedError } from "../../../../libs/sdk/src/index.js";
 
 interface Identity {
 	readonly authenticated: boolean;
@@ -49,6 +50,22 @@ export async function organizationDashboard(
 	await open(destination.href);
 }
 
+export async function organizationRestart(transport: NodeTransport, options: { json?: boolean; wait?: boolean }) {
+	const capability = await transport.get<{ restart: boolean }>("/api/org/operator/capabilities");
+	if (!capability.restart)
+		throw new SignetError(
+			"This daemon has no verified supervisor. Restart it on the instance host.",
+			"supervisor_required",
+		);
+	const result = await transport.post<{ jobId: string }>("/api/org/operator/restart", {});
+	console.log(
+		JSON.stringify(
+			options.wait ? await waitForOrganizationJob(transport, result.jobId) : result,
+			null,
+			options.json ? undefined : 2,
+		),
+	);
+}
 export async function organizationPause(
 	transport: NodeTransport,
 	paused: boolean,
