@@ -392,7 +392,13 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 					run(harness, options, { ...deps, ...(flagKey ? { flagKey } : {}) }),
 				);
 			} catch (error) {
-				reportAuthError(error, options.json);
+				reportAuthError(
+					error,
+					options.json,
+					options.apiKeyStdin
+						? "Supplied connector key was rejected; provide a valid harness-bound connector key"
+						: undefined,
+				);
 			}
 		};
 	const connector = program.command("connector").description("Manage harness credentials and integrations");

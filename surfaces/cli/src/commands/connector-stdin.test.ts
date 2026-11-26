@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConnectorRegistry, readKeyFile } from "../../../../libs/sdk/src/node.js";
 
-test.each(["connector", "personal", "wrong-harness", "session", "unbound"])(
+test.each(["connector", "personal", "wrong-harness", "session", "unbound", "invalid"])(
 	"connect stdin validates the server credential binding: %s",
 	async (kind) => {
 		const home = await mkdtemp(join(tmpdir(), "connector-stdin-"));
@@ -21,6 +21,7 @@ test.each(["connector", "personal", "wrong-harness", "session", "unbound"])(
 				}
 				if (new URL(request.url).pathname !== "/api/auth/whoami") return Response.json({});
 				expect(request.headers.get("authorization")).toBe(`Bearer ${secret}`);
+				if (kind === "invalid") return Response.json({ reason: "revoked" }, { status: 401 });
 				return Response.json({
 					mode: "team",
 					credential: {
@@ -54,8 +55,8 @@ test.each(["connector", "personal", "wrong-harness", "session", "unbound"])(
 				expect(entry?.keyId).toBe("manual-key");
 				expect(await readKeyFile(entry?.keyFile ?? "missing")).toBe(secret);
 			} else {
-				expect(code).toBe(1);
-				expect(stderr).toContain("connector key bound to codex");
+				expect(code).toBe(kind === "invalid" ? 3 : 1);
+				expect(stderr).toContain(kind === "invalid" ? "connector key" : "connector key bound to codex");
 				expect(stderr).not.toContain("session expired");
 				expect(entry).toBeUndefined();
 			}

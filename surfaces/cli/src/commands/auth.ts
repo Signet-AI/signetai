@@ -36,7 +36,11 @@ interface DeviceToken {
 	refreshExpiresAt: string;
 }
 
-export function reportAuthError(error: unknown, json = false): void {
+export function reportAuthError(
+	error: unknown,
+	json = false,
+	unauthorizedMessage = "Signet session expired, run `signet login`",
+): void {
 	const status = error instanceof SignetApiError ? error.status : 0;
 	const reason =
 		error instanceof SignetUnauthorizedError || error instanceof SignetForbiddenError
@@ -45,11 +49,7 @@ export function reportAuthError(error: unknown, json = false): void {
 				? error.code
 				: "request_failed";
 	const message =
-		status === 401
-			? "Signet session expired, run `signet login`"
-			: error instanceof Error
-				? error.message
-				: "Signet request failed";
+		status === 401 ? unauthorizedMessage : error instanceof Error ? error.message : "Signet request failed";
 	process.stderr.write(`${json ? JSON.stringify({ error: message, reason, status }) : message}\n`);
 	process.exitCode = status === 401 ? 3 : status === 403 ? 4 : 1;
 }
