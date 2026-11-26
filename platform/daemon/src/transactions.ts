@@ -510,36 +510,37 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		if (newHash && input.embeddingVector && input.embeddingVector.length > 0 && embeddingGenerationActive) {
 			if (!existing.agent_id) throw new Error("agent_required");
 			const compartment = compartmentForWrite(db, { agentId: existing.agent_id, memoryId: input.memoryId });
-			const prior = db
-				.prepare(
-					"SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND content_hash=? AND compartment_id IS ?",
-				)
-				.get(input.memoryId, existing.agent_id, newHash, compartment);
-			const embId = typeof prior?.id === "string" ? prior.id : crypto.randomUUID();
 			const blob = vectorToBlob(input.embeddingVector);
-			db.prepare(
-				`INSERT INTO embeddings
+			const stored = db
+				.prepare(
+					`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
-				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+				 VALUES (COALESCE((SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND content_hash=? AND compartment_id IS ? ORDER BY id LIMIT 1),?), ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
 				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text,
-				   created_at = excluded.created_at, agent_id = excluded.agent_id, compartment_id = excluded.compartment_id`,
-			).run(
-				embId,
-				newHash,
-				blob,
-				input.embeddingVector.length,
-				input.memoryId,
-				input.patch.content,
-				input.changedAt,
-				existing.agent_id,
-				compartment,
-			);
-			syncVecInsert(db, embId, input.embeddingVector);
+				   created_at = excluded.created_at, agent_id = excluded.agent_id, compartment_id = excluded.compartment_id RETURNING id`,
+				)
+				.get(
+					input.memoryId,
+					existing.agent_id,
+					newHash,
+					compartment,
+					crypto.randomUUID(),
+					newHash,
+					blob,
+					input.embeddingVector.length,
+					input.memoryId,
+					input.patch.content,
+					input.changedAt,
+					existing.agent_id,
+					compartment,
+				);
+			if (typeof stored?.id !== "string") throw new Error("embedding_write_failed");
+			syncVecInsert(db, stored.id, input.embeddingVector);
 		}
 	}
 
