@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { classificationFixture } from "../test-support/classification-fixture.test";
+import { currentClassificationFixture } from "../test-support/classification-fixture.test";
+import { compartmentForWrite } from "../../../core/src/compartment-shards";
 import { finalizeDreamingPassInDb } from "./dreaming";
 
 for (const targetKind of ["agent", "session"] as const) {
 	test(`manifests inherit ${targetKind} labels and the durable speaker`, () => {
-		const db = classificationFixture();
+		const db = currentClassificationFixture();
 		try {
 			db.prepare(
 				"INSERT INTO session_transcripts(session_key,content,agent_id,created_at,completed_at,speaker_user_id) VALUES('classified-manifest','User: classified evidence','default',?,?, 'alice')",
@@ -19,6 +20,10 @@ for (const targetKind of ["agent", "session"] as const) {
 				"cls_manifest",
 				new Date().toISOString(),
 			);
+			const compartmentId = compartmentForWrite(db, { agentId: "default", sessionKey: "classified-manifest" });
+			db.prepare(
+				"INSERT INTO dreaming_passes(id,agent_id,mode,status,scope_key,compartment_id) VALUES('manifest-pass','default','incremental-hygiene','running','default',?)",
+			).run(compartmentId);
 			const source = {
 				kind: "transcript",
 				id: "classified-manifest",

@@ -510,7 +510,7 @@ describe("organization credential boundary", () => {
 		const author = { userId, credential: "session:test" };
 		const passId = await createDreamingPass(
 			getDbAccessor(),
-			"default",
+			`personal-${userId.slice(4)}`,
 			"incremental",
 			{ text: "test policy", source: "custom" },
 			author,
@@ -529,7 +529,7 @@ describe("organization credential boundary", () => {
 		const { createOntologyProposal } = await import("../ontology-proposals");
 		const { getDbAccessor } = await import("../db-accessor");
 		const proposal = await createOntologyProposal(getDbAccessor(), {
-			agentId: "default",
+			agentId: `personal-${userId.slice(4)}`,
 			operation: "create_entity",
 			payload: { name: "Actor" },
 			createdBy: `user:${userId}`,
