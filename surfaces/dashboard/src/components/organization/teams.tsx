@@ -79,7 +79,7 @@ export function SharedKeyForm({
 								setScope(event.target.checked ? [...scope, permission] : scope.filter((value) => value !== permission))
 							}
 						/>
-						{permission}
+						{displayLabel(permission)}
 					</label>
 				))}
 			</fieldset>

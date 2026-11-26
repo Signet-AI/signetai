@@ -4,7 +4,7 @@ import { HomeSecretsPanel } from "@/components/home/secrets";
 import { OrganizationResource } from "@/views/organization";
 import { useView } from "@/lib/view-context";
 import type { OrganizationAgent } from "@/lib/organization";
-import { agentDisplayName } from "./controls";
+import { agentDisplayName, displayLabel } from "./controls";
 import { OrganizationMemory } from "./memory";
 import { OrganizationSessions } from "./sessions";
 
@@ -51,8 +51,9 @@ export function OrganizationHome() {
 										id="org-system-devices"
 										label="Devices and connectors"
 										summary={
-											Array.from(new Set(keys.flatMap((key) => (key.harness ? [key.harness] : [])))).join(", ") ||
-											"No connected harnesses"
+											Array.from(new Set(keys.flatMap((key) => (key.harness ? [displayLabel(key.harness)] : [])))).join(
+												", ",
+											) || "No connected harnesses"
 										}
 										count={keys.length}
 										onOpen={() => {

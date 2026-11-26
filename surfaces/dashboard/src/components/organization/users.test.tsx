@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OffboardingImpact, RolesMatrix, UsersContent, AccessContent } from "./users";
+import { SharedKeyForm } from "./teams";
+import { AccessContent, OffboardingImpact, RolesMatrix, UsersContent } from "./users";
+
+test("shared-key permission labels are human-readable", () => {
+	const html = renderToStaticMarkup(<SharedKeyForm agents={[]} permissions={["remember", "recall"]} />);
+	expect(html).toContain("Remember</label>");
+	expect(html).toContain("Recall</label>");
+});
 
 test("effective access uses named mobile cards and an explicit classifications empty state", () => {
 	const html = renderToStaticMarkup(
