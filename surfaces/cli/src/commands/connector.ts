@@ -127,8 +127,8 @@ async function revokeConnectorKey(
 	const response = await transport.get<{ keys: { id: string; revoked_at?: string | null }[] }>(
 		"/api/auth/connector-keys",
 	);
-	if (!Array.isArray(response.keys) || response.keys.some((key) => key.id === entry.keyId && !key.revoked_at))
-		throw new Error("Connector revocation could not be verified");
+	const verified = Array.isArray(response.keys) ? response.keys.find((key) => key.id === entry.keyId) : undefined;
+	if (!verified?.revoked_at) throw new Error("Connector revocation could not be verified; it remains pending");
 }
 function withHarnessLock<T>(harness: string, deps: ConnectorDeps, run: () => Promise<T>): Promise<T> {
 	return withFileLock(join(configDirectory(deps), "connector-locks", `${identifier(harness)}.lock`), run);

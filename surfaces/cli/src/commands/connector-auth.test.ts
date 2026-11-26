@@ -76,6 +76,7 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 	let revoked = false;
 	const revocations: {
 		fail: boolean;
+		hide: boolean;
 		observations: {
 			keyId: string;
 			activeKeyId?: string;
@@ -83,7 +84,7 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 			replacement: boolean;
 			proxy: boolean;
 		}[];
-	} = { fail: false, observations: [] };
+	} = { fail: false, hide: false, observations: [] };
 	const metadata = {
 		id: "previous",
 		last_used_at: "2026-11-25T12:00:00.000Z",
@@ -113,7 +114,9 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 				return Response.json({ reason: "not_found" }, { status: 404 });
 			}
 			if (path === "/api/auth/connector-keys" && request.method === "GET")
-				return Response.json({ keys: [{ ...metadata, revoked_at: revoked ? "2026-11-25T12:01:00.000Z" : null }] });
+				return Response.json({
+					keys: revocations.hide ? [] : [{ ...metadata, revoked_at: revoked ? "2026-11-25T12:01:00.000Z" : null }],
+				});
 			if (path === "/api/org/keys") return Response.json({ keys: [{ user_id: null }] });
 			if (path === "/api/auth/connector-keys" && request.method === "POST")
 				return Response.json(
@@ -472,6 +475,24 @@ test("failed installation restores evidence behind a home-relative workspace pat
 	} finally {
 		install.mockRestore();
 		await rm(workspace, { recursive: true, force: true });
+		f.cleanup();
+	}
+});
+
+test("an ambiguous missing key is pending rather than falsely confirmed revoked", async () => {
+	const f = await lifecycleFixture();
+	try {
+		f.revocations.hide = true;
+		expect(await f.run(["disconnect", "codex"])).toBe(1);
+		expect((await f.registry.read()).codex).toBeUndefined();
+		const pending = join(f.home, ".config", "signet", "pending-revokes.json");
+		expect(JSON.parse(await readFile(pending, "utf8"))).toEqual([
+			{ harness: "codex", url: f.server.url.origin, keyId: "previous" },
+		]);
+		f.revocations.hide = false;
+		await f.run(["connector", "doctor", "--json"]);
+		expect(JSON.parse(await readFile(pending, "utf8"))).toEqual([]);
+	} finally {
 		f.cleanup();
 	}
 });
