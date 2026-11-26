@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ const { registerHooksRoutes } = await import("./hooks-routes");
 const { registerGlobalMiddleware } = await import("../middleware");
 const { AGENTS_DIR, authConfig } = await import("./state");
 
+const agent = `noam-${randomUUID()}`;
 let dir = "";
 let app: Hono;
 
@@ -35,6 +36,7 @@ afterEach(async () => {
 afterAll(() => {
 	if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	else process.env.SIGNET_PATH = previousSignetPath;
+	rmSync(transcriptUploadAgentDirectory(AGENTS_DIR, agent), { recursive: true, force: true });
 	rmSync(suiteDir, { recursive: true, force: true });
 });
 
@@ -47,7 +49,7 @@ function query(overrides: Readonly<Record<string, string | null>> = {}): string 
 	const values: Record<string, string | null> = {
 		harness: "codex",
 		sessionKey: "sess-1",
-		agentId: "noam",
+		agentId: agent,
 		cwd: "/repo",
 		...overrides,
 	};
@@ -84,7 +86,7 @@ describe("transcript upload route", () => {
 		expect(first.status).toBe(200);
 		expect(await first.json()).toMatchObject({ committedOffset: 8, generation: 0, tailSha256: sha('{"a":1}\n') });
 		expect((await patch('{"b":2}\n', { offset: 8 })).status).toBe(200);
-		expect(existsSync(transcriptUploadAgentDirectory(AGENTS_DIR, "noam"))).toBe(true);
+		expect(existsSync(transcriptUploadAgentDirectory(AGENTS_DIR, agent))).toBe(true);
 		const state = await app.request(query());
 		expect(state.status).toBe(200);
 		expect(await state.json()).toEqual({
@@ -112,7 +114,7 @@ describe("transcript upload route", () => {
 				controller.close();
 			},
 		});
-		const purged = { agentId: "purge-race" };
+		const purged = { agentId: `purge-race-${randomUUID()}` };
 		const pending = patch(body, { stream, target: daemon, query: purged });
 		await Bun.sleep(20);
 		await withTranscriptUploadAgentLock(purged.agentId, "exclusive", async () => {});
@@ -169,7 +171,7 @@ describe("transcript upload route", () => {
 		authConfig.mode = "team";
 		const claims: TokenClaims = {
 			sub: "project-token",
-			scope: { agent: "noam", project: "/repo" },
+			scope: { agent, project: "/repo" },
 			role: "agent",
 			iat: Math.floor(Date.now() / 1000),
 			exp: Math.floor(Date.now() / 1000) + 3600,
@@ -193,7 +195,7 @@ describe("transcript upload route", () => {
 		authConfig.mode = "team";
 		const claims: TokenClaims = {
 			sub: "agent-token",
-			scope: { agent: "noam" },
+			scope: { agent },
 			role: "agent",
 			iat: Math.floor(Date.now() / 1000),
 			exp: Math.floor(Date.now() / 1000) + 3600,
