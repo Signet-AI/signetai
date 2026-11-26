@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { Command } from "commander";
+import { cliTarget } from "./organization-target.js";
 
 export interface CliPreActionDeps {
 	readonly agentsDir: string;
@@ -14,6 +15,7 @@ export interface CliPreActionDeps {
 
 export function registerCliPreAction(program: Command, deps: CliPreActionDeps): void {
 	program.hook("preAction", async (_thisCommand, actionCommand) => {
+		if (cliTarget()?.remote) return;
 		let current: Command | null = actionCommand;
 		let topLevelCommand = "";
 
