@@ -153,15 +153,18 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 				const location = loginTarget(opts, deps);
 				const store = new LoginStore(location.origin, deps);
 				let failure: unknown;
+				let revocationConfirmed = false;
 				try {
-					const target = await resolveTarget({ ...deps, flagUrl: location.url });
-					await new NodeTransport(target, { env: deps.env }).post("/api/auth/logout", { all: opts.all === true });
+					if (await store.load()) {
+						const target = await resolveTarget({ ...deps, flagUrl: location.url });
+						await new NodeTransport(target, { env: deps.env }).post("/api/auth/logout", { all: opts.all === true });
+						revocationConfirmed = true;
+					}
 				} catch (error) {
 					failure = error;
 				} finally {
 					await store.clear();
 				}
-				const revocationConfirmed = failure === undefined;
 				print(
 					opts.json
 						? JSON.stringify({ authenticated: false, revocationConfirmed })
@@ -169,7 +172,7 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 							? "Signed out"
 							: "Signed out locally; server revocation was not confirmed.",
 				);
-				if (failure !== undefined) reportAuthError(failure, opts.json);
+				if (failure !== undefined && !(failure instanceof SignetUnauthorizedError)) reportAuthError(failure, opts.json);
 			}),
 		);
 	options(program.command("whoami").description("Show the authenticated identity")).action(

@@ -166,3 +166,53 @@ test("device login stores credentials and logout revokes before clearing", async
 		server.stop(true);
 	}
 });
+
+for (const savedSession of [false, true]) {
+	for (const all of [false, true]) {
+		test(`logout is clean when the session is absent or expired; saved=${savedSession}; all=${all}`, async () => {
+			const home = await mkdtemp(join(tmpdir(), "logout-expired-"));
+			homes.push(home);
+			let requests = 0;
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch() {
+					requests++;
+					return Response.json({ reason: "revoked" }, { status: 401 });
+				},
+			});
+			const keyring = {
+				get: async () => ({ state: "unsupported" as const }),
+				set: async () => ({ state: "unsupported" as const }),
+			};
+			const env = { HOME: home };
+			const store = new LoginStore(server.url.origin, { env, keyring });
+			if (savedSession)
+				await store.save({
+					accessToken: "expired-access",
+					refreshToken: "expired-refresh",
+					accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
+					refreshExpiresAt: new Date(Date.now() + 120000).toISOString(),
+				});
+			const printed: string[] = [];
+			const program = new Command();
+			registerAuthCommands(program, {
+				env,
+				keyring,
+				flagUrl: server.url.origin,
+				print: (value) => printed.push(value),
+			});
+			process.exitCode = 0;
+			try {
+				await program.parseAsync(["logout", "--json", ...(all ? ["--all"] : [])], { from: "user" });
+				expect(process.exitCode).toBe(0);
+				expect(await store.load()).toBeNull();
+				expect(JSON.parse(printed[0] ?? "null")).toMatchObject({ authenticated: false, revocationConfirmed: false });
+				expect(requests).toBe(savedSession ? 1 : 0);
+			} finally {
+				server.stop(true);
+				process.exitCode = 0;
+			}
+		});
+	}
+}
