@@ -89,20 +89,39 @@ export function AuthField({
 	);
 }
 
+type DeviceDecision = { readonly client: "cli" | "desktop"; readonly decision: "approve" | "deny" };
+
+export function DeviceApprovalResult({ client, decision }: DeviceDecision) {
+	return (
+		<div className="flex flex-col gap-4">
+			<p role="status">
+				{decision === "approve" ? "Sign-in approved. Return to your device." : "Sign-in denied. No access was granted."}
+			</p>
+			{client === "desktop" && decision === "approve" && (
+				<Button asChild className="self-start">
+					<a href="signet://auth/complete">Return to Signet</a>
+				</Button>
+			)}
+		</div>
+	);
+}
+
 export function DeviceApprovalPage() {
 	const whoami = useWhoami();
 	const [code, setCode] = useState(() => new URLSearchParams(location.search).get("user_code") ?? "");
 	const [lookup, setLookup] = useState("");
-	const [done, setDone] = useState<string | null>(null);
+	const [done, setDone] = useState<DeviceDecision | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const { result, refresh } = usePanelQuery<{
-		client: string;
+		client: "cli" | "desktop";
 		deviceName: string;
 		platform: string | null;
 		createdAt: string;
 	}>(lookup ? `/api/auth/device/${encodeURIComponent(lookup)}` : null);
 	const decide = async (decision: "approve" | "deny") => {
+		const client = result?.data?.client;
+		if (!client) return;
 		setBusy(true);
 		setError(null);
 		const response = await getJSONResult<{ ok: boolean }>("/api/auth/device/approve", {
@@ -112,10 +131,7 @@ export function DeviceApprovalPage() {
 		});
 		setBusy(false);
 		if (response.error) setError(response.error);
-		else
-			setDone(
-				decision === "approve" ? "Sign-in approved. Return to your device." : "Sign-in denied. No access was granted.",
-			);
+		else setDone({ client, decision });
 	};
 	return (
 		<AuthPage
@@ -124,7 +140,7 @@ export function DeviceApprovalPage() {
 			description="Only approve a code from a device you are signing in on."
 		>
 			{done ? (
-				<p role="status">{done}</p>
+				<DeviceApprovalResult {...done} />
 			) : (
 				<>
 					<form
