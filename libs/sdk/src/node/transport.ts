@@ -2,6 +2,7 @@ import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { randomUUID } from "node:crypto";
 import {
 	SignetError,
+	SignetApiError,
 	SignetCredentialError,
 	SignetNetworkError,
 	SignetTimeoutError,
@@ -15,9 +16,12 @@ import {
 	captureDeliveryHeaders,
 	DELIVERY_SCOPE_HEADERS,
 	type FlushOptions,
+	type UploadCheckpoint,
+	type OutboxEntry,
 	type OutboxFlushResult,
 } from "./outbox.js";
 import type { ResolvedTarget } from "./target.js";
+import { captureRemoteSessionEnd } from "./capture.js";
 import type { StorageOptions } from "./storage.js";
 
 export interface NodeTransportOptions
@@ -48,7 +52,83 @@ export class NodeTransport extends SignetTransport {
 		path: string,
 		opts: RequestOptions,
 		capturedHeaders?: Readonly<Record<string, string>>,
+		upload?: OutboxEntry["upload"],
+		checkpoint?: UploadCheckpoint,
 	): Promise<T> {
+		let current = upload;
+		const save = checkpoint
+			? async (state: NonNullable<OutboxEntry["upload"]>) => {
+					await checkpoint(state);
+					current = state;
+				}
+			: undefined;
+		for (const recovering of [false, true]) {
+			try {
+				return await this.sendAttempt<T>(method, path, opts, capturedHeaders, current, save);
+			} catch (error) {
+				if (
+					!(error instanceof SignetApiError) ||
+					error.status !== 422 ||
+					!this.target.remote ||
+					path !== "/api/hooks/session-end" ||
+					!current ||
+					!save
+				)
+					throw error;
+				if (recovering)
+					throw new SignetError(
+						"Upload checksum failed after recovery; original transcript retained",
+						"transcript_upload_checksum_failed",
+					);
+				await save({ ...current, uploadId: null, receivedBytes: 0 });
+			}
+		}
+		throw new SignetError("Upload recovery exhausted", "transcript_upload_checksum_failed");
+	}
+	private async sendAttempt<T>(
+		method: string,
+		path: string,
+		opts: RequestOptions,
+		capturedHeaders?: Readonly<Record<string, string>>,
+		upload?: OutboxEntry["upload"],
+		checkpoint?: UploadCheckpoint,
+	): Promise<T> {
+		if (this.target.remote && path === "/api/hooks/session-end") {
+			try {
+				opts = {
+					...opts,
+					body: await captureRemoteSessionEnd(
+						opts.body,
+						opts.signal,
+						checkpoint
+							? {
+									state: upload,
+									checkpoint,
+									request: (method, path, step) =>
+										this.send(
+											method,
+											path,
+											{
+												...opts,
+												...step,
+												body: step.body,
+												rawBody: step.rawBody,
+												headers: { ...opts.headers, ...step.headers },
+											},
+											capturedHeaders,
+										),
+								}
+							: undefined,
+					),
+				};
+			} catch (error) {
+				if (error instanceof SignetError || opts.signal?.aborted) throw error;
+				throw new SignetError(
+					error instanceof Error ? error.message : "Transcript capture failed",
+					"transcript_capture_failed",
+				);
+			}
+		}
 		let used: string | null = null;
 		let acquired = false;
 		const callHeaders = new Headers(opts.headers);
@@ -134,7 +214,8 @@ export class NodeTransport extends SignetTransport {
 						headers: captureDeliveryHeaders(Object.fromEntries(captured)),
 						idempotencyKey: headers.get("idempotency-key") ?? undefined,
 					},
-					(entry) => this.send<T>(method, path, { ...request, body: entry.body }, entry.headers),
+					(entry, checkpoint) =>
+						this.send<T>(method, path, { ...request, body: entry.body }, entry.headers, entry.upload, checkpoint),
 					request,
 				);
 				result = delivered.value;
@@ -150,12 +231,14 @@ export class NodeTransport extends SignetTransport {
 	}
 	async flush(options?: FlushOptions): Promise<OutboxFlushResult> {
 		return this.outbox.flush(
-			(entry, control) =>
+			(entry, control, checkpoint) =>
 				this.send(
 					entry.method,
 					entry.path,
 					{ ...control, body: entry.body, headers: { "Idempotency-Key": entry.idempotencyKey } },
 					entry.headers,
+					entry.upload,
+					checkpoint,
 				),
 			{ ...options, origin: this.target.origin, harness: this.target.harness ?? "cli" },
 		);

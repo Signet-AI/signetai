@@ -1,3 +1,4 @@
+import { attemptAsync } from "@signet/core/attempt";
 import {
 	SignetError,
 	SignetCredentialError,
@@ -5,6 +6,7 @@ import {
 	SignetApiError,
 	SignetNetworkError,
 	SignetTimeoutError,
+	SignetResponseError,
 } from "./errors.js";
 
 export type CredentialProvider = () => Promise<string | null>;
@@ -17,6 +19,7 @@ export interface RequestControl {
 }
 export interface RequestOptions extends RequestControl {
 	readonly body?: unknown;
+	readonly rawBody?: Uint8Array;
 	readonly query?: Query;
 }
 export interface TransportConfig {
@@ -138,8 +141,15 @@ export class SignetTransport {
 		for (const [key, value] of Object.entries(opts.headers ?? {})) headers.set(key, value);
 		headers.delete("x-signet-actor");
 		headers.delete("x-signet-actor-type");
-		const body = opts.body === undefined ? undefined : JSON.stringify(opts.body);
-		if (body !== undefined) headers.set("content-type", "application/json");
+		if (opts.body !== undefined && opts.rawBody !== undefined) throw new TypeError("Use JSON or raw body, not both");
+		const body =
+			opts.rawBody !== undefined
+				? new Uint8Array(opts.rawBody)
+				: opts.body === undefined
+					? undefined
+					: JSON.stringify(opts.body);
+		if (body !== undefined)
+			headers.set("content-type", opts.rawBody === undefined ? "application/json" : "application/octet-stream");
 		method = method.toUpperCase();
 		const retryable =
 			["GET", "HEAD", "OPTIONS", "PUT", "DELETE"].includes(method) ||
@@ -223,10 +233,50 @@ export class SignetTransport {
 
 async function parseResponseBody(response: Response) {
 	if (response.status === 204 || response.status === 205) return undefined;
-	const text = await response.text();
+	const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+	const json = contentType.includes("application/json") || contentType.includes("+json");
+	let text: string;
+	try {
+		if (response.ok) text = await response.text();
+		else {
+			const reader = response.body?.getReader();
+			const chunks: Uint8Array[] = [];
+			let bytes = 0;
+			const limit = json ? 1024 * 1024 : 4096;
+			if (reader) {
+				try {
+					while (true) {
+						const chunk = await reader.read();
+						if (chunk.done) break;
+						if (json && bytes + chunk.value.byteLength > limit)
+							throw new RangeError("Error JSON response exceeds 1 MiB");
+						const bounded = chunk.value.subarray(0, limit - bytes);
+						chunks.push(bounded);
+						bytes += bounded.byteLength;
+						if (!json) break;
+					}
+				} finally {
+					await reader.cancel();
+				}
+			}
+			const combined = new Uint8Array(bytes);
+			let offset = 0;
+			for (const chunk of chunks) {
+				combined.set(chunk, offset);
+				offset += chunk.byteLength;
+			}
+			text = new TextDecoder().decode(combined);
+		}
+	} catch (error) {
+		await attemptAsync(async () => response.body?.cancel());
+		if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) throw error;
+		throw new SignetResponseError(
+			"Response body read failed",
+			error instanceof Error ? error : new Error("Response read failed"),
+		);
+	}
 	if (!text) return undefined;
-	const contentType = response.headers.get("content-type") ?? "";
-	if (contentType.includes("application/json") || contentType.includes("+json")) {
+	if (json) {
 		try {
 			return JSON.parse(text);
 		} catch {

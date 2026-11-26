@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { describe, expect, it } from "bun:test";
 import { createSessionState } from "./src/session-state.js";
 import { HIDDEN_CONTEXT_CUSTOM_TYPE } from "./src/types.js";

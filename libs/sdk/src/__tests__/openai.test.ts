@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { describe, expect, test } from "bun:test";
 import { SignetError } from "../errors.js";
 import type { SignetClient } from "../index.js";

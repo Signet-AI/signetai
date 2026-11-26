@@ -1,4 +1,5 @@
 import type { ReadScope } from "@signet/core";
+import type { CaptureEnqueueInput } from "./transcript-capture-owner";
 import type { AgentRemovalInput } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
 import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
@@ -375,6 +376,11 @@ export type DbOwnerRequest =
 	  }
 	| { readonly kind: "session_finalizer_author"; readonly agentId: string; readonly sessionKey: string }
 	| { readonly kind: "content_read"; readonly request: import("./content-read").ContentReadRequest }
+	| { readonly kind: "transcript_capture_enqueue"; readonly input: CaptureEnqueueInput }
+	| {
+			readonly kind: "transcript_capture_transition";
+			readonly input: import("./transcript-capture-owner").CaptureTransitionInput;
+	  }
 	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";

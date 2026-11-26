@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { describe, expect, it } from "bun:test";
 import type { DaemonClient, DaemonFetchResult } from "./daemon-client.js";
 import { createWakeWaiter } from "./wake-waiter.js";

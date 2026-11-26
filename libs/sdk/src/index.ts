@@ -791,6 +791,7 @@ for (const key of Reflect.ownKeys(SignetClientP2.prototype)) {
 }
 export const SignetSDK = SignetClient;
 export const Signet = SignetClient;
+export { SignetResponseError } from "./errors.js";
 export { SignetTransport } from "./transport.js";
 export type { CredentialProvider, RequestControl, RequestOptions, TransportConfig, Query } from "./transport.js";
 export {

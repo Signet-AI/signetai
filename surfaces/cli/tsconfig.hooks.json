@@ -5,6 +5,6 @@
 		"rootDir": "../..",
 		"types": ["bun-types"]
 	},
-	"files": ["src/commands/hook.ts"],
+	"files": ["src/commands/hook.ts", "src/commands/auth.ts", "src/commands/connector.ts"],
 	"include": []
 }

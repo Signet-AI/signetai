@@ -14,7 +14,58 @@ from unittest.mock import patch
 import signet_transport as transport
 
 
+class UploadResumeConformanceTests(unittest.TestCase):
+    def test_shared_upload_process_restart_conformance(self):
+        root=Path(__file__).resolve().parents[4]
+        fixture=json.loads((root/"tests/fixtures/connector-conformance.json").read_text())
+        for case in fixture["uploads"]:
+            with self.subTest(case=case["name"]):
+                result=subprocess.run([os.environ.get("SIGNET_TEST_BUN","/home/nicholai/.bun/bin/bun"),str(root/"tests/support/upload-resume-conformance.ts"),"python",case["name"]],cwd=root,env=os.environ.copy(),capture_output=True,text=True,timeout=180)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                print(result.stdout.strip())
+
 class TransportTests(unittest.TestCase):
+    def test_long_error_message_preserves_structured_reason(self):
+        for status, reason in ((401, "expired"), (403, "permission")):
+            error = transport._api_error(status, {"error": "x" * 8192, "reason": reason, "required": "audit"})
+            self.assertEqual(getattr(error, "reason", None), reason)
+            self.assertEqual(error.body["required"], "audit")
+            self.assertLessEqual(len(str(error)), 4096)
+
+    def test_shared_node_conformance_fixture(self):
+        import client
+        fixture = json.loads((Path(__file__).resolve().parents[4] / "tests/fixtures/connector-conformance.json").read_text())
+        class AbsentKeyring:
+            def get(self, *args): return None
+            def set(self, *args): return False
+        for case in fixture["targets"]:
+            with self.subTest(case=case["name"]), tempfile.TemporaryDirectory() as home:
+                env = {"HOME": home, **case["env"]}
+                registry = case["registry"]
+                if registry:
+                    entry = {"url": registry["url"]}
+                    if registry["key"]:
+                        entry["keyFile"] = str(transport.write_key_file(registry["url"], fixture["harness"], registry["key"], env=env))
+                    transport.ConnectorRegistry(env=env).set(fixture["harness"], entry)
+                target = transport.resolve_target(harness=fixture["harness"], env=env, keyring=AbsentKeyring(), flag_url=case["flagUrl"], flag_key=case["flagKey"], config_url=case["configUrl"])
+                expected = case["expected"]
+                self.assertEqual(target.url, expected["url"])
+                self.assertEqual(target.credential.source, expected["source"])
+                self.assertEqual(target.credential.get(), expected["credential"])
+                self.assertEqual(target.remote, expected["remote"])
+                if case["flagUrl"] is None and case["flagKey"] is None:
+                    def resolve(**options): return transport.resolve_target(**options, keyring=AbsentKeyring())
+                    with patch.dict(os.environ, env, clear=True), patch.object(client, "resolve_target", resolve):
+                        self.assertEqual(client.SignetClient(harness=fixture["harness"]).base_url, expected["url"])
+        with tempfile.TemporaryDirectory() as home:
+            box = transport.DurableOutbox(fixture["outbox"]["origin"], env={"HOME": home}, harness=fixture["harness"])
+            request = fixture["outbox"]["request"]
+            box.enqueue(request["method"], request["path"], request["body"], idempotency_key=request["idempotencyKey"], headers=request["headers"])
+            records = [json.loads(path.read_text()) for path in box.directory.glob("*.json") if not path.name.startswith(".")]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(sorted(records[0]), fixture["outbox"]["recordKeys"])
+            for key, value in fixture["outbox"]["record"].items(): self.assertEqual(records[0][key], value)
+
     def test_scope_disposition_survives_exit_after_first_settlement_move(self):
         module_dir = str(Path(transport.__file__).parent)
         code = '''import os,sys

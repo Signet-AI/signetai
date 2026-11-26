@@ -348,6 +348,7 @@ export {
 	detectSchema,
 	detectSchemaType,
 	ensureUnifiedSchema,
+	initializeDatabaseSchema,
 	ensureMigrationsTableSchema,
 	UNIFIED_SCHEMA,
 } from "./migration";

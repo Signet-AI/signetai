@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";

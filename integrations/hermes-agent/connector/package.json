@@ -26,7 +26,8 @@
 	},
 	"dependencies": {
 		"@signet/connector-base": "1.0.1",
-		"@signet/core": "1.0.1"
+		"@signet/core": "1.0.1",
+		"@signet/sdk": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

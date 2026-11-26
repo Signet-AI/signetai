@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import {
 	BaseConnector,
+	resolveSignetCliCommand,
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
@@ -11,6 +12,7 @@ import {
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import { LOOPBACK_HOST, expandHome } from "@signet/core";
+import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 
 type JsonObject = Record<string, unknown>;
 const OPENCLAW_PARSE_OPTIONS = { label: "OpenClaw config" } as const;
@@ -129,9 +131,48 @@ function removePluginAllow(pluginsObj: JsonObject, pluginName: string): { change
 	}
 	return { changed: !unchanged };
 }
+function removeSignetCredentials(config: JsonObject): boolean {
+	const plugins = isJsonObject(config.plugins) ? config.plugins : {};
+	const entries = isJsonObject(plugins.entries) ? plugins.entries : {};
+	const targets = [
+		config.signet,
+		...["signet-memory", "signet-memory-openclaw"].map((name) => {
+			const entry = entries[name];
+			return isJsonObject(entry) ? entry.config : undefined;
+		}),
+	];
+	let removed = false;
+	for (const target of targets) {
+		if (!isJsonObject(target)) continue;
+		for (const name of ["apiKey", "token", "SIGNET_API_KEY", "SIGNET_TOKEN"]) {
+			if (Object.hasOwn(target, name)) {
+				Reflect.deleteProperty(target, name);
+				removed = true;
+			}
+		}
+		if (isJsonObject(target.env))
+			for (const name of ["SIGNET_API_KEY", "SIGNET_TOKEN"]) {
+				if (Object.hasOwn(target.env, name)) {
+					Reflect.deleteProperty(target.env, name);
+					removed = true;
+				}
+			}
+	}
+	return removed;
+}
+function writeOpenClawConfig(configPath: string, config: JsonObject, indent: string | number): void {
+	removeSignetCredentials(config);
+	atomicWriteJson(configPath, config, indent);
+}
 function backupConfig(configPath: string, raw: string): void {
 	try {
-		atomicWriteText(`${configPath}.signet-backup`, raw, statSync(configPath).mode & 0o777);
+		const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
+		const sanitized = removeSignetCredentials(config);
+		atomicWriteText(
+			`${configPath}.signet-backup`,
+			sanitized ? JSON.stringify(config, null, 2) + "\n" : raw,
+			sanitized ? 0o600 : statSync(configPath).mode & 0o777,
+		);
 	} catch {}
 }
 export class OpenClawConnector extends BaseConnector {
@@ -191,7 +232,7 @@ export class OpenClawConnector extends BaseConnector {
 								allowConversationAccess: true,
 							},
 							config: {
-								daemonUrl: `http://${LOOPBACK_HOST}:3850`,
+								daemonUrl: resolveSignetDaemonUrl(),
 							},
 						},
 					},
@@ -305,7 +346,7 @@ export class OpenClawConnector extends BaseConnector {
 				const patch: JsonObject = { agents: { list: merged } };
 				deepMerge(config, patch);
 				backupConfig(configPath, raw);
-				atomicWriteJson(configPath, config, indent);
+				writeOpenClawConfig(configPath, config, indent);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
 				console.warn(`[signet/openclaw] Skipped agents.list patch for ${configPath}: ${message}`);
@@ -425,7 +466,7 @@ export class OpenClawConnector extends BaseConnector {
 
 				config.plugins = pluginsObj;
 				backupConfig(configPath, raw);
-				atomicWriteJson(configPath, config, indent);
+				writeOpenClawConfig(configPath, config, indent);
 				patched.push(configPath);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
@@ -511,6 +552,9 @@ export class OpenClawConnector extends BaseConnector {
 			}
 		}
 		return candidates[0];
+	}
+	getConfigPaths(): readonly string[] {
+		return this.getConfigCandidates();
 	}
 	private validateWorkspacePath(p: string): void {
 		const resolved = resolve(expandHome(p, this.getHomeDir()));
@@ -697,7 +741,7 @@ export class OpenClawConnector extends BaseConnector {
 
 				deepMerge(config, patch);
 				backupConfig(configPath, raw);
-				atomicWriteJson(configPath, config, indent);
+				writeOpenClawConfig(configPath, config, indent);
 				patched.push(configPath);
 			} catch (e) {
 				const message = (e as Error).message || "unknown parse/write error";
@@ -739,7 +783,7 @@ export class OpenClawConnector extends BaseConnector {
 		const indent = this.detectIndent(raw);
 		backupConfig(configPath, raw);
 		deepMerge(config, patch);
-		atomicWriteJson(configPath, config, indent);
+		writeOpenClawConfig(configPath, config, indent);
 	}
 	patchLoadPaths(searchPath: string): { patched: string[]; warnings: string[] } {
 		const patched: string[] = [];
@@ -798,7 +842,7 @@ export class OpenClawConnector extends BaseConnector {
 				if (dirty) {
 					config.plugins = pluginsObj;
 					backupConfig(configPath, raw);
-					atomicWriteJson(configPath, config, indent);
+					writeOpenClawConfig(configPath, config, indent);
 					patched.push(configPath);
 				}
 			} catch (e) {
@@ -827,20 +871,17 @@ description: "Signet memory integration"
 - \`/recall <query>\` - Search memories
 `;
 
-		const handlerJs = `const DAEMON_URL = process.env.SIGNET_DAEMON_URL || "http://127.0.0.1:3850";
-
+		const handlerJs = `import { execFile } from "node:child_process";
+const launcher = ${JSON.stringify(resolveSignetCliCommand())};
 async function fetchDaemon(path, body) {
-  const res = await fetch(\`\${DAEMON_URL}\${path}\`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-signet-runtime-path": "legacy",
-    },
-    body: JSON.stringify({ ...body, runtimePath: "legacy" }),
-    signal: AbortSignal.timeout(5000),
+ const event = path.split("/").pop();
+ return new Promise((resolve, reject) => {
+  const child = execFile(launcher.command, [...launcher.args, "hook", event, "--harness", "openclaw", "--json"], {timeout: 20000, maxBuffer: 1024 * 1024}, (error, stdout, stderr) => {
+   if (error) { reject(new Error(stderr.trim() || "Signet hook command failed")); return; }
+   try { resolve(JSON.parse(stdout)); } catch (failure) { reject(failure); }
   });
-  if (!res.ok) throw new Error(\`daemon \${res.status}\`);
-  return res.json();
+  child.stdin.end(JSON.stringify(body));
+ });
 }
 
 let sharedRecallFormatter;

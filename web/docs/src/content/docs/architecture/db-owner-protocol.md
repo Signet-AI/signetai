@@ -88,6 +88,8 @@ The owner sends:
 
 ## Execution and cancellation
 
+`transcript_capture_transition` completes, fails, or recovers capture jobs in the owner. Completion and terminal failure settle upload storage and its receipt in the same transaction; a failed settlement cannot publish a completed job. Recovery and the upload sweep settle old terminal uploads in bounded batches.
+
 The single owner process serially drains bounded foreground and maintenance queues. It prioritizes foreground jobs and admits a maintenance turn after a bounded foreground burst; no job preempts synchronous work already running. Read-only statements use read-only SQLite connections within that same process, not a separate reader process. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements atomically. A `batch` contains only `run` statements and also rolls back on failure; `requireChanges` is a fail-closed zero-change precondition.
 
 A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline abandons the job rather than killing the owner: the client rejects the handle, removes the job from its pending map, and sends a cancel message when the job was dispatched. The owner drops a still-queued job; an already-running synchronous operation may finish, but its abandoned result is ignored. Other jobs continue on the surviving owner.

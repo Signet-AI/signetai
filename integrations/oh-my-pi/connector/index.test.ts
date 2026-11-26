@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,9 +61,9 @@ describe("OhMyPiConnector", () => {
 		const content = readFileSync(installedPath, "utf8");
 		expect(content).toContain("SIGNET_MANAGED_OH_MY_PI_EXTENSION");
 		expect(content).toContain("Managed by Signet (@signet/oh-my-pi-extension)");
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "agent-from-env")');
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:4123")');
-		expect(content).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(tmpRoot)})`);
+		expect(content).not.toContain("agent-from-env");
+		expect(content).not.toContain("http://127.0.0.1:4123");
+
 		expect(content.length).toBeGreaterThan(1_000);
 	});
 
@@ -77,26 +78,26 @@ describe("OhMyPiConnector", () => {
 		expect(statSync(installedPath).mode & 0o777).toBe(0o600);
 	});
 
-	it("falls back to default agent id when none is configured at install time", async () => {
+	it("does not inject a default agent into the runtime environment", async () => {
 		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		const connector = new OhMyPiConnector();
 		await connector.install(tmpRoot);
 
 		const installedPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js");
-		const content = readFileSync(installedPath, "utf8");
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
+		await import(join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js"));
+		expect(process.env.SIGNET_AGENT_ID).toBeUndefined();
 	});
 
-	it("treats blank runtime env values as missing when generating the managed bootstrap", async () => {
+	it("does not rewrite blank runtime environment values", async () => {
 		process.env.SIGNET_AGENT_ID = "   ";
-		process.env.SIGNET_DAEMON_URL = "\n\t";
+		process.env.SIGNET_DAEMON_URL = "\n	";
 		const connector = new OhMyPiConnector();
 		await connector.install(tmpRoot);
 
 		const installedPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js");
-		const content = readFileSync(installedPath, "utf8");
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
-		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+		await import(join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js"));
+		expect(process.env.SIGNET_AGENT_ID).toBe("   ");
+		expect(process.env.SIGNET_DAEMON_URL).toBe("\n	");
 	});
 
 	it("persists a custom Oh My Pi agent dir so later maintenance still finds the managed install", async () => {

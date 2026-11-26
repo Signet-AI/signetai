@@ -1,4 +1,5 @@
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
+import { isIP } from "node:net";
 import { LoginStore, type LoginStoreOptions } from "./login.js";
 import { ConnectorRegistry, readKeyFile } from "./registry.js";
 import { identifier } from "./storage.js";
@@ -29,30 +30,31 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 	const flagUrl = options.flagUrl?.trim();
 	if (options.flagUrl !== undefined && !flagUrl) throw new TypeError("flagUrl cannot be empty");
 	const envUrl = env.SIGNET_DAEMON_URL?.trim();
-	const hasExplicitCredential =
-		options.flagKey !== undefined || Boolean(env.SIGNET_API_KEY?.trim()) || Boolean(env.SIGNET_API_KEY_FILE?.trim());
 	const entries =
-		options.harness && !((flagUrl || envUrl) && hasExplicitCredential)
-			? await new ConnectorRegistry(options).read()
-			: {};
+		options.harness && !(flagUrl && options.flagKey !== undefined) ? await new ConnectorRegistry(options).read() : {};
 	const registry = options.harness && Object.hasOwn(entries, options.harness) ? entries[options.harness] : undefined;
-	const explicit = flagUrl || envUrl || registry?.url || options.configUrl;
-	const url = resolveSignetDaemonUrl({
-		env: { ...env, SIGNET_DAEMON_URL: flagUrl || envUrl },
-		configUrl: registry?.url ?? options.configUrl,
-	});
+
+	const hasEnvironmentBinding = Boolean(env.SIGNET_HOST?.trim() || env.SIGNET_PORT?.trim());
+	const selectedUrl = flagUrl || registry?.url || envUrl || (!hasEnvironmentBinding ? options.configUrl : undefined);
+	const url = resolveSignetDaemonUrl({ env: { ...env, SIGNET_DAEMON_URL: selectedUrl } });
 	const origin = new URL(url).origin;
+	const hasEnvironmentCredential = Boolean(env.SIGNET_API_KEY?.trim() || env.SIGNET_API_KEY_FILE?.trim());
+	const environmentCredentialApplies =
+		options.flagKey !== undefined ||
+		!hasEnvironmentCredential ||
+		!envUrl ||
+		new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: envUrl } })).origin === origin;
 	let credential: TargetCredential;
 	if (options.flagKey !== undefined) {
 		if (!options.flagKey.trim()) throw new TypeError("flagKey cannot be empty");
 		const key = options.flagKey.trim();
 		credential = { source: "flag", get: async () => key };
-	} else if (env.SIGNET_API_KEY?.trim()) {
+	} else if (environmentCredentialApplies && env.SIGNET_API_KEY?.trim()) {
 		const key = env.SIGNET_API_KEY.trim();
 		credential = { source: "env", get: async () => key };
 	} else {
 		const keyFile =
-			env.SIGNET_API_KEY_FILE?.trim() ||
+			(environmentCredentialApplies ? env.SIGNET_API_KEY_FILE?.trim() : undefined) ||
 			(registry && new URL(registry.url).origin === origin ? registry.keyFile : undefined);
 		if (keyFile) {
 			await readKeyFile(keyFile);
@@ -77,6 +79,15 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 		harness,
 		origin,
 		credential,
-		remote: Boolean(explicit) || !["127.0.0.1", "[::1]", "localhost"].includes(new URL(url).hostname),
+		remote: credential.source !== "none" || !isLoopback(new URL(url).hostname),
 	};
+}
+
+function isLoopback(hostname: string): boolean {
+	return (
+		hostname === "localhost" ||
+		hostname === "[::1]" ||
+		(isIP(hostname) === 4 && hostname.startsWith("127.")) ||
+		/^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(hostname)
+	);
 }

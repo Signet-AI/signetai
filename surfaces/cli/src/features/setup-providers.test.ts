@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { describe, expect, it } from "bun:test";
 import { offerOllamaInstallFlow, resolveCommandPath } from "./setup-providers.js";
 function realResolverWith(currentPlatform: NodeJS.Platform, present: string[]) {

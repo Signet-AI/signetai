@@ -1,5 +1,12 @@
 import type { ReadScope } from "../read-scope";
 import { principalMessageReadScope } from "../auth/message-read-scope";
+import {
+	getHookUploadForSessionEnd,
+	hookUploadResult,
+	HookUploadMissing,
+	type HookUploadEndState,
+} from "../hook-transcript-uploads";
+import { registerHookUploadRoutes, isHookUploadCallerError, hookUploadErrorResponse } from "./hook-upload-routes";
 import { withStopAdmission } from "../stop-admission";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
@@ -1007,17 +1014,41 @@ function registerSessionEnd(app: Hono): void {
 			if (endScope.error) return c.json({ error: endScope.error }, 403);
 			const agentId = endScope.agentId;
 			body.agentId = agentId;
+			let resolvedUpload: HookUploadEndState | undefined;
+			if (body.transcriptUpload !== undefined) {
+				const ref: unknown = body.transcriptUpload;
+				if (
+					typeof ref !== "object" ||
+					ref === null ||
+					!("uploadId" in ref) ||
+					typeof ref.uploadId !== "string" ||
+					body.transcript !== undefined ||
+					body.transcriptPath !== undefined
+				)
+					return c.json({ error: "Provide transcriptUpload instead of transcript or transcriptPath" }, 400);
+				resolvedUpload = await getHookUploadForSessionEnd(c.get("principal"), ref.uploadId);
+				if (
+					resolvedUpload.agent_id !== agentId ||
+					resolvedUpload.harness !== body.harness ||
+					resolvedUpload.session_key !== sessionKey
+				)
+					throw new HookUploadMissing();
+			}
 			const bindingError = await validateSessionControl(c, sessionKey, agentId, {
 				context: "sessionKey",
 			});
 			if (bindingError) return c.json({ error: bindingError }, 403);
+
+			const upload = resolvedUpload?.kind === "upload" ? resolvedUpload : undefined;
+			const cachedUploadResult = resolvedUpload ? hookUploadResult(resolvedUpload) : null;
+			if (cachedUploadResult) return c.json(cachedUploadResult);
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
 			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, body.harness, "session-end", {
 				memoriesSaved: 0,
 			});
-			if (duplicate) return c.json(duplicate);
+			if (duplicate && !upload) return c.json(duplicate);
 
 			if (sessionKey)
 				await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "status" });
@@ -1029,7 +1060,7 @@ function registerSessionEnd(app: Hono): void {
 			}
 
 			try {
-				const result = await handleSessionEnd({ ...body, author: c.get("author") });
+				const result = await handleSessionEnd({ ...body, author: c.get("author") }, upload);
 				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken = (): boolean =>
 					sessionKey !== undefined &&
@@ -1070,6 +1101,8 @@ function registerSessionEnd(app: Hono): void {
 				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
 				return c.json({ error: "Write pressure; retry the session end", retryable: true }, 503);
 			}
+			if (isHookUploadCallerError(e)) return hookUploadErrorResponse(c, e);
+			if (e instanceof RangeError) return c.json({ error: e.message }, 400);
 			logger.error("hooks", "Session end hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
 		}
@@ -2357,6 +2390,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerNotifications(app);
 	registerDirectMessageWake(app);
 	registerDirectMessageWakeRelease(app);
+	registerHookUploadRoutes(app);
 	registerSessionEnd(app);
 	registerStop(app);
 	registerSkillInvocation(app);

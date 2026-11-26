@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	opendirSync,
 	readFileSync,
@@ -33,6 +34,7 @@ import {
 	isExistingFile,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 	writeConfigText,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
@@ -92,17 +94,12 @@ function resolveSignetArgs(runtime: string | null = null, existing?: ResolvedCom
 	return [launcher.command, ...launcher.args];
 }
 
-function resolveSignetMcp(runtime: string | null = null, existing?: ResolvedCommand, apiKey?: string): SignetMcpConfig {
-	const remoteDaemonUrl = resolveRemoteDaemonUrl();
-	if (remoteDaemonUrl) {
-		return {
-			url: `${remoteDaemonUrl}/mcp`,
-			startupTimeoutSec: 10,
-			toolTimeoutSec: 30,
-			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
-		};
-	}
-	return resolveSignetMcpCommand(existing, runtime);
+function resolveSignetMcp(
+	runtime: string | null = null,
+	existing?: ResolvedCommand,
+	_apiKey?: string,
+): SignetMcpConfig {
+	return resolveHarnessMcpCommand("codex", existing, runtime);
 }
 
 const CODEX_RUNTIME_SCAN_DEPTH = 8;
@@ -643,19 +640,7 @@ function withRemoteDaemonEnv(
 	platform: NodeJS.Platform = process.platform,
 	apiKey?: string,
 ): string {
-	if (!remoteDaemonUrl && !apiKey) return command;
-	if (platform === "win32") {
-		const vars = [
-			...(remoteDaemonUrl ? [`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`] : []),
-			...(apiKey ? [`set "SIGNET_API_KEY=${cmdEnvQuote(apiKey)}"`] : []),
-		];
-		return `${vars.join(" && ")} && ${command}`;
-	}
-	return [
-		...(remoteDaemonUrl ? [`SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)}`] : []),
-		...(apiKey ? [`SIGNET_API_KEY=${shellQuote(apiKey)}`] : []),
-		command,
-	].join(" ");
+	return command;
 }
 
 function writeWindowsHookWrapper(
@@ -683,8 +668,7 @@ function writeWindowsHookWrapper(
 	} catch {}
 
 	const lines = ["@echo off", "setlocal"];
-	if (remoteDaemonUrl) lines.push(`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`);
-	if (apiKey) lines.push(`set "SIGNET_API_KEY=${cmdEnvQuote(apiKey)}"`);
+
 	const invocation = signetArgs.map(windowsBatchArg).join(" ");
 	lines.push(`${windowsBatchEntrypoint(signetArgs[0] ?? "")}${invocation} %*`);
 	lines.push("exit /b %ERRORLEVEL%", "");
@@ -1122,12 +1106,6 @@ function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 		return true;
 	}
 
-	const content = readFileSync(path, "utf-8");
-
-	if (!content.includes("[mcp_servers.signet]")) {
-		writeConfigText(path, `${content.trimEnd()}\n\n${block}`);
-		return true;
-	}
 	unpatchConfigToml(path);
 	const updated = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
 	const prefix = updated.length > 0 ? `${updated}\n\n` : "";
@@ -1138,14 +1116,15 @@ function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 function unpatchConfigToml(path: string): boolean {
 	if (!existsSync(path)) return false;
 	const content = readFileSync(path, "utf-8");
-	if (!content.includes("[mcp_servers.signet]")) return false;
 	const lines = content.split("\n");
 	const filtered: string[] = [];
 	let inSection = false;
+	let found = false;
 	for (const line of lines) {
 		if (line.trim() === "# Signet MCP server") continue;
-		if (line.trim() === "[mcp_servers.signet]") {
+		if (line.trim() === "[mcp_servers.signet]" || line.trim().startsWith("[mcp_servers.signet.")) {
 			inSection = true;
+			found = true;
 			continue;
 		}
 		if (inSection) {
@@ -1160,6 +1139,7 @@ function unpatchConfigToml(path: string): boolean {
 		}
 		filtered.push(line);
 	}
+	if (!found) return false;
 	writeFileSync(
 		path,
 		`${filtered
@@ -1368,6 +1348,13 @@ export class CodexConnector extends BaseConnector {
 
 	getConfigPath(): string {
 		return join(this.getCodexHome(), "config.toml");
+	}
+	getConfigPaths(): readonly string[] {
+		return [
+			this.getConfigPath(),
+			this.getHooksJsonPath(),
+			join(this.getCodexHome(), ".tmp", "signet-plugin-marketplace"),
+		];
 	}
 
 	private installCompatibilityHooks(
@@ -1607,7 +1594,7 @@ export class CodexConnector extends BaseConnector {
 			}
 		}
 		const skillsLink = join(this.getCodexHome(), "skills");
-		if (existsSync(skillsLink)) {
+		if (existsSync(skillsLink) && lstatSync(skillsLink).isSymbolicLink()) {
 			rmSync(skillsLink, { force: true });
 			filesRemoved.push(skillsLink);
 		}

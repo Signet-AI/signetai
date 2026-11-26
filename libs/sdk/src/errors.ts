@@ -14,7 +14,9 @@ export class SignetApiError extends SignetError {
 		readonly body: unknown,
 	) {
 		super(
-			typeof body === "object" && body !== null && "error" in body ? String(body.error) : `API error ${status}`,
+			typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+				? body.error.slice(0, 4096)
+				: `API error ${status}`,
 			"api_error",
 		);
 		this.name = "SignetApiError";
@@ -82,6 +84,8 @@ export class SignetNetworkError extends SignetError {
 		this.cause = cause;
 	}
 }
+
+export class SignetResponseError extends SignetNetworkError {}
 
 export class SignetTimeoutError extends SignetNetworkError {
 	constructor(timeoutMs: number) {

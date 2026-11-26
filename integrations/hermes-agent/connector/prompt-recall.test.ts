@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -35,6 +36,7 @@ const PRELUDE = [
 	"submitted = []",
 	"stopped = []",
 	"class FakeClient:",
+	"    agent_id = 'fixture-agent'",
 	"    delays = {}",
 	"    responses = {}",
 	"    def user_prompt_submit(self, key, msg, **kw):",

@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
 const output = resolve(import.meta.dir, "dist");
 await rm(output, { recursive: true, force: true });
@@ -19,24 +19,19 @@ const browser = await Bun.build({
 	external,
 });
 if (!browser.success) throw new AggregateError(browser.logs, "SDK browser build failed");
-const shared = new Set(["index.js", "errors.js", "transport.js"].map((name) => resolve(import.meta.dir, "src", name)));
-const node = await Bun.build({
-	entrypoints: [resolve(import.meta.dir, "src/node.ts")],
-	outdir: output,
-	target: "node",
-	splitting: true,
-	external,
-	plugins: [
-		{
-			name: "shared-browser-transport",
-			setup(build) {
-				build.onResolve({ filter: /(?:index|errors|transport)\.js$/ }, (args) => {
-					const path = resolve(dirname(args.importer), args.path);
-					if (shared.has(path)) return { path: `./${basename(path)}`, external: true };
-					return undefined;
-				});
-			},
-		},
-	],
-});
-if (!node.success) throw new AggregateError(node.logs, "SDK Node build failed");
+import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
+const transpiler = new Bun.Transpiler({ target: "node", loader: "ts" });
+await mkdir(join(output, "node"), { recursive: true });
+await writeFile(
+	join(output, "node.js"),
+	transpiler.transformSync(await readFile(resolve(import.meta.dir, "src/node.ts"), "utf8")),
+);
+for (const file of await readdir(resolve(import.meta.dir, "src/node"))) {
+	if (!file.endsWith(".ts")) continue;
+	await writeFile(
+		join(output, "node", file.replace(/\.ts$/, ".js")),
+		transpiler.transformSync(await readFile(resolve(import.meta.dir, "src/node", file), "utf8")),
+	);
+}

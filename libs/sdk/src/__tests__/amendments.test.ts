@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import ts from "typescript";
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, chmod, symlink, writeFile, readFile } from "node:fs/promises";

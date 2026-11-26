@@ -18,6 +18,7 @@
 		"dev": "bun --watch src/index.ts"
 	},
 	"dependencies": {
+		"@signet/sdk": "workspace:*",
 		"@signet/core": "workspace:*",
 		"@signet/pi-extension-base": "workspace:*",
 		"@sinclair/typebox": "^0.34.0"

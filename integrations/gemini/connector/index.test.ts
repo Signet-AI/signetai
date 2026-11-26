@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as realOs from "node:os";
@@ -51,7 +52,9 @@ test.each([false, true])("retains the host MCP launcher and other servers; overr
 	expect(config.theme).toBe("dark");
 	expect(config.mcpServers.other).toEqual(other);
 	expect(config.mcpServers.signet).toEqual(
-		override ? { command: "/host/Other Tools/signet", args: ["--host"], env: { SIGNET_MCP_STDIO_WORKER: "1" } } : host,
+		override
+			? { command: "/host/Other Tools/signet", args: ["--host", "connector", "mcp", "gemini"] }
+			: { command: host.command, args: ["connector", "mcp", "gemini"], env: { CUSTOM: "keep" } },
 	);
 	await connector.uninstall();
 	expect(JSON.parse(readFileSync(path, "utf-8")).mcpServers).toEqual({ other });

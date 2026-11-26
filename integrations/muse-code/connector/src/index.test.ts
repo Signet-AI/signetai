@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import {
 	chmodSync,
@@ -156,7 +157,7 @@ describe("MuseCodeConnector", () => {
 		expect(connector.isInstalled()).toBe(true);
 	});
 
-	test.skipIf(process.platform === "win32")("tightens an unchanged settings file on reinstall", async () => {
+	test.skipIf(process.platform === "win32")("reinstalls idempotently without persisting credentials", async () => {
 		process.env.SIGNET_API_KEY = "sig_sk_muse_private";
 		const connector = new MuseCodeConnector();
 		await connector.install(workspace());
@@ -165,8 +166,7 @@ describe("MuseCodeConnector", () => {
 		const result = await connector.install(workspace());
 
 		expect(result.configsPatched).toEqual([]);
-		expect(readFileSync(settingsPath(), "utf-8")).toContain("sig_sk_muse_private");
-		expect(statSync(settingsPath()).mode & 0o777).toBe(0o600);
+		expect(readFileSync(settingsPath(), "utf-8")).not.toContain("sig_sk_muse_private");
 	});
 
 	test("preserves user hooks and servers and is idempotent", async () => {

@@ -10,8 +10,13 @@ import {
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult } from "../lib/daemon.js";
+import { reportAuthError } from "./auth.js";
+import { apiError, SignetError } from "../../../../libs/sdk/src/errors.js";
 
 interface HookDeps {
+	readonly createHookFetch?: (
+		harness: string,
+	) => Promise<HookDeps["fetchDaemonResult"] & { readonly remote?: boolean }>;
 	readonly AGENTS_DIR: string;
 	readonly fetchDaemonResult: <T>(
 		path: string,
@@ -384,16 +389,72 @@ async function fetchHookData<T>(
 }
 
 export function registerHookCommands(program: Command, deps: HookDeps): void {
-	const hookCmd = program.command("hook").description("Lifecycle hooks for harness integration");
+	const hookCmd = program
+		.command("hook")
+		.description("Lifecycle hooks for harness integration")
+		.option("--json", "Machine-readable failures");
 
-	hookCmd.hook("preAction", () => {
+	hookCmd.hook("preAction", async (_command, action) => {
 		if (process.env.SIGNET_NO_HOOKS === "1" || process.env.SIGNET_BYPASS === "1") {
 			process.exit(0);
 		}
+		if (deps.createHookFetch) {
+			const options = action.optsWithGlobals();
+			const harness = typeof options.harness === "string" ? options.harness : "cli";
+			const fetch = await deps.createHookFetch(harness).catch((error: unknown): never => {
+				reportAuthError(error, options.json === true);
+				return process.exit(process.exitCode ?? 1);
+			});
+			deps = {
+				...deps,
+				fetchDaemonResult: async <T>(path: string, request?: RequestInit & { timeout?: number }) => {
+					const result = await fetch<T>(path, request);
+					if (!result.ok && (result.status === 401 || result.status === 403 || fetch.remote)) {
+						const body = result.body;
+						const reason =
+							typeof body === "object" && body !== null && "reason" in body && typeof body.reason === "string"
+								? body.reason
+								: result.reason;
+						const error = result.status
+							? apiError(result.status, body)
+							: new SignetError(result.error ?? "Hook delivery failed", reason);
+						reportAuthError(error, options.json === true);
+						process.exit(process.exitCode ?? 1);
+					}
+					return result;
+				},
+				readStaticIdentity: fetch.remote ? () => null : deps.readStaticIdentity,
+			};
+		}
 	});
 	hookCmd.hook("postAction", () => {
-		process.exit(0);
+		process.exit(process.exitCode ?? 0);
 	});
+
+	for (const event of ["remember", "recall"] as const) {
+		hookCmd
+			.command(event)
+			.description("Translate legacy harness memory commands")
+			.requiredOption("-H, --harness <harness>", "Harness name")
+			.option("--json", "Output as JSON")
+			.action(async (options) => {
+				const input = await readJson(deps.stdin);
+				if (!input) throw new Error("A JSON hook payload is required");
+				const response = await deps.fetchDaemonResult<unknown>(`/api/hooks/${event}`, {
+					method: "POST",
+					body: JSON.stringify({ ...input, harness: options.harness, runtimePath: "legacy" }),
+					timeout: 15_000,
+				});
+				if (!response.ok) {
+					process.exitCode = 1;
+					console.error(
+						JSON.stringify({ error: "Signet hook request failed", reason: response.reason, status: response.status }),
+					);
+					return;
+				}
+				console.log(JSON.stringify(response.data));
+			});
+	}
 
 	hookCmd
 		.command("session-start")

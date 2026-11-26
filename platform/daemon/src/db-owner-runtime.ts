@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { requireReadScope, resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
+import type { CaptureEnqueueInput } from "./transcript-capture-owner";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { type PurgeBatchResult, purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
@@ -343,6 +344,8 @@ async function executeInlineOwnerRequest(
 	}
 	switch (request.kind) {
 		case "content_read":
+		case "transcript_capture_transition":
+		case "transcript_capture_enqueue":
 		case "fts_partition":
 		case "classification":
 		case "embedding_projection":
@@ -664,6 +667,28 @@ export async function dbOwnerQuery<Row = unknown>(
 	);
 }
 
+export async function dbOwnerCaptureTransition(
+	owner: DbOwnerClient,
+	input: import("./transcript-capture-owner").CaptureTransitionInput,
+	options: DbOwnerSqlOptions,
+): Promise<number> {
+	return submitWithAdmission(
+		owner,
+		{ kind: "transcript_capture_transition", input },
+		{ ...options, lane: "write", estimatedWorkUnits: 4096 },
+	);
+}
+export async function dbOwnerEnqueueTranscriptCapture(
+	owner: DbOwnerClient,
+	input: CaptureEnqueueInput,
+	options: DbOwnerSqlOptions,
+): Promise<string | null> {
+	return submitWithAdmission(
+		owner,
+		{ kind: "transcript_capture_enqueue", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
 export async function dbOwnerTranscriptOperation<Result>(
 	owner: DbOwnerClient,
 	request: Extract<

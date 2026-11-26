@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { Command } from "commander";
 import { describe, expect, it } from "bun:test";
 import { registerCliPreAction } from "./cli-pre-action.js";

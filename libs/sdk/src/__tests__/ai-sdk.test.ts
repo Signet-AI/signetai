@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { getMemoryContext, memoryTools } from "../ai-sdk.js";
 import { SignetClient } from "../index.js";

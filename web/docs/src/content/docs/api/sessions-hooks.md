@@ -217,6 +217,7 @@ Releases the session's runtime path claim.
   "harness": "claude-code",
   "sessionKey": "session-uuid",
   "sessionId": "session-uuid",
+  "reason": "session_shutdown",
   "transcriptPath": "/tmp/signet/session-transcript.txt",
   "capturedAt": "2026-08-03T20:00:00.000Z",
   "runtimePath": "plugin"
@@ -224,8 +225,11 @@ Releases the session's runtime path claim.
 ```
 
 `harness` is required.
-`transcriptPath` or inline `transcript` may be provided for transcript
-capture. `capturedAt` is optional for live hooks; importers should supply the
+`transcriptPath` (local capture), inline `transcript`, or
+`transcriptUpload: {"uploadId": "<upload UUID>"}` may be provided for capture.
+A staged upload replaces both `transcript` and `transcriptPath`; combining them
+returns `400`. Staged capture requires a recognized session boundary other
+than `clear`, such as `session_shutdown`. `capturedAt` is optional for live hooks; importers should supply the
 original ISO-8601 event time so temporal reasoning retains source chronology.
 Signet stores a cleaned conversation-only transcript as episodic evidence and
 may retain raw auditable traces separately in daemon logs.
@@ -244,6 +248,114 @@ rewritten. There is no summary-worker job or generated session-summary artifact
 in this path. The response includes `transcriptCaptureJobId` when transcript
 capture was queued. Poll `GET /api/hooks/transcript-capture/:jobId?agentId=<agent>`
 until the status is `completed`; the receipt never exposes transcript content.
+
+### POST /api/hooks/session-end/uploads
+
+Declares remote session-end evidence that exceeds the 4 MiB inline capture
+limit. Requires `remember` permission. The Node SDK and Hermes Python transport
+perform this transfer automatically for remote transcript-file capture.
+
+```json
+{
+  "harness": "codex",
+  "sessionKey": "session-uuid",
+  "agentId": "alice",
+  "totalBytes": 6291456,
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+`totalBytes` is the exact file length, from 1 byte through 256 MiB; larger declarations return `413`. `sha256`
+is the SHA-256 digest of the complete original bytes. The resolved agent and
+connector's harness binding must match. Creation runs the same session-control
+admission as session-end before reserving space or accepting staged chunks. Repeating a declaration for the same
+principal, harness, session, and digest returns the same upload under its
+original credential binding.
+
+**Response: `201`**
+
+```json
+{
+  "uploadId": "00000000-0000-4000-8000-000000000001",
+  "chunkBytes": 1048576,
+  "receivedBytes": 0
+}
+```
+
+`400` rejects malformed bounds or a digest with the wrong format. Capacity or
+concurrent-transfer limits can return `503`; retain the evidence and retry.
+
+### PATCH /api/hooks/session-end/uploads/:id
+
+Durably appends raw bytes, not JSON. Requires `remember` permission and the
+same principal and credential that created the upload.
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/octet-stream` |
+| `upload-offset` | Zero-based byte offset |
+| `upload-checksum` | Lowercase hexadecimal SHA-256 of this chunk |
+
+Send at most `chunkBytes` per request. Offsets and non-final chunk lengths must
+be multiples of 64 KiB. A final chunk may be shorter. The response is
+`200 {"uploadId": "<upload UUID>", "receivedBytes": 1048576}`. The offset is
+advanced only after durable storage. Replaying an already stored byte range
+with the same bytes is safe; use the returned offset, which may be ahead of
+that replayed chunk. Invalid bounds or chunk checksums return `400`.
+
+### GET /api/hooks/session-end/uploads/:id
+
+Returns `200 {"uploadId": "<upload UUID>", "chunkBytes": 1048576,
+"receivedBytes": 2097152}`. Requires `remember` permission and the upload's
+original principal and credential. Read this offset after a connection loss or
+client restart; never assume that a lost acknowledgement means a lost write.
+Missing, expired, or other-principal uploads return the same `404` response.
+
+Once every byte is uploaded, call `POST /api/hooks/session-end` with the same
+harness, session, and agent, plus `transcriptUpload: {"uploadId": "<upload UUID>"}`.
+The daemon verifies the whole-file digest and uses normal session-end speaker,
+compartment, and transcript-admission policy. Capture admission, consumption,
+and the original replay receipt commit in one transaction. Repeating session-end
+with that upload returns the original result, including after daemon restart.
+`queued: true` acknowledges capture admission, not completed processing; poll
+the capture receipt when completion matters.
+
+Unconsumed uploads expire after 24 hours without progress and are purged with
+their chunks. Consumption releases the reservation down to the staged bytes.
+When capture completes, its job-completion transaction deletes the chunks and
+staging row and releases the remaining reservation. A small authority-bound
+receipt preserves replay for seven days after consumption, then expires in the
+upload sweep. Terminal capture failures release staging the same way; replay
+returns `queued: false` and `captureFailed: true`. Normal session-transcript
+deletion also purges its receipts. The client outbox keeps its upload ID and
+last acknowledged offset across process exits. Replay asks the server for its
+current offset and resumes there. A stored ID returning `404` or `410` is
+cleared before re-hashing and redeclaring the same original file. A `422` checksum
+rejection gets one recovery attempt; a second rejection remains pending.
+Keep the original client file until handoff
+is acknowledged; if it changes during an interrupted transfer, delivery fails
+and the outbox retains the original reference rather than sending replacement
+bytes as the original evidence.
+
+Hook staging reserves the declared size plus 4 KiB per 64 KiB storage chunk.
+A principal can hold at most eight open uploads and four concurrent PATCHes.
+The global PATCH limit remains sixteen; a full pool returns `503 busy`.
+
+### DELETE /api/hooks/session-end/uploads/:id
+
+Abort an unconsumed upload. The same principal, credential, agent, harness, and
+session binding required for upload reads applies. The transaction removes
+staged bytes and releases the reservation. Success returns `{"aborted": true}`;
+missing and other-principal IDs return identical `404` responses. A consumed
+upload belongs to its capture job and cannot be aborted.
+
+Upload gaps, overlaps, and replays with different bytes return `409` with
+`reason: "upload_offset_conflict"` and the durable `receivedBytes`. Finalizing
+before all declared bytes arrive returns `409 upload_incomplete`. A whole-file
+checksum mismatch returns `422 upload_checksum_mismatch`, records failure,
+and releases staging; declaring the same content again creates a fresh ID.
+Unexpected upload-service failures return `503 upload_unavailable` rather than
+being exposed as caller-error `500` responses.
 
 ### POST /api/hooks/remember
 

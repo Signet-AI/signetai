@@ -64,6 +64,9 @@ export class ConnectorRegistry {
 		});
 	}
 }
+export function connectorKeyFilePath(origin: string, harness: string, options: StorageOptions = {}): string {
+	return join(configDirectory(options), "keys", originHash(origin), `${identifier(harness)}.key`);
+}
 export async function writeKeyFile(
 	origin: string,
 	harness: string,
@@ -71,7 +74,7 @@ export async function writeKeyFile(
 	options: StorageOptions = {},
 ): Promise<string> {
 	if (!credential.trim() || /[\r\n]/.test(credential)) throw new TypeError("Invalid connector credential");
-	const path = join(configDirectory(options), "keys", originHash(origin), `${identifier(harness)}.key`);
+	const path = connectorKeyFilePath(origin, harness, options);
 	await atomicPrivateWrite(path, credential);
 	return path;
 }
