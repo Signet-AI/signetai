@@ -99,6 +99,7 @@ export interface UserRow {
 	compliance: number;
 	status: "active" | "deactivated";
 	password_hash: string | null;
+	oidc_issuer?: string | null;
 	personal_agent_id: string | null;
 	default_read_agent_id: string | null;
 }
@@ -132,6 +133,7 @@ export function userView(u: UserRow) {
 		displayName: u.display_name,
 		role: u.role,
 		compliance: Boolean(u.compliance),
+		ssoManaged: Boolean(u.oidc_issuer),
 	};
 }
 export function auditStatement(

@@ -45,6 +45,29 @@ async function claim() {
 	result.accessToken = admin;
 	return result;
 }
+async function member(username: string) {
+	const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+	const accepted = await call(
+		"/api/auth/invites/accept",
+		"POST",
+		{
+			token: new URL(invite.inviteUrl).pathname.split("/").pop(),
+			username,
+			displayName: username,
+			password: "test password",
+		},
+		"",
+	);
+	expect(accepted.status).toBe(200);
+	const token =
+		accepted.headers
+			.getSetCookie()
+			.find((value) => value.startsWith("signet_session="))
+			?.split(";")[0]
+			?.slice("signet_session=".length) ?? "";
+	const identity = await (await call("/api/auth/whoami", "GET", undefined, token)).json();
+	return { token, userId: identity.user.id, agentId: identity.agents.defaultWrite };
+}
 beforeEach(async () => {
 	dir = mkdtempSync(join(tmpdir(), "org-routes-"));
 	process.env.SIGNET_PATH = dir;
@@ -65,6 +88,119 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("own profile updates are scoped and SSO identity fields are read-only", async () => {
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		const updated = await call(
+			"/api/auth/profile",
+			"PATCH",
+			{ displayName: "Alice Changed", email: "alice@example.com" },
+			alice.token,
+		);
+		expect(updated.status).toBe(200);
+		expect(await updated.json()).toMatchObject({
+			user: { id: alice.userId, displayName: "Alice Changed", email: "alice@example.com", ssoManaged: false },
+			editableFields: ["displayName", "email"],
+		});
+		expect(
+			(await call("/api/auth/profile", "PATCH", { userId: bob.userId, displayName: "spoof" }, alice.token)).status,
+		).toBe(400);
+		expect((await (await call("/api/auth/profile", "GET", undefined, bob.token)).json()).user.displayName).toBe("bob");
+		const { organizationWrite } = await import("./organization-store");
+		const group = await (await call("/api/org/groups", "POST", { name: "Managed Team" })).json();
+		expect((await call(`/api/org/groups/${group.id}/members/${alice.userId}`, "PUT", { role: "member" })).status).toBe(
+			200,
+		);
+		await organizationWrite([
+			statement("UPDATE group_members SET managed_by='idp' WHERE group_id=? AND user_id=?", [group.id, alice.userId]),
+		]);
+		expect((await (await call("/api/auth/whoami", "GET", undefined, alice.token)).json()).user.groups).toContainEqual({
+			id: group.id,
+			name: "Managed Team",
+			role: "member",
+			managedBy: "idp",
+		});
+		await organizationWrite([
+			statement("UPDATE users SET oidc_issuer=?,oidc_subject=? WHERE id=?", [
+				"https://idp.example",
+				"alice-subject",
+				alice.userId,
+			]),
+		]);
+		expect(await (await call("/api/auth/profile", "GET", undefined, alice.token)).json()).toMatchObject({
+			user: { ssoManaged: true },
+			editableFields: [],
+			identityProvider: { kind: "oidc", issuer: "https://idp.example" },
+		});
+		expect((await call("/api/auth/profile", "PATCH", { email: "changed@example.com" }, alice.token)).status).toBe(403);
+	});
+	test("a member can rename only their own personal agent without transferring it", async () => {
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		expect((await call(`/api/agents/${alice.agentId}`, "PATCH", { name: "Alice Notes" }, alice.token)).status).toBe(
+			200,
+		);
+		expect((await call(`/api/agents/${bob.agentId}`, "PATCH", { name: "Other Notes" }, alice.token)).status).toBe(403);
+		expect(
+			(await call(`/api/agents/${alice.agentId}`, "PATCH", { name: "Notes", ownerUserId: bob.userId }, alice.token))
+				.status,
+		).toBe(403);
+		const inventory = await (await call("/api/agents")).json();
+		expect(inventory.agents.find((item: { id: string }) => item.id === alice.agentId)).toMatchObject({
+			name: "Alice Notes",
+			ownerUserId: alice.userId,
+		});
+	});
+
+	test("SSO invitation continuation is token-free, single-use and short-lived", async () => {
+		await claim();
+		const provider = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				const issuer = new URL(request.url).origin;
+				return Response.json({
+					issuer,
+					authorization_endpoint: `${issuer}/authorize`,
+					token_endpoint: `${issuer}/token`,
+					jwks_uri: `${issuer}/jwks`,
+				});
+			},
+		});
+		try {
+			await call("/api/org/settings", "PATCH", {
+				oidc: { issuer: provider.url.origin, clientId: "fixture", allowedDomains: [] },
+				requireSso: true,
+			});
+			const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+			const token = new URL(invite.inviteUrl).pathname.split("/").pop();
+			const accepted = await (
+				await call("/api/auth/invites/accept", "POST", { token, username: "sso-user", displayName: "SSO User" }, "")
+			).json();
+			expect(accepted.ssoStartPath).not.toContain(token);
+			const path = new URL(accepted.ssoStartPath, "http://localhost");
+			expect(path.searchParams.has("invite")).toBe(false);
+			expect(path.searchParams.get("continuation")).toBeTruthy();
+			const started = await call(path.pathname + path.search, "GET", undefined, "");
+			expect(started.status).toBe(302);
+			expect(started.headers.get("location")).not.toContain(token);
+			expect((await call(path.pathname + path.search, "GET", undefined, "")).status).toBe(401);
+			const retry = await (
+				await call("/api/auth/invites/accept", "POST", { token, username: "sso-user", displayName: "SSO User" }, "")
+			).json();
+			const now = Date.now();
+			const clock = spyOn(Date, "now").mockReturnValue(now + 61_000);
+			try {
+				expect((await call(retry.ssoStartPath, "GET", undefined, "")).status).toBe(401);
+			} finally {
+				clock.mockRestore();
+			}
+		} finally {
+			provider.stop(true);
+		}
+	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
 		const agent = await (await call("/api/agents", "POST", { name: "transfer-me", kind: "personal" })).json();

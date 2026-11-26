@@ -123,7 +123,11 @@ export function registerOrganizationRoutes(
 	app.get(
 		"/api/auth/sso/start",
 		active(async (c) => {
-			const result = await oidcStart(origin(c), c.req.query("invite"));
+			if (c.req.query("invite"))
+				throw new IdentityError(400, "invalid_request", "Submit invitation tokens as JSON, not in URLs");
+			const code = c.req.query("continuation");
+			const invite = code ? await operations.consumeInvitationContinuation(code) : undefined;
+			const result = await oidcStart(origin(c), invite);
 			setCookie(c, authCookies(c).state, result.state, {
 				httpOnly: true,
 				sameSite: "Lax",
@@ -154,6 +158,14 @@ export function registerOrganizationRoutes(
 	app.patch(
 		"/api/auth/preferences",
 		active(async (c) => c.json(await operations.updatePreferences(user(c), await body(c)))),
+	);
+	app.get(
+		"/api/auth/profile",
+		active(async (c) => c.json(await operations.profile(user(c)))),
+	);
+	app.patch(
+		"/api/auth/profile",
+		active(async (c) => c.json(await operations.updateProfile(user(c), await body(c)))),
 	);
 	app.post(
 		"/api/auth/logout",
