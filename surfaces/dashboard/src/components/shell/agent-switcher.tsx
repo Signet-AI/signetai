@@ -21,6 +21,13 @@ interface ContextAgent {
 	readonly canActAs: boolean;
 }
 
+export function contextAgentDisplayName(
+	agent: { readonly name: string; readonly kind: string },
+	organizationName: string,
+): string {
+	return agent.kind === "organization" && agent.name === "default" ? organizationName : agent.name;
+}
+
 export function AgentContextSelect({
 	value,
 	disabled,
@@ -39,7 +46,7 @@ export function AgentContextSelect({
 }) {
 	return (
 		<Select value={value} disabled={disabled} onValueChange={onValueChange}>
-			<SelectTrigger className="home-source-filter max-w-36" aria-label="Agent context">
+			<SelectTrigger className="home-source-filter max-w-full" aria-label="Agent context">
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent className="home-source-options" position="popper" align="end" sideOffset={4}>
@@ -65,7 +72,10 @@ export function AgentContextSwitcher() {
 	const selected = useAgentContext();
 	const { result, refresh } = usePanelQuery<{ agents: readonly ContextAgent[] }>(whoami ? "/api/agents" : null);
 	if (!whoami) return null;
-	const agents = result?.data?.agents.filter((agent) => !agent.archivedAt && agent.canActAs) ?? [];
+	const agents =
+		result?.data?.agents
+			.filter((agent) => !agent.archivedAt && agent.canActAs)
+			.map((agent) => ({ ...agent, name: contextAgentDisplayName(agent, whoami.organization.name) })) ?? [];
 	const groups = [
 		{ label: "Organization", agents: agents.filter((agent) => agent.kind === "organization") },
 		{
@@ -80,7 +90,7 @@ export function AgentContextSwitcher() {
 		},
 	];
 	return (
-		<div className="sig-no-drag flex min-w-0 items-center gap-2">
+		<div className="sig-no-drag flex min-w-0 max-w-24 flex-1 items-center gap-2 sm:max-w-36">
 			<AgentContextSelect
 				value={selected}
 				groups={groups}

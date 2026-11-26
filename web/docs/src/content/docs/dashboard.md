@@ -38,7 +38,7 @@ The identity menu shows your name, role, organization, instance origin, and sess
 - **Personal API keys** asks for a name, agent, expiry, and a subset of your permissions. Copy a new key immediately; dismissing it or leaving the page removes it from view. It cannot be revealed again.
 - **My agents** creates personal agents when organization policy allows it. Rename your personal agents from this screen when you have the modify permission.
 
-The global agent switcher offers the organization agent, your team agents, and your personal agents. Content reads in Home, Memory, and Dreams follow this context. A denied panel explains its missing requirement without signing you out or replacing the rest of the page.
+The global agent switcher offers the organization agent, your team agents, and your personal agents. The organization agent uses the organization’s name until it is renamed. The page title stays centered, with the switcher and identity menu on the right; on small screens, open your avatar to see your identity details. Only organization administrators see the instance-update availability indicator. Content reads in Home, Memory, and Dreams follow this context. A denied panel explains its missing requirement without signing you out or replacing the rest of the page.
 
 For a new instance, open the printed `/auth/setup` URL (or `/auth/claim`) and paste the setup token printed by the daemon. Supply the organization name and first administrator’s details. Keep the bootstrap password until SSO is configured and verified.
 
