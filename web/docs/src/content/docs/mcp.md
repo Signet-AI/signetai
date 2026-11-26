@@ -938,4 +938,4 @@ Phase 2 tool candidates (not yet implemented):
 - `config_read` — read agent config
 - `document_ingest` — ingest a document
 
-The `/mcp` transport does not grant read access as a whole. HTTP-backed tools re-enter their HTTP permission and scope checks. Non-HTTP GraphIQ tools require `recall` for reads and `admin` for clearing or indexing, including compatibility aliases. A missing principal or permission cannot execute a plugin command.
+The `/mcp` transport does not grant read access as a whole. HTTP-backed tools re-enter their HTTP permission and scope checks. Non-HTTP GraphIQ tools require `recall` for reads and `admin` for clearing or indexing, including compatibility aliases. A missing principal or permission cannot execute a plugin command. JSON-RPC batch bodies apply the same gate to every element before dispatch. If any element fails that gate, the whole batch returns `403` and no tool handler runs.

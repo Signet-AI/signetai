@@ -299,6 +299,8 @@ export function streamMemorySearchTelemetry(
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let cancelled = false;
+	let emitted = false;
+	const encodeRecord = (value: unknown) => encoder.encode(`${emitted ? "\n" : ""}${JSON.stringify(value)}`);
 	async function* records() {
 		let cursor: MemorySearchTelemetryCursor | undefined;
 		let remaining = query.limit;
@@ -306,7 +308,7 @@ export function streamMemorySearchTelemetry(
 		for (;;) {
 			if (cancelled || signal?.aborted) return;
 			if (Date.now() >= deadline) {
-				yield encoder.encode(JSON.stringify({ kind: "error", error: "export_deadline" }) + "\n");
+				yield encodeRecord({ kind: "error", error: "export_deadline" });
 				return;
 			}
 			const page = await attemptAsync(async () =>
@@ -323,29 +325,28 @@ export function streamMemorySearchTelemetry(
 			);
 			if (cancelled || signal?.aborted) return;
 			if (!page || page.oversized) {
-				yield encoder.encode(
-					JSON.stringify({ kind: "error", error: page?.oversized ? "export_row_too_large" : "export_failed" }) + "\n",
-				);
+				yield encodeRecord({ kind: "error", error: page?.oversized ? "export_row_too_large" : "export_failed" });
 				return;
 			}
 			for (const row of page.rows) {
 				if (cancelled || signal?.aborted) return;
 				if (Date.now() >= deadline) {
-					yield encoder.encode(JSON.stringify({ kind: "error", error: "export_deadline" }) + "\n");
+					yield encodeRecord({ kind: "error", error: "export_deadline" });
 					return;
 				}
-				const line = encoder.encode(JSON.stringify(rowToItem(row)) + "\n");
+				const line = encodeRecord(rowToItem(row));
 				if (line.byteLength > SEARCH_TELEMETRY_EXPORT_BYTES) {
-					yield encoder.encode(JSON.stringify({ kind: "error", error: "export_row_too_large" }) + "\n");
+					yield encodeRecord({ kind: "error", error: "export_row_too_large" });
 					return;
 				}
 				yield line;
+				emitted = true;
 				cursor = { createdAt: row.created_at, id: row.id };
 				if (remaining !== undefined && --remaining === 0) return;
 			}
 			if (!page.hasMore) return;
 			if (page.rows.length === 0) {
-				yield encoder.encode(JSON.stringify({ kind: "error", error: "export_failed" }) + "\n");
+				yield encodeRecord({ kind: "error", error: "export_failed" });
 				return;
 			}
 		}
@@ -360,7 +361,7 @@ export function streamMemorySearchTelemetry(
 				return;
 			}
 			if (!next) {
-				controller.enqueue(encoder.encode(JSON.stringify({ kind: "error", error: "export_failed" }) + "\n"));
+				controller.enqueue(encodeRecord({ kind: "error", error: "export_failed" }));
 				controller.close();
 				return;
 			}

@@ -729,7 +729,6 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.use("/api/dream/tools/*", async (c, next) => requirePermission("modify", authConfig)(c, next));
 	app.use("/api/dream/tools", async (c, next) => requirePermission("modify", authConfig)(c, next));
 	app.use("/api/dream/*", async (c, next) => {
-		if (c.req.method === "GET") return requirePermission("admin", authConfig)(c, next);
 		if (
 			c.req.path === "/api/dream/operations" ||
 			c.req.path === "/api/dream/tools" ||

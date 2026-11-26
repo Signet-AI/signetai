@@ -149,8 +149,6 @@ export function registerTelemetryRoutes(app: Hono): void {
 	registerPublicReadResponse(app, "/api/telemetry/*");
 	registerPublicReadResponse(app, "/api/checkpoints");
 	registerPublicReadResponse(app, "/api/checkpoints/*");
-	app.use("/api/checkpoints", async (c, next) => requirePermission("recall", authConfig)(c, next));
-	app.use("/api/checkpoints/*", async (c, next) => requirePermission("recall", authConfig)(c, next));
 	app.use("/api/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
@@ -739,7 +737,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const project = resolveScopedProject(c, c.req.query("project"));
 		if (project.error) return c.json({ error: project.error }, 403);
 
-		const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
 		const noHitsRaw = c.req.query("no_hits");
 		const output = streamMemorySearchTelemetry(
 			getDbAccessor(),
@@ -756,7 +754,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 						: noHitsRaw === "0" || noHitsRaw === "false"
 							? false
 							: undefined,
-				limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10000) : undefined,
+				limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10000) : 10000,
 				offset: 0,
 			},
 			c.req.raw.signal,

@@ -290,13 +290,16 @@ test("organization permissions do not bypass unavailable unlabelled diagnostics 
 	expect((await app.request("/api/update/config")).status).toBe(200);
 });
 
-test("checkpoint reads require recall permission even for an audience administrator", async () => {
-	for (const path of ["/api/checkpoints?project=atlas", "/api/checkpoints/thread"]) {
-		const response = await app.request(path, {
-			headers: { "x-test-user": "audience", "x-test-empty-permissions": "1" },
-		});
-		expect(response.status).toBe(403);
-		expect(await response.json()).toMatchObject({ reason: "permission", required: "recall" });
+test("checkpoint reads preserve base permissions without widening the read predicate", async () => {
+	for (const audience of [false, true]) {
+		for (const path of ["/api/checkpoints?project=atlas", "/api/checkpoints/thread"]) {
+			const expected = await body(path, audience);
+			const response = await app.request(path, {
+				headers: { "x-test-user": audience ? "audience" : "reader", "x-test-empty-permissions": "1" },
+			});
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual(expected);
+		}
 	}
 });
 

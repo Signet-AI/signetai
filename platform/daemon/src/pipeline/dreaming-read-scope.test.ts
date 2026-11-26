@@ -171,7 +171,7 @@ function orgApp(userId: string, permissions: Principal["permissions"] = rolePerm
 	return app;
 }
 
-test("Dreaming GET routes retain their admin permission", async () => {
+test("Dreaming GET routes retain base permissions with modify-only tool discovery", async () => {
 	const member = orgApp("outside", new Set(["recall", "modify"]));
 	for (const path of [
 		"/api/dream/status",
@@ -179,12 +179,12 @@ test("Dreaming GET routes retain their admin permission", async () => {
 		"/api/dream/passes/visible/tools",
 		"/api/dream/passes/visible/policy",
 		"/api/dream/passes/visible/events",
-		"/api/dream/tools",
 	]) {
 		const response = await member.request(path);
 		expect(response.status).toBe(403);
 		if (response.body) await response.body.cancel();
 	}
+	expect((await member.request("/api/dream/tools")).status).toBe(200);
 	expect((await orgApp("outside").request("/api/dream/status")).status).toBe(200);
 });
 

@@ -63,6 +63,24 @@ function records(parts: readonly Uint8Array[]) {
 		.filter(Boolean)
 		.map((line) => z.record(z.string(), z.unknown()).parse(JSON.parse(line)));
 }
+test("telemetry export defaults to the base ten-thousand record cap", async () => {
+	await seed(10001, "small export");
+	const response = await app.request("/api/telemetry/memory-search/export");
+	expect(response.status).toBe(200);
+	const rows = records(await chunks(response));
+	expect(rows).toHaveLength(10000);
+	expect(new Set(rows.map((row) => row.id)).size).toBe(10000);
+});
+test("telemetry export joins records exactly like base without a trailing newline", async () => {
+	expect(await (await app.request("/api/telemetry/memory-search/export")).text()).toBe("");
+	await seed(2, "small export");
+	const list = await app.request("/api/telemetry/memory-search?limit=2");
+	const { items } = z.object({ items: z.array(z.record(z.string(), z.unknown())) }).parse(await list.json());
+	expect(await (await app.request("/api/telemetry/memory-search/export?limit=2")).text()).toBe(
+		items.map((item) => JSON.stringify(item)).join("\n"),
+	);
+});
+
 test("owner export pages stay within four MiB across a byte-limited keyset", async () => {
 	await seed(8, "a".repeat(1024 * 1024));
 	const { dbOwnerSearchTelemetryExportPage } = await import("../db-owner-runtime");
