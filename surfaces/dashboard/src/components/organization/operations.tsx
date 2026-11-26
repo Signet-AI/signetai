@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useWhoami } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
 import { displayLabel } from "./controls";
 import { dashboardFetch, getJSONResult } from "@/lib/api";
@@ -127,6 +128,10 @@ export function AuditContent({
 	admin: boolean;
 	refresh: () => void;
 }) {
+	const whoami = useWhoami();
+	const people = usePanelQuery<{ users: readonly { id: string; display_name: string }[] }>(
+		admin ? "/api/org/users" : null,
+	);
 	const [days, setDays] = useState(String(retention ?? 365));
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -182,10 +187,16 @@ export function AuditContent({
 								<DateValue value={event.at} />
 							</td>
 							<td className={cellClass}>
-								{event.actor_user_id ? "Person" : "System"}
+								{event.actor_user_id === whoami?.user.id
+									? whoami?.user.displayName
+									: (people.result?.data?.users.find((person) => person.id === event.actor_user_id)?.display_name ??
+										(event.actor_user_id ? "Person" : "System"))}
 								<div className="break-all text-xs text-muted-foreground">{event.actor_user_id}</div>
 							</td>
-							<td className={cellClass}>{event.action}</td>
+							<td className={cellClass}>
+								{displayLabel(event.action.replaceAll(".", " "))}
+								<div className="text-xs text-muted-foreground">{event.action}</div>
+							</td>
 							<td className={`${cellClass} break-all`}>
 								{event.target_kind ? displayLabel(event.target_kind) : "Instance"}
 								<div className="text-xs text-muted-foreground">{event.target_id}</div>

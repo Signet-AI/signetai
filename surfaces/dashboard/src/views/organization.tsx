@@ -332,7 +332,7 @@ function KeysSection({ permissions }: { permissions: readonly string[] }) {
 	const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)));
 	return (
 		<div className="flex flex-col gap-6">
-			<div className="grid gap-3 sm:grid-cols-2">
+			<div className="flex flex-col gap-3">
 				{["userId", "deviceId", "harness", "agentId"].map((key) => (
 					<TextField
 						key={key}
@@ -363,7 +363,7 @@ function AuditSection({ admin }: { admin: boolean }) {
 	if (cursor) pageQuery.set("cursor", cursor);
 	return (
 		<div className="flex flex-col gap-6">
-			<div className="grid gap-3 sm:grid-cols-2">
+			<div className="flex flex-col gap-3">
 				{[
 					{ key: "actor", label: "Actor user ID" },
 					{ key: "action", label: "Audit action" },

@@ -70,7 +70,7 @@ export function AuthenticationContent({
 				title="Single sign-on"
 				description="OIDC client secrets belong in Secrets. Only the secret name is stored in authentication settings."
 			>
-				<div className="grid gap-3 sm:grid-cols-2">
+				<div className="flex flex-col gap-3">
 					<TextField label="OIDC issuer" type="url" value={issuer} onChange={setIssuer} />
 					<TextField label="OIDC client ID" value={clientId} onChange={setClientId} />
 					<TextField label="Client secret name" value={secretRef} onChange={setSecretRef} />
@@ -95,7 +95,7 @@ export function AuthenticationContent({
 				</Action>
 			</OrganizationBlock>
 			<OrganizationBlock title="Identity-provider group mapping">
-				<div className="grid gap-3 sm:grid-cols-2">
+				<div className="flex flex-col gap-3">
 					<TextField label="Identity-provider group" value={mappingName} onChange={setMappingName} />
 					<Choice
 						label="Signet team"
@@ -140,7 +140,7 @@ export function AuthenticationContent({
 					<input type="checkbox" checked={requireSso} onChange={(event) => setRequireSso(event.target.checked)} />
 					Require SSO
 				</label>
-				<div className="grid gap-3 sm:grid-cols-2">
+				<div className="flex flex-col gap-3">
 					<TextField label="Browser session TTL in seconds" type="number" value={sessionTtl} onChange={setSessionTtl} />
 					<TextField
 						label="Connector key TTL in seconds"

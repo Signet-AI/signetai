@@ -55,7 +55,7 @@ export function SharedKeyForm({
 			title="Issue a shared-agent key"
 			description="For bots and CI. Only administrators and team owners can issue these keys."
 		>
-			<div className="grid gap-3 sm:grid-cols-2">
+			<div className="flex flex-col gap-3">
 				<TextField label="Key name" value={name} onChange={setName} />
 				<Choice
 					label="Shared agent"
@@ -208,7 +208,7 @@ export function TeamContent({
 				</OrganizationTable>
 				{editable && (
 					<>
-						<div className="grid gap-3 sm:grid-cols-2">
+						<div className="flex flex-col gap-3">
 							<TextField label="User ID" value={userId} onChange={setUserId} />
 							<Choice
 								label="Membership role"
