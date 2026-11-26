@@ -44,10 +44,13 @@ export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
 					? 404
 					: reason === "capacity"
 						? 429
-						: ["purge_requires_archive", "purge_limit", "protected_agent", "purge_blocked"].includes(reason)
+						: ["purge_requires_archive", "purge_limit", "protected_agent", "purge_blocked", "org_policy"].includes(
+									reason,
+								)
 							? 409
 							: 403,
 				reason,
+				reason === "permission" ? "Requires the admin role with permission for this operation and scope" : reason,
 			);
 		}
 		throw error;
@@ -71,7 +74,11 @@ export async function startOperatorJob(p: Principal, raw: unknown, headerAgent?:
 	if (!reconciled.ok) throw new IdentityError(reconciled.error.status, reconciled.error.reason);
 	const input = { ...parsed, agentId: reconciled.value };
 	if (!p.permissions.has(input.action === "embed.audit" ? "diagnostics" : "admin"))
-		throw new IdentityError(403, "permission");
+		throw new IdentityError(
+			403,
+			"permission",
+			input.action === "embed.audit" ? "Requires diagnostics permission" : "Requires the admin role",
+		);
 	const actor = operatorActor(p);
 	const settings = principalAccess(p);
 	if (!settings) throw new IdentityError(403, "permission");

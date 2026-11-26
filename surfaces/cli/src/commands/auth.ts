@@ -1,6 +1,7 @@
+import { readSecretFromStdin } from "../lib/stdin-secret.js";
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { hostname, platform } from "node:os";
-import type { Command } from "commander";
+import { CommanderError, type Command } from "commander";
 import open from "open";
 import {
 	SignetApiError,
@@ -31,6 +32,10 @@ export interface LoginOnboardingContext {
 	readonly json: boolean;
 }
 interface AuthOptions {
+	issuer?: string;
+	clientId?: string;
+	clientSecretRef?: string;
+	clientSecretStdin?: boolean;
 	url?: string;
 	json?: boolean;
 	all?: boolean;
@@ -62,7 +67,9 @@ export function reportAuthError(
 			? error.reason
 			: error instanceof SignetError
 				? error.code
-				: "request_failed";
+				: error instanceof CommanderError
+					? "invalid_arguments"
+					: "request_failed";
 	const target = cliTarget();
 	const expiredMessage =
 		target?.remote && unauthorizedMessage === "Signet session expired, run `signet login`"
@@ -97,10 +104,11 @@ function loginTarget(options: AuthOptions, deps: AuthCommandDeps): { url: string
 export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {}): void {
 	const print = deps.print ?? console.log;
 	const action = (run: (options: AuthOptions) => Promise<void>) => async (options: AuthOptions) => {
+		const resolved = { ...program.opts<AuthOptions>(), ...options };
 		try {
-			await run(options);
+			await run(resolved);
 		} catch (error) {
-			reportAuthError(error, options.json);
+			reportAuthError(error, resolved.json);
 		}
 	};
 	const options = (command: Command) =>
@@ -148,7 +156,8 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 					try {
 						await (deps.openBrowser ?? open)(approval.href);
 					} catch {
-						print("Browser unavailable; open the approval URL above.");
+						if (opts.json) process.stderr.write("Browser unavailable; open the approval URL above.\n");
+						else print("Browser unavailable; open the approval URL above.");
 					}
 				}
 				const deadline = Date.now() + Math.min(device.expiresIn, 600) * 1000;
@@ -234,9 +243,12 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 	options(program.command("whoami").description("Show the authenticated identity")).action(
 		action(async (opts) => {
 			const target = cliTarget() ?? (await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl }));
-			const identity = await (cliTransport() ?? new NodeTransport(target, { env: deps.env })).get<unknown>(
-				"/api/auth/whoami",
-			);
+			const identity = await (cliTransport() ?? new NodeTransport(target, { env: deps.env })).get<{
+				mode?: string;
+				authenticated?: boolean;
+			}>("/api/auth/whoami");
+			if (target.remote && identity.mode !== "local" && identity.authenticated !== true)
+				throw new SignetUnauthorizedError(target.credential.reason ?? "missing_credential");
 			print(
 				JSON.stringify(
 					{ identity, url: target.url, credentialSource: target.credential.source },
@@ -247,6 +259,26 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 		}),
 	);
 	const auth = program.command("auth").description("Manage your devices and sessions");
+	options(auth.command("sso").command("set").description("Configure organization SSO without putting a secret in argv"))
+		.requiredOption("--issuer <url>", "OIDC issuer")
+		.requiredOption("--client-id <id>", "OIDC client ID")
+		.option("--client-secret-ref <name>", "Secret-store reference (default: SIGNET_OIDC_CLIENT_SECRET)")
+		.option("--client-secret-stdin", "Read the client secret from a bounded stdin pipe")
+		.action(
+			action(async (opts) => {
+				if (opts.clientSecretStdin && opts.clientSecretRef)
+					throw new SignetError("Choose a secret reference or stdin, not both", "invalid_request");
+				const secret = opts.clientSecretStdin ? await readSecretFromStdin(16384) : undefined;
+				const result = await (await authTransport(opts, deps)).post("/api/org/sso", {
+					issuer: opts.issuer,
+					clientId: opts.clientId,
+					...(secret
+						? { clientSecret: secret }
+						: { clientSecretRef: opts.clientSecretRef ?? "SIGNET_OIDC_CLIENT_SECRET" }),
+				});
+				print(JSON.stringify(result, null, opts.json ? undefined : 2));
+			}),
+		);
 	for (const kind of ["devices", "sessions"] as const) {
 		const group = options(auth.command(kind).description(`List your ${kind}`));
 		group.action(
@@ -269,7 +301,7 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 						),
 					);
 				} catch (error) {
-					reportAuthError(error, opts.json);
+					reportAuthError(error, opts.json ?? program.opts<AuthOptions>().json);
 				}
 			},
 		);
@@ -284,7 +316,7 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 						),
 					);
 				} catch (error) {
-					reportAuthError(error, opts.json);
+					reportAuthError(error, opts.json ?? program.opts<AuthOptions>().json);
 				}
 			});
 		}

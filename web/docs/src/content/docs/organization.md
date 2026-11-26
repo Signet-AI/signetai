@@ -339,3 +339,70 @@ operator, or cleanup that exceeds the one-minute deadline leaves a refused or
 incomplete result rather than claiming successful deletion. Use the job ID to
 inspect the result; resolve the blocker before retrying. Purge responses never
 include counts of content outside the caller's audience.
+
+## Configuring SSO from the CLI
+
+Run `signet auth sso set --issuer https://idp.example.com --client-id signet
+--client-secret-ref SIGNET_OIDC_CLIENT_SECRET`. The reference is resolved by the
+instance's secret store, not the developer's machine. Alternatively, pipe a
+secret-manager command into the same command with `--client-secret-stdin`.
+There is no secret-value argument. Stdin is bounded to 16 KiB and ten seconds;
+`--non-interactive` does not request keychain authorization. A locked instance
+store fails with `secret_store_unavailable` rather than opening an OS prompt.
+
+Settings and their audit event commit together through the DB owner with current,
+unrestricted admin authorization. A staged secret is read back before publication,
+and failed publication removes it only after confirming it is not referenced.
+If publication cannot be checked, `sso_publication_uncertain` retains the secret
+rather than risking a broken live configuration. Successful replacement does not
+delete older operator-managed secret references; retire them explicitly through
+Signet's secret store after verifying the new configuration. Secret values never
+appear in settings, audit output, or command output.
+
+## Importing organization evidence
+
+`signet import notes.md --agent <id> --classification <id> --json` uploads source
+evidence through the instance's existing document-import owner. Use
+`--unclassified` to make that choice explicit instead. Interactive imports offer
+only classifications available to you. Pipes, JSON output, and `--non-interactive`
+require an explicit classification choice. The server applies the label before
+any evidence is visible and checks your identity, agent, and classification rights.
+
+The client admits one regular file up to 16 MiB, never sends a host filesystem
+path, and never opens or migrates a local database for this command. The response
+reports the instance's durable import acknowledgement, not just dispatch.
+
+Organization exports are scoped evidence, not a privileged database backup.
+To bring a JSON, JSONL, or NDJSON file back as immutable source evidence, explicitly
+add `--as-evidence`. Its original bytes and claimed provenance remain evidence;
+foreign author IDs, entity rows, relationships, configuration, and derived claims
+are not restored as authority. Remote restoration of derived-state bundles is
+permanently refused with `derived_state_restore_forbidden`, not deferred to a
+future restore implementation. Use `--as-evidence` for source-evidence ingestion;
+Dreaming is the only automatic author of semantic claims and rebuilds the graph
+from evidence. Bundled graph rows and foreign authors are not authoritative
+evidence. Local offline portable restore keeps its current behavior.
+
+## Failures and scripts
+
+Authentication failures exit **3** and name the instance: `Session expired for
+acme.example. Run signet login.` Permission failures exit **4**, identify the
+missing requirement, and direct team membership changes to a team owner. There
+is no retry against a local daemon after either failure. Other failures exit 1;
+`doctor` uses 2 when it successfully reports degraded health.
+
+With `--json`, request and argument errors are JSON objects on stderr with
+`error`, `reason`, and `status`;
+403 responses also include `required` when available. This also applies to command
+syntax errors (`invalid_arguments`). Partial transitions remain explicit rather
+than being reported as complete. One-time key-creation warnings also use stderr;
+those warnings are not operation failures. Put global
+flags before or after the command, for example `signet --json whoami`.
+
+`--non-interactive` refuses browser sign-in, dashboard opening, keychain prompts,
+and unconfirmed agent purge. Supply credentials through `SIGNET_API_KEY` or a
+protected `SIGNET_API_KEY_FILE` for unattended calls. JSON login keeps approval
+instructions and browser-unavailable notices on stderr, leaving one final JSON
+result on stdout. JSON onboarding detects harnesses without changing them;
+connection remains an explicit choice. Use explicit classification flags for
+scripted imports and `--confirm --wait` for destructive organization jobs.

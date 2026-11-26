@@ -1,3 +1,5 @@
+import { settingsSchema, settingsColumns } from "./auth/organization-settings-contract";
+import type { OrganizationRow } from "./auth/organization-store";
 import { removeAgentInTx } from "./agent-removal";
 import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { canActAs, type AgentRecord } from "./auth/agent-access";
@@ -256,6 +258,48 @@ export function executeOperatorJob(db: WriteDb, request: OperatorRequest): unkno
 	}
 }
 function operation(db: WriteDb, request: OperatorRequest): unknown {
+	if (request.op === "settings") {
+		operation(db, { op: "authorize-global", actor: request.actor });
+		const data = settingsSchema.parse(request.input);
+		const current = prepareTypedStatement<OrganizationRow>(db, "SELECT * FROM organization WHERE id=1").get();
+		if (!current) deny("not_found");
+		const nextOidc = data.oidc === undefined ? current.oidc_json : data.oidc;
+		if (
+			((data.passwordLogin ?? Boolean(current.password_login)) === false ||
+				(data.requireSso ?? Boolean(current.require_sso))) &&
+			!nextOidc
+		)
+			deny("org_policy");
+		for (const [key, column] of Object.entries(settingsColumns)) {
+			const value: unknown = Reflect.get(data, key);
+			if (value === undefined) continue;
+			const normalized =
+				key === "oidc"
+					? value === null
+						? null
+						: JSON.stringify(value)
+					: typeof value === "boolean"
+						? Number(value)
+						: value;
+			if (typeof normalized !== "string" && typeof normalized !== "number" && normalized !== null)
+				deny("invalid_request");
+			db.prepare(`UPDATE organization SET ${column}=?,updated_at=? WHERE id=1`).run(
+				normalized,
+				new Date().toISOString(),
+			);
+		}
+		auditAuthoredWriteInTx(
+			db,
+			{ userId: request.actor.userId, credential: `${request.actor.credentialKind}:${request.actor.credentialId}` },
+			"organization.settings_updated",
+			"organization",
+			"1",
+			null,
+			{ fields: Object.keys(data) },
+		);
+		return { ok: true };
+	}
+
 	if (request.op === "agent-purge") return agentPurge(db, request);
 	if (request.op === "authorize-global") {
 		if (request.actor.boundAgentId !== null || request.actor.allowedProjects !== null) deny("permission");

@@ -306,7 +306,12 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 				process.exit(1);
 			}
 
-			if (!options.force) {
+			if (!options.force && !options.confirm) {
+				if (program.opts().nonInteractive)
+					throw new SignetError(
+						"Purge confirmation is required; pass --force or --confirm in non-interactive mode",
+						"confirmation_required",
+					);
 				const readline = await import("node:readline");
 				const rl = readline.createInterface({
 					input: process.stdin,

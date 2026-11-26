@@ -437,3 +437,4 @@ without hiding setup affordances).
 | GET | `/api/org/operator/capabilities` | Verified supervisor availability, admin only. |
 | POST | `/api/org/operator/restart` | Unrestricted admin; empty JSON body; HTTP 202 with `{accepted, jobId, status, supervisor}`. Poll the job for actual readiness. |
 | POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill jobs. Returns HTTP 202 with `{jobId}`. See Organization for action schemas, admission limits, and incomplete-job semantics. |
+| POST | `/api/org/sso` | Unrestricted admin; OIDC issuer/client ID and exactly one `clientSecretRef` or write-only `clientSecret`. Uses Signet Secrets, verifies storage, publishes settings and audit through the DB owner, and never returns secret values. MCP `signet_org_sso_set` accepts references only. |

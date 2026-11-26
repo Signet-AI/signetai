@@ -1,3 +1,4 @@
+import { SignetError } from "../../../../libs/sdk/src/index.js";
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import type { Command } from "commander";
 import {
@@ -27,6 +28,23 @@ export function cliTransport(): NodeTransport | undefined {
 export function cliAgent(): string | undefined {
 	return selectedAgent;
 }
+export function credentialOptions<T extends ResolveTargetOptions>(deps: T, nonInteractive: boolean): T {
+	if (!nonInteractive) return deps;
+	return {
+		...deps,
+		keyring: {
+			get: async () => {
+				throw new SignetError(
+					"Keychain access requires interactive mode; provide an environment credential or protected key file",
+					"interactive_required",
+				);
+			},
+			set: async () => {
+				throw new SignetError("Keychain writes require interactive mode", "interactive_required");
+			},
+		},
+	};
+}
 export async function resolveCliTarget(
 	options: CliTargetOptions,
 	deps: ResolveTargetOptions = {},
@@ -48,24 +66,9 @@ export async function resolveCliTarget(
 		!(deps.env ?? process.env).SIGNET_API_KEY_FILE
 	)
 		return resolveCliTarget({ local: true }, deps);
-	const target = await resolveTarget({
-		...deps,
-		flagUrl: options.url ?? deps.flagUrl,
-		...(options.nonInteractive
-			? {
-					keyring: {
-						get: async () => {
-							throw new Error(
-								"Keychain access requires interactive mode; provide an environment credential or protected key file",
-							);
-						},
-						set: async () => {
-							throw new Error("Keychain writes require interactive mode");
-						},
-					},
-				}
-			: {}),
-	});
+	const target = await resolveTarget(
+		credentialOptions({ ...deps, flagUrl: options.url ?? deps.flagUrl }, options.nonInteractive === true),
+	);
 	if (options.org && !target.remote)
 		throw new Error("No organization instance is configured. Run `signet login --url <url>`.");
 	return target;
@@ -93,19 +96,24 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 	selected = undefined;
 	transport = undefined;
 	selectedAgent = undefined;
+	if (!program.options.some((option) => option.long === "--json"))
+		program.option("--json", "Use JSON where supported and structure command errors");
 	registerTargetFlags(program);
 	program.hook("preAction", async (_root, command) => {
+		for (const name of ["json", "nonInteractive"]) {
+			if (program.getOptionValue(name) === true) command.setOptionValueWithSource(name, true, "cli");
+		}
 		let top = command;
 		while (top.parent && top.parent !== program) top = top.parent;
 		if (["hook", "connect", "disconnect", "connector"].includes(top.name())) return;
 		const options = command.opts<CliTargetOptions>();
+		if (options.nonInteractive && top.name() === "dashboard")
+			throw new SignetError("Browser opening is disabled by --non-interactive", "non_interactive");
 		selected = await resolveCliTarget({ ...options, url: options.join ?? options.url }, deps);
 		selectedAgent = options.agent;
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;
 		if (selected.remote && top.name() === "import" && !selectedAgent)
 			throw new Error("Organization imports require --agent <id>.");
-		if (selected.remote && top.name() === "import")
-			throw new Error("Remote portable bundles are not available yet. No local database was opened.");
 
 		if (
 			selected.remote &&

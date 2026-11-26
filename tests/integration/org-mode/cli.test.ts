@@ -11,15 +11,25 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 	try {
 		const fixture = await Fixture.create(daemon, "personal", false);
 		const admin = await device(daemon, fixture.admin, "cli-admin");
-		const cli = async (args: readonly string[], bearer = admin.credential.bearer ?? "", expectedCode = 0) => {
+		const cli = async (
+			args: readonly string[],
+			bearer = admin.credential.bearer ?? "",
+			expectedCode = 0,
+			input?: string,
+		) => {
 			const env: NodeJS.ProcessEnv = { ...daemon.env, SIGNET_API_KEY: bearer };
 			delete env.SIGNET_DAEMON_ENTRYPOINT;
 			const child = Bun.spawn([process.execPath, join(repo, "surfaces/cli/src/cli.ts"), ...args], {
 				env,
 				cwd: repo,
+				stdin: input === undefined ? "ignore" : "pipe",
 				stdout: "pipe",
 				stderr: "pipe",
 			});
+			if (input !== undefined && child.stdin) {
+				child.stdin.write(input);
+				child.stdin.end();
+			}
 			const [stdout, stderr, code] = await Promise.all([
 				new Response(child.stdout).text(),
 				new Response(child.stderr).text(),
@@ -29,6 +39,21 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 			if (expectedCode !== 0 && expectedCode !== 2) expect(stdout).toBe("");
 			return JSON.parse(expectedCode === 0 || expectedCode === 2 ? stdout : stderr);
 		};
+
+		expect((await cli(["auth", "sso", "set", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
+			"invalid_arguments",
+		);
+		expect((await cli(["dashboard", "--non-interactive", "--json"], text(admin.credential.bearer), 1)).reason).toBe(
+			"non_interactive",
+		);
+		const ownerFailure = await cli(
+			["org", "teams", "add", fixture.engId, fixture.user("alice").id, "--json"],
+			text(fixture.user("bob").session.bearer),
+			4,
+		);
+		expect(ownerFailure.required).toBe("Ask a team owner (eng)");
+		expect((await cli(["--json", "whoami"])).identity.authenticated).toBe(true);
+		expect((await cli(["whoami", "--json"], "invalid-fixture", 3)).reason).toBe("missing_credential");
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
 		const doctor = await cli(["doctor", "--json"]);
@@ -103,6 +128,65 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		expect(agentInventory.agents.some((agent: { id: string }) => agent.id === purgedAgent.agentId)).toBe(false);
 		expect((await request(daemon.origin, "/api/agents", purgeKey.credential)).status).toBe(401);
 		expect((await cli(["audit", "--action", "agent.purged", "--json"])).events.length).toBe(1);
+
+		const sso = await cli(
+			[
+				"auth",
+				"sso",
+				"set",
+				"--issuer",
+				"https://idp.example",
+				"--client-id",
+				"isolated-client",
+				"--client-secret-stdin",
+				"--json",
+			],
+			text(admin.credential.bearer),
+			0,
+			"isolated-sso-secret\n",
+		);
+		expect(sso.oidc.issuer).toBe("https://idp.example");
+		expect(JSON.stringify(sso)).not.toContain("isolated-sso-secret");
+		const referenced = await cli([
+			"auth",
+			"sso",
+			"set",
+			"--issuer",
+			"https://idp.example",
+			"--client-id",
+			"isolated-client",
+			"--client-secret-ref",
+			sso.oidc.clientSecretRef,
+			"--json",
+		]);
+		expect(referenced.oidc.clientSecretRef).toBe(sso.oidc.clientSecretRef);
+
+		const importPath = join(daemon.root, "cli-import.md");
+		await writeFile(importPath, "# CLI source evidence\nCLI import classified marker.");
+		const carol = fixture.user("carol");
+		const imported = await cli(
+			["import", importPath, "--agent", carol.agentId, "--classification", fixture.hrId, "--non-interactive", "--json"],
+			text(carol.session.bearer),
+		);
+		expect(imported.imported).toBe(1);
+		expect(imported.files[0].status).toBe("imported");
+		const bundlePath = join(daemon.root, "refused-derived.json");
+		await writeFile(bundlePath, JSON.stringify({ "entities.jsonl": '{"name":"not evidence"}' }));
+		const refused = await cli(
+			["import", bundlePath, "--agent", carol.agentId, "--unclassified", "--json"],
+			text(carol.session.bearer),
+			1,
+		);
+		expect(refused.reason).toBe("derived_state_restore_forbidden");
+		expect(refused.error).toContain("--as-evidence");
+		const sourceId = imported.files[0].sourceId;
+		expect(typeof sourceId).toBe("string");
+		expect(
+			JSON.stringify((await request(daemon.origin, `/api/sources?agentId=${carol.agentId}`, admin.credential)).body),
+		).not.toContain(sourceId);
+		expect(
+			JSON.stringify((await request(daemon.origin, `/api/sources?agentId=${carol.agentId}`, carol.session)).body),
+		).toContain(sourceId);
 		const exportedPath = join(daemon.root, "organization-export.ndjson");
 		const exported = await cli(["export", "bundle", "--all", "--output", exportedPath, "--json"]);
 		expect(exported.exported).toBe(true);

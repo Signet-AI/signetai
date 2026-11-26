@@ -1,10 +1,11 @@
 import "../../../../tests/support/connector-safety.js";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, spyOn } from "bun:test";
 import { Command } from "commander";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LoginStore } from "../../../../libs/sdk/src/node.js";
+import { registerOrganizationTarget } from "../lib/organization-target.js";
 import { registerAuthCommands } from "./auth.js";
 
 test("non-interactive login refuses before opening a browser or touching keychain", async () => {
@@ -175,6 +176,7 @@ test("device login stores credentials and logout revokes before clearing", async
 		configUrl: server.url.origin,
 		print: (value) => output.push(value),
 		openBrowser: async (url) => {
+			if (opened) throw new Error("fixture browser unavailable");
 			opened = url;
 		},
 	});
@@ -186,7 +188,10 @@ test("device login stores credentials and logout revokes before clearing", async
 		expect(output.join("\n")).toContain("ABCD-EFGH");
 		expect(output.join("\n")).not.toContain("private-");
 		await writeFile(`${store.path}.state`, JSON.stringify({ state: "dead", reason: "revoked" }), { mode: 0o600 });
-		await program.parseAsync(["login"], { from: "user" });
+		output.length = 0;
+		await program.parseAsync(["login", "--json"], { from: "user" });
+		expect(output).toHaveLength(1);
+		expect(JSON.parse(output[0] ?? "null").authenticated).toBe(true);
 		expect((await store.load())?.credential.refreshToken).toBe("private-refresh");
 		await program.parseAsync(["logout"], { from: "user" });
 		expect(await store.load()).toBeNull();
@@ -245,3 +250,77 @@ for (const savedSession of [false, true]) {
 		});
 	}
 }
+
+for (const status of [401, 403]) {
+	test(`global JSON auth failures preserve instance, reason and exit status ${status}`, async () => {
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () =>
+				Response.json(
+					status === 401
+						? { reason: "expired", error: "expired" }
+						: { reason: "not_owner", required: "Ask a team owner (payments)" },
+					{ status },
+				),
+		});
+		const errors: string[] = [];
+		const stderr = spyOn(process.stderr, "write").mockImplementation((value) => {
+			errors.push(String(value));
+			return true;
+		});
+		const program = new Command().option("--json");
+		registerOrganizationTarget(program, { env: { SIGNET_DAEMON_URL: server.url.origin, SIGNET_API_KEY: "fixture" } });
+		registerAuthCommands(program, {
+			print: () => {
+				throw new Error("Error output must not use stdout");
+			},
+		});
+		process.exitCode = 0;
+		try {
+			await program.parseAsync(["--json", "whoami"], { from: "user" });
+			const result = JSON.parse(errors.join(""));
+			expect(result).toMatchObject({ status, reason: status === 401 ? "expired" : "not_owner" });
+			expect(result.error).toBe(
+				status === 401 ? "Session expired for `127.0.0.1`. Run `signet login`." : "Ask a team owner (payments)",
+			);
+			expect(process.exitCode).toBe(status === 401 ? 3 : 4);
+		} finally {
+			stderr.mockRestore();
+			server.stop(true);
+			registerOrganizationTarget(new Command());
+			process.exitCode = 0;
+		}
+	});
+}
+
+test("non-interactive connector provisioning refuses before keychain access", async () => {
+	const home = await mkdtemp(join(tmpdir(), "connector-no-prompt-"));
+	homes.push(home);
+	const { registerConnectorCommands } = await import("./connector.js");
+	let keychainCalls = 0;
+	const program = new Command().option("--non-interactive");
+	registerConnectorCommands(program, {
+		agentsDir: home,
+		env: { HOME: home },
+		flagUrl: "https://org.example",
+		keyring: {
+			get: async () => {
+				keychainCalls++;
+				throw new Error("keychain must not be called");
+			},
+			set: async () => {
+				keychainCalls++;
+				return { state: "unsupported" as const };
+			},
+		},
+	});
+	process.exitCode = 0;
+	try {
+		await program.parseAsync(["--non-interactive", "connect", "codex"], { from: "user" });
+		expect(keychainCalls).toBe(0);
+		expect(process.exitCode).toBe(1);
+	} finally {
+		process.exitCode = 0;
+	}
+});
