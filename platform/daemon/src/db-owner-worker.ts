@@ -1204,10 +1204,10 @@ export function runDbOwnerWorker(): void {
 			return result;
 		}
 		if (job.request.kind === "fts_partition") {
-			const { createMemoriesFts, recreateMemoriesFts } = await import("@signet/core");
+			const { createMemoriesFts, recreateMemoriesFtsSchema } = await import("@signet/core");
 			db.exec("BEGIN IMMEDIATE");
 			try {
-				if (job.request.action === "rebuild") recreateMemoriesFts(db);
+				if (job.request.action === "rebuild") recreateMemoriesFtsSchema(db);
 				else createMemoriesFts(db);
 				db.exec("COMMIT");
 				context.committed = true;

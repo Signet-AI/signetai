@@ -486,6 +486,9 @@ describe("DB owner FTS maintenance", () => {
 		directory = database.directory;
 		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
 
+		const partial = await maintenance.rebuildFts({ chunkSize: 3, maxChunks: 1 });
+		expect(partial).toMatchObject({ status: "running", processed: 3 });
+		expect(countFts(database.path)).toBe(3);
 		const result = await maintenance.rebuildFts({
 			chunkSize: 3,
 			audit: {
