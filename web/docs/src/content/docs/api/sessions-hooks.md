@@ -270,7 +270,9 @@ is the SHA-256 digest of the complete original bytes. The resolved agent and
 connector's harness binding must match. Creation runs the same session-control
 admission as session-end before reserving space or accepting staged chunks. Repeating a declaration for the same
 principal, harness, session, and digest returns the same upload under its
-original credential binding.
+original credential binding. A principal outside the destination's classification
+audience receives `403` with reason `classified_destination` before an upload
+row, capacity reservation, or staged chunk exists.
 
 **Response: `201`**
 
