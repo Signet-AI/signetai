@@ -536,6 +536,16 @@ describe("organization HTTP flows", () => {
 				),
 			]);
 		}
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories(id,content,agent_id,memory_kind,type,visibility,created_at,updated_at) VALUES ('hr-child','derived private',?,'semantic','fact','private',?,?),('hr-grandchild','copied private',?,'semantic','fact','private',?,?)",
+				[hrAgent.agentId, now, now, hrAgent.agentId, now, now],
+			),
+			statement(
+				"INSERT INTO derived_memory_sources(agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'hr-child','memory','memory-hr',?),(?,'hr-grandchild','memory','hr-child',?)",
+				[hrAgent.agentId, now, hrAgent.agentId, now],
+			),
+		]);
 		const expired = await issueSession(bob.userId, "cli");
 		await organizationWrite([
 			statement(
@@ -594,13 +604,37 @@ describe("organization HTTP flows", () => {
 		).toBe(200);
 		const authorized = await (await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "keep" })).json();
 		expect(authorized.plan.counts).toMatchObject({
-			memories: 2,
+			memories: 4,
 			transcripts: 2,
 			artifacts: 2,
 			documents: 2,
 			sessions: 1,
 			agents: 2,
 		});
+		expect(
+			(await call(`/api/classifications/${hr.id}/audience`, "PUT", [{ kind: "user", id: bob.userId }], bob.token))
+				.status,
+		).toBe(200);
+		const purged = await (
+			await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "purge", dryRun: false })
+		).json();
+		let status = await (await call(`/api/org/jobs/${purged.jobId}`)).json();
+		for (let attempt = 0; status.status === "running" && attempt < 100; attempt++) {
+			await Bun.sleep(25);
+			status = await (await call(`/api/org/jobs/${purged.jobId}`)).json();
+		}
+		expect(status.status).toBe("complete");
+		expect(JSON.parse(status.progress_json).removed).toMatchObject({
+			memories: 1,
+			documents: 1,
+			memory_artifacts: 1,
+			session_transcripts: 1,
+		});
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [bob.userId], "get"),
+			),
+		).toEqual({ n: 0 });
 	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
@@ -1281,6 +1315,7 @@ describe("organization HTTP flows", () => {
 				["purge-target", departing.user.id],
 				["keep-other", root.user.id],
 				["purge-derived", root.user.id],
+				["purge-grandchild", root.user.id],
 			])
 				txIngestEnvelope(db, {
 					id: memoryId,
@@ -1309,6 +1344,10 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([
 			statement(
 				"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-derived','memory','purge-target',?)",
+				[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
+			),
+			statement(
+				"INSERT INTO derived_memory_sources (agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES (?,'purge-grandchild','memory','purge-derived',?)",
 				[`personal-${root.user.id.slice(4)}`, new Date().toISOString()],
 			),
 			statement(
@@ -1367,6 +1406,19 @@ describe("organization HTTP flows", () => {
 				],
 			),
 		]);
+		const preview = await (
+			await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", { mode: "purge" })
+		).json();
+		expect(preview.plan.counts).toMatchObject({
+			memories: 3,
+			summaries: 3,
+			artifacts: 1,
+			documents: 1,
+			transcripts: 1,
+		});
+		const beforeMemories = await organizationQuery<{ n: number }>(
+			statement("SELECT COUNT(*) AS n FROM memories", [], "get"),
+		);
 		const started = await call(`/api/org/users/${departing.user.id}/deactivate`, "POST", {
 			mode: "purge",
 			dryRun: false,
@@ -1393,7 +1445,12 @@ describe("organization HTTP flows", () => {
 			),
 		).toBeNull();
 		const progress = JSON.parse(status.progress_json);
-		expect(progress.removed.session_summaries).toBe(3);
+		const afterMemories = await organizationQuery<{ n: number }>(
+			statement("SELECT COUNT(*) AS n FROM memories", [], "get"),
+		);
+		expect(beforeMemories.n - afterMemories.n).toBe(preview.plan.counts.memories);
+		expect(progress.removed.memories).toBe(preview.plan.counts.memories);
+		expect(progress.removed.session_summaries).toBe(preview.plan.counts.summaries);
 		expect(progress.residual).toBeDefined();
 		expect(Object.values(progress.residual).every((n) => n === 0)).toBe(true);
 
