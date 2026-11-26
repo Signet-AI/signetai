@@ -30,6 +30,9 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
 		expect((await cli(["logs", "--json", "--lines", "5"])).redacted).toBe(true);
+		expect((await cli(["logs", "--local", "--json"], text(admin.credential.bearer), 1)).error).toBe(
+			"JSON log output requires an organization target",
+		);
 		expect((await cli(["logs", "--follow", "--json"], text(fixture.user("alice").session.bearer), 4)).reason).toBe(
 			"permission",
 		);

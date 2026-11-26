@@ -1016,8 +1016,11 @@ registerDaemonCommands(program, {
 	doResume: (options) => setTargetPause(false, options),
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),
-	showLogs: (options) =>
-		cliTransport() ? organizationLogs(fetchDaemonStream, options) : showLogs(options, daemonDeps),
+	showLogs: async (options) => {
+		if (cliTransport()) return organizationLogs(fetchDaemonStream, options);
+		if (options.json) throw new Error("JSON log output requires an organization target");
+		return showLogs(options, daemonDeps);
+	},
 	showStatus: (options) => showTargetStatus(options),
 });
 
