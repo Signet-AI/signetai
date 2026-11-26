@@ -3703,35 +3703,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1358,
+      "line": 1359,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1360,
+      "line": 1361,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1370,
+      "line": 1371,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1372,
+      "line": 1373,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1373,
+      "line": 1374,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
@@ -4272,7 +4272,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 497,
+      "line": 500,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -4280,7 +4280,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 524,
+      "line": 527,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path",
@@ -4288,7 +4288,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 588,
+      "line": 591,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path",
@@ -4296,7 +4296,7 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 628,
+      "line": 631,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path",

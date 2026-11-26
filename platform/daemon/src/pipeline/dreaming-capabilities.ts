@@ -100,7 +100,9 @@ function projectEvidenceItem(
 		project: source.project,
 		harness: source.harness,
 		capturedAt: source.capturedAt,
-		...(source.sourceEntryId === null && source.speakerUserId ? { speakerUserId: source.speakerUserId } : {}),
+		...((source.kind === "transcript" || source.sourceEntryId === null) && source.speakerUserId
+			? { speakerUserId: source.speakerUserId }
+			: {}),
 		...(source.speaker === undefined ? {} : { speaker: source.speaker }),
 	};
 }
@@ -954,6 +956,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					agentId,
 					scopeKey: scopes ?? dreamingScopeKey(allowedScopes),
 					compartmentId: params.compartmentId ?? null,
+					readScope: params.readScope,
 					allowedScopes,
 					id,
 					n,

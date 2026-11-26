@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { readDreamingHistoryLinePage } from "./dreaming";
 import type { LlmUsage } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
@@ -200,26 +202,29 @@ async function readLines(
 	scopeKey: string,
 	nodes: readonly HistoryNode[],
 	compartmentId: number | null,
+	readScope?: ReadScope,
 ): Promise<HistoryLine[]> {
 	const lines: HistoryLine[] = [];
 	for (let start = 0; start < nodes.length; start += PAGE_ROWS) {
 		const page = nodes.slice(start, start + PAGE_ROWS);
-		const rows = await ownerQueryAll<{
-			level: number;
-			idx: number;
-			hex: string;
-			bytes: number;
-			passId: string | null;
-		}>(
-			owner,
-			"dreaming.history.lines",
-			`SELECT level, idx, hex(substr(CAST(text AS BLOB), 1, ?1)) AS hex, length(CAST(text AS BLOB)) AS bytes,
+		const rows = readScope
+			? await readDreamingHistoryLinePage(owner, agentId, scopeKey, page, DREAMING_HISTORY_LINE_BYTES, readScope)
+			: await ownerQueryAll<{
+					level: number;
+					idx: number;
+					hex: string;
+					bytes: number;
+					passId: string | null;
+				}>(
+					owner,
+					"dreaming.history.lines",
+					`SELECT level, idx, hex(substr(CAST(text AS BLOB), 1, ?1)) AS hex, length(CAST(text AS BLOB)) AS bytes,
 			        pass_id AS passId
 			 FROM dreaming_history_nodes
 			 WHERE ${historyReadLabel(compartmentId, "?2")} AND agent_id = ?2 AND scope_key = ?3 AND (level, idx) IN (VALUES ${page.map(() => "(?, ?)").join(", ")})`,
-			[DREAMING_HISTORY_LINE_BYTES, agentId, scopeKey, ...page.flatMap((node) => [node.level, node.idx])],
-			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
-		);
+					[DREAMING_HISTORY_LINE_BYTES, agentId, scopeKey, ...page.flatMap((node) => [node.level, node.idx])],
+					{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+				);
 		const byKey = new Map(rows.map((row) => [`${row.level}:${row.idx}`, row]));
 		for (const node of page) {
 			const row = byKey.get(`${node.level}:${node.idx}`);
@@ -402,6 +407,7 @@ export async function zoomDreamingHistory(
 		readonly scopeKey: string;
 		readonly allowedScopes: readonly string[];
 		readonly compartmentId?: number | null;
+		readonly readScope?: ReadScope;
 		readonly id: number;
 		readonly n: number;
 	},
@@ -418,11 +424,34 @@ export async function zoomDreamingHistory(
 		return { ok: false, error: `No line ${id}+${n}: n must be a power of two and id a multiple of n.` };
 	}
 	const owner = await getDbOwnerForAccessor(accessor);
+	if (params.readScope) {
+		if (n > 128 || !Number.isSafeInteger(id + n))
+			return { ok: false, error: "History range exceeds 128 readable passes." };
+		const leaves = await readLines(
+			owner,
+			agentId,
+			scopeKey,
+			Array.from({ length: n }, (_, offset) => ({ level: 0, idx: id + offset })),
+			compartmentId,
+			params.readScope,
+		);
+		if (leaves.length !== n) return { ok: false, error: `No line ${id}+${n}.` };
+		if (n > 1) return { ok: true, lines: leaves.map((line) => line.text) };
+		const leaf = leaves[0];
+		if (!leaf || leaf.passId === null) return { ok: false, error: `No line ${id}+1.` };
+		const record = await readDreamingPassRecord(owner, agentId, leaf.passId, params.readScope);
+		return record === null ? { ok: false, error: `No line ${id}+1.` } : { ok: true, record };
+	}
 	const level = Math.log2(n);
 	if (level === 0) {
-		const [leaf] = await readLines(owner, agentId, scopeKey, [{ level: 0, idx: id }], compartmentId);
+		const [leaf] = await readLines(owner, agentId, scopeKey, [{ level: 0, idx: id }], compartmentId, params.readScope);
 		if (leaf === undefined || leaf.passId === null) return { ok: false, error: `No line ${id}+1.` };
-		const record = await readDreamingPassRecord(owner, agentId, leaf.passId, historyReadScope(agentId, compartmentId));
+		const record = await readDreamingPassRecord(
+			owner,
+			agentId,
+			leaf.passId,
+			params.readScope ?? historyReadScope(agentId, compartmentId),
+		);
 		return record === null
 			? { ok: false, error: `Pass ${leaf.passId} for line ${id}+1 is no longer retained.` }
 			: { ok: true, record };
@@ -437,6 +466,7 @@ export async function zoomDreamingHistory(
 			{ level: level - 1, idx: (id / n) * 2 + 1 },
 		],
 		compartmentId,
+		params.readScope,
 	);
 	if (lines.length !== 3) return { ok: false, error: `No line ${id}+${n}.` };
 	return { ok: true, lines: lines.slice(1).map((line) => `${lineLabel(line.node)}|${line.text}`) };
