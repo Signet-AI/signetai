@@ -4,7 +4,10 @@ import { readScopeSql } from "../read-scope";
 import { classifyEntityQuality } from "../entity-quality";
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { z } from "zod";
-import { runDbOwnerDomainOperation } from "../db-owner-runtime";
+import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
+import { ownerQueryAll } from "../db-owner-maintenance";
+import { countTokens } from "./tokenizer";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
 import type {
 	DbOwnerDreamingGraphRead,
 	DbOwnerDreamingEvidenceSearch,
@@ -47,6 +50,31 @@ import { dreamingScopeKey, zoomDreamingHistory } from "./dreaming-history";
 import { writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
 import { MEMORY_HEAD_MAX_TOKENS, readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
+
+async function readScopedCuratedMemoryHead(
+	accessor: DbAccessor,
+	agentId: string,
+	readScope: ReadScope,
+): Promise<Record<string, unknown>> {
+	const predicate = dreamingReadPredicate("e", readScope);
+	const entries = await ownerQueryAll<{ entry_id: string; canonical_text: string; status: string }>(
+		await getDbOwnerForAccessor(accessor),
+		"dreaming.memory-head.scoped",
+		`SELECT e.entry_id, e.canonical_text, e.status FROM memory_head_entries e
+ WHERE e.agent_id = ? AND e.status = 'active' ${predicate.sql} ORDER BY e.entry_id LIMIT 200`,
+		[agentId, ...predicate.args],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 200 },
+	);
+	const content = entries.map((entry) => `- ${entry.canonical_text.trim()}`).join("\n");
+	return {
+		agentId,
+		content,
+		status: "scoped",
+		entries,
+		maxTokens: MEMORY_HEAD_MAX_TOKENS,
+		tokens: countTokens(content),
+	};
+}
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -729,9 +757,11 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				scopeId === agentId
 					? {
 							ok: true,
-							head: await (params.memoryHeadCommitter
-								? params.memoryHeadCommitter.read(scopeId)
-								: readCuratedMemoryHead(scopeId)),
+							head: await (params.passId === undefined && params.readScope
+								? readScopedCuratedMemoryHead(accessor, scopeId, params.readScope)
+								: params.memoryHeadCommitter
+									? params.memoryHeadCommitter.read(scopeId)
+									: readCuratedMemoryHead(scopeId)),
 						}
 					: { ok: false, error: "Head scope must match the active agent" },
 		),

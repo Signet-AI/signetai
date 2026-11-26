@@ -368,9 +368,15 @@ test("head, review attention, and graph capabilities preserve visible results wh
 		body: JSON.stringify({ input: { agentId: "agent-b", entityId: "public-entity" } }),
 	});
 	expect(await read.json()).toMatchObject({ ok: true, entity: { id: "public-entity" } });
-	const quality = await (await app.request("/api/dream/quality")).json();
+	const { getDreamingQualityReport } = await import("./dreaming-quality");
+	expect(await (await app.request("/api/dream/quality")).json()).toEqual({ agentId: "default", unavailable: true });
+	expect(await (await orgApp("hr").request("/api/dream/quality")).json()).toEqual({
+		agentId: "default",
+		unavailable: true,
+	});
+	const quality = await getDreamingQualityReport(getDbAccessor(), "agent-a", scope);
 	expect(quality).toMatchObject({ graphGarbageRate: { totalEntities: 1 }, structureQuality: { totalEntities: 1 } });
-	expect(await (await orgApp("hr").request("/api/dream/quality")).json()).toMatchObject({
+	expect(await getDreamingQualityReport(getDbAccessor(), "agent-a", audience)).toMatchObject({
 		graphGarbageRate: { totalEntities: 2 },
 	});
 });
