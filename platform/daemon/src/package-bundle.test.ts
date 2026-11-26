@@ -40,12 +40,12 @@ function packFiles(dir: string, prepare = true): string[] {
 		throw new Error(res.stderr || res.stdout || `npm pack failed in ${dir}`);
 	}
 
-	const parsed = JSON.parse(res.stdout);
-	if (!Array.isArray(parsed)) {
-		throw new Error(`unexpected npm pack payload for ${dir}`);
-	}
-
-	const first = parsed[0];
+	const parsed: unknown = JSON.parse(res.stdout);
+	const first: unknown = Array.isArray(parsed)
+		? parsed[0]
+		: typeof parsed === "object" && parsed !== null
+			? Object.values(parsed)[0]
+			: undefined;
 	if (typeof first !== "object" || first === null) {
 		throw new Error(`missing npm pack entry for ${dir}`);
 	}
