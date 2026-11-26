@@ -145,6 +145,24 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 			"--json",
 		]);
 		expect(referenced.oidc.clientSecretRef).toBe(sso.oidc.clientSecretRef);
+
+		const importPath = join(daemon.root, "cli-import.md");
+		await writeFile(importPath, "# CLI source evidence\nCLI import classified marker.");
+		const carol = fixture.user("carol");
+		const imported = await cli(
+			["import", importPath, "--agent", carol.agentId, "--classification", fixture.hrId, "--non-interactive", "--json"],
+			text(carol.session.bearer),
+		);
+		expect(imported.imported).toBe(1);
+		expect(imported.files[0].status).toBe("imported");
+		const sourceId = imported.files[0].sourceId;
+		expect(typeof sourceId).toBe("string");
+		expect(
+			JSON.stringify((await request(daemon.origin, `/api/sources?agentId=${carol.agentId}`, admin.credential)).body),
+		).not.toContain(sourceId);
+		expect(
+			JSON.stringify((await request(daemon.origin, `/api/sources?agentId=${carol.agentId}`, carol.session)).body),
+		).toContain(sourceId);
 		const exportedPath = join(daemon.root, "organization-export.ndjson");
 		const exported = await cli(["export", "bundle", "--all", "--output", exportedPath, "--json"]);
 		expect(exported.exported).toBe(true);

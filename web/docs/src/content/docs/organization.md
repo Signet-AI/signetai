@@ -358,3 +358,23 @@ rather than risking a broken live configuration. Successful replacement does not
 delete older operator-managed secret references; retire them explicitly through
 Signet's secret store after verifying the new configuration. Secret values never
 appear in settings, audit output, or command output.
+
+## Importing organization evidence
+
+`signet import notes.md --agent <id> --classification <id> --json` uploads source
+evidence through the instance's existing document-import owner. Use
+`--unclassified` to make that choice explicit instead. Interactive imports offer
+only classifications available to you. Pipes, JSON output, and `--non-interactive`
+require an explicit classification choice. The server applies the label before
+any evidence is visible and checks your identity, agent, and classification rights.
+
+The client admits one regular file up to 16 MiB, never sends a host filesystem
+path, and never opens or migrates a local database for this command. The response
+reports the instance's durable import acknowledgement, not just dispatch.
+
+Organization exports are scoped evidence, not a privileged database backup.
+To bring a JSON, JSONL, or NDJSON file back as immutable source evidence, explicitly
+add `--as-evidence`. Its original bytes and claimed provenance remain evidence;
+foreign author IDs, entity rows, relationships, configuration, and derived claims
+are not restored as authority. Direct remote restoration of legacy derived-state
+bundles remains unsupported. Local portable import behavior is unchanged.

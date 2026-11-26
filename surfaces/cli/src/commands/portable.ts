@@ -1,3 +1,4 @@
+import { importOrganizationEvidence, type OrganizationImportOptions } from "./organization-import.js";
 import { cliTarget } from "../lib/organization-target.js";
 import { exportOrganizationData } from "./organization-export.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -97,10 +98,18 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 
 	program
 		.command("import <path>")
-		.description("Import agent data from an export bundle")
-		.option("--agent <id>", "Target agent for every imported memory and entity")
-		.option("--json", "Input is a JSON file instead of a directory")
-		.action(async (importPath: string, options: { agent?: string; json?: boolean }) => {
+		.description("Import a local portable bundle or organization source evidence")
+		.option("--agent <id>", "Target agent (required for organization imports)")
+		.option("--json", "Input is JSON locally; machine-readable acknowledgement remotely")
+		.option("--classification <id>", "Classification for organization source evidence")
+		.option("--unclassified", "Explicitly import without a classification")
+		.option("--as-evidence", "Preserve a portable or JSON file as source evidence, without restoring authority")
+		.action(async (importPath: string, _options: OrganizationImportOptions, command: Command) => {
+			const options = command.optsWithGlobals<OrganizationImportOptions>();
+			if (cliTarget()?.remote) {
+				if (!deps.fetchDaemonStream) throw new Error("Organization streaming transport is unavailable");
+				return importOrganizationEvidence(importPath, options, deps.fetchDaemonStream);
+			}
 			const agentsDir = deps.AGENTS_DIR;
 
 			if (!existsSync(importPath)) {
