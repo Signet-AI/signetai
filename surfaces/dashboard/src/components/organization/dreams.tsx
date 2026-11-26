@@ -7,8 +7,9 @@ import { useAgentContext } from "@/lib/agent-context";
 import type { DreamPass, DreamToolCall } from "@/lib/api";
 import { ClassificationBadges, type ClassificationLabel } from "@/components/shell/attribution";
 import type { OrganizationAgent } from "@/lib/organization";
-import { Action, Choice, OrganizationBlock, TextField, displayLabel } from "./controls";
+import { Action, Choice, OrganizationBlock, displayLabel } from "./controls";
 import { EvidenceList } from "./evidence-list";
+import { AuthorFilter, FilterSearch, FilterToolbar } from "./filters";
 import { OrganizationResource } from "@/views/organization";
 
 interface ReviewedPass extends DreamPass {
@@ -88,31 +89,36 @@ export function OrganizationDreams() {
 			<div className="dreams-content">
 				<PageHeading title="Dreams" description="Audience-scoped passes for the selected agent." />
 				<OrganizationBlock title="Passes">
-					<TextField label="Search passes" value={query} onChange={setQuery} />
-					<Choice
-						label="Author"
-						value={author}
-						onChange={setAuthor}
-						options={[{ value: "", label: "All authors" }, ...authors.map(([value, label]) => ({ value, label }))]}
-					/>
-					<Choice
-						label="Team"
-						value={team}
-						onChange={setTeam}
-						options={[{ value: "", label: "All teams" }, ...teams.map(([value, label]) => ({ value, label }))]}
-					/>
-					<Choice
-						label="Classification"
-						value={classification}
-						onChange={setClassification}
-						options={[
-							{ value: "", label: "All readable classifications" },
-							...labels.map(([value, label]) => ({ value, label })),
-						]}
-					/>
-					<p className="settings-row-description">
-						Filters review recent readable passes. Author, team, and labels come from each pass.
-					</p>
+					<FilterToolbar>
+						<FilterSearch label="Search passes" value={query} onChange={setQuery} />
+						<AuthorFilter
+							value={author}
+							onChange={setAuthor}
+							options={[{ value: "", label: "All authors" }, ...authors.map(([value, label]) => ({ value, label }))]}
+						/>
+						<Choice
+							inline
+							label="Team"
+							value={team}
+							onChange={setTeam}
+							options={[{ value: "", label: "All teams" }, ...teams.map(([value, label]) => ({ value, label }))]}
+						/>
+						<Choice
+							inline
+							label="Classification"
+							value={classification}
+							onChange={setClassification}
+							options={[
+								{ value: "", label: "All classifications" },
+								...labels.map(([value, label]) => ({ value, label })),
+							]}
+						/>
+					</FilterToolbar>
+					{status.result?.data && (
+						<p role="status" className="text-meta text-muted-foreground">
+							{rows.length} {rows.length === 1 ? "pass" : "passes"}
+						</p>
+					)}
 					<Panel
 						result={status.result}
 						empty={!rows.length}

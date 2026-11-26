@@ -5,10 +5,11 @@ import { useWhoami } from "@/lib/session";
 import { Panel } from "@/components/shell/panel";
 import { ClassificationBadges, type ClassificationLabel } from "@/components/shell/attribution";
 import type { OrganizationAgent, OrganizationClassification, OrganizationGroup } from "@/lib/organization";
-import { Action, Choice, OrganizationBlock, TextField, agentDisplayName } from "./controls";
+import { Action, Choice, OrganizationBlock, agentDisplayName } from "./controls";
 import { EvidenceList } from "./evidence-list";
 import { ClassifyAction } from "./classifications";
-import { UserLookup, type LookupPerson } from "./user-lookup";
+import type { LookupPerson } from "./user-lookup";
+import { AuthorFilter, FilterSearch, FilterToolbar } from "./filters";
 
 interface MemoryRow {
 	readonly id: string;
@@ -78,24 +79,19 @@ export function OrganizationMemory() {
 	).map((id) => ({ value: id, label: personName(id) }));
 	return (
 		<OrganizationBlock title="Memory">
-			<div className="flex flex-col gap-3">
-				<TextField label="Search this page" value={query} onChange={setQuery} />
-				{(whoami.user.role === "admin" || whoami.user.compliance) && (
-					<UserLookup
-						label="Find an author"
-						onSelect={(value) => {
-							setPerson(value);
-							change(setAuthor)(value.id);
-						}}
-					/>
-				)}
-				<Choice
-					label="Author"
+			<FilterToolbar>
+				<FilterSearch label="Search memories" value={query} onChange={setQuery} />
+				<AuthorFilter
 					value={author}
-					onChange={change(setAuthor)}
+					remote={whoami.user.role === "admin" || whoami.user.compliance}
 					options={[{ value: "", label: "All authors" }, ...authorOptions]}
+					onChange={(value, person) => {
+						if (person) setPerson(person);
+						change(setAuthor)(value);
+					}}
 				/>
 				<Choice
+					inline
 					label="Team"
 					value={team}
 					onChange={change(setTeam)}
@@ -105,25 +101,22 @@ export function OrganizationMemory() {
 					]}
 				/>
 				<Choice
+					inline
 					label="Classification"
 					value={classification}
 					onChange={change(setClassification)}
 					options={[
-						{ value: "", label: "All readable memory" },
+						{ value: "", label: "All classifications" },
 						...(definitions.result?.data ?? [])
 							.filter((definition) => audienceIds.has(definition.id))
 							.map((definition) => ({ value: definition.id, label: definition.name })),
 					]}
 				/>
-			</div>
-			<p className="settings-row-description">
-				Author, team, and classification filters apply across readable memory before pagination. Text search narrows
-				this page only.
-			</p>
+			</FilterToolbar>
 			<Panel result={memories.result} onRetry={memories.refresh}>
 				{(data) => (
 					<p role="status" className="settings-row-description">
-						{data.stats.total} corpus matches
+						{data.stats.total} {data.stats.total === 1 ? "memory" : "memories"}
 					</p>
 				)}
 			</Panel>

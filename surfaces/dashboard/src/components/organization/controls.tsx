@@ -80,21 +80,28 @@ export function Choice({
 	value,
 	onChange,
 	options,
+	inline = false,
 }: {
 	label: string;
 	value: string;
 	onChange: (value: string) => void;
 	options: readonly { value: string; label: string }[];
 	required?: boolean;
+	inline?: boolean;
 }) {
 	const id = useId();
 	return (
-		<div className="settings-row">
-			<label className="settings-row-title" htmlFor={id}>
+		<div className={inline ? "min-w-0" : "settings-row"}>
+			<label className={inline ? "sr-only" : "settings-row-title"} htmlFor={id}>
 				{label}
 			</label>
 			<Select value={value || NONE} onValueChange={(next) => onChange(next === NONE ? "" : next)}>
-				<SelectTrigger id={id} size="compact" aria-label={label} className="settings-control">
+				<SelectTrigger
+					id={id}
+					size="compact"
+					aria-label={label}
+					className={inline ? "home-source-filter w-full" : "settings-control"}
+				>
 					<SelectValue />
 				</SelectTrigger>
 				<SelectContent position="popper" align="start" className="ui-select-menu max-h-80">

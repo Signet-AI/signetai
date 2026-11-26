@@ -27,7 +27,7 @@ Offboarding and bulk key revocation return tracked jobs. Pending or running is n
 
 ## Reading shared memory
 
-Home and Memory follow the agent switcher. Author, team, and classification filters run across the readable corpus, and the result count comes from the daemon. Text search narrows the current page. Refresh memory keeps your filters while loading the latest results. Rows display classification badges only when the daemon includes their labels. **Open knowledge graph** keeps the graph available from Memory. Classification item lists have Previous and Next controls and use the same material rows as Memory and Sessions.
+Home and Memory follow the agent switcher. Search, Author, Team, and Classification share a compact toolbar. On phones, open **Filters** to use the same controls in a side sheet. The Author combobox searches names and emails when your account has lookup access. Author, team, and classification filters run across the readable corpus, and the result count comes from the daemon. Text search narrows the current page. Refresh memory keeps your filters while loading the latest results. Rows display classification badges only when the daemon includes their labels. **Open knowledge graph** keeps the graph available from Memory. Classification item lists have Previous and Next controls and use the same material rows as Memory and Sessions.
 
 Dreams shows passes and logs that the current credential may read, with per-pass author, team, and classification filters. Being an administrator does not bypass a classification audience. Logs for classified passes are visible only to their audience.
 
