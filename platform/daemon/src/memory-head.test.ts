@@ -127,7 +127,12 @@ describe("memory head owner runtime", () => {
 		try {
 			reading = Promise.all([
 				readCuratedMemoryHead("default"),
-				requestMemoryHead({ action: "inspect", agentId: "default", content }),
+				requestMemoryHead({
+					action: "inspect",
+					agentId: "default",
+					content,
+					readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				}),
 			]);
 			const result = await Promise.race([
 				reading,
@@ -548,7 +553,14 @@ describe("memory head owner runtime", () => {
 		await sql("UPDATE memory_head_revision_entries SET compartment_id=1 WHERE entry_id='meeting'");
 		rmSync(target);
 		expect(await snapshot()).toMatchObject({ content: null, entries: [], status: "stale" });
-		expect(await head({ action: "inspect", agentId: "default", content: oldFile })).toMatchObject({
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: oldFile,
+				readScope: { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null },
+			}),
+		).toMatchObject({
 			content: null,
 			status: "stale",
 		});

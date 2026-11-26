@@ -362,7 +362,13 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 		return result;
 	}
 	const restrictedInspect = request.action === "inspect" && requireReadScope(request.readScope).compartments !== "all";
-	const head = currentHead(db, partition);
+	const head =
+		request.action === "inspect"
+			? prepareTypedStatement<Head>(
+					db,
+					"SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?",
+				).get(agentId)
+			: currentHead(db, partition);
 	if (request.action === "inspect") {
 		if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
 		const generated =
@@ -376,8 +382,12 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 				status: "authored",
 				content: authoredHeadReadable(db, agentId, scope) ? request.content : null,
 			};
-		if (scope.compartments !== "all" && head && head.revision > 0)
-			return { generated, status: "current", content: readableHeadBody(db, agentId, head.revision, scope) };
+		if (scope.compartments !== "all" && head && head.revision > 0) {
+			const content = readableHeadBody(db, agentId, head.revision, scope);
+			return scope.projects === null && !content && head.content
+				? { generated, status: "stale", content: null }
+				: { generated, status: "current", content };
+		}
 		if (head?.is_current !== 1) return { generated, status: "stale", content: null };
 		return {
 			generated,
