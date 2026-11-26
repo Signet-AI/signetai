@@ -43,6 +43,12 @@ describe("memory search telemetry", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("rejects list callers that omit the required scope", async () => {
+		await expect(
+			Reflect.apply(listMemorySearchTelemetry, undefined, [getDbAccessor(), { agentId: "ant" }]),
+		).rejects.toThrow();
+	});
+
 	function response(): RecallResponse {
 		return {
 			query: "what did we decide about recall qa",
