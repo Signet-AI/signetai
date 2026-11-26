@@ -6,7 +6,7 @@ import { writeCodexNativeNote } from "./memory-routes";
 import { registerMemoryRoutes } from "./memory-routes";
 import { Hono } from "hono";
 
-it("l4-review-authors denies authorless memory and document mutations", async () => {
+it("denies authorless memory and document mutations", async () => {
 	const app = new Hono();
 	registerMemoryRoutes(app);
 	for (const path of ["/api/memory/remember", "/api/memory/feedback", "/api/documents"]) {

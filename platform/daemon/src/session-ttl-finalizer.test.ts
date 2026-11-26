@@ -53,7 +53,7 @@ describe("TTL eviction finalizer (#902)", () => {
 		clearContinuity(sessionKey);
 	});
 
-	it("l4-review-authors preserves the bound speaker on TTL checkpoints", async () => {
+	it("preserves the bound speaker on TTL checkpoints", async () => {
 		setup();
 		const sessionKey = "ttl-bound-speaker";
 		upsertSessionTranscript(sessionKey, `User: ${"x".repeat(600)}`, "plugin", null, "default");

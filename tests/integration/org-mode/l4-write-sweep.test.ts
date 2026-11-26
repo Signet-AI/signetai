@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -22,7 +23,20 @@ test("A16 actual HTTP writes reject classified destinations without persisted si
 						.all()
 						.map(({ name }) => {
 							assert(/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(name));
-							return [name, db.query<{ n: number }, []>(`SELECT count(*) n FROM ${name}`).get()?.n];
+							const rows = db
+								.query(`SELECT * FROM ${name}`)
+								.all()
+								.map((row) =>
+									JSON.stringify(row, (_key, value: unknown) =>
+										typeof value === "bigint"
+											? { bigint: value.toString() }
+											: value instanceof Uint8Array
+												? { blob: Buffer.from(value).toString("base64") }
+												: value,
+									),
+								)
+								.sort();
+							return [name, createHash("sha256").update(JSON.stringify(rows)).digest("hex")];
 						}),
 				),
 			);
@@ -93,7 +107,7 @@ test("A16 actual HTTP writes reject classified destinations without persisted si
 	}
 }, 180_000);
 
-test("L4 classified evidence HTTP write sweep preserves compartments and principal authors", async () => {
+test("classified evidence HTTP write sweep preserves compartments and principal authors", async () => {
 	const sweep = await WriteSweep.create();
 	try {
 		await sweep.seed();

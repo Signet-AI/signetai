@@ -359,6 +359,7 @@ export function runDbOwnerWorker(): void {
 	function executeReadOnlyStatement(statement: DbOwnerStatement): unknown {
 		if (statement.result === "run") throw new Error("DB owner readonly statements must return rows");
 		const readonlyDb = new Database(ownerDbPath, { readonly: true });
+		configureEvidencePurgeConnection(readonlyDb);
 		try {
 			const params = (statement.params ?? []).map((value) => bindParameter(value));
 			const prepared = readonlyDb.prepare(statement.sql);

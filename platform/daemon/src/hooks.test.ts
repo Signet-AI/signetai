@@ -56,7 +56,7 @@ const {
 	selectWithTokenBudget,
 } = hooks;
 
-test("l4-review-authors rejects missing hook authors before doing work", async () => {
+test("rejects missing hook authors before doing work", async () => {
 	const request = { harness: "hermes", sessionKey: "missing-author", agentId: "default" };
 	for (const handler of [handlePreCompaction, handleUserPromptSubmit, handleSessionEnd, handleCheckpointExtract]) {
 		await expect(Reflect.apply(handler, undefined, [request])).rejects.toThrow("explicit author");
@@ -67,7 +67,7 @@ for (const [name, handler] of [
 	["session-start", handleSessionStart],
 	["stop", handleStop],
 ] as const) {
-	test(`l4-review-authors rejects missing ${name} authors before doing work`, async () => {
+	test(`rejects missing ${name} authors before doing work`, async () => {
 		await expect(
 			Reflect.apply(handler, undefined, [
 				{

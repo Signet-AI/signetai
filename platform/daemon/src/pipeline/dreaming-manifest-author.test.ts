@@ -3,7 +3,7 @@ import { classificationFixture } from "../test-support/classification-fixture.te
 import { finalizeDreamingPassInDb } from "./dreaming";
 
 for (const targetKind of ["agent", "session"] as const) {
-	test(`l4-review-authors manifests inherit ${targetKind} labels and the durable speaker`, () => {
+	test(`manifests inherit ${targetKind} labels and the durable speaker`, () => {
 		const db = classificationFixture();
 		try {
 			db.prepare(

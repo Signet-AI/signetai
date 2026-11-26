@@ -333,28 +333,32 @@ export function up(db: MigrationDb): void {
 	if (exists(db, "memories_fts")) createMemoriesFts(db);
 }
 
-export function configureEvidencePurgeConnection(db: MigrationDb): void {
+export function configureEvidencePurgeConnection(db: Pick<MigrationDb, "exec">): void {
 	db.exec("PRAGMA recursive_triggers=ON");
 }
 
 export function installEvidencePurgeLifecycle(db: MigrationDb): void {
 	configureEvidencePurgeConnection(db);
 	const derived = [
-		["entity", "entities", "id"],
-		["attribute", "entity_attributes", "id"],
-		["dependency", "entity_dependencies", "id"],
-		["aspect", "entity_aspects", "id"],
-		["assertion", "epistemic_assertions", "id"],
-		["memory", "memories", "id"],
-		["reflection", "daily_reflections", "id"],
-		["proposal", "ontology_proposals", "id"],
-		["contradiction", "ontology_contradictions", "id"],
-		["community", "entity_communities", "id"],
-		["head_entry", "memory_head_entries", "entry_id"],
-		["head_revision", "memory_head_revision_entries", "json_array(revision,entry_id)"],
-		["telemetry", "memory_search_telemetry", "id"],
-		["telemetry", "session_recall_events", "json_array(session_key,context_epoch,item_kind,item_id)"],
+		["entity", "entities", ["id"]],
+		["attribute", "entity_attributes", ["id"]],
+		["dependency", "entity_dependencies", ["id"]],
+		["aspect", "entity_aspects", ["id"]],
+		["assertion", "epistemic_assertions", ["id"]],
+		["memory", "memories", ["id"]],
+		["reflection", "daily_reflections", ["id"]],
+		["proposal", "ontology_proposals", ["id"]],
+		["contradiction", "ontology_contradictions", ["id"]],
+		["community", "entity_communities", ["id"]],
+		["head_entry", "memory_head_entries", ["entry_id"]],
+		["head_revision", "memory_head_revision_entries", ["revision", "entry_id"]],
+		["telemetry", "memory_search_telemetry", ["id"]],
+		["telemetry", "session_recall_events", ["session_key", "context_epoch", "item_kind", "item_id"]],
 	] as const;
+	const keySql = (columns: readonly string[], qualifier?: string): string => {
+		const terms = columns.map((column) => (qualifier ? `${qualifier}.${column}` : column));
+		return terms.length === 1 ? terms.join("") : `json_array(${terms.join(",")})`;
+	};
 	for (const [table, kind, key] of [
 		["memories", "memory", "id"],
 		["session_transcripts", "transcript", "session_key"],
@@ -366,10 +370,10 @@ export function installEvidencePurgeLifecycle(db: MigrationDb): void {
 		const affected = `SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}' AND evidence_id=old.${key}`;
 		const deletes = derived
 			.filter(([, target]) => exists(db, target))
-			.map(
-				([derivedKind, target, targetKey]) =>
-					`DELETE FROM ${target} WHERE agent_id=old.agent_id ${target === "entities" && db.prepare("SELECT 1 FROM pragma_table_info('entities') WHERE name='person_user_id'").get() ? "AND person_user_id IS NULL" : ""} AND ${targetKey} IN (SELECT derived_id FROM (${affected}) WHERE derived_kind='${derivedKind}') AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.agent_id=old.agent_id AND c.derived_kind='${derivedKind}' AND c.derived_id=${targetKey.startsWith("json_array") ? targetKey.replace(/\b(revision|entry_id|session_key|context_epoch|item_kind|item_id)\b/g, `${target}.$1`) : `${target}.${targetKey}`} AND NOT(c.evidence_kind='${kind}' AND c.evidence_id=old.${key}));`,
-			)
+			.map(([derivedKind, target, columns]) => {
+				const targetKey = keySql(columns);
+				return `DELETE FROM ${target} WHERE agent_id=old.agent_id ${target === "entities" && db.prepare("SELECT 1 FROM pragma_table_info('entities') WHERE name='person_user_id'").get() ? "AND person_user_id IS NULL" : ""} AND ${targetKey} IN (SELECT derived_id FROM (${affected}) WHERE derived_kind='${derivedKind}') AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.agent_id=old.agent_id AND c.derived_kind='${derivedKind}' AND c.derived_id=${keySql(columns, target)} AND NOT(c.evidence_kind='${kind}' AND c.evidence_id=old.${key}));`;
+			})
 			.join("");
 		const enqueue = exists(db, "org_jobs")
 			? `UPDATE org_jobs SET status='pending',progress_json=NULL,error=NULL,finished_at=NULL WHERE kind='recompute' AND status IN ('pending','running') AND json_extract(params_json,'$.agentId')=old.agent_id AND EXISTS(${affected}); INSERT INTO org_jobs(id,kind,status,params_json,created_at) SELECT 'job_recompute_'||lower(hex(randomblob(16))),'recompute','pending',json_object('agentId',old.agent_id),datetime('now') WHERE EXISTS(${affected}) AND NOT EXISTS(SELECT 1 FROM org_jobs WHERE kind='recompute' AND status IN ('pending','running') AND json_extract(params_json,'$.agentId')=old.agent_id);`
@@ -378,17 +382,9 @@ export function installEvidencePurgeLifecycle(db: MigrationDb): void {
 			`DROP TRIGGER IF EXISTS ${table}_evidence_purge; CREATE TRIGGER ${table}_evidence_purge AFTER DELETE ON ${table} BEGIN ${enqueue}${deletes} DELETE FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}' AND evidence_id=old.${key}; END`,
 		);
 	}
-	for (const [kind, table, key] of derived) {
+	for (const [kind, table, columns] of derived) {
 		if (!exists(db, table)) continue;
-		const oldKey = key.startsWith("json_array")
-			? key
-					.replaceAll("revision", "old.revision")
-					.replaceAll("entry_id", "old.entry_id")
-					.replaceAll("session_key", "old.session_key")
-					.replaceAll("context_epoch", "old.context_epoch")
-					.replaceAll("item_kind", "old.item_kind")
-					.replaceAll("item_id", "old.item_id")
-			: `old.${key}`;
+		const oldKey = keySql(columns, "old");
 		db.exec(
 			`DROP TRIGGER IF EXISTS ${table}_citation_purge; CREATE TRIGGER ${table}_citation_purge AFTER DELETE ON ${table} BEGIN DELETE FROM evidence_citations WHERE derived_kind='${kind}' AND agent_id=old.agent_id AND derived_id=${oldKey}; END`,
 		);
