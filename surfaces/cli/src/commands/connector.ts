@@ -39,6 +39,7 @@ import { reportAuthError, type AuthCommandDeps } from "./auth.js";
 interface ConnectorInstallOptions {
 	url?: string;
 	apiKeyStdin?: boolean;
+	purgeOutbox?: boolean;
 	agentId?: string;
 	path?: string;
 	profile?: string;
@@ -315,6 +316,14 @@ async function disconnect(raw: string, options: ConnectorInstallOptions, deps: C
 		deps.env,
 	);
 	const entry = (await registry.read())[registryKey];
+	let outbox: DurableOutbox | undefined;
+	if (options.purgeOutbox) {
+		if (!entry && !options.url) throw new Error("No saved connector target; pass --url to select the retained outbox");
+		const target = await resolveTarget({ ...deps, harness: registryKey, flagUrl: options.url ?? entry?.url });
+		if (entry && target.url !== entry.url)
+			throw new Error("The requested outbox target differs from the connected target");
+		outbox = new DurableOutbox(target.url, { env: deps.env, harness: registryKey });
+	}
 	const pending = entry?.keyId ? { harness: registryKey, url: entry.url, keyId: entry.keyId } : undefined;
 	if (pending) await new PendingRevokes(deps).add(pending);
 	const result = await installer.uninstall();
@@ -329,11 +338,22 @@ async function disconnect(raw: string, options: ConnectorInstallOptions, deps: C
 	}
 	if (installer.isInstalled())
 		throw new Error("Harness integration removal could not be verified; registry state was retained");
+	if (outbox) await outbox.purge();
 	if (entry?.keyFile) await rm(entry.keyFile, { force: true });
 	await registry.remove(registryKey);
 	if ((await registry.read())[registryKey]) throw new Error("Connector registry removal could not be verified");
 	const revocation = await finishRevocation(pending, deps, options.json);
-	console.log(JSON.stringify({ harness, disconnected: true, revocation }));
+	console.log(
+		JSON.stringify({
+			harness,
+			disconnected: true,
+			revocation,
+			outbox: options.purgeOutbox ? "purged" : "retained",
+			message: options.purgeOutbox
+				? "Session evidence outbox purged"
+				: "Session evidence kept; use --purge-outbox to delete it (pass --url if already disconnected)",
+		}),
+	);
 }
 function addOptions(command: Command): Command {
 	return command
@@ -402,7 +422,9 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 			await installConnector(harness, { ...opts, url: entry.url, agent: opts.agent ?? entry.agentId }, ctx);
 		}),
 	);
-	addOptions(program.command("disconnect <harness>")).action(action(disconnect));
+	addOptions(program.command("disconnect <harness>"))
+		.option("--purge-outbox", "Delete this harness target’s retained session evidence")
+		.action(action(disconnect));
 	connector
 		.command("list")
 		.option("--json")

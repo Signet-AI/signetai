@@ -162,7 +162,7 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 		revocations,
 		async run(args: string[]) {
 			process.exitCode = 0;
-			const program = new Command();
+			const program = new Command().exitOverride();
 			registerConnectorCommands(program, { agentsDir: home, env, keyring, flagUrl: server.url.origin });
 			await program.parseAsync(args, { from: "user" });
 			const code = process.exitCode ?? 0;
@@ -397,6 +397,54 @@ test("disconnect preserves a real Codex skills directory", async () => {
 		await writeFile(join(path, "SKILL.md"), "user-owned skill");
 		expect(await f.run(["disconnect", "codex"])).toBe(0);
 		expect(await readFile(join(path, "SKILL.md"), "utf8")).toBe("user-owned skill");
+	} finally {
+		f.cleanup();
+	}
+});
+
+test.each([false, true])("disconnect explicitly retains or purges only its outbox: purge=%s", async (purge) => {
+	const f = await lifecycleFixture();
+	const outbox = new DurableOutbox(f.server.url.origin, { env: f.env, harness: "codex" });
+	const other = new DurableOutbox(f.server.url.origin, { env: f.env, harness: "pi" });
+	const lines: string[] = [];
+	const log = console.log;
+	console.log = (...values: unknown[]) => {
+		lines.push(values.map(String).join(" "));
+	};
+	try {
+		for (const box of [outbox, outbox, other])
+			await box.enqueue({ method: "POST", path: "/api/hooks/session-end", body: { transcript: "retained evidence" } });
+		let calls = 0;
+		await outbox.flush(
+			async () => {
+				calls++;
+				throw Object.assign(new Error("fixture"), { status: calls === 1 ? 403 : 401 });
+			},
+			{ force: true },
+		);
+		expect((await outbox.status()).pending).toBe(1);
+		expect((await outbox.status()).quarantined).toBe(1);
+		expect(await f.run(["disconnect", "codex", ...(purge ? ["--purge-outbox"] : []), "--json"])).toBe(0);
+		expect((await outbox.status()).pending).toBe(purge ? 0 : 1);
+		expect((await outbox.status()).quarantined).toBe(purge ? 0 : 1);
+		expect((await other.status()).pending).toBe(1);
+		expect(JSON.parse(lines.at(-1) ?? "{}").outbox).toBe(purge ? "purged" : "retained");
+		if (!purge) expect(JSON.parse(lines.at(-1) ?? "{}").message).toContain("kept");
+	} finally {
+		console.log = log;
+		f.cleanup();
+	}
+});
+
+test("a retained outbox can be purged after disconnect using its explicit origin", async () => {
+	const f = await lifecycleFixture();
+	try {
+		const outbox = new DurableOutbox(f.server.url.origin, { env: f.env, harness: "codex" });
+		await outbox.enqueue({ method: "POST", path: "/api/hooks/session-end", body: { transcript: "evidence" } });
+		expect(await f.run(["disconnect", "codex"])).toBe(0);
+		expect((await outbox.status()).pending).toBe(1);
+		expect(await f.run(["disconnect", "codex", "--url", f.server.url.origin, "--purge-outbox"])).toBe(0);
+		expect((await outbox.status()).pending).toBe(0);
 	} finally {
 		f.cleanup();
 	}

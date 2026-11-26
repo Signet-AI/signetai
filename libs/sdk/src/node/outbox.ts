@@ -861,6 +861,8 @@ export class DurableOutbox {
 				if (name === ".lock.tickets") continue;
 				await rm(join(this.directory, name), { recursive: true, force: true });
 			}
+			if ((await this.names()).some((name) => name !== ".lock.tickets"))
+				throw new Error("Outbox purge could not be verified");
 		});
 	}
 }
