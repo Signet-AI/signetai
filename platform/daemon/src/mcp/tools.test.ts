@@ -195,6 +195,25 @@ describe("createMcpServer", () => {
 		resetDefaultPluginHostForTests();
 	});
 
+	it("organization tools re-enter HTTP authorization and preserve forbidden responses", async () => {
+		const capture: { url?: string; method?: string; body?: string } = {};
+		mockFetch(403, { error: "Requires the audit permission", reason: "permission" }, capture);
+		const denied = await callTool(server, "signet_org_audit", { actor: "usr_alice" });
+		expect(denied.isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/audit?actor=usr_alice");
+		mockFetch(200, { actAs: [] }, capture);
+		await callTool(server, "signet_org_access", { userId: "usr_alice" });
+		expect(capture.url).toBe("http://localhost:3850/api/org/access/usr_alice");
+		await callTool(server, "signet_org_job", { jobId: "job_123" });
+		expect(capture.url).toBe("http://localhost:3850/api/org/jobs/job_123");
+		mockFetch(202, { jobId: "job_classify" }, capture);
+		await callTool(server, "signet_classify", {
+			classificationId: "cls_hr",
+			target: { kind: "memory", id: "mem_1", agentId: "agent_a" },
+		});
+		expect(capture.url).toBe("http://localhost:3850/api/classifications/cls_hr/apply");
+	});
+
 	it("creates server with correct info", () => {
 		expect(server).toBeDefined();
 		expect(server.server).toBeDefined();

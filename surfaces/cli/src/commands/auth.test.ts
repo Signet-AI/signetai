@@ -7,6 +7,35 @@ import { tmpdir } from "node:os";
 import { LoginStore } from "../../../../libs/sdk/src/node.js";
 import { registerAuthCommands } from "./auth.js";
 
+test("non-interactive login refuses before opening a browser or touching keychain", async () => {
+	let calls = 0;
+	const program = new Command();
+	registerAuthCommands(program, {
+		flagUrl: "https://org.example",
+		openBrowser: async () => {
+			calls++;
+		},
+		keyring: {
+			get: async () => {
+				calls++;
+				return { state: "unsupported" as const };
+			},
+			set: async () => {
+				calls++;
+				return { state: "unsupported" as const };
+			},
+		},
+	});
+	process.exitCode = 0;
+	try {
+		await program.parseAsync(["login", "--non-interactive"], { from: "user" });
+		expect(calls).toBe(0);
+		expect(process.exitCode).toBe(1);
+	} finally {
+		process.exitCode = 0;
+	}
+});
+
 const homes: string[] = [];
 afterEach(async () => {
 	for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
