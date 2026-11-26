@@ -177,6 +177,7 @@ import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
 import { SESSION_TRANSCRIPT_TURN_TRIGGERS, up as sessionTranscriptTurnFts } from "./176-session-transcript-turn-fts";
+import { up as sessionTranscriptUploads } from "./177-session-transcript-uploads";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1641,6 +1642,12 @@ export const MIGRATIONS: readonly Migration[] = [
 			],
 			triggers: SESSION_TRANSCRIPT_TURN_TRIGGERS,
 		},
+	},
+	{
+		version: 177,
+		name: "session-transcript-uploads",
+		up: sessionTranscriptUploads,
+		artifacts: { tables: ["session_transcript_uploads", "session_transcript_upload_purges"] },
 	},
 ];
 function checksum(m: Migration): string {

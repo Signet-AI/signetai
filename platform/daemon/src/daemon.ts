@@ -274,6 +274,7 @@ import {
 	telemetryDisabledByEnv,
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
+import { drainTranscriptUploadPurges } from "./transcript-upload";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
@@ -1996,6 +1997,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
+	void drainTranscriptUploadPurges(AGENTS_DIR);
 
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;

@@ -11,6 +11,12 @@ import {
 } from "./transcript-import-safe-fs";
 import { withTranscriptFileLock, chainTranscriptRecord, TRANSCRIPT_PREFIX_SEED } from "./transcript-jsonl";
 import { normalizeSessionKey } from "./session-end-state";
+import {
+	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
+	isTranscriptUploadPath,
+	removeTranscriptUploadTree,
+	transcriptUploadSessionDirectory,
+} from "./transcript-upload-paths";
 
 export interface TranscriptFileCheckpoint {
 	readonly inode: number;
@@ -270,6 +276,14 @@ export async function redactTranscriptFileBatch(input: {
 	const path = resolve(input.basePath, input.path.split("#")[0] ?? input.path);
 	const rel = relative(resolve(input.basePath), path);
 	if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Transcript cleanup target escapes workspace");
+	if (isTranscriptUploadPath(input.basePath, path)) {
+		if (path !== resolve(transcriptUploadSessionDirectory(input.basePath, input.agentId, input.sessionKey)))
+			throw new Error("Transcript upload cleanup target belongs to another session");
+		const done = await removeTranscriptUploadTree(input.basePath, path, {
+			remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
+		});
+		return { done, checkpoint: input.checkpoint };
+	}
 	const tmp = deletionTemp({ ...input, path });
 	await mkdir(dirname(path), { recursive: true });
 	return withTranscriptFileLock(

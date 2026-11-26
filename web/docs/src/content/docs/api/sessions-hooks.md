@@ -245,6 +245,63 @@ in this path. The response includes `transcriptCaptureJobId` when transcript
 capture was queued. Poll `GET /api/hooks/transcript-capture/:jobId?agentId=<agent>`
 until the status is `completed`; the receipt never exposes transcript content.
 
+### PATCH /api/hooks/transcript-upload
+
+Appends one range of the harness's raw JSONL transcript file at a byte offset.
+A connector uses it when the daemon cannot read the harness file itself. The
+daemon writes the bytes to a file it owns in the workspace, commits the new
+offset, and queues a capture of the committed bytes in the same transaction.
+Requires `remember` permission.
+
+**Query parameters**: `harness`, `sessionKey`, `agentId`, and `cwd`. `harness`
+and `sessionKey` are required. The agent comes from `agentId`, from an
+`agent:<id>:` session key, or from the token; with none of them the request
+fails with `400`. It never falls back to the default agent. `cwd` sets the
+transcript's project.
+
+**Headers**
+
+- `Upload-Generation`: a non-negative integer. Start at `0`. Send a higher
+  value, from offset `0`, when the harness rewrites the file instead of
+  appending to it.
+- `Upload-Offset`: the byte offset of this range. It must equal the committed
+  offset of the current generation.
+- `Upload-Checksum`: the SHA-256 hex digest of the body.
+
+The body holds whole JSONL records: at most 1 MiB, ending with a newline.
+
+**Response**: `{ "committedOffset": 16, "generation": 0, "tailSha256": "…",
+"jobId": "tcj_…" }`. `tailSha256` hashes the last 64 KiB of committed bytes, so
+a connector can check that its own file still matches before it sends the next
+range. A bypassed session or a session being deleted returns
+`{ "bypassed": true }` and commits nothing.
+
+A new generation keeps the bytes of the old one on disk. When the rewritten
+file drops turns that an earlier capture already stored, the capture job
+fails and the stored transcript stays as it was. Deleting the session, or
+purging its agent, removes every generation file.
+
+**Errors**
+
+- `400`: a missing parameter or header, an empty body, a body without a final
+  newline, a checksum mismatch, or no agent.
+- `403`: an agent scope, project scope, or session-binding violation, or a
+  session whose stored transcript belongs to another project.
+- `409`: `{ "error": "offset_mismatch", "committedOffset", "generation",
+  "tailSha256" }` when the offset or generation does not continue the
+  committed state, or `{ "error": "harness_mismatch" }` when another harness
+  owns the session's upload.
+- `413`: a body larger than 1 MiB.
+- `503`: more than 8 uploads in flight (`Retry-After: 1`), or database write
+  pressure (`retryable: true` and a `Retry-After` header).
+
+### GET /api/hooks/transcript-upload
+
+Returns the committed upload state for the same query parameters:
+`{ "committedOffset", "generation", "tailSha256" }`. Before the first range it
+returns `{ "committedOffset": 0, "generation": null, "tailSha256": null }`. A
+connector calls it after a restart or a `409` to find where to resume.
+
 ### POST /api/hooks/remember
 
 Explicit memory save from within a session. Requires `remember` permission.

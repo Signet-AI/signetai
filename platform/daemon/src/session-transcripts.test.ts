@@ -5,9 +5,14 @@ import { dirname, join } from "node:path";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor, prepareTypedStatement } from "./db-accessor";
 import {
 	appendSessionTranscriptAsync,
+	type TranscriptUploadCommit,
+	type TranscriptUploadCommitResult,
+	type TranscriptUploadState,
 	backfillTranscriptTurnsFtsChunkInDb,
+	commitTranscriptUploadInTx,
 	ensureCanonicalTranscriptHistory,
 	getStoredSessionTranscriptInfoAsync,
+	readTranscriptUploadStateInDb,
 	upsertSessionTranscript,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
@@ -753,5 +758,139 @@ describe("session transcript live append", () => {
 			{ session_key: hyphenKey, content: "User: first" },
 			{ session_key: colonKey, content: "Assistant: second" },
 		]);
+	});
+});
+
+describe("transcript upload state", () => {
+	afterEach(async () => {
+		await closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	function init(): void {
+		dir = mkdtempSync(join(tmpdir(), "signet-transcript-upload-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+	}
+
+	function upload(
+		overrides: Partial<TranscriptUploadCommit> & { readonly committedOffset: number },
+	): TranscriptUploadCommit {
+		const { committedOffset, ...rest } = overrides;
+		return {
+			agentId: "noam",
+			sessionKey: "sess-1",
+			sessionId: "sess-1",
+			harness: "codex",
+			project: "/repo",
+			generation: 0,
+			expectedOffset: 0,
+			tailSha256: `tail-${committedOffset}`,
+			source: {
+				path: join(dir, "transcripts", "uploads", "a", "b.jsonl"),
+				sizeBytes: committedOffset,
+				mtimeMs: committedOffset,
+			},
+			capturedAt: "2026-11-26T10:00:00.000Z",
+			...rest,
+		};
+	}
+
+	async function commit(input: TranscriptUploadCommit): Promise<TranscriptUploadCommitResult> {
+		return await getDbAccessor().withWriteTxAsync((db) => commitTranscriptUploadInTx(db, input));
+	}
+
+	async function state(agentId = "noam", sessionKey = "sess-1"): Promise<TranscriptUploadState | null> {
+		return await getDbAccessor().withReadDbAsync((db) => readTranscriptUploadStateInDb(db, agentId, sessionKey));
+	}
+
+	async function jobs(): Promise<Array<{ agent_id: string; source_size_bytes: number; status: string }>> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ agent_id: string; source_size_bytes: number; status: string }>(
+				db,
+				"SELECT agent_id, source_size_bytes, status FROM transcript_capture_jobs ORDER BY agent_id",
+			).all(),
+		);
+	}
+
+	it("commits the first range and queues a capture job for the upload file in the same transaction", async () => {
+		init();
+		const result = await commit(upload({ committedOffset: 120 }));
+		expect(result.status).toBe("committed");
+		expect(await state()).toEqual({
+			harness: "codex",
+			project: "/repo",
+			generation: 0,
+			committedOffset: 120,
+			tailSha256: "tail-120",
+		});
+		expect(await jobs()).toEqual([{ agent_id: "noam", source_size_bytes: 120, status: "pending" }]);
+	});
+
+	it("advances only from the committed offset and reports the current state otherwise", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect((await commit(upload({ expectedOffset: 120, committedOffset: 300 }))).status).toBe("committed");
+		const stale = await commit(upload({ expectedOffset: 120, committedOffset: 400 }));
+		expect(stale).toEqual({ status: "offset_mismatch", state: await state() });
+		expect((await state())?.committedOffset).toBe(300);
+		expect(await jobs()).toEqual([{ agent_id: "noam", source_size_bytes: 300, status: "pending" }]);
+	});
+
+	it("starts a new generation only from offset zero", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect((await commit(upload({ generation: 0, committedOffset: 50 }))).status).toBe("offset_mismatch");
+		expect((await commit(upload({ generation: 1, expectedOffset: 120, committedOffset: 200 }))).status).toBe(
+			"offset_mismatch",
+		);
+		expect((await commit(upload({ generation: 1, committedOffset: 50 }))).status).toBe("committed");
+		expect(await state()).toMatchObject({ generation: 1, committedOffset: 50 });
+		expect((await commit(upload({ generation: 0, committedOffset: 10 }))).status).toBe("offset_mismatch");
+	});
+
+	it("rejects another harness and another project for the same session", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect(await commit(upload({ harness: "claude-code", expectedOffset: 120, committedOffset: 200 }))).toEqual({
+			status: "harness_mismatch",
+		});
+		expect(await commit(upload({ project: "/other", expectedOffset: 120, committedOffset: 200 }))).toEqual({
+			status: "project_mismatch",
+		});
+		expect((await state())?.committedOffset).toBe(120);
+	});
+
+	it("rejects a session whose stored transcript belongs to another project", async () => {
+		init();
+		await upsertSessionTranscriptAsync("sess-1", "User: hello", "codex", "/other", "noam");
+		expect(await commit(upload({ committedOffset: 120 }))).toEqual({ status: "project_mismatch" });
+		expect(await state()).toBeNull();
+		expect(await jobs()).toEqual([]);
+	});
+
+	it("keeps upload state per agent", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect(await state("other")).toBeNull();
+		expect((await commit(upload({ agentId: "other", expectedOffset: 120, committedOffset: 200 }))).status).toBe(
+			"offset_mismatch",
+		);
+		expect((await commit(upload({ agentId: "other", committedOffset: 80 }))).status).toBe("committed");
+		expect((await state())?.committedOffset).toBe(120);
+		expect((await state("other"))?.committedOffset).toBe(80);
+	});
+
+	it("drops the range of a session that is being deleted", async () => {
+		init();
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO session_transcript_deletions (agent_id, session_key, watermark, blocked) VALUES ('noam', 'sess-1', '2026-11-26T09:00:00.000Z', 1)",
+			).run();
+		});
+		expect(await commit(upload({ committedOffset: 120 }))).toEqual({ status: "bypassed" });
+		expect(await state()).toBeNull();
+		expect(await jobs()).toEqual([]);
 	});
 });

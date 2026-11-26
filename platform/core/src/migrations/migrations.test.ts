@@ -502,6 +502,37 @@ describe("migration framework", () => {
 		).toEqual({ name: "idx_session_transcript_turns_seq" });
 	});
 
+	test("177 keeps one upload state per agent session and re-runs when the table is missing", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		const insert = db.prepare(
+			"INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at) VALUES (?, 'sess-a', 'codex', '/repo', 0, 0, 'e3b0', '2026-11-26T00:00:00Z', '2026-11-26T00:00:00Z')",
+		);
+		insert.run("agent-a");
+		insert.run("agent-b");
+		expect(() => insert.run("agent-a")).toThrow();
+		expect(() =>
+			db.exec(
+				"INSERT INTO session_transcript_uploads (agent_id, session_key, harness, generation, committed_offset, tail_sha256, created_at, updated_at) VALUES ('agent-c', 's', 'codex', 0, -1, 'x', 'now', 'now')",
+			),
+		).toThrow();
+
+		db.exec("DROP TABLE session_transcript_uploads");
+		expect(hasPendingMigrations(db)).toBe(true);
+		runMigrations(db);
+		expect(db.query("SELECT COUNT(*) AS count FROM session_transcript_uploads").get()).toEqual({ count: 0 });
+
+		db.exec("DROP TABLE session_transcript_upload_purges");
+		expect(hasPendingMigrations(db)).toBe(true);
+		runMigrations(db);
+		expect(
+			db
+				.prepare("PRAGMA table_info(session_transcript_upload_purges)")
+				.all()
+				.map((row) => (row as { name: string }).name),
+		).toEqual(["path", "created_at"]);
+	});
+
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {
 		for (const version of [138, 139] as const) {
 			db = createFreshDb();
@@ -511,7 +542,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(176);
+			expect(applied.version).toBe(Math.max(...MIGRATIONS.map((entry) => entry.version)));
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });

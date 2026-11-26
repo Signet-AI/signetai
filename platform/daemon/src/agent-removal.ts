@@ -1,6 +1,7 @@
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { txDecrementEntityMentions } from "./pipeline/graph-transactions";
+import { transcriptUploadAgentRelativePath } from "./transcript-upload-paths";
 
 export type AgentRemovalMode = "archive" | "purge";
 
@@ -164,6 +165,10 @@ function purgeAgentRowsInTx(db: WriteDb, input: AgentRemovalInput, rows: Rows): 
 	record(rows, "entity_attributes.memory_detached", detached);
 
 	recordHistoryInTx(db, rows, input, "purged", "agent_id = ?");
+	db.prepare("INSERT OR IGNORE INTO session_transcript_upload_purges (path, created_at) VALUES (?, ?)").run(
+		transcriptUploadAgentRelativePath(input.agentId),
+		input.changedAt,
+	);
 
 	const tables = agentScopedTables(db);
 	for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {

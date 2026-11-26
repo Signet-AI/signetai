@@ -1176,6 +1176,20 @@ export function runDbOwnerWorker(): void {
 			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "session_compaction_summary")
 			return await executeSessionCompactionSummary(job.request, context);
+		if (job.request.kind === "session_transcript_upload_state") {
+			const { readTranscriptUploadStateInDb } = await import("./session-transcripts");
+			return readTranscriptUploadStateInDb(db, job.request.input.agentId, job.request.input.sessionKey);
+		}
+		if (job.request.kind === "session_transcript_upload_purge") {
+			const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");
+			const root = bindTranscriptWorkspace(job.request.input.basePath);
+			return await drainTranscriptUploadPurgesOwned(db, root, async (operation) => withBusyRetry(operation, context));
+		}
+		if (job.request.kind === "session_transcript_upload_commit") {
+			const { commitTranscriptUploadInTx } = await import("./session-transcripts");
+			const input = job.request.input;
+			return withBusyRetry(() => commitTranscriptUploadInTx(db, input), context);
+		}
 		if (job.request.kind === "session_transcript_turn_backfill") {
 			const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
 			const input = job.request.input;

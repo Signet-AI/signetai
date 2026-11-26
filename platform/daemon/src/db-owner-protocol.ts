@@ -393,6 +393,18 @@ export type DbOwnerRequest =
 			readonly input: import("./session-transcripts").CompactionSummaryInput;
 	  }
 	| {
+			readonly kind: "session_transcript_upload_state";
+			readonly input: { readonly agentId: string; readonly sessionKey: string };
+	  }
+	| {
+			readonly kind: "session_transcript_upload_purge";
+			readonly input: { readonly basePath: string };
+	  }
+	| {
+			readonly kind: "session_transcript_upload_commit";
+			readonly input: import("./session-transcripts").TranscriptUploadCommit;
+	  }
+	| {
 			readonly kind: "session_transcript_turn_backfill";
 			readonly input: import("./session-transcripts").TranscriptTurnBackfillOptions;
 	  }

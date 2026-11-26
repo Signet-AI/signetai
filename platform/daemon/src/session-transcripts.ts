@@ -6,6 +6,13 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
+import { type TranscriptCaptureSource, upsertTranscriptCaptureJobInTx } from "./transcript-capture-jobs";
+import {
+	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
+	removeTranscriptUploadTree,
+	transcriptUploadSessionDirectory,
+	transcriptUploadsRoot,
+} from "./transcript-upload-paths";
 import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
 import { writeTranscriptAudit } from "./transcript-audit";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
@@ -463,7 +470,8 @@ export function deleteSessionTranscriptInTx(
 		(claim
 			? { harness: claim.harness ?? "unknown", project: stored?.project ?? previous?.project ?? null }
 			: undefined);
-	const found = stored ?? previous ?? live;
+	const upload = readTranscriptUploadStateInDb(db, input.agentId, input.sessionKey);
+	const found = stored ?? previous ?? live ?? upload;
 	if (!found || (input.project !== undefined && found.project !== input.project)) return { status: "not_found" };
 	const generation = previous?.generation ?? 1;
 	if (input.generation !== undefined && input.generation !== generation) return { status: "conflict", generation };
@@ -485,7 +493,7 @@ export function deleteSessionTranscriptInTx(
 			generation,
 			generation,
 			new Date().toISOString(),
-			stored?.harness ?? live?.harness ?? previous?.harness ?? null,
+			stored?.harness ?? live?.harness ?? previous?.harness ?? upload?.harness ?? null,
 			found.project,
 			Number(input.hard),
 			JSON.stringify(counts),
@@ -720,6 +728,16 @@ export function deleteSessionTranscriptInTx(
 			db.prepare(
 				"INSERT OR IGNORE INTO session_transcript_delete_files (agent_id,session_key,generation,path) VALUES (?,?,?,?)",
 			).run(...scope, canonicalTranscriptPath(basePath, row.harness ?? "unknown"));
+			if (
+				db
+					.prepare("DELETE FROM session_transcript_uploads WHERE agent_id = ? AND session_key = ?")
+					.run(input.agentId, input.sessionKey).changes > 0
+			) {
+				add("uploads", 1);
+				db.prepare(
+					"INSERT OR IGNORE INTO session_transcript_delete_files (agent_id,session_key,generation,path) VALUES (?,?,?,?)",
+				).run(...scope, transcriptUploadSessionDirectory(basePath, input.agentId, input.sessionKey));
+			}
 			phase = "files";
 		}
 	}
@@ -1966,4 +1984,154 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 	}
 	db.prepare("UPDATE session_transcript_turns_backfill SET cursor = end_rowid WHERE id = 1").run();
 	return { complete: true, indexed };
+}
+
+export interface TranscriptUploadState {
+	readonly harness: string;
+	readonly project: string | null;
+	readonly generation: number;
+	readonly committedOffset: number;
+	readonly tailSha256: string;
+}
+
+export interface TranscriptUploadCommit {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly sessionId: string;
+	readonly harness: string;
+	readonly project: string | null;
+	readonly generation: number;
+	readonly expectedOffset: number;
+	readonly tailSha256: string;
+	readonly source: TranscriptCaptureSource;
+	readonly capturedAt: string;
+}
+
+export type TranscriptUploadCommitResult =
+	| { readonly status: "committed"; readonly state: TranscriptUploadState; readonly jobId: string }
+	| { readonly status: "bypassed" }
+	| { readonly status: "project_mismatch" }
+	| { readonly status: "harness_mismatch" }
+	| { readonly status: "offset_mismatch"; readonly state: TranscriptUploadState | null };
+
+export function readTranscriptUploadStateInDb(
+	db: ReadDb,
+	agentId: string,
+	sessionKey: string,
+): TranscriptUploadState | null {
+	const row = prepareTypedStatement<{
+		harness: string;
+		project: string | null;
+		generation: number;
+		committed_offset: number;
+		tail_sha256: string;
+	}>(
+		db,
+		"SELECT harness, project, generation, committed_offset, tail_sha256 FROM session_transcript_uploads WHERE agent_id = ? AND session_key = ?",
+	).get(agentId, sessionKey);
+	if (!row) return null;
+	return {
+		harness: row.harness,
+		project: row.project,
+		generation: row.generation,
+		committedOffset: row.committed_offset,
+		tailSha256: row.tail_sha256,
+	};
+}
+
+export function transcriptUploadConflict(
+	current: TranscriptUploadState | null,
+	request: { readonly harness: string; readonly generation: number; readonly offset: number },
+): TranscriptUploadCommitResult | null {
+	if (current && current.harness !== request.harness) return { status: "harness_mismatch" };
+	const advances =
+		current?.generation === request.generation
+			? current.committedOffset === request.offset
+			: request.offset === 0 && (current === null || request.generation > current.generation);
+	return advances ? null : { status: "offset_mismatch", state: current };
+}
+
+export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadCommit): TranscriptUploadCommitResult {
+	if (input.source.sizeBytes <= input.expectedOffset) throw new Error("Transcript upload range is empty");
+	if (!admitSessionTranscriptInDb(db, input)) return { status: "bypassed" };
+	const current = readTranscriptUploadStateInDb(db, input.agentId, input.sessionKey);
+	const conflict = transcriptUploadConflict(current, { ...input, offset: input.expectedOffset });
+	if (conflict) return conflict;
+	const stored = prepareTypedStatement<{ project: string | null }>(
+		db,
+		"SELECT project FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
+	).get(input.agentId, input.sessionKey);
+	if ([current?.project, stored?.project].some((project) => project != null && project !== input.project))
+		return { status: "project_mismatch" };
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(agent_id, session_key) DO UPDATE SET generation = excluded.generation, committed_offset = excluded.committed_offset, tail_sha256 = excluded.tail_sha256, updated_at = excluded.updated_at`,
+	).run(
+		input.agentId,
+		input.sessionKey,
+		input.harness,
+		input.project,
+		input.generation,
+		input.source.sizeBytes,
+		input.tailSha256,
+		now,
+		now,
+	);
+	const jobId = upsertTranscriptCaptureJobInTx(db, {
+		input: {
+			agentId: input.agentId,
+			harness: input.harness,
+			sessionKey: input.sessionKey,
+			sessionId: input.sessionId,
+			project: input.project,
+			transcript: "",
+			capturedAt: input.capturedAt,
+			endedAt: null,
+		},
+		source: input.source,
+		sourceSha256: null,
+		storedAvailable: false,
+		createdAt: now,
+	});
+	return {
+		status: "committed",
+		state: {
+			harness: input.harness,
+			project: input.project,
+			generation: input.generation,
+			committedOffset: input.source.sizeBytes,
+			tailSha256: input.tailSha256,
+		},
+		jobId,
+	};
+}
+
+export async function drainTranscriptUploadPurgesOwned(
+	db: WriteDb,
+	basePath: string,
+	transact: (operation: () => void) => Promise<void>,
+): Promise<{ readonly pending: number }> {
+	const budget = { remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES };
+	const intents = prepareTypedStatement<{ path: string }>(
+		db,
+		"SELECT path FROM session_transcript_upload_purges ORDER BY created_at, path LIMIT 16",
+	).all();
+	const removed: string[] = [];
+	for (const intent of intents) {
+		if (!(await removeTranscriptUploadTree(basePath, join(transcriptUploadsRoot(basePath), intent.path), budget)))
+			break;
+		removed.push(intent.path);
+	}
+	if (removed.length > 0)
+		await transact(() => {
+			const remove = db.prepare("DELETE FROM session_transcript_upload_purges WHERE path = ?");
+			for (const path of removed) remove.run(path);
+		});
+	const left = prepareTypedStatement<{ count: number }>(
+		db,
+		"SELECT COUNT(*) AS count FROM session_transcript_upload_purges",
+	).get();
+	return { pending: left?.count ?? 0 };
 }

@@ -7,7 +7,12 @@ import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-own
 
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
+import {
+	dbOwnerQuery,
+	dbOwnerReadTranscriptUploadState,
+	getDbOwnerForAccessor,
+	ownerStatement,
+} from "../db-owner-runtime";
 import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
@@ -104,6 +109,8 @@ import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
+import { MAX_TRANSCRIPT_UPLOAD_BYTES, uploadTranscriptRange } from "../transcript-upload";
+import type { TranscriptUploadState } from "../session-transcripts";
 import { claimBoardActivityNotices } from "../board";
 import {
 	MAX_WAKE_RELEASE_IDS,
@@ -956,6 +963,141 @@ function registerStop(app: Hono): void {
 				}
 				logger.error("hooks", "Stop hook failed", e as Error);
 				return c.json({ error: "Hook execution failed" }, 500);
+			}
+		},
+	);
+}
+
+const TRANSCRIPT_UPLOAD_MAX_IN_FLIGHT = 8;
+const transcriptUploadAdmission: ConcurrencyAdmission = createConcurrencyAdmission(TRANSCRIPT_UPLOAD_MAX_IN_FLIGHT);
+const UPLOAD_CHECKSUM = /^[0-9a-f]{64}$/i;
+
+interface TranscriptUploadScope {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly sessionId: string;
+	readonly harness: string;
+	readonly project: string | null;
+}
+
+async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploadScope | Response> {
+	const harness = parseOptionalString(c.req.query("harness"));
+	if (!harness) return c.json({ error: "harness is required" }, 400);
+	const sessionId = parseOptionalString(c.req.query("sessionKey"));
+	if (!sessionId) return c.json({ error: "sessionKey is required" }, 400);
+	const scope = resolveScopedAgentId(
+		c,
+		requestedAgentId({ agentId: parseOptionalString(c.req.query("agentId")), sessionKey: sessionId }),
+		"",
+	);
+	if (!scope.agentId) return c.json({ error: "agentId is required" }, 400);
+	if (scope.error) return c.json({ error: scope.error }, 403);
+	const bindingError = validateSessionAgentBinding(c, sessionId, scope.agentId, {
+		requireExisting: false,
+		context: "sessionKey",
+	});
+	if (bindingError) return c.json({ error: bindingError }, 403);
+	const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+	if (denied) return denied;
+	const project = resolveScopedProject(c, parseOptionalString(c.req.query("cwd")));
+	if (project.error) return c.json({ error: project.error }, 403);
+	return {
+		agentId: scope.agentId,
+		sessionKey: normalizeSessionKey(sessionId),
+		sessionId,
+		harness,
+		project: project.project ?? null,
+	};
+}
+
+function uploadStateBody(state: TranscriptUploadState | null): {
+	committedOffset: number;
+	generation: number | null;
+	tailSha256: string | null;
+} {
+	return {
+		committedOffset: state?.committedOffset ?? 0,
+		generation: state?.generation ?? null,
+		tailSha256: state?.tailSha256 ?? null,
+	};
+}
+
+function registerTranscriptUpload(app: Hono): void {
+	app.get("/api/hooks/transcript-upload", async (c) => {
+		const scope = await resolveTranscriptUploadScope(c);
+		if (scope instanceof Response) return scope;
+		const state = await dbOwnerReadTranscriptUploadState(
+			await getDbOwnerForAccessor(getDbAccessor()),
+			{ agentId: scope.agentId, sessionKey: scope.sessionKey },
+			{ operation: "transcript-upload.state" },
+		);
+		if (state && state.harness !== scope.harness) return c.json({ error: "harness_mismatch" }, 409);
+		return c.json(uploadStateBody(state));
+	});
+	app.patch(
+		"/api/hooks/transcript-upload",
+		async (c, next) => {
+			if (!transcriptUploadAdmission.acquire()) {
+				c.header("Retry-After", "1");
+				return c.json({ error: "Too many concurrent transcript uploads; retry shortly" }, 503);
+			}
+			try {
+				await next();
+			} finally {
+				transcriptUploadAdmission.release();
+			}
+		},
+		bodyLimit({
+			maxSize: MAX_TRANSCRIPT_UPLOAD_BYTES,
+			onError: (c) => c.json({ error: "payload too large" }, 413),
+		}),
+		async (c) => {
+			if (isInternalCall(c)) return c.json({ bypassed: true });
+			try {
+				const scope = await resolveTranscriptUploadScope(c);
+				if (scope instanceof Response) return scope;
+				const generation = parseOptionalNonNegativeInt(c.req.header("upload-generation"));
+				const offset = parseOptionalNonNegativeInt(c.req.header("upload-offset"));
+				const checksum = c.req.header("upload-checksum")?.trim() ?? "";
+				if (generation === undefined || offset === undefined || !UPLOAD_CHECKSUM.test(checksum)) {
+					return c.json(
+						{ error: "Upload-Generation, Upload-Offset and a sha256 Upload-Checksum header are required" },
+						400,
+					);
+				}
+				if (isSessionBypassed(scope.sessionKey, scope.agentId)) return c.json({ bypassed: true });
+				stampHarness(scope.harness);
+				const result = await uploadTranscriptRange(getDbAccessor(), {
+					basePath: AGENTS_DIR,
+					...scope,
+					generation,
+					offset,
+					checksum,
+					body: new Uint8Array(await c.req.arrayBuffer()),
+					capturedAt: new Date().toISOString(),
+					signal: c.req.raw.signal,
+				});
+				switch (result.status) {
+					case "committed":
+						return c.json({ ...uploadStateBody(result.state), jobId: result.jobId });
+					case "invalid":
+						return c.json({ error: `invalid upload body: ${result.reason}` }, 400);
+					case "offset_mismatch":
+						return c.json({ error: "offset_mismatch", ...uploadStateBody(result.state) }, 409);
+					case "harness_mismatch":
+						return c.json({ error: "harness_mismatch" }, 409);
+					case "project_mismatch":
+						return c.json({ error: "session transcript is outside the project scope" }, 403);
+					case "bypassed":
+						return c.json({ bypassed: true });
+				}
+			} catch (e) {
+				if (isRetryableWritePressure(e)) {
+					c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+					return c.json({ error: "Write pressure; retry the transcript upload", retryable: true }, 503);
+				}
+				logger.error("hooks", "Transcript upload failed", e instanceof Error ? e : new Error(String(e)));
+				return c.json({ error: "Transcript upload failed" }, 500);
 			}
 		},
 	);
@@ -2334,6 +2476,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerDirectMessageWake(app);
 	registerDirectMessageWakeRelease(app);
 	registerSessionEnd(app);
+	registerTranscriptUpload(app);
 	registerStop(app);
 	registerSkillInvocation(app);
 	registerCheckpointExtract(app);

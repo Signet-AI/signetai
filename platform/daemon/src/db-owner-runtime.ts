@@ -24,6 +24,9 @@ import type {
 	CompactionSummaryInput,
 	TranscriptTurnBackfillChunk,
 	TranscriptTurnBackfillOptions,
+	TranscriptUploadCommit,
+	TranscriptUploadCommitResult,
+	TranscriptUploadState,
 } from "./session-transcripts";
 import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
@@ -213,6 +216,30 @@ async function executeInlineOwnerRequest(
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			writeSessionTranscriptRow(db as WriteDb, request.input),
 		);
+	}
+	if (request.kind === "session_transcript_upload_state") {
+		const { readTranscriptUploadStateInDb } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readTranscriptUploadStateInDb(db, request.input.agentId, request.input.sessionKey),
+		);
+	}
+	if (request.kind === "session_transcript_upload_purge") {
+		const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");
+		const db = await invokeAccessorAsync(accessor, "withWriteDbAsync", (db) => db);
+		if (!("exec" in db)) throw new Error("Transcript upload purge requires owner write access");
+		return drainTranscriptUploadPurgesOwned(db, request.input.basePath, (operation) =>
+			invokeAccessorAsync(accessor, "withWriteTxAsync", (tx) => {
+				if (tx !== db) throw new Error("Transcript upload purge write handle changed");
+				operation();
+			}),
+		);
+	}
+	if (request.kind === "session_transcript_upload_commit") {
+		const { commitTranscriptUploadInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Transcript upload commit requires owner write access");
+			return commitTranscriptUploadInTx(db, request.input);
+		});
 	}
 	if (request.kind === "session_transcript_turn_backfill") {
 		const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
@@ -593,6 +620,42 @@ export async function dbOwnerWriteSessionTranscript(
 		owner,
 		{ kind: "session_transcript_write", input },
 		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerReadTranscriptUploadState(
+	owner: DbOwnerClient,
+	input: { readonly agentId: string; readonly sessionKey: string },
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptUploadState | null> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_state", input },
+		{ ...options, lane: "read", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerCommitTranscriptUpload(
+	owner: DbOwnerClient,
+	input: TranscriptUploadCommit,
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptUploadCommitResult> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_commit", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerDrainTranscriptUploadPurges(
+	owner: DbOwnerClient,
+	input: { readonly basePath: string },
+	options: DbOwnerSqlOptions,
+): Promise<{ readonly pending: number }> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_purge", input },
+		{ ...options, lane: "write", workloadClass: "maintenance", estimatedWorkUnits: 1 },
 	);
 }
 
