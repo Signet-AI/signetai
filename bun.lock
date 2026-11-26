@@ -314,6 +314,7 @@
       "version": "1.0.1",
       "dependencies": {
         "@signet/core": "1.0.1",
+        "@signet/sdk": "workspace:*",
         "json5": "^2.2.3",
         "jsonc-parser": "3.3.1",
       },

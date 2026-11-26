@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
 	buildClosure,
 	buildOrder,
@@ -165,6 +168,8 @@ describe("buildOrder", () => {
 		const connector = workspaces.find((workspace) => workspace.name === "@signet/connector-claude-code");
 		expect(connector?.workspaceDependencies).toContain("@signet/core");
 		expect(connector?.workspaceDependencies).toContain("@signet/connector-base");
+		const base = workspaces.find((workspace) => workspace.name === "@signet/connector-base");
+		expect(base?.workspaceDependencies).toContain("@signet/sdk");
 		const core = workspaces.find((workspace) => workspace.name === "@signet/core");
 		expect(core?.workspaceDependencies).toContain("@signet/native");
 		const daemon = workspaces.find((workspace) => workspace.name === "@signet/daemon");
@@ -187,4 +192,45 @@ describe("isBiomeCandidate", () => {
 		expect(isBiomeCandidate("references/vendored/pkg/index.ts")).toBe(false);
 		expect(isBiomeCandidate("platform/core/generated/schema.ts")).toBe(false);
 	});
+});
+
+test("pre-commit never overlaps independent workspace builds", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-precommit-serial-"));
+	try {
+		await mkdir(join(root, "scripts"), { recursive: true });
+		await writeFile(join(root, "scripts/pre-commit.ts"), await readFile(join(import.meta.dir, "pre-commit.ts")));
+		await writeFile(
+			join(root, "package.json"),
+			JSON.stringify({ name: "serial-hook-fixture", workspaces: ["packages/*"], scripts: { biome: "true" } }),
+		);
+		const script = `import {mkdir,rm} from "node:fs/promises"; const lock=new URL("../../busy",import.meta.url); try {await mkdir(lock)} catch {console.error("overlapping workspace builds");process.exit(9)} await Bun.sleep(100); await rm(lock,{recursive:true});`;
+		for (const name of ["provider", "consumer"]) {
+			await mkdir(join(root, "packages", name), { recursive: true });
+			await writeFile(
+				join(root, "packages", name, "package.json"),
+				JSON.stringify({
+					name: `@fixture/${name}`,
+					version: "1.0.0",
+					scripts: { build: "bun build.ts", typecheck: "true" },
+				}),
+			);
+			await writeFile(join(root, "packages", name, "build.ts"), script);
+		}
+		for (const args of [
+			["init", "--quiet"],
+			["add", "scripts/pre-commit.ts"],
+		]) {
+			const git = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+			expect(await git.exited).toBe(0);
+		}
+		const child = Bun.spawn([process.execPath, "scripts/pre-commit.ts"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+		const output = await new Response(child.stdout).text();
+		const errors = await new Response(child.stderr).text();
+		expect({ exit: await child.exited, overlap: (output + errors).includes("overlapping workspace builds") }).toEqual({
+			exit: 0,
+			overlap: false,
+		});
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
