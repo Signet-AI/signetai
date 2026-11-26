@@ -915,12 +915,16 @@ inference:
 			const state = await import("./routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
 			const { registerPipelineRoutes } = await import("./routes/pipeline-routes");
+			const { legacyPrincipal } = await import("./auth/principal");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode Dreaming test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
 			app.use("*", async (c, next) => {
 				const claims = c.get("auth")?.claims;
-				if (claims) c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				if (claims) {
+					c.set("principal", legacyPrincipal(claims));
+					c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+				}
 				await next();
 			});
 			registerPipelineRoutes(app);

@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "../inference-router";
 import { registerPipelineRoutes } from "../routes/pipeline-routes";
+import { localPrincipal } from "../auth/principal";
 import { type DreamingAgentExecutor, runDreamingAgentPass } from "./dreaming";
 import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 
@@ -96,6 +97,10 @@ describe("A Dreaming pass run by an out-of-process ACPX agent", () => {
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("principal", localPrincipal());
+			await next();
+		});
 		registerPipelineRoutes(app);
 		server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => app.fetch(request) });
 	});

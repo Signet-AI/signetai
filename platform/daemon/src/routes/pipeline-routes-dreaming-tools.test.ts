@@ -8,6 +8,7 @@ import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
 import { bindDreamingPassTools } from "../pipeline/dreaming-pass-tools";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
 import { registerPipelineRoutes } from "./pipeline-routes";
+import { localPrincipal } from "../auth/principal";
 
 describe("POST /api/dream/tools/apply_ontology_ops", () => {
 	let agentsDir = "";
@@ -128,6 +129,10 @@ describe("POST /api/dream/tools/:capability for a request that names a pass", ()
 
 	function call(capability: string, body: Record<string, unknown>): Promise<Response> {
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("principal", localPrincipal());
+			await next();
+		});
 		registerPipelineRoutes(app);
 		return Promise.resolve(
 			app.request(`/api/dream/tools/${capability}`, {
