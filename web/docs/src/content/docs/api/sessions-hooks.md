@@ -267,7 +267,8 @@ perform this transfer automatically for remote transcript-file capture.
 
 `totalBytes` is the exact file length, from 1 byte through 256 MiB; larger declarations return `413`. `sha256`
 is the SHA-256 digest of the complete original bytes. The resolved agent and
-connector's harness binding must match. Repeating a declaration for the same
+connector's harness binding must match. Creation runs the same session-control
+admission as session-end before reserving space or accepting staged chunks. Repeating a declaration for the same
 principal, harness, session, and digest returns the same upload under its
 original credential binding.
 

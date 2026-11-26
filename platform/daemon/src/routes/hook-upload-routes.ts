@@ -5,7 +5,7 @@ import { jsonBody } from "../request-body";
 import { requirePermission } from "../auth";
 import { attemptAsync } from "@signet/core";
 import { authConfig } from "./state";
-import { resolveScopedAgentId } from "./utils";
+import { resolveScopedAgentId, validateSessionControl } from "./utils";
 import {
 	createHookUpload,
 	createHookUploadAdmission,
@@ -109,6 +109,10 @@ export function registerHookUploadRoutes(app: Hono): void {
 			return c.json({ error: "Transcript exceeds upload byte limit", reason: "upload_too_large" }, 413);
 		const agent = resolveScopedAgentId(c, c.get("requestedOrganizationAgent"), resolveDaemonAgentId());
 		if (agent.error) return c.json({ error: agent.error }, 403);
+		const uploadAdmissionError = await validateSessionControl(c, raw.sessionKey, agent.agentId, {
+			context: "sessionKey",
+		});
+		if (uploadAdmissionError) return c.json({ error: uploadAdmissionError }, 403);
 		try {
 			const row = await createHookUpload(principal, agent.agentId, {
 				sessionKey: raw.sessionKey,

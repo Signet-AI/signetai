@@ -342,3 +342,43 @@ test(
 		}),
 	180000,
 );
+
+test(
+	"A21 upload creation uses session-end control admission before staging",
+	() =>
+		withUpload(async (daemon, fixture) => {
+			const alice = fixture.user("alice"),
+				bob = fixture.user("bob"),
+				sessionKey = "bob-controlled-upload-session";
+			success(
+				await request(daemon.origin, "/api/hooks/session-start", bob.connector, "POST", {
+					harness: "codex",
+					sessionKey,
+				}),
+				"register Bob session",
+			);
+			const deniedEnd = await request(daemon.origin, "/api/hooks/session-end", alice.connector, "POST", {
+				harness: "codex",
+				sessionKey,
+				reason: "session_shutdown",
+			});
+			assert.equal(deniedEnd.status, 403);
+			const creation = await request(daemon.origin, "/api/hooks/session-end/uploads", alice.connector, "POST", {
+				harness: "codex",
+				sessionKey,
+				totalBytes: 1,
+				sha256: digest(Buffer.from("x")),
+			});
+			assert.equal(creation.status, 403, "a principal unable to end the session cannot stage its evidence");
+			const db = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+			try {
+				assert.deepEqual(db.prepare("SELECT COUNT(*) AS count FROM hook_transcript_uploads").get(), { count: 0 });
+				assert.deepEqual(db.prepare("SELECT reserved_bytes FROM source_import_capacity WHERE id=1").get(), {
+					reserved_bytes: 0,
+				});
+			} finally {
+				db.close();
+			}
+		}),
+	180000,
+);
