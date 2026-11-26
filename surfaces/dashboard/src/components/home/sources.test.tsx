@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { type SignetSource, api } from "@/lib/api";
 import { ViewProvider } from "@/lib/view-context";
@@ -357,12 +357,18 @@ describe("sources grouping", () => {
 			);
 		}) as typeof fetch;
 		try {
-			const result = await api.createSourceImport("agent-a", [new File(["{}"], "transcript.jsonl")], "reimport");
+			const result = await api.createSourceImport(
+				"agent-a",
+				[new File(["{}"], "transcript.jsonl")],
+				"reimport",
+				"class-hr",
+			);
 			expect(result.error).toBeNull();
 			expect(paths[0]).toContain("/api/sources/imports?agentId=agent-a");
 			expect(JSON.parse(String(calls[0]?.body))).toMatchObject({
 				schemaId: "signet-export",
 				duplicateMode: "reimport",
+				classificationId: "class-hr",
 			});
 
 			const started = await api.controlSourceImport("job-1", "start", "agent-b");
@@ -370,6 +376,27 @@ describe("sources grouping", () => {
 			expect(paths[1]).toContain("/api/sources/imports/job-1/start?agentId=agent-b");
 		} finally {
 			globalThis.fetch = previousFetch;
+		}
+	});
+
+	test("document imports carry the selected agent and classification at admission", async () => {
+		const transport = spyOn(globalThis, "fetch").mockResolvedValue(
+			Response.json({ imported: 0, failed: 0, files: [] }, { status: 201 }),
+		);
+		try {
+			const result = await originalImportSources([new File(["Evidence"], "note.md")], "skip", [], {
+				agentId: "agent-a",
+				classificationId: "class-hr",
+			});
+			expect(result.ok).toBe(true);
+			const call = transport.mock.calls[0];
+			expect(String(call?.[0])).toContain("/api/sources/import?agentId=agent-a");
+			const form = call?.[1]?.body;
+			if (!(form instanceof FormData)) throw new Error("Document import must be multipart");
+			expect(form.get("classificationId")).toBe("class-hr");
+			expect(form.getAll("files")).toHaveLength(1);
+		} finally {
+			transport.mockRestore();
 		}
 	});
 

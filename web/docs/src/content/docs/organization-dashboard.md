@@ -33,6 +33,12 @@ Dreams shows passes and logs that the current credential may read. Being an admi
 
 Home's System section reports readable sources, your own device connectors, and agents you may act as. Secrets are hidden from non-administrators; an instance-local secret store is labeled **Stored on this instance**, never on the browser's device.
 
+## Importing files and transcripts
+
+In Data & files, choose an **Import agent** and **Import classification** before uploading documents or transcript exports. Choose **No classification** explicitly when the material is not classified. Only agents you may use are offered. Ownership and labels are committed by the daemon at admission, before evidence is made readable; there is no follow-up classification window.
+
+Changing either destination choice starts a new transcript import rather than resuming a job under different labels. If Signet reports a classification conflict for a duplicate, choose matching labels or use the source's normal management controls; it never silently drops a classification.
+
 ## Classifications
 
 Compliance users can create classifications, edit names and descriptions, and archive definitions. Audience and applier editing requires the daemon to return the current principals; the dashboard never replaces unknown membership with an empty list. Audience members can inspect the items carrying a classification.
