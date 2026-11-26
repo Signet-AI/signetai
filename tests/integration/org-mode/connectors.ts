@@ -118,7 +118,7 @@ async function seedInlineCredential(harness: string, root: string, secret: strin
 		location.field === "apiKey" ? secret : { ...(isJsonObject(current) ? current : {}), SIGNET_API_KEY: secret };
 	await writeFile(location.path, JSON.stringify(value, null, 2));
 }
-export async function connectorSecrets(fixture: Fixture): Promise<void> {
+export async function connectorSecrets(fixture: Fixture, registryOrigin: string): Promise<void> {
 	const build = Bun.spawn([process.execPath, "run", "build:cli"], {
 		cwd: join(repo, "surfaces/cli"),
 		env: fixture.daemon.env,
@@ -135,9 +135,21 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 			SIGNET_DAEMON_URL: fixture.daemon.origin,
 			SIGNET_PATH: fixture.daemon.workspace,
 			npm_config_prefix: join(root, "npm-global"),
+			npm_config_registry: `${registryOrigin}/`,
+			BUN_CONFIG_REGISTRY: `${registryOrigin}/`,
+			BUN_INSTALL: join(root, "home/.bun"),
+			BUN_INSTALL_GLOBAL_DIR: join(root, "home/.bun/install/global"),
+			BUN_INSTALL_CACHE_DIR: join(root, "bun-cache"),
 			SIGNET_CONNECTOR_ASSETS_DIR: join(root, "assets"),
 		};
 		await seedHarnessHomes(root);
+		await writeFile(join(root, "tmp/package.json"), JSON.stringify({ private: true }));
+		await mkdir(env.BUN_INSTALL_GLOBAL_DIR, { recursive: true });
+		await writeFile(
+			join(env.BUN_INSTALL_GLOBAL_DIR, "package.json"),
+			JSON.stringify({ private: true, dependencies: {} }),
+		);
+		await writeFile(join(root, "home/.npmrc"), `registry=${registryOrigin}/\n`);
 		await cp(
 			join(repo, "integrations/hermes-agent/connector/hermes-plugin"),
 			join(root, "assets/hermes-agent/hermes-plugin"),
@@ -280,6 +292,14 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 					);
 				}
 			}
+		}
+		if (harness === "openclaw") {
+			const runtime = "node_modules/@signetai/signet-memory-openclaw/dist/index.js";
+			const installed = await Promise.all([
+				Bun.file(join(env.BUN_INSTALL_GLOBAL_DIR, runtime)).exists(),
+				Bun.file(join(env.npm_config_prefix, "lib", runtime)).exists(),
+			]);
+			assert(installed.some(Boolean), "OpenClaw refresh must install a usable plugin artifact in its isolated prefix");
 		}
 	}
 	assert.equal(failures.length, 0, failures.join("\n"));

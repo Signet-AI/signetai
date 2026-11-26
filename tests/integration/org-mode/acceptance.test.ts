@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createToken } from "../../../platform/daemon/src/auth/tokens";
 import { connectorSecrets } from "./connectors";
+import { packageRegistry } from "./package-registry";
 import { OrgDaemon } from "./daemon";
 import { connector, Fixture } from "./fixture";
 import { deriveClaim } from "./graph";
@@ -344,7 +345,16 @@ test(
 test("AC10 connect every supported harness without secrets in configs or process argv", async () => {
 	const daemon = await OrgDaemon.create();
 	try {
-		await connectorSecrets(await Fixture.createIdentity(daemon));
+		const registry = await packageRegistry(daemon.root);
+		try {
+			await connectorSecrets(await Fixture.createIdentity(daemon), registry.origin);
+			assert(
+				registry.requested.has("@signetai/signet-memory-openclaw"),
+				"OpenClaw must install the real packed fixture plugin",
+			);
+		} finally {
+			await registry.stop();
+		}
 	} finally {
 		await daemon.dispose();
 	}
