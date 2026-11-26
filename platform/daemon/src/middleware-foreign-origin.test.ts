@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbOwner } from "./db-owner-runtime";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-foreign-origin-"));
@@ -26,17 +29,32 @@ function writeAuthMode(mode: "local" | "hybrid" | "team"): void {
 }
 
 function send(method: string, headers: Record<string, string>, path = "/api/secrets/exec"): Promise<number> {
+	const body = method === "GET" ? undefined : '{"command":"id"}';
 	return new Promise((resolve, reject) => {
-		const req = request({ host: "127.0.0.1", port, path, method, headers }, (res) => {
-			res.resume();
-			res.on("end", () => resolve(res.statusCode ?? 0));
-		});
+		const req = request(
+			{
+				host: "127.0.0.1",
+				port,
+				path,
+				method,
+				headers: {
+					"content-type": "application/json",
+					...(body ? { "content-length": String(Buffer.byteLength(body)) } : {}),
+					...headers,
+				},
+			},
+			(res) => {
+				res.resume();
+				res.on("end", () => resolve(res.statusCode ?? 0));
+			},
+		);
 		req.on("error", reject);
-		req.end(method === "GET" ? undefined : '{"command":"id"}');
+		req.end(body);
 	});
 }
 
 beforeAll(async () => {
+	initDbAccessor(resolveWorkspaceLayout(agentsDir).database);
 	state = await import("./routes/state.js");
 	({ createToken } = await import("./auth"));
 	const { Hono } = await import("hono");
@@ -60,6 +78,8 @@ afterAll(async () => {
 	const closing = new Promise<void>((resolve) => server.close(() => resolve()));
 	if ("closeAllConnections" in server) server.closeAllConnections();
 	await closing;
+	await closeDbOwner();
+	await closeDbAccessor();
 	if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	else process.env.SIGNET_PATH = previousSignetPath;
 	rmSync(agentsDir, { recursive: true, force: true });
@@ -105,7 +125,8 @@ describe("browser writes without credentials", () => {
 		if (!state.authSecret) throw new Error("expected auth secret in hybrid mode");
 		const token = createToken(state.authSecret, { sub: "origin-test", role: "agent", scope: {} }, 60);
 		expect(await send("POST", { origin: "http://evil.example", authorization: `Bearer ${token}` })).toBe(200);
-		expect(await send("POST", { origin: "https://signet.example" }, "/api/auth/login")).toBe(200);
+		expect(await send("POST", { origin: "https://signet.example" }, "/api/auth/login")).toBe(403);
+		expect(await send("POST", { origin: `http://127.0.0.1:${port}` }, "/api/auth/login")).toBe(200);
 
 		writeAuthMode("team");
 		expect(await send("POST", { origin: "http://evil.example" })).toBe(401);

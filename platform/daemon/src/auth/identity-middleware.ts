@@ -100,7 +100,11 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${rateLimitClientAddress(c) ?? "unknown"}`, c))
 			return failure(c, new IdentityError(429, "rate_limit"));
 		try {
-			if (c.req.path !== "/api/hooks/stop" || c.req.method !== "POST") await prepareJsonBody(c);
+			if (
+				(config.mode === "team" || c.req.path === "/api/auth/login") &&
+				(c.req.path !== "/api/hooks/stop" || c.req.method !== "POST")
+			)
+				await prepareJsonBody(c);
 		} catch (error) {
 			if (error instanceof JsonBodyError) return c.json({ error: error.message, reason: error.reason }, error.status);
 			throw error;
