@@ -116,7 +116,7 @@ export function OffboardingWizard({
 				if (!open && !busy) onClose();
 			}}
 		>
-			<DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+			<DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto [&>*]:min-w-0">
 				<DialogHeader>
 					<DialogTitle>Offboard {user.displayName}</DialogTitle>
 					<DialogDescription>
@@ -167,14 +167,17 @@ export function OffboardingWizard({
 							<div className="flex flex-col gap-4">
 								<OffboardingImpact plan={plan} />
 								{plan.ownedAgents && (
-									<OrganizationTable columns={["Agent", "Ownership after offboarding"]}>
-										{plan.ownedAgents.map((agent) => (
-											<tr key={agent.id} className={rowClass}>
-												<td className={cellClass}>{agent.name}</td>
-												<td className={cellClass}>{agent.transferTo?.displayName ?? "Unchanged"}</td>
-											</tr>
-										))}
-									</OrganizationTable>
+									<div>
+										<p className="text-small text-muted-foreground">Agent ownership after offboarding</p>
+										<ul className="m-0 list-none space-y-2 p-0 text-small">
+											{plan.ownedAgents.map((agent) => (
+												<li key={agent.id} className="flex flex-wrap justify-between gap-2">
+													<span>{agent.name}</span>
+													<span>{agent.transferTo?.displayName ?? "Unchanged"}</span>
+												</li>
+											))}
+										</ul>
+									</div>
 								)}
 								<p className="text-small">
 									{mode === "transfer"
