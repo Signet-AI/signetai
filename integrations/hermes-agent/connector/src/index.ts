@@ -1585,14 +1585,17 @@ export class HermesAgentConnector extends BaseConnector {
 		const hermesHome = this.getHermesHome();
 		return resolveConfigPath(hermesHome, this.target?.profile ? hermesHome : undefined);
 	}
-	getConfigPaths(): readonly string[] {
+	getInstallPaths(): readonly string[] {
 		const repo = this.getHermesRepo();
 		return [
 			this.getConfigPath(),
 			getUserPluginTargetDir(this.getHermesHome()),
-			join(this.getHermesHome(), "profiles"),
 			...(repo ? [getRepoPluginTargetDir(repo)] : []),
 		];
+	}
+
+	getConfigPaths(): readonly string[] {
+		return [...this.getInstallPaths(), join(this.getHermesHome(), "profiles")];
 	}
 
 	async install(basePath: string, options: HermesConnectorOptions = {}): Promise<InstallResult> {

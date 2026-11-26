@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	opendirSync,
 	readFileSync,
@@ -1593,7 +1594,7 @@ export class CodexConnector extends BaseConnector {
 			}
 		}
 		const skillsLink = join(this.getCodexHome(), "skills");
-		if (existsSync(skillsLink)) {
+		if (existsSync(skillsLink) && lstatSync(skillsLink).isSymbolicLink()) {
 			rmSync(skillsLink, { force: true });
 			filesRemoved.push(skillsLink);
 		}

@@ -1,5 +1,6 @@
 import "../../../../tests/support/connector-safety.js";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, spyOn } from "bun:test";
+import { CodexConnector } from "@signet/connector-codex";
 import { Command } from "commander";
 import { mkdtemp, readFile, rm, mkdir, writeFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
@@ -73,6 +74,16 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 	const secret = `sig_sk_${crypto.randomUUID()}`;
 	const previousSecret = `sig_sk_${crypto.randomUUID()}`;
 	let revoked = false;
+	const revocations: {
+		fail: boolean;
+		observations: {
+			keyId: string;
+			activeKeyId?: string;
+			keyFileExists: boolean;
+			replacement: boolean;
+			proxy: boolean;
+		}[];
+	} = { fail: false, observations: [] };
 	const metadata = {
 		id: "previous",
 		last_used_at: "2026-11-25T12:00:00.000Z",
@@ -85,10 +96,20 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
-		fetch(request) {
+		async fetch(request) {
 			const path = new URL(request.url).pathname;
-			if (path === "/api/auth/connector-keys/previous" && request.method === "DELETE") {
-				revoked = true;
+			if (path.startsWith("/api/auth/connector-keys/") && request.method === "DELETE") {
+				const active = (await registry.read()).codex;
+				const config = await readFile(join(codexHome, "config.toml"), "utf8").catch(() => "");
+				revocations.observations.push({
+					keyId: path.split("/").at(-1) ?? "",
+					activeKeyId: active?.keyId,
+					keyFileExists: await Bun.file(keyFile).exists(),
+					replacement: active?.keyFile ? (await readKeyFile(active.keyFile)) === secret : false,
+					proxy: config.includes("connector"),
+				});
+				if (revocations.fail) return Response.json({ error: "fixture revoke failure" }, { status: 500 });
+				if (path.endsWith("/previous")) revoked = true;
 				return Response.json({ reason: "not_found" }, { status: 404 });
 			}
 			if (path === "/api/auth/connector-keys" && request.method === "GET")
@@ -138,6 +159,7 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 		codexHome,
 		server,
 		metadata,
+		revocations,
 		async run(args: string[]) {
 			process.exitCode = 0;
 			const program = new Command();
@@ -179,7 +201,7 @@ test.each(["rotate", "disconnect"])("%s succeeds when the previous key is alread
 });
 
 test.each(["rotate", "disconnect"])(
-	"%s preserves recoverable local state when the server is unreachable",
+	"%s retains honest recovery metadata when the server is unreachable",
 	async (operation) => {
 		const fixture = await lifecycleFixture();
 		try {
@@ -188,9 +210,17 @@ test.each(["rotate", "disconnect"])(
 			fixture.server.stop(true);
 			const args = operation === "rotate" ? ["connector", "rotate", "codex"] : ["disconnect", "codex"];
 			expect(await fixture.run(args)).toBe(1);
-			expect(await fixture.registry.read()).toEqual(before);
-			expect(await readKeyFile(fixture.keyFile)).toBe(fixture.previousSecret);
-			expect(await readFile(join(fixture.codexHome, "config.toml"), "utf8")).toBe(config);
+			if (operation === "rotate") {
+				expect(await fixture.registry.read()).toEqual(before);
+				expect(await readKeyFile(fixture.keyFile)).toBe(fixture.previousSecret);
+				expect(await readFile(join(fixture.codexHome, "config.toml"), "utf8")).toBe(config);
+			} else {
+				expect((await fixture.registry.read()).codex).toBeUndefined();
+				expect(await Bun.file(fixture.keyFile).exists()).toBe(false);
+				expect(
+					JSON.parse(await readFile(join(fixture.home, ".config", "signet", "pending-revokes.json"), "utf8")),
+				).toEqual([{ harness: "codex", url: fixture.server.url.origin, keyId: "previous" }]);
+			}
 		} finally {
 			fixture.cleanup();
 		}
@@ -285,5 +315,89 @@ test("connector doctor reports unsafe key files, retained evidence and unassigne
 	} finally {
 		console.log = log;
 		fixture.cleanup();
+	}
+});
+
+test("rotation revokes only after the replacement integration and credential are live", async () => {
+	const f = await lifecycleFixture();
+	try {
+		expect(await f.run(["connector", "rotate", "codex"])).toBe(0);
+		expect(f.revocations.observations).toEqual([
+			{ keyId: "previous", activeKeyId: "replacement", keyFileExists: true, replacement: true, proxy: true },
+		]);
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("disconnect removes integration and local credentials before revoking", async () => {
+	const f = await lifecycleFixture();
+	try {
+		expect(await f.run(["disconnect", "codex"])).toBe(0);
+		expect(f.revocations.observations).toEqual([
+			{ keyId: "previous", activeKeyId: undefined, keyFileExists: false, replacement: false, proxy: false },
+		]);
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("failed install restores the previous config, registry, and key", async () => {
+	const f = await lifecycleFixture();
+	const configPath = join(f.codexHome, "config.toml");
+	const before = await readFile(configPath, "utf8");
+	const install = spyOn(CodexConnector.prototype, "install").mockImplementation(async () => {
+		await writeFile(configPath, "failed installation");
+		return { success: false, message: "fixture install failure", filesWritten: [configPath] };
+	});
+	try {
+		expect(await f.run(["connector", "rotate", "codex"])).toBe(1);
+		expect((await f.registry.read()).codex?.keyId).toBe("previous");
+		expect(await readKeyFile(f.keyFile)).toBe(f.previousSecret);
+		expect(await readFile(configPath, "utf8")).toBe(before);
+		expect(f.revocations.observations.map((item) => item.keyId)).toEqual(["replacement"]);
+	} finally {
+		install.mockRestore();
+		f.cleanup();
+	}
+});
+
+test.each(["rotate", "disconnect"])("%s persists failed revocation for doctor retry", async (operation) => {
+	const f = await lifecycleFixture();
+	const log = console.log;
+	const lines: string[] = [];
+	console.log = (...values: unknown[]) => {
+		lines.push(values.map(String).join(" "));
+	};
+	try {
+		f.revocations.fail = true;
+		expect(await f.run(operation === "rotate" ? ["connector", "rotate", "codex"] : ["disconnect", "codex"])).toBe(1);
+		expect((await f.registry.read()).codex?.keyId).toBe(operation === "rotate" ? "replacement" : undefined);
+		const path = join(f.home, ".config", "signet", "pending-revokes.json");
+		expect(JSON.parse(await readFile(path, "utf8"))).toEqual([
+			{ harness: "codex", url: f.server.url.origin, keyId: "previous" },
+		]);
+		await f.run(["connector", "doctor", "--json"]);
+		expect(lines.join("\n")).toContain("pendingRevokes");
+		f.revocations.fail = false;
+		await f.run(["connector", "doctor", "--json"]);
+		expect(JSON.parse(await readFile(path, "utf8"))).toEqual([]);
+		expect(lines.join("\n")).not.toContain(f.secret);
+	} finally {
+		console.log = log;
+		f.cleanup();
+	}
+});
+
+test("disconnect preserves a real Codex skills directory", async () => {
+	const f = await lifecycleFixture();
+	try {
+		const path = join(f.codexHome, "skills", "user-skill");
+		await mkdir(path, { recursive: true });
+		await writeFile(join(path, "SKILL.md"), "user-owned skill");
+		expect(await f.run(["disconnect", "codex"])).toBe(0);
+		expect(await readFile(join(path, "SKILL.md"), "utf8")).toBe("user-owned skill");
+	} finally {
+		f.cleanup();
 	}
 });

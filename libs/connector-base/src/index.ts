@@ -159,6 +159,9 @@ export abstract class BaseConnector {
 	async reinitialize(basePath: string): Promise<InstallResult> {
 		return this.install(basePath);
 	}
+	getInstallPaths(): readonly string[] {
+		return this.getConfigPaths();
+	}
 	getConfigPaths(): readonly string[] {
 		return [this.getConfigPath()];
 	}
