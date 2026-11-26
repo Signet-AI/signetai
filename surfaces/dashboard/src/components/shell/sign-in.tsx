@@ -276,13 +276,18 @@ export function SessionChip({ session }: { session: Session }) {
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="ghost" size="sm" className="sig-no-drag h-9 gap-2 font-sans text-xs text-muted-foreground">
+				<Button
+					variant="ghost"
+					size="sm"
+					aria-label={whoami ? (identity.name ?? identity.sub) : undefined}
+					className="sig-no-drag h-9 gap-2 px-2 font-sans text-xs text-muted-foreground sm:px-3"
+				>
 					{whoami ? (
 						<>
 							<span className="flex size-5 items-center justify-center rounded-full border" aria-hidden="true">
 								{identity.name?.slice(0, 1)}
 							</span>
-							<span className="max-w-24 truncate">{identity.name}</span>
+							<span className="hidden max-w-24 truncate sm:inline">{identity.name}</span>
 						</>
 					) : (
 						describeTarget(session.mode)

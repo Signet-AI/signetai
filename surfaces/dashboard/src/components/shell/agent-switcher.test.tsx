@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentContextSelect } from "./agent-switcher";
+import { AgentContextSelect, contextAgentDisplayName } from "./agent-switcher";
+
+test("organization context presents its display name, never the structural default id", () => {
+	expect(contextAgentDisplayName({ name: "default", kind: "organization" }, "Acme")).toBe("Acme");
+	expect(contextAgentDisplayName({ name: "Shared knowledge", kind: "organization" }, "Acme")).toBe("Shared knowledge");
+	expect(contextAgentDisplayName({ name: "default", kind: "personal" }, "Acme")).toBe("default");
+});
 
 test("agent context uses the existing source-filter Select trigger", () => {
 	const html = renderToStaticMarkup(
