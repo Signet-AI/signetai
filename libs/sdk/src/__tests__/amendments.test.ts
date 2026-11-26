@@ -103,14 +103,10 @@ test.skipIf(process.platform === "win32")("FIFO key refusal cannot block opening
 	try {
 		const fifo = join(home, "key");
 		expect(await Bun.spawn(["mkfifo", fifo]).exited).toBe(0);
-		const module = new URL("../node.ts", import.meta.url).href;
+
 		const child = Bun.spawn(
-			[
-				process.execPath,
-				"--eval",
-				`import {readKeyFile} from ${JSON.stringify(module)};setTimeout(()=>process.exit(2),350);try{await readKeyFile(${JSON.stringify(fifo)});process.exit(3)}catch{process.exit(0)}`,
-			],
-			{ stdout: "pipe", stderr: "pipe" },
+			[process.execPath, "test", fileURLToPath(new URL("../../test-support/fifo-key.fixture.mjs", import.meta.url))],
+			{ env: { ...process.env, FIXTURE_FIFO: fifo }, stdout: "pipe", stderr: "pipe" },
 		);
 		expect(await child.exited).toBe(0);
 	} finally {
