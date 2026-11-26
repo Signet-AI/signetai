@@ -1,3 +1,12 @@
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectLabel,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { useAgentContext, selectAgent } from "@/lib/agent-context";
 import { useWhoami } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
@@ -12,6 +21,45 @@ interface ContextAgent {
 	readonly canActAs: boolean;
 }
 
+export function AgentContextSelect({
+	value,
+	disabled,
+	groups,
+	onValueChange,
+	placeholder = "Loading agents…",
+}: {
+	readonly value: string | undefined;
+	readonly disabled: boolean;
+	readonly groups: readonly {
+		readonly label: string;
+		readonly agents: readonly { readonly id: string; readonly name: string }[];
+	}[];
+	readonly onValueChange: (value: string) => void;
+	readonly placeholder?: string;
+}) {
+	return (
+		<Select value={value} disabled={disabled} onValueChange={onValueChange}>
+			<SelectTrigger className="home-source-filter max-w-36" aria-label="Agent context">
+				<SelectValue placeholder={placeholder} />
+			</SelectTrigger>
+			<SelectContent className="home-source-options" position="popper" align="end" sideOffset={4}>
+				{groups
+					.filter((group) => group.agents.length > 0)
+					.map((group) => (
+						<SelectGroup key={group.label}>
+							<SelectLabel>{group.label}</SelectLabel>
+							{group.agents.map((agent) => (
+								<SelectItem key={agent.id} value={agent.id}>
+									{agent.name}
+								</SelectItem>
+							))}
+						</SelectGroup>
+					))}
+			</SelectContent>
+		</Select>
+	);
+}
+
 export function AgentContextSwitcher() {
 	const whoami = useWhoami();
 	const selected = useAgentContext();
@@ -21,40 +69,25 @@ export function AgentContextSwitcher() {
 	const groups = [
 		{ label: "Organization", agents: agents.filter((agent) => agent.kind === "organization") },
 		{
-			label: "Your teams",
+			label: "Teams",
 			agents: agents.filter(
 				(agent) => agent.kind === "team" && whoami.user.groups.some((group) => group.id === agent.ownerGroupId),
 			),
 		},
 		{
-			label: "Your personal agents",
+			label: "Personal",
 			agents: agents.filter((agent) => agent.kind === "personal" && agent.ownerUserId === whoami.user.id),
 		},
 	];
 	return (
 		<div className="sig-no-drag flex min-w-0 items-center gap-2">
-			<select
-				aria-label="Agent context"
-				className="max-w-36 truncate rounded border bg-background px-2 py-1 text-xs text-foreground"
-				value={selected ?? ""}
+			<AgentContextSelect
+				value={selected}
+				groups={groups}
 				disabled={!result?.data}
-				onChange={(event) => selectAgent(event.target.value)}
-			>
-				{!result?.data && <option value="">{result?.error ? "Agents unavailable" : "Loading agents…"}</option>}
-				{groups.map(
-					(group) =>
-						group.agents.length > 0 && (
-							<optgroup key={group.label} label={group.label}>
-								{group.agents.map((agent) => (
-									<option key={agent.id} value={agent.id}>
-										{agent.name}
-										{agent.kind === "organization" ? " (default)" : ""}
-									</option>
-								))}
-							</optgroup>
-						),
-				)}
-			</select>
+				onValueChange={selectAgent}
+				placeholder={result?.error ? "Agents unavailable" : "Loading agents…"}
+			/>
 			{result?.error && (
 				<button type="button" className="text-xs underline" onClick={refresh}>
 					Retry
