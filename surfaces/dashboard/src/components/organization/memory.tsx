@@ -58,12 +58,14 @@ export function OrganizationMemory() {
 		id === whoami.user.id ? whoami.user.displayName : person?.id === id ? person.displayName : "Another person";
 	const audienceIds = new Set(
 		(definitions.result?.data ?? [])
-			.filter((definition) =>
-				definition.audience?.some((principal) =>
-					principal.kind === "user"
-						? principal.id === whoami.user.id
-						: whoami.user.groups.some((group) => group.id === principal.id),
-				),
+			.filter(
+				(definition) =>
+					!whoami.user.compliance ||
+					definition.audience?.some((principal) =>
+						principal.kind === "user"
+							? principal.id === whoami.user.id
+							: whoami.user.groups.some((group) => group.id === principal.id),
+					),
 			)
 			.map((definition) => definition.id),
 	);
@@ -153,6 +155,15 @@ export function OrganizationMemory() {
 				)}
 			</Panel>
 			<div className="flex gap-2">
+				<Action
+					secondary
+					onClick={() => {
+						setSelected(null);
+						memories.refresh();
+					}}
+				>
+					Refresh memory
+				</Action>
 				<Action
 					secondary
 					disabled={!offset}
