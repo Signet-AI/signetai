@@ -231,9 +231,9 @@ export function insertHistoryEvent(
 			`INSERT INTO memory_history
 		 (id, memory_id, event, old_content, new_content, changed_by, reason,
 		  metadata, created_at, actor_type, session_id, request_id, agent_id, compartment_id, dreaming_pass_id)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, m.agent_id, m.compartment_id, ? FROM ${source} m ${filter}`,
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, m.agent_id, m.compartment_id, ? FROM ${source} m ${filter} RETURNING id`,
 		)
-		.run(
+		.get(
 			id,
 			args.memoryId,
 			args.event,
@@ -249,7 +249,7 @@ export function insertHistoryEvent(
 			args.passId ?? null,
 			...sourceArgs,
 		);
-	if (result.changes !== 1) throw new Error("history_memory_scope_missing");
+	if (result?.id !== id) throw new Error("history_memory_scope_missing");
 	auditAuthoredWriteInTx(db, args.author, `memory.${args.event}`, "memory", args.memoryId, args.agentId ?? null);
 }
 
