@@ -5,7 +5,6 @@ import {
 	assertDreamingMutationLabelInDb,
 	dreamingEvidenceRecordInDb,
 	evidenceCitationInDb,
-	recordSemanticCitationsInTx,
 	type SemanticEvidenceCitation,
 	dreamingReadScopeInDb,
 	dreamingPassPartitionInDb,
@@ -140,12 +139,10 @@ export function linkDerivedMemorySourcesInTx(
 			? dreamingPassPartitionInDb(db, input.passId, agentId)
 			: { agentId, compartmentId: target.compartment_id };
 	assertDreamingMutationLabelInDb(db, "memories", derivedMemoryId, partition);
-	const citations: SemanticEvidenceCitation[] = [];
 	for (const source of sources) {
 		validateDerivedMemorySourceInTx(db, { agentId, sourceKind: source.sourceKind, sourceId: source.sourceId });
 		const evidence = derivedSourceCitation(source.sourceKind, source.sourceId);
-		evidenceCitationInDb(db, partition, evidence);
-		citations.push(evidence);
+		if (input.passId !== undefined) evidenceCitationInDb(db, partition, evidence);
 	}
 	const seen = new Set<string>();
 	const insert = db.prepare(
@@ -172,7 +169,6 @@ export function linkDerivedMemorySourcesInTx(
 		);
 	}
 	completeDerivedMemoryCitationsInTx(db, derivedMemoryId, agentId);
-	recordSemanticCitationsInTx(db, { kind: "memory", id: derivedMemoryId, partition, evidence: citations });
 }
 export { citationKind } from "./db-helpers";
 export function markDerivedMemoriesStaleForSourceInTx(

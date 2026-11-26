@@ -251,11 +251,15 @@ export function completeDerivedMemoryCitationsInTx(db: WriteDb, derivedMemoryId:
 		derivedMemoryId,
 		agentId,
 	);
-	db.prepare("UPDATE memory_hints SET compartment_id=? WHERE memory_id=? AND agent_id=?").run(
-		compartment,
-		derivedMemoryId,
-		agentId,
-	);
+	for (const [table, parentKey] of [
+		["memory_hints", "memory_id"],
+		["derived_memory_sources", "derived_memory_id"],
+	] as const)
+		db.prepare(`UPDATE ${table} SET compartment_id=? WHERE ${parentKey}=? AND agent_id=?`).run(
+			compartment,
+			derivedMemoryId,
+			agentId,
+		);
 	for (const store of ["embeddings", "embeddings_staging"] as const) {
 		const embeddings = prepareTypedStatement<{ id: string }>(
 			db,

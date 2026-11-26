@@ -283,8 +283,9 @@ function canonicalPair(
 
 function claimReadScope(
 	db: ReadDb,
-	partition: DreamingPartition,
+	partition?: DreamingPartition,
 ): { readonly sql: string; readonly args: readonly unknown[] } {
+	if (partition === undefined) return { sql: "", args: [] };
 	const scope = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
 	const predicates = ["attr", "asp", "e"].map((alias) => readScopeSql(alias, scope, { visibility: null }));
 	return {
@@ -310,7 +311,7 @@ function readActiveClaim(
 	return row == null ? null : claimFromRow(row);
 }
 
-function readClaim(db: WriteDb, agentId: string, attributeId: string, partition: DreamingPartition): ClaimRow | null {
+function readClaim(db: WriteDb, agentId: string, attributeId: string, partition?: DreamingPartition): ClaimRow | null {
 	const scope = claimReadScope(db, partition);
 	const row = db
 		.prepare(`${claimSelect()}
@@ -323,7 +324,7 @@ function insertOrReactivateContradiction(
 	db: WriteDb,
 	input: {
 		readonly agentId: string;
-		readonly partition: DreamingPartition;
+		readonly partition?: DreamingPartition;
 		readonly entityId: string;
 		readonly entityName: string;
 		readonly aspectId: string;
@@ -345,9 +346,16 @@ function insertOrReactivateContradiction(
 		| null
 		| undefined;
 	const timestamp = new Date().toISOString();
-	const compartment = input.partition.compartmentId;
+	const partition = input.partition ?? {
+		agentId: input.agentId,
+		compartmentId: evidenceCompartmentInTx(db, input.agentId, [
+			{ kind: "attribute", id: input.left.id },
+			{ kind: "attribute", id: input.right.id },
+		]),
+	};
+	const compartment = partition.compartmentId;
 	if (existing != null) {
-		assertDreamingMutationLabelInDb(db, "ontology_contradictions", existing.id, input.partition);
+		if (input.partition) assertDreamingMutationLabelInDb(db, "ontology_contradictions", existing.id, partition);
 		db.prepare(
 			`UPDATE ontology_contradictions
 			 SET entity_id = ?, entity_name = ?, aspect_id = ?, aspect_name = ?,
@@ -391,7 +399,7 @@ function insertOrReactivateContradiction(
 			existing.id,
 			input.agentId,
 		);
-		recordContradictionCitationsInTx(db, existing.id, input);
+		recordContradictionCitationsInTx(db, existing.id, { ...input, partition });
 		return existing.id;
 	}
 
@@ -442,7 +450,7 @@ function insertOrReactivateContradiction(
 		timestamp,
 		compartment,
 	);
-	recordContradictionCitationsInTx(db, id, input);
+	recordContradictionCitationsInTx(db, id, { ...input, partition });
 	return id;
 }
 
@@ -478,15 +486,12 @@ export function recordOntologyContradictionsForAttributeInTx(
 ): readonly string[] {
 	if (!tableExists(db, "ontology_contradictions")) return [];
 	const partition =
-		input.passId !== undefined
-			? dreamingPassPartitionInDb(db, input.passId, input.agentId)
-			: (input.partition ?? { agentId: input.agentId, compartmentId: null });
-	if (partition.agentId !== input.agentId) throw new Error("compartment_mismatch");
-	evidenceCitationInDb(db, partition, { kind: "attribute", id: input.attributeId });
-	const scope = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
-	const claimScope = readScopeSql("attr", scope, { visibility: null });
-	const aspectScope = readScopeSql("asp", scope, { visibility: null });
-	const entityScope = readScopeSql("e", scope, { visibility: null });
+		input.passId !== undefined ? dreamingPassPartitionInDb(db, input.passId, input.agentId) : input.partition;
+	if (partition) {
+		if (partition.agentId !== input.agentId) throw new Error("compartment_mismatch");
+		evidenceCitationInDb(db, partition, { kind: "attribute", id: input.attributeId });
+	}
+	const predicate = claimReadScope(db, partition);
 	const candidate = readClaim(db, input.agentId, input.attributeId, partition);
 	if (candidate === null || candidate.kind === "constraint") return [];
 	const rows = db
@@ -498,16 +503,14 @@ export function recordOntologyContradictionsForAttributeInTx(
 			  AND COALESCE(attr.group_key, 'general') = ?
 			  AND attr.claim_key = ?
 			  AND COALESCE(attr.kind, 'attribute') != 'constraint'
-			  ${claimScope.sql} ${aspectScope.sql} ${entityScope.sql}`)
+			  ${predicate.sql}`)
 		.all(
 			input.agentId,
 			candidate.aspectId,
 			candidate.id,
 			candidate.groupKey,
 			candidate.claimKey,
-			...claimScope.args,
-			...aspectScope.args,
-			...entityScope.args,
+			...predicate.args,
 		) as Array<Record<string, unknown>>;
 	const contradictionIds: string[] = [];
 	for (const row of rows) {

@@ -46,6 +46,9 @@ test("linking derived evidence persists citations and unions the parent label at
 	expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'derivedsecret'").get()).toEqual({
 		n: 0,
 	});
+	expect(
+		db.prepare("SELECT compartment_id FROM derived_memory_sources WHERE derived_memory_id='derived'").get(),
+	).toEqual(db.prepare("SELECT compartment_id FROM memories WHERE id='derived'").get());
 	expect(db.prepare("SELECT compartment_id FROM memory_hints WHERE id='hint'").get()).toEqual(
 		db.prepare("SELECT compartment_id FROM memories WHERE id='derived'").get(),
 	);
@@ -131,6 +134,15 @@ test("contradictions outside passes copy both attribute labels and citations", a
 	const ids = db.transaction(() =>
 		recordOntologyContradictionsForAttributeInTx(db, { agentId: "default", attributeId: "right" }),
 	)();
+	expect(() =>
+		db.transaction(() =>
+			recordOntologyContradictionsForAttributeInTx(db, {
+				agentId: "default",
+				attributeId: "right",
+				partition: { agentId: "default", compartmentId: null },
+			}),
+		)(),
+	).toThrow("compartment_mismatch");
 	expect(ids).toHaveLength(1);
 	expect(
 		db
