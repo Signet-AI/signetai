@@ -56,9 +56,9 @@ describe("Dreaming attention client reads", () => {
 			expect(
 				(await getDreamingAttentionScoped(accessor, "a", { readScope: scope, limit: 1 })).map((row) => row.id),
 			).toEqual(["visible"]);
-			expect(getDreamingAttentionAcrossScopes(accessor, { readScope: scope, limit: 1 }).map((row) => row.id)).toEqual([
-				"visible",
-			]);
+			expect(
+				(await getDreamingAttentionAcrossScopes(accessor, { readScope: scope, limit: 1 })).map((row) => row.id),
+			).toEqual(["visible"]);
 			expect(getDreamingAttentionSnapshots(accessor, "a", 1, scope).map((row) => row.id)).toEqual(["visible"]);
 			expect(getDreamingAttentionById(accessor, { agentId: "a", id: "hidden", readScope: scope })).toBeNull();
 			expect(getDreamingAttentionById(accessor, { agentId: "a", id: "visible", readScope: scope })?.id).toBe("visible");

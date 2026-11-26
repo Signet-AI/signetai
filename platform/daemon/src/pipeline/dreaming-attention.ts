@@ -207,7 +207,6 @@ export async function getDreamingAttentionScoped(
 	const audienceFilter = options.agentFacing === true ? AGENT_FACING_ATTENTION_FILTER : "";
 	const params: (string | number)[] = [agentId];
 	if (kindFilter && options.kind !== undefined) params.push(options.kind);
-	params.push(...predicate.args);
 	const rows = await ownerQueryAll<{
 		id: string;
 		kind: DreamingAttentionKind;
