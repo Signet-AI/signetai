@@ -1,9 +1,11 @@
+import "../../../tests/support/connector-safety.js";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	getDatabaseIntegrityStatus,
 	publishDatabaseIntegrityStatus,
@@ -459,7 +461,9 @@ describe("deferred database integrity recovery (#1513)", () => {
 				timeoutMs: 1000,
 			});
 			expect(result.state).toBe("healthy");
-			expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({});
+			expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({
+				bunOptions: `--preload=${fileURLToPath(new URL("../../../tests/support/block-live-daemon.cjs", import.meta.url))} `,
+			});
 		} finally {
 			for (const [key, value] of previous) {
 				if (value === undefined) delete process.env[key];
@@ -510,7 +514,10 @@ describe("deferred database integrity recovery (#1513)", () => {
 				},
 			);
 			expect(result.state).toBe("repaired");
-			expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({});
+			expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({
+				BUN_OPTIONS: `--preload=${fileURLToPath(new URL("../../../tests/support/block-live-daemon.cjs", import.meta.url))} `,
+				NODE_OPTIONS: `--require ${fileURLToPath(new URL("../../../tests/support/block-live-daemon.cjs", import.meta.url))} `,
+			});
 		} finally {
 			for (const [key, value] of previous) {
 				if (value === undefined) delete process.env[key];
