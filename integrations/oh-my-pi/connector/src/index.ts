@@ -77,6 +77,12 @@ export class OhMyPiConnector extends BaseConnector {
 	getConfigPath(): string {
 		return this.getManagedExtensionPath();
 	}
+	getConfigPaths(): readonly string[] {
+		return [
+			...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
+			...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
+		];
+	}
 
 	async install(basePath: string): Promise<InstallResult> {
 		const auth = await resolveInstallApiKey();

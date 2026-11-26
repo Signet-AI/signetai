@@ -83,6 +83,10 @@ export class OpenCodeConnector extends BaseConnector {
 		}
 		return join(opencodePath, "opencode.jsonc");
 	}
+	getConfigPaths(): readonly string[] {
+		const path = this.getOpenCodePath();
+		return [...this.getConfigCandidates(path), this.getPluginsPath(path)];
+	}
 
 	private getPluginsPath(opencodePath: string): string {
 		return join(opencodePath, "plugins");

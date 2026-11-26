@@ -1,47 +1,77 @@
-import type { Dirent } from "node:fs";
-import { readdir, readFile, lstat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { constants } from "node:fs";
+import { readdir, open, lstat } from "node:fs/promises";
+import { join } from "node:path";
 
 export async function inspectConnectorFiles(
-	configPath: string,
+	configPaths: readonly string[],
 ): Promise<{ inlineKeyFiles: string[]; scanIncomplete: boolean }> {
-	const inlineKeyFiles: string[] = [];
-	let visited = 0;
+	const inlineKeyFiles = new Set<string>();
+	const seen = new Set<string>();
 	let scanIncomplete = false;
-	async function walk(directory: string, depth: number): Promise<void> {
-		let entries: Dirent[];
-		try {
-			entries = await readdir(directory, { withFileTypes: true });
-		} catch (error) {
-			if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
-			throw error;
+	const deadline = Date.now() + 5000;
+	async function visit(path: string, depth: number, declared = false): Promise<void> {
+		if (seen.has(path)) return;
+		if (seen.size >= 2048 || Date.now() >= deadline) {
+			scanIncomplete = true;
+			return;
 		}
-		for (const entry of entries) {
-			if (++visited > 2048) {
+		seen.add(path);
+		try {
+			const info = await lstat(path);
+			if (info.isSymbolicLink()) {
 				scanIncomplete = true;
 				return;
 			}
-			const path = join(directory, entry.name);
-			if (entry.isDirectory()) {
-				if (depth > 0 && !["node_modules", "sessions", "projects", ".git", "skills", "cache"].includes(entry.name))
-					await walk(path, depth - 1);
-				continue;
+			if (info.isDirectory()) {
+				if (depth < 0) {
+					scanIncomplete = true;
+					return;
+				}
+				for (const entry of await readdir(path, { withFileTypes: true })) {
+					if (["node_modules", "sessions", "projects", ".git", "skills", "cache", "__pycache__"].includes(entry.name))
+						continue;
+					await visit(join(path, entry.name), depth - 1);
+				}
+				return;
 			}
-			if (!entry.isFile() || !/(?:\.jsonc?|\.yaml|\.toml|\.cmd|\.ps1|\.sh|\.m?js|\.env)$/.test(entry.name)) continue;
-			const info = await lstat(path);
-			if (info.size > 8 * 1024 * 1024) {
-				scanIncomplete = true;
-				continue;
+			if (!declared && !/(?:\.jsonc?|\.ya?ml|\.toml|\.cmd|\.ps1|\.sh|\.m?[jt]s|\.py|\.md|\.env)$/.test(path)) return;
+			const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+			try {
+				const before = await handle.stat();
+				if (!before.isFile() || before.size > 8 * 1024 * 1024) {
+					scanIncomplete = true;
+					return;
+				}
+				const buffer = Buffer.alloc(before.size);
+				let offset = 0;
+				while (offset < buffer.length) {
+					if (Date.now() >= deadline) {
+						scanIncomplete = true;
+						return;
+					}
+					const { bytesRead } = await handle.read(buffer, offset, Math.min(65536, buffer.length - offset), offset);
+					if (!bytesRead) {
+						scanIncomplete = true;
+						return;
+					}
+					offset += bytesRead;
+				}
+				const after = await handle.stat();
+				if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) scanIncomplete = true;
+				const content = buffer.toString("utf8");
+				if (
+					/sig_(?:sk|ses|ref)_[A-Za-z0-9_.-]{8,}/.test(content) ||
+					/(?:^|[\s"'])SIGNET_(?:API_KEY|TOKEN)\s*=\s*["']?[A-Za-z0-9_./+=:-]+/m.test(content) ||
+					/["']SIGNET_(?:API_KEY|TOKEN)["']\s*:\s*["'][^"'\s]+["']/.test(content)
+				)
+					inlineKeyFiles.add(path);
+			} finally {
+				await handle.close();
 			}
-			const content = await readFile(path, "utf8");
-			if (
-				/sig_(?:sk|ses|ref)_[A-Za-z0-9_.-]{8,}/.test(content) ||
-				/(?:^|[\s"'])SIGNET_(?:API_KEY|TOKEN)\s*=\s*["']?[A-Za-z0-9_./+=:-]+/m.test(content) ||
-				/["']SIGNET_(?:API_KEY|TOKEN)["']\s*:\s*["'][^"'\s]+["']/.test(content)
-			)
-				inlineKeyFiles.push(path);
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) scanIncomplete = true;
 		}
 	}
-	await walk(dirname(configPath), 3);
-	return { inlineKeyFiles: inlineKeyFiles.sort(), scanIncomplete };
+	for (const path of configPaths) await visit(path, 3, true);
+	return { inlineKeyFiles: [...inlineKeyFiles].sort(), scanIncomplete };
 }

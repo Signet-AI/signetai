@@ -264,6 +264,9 @@ export class ClaudeCodeConnector extends BaseConnector {
 	getConfigPath(): string {
 		return join(homedir(), ".claude", "settings.json");
 	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath(), join(homedir(), ".claude.json")];
+	}
 	async onSessionStart(ctx: SessionContext): Promise<SessionStartResult | null> {
 		try {
 			const transport = new NodeTransport(await resolveTarget({ harness: "claude-code", configUrl: this.daemonUrl }), {

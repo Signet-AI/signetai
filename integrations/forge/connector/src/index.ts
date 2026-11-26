@@ -98,6 +98,9 @@ export class ForgeConnector extends BaseConnector {
 	getConfigPath(): string {
 		return this.getMcpConfigPath();
 	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath(), this.getAgentsPath()];
+	}
 
 	async install(basePath: string): Promise<InstallResult> {
 		resolveSignetMcpCommand();

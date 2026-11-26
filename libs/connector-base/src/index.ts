@@ -159,6 +159,9 @@ export abstract class BaseConnector {
 	async reinitialize(basePath: string): Promise<InstallResult> {
 		return this.install(basePath);
 	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath()];
+	}
 	abstract getConfigPath(): string;
 }
 export function isSignetGeneratedFile(raw: string): boolean {

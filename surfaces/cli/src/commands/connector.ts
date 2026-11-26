@@ -342,7 +342,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 				const results = [];
 				const inline = [];
 				for (const harness of supportedHarnesses) {
-					const files = await inspectConnectorFiles(connectorFor(harness).getConfigPath());
+					const files = await inspectConnectorFiles(connectorFor(harness).getConfigPaths());
 					if (files.inlineKeyFiles.length || files.scanIncomplete) inline.push({ harness, ...files });
 				}
 				for (const [harness, entry] of Object.entries(await new ConnectorRegistry(deps).read())) {

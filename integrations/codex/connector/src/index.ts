@@ -1348,6 +1348,13 @@ export class CodexConnector extends BaseConnector {
 	getConfigPath(): string {
 		return join(this.getCodexHome(), "config.toml");
 	}
+	getConfigPaths(): readonly string[] {
+		return [
+			this.getConfigPath(),
+			this.getHooksJsonPath(),
+			join(this.getCodexHome(), ".tmp", "signet-plugin-marketplace"),
+		];
+	}
 
 	private installCompatibilityHooks(
 		signetArgs: string[],

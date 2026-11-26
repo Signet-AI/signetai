@@ -53,6 +53,9 @@ export class GeminiConnector extends BaseConnector {
 	getConfigPath(): string {
 		return join(this.getGeminiHome(), "settings.json");
 	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath(), this.getGeminiMdPath()];
+	}
 
 	private getGeminiMdPath(): string {
 		const geminiHome = this.getGeminiHome();

@@ -553,6 +553,9 @@ export class OpenClawConnector extends BaseConnector {
 		}
 		return candidates[0];
 	}
+	getConfigPaths(): readonly string[] {
+		return this.getConfigCandidates();
+	}
 	private validateWorkspacePath(p: string): void {
 		const resolved = resolve(expandHome(p, this.getHomeDir()));
 		const tmp = tmpdir();

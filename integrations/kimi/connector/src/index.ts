@@ -299,6 +299,9 @@ export class KimiConnector extends BaseConnector {
 	getConfigPath(): string {
 		return join(this.getKimiHome(), "config.toml");
 	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath(), this.getMcpJsonPath()];
+	}
 
 	protected getMcpJsonPath(): string {
 		return join(this.getKimiHome(), "mcp.json");

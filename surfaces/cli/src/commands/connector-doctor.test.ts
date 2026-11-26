@@ -2,8 +2,47 @@ import "../../../../tests/support/connector-safety.js";
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { inspectConnectorFiles } from "../lib/connector-doctor";
+import { Command } from "commander";
+import { registerConnectorCommands } from "./connector.js";
+
+test("doctor finds credentials in Claude global MCP configuration", async () => {
+	const home = homedir();
+	expect(home).not.toBe("/home/nicholai");
+	const previousHome = process.env.HOME;
+	const previousLog = console.log;
+	const lines: string[] = [];
+	const secret = `sig_sk_${crypto.randomUUID()}`;
+	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ keys: [] }) });
+	const keyring = {
+		get: async () => ({ state: "unsupported" as const }),
+		set: async () => ({ state: "unsupported" as const }),
+	};
+	try {
+		process.env.HOME = home;
+		console.log = (...values: unknown[]) => {
+			lines.push(values.map(String).join(" "));
+		};
+		await writeFile(
+			join(home, ".claude.json"),
+			JSON.stringify({ mcpServers: { signet: { env: { SIGNET_API_KEY: secret } } } }),
+		);
+		const program = new Command();
+		registerConnectorCommands(program, { agentsDir: home, env: { HOME: home }, keyring, flagUrl: server.url.origin });
+		await program.parseAsync(["connector", "doctor", "--json"], { from: "user" });
+		expect(lines.join("\n")).toContain(join(home, ".claude.json"));
+		expect(lines.join("\n")).not.toContain(secret);
+		expect(process.exitCode).toBe(1);
+	} finally {
+		server.stop(true);
+		console.log = previousLog;
+		process.exitCode = 0;
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		await rm(join(home, ".claude.json"), { force: true });
+	}
+});
 
 test.each(["sig_sk_", "legacy-"])(
 	"connector doctor identifies %s credentials without returning their values",
@@ -16,7 +55,7 @@ test.each(["sig_sk_", "legacy-"])(
 				join(home, "settings.json"),
 				JSON.stringify({ hooks: { SessionEnd: `SIGNET_API_KEY=${key} signet hook session-end` } }),
 			);
-			const report = await inspectConnectorFiles(join(home, "settings.json"));
+			const report = await inspectConnectorFiles([join(home, "settings.json")]);
 			expect(report.inlineKeyFiles).toEqual([join(home, "settings.json")]);
 			expect(JSON.stringify(report)).not.toContain(key);
 		} finally {
