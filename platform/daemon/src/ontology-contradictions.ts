@@ -345,17 +345,7 @@ function insertOrReactivateContradiction(
 		| null
 		| undefined;
 	const timestamp = new Date().toISOString();
-	const evidence: readonly CitationEvidence[] = [
-		{ kind: "attribute", id: input.left.id },
-		{ kind: "attribute", id: input.right.id },
-		...prepareTypedStatement<{ evidence_kind: CitationEvidence["kind"]; evidence_id: string }>(
-			db,
-			"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='attribute' AND agent_id=? AND derived_id IN (?,?)",
-		)
-			.all(input.agentId, input.left.id, input.right.id)
-			.map((ref): CitationEvidence => ({ kind: ref.evidence_kind, id: ref.evidence_id })),
-	];
-	const compartment = evidenceCompartmentInTx(db, input.agentId, evidence);
+	const compartment = input.partition.compartmentId;
 	if (existing != null) {
 		assertDreamingMutationLabelInDb(db, "ontology_contradictions", existing.id, input.partition);
 		db.prepare(
