@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { MIGRATIONS } from "./index";
-import { up, COMPARTMENT_TABLES } from "./177-classifications";
+import { up, COMPARTMENT_TABLES, installWriteGuards, installEvidencePurgeLifecycle } from "./177-classifications";
 
 test("checkpoint migration resolves unique transcript owners and preserves ambiguous ownership", () => {
 	const db = new Database(":memory:");
@@ -40,6 +40,23 @@ test("classification schema is repeatable and preserves guarded historical citat
 		`INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at,proposal_evidence) VALUES ('bad','Bad','bad','concept','default','now','now','not json')`,
 	);
 	up(db);
+	const generation = db.prepare("PRAGMA schema_version").get();
+	installWriteGuards(db);
+	installEvidencePurgeLifecycle(db);
+	expect(db.prepare("PRAGMA schema_version").get()).toEqual(generation);
+	db.exec(
+		"DROP TRIGGER memories_compartment_insert; CREATE TRIGGER memories_compartment_insert BEFORE INSERT ON memories BEGIN SELECT 1; END",
+	);
+	installWriteGuards(db);
+	db.exec(
+		"INSERT INTO classifications(id,name) VALUES('secret','Secret'); INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent','default','default','secret')",
+	);
+	expect(() =>
+		db.exec(
+			"INSERT INTO memories(id,content,type,created_at,updated_at,updated_by,agent_id) VALUES('blocked','private','fact','now','now','test','default')",
+		),
+	).toThrow("compartment_required");
+	expect(db.prepare("SELECT id FROM memories WHERE id='blocked'").all()).toEqual([]);
 	up(db);
 	expect(
 		db.prepare("SELECT derived_id,evidence_kind,evidence_id FROM evidence_citations ORDER BY evidence_kind").all(),
