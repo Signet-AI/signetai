@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { DurableImportStatus } from "@/components/workspace/import-inbox";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { type SignetSource, api } from "@/lib/api";
 import { ViewProvider } from "@/lib/view-context";
@@ -376,6 +377,31 @@ describe("sources grouping", () => {
 			expect(paths[1]).toContain("/api/sources/imports/job-1/start?agentId=agent-b");
 		} finally {
 			globalThis.fetch = previousFetch;
+		}
+	});
+
+	test("import inbox announces progress separately from its disclosure icon", async () => {
+		const original = api.getSourceImports;
+		let state = "running";
+		api.getSourceImports = async () => ({
+			data: {
+				imports: [
+					{ id: "job-progress", kind: "import", state, files: [{ id: "file-progress", name: "progress.jsonl" }] },
+				],
+			},
+			error: null,
+			status: 200,
+		});
+		const mounted = await mount(<DurableImportStatus />);
+		try {
+			expect(mounted.container.querySelector('[role="status"]')?.textContent).toBe("Importing");
+			state = "completed";
+			await click(button(mounted.container, "Refresh"));
+			expect(mounted.container.querySelector('[role="status"]')?.textContent).toBe("Complete");
+		} finally {
+			await act(async () => mounted.root.unmount());
+			mounted.container.remove();
+			api.getSourceImports = original;
 		}
 	});
 

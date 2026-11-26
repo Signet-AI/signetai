@@ -49,7 +49,7 @@ function ImportJob({ job }: { job: SourceImportJob }) {
 				<div className="flex items-center justify-between gap-3">
 					<span className="settings-row-title">{job.files?.[0]?.name || "File import"}</span>
 					<span className="inline-flex items-center gap-3 text-xs text-muted-foreground">
-						{JOB_STATES[current.state] || current.state.replaceAll("_", " ")}
+						<span role="status">{JOB_STATES[current.state] || current.state.replaceAll("_", " ")}</span>
 						<span className="group-open:rotate-90" aria-hidden="true">
 							›
 						</span>
