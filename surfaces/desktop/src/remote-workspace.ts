@@ -270,7 +270,7 @@ export class RemoteWorkspace {
 		if (
 			PRIVATE_AUTH_PATHS.has(path) ||
 			(path.startsWith("/api/auth/") &&
-				!/^\/api\/auth\/(?:whoami|methods|sessions(?:\/[^/]+)?|devices(?:\/[^/]+)?|connector-keys(?:\/[^/]+)?|api-keys(?:\/[^/]+)?|device\/approve|device\/[A-Z2-9-]+)$/.test(
+				!/^\/api\/auth\/(?:whoami|methods|profile|preferences|sessions(?:\/[^/]+)?|devices(?:\/[^/]+)?|connector-keys(?:\/[^/]+(?:\/errors)?)?|api-keys(?:\/[^/]+)?|device\/approve|device\/[A-Z2-9-]+)$/.test(
 					path,
 				))
 		)

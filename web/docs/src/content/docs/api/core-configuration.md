@@ -62,6 +62,28 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
 }
 ```
 
+### GET /api/auth/profile
+
+Returns `{ "user": ... }` for the authenticated organization user, including
+identity provider and profile metadata. The request must resolve to an active
+user; it cannot read another user's profile.
+
+### PATCH /api/auth/profile
+
+Updates the signed-in organization's user profile and returns `{ "user": ... }`.
+Requires a user session; cookie requests also require `x-signet-csrf`. Send
+`{ "displayName": "Name" }`. A password identity can also update `email`; SSO
+identities cannot change an email managed by their provider. API keys cannot
+update a profile.
+
+### GET /api/auth/connector-keys/:id/errors
+
+Returns `{ "keyId": "...", "since": "...", "limit": 10, "errors": [] }` for
+a connector key owned by the signed-in user. Requires a user session and returns
+`403` for a missing, non-connector, or other user's key. Includes at most the ten
+most recent connector errors from the preceding seven days, each with `at`,
+`status`, and `reason`.
+
 ### PATCH /api/auth/preferences
 
 Updates the signed-in organization user's default read agent. Requires a user

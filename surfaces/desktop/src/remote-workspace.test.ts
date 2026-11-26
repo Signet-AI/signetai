@@ -178,6 +178,39 @@ describe("desktop remote workspace", () => {
 		}
 	});
 
+	test("organization account metadata routes remain main-authenticated", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-account-proxy-"));
+		let authenticated = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				if (request.headers.get("authorization") === `Bearer ${credential.accessToken}`) authenticated++;
+				return Response.json({ ok: true });
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			await login.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			for (const [method, path] of [
+				["GET", "/api/auth/profile"],
+				["PATCH", "/api/auth/profile"],
+				["PATCH", "/api/auth/preferences"],
+				["GET", "/api/auth/connector-keys/test-key/errors"],
+			]) {
+				expect((await desktop.proxy(new Request(`app://signet${path}`, { method }))).status).toBe(200);
+			}
+			expect(authenticated).toBe(4);
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	test("expired or revoked sessions remain distinguishable and can be signed out", async () => {
 		const root = await mkdtemp(join(tmpdir(), "desktop-expired-"));
 		const server = Bun.serve({

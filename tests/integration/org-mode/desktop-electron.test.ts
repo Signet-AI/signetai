@@ -269,6 +269,9 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 					"fetch('/api/auth/whoami').then(r=>r.json()).then(r=>({authenticated:r.authenticated,name:r.user.displayName}))",
 				),
 			).toEqual({ authenticated: true, name: "Alice" });
+			expect(await cdp.evaluate("fetch('/api/auth/profile').then(r=>r.json()).then(r=>r.user.displayName)")).toBe(
+				"Alice",
+			);
 			expect(await cdp.evaluate("fetch('/api/auth/refresh',{method:'POST'}).then(r=>r.status)")).toBe(403);
 			await until(
 				async () => text(await page.evaluate("document.body.innerText")).length > 100,
