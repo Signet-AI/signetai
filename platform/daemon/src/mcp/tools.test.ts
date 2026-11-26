@@ -201,6 +201,13 @@ describe("createMcpServer", () => {
 		const denied = await callTool(server, "signet_org_audit", { actor: "usr_alice" });
 		expect(denied.isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/org/audit?actor=usr_alice");
+		expect((await callTool(server, "signet_operator_logs", { limit: 5 })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/logs?limit=5");
+		expect((await callTool(server, "signet_pipeline_pause", { paused: true })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/pipeline/pause");
+		expect(capture.method).toBe("POST");
+		expect((await callTool(server, "signet_org_user_lookup", { q: "alice" })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/users/lookup?q=alice");
 		mockFetch(200, { actAs: [] }, capture);
 		await callTool(server, "signet_org_access", { userId: "usr_alice" });
 		expect(capture.url).toBe("http://localhost:3850/api/org/access/usr_alice");
@@ -394,7 +401,8 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_org_audit");
 		expect(names).toContain("signet_org_job");
 		expect(names).toContain("signet_classify");
-		expect(names.length).toBe(66);
+		expect(names).toContain("signet_operator_logs");
+		expect(names.length).toBe(69);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
@@ -1271,9 +1279,18 @@ describe("createMcpServer", () => {
 			const cap: { url?: string } = {};
 			mockFetch(200, { memories: [], total: 0 }, cap);
 
-			await callTool(server, "memory_list", { limit: 10, type: "fact" });
+			await callTool(server, "memory_list", {
+				limit: 10,
+				type: "fact",
+				author: "usr_alice",
+				team: "grp_review",
+				classification: "cls_hr",
+			});
 			expect(cap.url).toContain("limit=10");
 			expect(cap.url).toContain("type=fact");
+			expect(cap.url).toContain("author=usr_alice");
+			expect(cap.url).toContain("team=grp_review");
+			expect(cap.url).toContain("classification=cls_hr");
 		});
 	});
 

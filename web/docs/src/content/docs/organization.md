@@ -108,7 +108,7 @@ The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL`
 
 Local filesystem and process commands (`start`, `stop`, `install`, `setup`, `migrate-schema`, `migrate-vectors`, `git`, `sync`, and `workspace`) refuse against a remote target. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
 
-Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. Remote operator commands (`logs`, `pause`, `resume`, `restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
+Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`logs`, `restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
 
 Administrators can use:
 
@@ -143,11 +143,37 @@ Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_jo
 
 Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
 
+## Operator log feeds
+
+Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Both are audited. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Local-mode logging is unchanged.
+
+A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
+
+## Memory review filters
+
+`GET /api/memories` accepts `author` (user ID), `team` (owning team ID), and `classification` (classification ID), together with the existing type, agent, and pagination options. Filters are combined before pagination in the read owner. `stats.total`, `stats.critical`, and `stats.withEmbeddings` describe only matching readable memories, not hidden material. Unknown and unreadable classifications both return no matches. Classified rows include `classifications: [{ id, name }]` only for audience members; unclassified rows and existing local responses do not gain that key. The MCP `memory_list` tool accepts the same filters.
+
+## Classified imported material
+
+Classification material enumeration (`GET /api/classifications/:id/items`) includes source IDs backed by readable imported transcripts, even when there is no artifact row. The same agent, project, and audience predicates apply before pagination; restricted callers do not receive inaccessible source IDs.
+
+## Dreaming review metadata
+
+Organization Dreaming status and pass responses include the system author (`{ kind: "system", name: "Dreaming" }`) and the owning `team` (`{ id, name }`, or `null`). A visible classified pass also includes `classifications: [{ id, name }]`. These labels come from the pass's inherited compartment and are returned only to its audience. Hidden passes remain absent without hidden counts or placeholder metadata. Local responses are unchanged. Metadata lookup is capped at 100 passes per request and rechecks the read scope inside the owner.
+
+## User lookup for compliance
+
+`GET /api/org/users/lookup?q=<name-or-email>` lets administrators and compliance officers find active people without granting the full user directory. Results contain only `id`, `displayName`, and `email`. Search is literal, case-insensitive, and bounded to 128 characters. Pages default to 20 people with a maximum `limit` of 50; pass the returned `nextCursor` as `cursor` for the next page. Agent- or project-restricted credentials cannot search this organization-wide directory. Queries are audited without recording the search text. `GET /api/org/users` remains admin-only. Agents can use the same operation through `signet_org_user_lookup`.
+
+## Worker pause controls
+
+Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited.
+
 ## Offboarding and audit
 
-Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.
+Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge publishes removed counts only after durable deletion and cleanup complete. Running jobs report their phase; an incomplete job does not claim completed removal counts. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its readable residuals instead of assuming it completed.
 
-Offboarding previews include readable impact counts for memories, transcripts, artifacts, documents, active keys and sessions, and owned agents. `ownedAgents` lists each readable agent and its transfer recipient. Counts respect the requesting administrator's agent, project, and classification scope: content outside an HR audience does not contribute, and no hidden totals are returned. Expired sessions without a valid refresh token do not count as active. Previewing is audited without deactivating the user.
+Offboarding previews use the deletion owner's planner, including copied memories and summary descendants, rather than a separate direct-row count. They include readable impact counts for memories, summaries, transcripts, artifacts, documents, active keys and sessions, and owned agents. The synchronous preview admits at most 1,000 reachable objects; a larger plan fails explicitly with `plan_limit` instead of returning a partial count. `ownedAgents` lists each readable agent and its transfer recipient. Counts respect the requesting administrator's agent, project, and classification scope: content outside an HR audience does not contribute, and no hidden totals are returned. Expired sessions without a valid refresh token do not count as active. Previewing is audited without deactivating the user.
 
 Deactivation revokes credentials before returning. The next request from a deactivated user fails, including a previously valid connector request. Reactivation does not restore revoked sessions or keys.
 

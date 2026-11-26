@@ -545,7 +545,7 @@ export function _testParseEpisodicCursor(value: string | null): EpisodicCursor |
 	return parseEpisodicCursor(value);
 }
 
-export interface DreamingPassRow {
+export interface DreamingPassRow extends Partial<Omit<import("../content-read").DreamPassReview, "id">> {
 	readonly id: string;
 	readonly mode: string;
 	readonly status: string;
@@ -948,6 +948,23 @@ function passReadPredicate(agentId: string, readScope?: ReadScope, alias = "") {
 	};
 }
 
+async function withDreamPassReview<T extends { readonly id: string }>(
+	rows: readonly T[],
+	scope?: ReadScope,
+	signal?: AbortSignal,
+): Promise<readonly T[]> {
+	if (!scope?.organizationMode || !rows.length) return rows;
+	const { contentRead } = await import("../content-read");
+	const metadata = await contentRead<readonly import("../content-read").DreamPassReview[]>(
+		{ op: "dream_pass_review", scope, ids: rows.map((row) => row.id) },
+		signal,
+	);
+	const byId = new Map(metadata.map((row) => [row.id, row]));
+	return rows.flatMap((row) => {
+		const review = byId.get(row.id);
+		return review ? [{ ...row, ...review }] : [];
+	});
+}
 export async function getDreamingPasses(
 	accessor: DbAccessor,
 	agentId: string,
@@ -955,7 +972,7 @@ export async function getDreamingPasses(
 	readScope?: ReadScope,
 ): Promise<readonly DreamingPassRow[]> {
 	const predicate = dreamingReadPredicate("", readScope);
-	return await ownerQueryAll<DreamingPassRow>(
+	const rows = await ownerQueryAll<DreamingPassRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.list",
 		`SELECT id, mode, status, started_at AS startedAt,
@@ -976,6 +993,7 @@ export async function getDreamingPasses(
 		[...(readScope ? [] : [agentId]), ...predicate.args, limit],
 		{ deadlineMs: 30_000, estimatedWorkUnits: Math.max(1, Math.min(limit, 100)) },
 	);
+	return withDreamPassReview(rows, readScope);
 }
 
 export interface DreamingPassPolicyRecord {
@@ -1042,15 +1060,14 @@ export async function getDreamingPass(
 	options: DreamingPassReadOptions = {},
 ): Promise<DreamingPassScope | null> {
 	const predicate = dreamingReadPredicate("", options.readScope);
-	return (
-		(await ownerQueryOne<DreamingPassScope>(
-			await getDbOwnerForAccessor(accessor),
-			"dreaming.pass.read",
-			`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql} LIMIT 1`,
-			[...(options.readScope ? [] : [agentId]), passId, ...predicate.args],
-			{ deadlineMs: 30_000, estimatedWorkUnits: 1, signal: options.signal },
-		)) ?? null
+	const row = await ownerQueryOne<DreamingPassScope>(
+		await getDbOwnerForAccessor(accessor),
+		"dreaming.pass.read",
+		`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql} LIMIT 1`,
+		[...(options.readScope ? [] : [agentId]), passId, ...predicate.args],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1, signal: options.signal },
 	);
+	return row ? ((await withDreamPassReview([row], options.readScope, options.signal))[0] ?? null) : null;
 }
 
 export async function getActiveDreamingPasses(
@@ -1059,13 +1076,14 @@ export async function getActiveDreamingPasses(
 	options: DreamingPassReadOptions = {},
 ): Promise<readonly DreamingPassScope[]> {
 	const predicate = dreamingReadPredicate("", options.readScope);
-	return await ownerQueryAll<DreamingPassScope>(
+	const rows = await ownerQueryAll<DreamingPassScope>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.active",
 		`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND status = 'running' ${predicate.sql} ORDER BY started_at ASC, id ASC`,
 		[...(options.readScope ? [] : [agentId]), ...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10, signal: options.signal },
 	);
+	return withDreamPassReview(rows, options.readScope, options.signal);
 }
 
 const DREAMING_CODEMODE_PROMPT =

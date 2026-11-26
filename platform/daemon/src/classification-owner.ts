@@ -1342,6 +1342,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 				["memory", "memories", "id"],
 				["session", "session_transcripts", "session_key"],
 				["source", "memory_artifacts", "source_id"],
+				["source", "session_transcripts", "source_id"],
 				["agent", "memories", "agent_id"],
 			] as const) {
 				const clause = readScopeSql("r", itemScope, {

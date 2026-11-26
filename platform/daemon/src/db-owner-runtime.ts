@@ -347,6 +347,7 @@ async function executeInlineOwnerRequest(
 		case "transcript_capture_transition":
 		case "transcript_capture_enqueue":
 		case "fts_partition":
+		case "organization_purge_plan":
 		case "classification":
 		case "embedding_projection":
 		case "initialize":
@@ -914,6 +915,16 @@ export async function dbOwnerReflectionAnswer(input: ReflectionAnswerInput, acce
 		await getDbOwnerForAccessor(accessor),
 		{ kind: "reflection_answer", input },
 		{ operation: "reflection.answer", lane: "write", deadlineMs: 10000 },
+	);
+}
+export async function dbOwnerOrganizationPurgePlan(
+	userId: string,
+	scope: import("./read-scope").ReadScope,
+): Promise<Record<string, number>> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "organization_purge_plan", userId, scope },
+		{ operation: "organization.purge-plan", lane: "read", deadlineMs: 15_000 },
 	);
 }
 export async function dbOwnerOrganizationPurge(userId: string, author: WriteAuthor): Promise<PurgeBatchResult> {
