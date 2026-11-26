@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { executeClassification } from "./classification-owner";
 import { readScopeSql, readVisibilitySchema, resolveReadScope, type ReadScope } from "./read-scope";
 import type { ClassificationTarget } from "./classifications";
 
 for (const kind of ["agent", "memory", "session", "source"] as const) {
 	test(`in-flight ${kind} classification hides content before its first batch`, () => {
-		const db = classificationFixture();
+		const db = currentClassificationFixture();
 		db.exec(
 			"INSERT INTO classifications(id,name) VALUES('cls_hr','HR');INSERT INTO classification_audience VALUES('cls_hr','user','alice');UPDATE memories SET source_id='session:s' WHERE id='m';INSERT INTO memories(id,content,agent_id,source_id,created_at,updated_at) VALUES('public','public','default','other','now','now');",
 		);
@@ -61,10 +61,10 @@ for (const kind of ["agent", "memory", "session", "source"] as const) {
 	});
 }
 test("an empty in-flight scope preserves SQL and EXPLAIN QUERY PLAN", async () => {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	const scope: ReadScope = { reach: { kind: "all" }, compartments: [], projects: null };
 	const before: ReturnType<typeof readScopeSql> = {
-		sql: " AND m.agent_id IN (SELECT id FROM agents WHERE archived_at IS NULL) AND m.visibility != 'archived' AND m.compartment_id IS NULL",
+		sql: " AND m.agent_id IN (SELECT id FROM agents WHERE archived_at IS NULL) AND COALESCE(m.visibility,'global') != 'archived' AND m.compartment_id IS NULL",
 		args: [],
 	};
 	const resolved = await resolveReadScope(

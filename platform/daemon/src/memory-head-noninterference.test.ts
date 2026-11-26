@@ -19,11 +19,14 @@ test("hidden evidence cannot invalidate a reader's unchanged MEMORY.md entries",
 			db.exec(
 				"INSERT INTO classifications(id,name) VALUES ('cls_head_secret','Head secret'); INSERT INTO memories(id,content,type,memory_kind,agent_id,created_at,updated_at,updated_by) VALUES ('head-visible','Atlas public head','fact','episodic','default','now','now','test')",
 			);
+			db.exec(
+				"INSERT INTO memory_head_revisions(id,agent_id,revision,content,content_hash,rendered_token_count,pass_id,base_revision,base_hash,created_at) VALUES('head-revision','default',1,'- Atlas public head','hash',4,'fixture-pass',0,'','now')",
+			);
 			db.prepare(
-				"INSERT INTO memory_head_entries(entry_id,agent_id,canonical_text,entry_hash,status,first_revision,last_revision,created_at,updated_at) VALUES ('head-entry','default','Atlas public head','hash','active',1,1,'now','now')",
+				"INSERT INTO memory_head_entries(id,entry_id,agent_id,canonical_text,entry_hash,status,first_revision,last_revision,created_at,updated_at) VALUES ('head-entry','head-entry','default','Atlas public head','hash','active',1,1,'now','now')",
 			).run();
 			db.prepare(
-				"INSERT INTO memory_head_revision_entries(agent_id,revision,entry_id,ordinal,operation,provenance_json) VALUES ('default',1,'head-entry',0,'add',?)",
+				"INSERT INTO memory_head_revision_entries(agent_id,revision,revision_id,entry_id,ordinal,operation,provenance_json) VALUES ('default',1,'head-revision','head-entry',0,'add',?)",
 			).run(JSON.stringify([{ source_ref: "memory:head-visible", quote: "Atlas public head" }]));
 			db.prepare(
 				"INSERT OR REPLACE INTO memory_md_heads(agent_id,content,content_hash,revision,revision_id,updated_at,is_current) VALUES ('default','- Atlas public head','hash',1,'head-revision','now',1)",
@@ -51,7 +54,7 @@ test("hidden evidence cannot invalidate a reader's unchanged MEMORY.md entries",
 		getSyncDbAccessor().withWriteTx((db) =>
 			db.prepare("UPDATE memories SET content='Replacement without the old quote' WHERE id='head-visible'").run(),
 		);
-		expect(await read()).toEqual({ generated: true, status: "current", content: "" });
+		expect(await read()).toEqual({ generated: true, status: "stale", content: null });
 	} finally {
 		await closeDbAccessor();
 		if (previous === undefined) delete process.env.SIGNET_PATH;

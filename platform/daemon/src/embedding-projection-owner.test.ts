@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { findSqliteVecExtension, syncEmbeddingCompartment } from "@signet/core";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { executeEmbeddingProjection } from "./embedding-projection-owner";
 import { executeClassification } from "./classification-owner";
 import type { ClassificationActor } from "./classifications";
 
 test("new vectors inherit their memory label and profile rebuilds preserve shard isolation", () => {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	const extension = findSqliteVecExtension();
 	if (!extension) throw new Error("sqlite-vec required");
 	db.loadExtension(extension);
