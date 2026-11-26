@@ -227,7 +227,7 @@ async function executeInlineOwnerRequest(
 		const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");
 		const db = await invokeAccessorAsync(accessor, "withWriteDbAsync", (db) => db);
 		if (!("exec" in db)) throw new Error("Transcript upload purge requires owner write access");
-		return drainTranscriptUploadPurgesOwned(db, request.input.basePath, (operation) =>
+		return drainTranscriptUploadPurgesOwned(db, request.input, (operation) =>
 			invokeAccessorAsync(accessor, "withWriteTxAsync", (tx) => {
 				if (tx !== db) throw new Error("Transcript upload purge write handle changed");
 				operation();
@@ -649,7 +649,7 @@ export async function dbOwnerCommitTranscriptUpload(
 
 export async function dbOwnerDrainTranscriptUploadPurges(
 	owner: DbOwnerClient,
-	input: { readonly basePath: string },
+	input: { readonly basePath: string; readonly reopen: boolean },
 	options: DbOwnerSqlOptions,
 ): Promise<{ readonly pending: number; readonly progressed: boolean }> {
 	return await submitWithAdmission(

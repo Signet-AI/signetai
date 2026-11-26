@@ -1,8 +1,8 @@
 import { constants } from "node:fs";
 import { lstat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { attemptAsync, resolveWorkspaceLayout } from "@signet/core";
 import { sha256 } from "./transcript-capture-jobs";
 import {
 	iterateContainedTranscriptDirectory,
@@ -37,17 +37,43 @@ export function transcriptUploadAgentDirectory(basePath: string, agentId: string
 	return join(transcriptUploadsRoot(basePath), transcriptUploadAgentRelativePath(agentId));
 }
 
-export function transcriptUploadSessionDirectory(basePath: string, agentId: string, sessionKey: string): string {
-	return join(transcriptUploadAgentDirectory(basePath, agentId), hashSegment(sessionKey));
+const EPOCH_DIRECTORY = /^e(0|[1-9][0-9]*)$/;
+
+export function transcriptUploadEpochDirectory(basePath: string, agentId: string, epoch: number): string {
+	return join(transcriptUploadAgentDirectory(basePath, agentId), `e${epoch}`);
+}
+
+export function transcriptUploadSessionDirectory(
+	basePath: string,
+	agentId: string,
+	epoch: number,
+	sessionKey: string,
+): string {
+	return join(transcriptUploadEpochDirectory(basePath, agentId, epoch), hashSegment(sessionKey));
 }
 
 export function transcriptUploadFilePath(
 	basePath: string,
 	agentId: string,
+	epoch: number,
 	sessionKey: string,
 	generation: number,
 ): string {
-	return join(transcriptUploadSessionDirectory(basePath, agentId, sessionKey), `${generation}.jsonl`);
+	return join(transcriptUploadSessionDirectory(basePath, agentId, epoch, sessionKey), `${generation}.jsonl`);
+}
+
+export function isTranscriptUploadSessionDirectory(
+	basePath: string,
+	agentId: string,
+	sessionKey: string,
+	path: string,
+): boolean {
+	const epochDirectory = dirname(path);
+	return (
+		basename(path) === hashSegment(sessionKey) &&
+		EPOCH_DIRECTORY.test(basename(epochDirectory)) &&
+		dirname(epochDirectory) === resolve(transcriptUploadAgentDirectory(basePath, agentId))
+	);
 }
 
 export async function readTranscriptUploadRange(handle: FileHandle, position: number, length: number): Promise<Buffer> {
@@ -77,6 +103,33 @@ export async function removeTranscriptUploadTree(
 ): Promise<boolean> {
 	if (!isTranscriptUploadPath(basePath, directory)) throw new Error("Transcript upload cleanup target escapes uploads");
 	return await removeTree(transcriptUploadsRoot(basePath), directory, budget);
+}
+
+export async function removeStaleTranscriptUploadEpochs(
+	basePath: string,
+	agentRelativePath: string,
+	currentEpoch: number,
+	budget: { remaining: number },
+): Promise<boolean> {
+	const root = transcriptUploadsRoot(basePath);
+	const agentDirectory = join(root, agentRelativePath);
+	if (!isTranscriptUploadPath(basePath, agentDirectory))
+		throw new Error("Transcript upload cleanup target escapes uploads");
+	const stale: string[] = [];
+	let current = false;
+	try {
+		for await (const name of iterateContainedTranscriptDirectory(root, agentDirectory)) {
+			const match = EPOCH_DIRECTORY.exec(name);
+			if (match && Number(match[1]) < currentEpoch) stale.push(name);
+			else current = true;
+		}
+	} catch (error) {
+		if (missing(error)) return true;
+		throw error;
+	}
+	for (const name of stale) if (!(await removeTree(root, join(agentDirectory, name), budget))) return false;
+	if (!current) await attemptAsync(() => removeContainedTranscriptPath(root, agentDirectory, { directory: true }));
+	return true;
 }
 
 async function removeTree(root: string, directory: string, budget: { remaining: number }): Promise<boolean> {

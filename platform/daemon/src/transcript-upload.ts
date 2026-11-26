@@ -19,6 +19,8 @@ import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsR
 
 export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
 const TAIL_HASH_BYTES = 64 * 1024;
+const PURGE_RUN_DEADLINE_MS = 30_000;
+const PURGE_CONTINUE_DELAY_MS = 1_000;
 
 export interface TranscriptUploadRequest {
 	readonly basePath: string;
@@ -73,7 +75,13 @@ export async function uploadTranscriptRange(
 		const conflict = transcriptUploadConflict(scope, input);
 		if (conflict) return conflict;
 		const root = transcriptUploadsRoot(input.basePath);
-		const path = transcriptUploadFilePath(input.basePath, input.agentId, input.sessionKey, input.generation);
+		const path = transcriptUploadFilePath(
+			input.basePath,
+			input.agentId,
+			scope.purgeEpoch,
+			input.sessionKey,
+			input.generation,
+		);
 		if (input.offset === 0) await mkdir(dirname(path), { recursive: true });
 		const handle = await openContainedTranscriptFile(root, path, constants.O_RDWR | constants.O_CREAT, 0o600);
 		const end = input.offset + input.body.byteLength;
@@ -125,6 +133,7 @@ export async function uploadTranscriptRange(
 			options,
 		);
 		if (result.status !== "committed") await discardUncommittedRange(root, path, input.offset);
+		if (result.status === "purge_pending") void drainTranscriptUploadPurges(input.basePath);
 		return result;
 	});
 }
@@ -147,57 +156,98 @@ export type TranscriptUploadPurgeResult =
 	| { readonly status: "removed" | "pending" }
 	| { readonly status: "failed"; readonly error: string };
 
-interface PurgeDrain {
-	readonly done: Promise<TranscriptUploadPurgeResult>;
-	readonly abort: AbortController;
+export interface TranscriptUploadPurgeOptions {
+	readonly waitMs?: number;
+	readonly reopen?: boolean;
+	readonly deadlineMs?: number;
 }
 
-const purgeDrains = new Map<string, PurgeDrain>();
-const purgeRequests = new Set<string>();
+interface PurgeState {
+	done: Promise<TranscriptUploadPurgeResult> | null;
+	abort: AbortController | null;
+	requested: boolean;
+	reopen: boolean;
+	timer: ReturnType<typeof setTimeout> | null;
+}
+
+const purges = new Map<string, PurgeState>();
+
+function purgeState(basePath: string): PurgeState {
+	let state = purges.get(basePath);
+	if (!state) {
+		state = { done: null, abort: null, requested: false, reopen: false, timer: null };
+		purges.set(basePath, state);
+	}
+	return state;
+}
 
 export async function drainTranscriptUploadPurges(
 	basePath: string,
-	waitMs?: number,
+	options: TranscriptUploadPurgeOptions = {},
 ): Promise<TranscriptUploadPurgeResult> {
-	let drain = purgeDrains.get(basePath);
-	if (drain) purgeRequests.add(basePath);
-	else {
+	const state = purgeState(basePath);
+	clearTimeout(state.timer ?? undefined);
+	state.timer = null;
+	state.reopen ||= options.reopen === true;
+	state.requested = true;
+	if (!state.done) {
 		const abort = new AbortController();
-		drain = { abort, done: runTranscriptUploadPurges(basePath, abort.signal) };
-		purgeDrains.set(basePath, drain);
+		state.abort = abort;
+		state.done = runTranscriptUploadPurges(basePath, state, abort.signal, options.deadlineMs ?? PURGE_RUN_DEADLINE_MS);
 	}
-	if (waitMs === undefined) return await drain.done;
+	const done = state.done;
+	const waitMs = options.waitMs;
+	if (waitMs === undefined) return await done;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const waited = new Promise<TranscriptUploadPurgeResult>((resolve) => {
 		timer = setTimeout(() => resolve({ status: "pending" }), waitMs);
 	});
 	try {
-		return await Promise.race([drain.done, waited]);
+		return await Promise.race([done, waited]);
 	} finally {
 		clearTimeout(timer);
 	}
 }
 
 export async function stopTranscriptUploadPurges(): Promise<void> {
-	const drains = [...purgeDrains.values()];
-	for (const drain of drains) drain.abort.abort();
-	await Promise.all(drains.map((drain) => drain.done));
+	const running: Promise<TranscriptUploadPurgeResult>[] = [];
+	for (const state of purges.values()) {
+		clearTimeout(state.timer ?? undefined);
+		state.timer = null;
+		state.abort?.abort();
+		if (state.done) running.push(state.done);
+	}
+	await Promise.all(running);
+	purges.clear();
 }
 
-async function runTranscriptUploadPurges(basePath: string, signal: AbortSignal): Promise<TranscriptUploadPurgeResult> {
+async function runTranscriptUploadPurges(
+	basePath: string,
+	state: PurgeState,
+	signal: AbortSignal,
+	deadlineMs: number,
+): Promise<TranscriptUploadPurgeResult> {
+	const deadline = Date.now() + deadlineMs;
+	let continuePending = false;
 	try {
 		const owner = await getDbOwner();
 		for (;;) {
-			purgeRequests.delete(basePath);
+			state.requested = false;
+			const reopen = state.reopen;
+			state.reopen = false;
 			const { pending, progressed } = await dbOwnerDrainTranscriptUploadPurges(
 				owner,
-				{ basePath },
+				{ basePath, reopen },
 				{ operation: "transcript-upload.purge", signal },
 			);
-			if (purgeRequests.has(basePath)) continue;
+			if (state.requested) continue;
 			if (pending === 0) return { status: "removed" };
 			if (!progressed) {
 				logger.warn("transcripts", "Transcript upload purge stopped without progress", { pending });
+				return { status: "pending" };
+			}
+			if (Date.now() >= deadline) {
+				continuePending = true;
 				return { status: "pending" };
 			}
 		}
@@ -207,7 +257,14 @@ async function runTranscriptUploadPurges(basePath: string, signal: AbortSignal):
 		logger.warn("transcripts", "Transcript upload purge failed", { error: message });
 		return { status: "failed", error: message };
 	} finally {
-		purgeDrains.delete(basePath);
-		purgeRequests.delete(basePath);
+		state.done = null;
+		state.abort = null;
+		if (continuePending && !signal.aborted) {
+			state.timer = setTimeout(() => {
+				state.timer = null;
+				void drainTranscriptUploadPurges(basePath);
+			}, PURGE_CONTINUE_DELAY_MS);
+			state.timer.unref?.();
+		}
 	}
 }

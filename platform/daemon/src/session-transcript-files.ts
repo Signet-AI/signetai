@@ -15,7 +15,7 @@ import {
 	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
 	isTranscriptUploadPath,
 	removeTranscriptUploadTree,
-	transcriptUploadSessionDirectory,
+	isTranscriptUploadSessionDirectory,
 } from "./transcript-upload-paths";
 
 export interface TranscriptFileCheckpoint {
@@ -277,7 +277,7 @@ export async function redactTranscriptFileBatch(input: {
 	const rel = relative(resolve(input.basePath), path);
 	if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Transcript cleanup target escapes workspace");
 	if (isTranscriptUploadPath(input.basePath, path)) {
-		if (path !== resolve(transcriptUploadSessionDirectory(input.basePath, input.agentId, input.sessionKey)))
+		if (!isTranscriptUploadSessionDirectory(input.basePath, input.agentId, input.sessionKey, path))
 			throw new Error("Transcript upload cleanup target belongs to another session");
 		const done = await removeTranscriptUploadTree(input.basePath, path, {
 			remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,

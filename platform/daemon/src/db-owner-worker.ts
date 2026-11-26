@@ -1182,8 +1182,8 @@ export function runDbOwnerWorker(): void {
 		}
 		if (job.request.kind === "session_transcript_upload_purge") {
 			const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");
-			const root = bindTranscriptWorkspace(job.request.input.basePath);
-			return await drainTranscriptUploadPurgesOwned(db, root, async (operation) => withBusyRetry(operation, context));
+			const input = { ...job.request.input, basePath: bindTranscriptWorkspace(job.request.input.basePath) };
+			return await drainTranscriptUploadPurgesOwned(db, input, async (operation) => withBusyRetry(operation, context));
 		}
 		if (job.request.kind === "session_transcript_upload_commit") {
 			const { commitTranscriptUploadInTx } = await import("./session-transcripts");

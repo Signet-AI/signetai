@@ -17,6 +17,7 @@ import {
 	readTranscriptUploadPrefix,
 	transcriptUploadAgentDirectory,
 	transcriptUploadAgentRelativePath,
+	transcriptUploadEpochDirectory,
 	transcriptUploadFilePath,
 	transcriptUploadSessionDirectory,
 } from "./transcript-upload-paths";
@@ -75,7 +76,7 @@ describe("transcript upload ranges", () => {
 	}
 
 	function file(generation = 0): string {
-		return transcriptUploadFilePath(dir, "noam", "sess-1", generation);
+		return transcriptUploadFilePath(dir, "noam", 0, "sess-1", generation);
 	}
 
 	it("appends each range at the committed offset and hashes the committed tail", async () => {
@@ -181,7 +182,7 @@ describe("transcript upload ranges", () => {
 		for (let i = 0; result.status === "pending" && i < 20; i++)
 			result = await deleteSessionTranscript({ agentId: "noam", sessionKey: "sess-1", hard: false, changedBy: "test" });
 		expect(result.status).toBe("complete");
-		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", "sess-1"))).toBe(false);
+		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", 0, "sess-1"))).toBe(false);
 		expect(await accessor.withReadDbAsync((db) => readTranscriptUploadStateInDb(db, "noam", "sess-1"))).toBeNull();
 		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
 	});
@@ -200,21 +201,23 @@ describe("transcript upload ranges", () => {
 		for (let i = 0; result.status === "pending" && i < 20; i++)
 			result = await deleteSessionTranscript({ agentId: "noam", sessionKey: "sess-1", hard: false, changedBy: "test" });
 		expect(result.status).toBe("complete");
-		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", "sess-1"))).toBe(false);
+		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", 0, "sess-1"))).toBe(false);
 	});
 
-	it("refuses ranges while a purge of the same agent is pending", async () => {
+	it("keeps a recreated agent's upload apart from a pending purge", async () => {
 		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"old":1}\n'));
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
 				transcriptUploadAgentRelativePath("noam"),
 			);
 		});
-		expect(await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'))).toEqual({ status: "purge_pending" });
-		expect(existsSync(file())).toBe(false);
-		expect(await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n', { agentId: "other" }))).toMatchObject({
-			status: "committed",
-		});
+		expect(
+			await uploadTranscriptRange(getDbAccessor(), request('{"new":1}\n', { sessionKey: "sess-2" })),
+		).toMatchObject({ status: "committed" });
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
+		expect(readFileSync(transcriptUploadFilePath(dir, "noam", 1, "sess-2", 0), "utf8")).toBe('{"new":1}\n');
 	});
 
 	it("refuses a commit that read the scope before a purge of its agent", async () => {
@@ -244,10 +247,63 @@ describe("transcript upload ranges", () => {
 			},
 			{ operation: "test.transcript-upload.commit" },
 		);
-		expect(result).toEqual({ status: "offset_mismatch", state: null });
+		expect(result).toEqual({ status: "purge_pending" });
 		expect(await accessor.withReadDbAsync((db) => readTranscriptUploadStateInDb(db, "noam", "sess-1"))).toBeNull();
 		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
+		expect(await uploadPurges()).toEqual([transcriptUploadAgentRelativePath("noam")]);
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
 		expect(await uploadTranscriptRange(accessor, request('{"a":1}\n'))).toMatchObject({ status: "committed" });
+		expect(existsSync(transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0))).toBe(true);
+	});
+
+	it("removes bytes a stale upload wrote after the drain when the daemon starts again", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await accessor.withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('noam', 'noam', 'isolated', 'now', 'now')",
+			).run();
+		});
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		await dbOwnerAgentRemove(
+			{ agentId: "noam", mode: "purge", changedBy: "test", changedAt: "2026-11-26T10:00:00.000Z" },
+			{ operation: "test.agent.purge" },
+		);
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		mkdirSync(transcriptUploadSessionDirectory(dir, "noam", 0, "sess-1"), { recursive: true });
+		writeFileSync(file(), '{"old":1}\n');
+		expect(await uploadTranscriptRange(accessor, request('{"new":1}\n'))).toMatchObject({ status: "committed" });
+		expect(await drainTranscriptUploadPurges(dir, { reopen: true })).toEqual({ status: "removed" });
+		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
+		expect(readFileSync(transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0), "utf8")).toBe('{"new":1}\n');
+	});
+
+	it("removes more files than the old pass cap in one drain request", async () => {
+		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
+		for (let generation = 1; generation <= 16_500; generation++) writeFileSync(file(generation), "x\n");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(false);
+	}, 120_000);
+
+	it("continues a drain that reached its deadline", async () => {
+		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
+		for (let generation = 1; generation <= 600; generation++) writeFileSync(file(generation), "x\n");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		expect(await drainTranscriptUploadPurges(dir, { deadlineMs: 0 })).toEqual({ status: "pending" });
+		for (let i = 0; i < 100 && (await uploadPurges()).length > 0; i++) await Bun.sleep(100);
+		expect(await uploadPurges()).toEqual([]);
+		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(false);
 	});
 
 	it("finishes a purge in the background after the caller stops waiting", async () => {
@@ -259,7 +315,7 @@ describe("transcript upload ranges", () => {
 				transcriptUploadAgentRelativePath("noam"),
 			);
 		});
-		expect(await drainTranscriptUploadPurges(dir, 0)).toEqual({ status: "pending" });
+		expect(await drainTranscriptUploadPurges(dir, { waitMs: 0 })).toEqual({ status: "pending" });
 		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
 		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(false);
 		expect(await uploadPurges()).toEqual([]);
@@ -298,14 +354,17 @@ describe("transcript upload ranges", () => {
 		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(true);
 		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
 		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(false);
-		expect(existsSync(transcriptUploadFilePath(dir, "other", "sess-1", 0))).toBe(true);
+		expect(existsSync(transcriptUploadFilePath(dir, "other", 0, "sess-1", 0))).toBe(true);
 		expect(await uploadPurges()).toEqual([]);
 	});
 
 	it("keeps each agent's upload in its own file", () => {
 		init();
-		expect(transcriptUploadFilePath(dir, "noam", "sess-1", 0)).not.toBe(
-			transcriptUploadFilePath(dir, "other", "sess-1", 0),
+		expect(transcriptUploadFilePath(dir, "noam", 0, "sess-1", 0)).not.toBe(
+			transcriptUploadFilePath(dir, "other", 0, "sess-1", 0),
+		);
+		expect(transcriptUploadFilePath(dir, "noam", 0, "sess-1", 0)).not.toBe(
+			transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0),
 		);
 	});
 });

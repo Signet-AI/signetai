@@ -398,7 +398,7 @@ export type DbOwnerRequest =
 	  }
 	| {
 			readonly kind: "session_transcript_upload_purge";
-			readonly input: { readonly basePath: string };
+			readonly input: { readonly basePath: string; readonly reopen: boolean };
 	  }
 	| {
 			readonly kind: "session_transcript_upload_commit";

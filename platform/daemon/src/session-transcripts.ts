@@ -9,10 +9,9 @@ import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTyped
 import { type TranscriptCaptureSource, upsertTranscriptCaptureJobInTx } from "./transcript-capture-jobs";
 import {
 	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
-	removeTranscriptUploadTree,
+	removeStaleTranscriptUploadEpochs,
 	transcriptUploadAgentRelativePath,
 	transcriptUploadSessionDirectory,
-	transcriptUploadsRoot,
 } from "./transcript-upload-paths";
 import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
 import { writeTranscriptAudit } from "./transcript-audit";
@@ -737,7 +736,15 @@ export function deleteSessionTranscriptInTx(
 				add("uploads", 1);
 				db.prepare(
 					"INSERT OR IGNORE INTO session_transcript_delete_files (agent_id,session_key,generation,path) VALUES (?,?,?,?)",
-				).run(...scope, transcriptUploadSessionDirectory(basePath, input.agentId, input.sessionKey));
+				).run(
+					...scope,
+					transcriptUploadSessionDirectory(
+						basePath,
+						input.agentId,
+						readTranscriptUploadPurgeInDb(db, input.agentId)?.epoch ?? 0,
+						input.sessionKey,
+					),
+				);
 			}
 			phase = "files";
 		}
@@ -2021,7 +2028,6 @@ export type TranscriptUploadCommitResult =
 export interface TranscriptUploadScope {
 	readonly state: TranscriptUploadState | null;
 	readonly stored: { readonly harness: string | null; readonly project: string | null } | null;
-	readonly purgePending: boolean;
 	readonly purgeEpoch: number;
 }
 
@@ -2050,19 +2056,24 @@ export function readTranscriptUploadStateInDb(
 	};
 }
 
+function readTranscriptUploadPurgeInDb(db: ReadDb, agentId: string): { readonly epoch: number } | null {
+	return (
+		prepareTypedStatement<{ epoch: number }>(
+			db,
+			"SELECT epoch FROM session_transcript_upload_purges WHERE path = ?",
+		).get(transcriptUploadAgentRelativePath(agentId)) ?? null
+	);
+}
+
 export function readTranscriptUploadScopeInDb(db: ReadDb, agentId: string, sessionKey: string): TranscriptUploadScope {
 	const stored = prepareTypedStatement<{ harness: string | null; project: string | null }>(
 		db,
 		"SELECT harness, project FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
 	).get(agentId, sessionKey);
-	const purge = prepareTypedStatement<{ epoch: number; drained_at: string | null }>(
-		db,
-		"SELECT epoch, drained_at FROM session_transcript_upload_purges WHERE path = ?",
-	).get(transcriptUploadAgentRelativePath(agentId));
+	const purge = readTranscriptUploadPurgeInDb(db, agentId);
 	return {
 		state: readTranscriptUploadStateInDb(db, agentId, sessionKey),
 		stored: stored ?? null,
-		purgePending: purge?.drained_at === null,
 		purgeEpoch: purge?.epoch ?? 0,
 	};
 }
@@ -2071,7 +2082,6 @@ export function transcriptUploadScopeConflict(
 	scope: TranscriptUploadScope,
 	request: { readonly harness: string; readonly project: string | null; readonly projectScoped: boolean },
 ): TranscriptUploadCommitResult | null {
-	if (scope.purgePending) return { status: "purge_pending" };
 	const harness = scope.state?.harness ?? scope.stored?.harness;
 	if (harness != null && harness !== request.harness) return { status: "harness_mismatch" };
 	const projects = [scope.state, scope.stored].flatMap((row) => (row ? [row.project] : []));
@@ -2105,9 +2115,14 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 	if (input.source.sizeBytes <= input.expectedOffset) throw new Error("Transcript upload range is empty");
 	if (!admitSessionTranscriptInDb(db, input)) return { status: "bypassed" };
 	const scope = readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey);
+	if (scope.purgeEpoch !== input.purgeEpoch) {
+		db.prepare("UPDATE session_transcript_upload_purges SET drained_at = NULL WHERE path = ?").run(
+			transcriptUploadAgentRelativePath(input.agentId),
+		);
+		return { status: "purge_pending" };
+	}
 	const conflict = transcriptUploadConflict(scope, { ...input, offset: input.expectedOffset });
 	if (conflict) return conflict;
-	if (scope.purgeEpoch !== input.purgeEpoch) return { status: "offset_mismatch", state: scope.state };
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at)
@@ -2155,9 +2170,14 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 
 export async function drainTranscriptUploadPurgesOwned(
 	db: WriteDb,
-	basePath: string,
+	input: { readonly basePath: string; readonly reopen: boolean },
 	transact: (operation: () => void) => Promise<void>,
 ): Promise<{ readonly pending: number; readonly progressed: boolean }> {
+	const basePath = input.basePath;
+	if (input.reopen)
+		await transact(() => {
+			db.prepare("UPDATE session_transcript_upload_purges SET drained_at = NULL WHERE drained_at IS NOT NULL").run();
+		});
 	const budget = { remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES };
 	const intents = prepareTypedStatement<{ path: string; epoch: number }>(
 		db,
@@ -2165,8 +2185,7 @@ export async function drainTranscriptUploadPurgesOwned(
 	).all();
 	const removed: Array<{ path: string; epoch: number }> = [];
 	for (const intent of intents) {
-		if (!(await removeTranscriptUploadTree(basePath, join(transcriptUploadsRoot(basePath), intent.path), budget)))
-			break;
+		if (!(await removeStaleTranscriptUploadEpochs(basePath, intent.path, intent.epoch, budget))) break;
 		removed.push(intent);
 	}
 	if (removed.length > 0) {

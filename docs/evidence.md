@@ -56,6 +56,14 @@ Trap: if the `memory_artifact_tombstones` table is missing, native source reinde
 
 Owner: `platform/daemon/src/memory-lineage.ts`.
 
+## Upload files live under a purge epoch
+
+Hook transcript uploads write to `transcripts/uploads/<agent>/e<epoch>/<session>/<generation>.jsonl`. An agent purge bumps the epoch in `session_transcript_upload_purges`, and the drain removes only directories of older epochs. An upload whose epoch changed before its commit gets `purge_pending` and reopens the purge row.
+
+Trap: deleting the whole agent directory also deletes files of a new agent with the same id. A stale upload can also write after the drain finished, so daemon start reopens every purge row before it drains.
+
+Owner: `platform/daemon/src/session-transcripts.ts` (`drainTranscriptUploadPurgesOwned`), `platform/daemon/src/transcript-upload-paths.ts`.
+
 ## Dependency history belongs to triggers
 
 SQLite triggers on `entity_dependencies` (insert, update, delete) write the dependency audit rows. Application code must not write those rows.

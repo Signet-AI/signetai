@@ -297,8 +297,9 @@ purging its agent, removes every generation file.
 - `413`: a body larger than 1 MiB.
 - `503`: more than 8 uploads in flight (`Retry-After: 1`), database write
   pressure (`retryable: true` and a `Retry-After` header), or
-  `{ "error": "purge_pending" }` while the daemon still removes the files of
-  an earlier purge of the same agent.
+  `{ "error": "purge_pending" }` for a range that started before a purge of
+  its agent. That range commits nothing; retry it, then call `GET` to find
+  where to resume.
 
 ### GET /api/hooks/transcript-upload
 
@@ -306,8 +307,8 @@ Returns the committed upload state for the same query parameters:
 `{ "committedOffset", "generation", "tailSha256" }`. Before the first range it
 returns `{ "committedOffset": 0, "generation": null, "tailSha256": null }`. A
 connector calls it after a restart or a `409` to find where to resume. It
-returns the same `403`, `409` and `503` errors as `PATCH` for another project,
-another harness, or a pending purge.
+returns the same `403` and `409` errors as `PATCH` for another project or
+another harness.
 
 ### POST /api/hooks/remember
 

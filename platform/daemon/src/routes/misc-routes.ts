@@ -397,7 +397,7 @@ export function registerMiscRoutes(app: Hono): void {
 		}
 		if (result.status === "not_found") return c.json({ error: "Agent not found" }, 404);
 		const uploads = purge
-			? (await drainTranscriptUploadPurges(AGENTS_DIR, TRANSCRIPT_UPLOAD_PURGE_WAIT_MS)).status
+			? (await drainTranscriptUploadPurges(AGENTS_DIR, { waitMs: TRANSCRIPT_UPLOAD_PURGE_WAIT_MS })).status
 			: "removed";
 		return c.json({
 			success: true,

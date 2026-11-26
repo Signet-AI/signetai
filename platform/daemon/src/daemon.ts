@@ -1998,7 +1998,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
-	void drainTranscriptUploadPurges(AGENTS_DIR);
 
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;
@@ -2885,6 +2884,7 @@ async function main() {
 		logFdSnapshot("post-pipeline");
 
 		initCheckpointFlush(getDbAccessor());
+		void drainTranscriptUploadPurges(AGENTS_DIR, { reopen: true });
 
 		if (!transcriptCaptureWorkerHandle) {
 			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
