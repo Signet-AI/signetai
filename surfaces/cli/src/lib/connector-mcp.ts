@@ -1,3 +1,4 @@
+import { attemptAsync } from "@signet/core/attempt";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -38,7 +39,7 @@ export async function runConnectorMcp(harness: string, options: ResolveTargetOpt
 				signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
 			});
 			if (response.status === 401 || response.status === 403) {
-				const body: unknown = await response.json().catch(() => ({}));
+				const body: unknown = await attemptAsync(() => response.json());
 				const reason =
 					typeof body === "object" && body !== null && "reason" in body && typeof body.reason === "string"
 						? body.reason

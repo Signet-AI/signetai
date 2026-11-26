@@ -211,6 +211,25 @@ test("local connect requires no login and removes legacy inline credentials", as
 	}
 });
 
+test.each([undefined, "alice"])(
+	"Hermes profile selection does not infer an agent identity; explicit=%s",
+	async (agent) => {
+		const fixture = await lifecycleFixture("local");
+		try {
+			expect(
+				await fixture.run(["connect", "hermes-agent", "--profile", "work", ...(agent ? ["--agent", agent] : [])]),
+			).toBe(0);
+			const entry = Object.entries(await fixture.registry.read()).find(([name]) =>
+				name.startsWith("hermes-agent."),
+			)?.[1];
+			expect(entry).toBeDefined();
+			expect(entry?.agentId).toBe(agent);
+		} finally {
+			fixture.cleanup();
+		}
+	},
+);
+
 test("connector list reports server last-use metadata without exposing credentials", async () => {
 	const fixture = await lifecycleFixture();
 	const lines: string[] = [];

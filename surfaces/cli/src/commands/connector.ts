@@ -82,7 +82,7 @@ function connectorFor(harness: string, profile?: string) {
 			throw new Error(`Unsupported harness: ${harness}`);
 	}
 }
-function canonical(harness: string): string {
+function canonicalHarness(harness: string): string {
 	return harness === "hermes" ? "hermes-agent" : harness;
 }
 interface Identity {
@@ -112,7 +112,7 @@ async function revokeConnectorKey(
 		throw new Error("Connector revocation could not be verified; local state was retained");
 }
 async function installConnector(raw: string, options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
-	const harness = canonical(raw);
+	const harness = canonicalHarness(raw);
 	const installer = connectorFor(harness, options.profile);
 	const target = await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl });
 	const transport = new NodeTransport(target, { env: deps.env });
@@ -137,11 +137,7 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 		});
 	}
 	const keyFile = issued ? await writeKeyFile(target.origin, registryKey, issued.secret, deps) : undefined;
-	const agentId =
-		issued?.key.agentId ??
-		options.agent ??
-		options.agentId ??
-		(harness === "hermes-agent" ? options.profile : undefined);
+	const agentId = issued?.key.agentId ?? options.agent ?? options.agentId;
 	await registry.set(registryKey, {
 		url: target.url,
 		...(keyFile ? { keyFile } : {}),
@@ -195,7 +191,7 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 	);
 }
 async function disconnect(raw: string, options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
-	const harness = canonical(raw);
+	const harness = canonicalHarness(raw);
 	const registry = new ConnectorRegistry(deps);
 	const installer = connectorFor(harness, options.profile);
 	const registryKey = connectorRegistryKey(
@@ -257,7 +253,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 		.description("Proxy MCP using the harness registry credential")
 		.action(async (harness: string) => {
 			try {
-				await runConnectorMcp(connectorRegistryKey(canonical(harness), undefined, deps.env), deps);
+				await runConnectorMcp(connectorRegistryKey(canonicalHarness(harness), undefined, deps.env), deps);
 			} catch (error) {
 				reportAuthError(error);
 			}
@@ -266,7 +262,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 	addOptions(connector.command("install <harness>")).action(action(installConnector));
 	addOptions(connector.command("rotate <harness>")).action(
 		action(async (harness, opts, ctx) => {
-			const name = canonical(harness);
+			const name = canonicalHarness(harness);
 			const installer = connectorFor(name, opts.profile);
 			const registryKey = connectorRegistryKey(
 				name,
