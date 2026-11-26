@@ -88,6 +88,56 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("bounded user lookup serves compliance without widening the directory", async () => {
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, bob.token)).status).toBe(403);
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
+		const found = await call("/api/org/users/lookup?q=alice&limit=1", "GET", undefined, bob.token);
+		expect(found.status).toBe(200);
+		expect((await found.json()).users).toEqual([{ id: alice.userId, displayName: "alice", email: null }]);
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([statement("UPDATE users SET email=? WHERE id=?", ["alice@example.test", alice.userId])]);
+		expect(
+			(await (await call("/api/org/users/lookup?q=%40example.test", "GET", undefined, bob.token)).json()).users,
+		).toEqual([{ id: alice.userId, displayName: "alice", email: "alice@example.test" }]);
+		expect((await (await call("/api/org/users/lookup?q=%25", "GET", undefined, bob.token)).json()).users).toEqual([]);
+		const page = await (await call("/api/org/users/lookup?q=a&limit=1", "GET", undefined, bob.token)).json();
+		expect(page.users).toHaveLength(1);
+		expect(typeof page.nextCursor).toBe("string");
+		const next = await (
+			await call(`/api/org/users/lookup?q=a&limit=1&cursor=${page.nextCursor}`, "GET", undefined, bob.token)
+		).json();
+		expect(next.users).toHaveLength(1);
+		expect(next.users[0].id).not.toBe(page.users[0].id);
+		expect(next.nextCursor).toBeNull();
+		expect((await call("/api/org/users", "GET", undefined, bob.token)).status).toBe(403);
+		expect((await call("/api/org/users/lookup?q=alice&limit=51", "GET", undefined, bob.token)).status).toBe(400);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{ name: "narrowed-lookup", permissions: ["recall"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+				bob.token,
+			)
+		).json();
+		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, key.secret)).status).toBe(403);
+		const scoped = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{
+					name: "scoped-lookup",
+					agentId: bob.agentId,
+					permissions: ["classify"],
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				bob.token,
+			)
+		).json();
+		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, scoped.secret)).status).toBe(403);
+	});
 	test("operator log streams are scoped, content-free and cancelled cleanly", async () => {
 		const { registerMiscRoutes } = await import("../routes/misc-routes");
 		const { logger } = await import("../logger");

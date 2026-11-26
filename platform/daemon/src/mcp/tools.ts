@@ -458,6 +458,27 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 	registerMcpTool(
 		server,
+		"signet_org_user_lookup",
+		{
+			title: "Look Up Organization Users",
+			description:
+				"Search a bounded page of names and emails. Requires admin or compliance access without agent or project restrictions.",
+			inputSchema: z
+				.object({
+					q: z.string().trim().min(1).max(128),
+					limit: z.number().int().min(1).max(50).optional(),
+					cursor: z.string().min(1).max(128).optional(),
+				})
+				.strict(),
+		},
+		async (input) => {
+			const query = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) if (value !== undefined) query.set(key, String(value));
+			return organizationResult(`/api/org/users/lookup?${query}`);
+		},
+	);
+	registerMcpTool(
+		server,
 		"signet_org_job",
 		{
 			title: "Organization Job",

@@ -22,6 +22,27 @@ import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 
 const text = z.string().trim().min(1).max(128);
+export async function lookupUsers(p: Principal, input: unknown) {
+	if (!(p.permissions.has("admin") || (p.compliance && p.permissions.has("classify"))))
+		throw new IdentityError(403, "permission", "Requires admin or compliance access");
+	if (p.boundAgentId !== null) throw new IdentityError(403, "agent_not_permitted");
+	if (p.allowedProjects !== null) throw new IdentityError(403, "project_not_permitted");
+	const data = z
+		.object({ q: text, limit: z.coerce.number().int().min(1).max(50).default(20), cursor: text.optional() })
+		.strict()
+		.parse(input);
+	const pattern = `%${data.q.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+	const rows = await organizationQuery<readonly { id: string; displayName: string; email: string | null }[]>(
+		statement(
+			"SELECT id,display_name AS displayName,email FROM users WHERE status='active' AND (? IS NULL OR id>?) AND (display_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\') ORDER BY id LIMIT ?",
+			[data.cursor ?? null, data.cursor ?? null, pattern, pattern, data.limit + 1],
+			"all",
+		),
+	);
+	const users = rows.slice(0, data.limit);
+	await organizationWrite([auditStatement(p, "user.lookup", "user", null, { count: users.length })]);
+	return { users, nextCursor: rows.length > data.limit ? (users.at(-1)?.id ?? null) : null };
+}
 export async function invites(p: Principal) {
 	requireAdmin(p);
 	return {
