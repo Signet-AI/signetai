@@ -93,7 +93,7 @@ async function lifecycleFixture(mode: "local" | "team" = "team") {
 			}
 			if (path === "/api/auth/connector-keys" && request.method === "GET")
 				return Response.json({ keys: [{ ...metadata, revoked_at: revoked ? "2026-11-25T12:01:00.000Z" : null }] });
-			if (path === "/api/org/keys") return Response.json({ keys: [{ userId: null }] });
+			if (path === "/api/org/keys") return Response.json({ keys: [{ user_id: null }] });
 			if (path === "/api/auth/connector-keys" && request.method === "POST")
 				return Response.json(
 					{ key: { id: "replacement", agentId: "alice", deviceId: "device", expiresAt: "2030-01-01" }, secret },

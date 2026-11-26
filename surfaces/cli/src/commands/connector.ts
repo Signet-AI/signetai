@@ -82,8 +82,9 @@ function connectorFor(harness: string, profile?: string) {
 			throw new Error(`Unsupported harness: ${harness}`);
 	}
 }
+const harnessAliases: ReadonlyMap<string, string> = new Map([["hermes", "hermes-agent"]]);
 function canonicalHarness(harness: string): string {
-	return harness === "hermes" ? "hermes-agent" : harness;
+	return harnessAliases.get(harness) ?? harness;
 }
 interface Identity {
 	mode: string;
@@ -387,7 +388,7 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 						legacy = {
 							status: "checked",
 							unassigned: keys.filter(
-								(key: unknown) => typeof key === "object" && key !== null && "userId" in key && key.userId === null,
+								(key: unknown) => typeof key === "object" && key !== null && "user_id" in key && key.user_id === null,
 							).length,
 						};
 				} catch (error) {
