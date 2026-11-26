@@ -223,6 +223,13 @@ describe("organization credential boundary", () => {
 		const second = await post();
 		expect(second.status).toBe(200);
 		expect(await second.json()).toMatchObject({ id: memory.id, deduped: true });
+		await organizationWrite([
+			statement("DELETE FROM classification_audience WHERE classification_id='cls_destination'"),
+		]);
+		const revoked = await post();
+		expect(revoked.status).toBe(403);
+		expect((await revoked.json()).reason).toBe("classified_destination");
+		expect(await organizationQuery(statement("SELECT count(*) n FROM memories", [], "get"))).toEqual({ n: 1 });
 	});
 	test("A14 hidden hash and idempotency duplicates produce ordinary fresh writes", async () => {
 		const { registerMemoryRoutes } = await import("../routes/memory-routes");
