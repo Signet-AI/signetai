@@ -97,7 +97,7 @@ test("A21 delivers a 10 MiB staged session-end with byte-exact evidence", async 
 				);
 				if (reply.status !== 200) return false;
 				evidence = Buffer.from(text(record(reply.body).content));
-				return true;
+				return evidence.length === bytes.length;
 			},
 			"A21 evidence readback",
 			60_000,
