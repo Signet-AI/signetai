@@ -44,8 +44,7 @@ import {
 	uniqueOntologyEvidenceRefs,
 } from "./ontology-evidence";
 import { readScopeSql, type ReadScope } from "./read-scope";
-import { getDbOwner, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
-import { ownerReadAll } from "./db-owner-sql";
+import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
 import { type MemoryTemporalEdgeInput, txInsertMemoryTemporalEdges } from "./temporal-edges";
 import { insertHistoryEvent, txForgetMemory, txIngestEnvelope, txSupersedeMemory } from "./transactions";
 
@@ -2794,10 +2793,15 @@ export async function readOntologyEntityAliasRows(params: {
 	if (scope.projects !== null) return [];
 	const aliasScope = readScopeSql("a", scope, { visibility: null, memory: null, session: null, source: null });
 	const entityScope = readScopeSql("e", scope, { visibility: null, memory: null, session: null, source: null });
-	const rows = await ownerReadAll<Record<string, unknown>>(
-		await getDbOwner(),
-		`SELECT a.id,a.entity_id,a.agent_id,a.alias,a.canonical_alias,a.confidence,a.source,a.status,a.created_at,a.updated_at FROM entity_aliases a JOIN entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id WHERE ${conditions.join(" AND ")}${aliasScope.sql}${entityScope.sql} ORDER BY a.status ASC, a.alias ASC`,
-		[...args, ...aliasScope.args, ...entityScope.args],
+	const rows = await dbOwnerQuery<readonly Record<string, unknown>[]>(
+		{
+			sql: `SELECT a.id,a.entity_id,a.agent_id,a.alias,a.canonical_alias,a.confidence,a.source,a.status,a.created_at,a.updated_at FROM entity_aliases a JOIN entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id WHERE ${conditions.join(" AND ")}${aliasScope.sql}${entityScope.sql} ORDER BY a.status ASC, a.alias ASC`,
+			params: [...args, ...aliasScope.args, ...entityScope.args].map((value) => {
+				if (typeof value === "string" || typeof value === "number" || value === null) return value;
+				throw new Error("invalid_read_scope");
+			}),
+			result: "all",
+		},
 		{ operation: "db:knowledge.entity-aliases.read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
 	);
 	return rows;
