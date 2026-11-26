@@ -24,7 +24,7 @@ export type ContentReadRequest =
 			readonly op: "readable_pointers";
 			readonly scope: ReadScope;
 			readonly references: readonly {
-				readonly kind: "memory" | "session" | "summary" | "artifact" | "document";
+				readonly kind: "memory" | "memory_value" | "session" | "summary" | "artifact" | "document";
 				readonly id: string;
 			}[];
 	  }

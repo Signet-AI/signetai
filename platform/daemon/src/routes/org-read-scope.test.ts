@@ -916,12 +916,30 @@ test("B3 history redacts previous and replacement pointers and their legacy reas
 			.prepare(
 				"INSERT INTO memory_history(id,memory_id,event,changed_by,reason,metadata,created_at) VALUES ('b3-history','b3-old','superseded','fixture','previous b3-hidden',?,?)",
 			)
-			.run(JSON.stringify({ previousSupersededBy: "b3-hidden", duplicateOf: "b3-hidden" }), at),
+			.run(
+				JSON.stringify({
+					previousSupersededBy: "b3-hidden",
+					duplicateOf: "b3-hidden",
+					inventedReviewPointer: "b3-hidden",
+					nested: { invented: "b3-hidden" },
+					values: ["b3-hidden", "ordinary"],
+					readableProbe: "b3-old",
+				}),
+				at,
+			),
 	);
 	const response = await request("/api/memory/b3-old/history");
 	expect(response.status).toBe(200);
 	expect(response.body).not.toContain("b3-hidden");
 	expect(response.body).toContain('"reason":null');
+	expect(JSON.parse(response.body).history[0].metadata).toEqual({
+		previousSupersededBy: null,
+		duplicateOf: null,
+		inventedReviewPointer: null,
+		nested: { invented: null },
+		values: [null, "ordinary"],
+		readableProbe: "b3-old",
+	});
 });
 test("B6 readable deleted superseders remain superseding in every mode", async () => {
 	seed("b6-old", null);

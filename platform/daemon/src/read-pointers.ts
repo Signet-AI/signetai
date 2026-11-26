@@ -8,7 +8,7 @@ declare module "hono" {
 	}
 }
 
-type Reference = { kind: "memory" | "session" | "summary" | "artifact" | "document"; id: string };
+type Reference = { kind: "memory" | "memory_value" | "session" | "summary" | "artifact" | "document"; id: string };
 const memoryKeys = new Set([
 	"supersededBy",
 	"previousSupersededBy",
@@ -61,10 +61,14 @@ function reference(key: string, value: unknown, record: Record<string, unknown>)
 }
 export async function redactReadPointers(value: unknown, scope: ReadScope): Promise<unknown> {
 	const refs = new Map<string, Reference>();
-	const collect = (node: unknown, depth: number): void => {
+	const collect = (node: unknown, depth: number, metadata = false): void => {
 		if (depth > 32) throw new Error("Pointer nesting limit exceeded");
+		if (metadata && typeof node === "string") {
+			refs.set(`memory_value:${node}`, { kind: "memory_value", id: node });
+			return;
+		}
 		if (Array.isArray(node)) {
-			for (const item of node) collect(item, depth + 1);
+			for (const item of node) collect(item, depth + 1, metadata);
 			return;
 		}
 		if (node === null || typeof node !== "object") return;
@@ -72,7 +76,7 @@ export async function redactReadPointers(value: unknown, scope: ReadScope): Prom
 		for (const [key, item] of Object.entries(record)) {
 			const ref = reference(key, item, record);
 			if (ref) refs.set(`${ref.kind}:${ref.id}`, ref);
-			else collect(item, depth + 1);
+			collect(item, depth + 1, metadata || key === "metadata");
 		}
 	};
 	collect(value, 0);
@@ -88,9 +92,11 @@ export async function redactReadPointers(value: unknown, scope: ReadScope): Prom
 			allowed.add(key);
 	}
 
-	const apply = (node: unknown): { value: unknown; redacted: boolean } => {
+	const apply = (node: unknown, metadata = false): { value: unknown; redacted: boolean } => {
+		if (metadata && typeof node === "string" && !allowed.has(`memory_value:${node}`))
+			return { value: null, redacted: true };
 		if (Array.isArray(node)) {
-			const children = node.map(apply);
+			const children = node.map((child) => apply(child, metadata));
 			return { value: children.map((child) => child.value), redacted: children.some((child) => child.redacted) };
 		}
 		if (node === null || typeof node !== "object") return { value: node, redacted: false };
@@ -117,7 +123,7 @@ export async function redactReadPointers(value: unknown, scope: ReadScope): Prom
 				result[key] = null;
 				redacted = true;
 			} else {
-				const child = apply(item);
+				const child = apply(item, metadata || key === "metadata");
 				result[key] = child.value;
 				redacted ||= child.redacted;
 			}

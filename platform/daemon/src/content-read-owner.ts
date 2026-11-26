@@ -159,21 +159,30 @@ export function executeContentRead(
 
 			const table = {
 				memory: "memories",
+				memory_value: "memories",
 				summary: "session_summaries",
 				artifact: "memory_artifacts",
 				document: "documents",
 			}[ref.kind];
 			const key = ref.kind === "artifact" ? "source_path" : "id";
 			const scope = readScopeSql("target", request.scope, {
-				visibility: ref.kind === "memory" ? "visibility" : null,
-				memory: ref.kind === "memory" ? "id" : null,
-				session: ref.kind === "memory" ? "source_id" : ref.kind === "document" ? null : "session_key",
+				visibility: ref.kind === "memory" || ref.kind === "memory_value" ? "visibility" : null,
+				memory: ref.kind === "memory" || ref.kind === "memory_value" ? "id" : null,
+				session:
+					ref.kind === "memory" || ref.kind === "memory_value"
+						? "source_id"
+						: ref.kind === "document"
+							? null
+							: "session_key",
 				source: ref.kind === "summary" ? null : ref.kind === "document" ? "id" : "source_id",
 			});
 			const id = ref.id;
+			const missing = ref.kind === "memory_value" ? `NOT EXISTS(SELECT 1 FROM memories WHERE id=?) OR ` : "";
 			const row = db
-				.prepare(`SELECT 1 FROM ${table} target WHERE target.${key} IN (?,?)${scope.sql} LIMIT 1`)
-				.get(id, ref.id, ...scope.args);
+				.prepare(
+					`SELECT 1 WHERE ${missing}EXISTS(SELECT 1 FROM ${table} target WHERE target.${key} IN (?,?)${scope.sql})`,
+				)
+				.get(...(ref.kind === "memory_value" ? [id] : []), id, ref.id, ...scope.args);
 			return row ? [`${ref.kind}:${ref.id}`] : [];
 		});
 	}
