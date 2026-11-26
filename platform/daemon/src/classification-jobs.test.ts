@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { executeClassification } from "./classification-owner";
 import type { ClassificationActor } from "./classifications";
 const actor: ClassificationActor = {
@@ -12,7 +12,7 @@ const actor: ClassificationActor = {
 	credential: "session:test",
 };
 function fixture(count: number) {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.exec(
 		"INSERT INTO classifications(id,name) VALUES('cls_hr','HR');WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<" +
 			count +

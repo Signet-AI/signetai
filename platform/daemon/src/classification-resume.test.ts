@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { createDbOwnerClient } from "./db-owner-client";
 import { runStartupRecoveryAsync } from "./startup-recovery";
 import type { DbAccessor } from "./db-accessor";
@@ -12,7 +12,7 @@ import type { ClassificationRequest } from "./classifications";
 test("a fresh DB owner resumes the durable cursor while foreground reads interleave", async () => {
 	const directory = mkdtempSync(join(tmpdir(), "classification-resume-")),
 		path = join(directory, "memory.db"),
-		db = classificationFixture();
+		db = currentClassificationFixture();
 	db.exec(
 		"INSERT INTO classifications(id,name) VALUES('cls_hr','HR');WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<6001) INSERT INTO memories(id,content,agent_id,created_at,updated_at) SELECT 'batch-'||x,'secret','default','now','now' FROM n",
 	);

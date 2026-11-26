@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { findSqliteVecExtension, compartmentFor } from "@signet/core";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { createDbOwnerClient } from "./db-owner-client";
 import { initDbAccessorLite, getDbAccessor, closeDbAccessor } from "./db-accessor";
 import { promoteStagingIndex } from "./embedding-index-migration";
@@ -11,7 +11,7 @@ import { promoteStagingIndex } from "./embedding-index-migration";
 async function promotion(virtual: boolean, fault = false): Promise<void> {
 	const directory = mkdtempSync(join(tmpdir(), "classified-promotion-")),
 		path = join(directory, "memory.db"),
-		db = classificationFixture();
+		db = currentClassificationFixture();
 	const extension = findSqliteVecExtension();
 	if (!extension) throw new Error("sqlite-vec required");
 	db.loadExtension(extension);
