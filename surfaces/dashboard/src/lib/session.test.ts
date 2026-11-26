@@ -68,7 +68,8 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 				path === "/api/auth/handoff/redeem" ? { status: 200, body: { token: "session-1" } } : signedIn;
 			await session.startSession();
 			expect(location.hash).toBe("#view=graph");
-			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-1");
+			expect(localStorage.getItem(session.TOKEN_KEY)).toBeNull();
+			expect(session.readToken()).toBe("session-1");
 			const redeem = calls.find((call) => call.path === "/api/auth/handoff/redeem");
 			expect(JSON.parse(String(redeem?.init?.body))).toEqual({ code: "code-1" });
 			expect(session.currentSession().kind).toBe("signed-in");
@@ -80,7 +81,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			location.hash = "#signet-handoff=code-2";
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(location.hash).toBe("");
-			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-3");
+			expect(session.readToken()).toBe("session-3");
 		});
 
 		test("a 401 mid-session ends the session in place and drops the dead token", async () => {
@@ -109,7 +110,8 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(result.ok).toBe(true);
 			const exchange = calls.find((call) => call.path === "/api/auth/session");
 			expect(header(exchange?.init, "Authorization")).toBe("Bearer sig_sk_k1_secret");
-			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-2");
+			expect(localStorage.getItem(session.TOKEN_KEY)).toBeNull();
+			expect(session.readToken()).toBe("session-2");
 			expect(session.authHeaders()).toEqual({ Authorization: "Bearer session-2" });
 		});
 
@@ -178,7 +180,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(after.kind === "signed-in" && after.expiresSoon).toBe(true);
 		});
 
-		test("does not warn about a session that starts inside the warning window", async () => {
+		test("warns about a session that starts inside the warning window", async () => {
 			handler = () =>
 				whoami({
 					authenticated: true,
@@ -188,7 +190,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 				});
 			await session.refreshSession();
 			const state = session.currentSession();
-			expect(state.kind === "signed-in" && state.expiresSoon).toBe(false);
+			expect(state.kind === "signed-in" && state.expiresSoon).toBe(true);
 		});
 
 		test("renewal opens sign-in without dropping the session, and can be cancelled", async () => {
@@ -246,15 +248,14 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(session.currentSession().kind).toBe("signed-in");
 		});
 
-		test("a token written during a check is checked instead of being discarded", async () => {
-			localStorage.setItem(session.TOKEN_KEY, "session-old");
+		test("obsolete stored credentials are not sent", async () => {
+			await session.signOut();
+			localStorage.setItem(session.TOKEN_KEY, "session-obsolete");
 			handler = (_path, init) => {
-				if (header(init, "Authorization") === "Bearer session-new") return signedIn;
-				localStorage.setItem(session.TOKEN_KEY, "session-new");
-				return whoami({ authenticated: false, effectiveAccess: false, error: "token expired" });
+				expect(header(init, "Authorization")).toBeNull();
+				return signedIn;
 			};
 			await session.refreshSession();
-			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-new");
 			expect(session.currentSession().kind).toBe("signed-in");
 		});
 
@@ -264,7 +265,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			}) as unknown as typeof fetch;
 			await session.refreshSession();
 			expect(session.currentSession().kind).toBe("unreachable");
-			expect(session.can(session.currentSession(), "admin")).toBe(true);
+			expect(session.can(session.currentSession(), "admin")).toBe(false);
 		});
 	});
 }

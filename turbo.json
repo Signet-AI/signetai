@@ -1,6 +1,11 @@
 {
 	"$schema": "https://turbo.build/schema.json",
-	"globalEnv": ["SIGNET_DAEMON_BIN"],
+	"globalEnv": [
+		"SIGNET_DAEMON_BIN",
+		"SIGNET_ELECTRON_TEST_EXECUTABLE",
+		"SIGNET_ELECTRON_TMPDIR",
+		"SIGNET_DESKTOP_SCREEN_DIR"
+	],
 	"globalPassThroughEnv": [
 		"TMPDIR",
 		"SIGNET_DB_OWNER_SMOKE",

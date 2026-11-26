@@ -18,9 +18,12 @@ Returns the identity and claims of the current request's credential. This route
 is open so the dashboard can determine whether to show the login screen; if an
 `Authorization` header is present, the signed token or API key is validated the
 same way protected routes validate it. In `local` mode, `authenticated` is
-always `false` and `claims` is `null`. `effectiveAccess` is `true` when the
-current request can use the dashboard without another login, including trusted
-localhost requests in `hybrid` mode. `error` is the reason a presented
+always `false` and `claims` is `null`. `effectiveAccess` remains a boolean: it is
+`true` when this request has access, including local and trusted hybrid requests.
+`accessMode` is `open`, `authenticated`, or `none`; organization clients use this
+field to distinguish trusted access, an authenticated identity, and sign-in. Organization sessions report `organization`, `user`,
+`credential`, and default read/write `agents`; legacy token claims are not the
+organization user record. `error` is the reason a presented
 credential was rejected, such as `token expired`, `invalid api key`,
 `api key revoked`, or `credential could not be verified` when the key store is
 unavailable, and `null` when none was presented or it was accepted.
@@ -47,6 +50,7 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
   },
   "trustedLocal": false,
   "effectiveAccess": true,
+  "accessMode": "authenticated",
   "error": null,
   "permissions": ["remember", "recall", "modify", "forget", "recover", "documents", "connectors", "diagnostics", "analytics"],
   "mode": "team",
@@ -57,6 +61,37 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
   ]
 }
 ```
+
+### GET /api/auth/profile
+
+Returns `{ "user": ... }` for the authenticated organization user, including
+identity provider and profile metadata. The request must resolve to an active
+user; it cannot read another user's profile.
+
+### PATCH /api/auth/profile
+
+Updates the signed-in organization's user profile and returns `{ "user": ... }`.
+Requires a user session; cookie requests also require `x-signet-csrf`. Send
+`{ "displayName": "Name" }`. A password identity can also update `email`; SSO
+identities cannot change an email managed by their provider. API keys cannot
+update a profile.
+
+### GET /api/auth/connector-keys/:id/errors
+
+Returns `{ "keyId": "...", "since": "...", "limit": 10, "errors": [] }` for
+a connector key owned by the signed-in user. Requires a user session and returns
+`403` for a missing, non-connector, or other user's key. Includes at most the ten
+most recent connector errors from the preceding seven days, each with `at`,
+`status`, and `reason`.
+
+### PATCH /api/auth/preferences
+
+Updates the signed-in organization user's default read agent. Requires a user
+session; API keys cannot change this preference. Cookie-authenticated requests
+require `x-signet-csrf`. Send `{ "defaultReadAgentId": "agent-id" }`. The daemon
+checks access to the target, saves the preference, and returns
+`{ "defaultReadAgentId": "agent-id" }`. A subsequent `GET /api/auth/whoami`
+reports it in `agents.defaultRead`.
 
 ### GET /api/auth/methods
 

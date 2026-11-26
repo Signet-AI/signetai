@@ -75,6 +75,28 @@ async function useNativeModule(directory: string, modulePath: string): Promise<v
 }
 
 describe("native secret keyring containment", () => {
+	test("Electron keyring helpers run as Node without changing the app environment", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-electron-keyring-"));
+		directories.push(directory);
+		const helperPath = join(directory, "electron.ts");
+		await writeFile(
+			helperPath,
+			`await Bun.stdin.text(); process.stdout.write(JSON.stringify({ok:true,result:{state:process.env.ELECTRON_RUN_AS_NODE==='1'?'missing':'unavailable'}}));`,
+		);
+		const previous = Object.getOwnPropertyDescriptor(process.versions, "electron");
+		const originalRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+		Object.defineProperty(process.versions, "electron", { configurable: true, value: "41.2.1" });
+		try {
+			setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 1000 });
+			expect(await credentialKeyring("signet-login", "https://electron.example").get()).toMatchObject({
+				state: "missing",
+			});
+			expect(process.env.ELECTRON_RUN_AS_NODE).toBe(originalRunAsNode);
+		} finally {
+			if (previous) Object.defineProperty(process.versions, "electron", previous);
+			else Reflect.deleteProperty(process.versions, "electron");
+		}
+	});
 	test("bounds concurrent native helper processes across login origins", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "signet-login-admission-"));
 		directories.push(directory);

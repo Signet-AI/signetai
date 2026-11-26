@@ -167,7 +167,6 @@ export async function createAgent(p: Principal, input: unknown) {
 	return { agentId };
 }
 export async function updateAgent(p: Principal, agentId: string, input: unknown) {
-	requireAdmin(p);
 	const data = z
 		.object({
 			name: text.optional(),
@@ -175,11 +174,42 @@ export async function updateAgent(p: Principal, agentId: string, input: unknown)
 			ownerGroupId: text.optional(),
 			archived: z.boolean().optional(),
 		})
+		.strict()
 		.parse(input);
-	if (agentId === "default" && data.archived) throw new IdentityError(403, "org_policy");
-	if (data.ownerUserId && !(await readUser(data.ownerUserId))) throw new IdentityError(404, "not_found");
+	if (p.boundAgentId && p.boundAgentId !== agentId) throw new IdentityError(403, "agent_binding_conflict");
+	if (p.role === "admin") requireAdmin(p);
+	else {
+		const owned = await organizationQuery<AgentRecord | null>(
+			statement("SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE id=?", [agentId], "get"),
+		);
+		if (
+			!p.permissions.has("modify") ||
+			!data.name ||
+			Object.keys(data).some((key) => key !== "name") ||
+			owned?.kind !== "personal" ||
+			owned.owner_user_id !== p.userId ||
+			owned.archived_at
+		)
+			throw new IdentityError(403, "not_owner", "Only the owner can rename a personal agent");
+	}
+	if (data.ownerUserId && data.ownerGroupId) throw new IdentityError(400, "invalid_transfer");
+	if (agentId === "default" && (data.archived || data.ownerUserId || data.ownerGroupId))
+		throw new IdentityError(403, "org_policy");
+	if (data.ownerUserId) await activeTarget(data.ownerUserId);
 	if (data.ownerGroupId) await group(p, data.ownerGroupId);
+	const transfer =
+		data.ownerUserId || data.ownerGroupId
+			? [
+					statement("UPDATE agents SET kind=?,owner_user_id=?,owner_group_id=? WHERE id=?", [
+						data.ownerUserId ? "personal" : "team",
+						data.ownerUserId ?? null,
+						data.ownerGroupId ?? null,
+						agentId,
+					]),
+				]
+			: [];
 	await organizationWrite([
+		...transfer,
 		{
 			...statement(
 				"UPDATE agents SET name = COALESCE(?,name),owner_user_id = COALESCE(?,owner_user_id),owner_group_id = COALESCE(?,owner_group_id),archived_at = CASE WHEN ? IS NULL THEN archived_at WHEN ? = 1 THEN ? ELSE NULL END,updated_at = ? WHERE id = ?",

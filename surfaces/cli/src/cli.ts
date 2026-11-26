@@ -47,7 +47,10 @@ import { registerAccelerateCommands } from "./commands/accelerate.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
-import { registerAuthCommands } from "./commands/auth.js";
+import { registerAuthCommands, reportAuthError } from "./commands/auth.js";
+import { registerOrganizationCommands } from "./commands/organization.js";
+import { cliTarget, cliTransport, registerOrganizationTarget } from "./lib/organization-target.js";
+import { organizationDashboard, organizationStatus } from "./commands/organization-client.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -844,6 +847,8 @@ Examples:
 `,
 );
 
+registerOrganizationTarget(program, { configUrl: readDaemonUrlConfig(AGENTS_DIR) });
+registerOrganizationCommands(program, { configUrl: readDaemonUrlConfig(AGENTS_DIR) });
 registerCliPreAction(program, {
 	agentsDir: AGENTS_DIR,
 	version: VERSION,
@@ -870,6 +875,24 @@ const healthDeps = {
 	normalizeAgentPath,
 	parseIntegerValue,
 	signetLogo,
+};
+
+const showTargetStatus = async (options: { path?: string; json?: boolean }): Promise<void> => {
+	const remote = cliTransport();
+	if (remote) return organizationStatus(remote, options.json);
+	return showStatus(options, healthDeps);
+};
+const showTargetDashboard = async (options: { path?: string }): Promise<void> => {
+	const remote = cliTransport();
+	const target = cliTarget();
+	if (remote && target)
+		return organizationDashboard(
+			remote,
+			target.url,
+			program.opts().nonInteractive === true,
+			(await import("open")).default,
+		);
+	return launchDashboard(options, daemonDeps);
 };
 
 const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> => {
@@ -938,7 +961,7 @@ const setupDeps: import("./features/setup-types.js").SetupDeps = {
 		}),
 	isDaemonRunning,
 	isGitRepo,
-	launchDashboard: (options) => launchDashboard(options, daemonDeps),
+	launchDashboard: (options) => showTargetDashboard(options),
 	normalizeAgentPath,
 	normalizeChoice,
 	normalizeStringValue,
@@ -966,11 +989,11 @@ registerAppCommands(program, {
 			}
 		}
 	},
-	launchDashboard: (options) => launchDashboard(options, daemonDeps),
+	launchDashboard: (options) => showTargetDashboard(options),
 	migrateSchema: (options) => migrateSchema(options, daemonDeps),
 	setupWizard: (options) => setupWizard(options, setupDeps),
 	showDoctor: (options) => showDoctor(options, healthDeps),
-	showStatus: (options) => showStatus(options, healthDeps),
+	showStatus: (options) => showTargetStatus(options),
 	syncTemplates: () => runSyncTemplates(),
 });
 
@@ -988,7 +1011,7 @@ registerDaemonCommands(program, {
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),
 	showLogs: (options) => showLogs(options, daemonDeps),
-	showStatus: (options) => showStatus(options, healthDeps),
+	showStatus: (options) => showTargetStatus(options),
 });
 
 registerAuthCommands(program, {
@@ -1186,5 +1209,9 @@ registerDefaultAction(program, {
 if (isDaemonEntrypoint) {
 	await import("../../../platform/daemon/src/daemon.js");
 } else {
-	await program.parseAsync();
+	try {
+		await program.parseAsync();
+	} catch (error) {
+		reportAuthError(error, process.argv.includes("--json"));
+	}
 }

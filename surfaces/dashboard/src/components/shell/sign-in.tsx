@@ -1,6 +1,14 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Dialog as DialogPrimitive, Popover } from "radix-ui";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SignetMark } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
@@ -23,6 +31,13 @@ export function describeTarget(mode: string): string {
 }
 
 function SignInForm({ session }: { session: SignedOut }) {
+	const providers = session.providers.filter(
+		(provider) =>
+			provider.enabled &&
+			provider.type !== "password" &&
+			provider.startPath?.startsWith("/api/auth/") &&
+			!provider.startPath.includes("\\"),
+	);
 	const password = session.providers.find((provider) => provider.type === "password" && provider.enabled);
 	const [useKey, setUseKey] = useState(!password);
 	const [username, setUsername] = useState(password?.username ?? "");
@@ -70,7 +85,9 @@ function SignInForm({ session }: { session: SignedOut }) {
 					{session.expired ? "Sign in again" : "Sign in to Signet"}
 				</h1>
 				<p className="m-0 rounded-full border px-2.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-					{describeTarget(session.mode)}
+					{session.organizationName
+						? `${session.organizationName} · ${typeof location === "undefined" ? "" : location.origin}`
+						: describeTarget(session.mode)}
 				</p>
 			</div>
 			{message && (
@@ -78,6 +95,11 @@ function SignInForm({ session }: { session: SignedOut }) {
 					{message}
 				</p>
 			)}
+			{providers.map((provider) => (
+				<Button key={provider.id} asChild variant="outline">
+					<a href={provider.startPath}>{provider.label ?? "Continue with SSO"}</a>
+				</Button>
+			))}
 			{useKey ? (
 				<FormField
 					id="signet-sign-in-key"
@@ -149,6 +171,11 @@ function SignInForm({ session }: { session: SignedOut }) {
 				<p className="m-0 text-center text-[13px] text-muted-foreground">
 					Password sign-in is not configured on this daemon.
 				</p>
+			)}
+			{!session.expired && session.mode === "team" && !session.organizationName && (
+				<a className="text-center text-small underline" href="/auth/setup">
+					Claim a new organization
+				</a>
 			)}
 			{session.renewal && (
 				<Button type="button" variant="ghost" size="sm" className="self-center" onClick={() => void cancelRenewal()}>
@@ -234,49 +261,87 @@ function formatExpiry(expiresAt: number): string {
 }
 
 export function SessionChip({ session }: { session: Session }) {
-	if (session.kind === "open" && session.mode !== "local") {
+	if (session.kind === "open" && session.mode !== "local")
 		return (
-			<span className="font-mono text-[10px] text-muted-foreground" title="Trusted loopback request">
+			<span className="font-sans text-xs text-muted-foreground" title="Trusted loopback request">
 				{describeTarget(session.mode)}
 			</span>
 		);
-	}
 	if (session.kind !== "signed-in") return null;
-	const { identity } = session;
+	const { identity, whoami } = session;
+	const logout = (all: boolean) =>
+		void signOut(all).catch((error: unknown) =>
+			toast.error(error instanceof Error ? error.message : "Sign-out failed."),
+		);
 	return (
-		<Popover.Root>
-			<Popover.Trigger asChild>
-				<Button variant="ghost" size="xs" className="sig-no-drag font-mono text-[10px] text-muted-foreground">
-					{describeTarget(session.mode)}
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button variant="ghost" size="sm" className="sig-no-drag h-9 gap-2 font-sans text-xs text-muted-foreground">
+					{whoami ? (
+						<>
+							<span className="flex size-5 items-center justify-center rounded-full border" aria-hidden="true">
+								{identity.name?.slice(0, 1)}
+							</span>
+							<span className="max-w-24 truncate">{identity.name}</span>
+						</>
+					) : (
+						describeTarget(session.mode)
+					)}
 				</Button>
-			</Popover.Trigger>
-			<Popover.Portal>
-				<Popover.Content
-					sideOffset={6}
-					align="end"
-					className="z-50 flex w-[260px] flex-col gap-3 rounded-lg border bg-popover p-3 text-popover-foreground shadow-md"
-				>
-					<dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
-						<dt className="text-muted-foreground">Signed in as</dt>
-						<dd className="m-0 truncate font-mono" title={identity.sub}>
-							{identity.name ?? identity.sub}
-						</dd>
-						<dt className="text-muted-foreground">Role</dt>
-						<dd className="m-0 font-mono">{identity.role}</dd>
-						<dt className="text-muted-foreground">Expires</dt>
-						<dd className="m-0">{formatExpiry(identity.expiresAt)}</dd>
-					</dl>
-					<Button variant="secondary" size="sm" onClick={() => void signOut()}>
-						Sign out of this browser
-					</Button>
-				</Popover.Content>
-			</Popover.Portal>
-		</Popover.Root>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" sideOffset={6} className="w-72">
+				<DropdownMenuLabel asChild>
+					<div className="flex flex-col gap-1 px-2 py-2 font-sans text-sm font-normal">
+						<p className="m-0 font-medium">{identity.name ?? identity.sub}</p>
+						<p className="m-0 text-muted-foreground">{identity.role}</p>
+						{whoami && (
+							<>
+								<p className="m-0">{whoami.organization.name}</p>
+								<p className="m-0 break-all font-mono text-xs text-muted-foreground">{location.origin}</p>
+							</>
+						)}
+						<p className="m-0 text-xs text-muted-foreground">Expires {formatExpiry(identity.expiresAt)}</p>
+					</div>
+				</DropdownMenuLabel>
+				{whoami && (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem asChild>
+							<a href="#account">My account</a>
+						</DropdownMenuItem>
+						<DropdownMenuItem asChild>
+							<a href="#account/devices">Devices and connectors</a>
+						</DropdownMenuItem>
+					</>
+				)}
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={() => logout(false)}>Sign out of this browser</DropdownMenuItem>
+				{whoami && (
+					<DropdownMenuItem variant="destructive" onSelect={() => logout(true)}>
+						Sign out everywhere
+					</DropdownMenuItem>
+				)}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
+export function sessionExpiryWarning(session: Session, path: string, now = Date.now()): number | null {
+	if (
+		path.startsWith("/auth/") ||
+		session.kind !== "signed-in" ||
+		session.mode !== "team" ||
+		session.whoami?.credential.kind !== "session" ||
+		!session.whoami.credential.expiresAt
+	)
+		return null;
+	const expiresAt = Date.parse(session.whoami.credential.expiresAt);
+	const remaining = expiresAt - now;
+	return remaining > 0 && remaining <= 300_000 ? expiresAt : null;
+}
+
 export function SessionExpiryToast({ session }: { session: Session }) {
-	const expiresAt = session.kind === "signed-in" && session.expiresSoon ? session.identity.expiresAt : null;
+	const expiresAt = sessionExpiryWarning(session, location.pathname);
 	useEffect(() => {
 		if (expiresAt === null) {
 			toast.dismiss("session-expiry");
@@ -288,6 +353,9 @@ export function SessionExpiryToast({ session }: { session: Session }) {
 			duration: Number.POSITIVE_INFINITY,
 			action: { label: "Sign in again", onClick: requestRenewal },
 		});
+		return () => {
+			toast.dismiss("session-expiry");
+		};
 	}, [expiresAt]);
 	return null;
 }

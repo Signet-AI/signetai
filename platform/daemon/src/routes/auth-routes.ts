@@ -126,13 +126,22 @@ export function registerAuthRoutes(app: Hono): void {
 		return c.json({
 			authenticated: auth?.authenticated ?? false,
 			trustedLocal: auth?.trustedLocal === true,
-			effectiveAccess:
-				authConfig.mode === "local" || auth?.trustedLocal ? "open" : effectiveAccess ? "authenticated" : "none",
-			organization: null,
-			user: null,
-			credential: c.get("principal")?.credential ?? null,
-			agents: { defaultRead: "default", defaultWrite: "default" },
-			hybridProxyDetected,
+			effectiveAccess,
+			accessMode:
+				authConfig.mode === "local" || auth?.trustedLocal === true
+					? "open"
+					: effectiveAccess
+						? "authenticated"
+						: "none",
+			...(authConfig.mode === "local"
+				? {}
+				: {
+						organization: null,
+						user: null,
+						credential: c.get("principal")?.credential ?? null,
+						agents: { defaultRead: "default", defaultWrite: "default" },
+						hybridProxyDetected,
+					}),
 			claims: auth?.claims ?? null,
 			error: auth?.error ?? null,
 			permissions,

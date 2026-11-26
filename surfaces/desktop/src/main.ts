@@ -1,6 +1,9 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { DesktopWorkspace, RemoteWorkspace } from "./remote-workspace.js";
+import { loadWorkspaceSelection, saveWorkspaceSelection } from "./workspace-selection.js";
+import { dashboardStylesheet, workspaceHtml } from "./workspace-view.js";
 import {
 	net,
 	BrowserWindow,
@@ -9,6 +12,8 @@ import {
 	app,
 	dialog,
 	ipcMain,
+	Tray,
+	nativeImage,
 	nativeTheme,
 	protocol,
 	shell,
@@ -53,6 +58,10 @@ const hasSingleInstanceLock = installSingleInstanceLock(
 
 const workspace = applyDesktopWorkspaceEnv(resolveDesktopWorkspace());
 const daemon = new DaemonManager({ workspacePath: workspace.path });
+let selectedWorkspace: DesktopWorkspace | null = null;
+let remoteWorkspace: RemoteWorkspace | null = null;
+let workspaceWindow: BrowserWindow | null = null;
+let remoteTray: Tray | null = null;
 let mainWindow: BrowserWindow | null = null;
 let tray: DesktopTray | null = null;
 let quitting = false;
@@ -134,6 +143,15 @@ function dashboardFile(url: string): string {
 }
 
 async function proxyDaemonRoute(request: Request): Promise<Response> {
+	if (remoteWorkspace) {
+		const response = await remoteWorkspace.proxy(request);
+		if (new URL(request.url).pathname === "/api/auth/logout" && response.ok) {
+			dashboardHasLoaded = false;
+			showDashboard();
+		}
+		return response;
+	}
+	if (!selectedWorkspace) return Response.json({ error: "Workspace is not ready" }, { status: 503 });
 	const target = daemonRouteTarget(daemon.baseUrl, request.url);
 	const headers = new Headers(request.headers);
 	headers.delete("host");
@@ -158,6 +176,18 @@ async function proxyDaemonRoute(request: Request): Promise<Response> {
 
 async function registerDashboardProtocol(): Promise<void> {
 	protocol.handle("app", async (request) => {
+		if (new URL(request.url).host !== "signet") return new Response("Unknown application origin", { status: 403 });
+		if (new URL(request.url).pathname === "/desktop/workspaces")
+			return new Response(
+				workspaceHtml(dashboardStylesheet(await readFile(resolve(dashboardRoot(), "index.html"), "utf8"))),
+				{
+					headers: {
+						"content-type": "text/html; charset=utf-8",
+						"content-security-policy":
+							"default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'",
+					},
+				},
+			);
 		if (isDaemonRouteUrl(request.url)) return proxyDaemonRoute(request);
 
 		let file = dashboardFile(request.url);
@@ -215,6 +245,9 @@ function createMainWindow(): BrowserWindow {
 	});
 	lockNativeZoom(mainWindow);
 
+	mainWindow.webContents.on("will-navigate", (event, url) => {
+		if (!url.startsWith("app://signet/")) event.preventDefault();
+	});
 	mainWindow.webContents.setWindowOpenHandler(({ url }) => {
 		if (url.startsWith("http://") || url.startsWith("https://")) {
 			shell.openExternal(url).catch(() => undefined);
@@ -237,6 +270,10 @@ function createMainWindow(): BrowserWindow {
 }
 
 function showDashboard(destination?: DesktopDeepLinkDestination): void {
+	if (destination === "auth-complete") {
+		if (app.isReady() && remoteWorkspace) showWorkspaceWindow();
+		return;
+	}
 	if (destination !== undefined) {
 		pendingDashboardDestination = destination;
 		dashboardDeepLinkGeneration += 1;
@@ -269,7 +306,8 @@ async function showDashboardReady(win: BrowserWindow): Promise<void> {
 
 async function prepareDaemonForDashboard(): Promise<void> {
 	try {
-		await daemon.ensureStarted();
+		if (!selectedWorkspace) throw new Error("Workspace is not ready");
+		await selectedWorkspace.prepare();
 		daemonStartupError = null;
 	} catch (err) {
 		daemonStartupError = errorMessage(err);
@@ -279,7 +317,8 @@ async function prepareDaemonForDashboard(): Promise<void> {
 
 async function assertDaemonUsable(): Promise<void> {
 	try {
-		await daemon.ensureStarted();
+		if (!selectedWorkspace) throw new Error("Workspace is not ready");
+		await selectedWorkspace.prepare();
 		daemonStartupError = null;
 	} catch (err) {
 		daemonStartupError = errorMessage(err);
@@ -288,7 +327,12 @@ async function assertDaemonUsable(): Promise<void> {
 }
 
 async function loadMainWindow(win: BrowserWindow, destination: DesktopDeepLinkDestination): Promise<boolean> {
-	const url = daemonStartupError ? startupErrorUrl(daemonStartupError) : desktopDashboardUrl(destination);
+	const signedOut = remoteWorkspace && (await remoteWorkspace.sessionStatus()).state !== "signed-in";
+	const url = signedOut
+		? "app://signet/desktop/workspaces"
+		: daemonStartupError
+			? startupErrorUrl(daemonStartupError)
+			: desktopDashboardUrl(destination);
 	loadedMainWindowUrl = url;
 	try {
 		await win.loadURL(url);
@@ -386,11 +430,13 @@ async function quickCapture(content: string): Promise<void> {
 	const trimmed = content.trim();
 	if (!trimmed) throw new Error("content is required");
 	await assertDaemonUsable();
-	const response = await fetch(`${daemon.baseUrl}/api/memory/remember`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ content: trimmed, who: "desktop-capture", importance: 0.7 }),
-	});
+	const response = await proxyDaemonRoute(
+		new Request("app://signet/api/memory/remember", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ content: trimmed, who: "desktop-capture", importance: 0.7 }),
+		}),
+	);
 	if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
 }
 
@@ -398,11 +444,13 @@ async function searchMemories(query: string, limit?: number): Promise<string> {
 	const trimmed = query.trim();
 	if (!trimmed) throw new Error("query is required");
 	await assertDaemonUsable();
-	const response = await fetch(`${daemon.baseUrl}/api/memory/recall`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ query: trimmed, limit: limit ?? 10 }),
-	});
+	const response = await proxyDaemonRoute(
+		new Request("app://signet/api/memory/recall", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ query: trimmed, limit: limit ?? 10 }),
+		}),
+	);
 	if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
 	return response.text();
 }
@@ -427,24 +475,87 @@ async function pickFiles(options?: { title?: string }): Promise<readonly string[
 	return result.canceled ? null : result.filePaths;
 }
 
+function showWorkspaceWindow(): void {
+	if (!app.isReady() || !hasSingleInstanceLock) return;
+	if (!workspaceWindow || workspaceWindow.isDestroyed()) {
+		workspaceWindow = new BrowserWindow({
+			width: 800,
+			height: 800,
+			title: "Signet workspaces",
+			webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, sandbox: true },
+		});
+		workspaceWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+		workspaceWindow.webContents.on("will-navigate", (event, url) => {
+			if (url !== "app://signet/desktop/workspaces") event.preventDefault();
+		});
+		void workspaceWindow.loadURL("app://signet/desktop/workspaces");
+	}
+	if (workspaceWindow.isMinimized()) workspaceWindow.restore();
+	workspaceWindow.show();
+	workspaceWindow.focus();
+}
+
+function requireWorkspaceSender(event: Electron.IpcMainInvokeEvent): void {
+	const frame = event.senderFrame;
+	if (
+		!frame ||
+		frame !== event.sender.mainFrame ||
+		!["app://signet/desktop/workspaces", "app://signet/"].some((prefix) => frame.url === prefix)
+	)
+		throw new Error("Workspace controls require the desktop workspace screen");
+}
+
 function registerIpc(): void {
+	ipcMain.handle("desktop:getWorkspace", (event) => {
+		requireWorkspaceSender(event);
+		return selectedWorkspace?.selection;
+	});
+	ipcMain.handle("desktop:selectWorkspace", async (event, value: unknown) => {
+		requireWorkspaceSender(event);
+		await saveWorkspaceSelection(resolve(app.getPath("userData"), "workspace-selection.json"), value);
+		app.relaunch();
+		app.quit();
+	});
+	ipcMain.handle("desktop:workspaceStatus", (event) => {
+		requireWorkspaceSender(event);
+		return remoteWorkspace?.pollSignIn();
+	});
+	ipcMain.handle("desktop:signIn", (event) => {
+		requireWorkspaceSender(event);
+		return remoteWorkspace?.signIn();
+	});
+	ipcMain.handle("desktop:signOut", (event) => {
+		requireWorkspaceSender(event);
+		return remoteWorkspace?.signOut();
+	});
+	ipcMain.handle("desktop:openWorkspaces", () => showWorkspaceWindow());
 	ipcMain.handle("desktop:startDaemon", async () => {
+		selectedWorkspace?.assertLocal();
 		const status = await daemon.start();
 		daemonStartupError = null;
 		return status;
 	});
-	ipcMain.handle("desktop:stopDaemon", () => daemon.stop());
+	ipcMain.handle("desktop:stopDaemon", () => {
+		selectedWorkspace?.assertLocal();
+		return daemon.stop();
+	});
 	ipcMain.handle("desktop:restartDaemon", async () => {
+		selectedWorkspace?.assertLocal();
 		const status = await daemon.restart();
 		daemonStartupError = null;
 		return status;
 	});
-	ipcMain.handle("desktop:getDaemonStatus", () => daemon.status());
+	ipcMain.handle("desktop:getDaemonStatus", () =>
+		remoteWorkspace ? remoteWorkspace.sessionStatus() : daemon.status(),
+	);
 	ipcMain.handle("desktop:setTitleBarTheme", (_event, theme: unknown) => {
 		if (theme !== "light" && theme !== "dark") throw new Error("theme must be light or dark");
 		setWindowTheme(theme);
 	});
-	ipcMain.handle("desktop:openDashboard", () => showDashboard());
+	ipcMain.handle("desktop:openDashboard", () => {
+		dashboardHasLoaded = false;
+		showDashboard();
+	});
 	ipcMain.handle("desktop:quickCapture", (_event, content: string) => quickCapture(content));
 	ipcMain.handle("desktop:searchMemories", (_event, query: string, limit?: number) => searchMemories(query, limit));
 	ipcMain.handle("desktop:pickDirectory", (_event, options?: { title?: string }) => pickDirectory(options));
@@ -474,10 +585,32 @@ app.whenReady().then(async () => {
 		app.dock.setIcon(iconPath("icon.png"));
 	}
 	configureDesktopUpdates();
+	const selection = await loadWorkspaceSelection(resolve(app.getPath("userData"), "workspace-selection.json"));
+	selectedWorkspace = new DesktopWorkspace(selection, daemon);
+	if (selection.mode === "organization")
+		remoteWorkspace = new RemoteWorkspace(selection.origin, { openExternal: (url) => shell.openExternal(url) });
 	await registerDashboardProtocol();
 	registerIpc();
-	tray = new DesktopTray(daemon, showDashboard, () => void checkForDesktopUpdate({ showNoUpdateDialog: true }));
-	tray.start();
+	if (remoteWorkspace) {
+		remoteTray = new Tray(nativeImage.createFromPath(iconPath("icon.png")));
+		remoteTray.setToolTip("Signet: Organization workspace");
+		remoteTray.setContextMenu(
+			Menu.buildFromTemplate([
+				{ label: "Open Dashboard", click: () => showDashboard() },
+				{ label: "Workspaces…", click: showWorkspaceWindow },
+				{ label: "Quit Signet", click: () => app.quit() },
+			]),
+		);
+		remoteTray.on("click", () => showDashboard());
+	} else {
+		tray = new DesktopTray(
+			daemon,
+			showDashboard,
+			() => void checkForDesktopUpdate({ showNoUpdateDialog: true }),
+			showWorkspaceWindow,
+		);
+		tray.start();
+	}
 	showDashboard();
 	setTimeout(() => void checkForDesktopUpdate(), 5000);
 
@@ -490,6 +623,7 @@ app.on("before-quit", () => {
 
 app.on("will-quit", () => {
 	tray?.stop();
+	remoteTray?.destroy();
 	daemon.shutdownOwned();
 });
 
