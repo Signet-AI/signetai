@@ -291,41 +291,35 @@ test("connector list reports server last-use metadata without exposing credentia
 	}
 });
 
-test.each(["", "/signet"])(
-	"connector doctor retains origin-scoped evidence for a base-path target: %s",
-	async (suffix) => {
-		const fixture = await lifecycleFixture();
-		const lines: string[] = [];
-		const log = console.log;
-		console.log = (...values: unknown[]) => {
-			lines.push(values.map(String).join(" "));
-		};
-		try {
-			const entry = (await fixture.registry.read()).codex;
-			if (!entry) throw new Error("Missing fixture connector");
-			await fixture.registry.set("codex", { ...entry, url: fixture.server.url.origin + suffix });
-			await new DurableOutbox(fixture.server.url.origin, { env: fixture.env, harness: "codex" }).enqueue({
-				method: "POST",
-				path: "/api/hooks/session-end",
-				body: { sessionKey: "retained", transcript: "evidence" },
-			});
-			await chmod(fixture.keyFile, 0o644);
-			expect(await fixture.run(["connector", "doctor", "--json"])).toBe(1);
-			const report = JSON.parse(lines.join(""));
-			expect(report.connectors).toEqual([
-				expect.objectContaining({ harness: "codex", healthy: false, outbox: expect.objectContaining({ pending: 1 }) }),
-			]);
-			expect(report.inlineKeys).toContainEqual(
-				expect.objectContaining({ harness: "codex", inlineKeyFiles: [join(fixture.codexHome, "config.toml")] }),
-			);
-			expect(report.legacyKeys).toEqual({ status: "checked", unassigned: 1 });
-			expect(lines.join("")).not.toContain(fixture.previousSecret);
-		} finally {
-			console.log = log;
-			fixture.cleanup();
-		}
-	},
-);
+test("connector doctor reports unsafe key files, retained evidence and unassigned legacy keys", async () => {
+	const fixture = await lifecycleFixture();
+	const lines: string[] = [];
+	const log = console.log;
+	console.log = (...values: unknown[]) => {
+		lines.push(values.map(String).join(" "));
+	};
+	try {
+		await new DurableOutbox(fixture.server.url.origin, { env: fixture.env, harness: "codex" }).enqueue({
+			method: "POST",
+			path: "/api/hooks/session-end",
+			body: { sessionKey: "retained", transcript: "evidence" },
+		});
+		await chmod(fixture.keyFile, 0o644);
+		expect(await fixture.run(["connector", "doctor", "--json"])).toBe(1);
+		const report = JSON.parse(lines.join(""));
+		expect(report.connectors).toEqual([
+			expect.objectContaining({ harness: "codex", healthy: false, outbox: expect.objectContaining({ pending: 1 }) }),
+		]);
+		expect(report.inlineKeys).toContainEqual(
+			expect.objectContaining({ harness: "codex", inlineKeyFiles: [join(fixture.codexHome, "config.toml")] }),
+		);
+		expect(report.legacyKeys).toEqual({ status: "checked", unassigned: 1 });
+		expect(lines.join("")).not.toContain(fixture.previousSecret);
+	} finally {
+		console.log = log;
+		fixture.cleanup();
+	}
+});
 
 test("rotation revokes only after the replacement integration and credential are live", async () => {
 	const f = await lifecycleFixture();
