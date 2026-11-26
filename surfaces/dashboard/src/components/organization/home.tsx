@@ -14,11 +14,7 @@ export function OrganizationHome() {
 		<div className="home-dashboard">
 			<div className="home-workspace">
 				<section className="home-today" aria-labelledby="today-title">
-					<PageHeading
-						id="today-title"
-						title="Today"
-						description="Readable memory and sessions for the selected agent."
-					/>
+					<PageHeading id="today-title" title="Today" description="Memories and sessions for the selected agent." />
 					<OrganizationMemory />
 					<OrganizationSessions />
 				</section>
@@ -35,7 +31,7 @@ export function OrganizationHome() {
 								<SetupRow
 									id="org-system-sources"
 									label="Sources"
-									summary={data.sources.map((source) => source.name).join(", ") || "No readable sources"}
+									summary={data.sources.map((source) => source.name).join(", ") || "No sources you can see"}
 									count={data.sources.length}
 									onOpen={() => openSettings("workspace")}
 								/>

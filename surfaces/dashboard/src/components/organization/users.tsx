@@ -462,7 +462,7 @@ export function RolesMatrix() {
 						</th>
 						{ORGANIZATION_ROLES.map((role) => (
 							<td key={role} className={cellClass}>
-								{rolePermissions(role).includes(permission) ? "Granted" : "—"}
+								{rolePermissions(role).includes(permission) ? "Granted" : "Not granted"}
 							</td>
 						))}
 					</tr>
@@ -552,11 +552,11 @@ export function AccessContent({
 					)}
 				</Panel>
 			</OrganizationBlock>
-			<OrganizationBlock title="Readable classifications">
+			<OrganizationBlock title="Classifications you can see">
 				<Panel
 					result={{ data: access.readableClassifications, error: null, status: 200 }}
 					empty={!access.readableClassifications.length}
-					emptyMessage="No readable classifications."
+					emptyMessage="No classifications you can see."
 				>
 					{(items) => (
 						<ul className="m-0 list-none divide-y p-0 text-small">

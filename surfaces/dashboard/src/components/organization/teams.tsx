@@ -128,7 +128,7 @@ export function TeamDirectory({
 								{group.name}
 							</Action>
 						</td>
-						<td className={cellClass}>{group.description ?? "—"}</td>
+						<td className={cellClass}>{group.description ?? "Not provided"}</td>
 						<td className={cellClass}>
 							{group.managed_by === "idp" ? "Managed by your identity provider" : "Managed in Signet"}
 						</td>

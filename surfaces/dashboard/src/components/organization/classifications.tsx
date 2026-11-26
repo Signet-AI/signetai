@@ -274,7 +274,7 @@ function ClassificationItems({ classification }: { classification: OrganizationC
 			<Panel
 				result={page.result}
 				empty={page.result?.data?.items.length === 0}
-				emptyMessage="No readable items carry this classification."
+				emptyMessage="No items you can see carry this classification."
 				onRetry={page.refresh}
 			>
 				{(data) => (

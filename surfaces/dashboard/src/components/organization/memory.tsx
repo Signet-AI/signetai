@@ -123,9 +123,7 @@ export function OrganizationMemory() {
 			<Panel
 				result={memories.result}
 				empty={!visible.length}
-				emptyMessage={
-					query ? "No memory on this page matches the text search." : "No readable memory matches these filters."
-				}
+				emptyMessage={query ? "No memory on this page matches the text search." : "No memories match these filters."}
 				onRetry={memories.refresh}
 			>
 				{() => (

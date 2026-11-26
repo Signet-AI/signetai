@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { PageHeading } from "@/components/dashboard/heading";
 import { Panel } from "@/components/shell/panel";
 import { MarkdownSummary } from "@/components/dreams/summary";
@@ -87,7 +88,7 @@ export function OrganizationDreams() {
 	return (
 		<div className="dreams-page">
 			<div className="dreams-content">
-				<PageHeading title="Dreams" description="Audience-scoped passes for the selected agent." />
+				<PageHeading title="Dreams" description="Passes for the selected agent." />
 				<OrganizationBlock title="Passes">
 					<FilterToolbar>
 						<FilterSearch label="Search passes" value={query} onChange={setQuery} />
@@ -122,24 +123,29 @@ export function OrganizationDreams() {
 					<Panel
 						result={status.result}
 						empty={!rows.length}
-						emptyMessage="No readable passes match these filters."
+						emptyMessage="No passes match these filters."
 						onRetry={status.refresh}
 					>
 						{() => (
 							<EvidenceList
 								rows={rows.map((pass) => ({
 									key: pass.id,
-									title: `${displayLabel(pass.mode)} pass — ${displayLabel(pass.status)}`,
+									title: `${displayLabel(pass.mode)} pass`,
 									identifier: pass.id,
 									kind: "dream",
 									author: pass.author?.name,
 									team: pass.team?.name ?? (pass.team === null ? "No team" : "Not recorded"),
-									badges: pass.classifications?.length ? (
-										<ClassificationBadges
-											classifications={pass.classifications}
-											audienceIds={new Set(pass.classifications.map((label) => label.id))}
-										/>
-									) : undefined,
+									badges: (
+										<>
+											<Badge>{displayLabel(pass.status)}</Badge>
+											{pass.classifications?.length ? (
+												<ClassificationBadges
+													classifications={pass.classifications}
+													audienceIds={new Set(pass.classifications.map((label) => label.id))}
+												/>
+											) : null}
+										</>
+									),
 									agent: agentId === "default" ? "Organization scope" : (agent?.name ?? "Selected scope"),
 									onOpen: () => setSelected(pass),
 								}))}

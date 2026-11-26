@@ -56,7 +56,7 @@ test("effective access uses named mobile cards and an explicit classifications e
 	expect(html).toContain("Administrator");
 	expect(html).not.toContain("transferred from");
 	expect(html).toContain("sm:hidden");
-	expect(html).toContain("No readable classifications.");
+	expect(html).toContain("No classifications you can see.");
 });
 
 test("people use explicit row actions and stacked mobile cards", () => {
