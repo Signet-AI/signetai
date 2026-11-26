@@ -2,6 +2,8 @@ import "../../support/connector-safety.js";
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { OrgDaemon } from "./daemon";
 import { Fixture } from "./fixture";
 import { record, request, success, text } from "./http";
@@ -63,7 +65,23 @@ test("source imports preserve staged bytes and replay offsets across daemon rest
 			},
 		);
 		assert.equal(evidence.status, 200, await evidence.clone().text());
-		assert(Buffer.from(await evidence.arrayBuffer()).equals(bytes), "Source staging must preserve every byte");
+		assert.equal(evidence.headers.get("x-signet-import-view"), "readable-records");
+		assert.equal(await evidence.text(), "", "Uninventoried staged records must not bypass organization read scope");
+		await daemon.stop();
+		const db = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+		try {
+			const chunks = db
+				.query<{ content: Uint8Array }, [string, string]>(
+					"SELECT content FROM source_import_chunks WHERE file_id = ? AND agent_id = ? ORDER BY byte_offset",
+				)
+				.all(fileId, text(created.agentId));
+			assert(
+				Buffer.concat(chunks.map((chunk) => Buffer.from(chunk.content))).equals(bytes),
+				"Source staging must preserve every byte",
+			);
+		} finally {
+			db.close();
+		}
 	} finally {
 		await daemon.dispose();
 	}
@@ -118,7 +136,25 @@ test("source import cancellation purges an incomplete multi-batch upload", async
 		);
 		assert(Array.isArray(state.files));
 		assert.equal(record(state.files[0]).storage_state, "purged");
-		assert.equal(record(state.files[0]).reserved_bytes, 0);
+		assert.equal(Object.hasOwn(record(state.files[0]), "reserved_bytes"), false);
+		await daemon.stop();
+		const db = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+		try {
+			assert.deepEqual(
+				db
+					.prepare("SELECT storage_state,reserved_bytes FROM source_import_files WHERE id = ? AND agent_id = ?")
+					.get(fileId, text(created.agentId)),
+				{ storage_state: "purged", reserved_bytes: 0 },
+			);
+			assert.deepEqual(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM source_import_chunks WHERE file_id = ? AND agent_id = ?")
+					.get(fileId, text(created.agentId)),
+				{ count: 0 },
+			);
+		} finally {
+			db.close();
+		}
 	} finally {
 		await daemon.dispose();
 	}
