@@ -37,14 +37,16 @@ function invalidateMutation(path: string): void {
 	);
 }
 
-async function dashboardFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function dashboardFetch(path: string, init?: RequestInit): Promise<Response> {
 	if (onboardingPreview) return onboardingPreviewFetch(path, init);
 	const method = init?.method?.toUpperCase() ?? "GET";
 	const accept = new Headers(init?.headers).get("accept") ?? "";
 	const isEventStream = accept.includes("text/event-stream");
 	const deadline = method === "GET" && !isEventStream ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
-	const response = await fetch(path, { ...init, signal });
+	const headers = new Headers(authHeaders());
+	new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+	const response = await fetch(path, { ...init, credentials: "same-origin", headers, signal });
 	if (response.status === 401) {
 		noteUnauthorized();
 		dashboardQueryCache.clear(false);
@@ -113,7 +115,9 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 			const retryAfter = Number(res.headers.get("Retry-After"));
 			const error =
 				res.status === 403
-					? describeForbidden(reason)
+					? typeof body === "object" && body !== null && "required" in body && typeof body.required === "string"
+						? body.required
+						: describeForbidden(reason)
 					: res.status === 429
 						? Number.isFinite(retryAfter) && retryAfter > 0
 							? `Too many requests. Try again in ${retryAfter}s.`
