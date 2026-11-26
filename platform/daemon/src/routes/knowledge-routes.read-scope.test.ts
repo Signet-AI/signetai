@@ -138,7 +138,7 @@ function seed(hidden = false): void {
 
 async function capture(app: Hono, paths: readonly string[]): Promise<readonly unknown[]> {
 	return Promise.all(
-		paths.map(async (path) => {
+		paths.map(async (path: string) => {
 			const response = await app.request(path);
 			const body: unknown = await response.json();
 			expect(response.status).toBe(200);
@@ -337,43 +337,43 @@ describe("knowledge and ontology organization reads", () => {
 		expect(JSON.stringify(allowed[1])).toContain('"member_count":2');
 	});
 
-	test("hidden insertion, update and reclassification do not change public graph responses", async () => {
+	test.each([
+		"/api/knowledge/entities?limit=1",
+		"/api/knowledge/navigation/entities?limit=1",
+		"/api/knowledge/navigation/entity?name=public%20needle",
+		"/api/knowledge/navigation/tree?entity=public%20needle",
+		"/api/knowledge/navigation/aspects?entity=public%20needle",
+		"/api/knowledge/navigation/groups?entity=public%20needle&aspect=details",
+		"/api/knowledge/navigation/claims?entity=public%20needle&aspect=details&group=general",
+		"/api/knowledge/navigation/attributes?entity=public%20needle&aspect=details&group=general&claim=claim",
+		"/api/knowledge/entities/public",
+		"/api/knowledge/entities/public/aspects",
+		"/api/knowledge/entities/public/dependencies",
+		"/api/knowledge/stats",
+		"/api/knowledge/hygiene",
+		"/api/knowledge/entities/health",
+		"/api/knowledge/traversal/status",
+		"/api/knowledge/entities/public/aspects/public-aspect/attributes?limit=1",
+		"/api/knowledge/communities",
+		"/api/knowledge/entities/pinned",
+		"/api/knowledge/constellation?max_attributes_per_aspect=1",
+		"/api/ontology/proposals?limit=1",
+		"/api/ontology/proposals/conflicts",
+		"/api/ontology/proposals/public-proposal",
+		"/api/ontology/proposals/public-proposal/evidence",
+		"/api/ontology/assertions?limit=1",
+		"/api/ontology/assertions/public-assertion",
+		"/api/ontology/contradictions",
+		"/api/ontology/entities/public/aliases",
+		"/api/ontology/links/public-link/evidence",
+		"/api/ontology/contradictions/public-contradiction",
+		"/api/ontology/claims/evidence?entity=public%20needle&aspect=details&group=general&claim=claim",
+		"/api/ontology/claims/explain?entity=public%20needle&aspect=details&group=general&claim=claim",
+		"/api/ontology/claims/version?entity=public&aspect=public-aspect&group=general&claim=claim&version=1",
+		"/api/ontology/claims/versions?entity=public&aspect=public-aspect&group=general&claim=claim",
+	])("hidden insertion, update and reclassification do not change public graph responses: %s", async (path: string) => {
 		const app = await appFor();
-		const paths = [
-			"/api/knowledge/entities?limit=1",
-			"/api/knowledge/navigation/entities?limit=1",
-			"/api/knowledge/navigation/entity?name=public%20needle",
-			"/api/knowledge/navigation/tree?entity=public%20needle",
-			"/api/knowledge/navigation/aspects?entity=public%20needle",
-			"/api/knowledge/navigation/groups?entity=public%20needle&aspect=details",
-			"/api/knowledge/navigation/claims?entity=public%20needle&aspect=details&group=general",
-			"/api/knowledge/navigation/attributes?entity=public%20needle&aspect=details&group=general&claim=claim",
-			"/api/knowledge/entities/public",
-			"/api/knowledge/entities/public/aspects",
-			"/api/knowledge/entities/public/dependencies",
-			"/api/knowledge/stats",
-			"/api/knowledge/hygiene",
-			"/api/knowledge/entities/health",
-			"/api/knowledge/traversal/status",
-			"/api/knowledge/entities/public/aspects/public-aspect/attributes?limit=1",
-			"/api/knowledge/communities",
-			"/api/knowledge/entities/pinned",
-			"/api/knowledge/constellation?max_attributes_per_aspect=1",
-			"/api/ontology/proposals?limit=1",
-			"/api/ontology/proposals/conflicts",
-			"/api/ontology/proposals/public-proposal",
-			"/api/ontology/proposals/public-proposal/evidence",
-			"/api/ontology/assertions?limit=1",
-			"/api/ontology/assertions/public-assertion",
-			"/api/ontology/contradictions",
-			"/api/ontology/entities/public/aliases",
-			"/api/ontology/links/public-link/evidence",
-			"/api/ontology/contradictions/public-contradiction",
-			"/api/ontology/claims/evidence?entity=public%20needle&aspect=details&group=general&claim=claim",
-			"/api/ontology/claims/explain?entity=public%20needle&aspect=details&group=general&claim=claim",
-			"/api/ontology/claims/version?entity=public&aspect=public-aspect&group=general&claim=claim&version=1",
-			"/api/ontology/claims/versions?entity=public&aspect=public-aspect&group=general&claim=claim",
-		];
+		const paths = [path];
 		const before = await capture(app, paths);
 		seed(true);
 		expect(await capture(app, paths)).toEqual(before);
@@ -551,7 +551,7 @@ describe("knowledge and ontology organization reads", () => {
 			"/api/ontology/claims/explain?entity=hidden%20needle&aspect=details&group=general&claim=claim",
 		];
 		const absent = await Promise.all(
-			paths.map(async (path) => {
+			paths.map(async (path: string) => {
 				const r = await app.request(path);
 				return [r.status, await r.text()];
 			}),
@@ -568,7 +568,7 @@ describe("knowledge and ontology organization reads", () => {
 		seed(true);
 		expect(
 			await Promise.all(
-				paths.map(async (path) => {
+				paths.map(async (path: string) => {
 					const r = await app.request(path);
 					return [r.status, await r.text()];
 				}),
