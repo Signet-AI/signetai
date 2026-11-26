@@ -110,6 +110,8 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(result.ok).toBe(true);
 			const exchange = calls.find((call) => call.path === "/api/auth/session");
 			expect(header(exchange?.init, "Authorization")).toBe("Bearer sig_sk_k1_secret");
+			expect(header(exchange?.init, "Content-Type")).toBe("application/json");
+			expect(exchange?.init?.body).toBe("{}");
 			expect(localStorage.getItem(session.TOKEN_KEY)).toBeNull();
 			expect(session.readToken()).toBe("session-2");
 			expect(session.authHeaders()).toEqual({ Authorization: "Bearer session-2" });

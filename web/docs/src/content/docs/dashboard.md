@@ -28,7 +28,7 @@ The dashboard asks `GET /api/auth/whoami` which permissions the signed-in creden
 
 Admins manage keys under **Settings → API keys**: list keys with role, agent, last use, and expiry; create a key, which is shown once with a copy button; and revoke a key after confirming. See [Teams](/teams/#4-create-a-key-for-each-teammate).
 
-In organization mode, browser sessions use HttpOnly cookies and CSRF protection. The dashboard does not persist bearer credentials in browser storage. **Sign out of this browser** revokes the current session on the daemon. **Sign out everywhere** revokes all of your sessions. Neither action revokes connector keys; revoke a connector key or its device to stop capture. Legacy, unclaimed team deployments still use short-lived bearer sessions held only in browser memory.
+In organization mode, browser sessions use HttpOnly cookies and CSRF protection. The dashboard does not persist bearer credentials in browser storage. Signing in with a personal key keeps its permission and agent ceilings, never extends its expiry, and ends when the key is revoked. Connector keys cannot be exchanged for browser sessions. **Sign out of this browser** revokes the current session on the daemon. **Sign out everywhere** revokes all of your sessions. Neither action revokes connector keys; revoke a connector key or its device to stop capture. Legacy, unclaimed team deployments still use short-lived bearer sessions held only in browser memory.
 
 ## Your organization account
 

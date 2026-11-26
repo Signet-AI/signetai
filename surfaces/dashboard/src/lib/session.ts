@@ -40,7 +40,12 @@ export interface Whoami {
 		}[];
 	};
 	readonly agents: { readonly defaultRead: string; readonly defaultWrite: string | null };
-	readonly credential: { readonly id: string; readonly kind: string; readonly expiresAt: string | null };
+	readonly credential: {
+		readonly id: string;
+		readonly kind: string;
+		readonly expiresAt: string | null;
+		readonly agentId?: string | null;
+	};
 }
 
 export type Session =
@@ -231,7 +236,7 @@ function readWhoami(value: Record<string, unknown>): Whoami | undefined {
 			ssoManaged: user.ssoManaged === true,
 			groups,
 		},
-		credential: { id: credentialId, kind, expiresAt: text(credential.expiresAt) },
+		credential: { id: credentialId, kind, expiresAt: text(credential.expiresAt), agentId: text(credential.agentId) },
 		agents: { defaultRead, defaultWrite: text(agents.defaultWrite) },
 	};
 }
@@ -411,7 +416,8 @@ export async function signInWithPassword(username: string, password: string): Pr
 export async function signInWithKey(key: string): Promise<SignInResult> {
 	const res = await request("/api/auth/session", {
 		method: "POST",
-		headers: { Authorization: `Bearer ${key.trim()}` },
+		headers: { Authorization: `Bearer ${key.trim()}`, "Content-Type": "application/json" },
+		body: JSON.stringify({}),
 	});
 	if (res?.status === 200) return adopt(res);
 	const error = res && isRecord(res.body) ? text(res.body.error) : null;

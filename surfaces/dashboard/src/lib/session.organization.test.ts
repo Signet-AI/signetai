@@ -115,6 +115,20 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 		expect(calls.at(-1)?.init?.body).toBe(JSON.stringify({ agentId: "named-target" }));
 	});
 
+	test("a bound cookie overrides remembered context and cannot select a wider agent", async () => {
+		const { selectedAgentId, selectAgent } = await import("./agent-context");
+		const { getJSONResult } = await import("./api");
+		whoamiOverride = { credential: { id: "ses_bound", kind: "session", agentId: "alice", expiresAt } };
+		await session.refreshSession();
+		expect(selectedAgentId()).toBe("alice");
+		selectAgent("eng-agent");
+		expect(selectedAgentId()).toBe("alice");
+		await getJSONResult("/api/dream/status");
+		expect(calls.at(-1)?.path).toBe("/api/dream/status?agentId=alice");
+		whoamiOverride = {};
+		await session.refreshSession();
+	});
+
 	test("organization accessMode and local boolean contracts stay separate", async () => {
 		whoamiOverride = { authenticated: false, effectiveAccess: true, accessMode: "none" };
 		await session.refreshSession();
