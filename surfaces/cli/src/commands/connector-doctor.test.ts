@@ -66,3 +66,16 @@ test.each(["sig_sk_", "legacy-"])(
 		}
 	},
 );
+
+test("doctor reports a truncated configuration-directory walk", async () => {
+	const home = await mkdtemp(join(tmpdir(), "doctor-depth-"));
+	try {
+		const deep = join(home, "hooks", "one", "two", "three", "four");
+		await mkdir(deep, { recursive: true });
+		await writeFile(join(deep, "legacy.sh"), "SIGNET_API_KEY=out-of-depth-key");
+		const report = await inspectConnectorFiles([join(home, "settings.json")]);
+		expect(report).toEqual({ inlineKeyFiles: [], scanIncomplete: true });
+	} finally {
+		await rm(home, { recursive: true, force: true });
+	}
+});
