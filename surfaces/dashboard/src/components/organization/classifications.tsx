@@ -19,21 +19,42 @@ import { EvidenceList } from "./evidence-list";
 import { displayLabel } from "./controls";
 import { UserLookup, type LookupPerson } from "./user-lookup";
 import { TrackedJob } from "./job";
+import { classificationImpact } from "@/lib/organization";
+import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+	DialogDescription,
+	DialogFooter,
+} from "@/components/ui/dialog";
 
 export function ClassifyAction({ target }: { target: ClassificationTarget }) {
 	const [open, setOpen] = useState(false);
 	const whoami = useWhoami();
 	if (!whoami) return null;
-	return open ? (
-		<ClassifyForm
-			key={`${target.kind}:${target.agentId}:${target.id}`}
-			target={target}
-			onClose={() => setOpen(false)}
-		/>
-	) : (
-		<Action secondary onClick={() => setOpen(true)}>
-			Classify…
-		</Action>
+	return (
+		<>
+			<Action secondary onClick={() => setOpen(true)}>
+				Classify…
+			</Action>
+			<Dialog open={open} onOpenChange={setOpen}>
+				<DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+					<DialogHeader>
+						<DialogTitle>Classify {target.kind}</DialogTitle>
+						<DialogDescription>
+							Choose a classification and review its impact before applying. Only its audience can see classified items.
+						</DialogDescription>
+					</DialogHeader>
+					<ClassifyForm
+						key={`${target.kind}:${target.agentId}:${target.id}`}
+						target={target}
+						onClose={() => setOpen(false)}
+					/>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }
 function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClose: () => void }) {
@@ -70,10 +91,7 @@ function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClo
 		setBusy(false);
 	};
 	return (
-		<OrganizationBlock
-			title={`Classify ${target.kind}`}
-			description="Classification changes include evidence and the derived state that cites it. Only the audience can read classified material."
-		>
+		<>
 			{jobId ? (
 				<>
 					<TrackedJob id={jobId} onComplete={finished} />
@@ -110,6 +128,7 @@ function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClo
 					>
 						{(definitions) => (
 							<Choice
+								inline
 								label="Classification"
 								value={classificationId}
 								onChange={(value) => {
@@ -125,27 +144,25 @@ function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClo
 							/>
 						)}
 					</Panel>
-					<Action disabled={busy || !classificationId} onClick={() => void execute(false)}>
-						Preview impact
-					</Action>
 					{preview && (
-						<>
-							<p role="status" className="text-small">
-								This will reclassify {preview.evidence} readable evidence rows and {preview.derived} derived claims and
-								supporting rows.
-							</p>
-							<Action disabled={busy} onClick={() => void execute(true)}>
-								Apply classification
-							</Action>
-						</>
+						<p role="status" className="text-small">
+							{classificationImpact(target.kind, preview.evidence, preview.derived)}
+						</p>
 					)}
 				</>
 			)}
 			<Message error={error} />
-			<Action secondary onClick={onClose}>
-				Close classification
-			</Action>
-		</OrganizationBlock>
+			<DialogFooter>
+				<Button variant="outline" onClick={onClose} disabled={busy}>
+					{jobId ? "Close" : "Cancel"}
+				</Button>
+				{!jobId && (
+					<Button variant="default" disabled={busy || !classificationId} onClick={() => void execute(!!preview)}>
+						{preview ? "Apply" : "Preview impact"}
+					</Button>
+				)}
+			</DialogFooter>
+		</>
 	);
 }
 

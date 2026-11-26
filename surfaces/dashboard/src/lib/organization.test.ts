@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { offboardingRequest, organizationSections, rolePermissions, terminalJob } from "./organization";
+import {
+	classificationImpact,
+	offboardingRequest,
+	organizationSections,
+	rolePermissions,
+	terminalJob,
+} from "./organization";
 
 describe("organization controls", () => {
 	test("local mode never exposes organization sections", () => {
@@ -27,4 +33,10 @@ describe("organization controls", () => {
 		expect(rolePermissions("admin")).not.toContain("classify");
 		expect(rolePermissions("readonly")).toEqual(["recall"]);
 	});
+});
+
+test("classification previews use plain counts and correct singular and plural copy", () => {
+	expect(classificationImpact("memory", 1, 0)).toBe("This will classify 1 memory and 0 items derived from it.");
+	expect(classificationImpact("memory", 2, 1)).toBe("This will classify 2 memories and 1 item derived from them.");
+	expect(classificationImpact("source", 1, 2)).toBe("This will classify 1 item and 2 items derived from it.");
 });

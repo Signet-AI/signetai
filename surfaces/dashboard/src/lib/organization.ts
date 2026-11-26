@@ -166,3 +166,8 @@ export interface OrganizationSettings {
 		readonly allowedDomains: readonly string[];
 	} | null;
 }
+
+export function classificationImpact(kind: ClassificationTarget["kind"], evidence: number, derived: number): string {
+	const noun = kind === "memory" ? (evidence === 1 ? "memory" : "memories") : evidence === 1 ? "item" : "items";
+	return `This will classify ${evidence} ${noun} and ${derived} ${derived === 1 ? "item" : "items"} derived from ${evidence === 1 ? "it" : "them"}.`;
+}
