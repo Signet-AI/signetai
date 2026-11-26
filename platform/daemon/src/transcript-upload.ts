@@ -15,6 +15,7 @@ import { type TranscriptUploadCommitResult, transcriptUploadConflict } from "./s
 import { sha256 } from "./transcript-capture-jobs";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import { openContainedTranscriptFile, removeContainedTranscriptPath } from "./transcript-import-safe-fs";
+import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsRoot } from "./transcript-upload-paths";
 
 export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
@@ -64,86 +65,92 @@ export async function uploadTranscriptRange(
 ): Promise<TranscriptUploadResult> {
 	const invalid = validate(input);
 	if (invalid) return invalid;
-	return await withTranscriptImportOperationLock(`upload\0${input.agentId}\0${input.sessionKey}`, async () => {
-		const owner = await getDbOwnerForAccessor(accessor);
-		const options = { operation: "transcript-upload", signal: input.signal };
-		const scope = await dbOwnerReadTranscriptUploadScope(
+	return await withTranscriptImportOperationLock(`upload\0${input.agentId}\0${input.sessionKey}`, () =>
+		withTranscriptUploadAgentLock(input.agentId, "shared", () => writeAndCommitRange(accessor, input)),
+	);
+}
+
+async function writeAndCommitRange(
+	accessor: DbAccessor,
+	input: TranscriptUploadRequest,
+): Promise<TranscriptUploadResult> {
+	const owner = await getDbOwnerForAccessor(accessor);
+	const options = { operation: "transcript-upload", signal: input.signal };
+	const scope = await dbOwnerReadTranscriptUploadScope(
+		owner,
+		{ agentId: input.agentId, sessionKey: input.sessionKey },
+		options,
+	);
+	const conflict = transcriptUploadConflict(scope, input);
+	if (conflict) return conflict;
+	const root = transcriptUploadsRoot(input.basePath);
+	const path = transcriptUploadFilePath(
+		input.basePath,
+		input.agentId,
+		scope.purgeEpoch,
+		input.sessionKey,
+		input.generation,
+	);
+	if (input.offset === 0) await mkdir(dirname(path), { recursive: true });
+	const handle = await openContainedTranscriptFile(root, path, constants.O_RDWR | constants.O_CREAT, 0o600);
+	const end = input.offset + input.body.byteLength;
+	let mtimeMs: number;
+	let tailSha256: string;
+	try {
+		const size = (await handle.stat()).size;
+		if (size < input.offset) throw new Error("Transcript upload file is shorter than its committed offset");
+		if (size > input.offset) await handle.truncate(input.offset);
+		let written = 0;
+		while (written < input.body.byteLength) {
+			const { bytesWritten } = await handle.write(
+				input.body,
+				written,
+				input.body.byteLength - written,
+				input.offset + written,
+			);
+			written += bytesWritten;
+		}
+		await handle.datasync();
+		mtimeMs = (await handle.stat()).mtimeMs;
+		const tailStart = Math.max(0, end - TAIL_HASH_BYTES);
+		tailSha256 =
+			tailStart >= input.offset
+				? sha256(input.body.subarray(tailStart - input.offset))
+				: sha256(
+						Buffer.concat([await readTranscriptUploadRange(handle, tailStart, input.offset - tailStart), input.body]),
+					);
+	} finally {
+		await handle.close();
+	}
+	if (input.offset === 0) await syncDirectory(root, dirname(path));
+	let result: TranscriptUploadCommitResult;
+	try {
+		result = await dbOwnerCommitTranscriptUpload(
 			owner,
-			{ agentId: input.agentId, sessionKey: input.sessionKey },
+			{
+				agentId: input.agentId,
+				sessionKey: input.sessionKey,
+				sessionId: input.sessionId,
+				harness: input.harness,
+				project: input.project,
+				projectScoped: input.projectScoped,
+				purgeEpoch: scope.purgeEpoch,
+				generation: input.generation,
+				expectedOffset: input.offset,
+				tailSha256,
+				source: { path, sizeBytes: end, mtimeMs },
+				capturedAt: input.capturedAt,
+			},
 			options,
 		);
-		const conflict = transcriptUploadConflict(scope, input);
-		if (conflict) return conflict;
-		const root = transcriptUploadsRoot(input.basePath);
-		const path = transcriptUploadFilePath(
-			input.basePath,
-			input.agentId,
-			scope.purgeEpoch,
-			input.sessionKey,
-			input.generation,
-		);
-		if (input.offset === 0) await mkdir(dirname(path), { recursive: true });
-		const handle = await openContainedTranscriptFile(root, path, constants.O_RDWR | constants.O_CREAT, 0o600);
-		const end = input.offset + input.body.byteLength;
-		let mtimeMs: number;
-		let tailSha256: string;
-		try {
-			const size = (await handle.stat()).size;
-			if (size < input.offset) throw new Error("Transcript upload file is shorter than its committed offset");
-			if (size > input.offset) await handle.truncate(input.offset);
-			let written = 0;
-			while (written < input.body.byteLength) {
-				const { bytesWritten } = await handle.write(
-					input.body,
-					written,
-					input.body.byteLength - written,
-					input.offset + written,
-				);
-				written += bytesWritten;
-			}
-			await handle.datasync();
-			mtimeMs = (await handle.stat()).mtimeMs;
-			const tailStart = Math.max(0, end - TAIL_HASH_BYTES);
-			tailSha256 =
-				tailStart >= input.offset
-					? sha256(input.body.subarray(tailStart - input.offset))
-					: sha256(
-							Buffer.concat([await readTranscriptUploadRange(handle, tailStart, input.offset - tailStart), input.body]),
-						);
-		} finally {
-			await handle.close();
+	} catch (error) {
+		if (await rangeAbsent(owner, input, scope.purgeEpoch, end)) {
+			await discardUncommittedRange(root, path, input.offset);
 		}
-		if (input.offset === 0) await syncDirectory(root, dirname(path));
-		let result: TranscriptUploadCommitResult;
-		try {
-			result = await dbOwnerCommitTranscriptUpload(
-				owner,
-				{
-					agentId: input.agentId,
-					sessionKey: input.sessionKey,
-					sessionId: input.sessionId,
-					harness: input.harness,
-					project: input.project,
-					projectScoped: input.projectScoped,
-					purgeEpoch: scope.purgeEpoch,
-					generation: input.generation,
-					expectedOffset: input.offset,
-					tailSha256,
-					source: { path, sizeBytes: end, mtimeMs },
-					capturedAt: input.capturedAt,
-				},
-				options,
-			);
-		} catch (error) {
-			if (await rangeAbsent(owner, input, scope.purgeEpoch, end)) {
-				await discardUncommittedRange(root, path, input.offset);
-			}
-			throw error;
-		}
-		if (result.status !== "committed") await discardUncommittedRange(root, path, input.offset);
-		if (result.status === "purge_pending") void drainTranscriptUploadPurges(input.basePath);
-		return result;
-	});
+		throw error;
+	}
+	if (result.status !== "committed") await discardUncommittedRange(root, path, input.offset);
+	return result;
 }
 
 async function rangeAbsent(
@@ -184,7 +191,6 @@ export type TranscriptUploadPurgeResult =
 
 export interface TranscriptUploadPurgeOptions {
 	readonly waitMs?: number;
-	readonly reopen?: boolean;
 	readonly deadlineMs?: number;
 }
 
@@ -192,7 +198,6 @@ interface PurgeState {
 	done: Promise<TranscriptUploadPurgeResult> | null;
 	abort: AbortController | null;
 	requested: boolean;
-	reopen: boolean;
 	timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -201,7 +206,7 @@ const purges = new Map<string, PurgeState>();
 function purgeState(basePath: string): PurgeState {
 	let state = purges.get(basePath);
 	if (!state) {
-		state = { done: null, abort: null, requested: false, reopen: false, timer: null };
+		state = { done: null, abort: null, requested: false, timer: null };
 		purges.set(basePath, state);
 	}
 	return state;
@@ -214,7 +219,6 @@ export async function drainTranscriptUploadPurges(
 	const state = purgeState(basePath);
 	clearTimeout(state.timer ?? undefined);
 	state.timer = null;
-	state.reopen ||= options.reopen === true;
 	state.requested = true;
 	if (!state.done) {
 		const abort = new AbortController();
@@ -259,11 +263,9 @@ async function runTranscriptUploadPurges(
 		const owner = await getDbOwner();
 		for (;;) {
 			state.requested = false;
-			const reopen = state.reopen;
-			state.reopen = false;
 			const { pending, progressed } = await dbOwnerDrainTranscriptUploadPurges(
 				owner,
-				{ basePath, reopen },
+				{ basePath },
 				{ operation: "transcript-upload.purge", signal },
 			);
 			const more = state.requested || (pending > 0 && progressed);

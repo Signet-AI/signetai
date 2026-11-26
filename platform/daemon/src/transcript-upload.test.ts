@@ -13,7 +13,12 @@ import {
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { getTranscriptCaptureStatus, runTranscriptCaptureOnce } from "./transcript-capture-worker";
-import { type TranscriptUploadRequest, drainTranscriptUploadPurges, uploadTranscriptRange } from "./transcript-upload";
+import {
+	type TranscriptUploadRequest,
+	drainTranscriptUploadPurges,
+	stopTranscriptUploadPurges,
+	uploadTranscriptRange,
+} from "./transcript-upload";
 import {
 	readTranscriptUploadPrefix,
 	transcriptUploadAgentDirectory,
@@ -32,6 +37,7 @@ function sha(value: string | Uint8Array): string {
 
 describe("transcript upload ranges", () => {
 	afterEach(async () => {
+		await stopTranscriptUploadPurges();
 		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		dir = "";
@@ -251,13 +257,12 @@ describe("transcript upload ranges", () => {
 		expect(result).toEqual({ status: "purge_pending" });
 		expect(await accessor.withReadDbAsync((db) => readTranscriptUploadStateInDb(db, "noam", "sess-1"))).toBeNull();
 		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
-		expect(await uploadPurges()).toEqual([transcriptUploadAgentRelativePath("noam")]);
-		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		expect(await uploadPurges()).toEqual([]);
 		expect(await uploadTranscriptRange(accessor, request('{"a":1}\n'))).toMatchObject({ status: "committed" });
 		expect(existsSync(transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0))).toBe(true);
 	});
 
-	it("removes bytes a stale upload wrote after the drain when the daemon starts again", async () => {
+	it("purges the bytes of an upload in flight whose commit outcome stays unknown", async () => {
 		init();
 		const accessor = getDbAccessor();
 		await accessor.withWriteTxAsync((db) => {
@@ -266,17 +271,44 @@ describe("transcript upload ranges", () => {
 			).run();
 		});
 		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
-		await dbOwnerAgentRemove(
-			{ agentId: "noam", mode: "purge", changedBy: "test", changedAt: "2026-11-26T10:00:00.000Z" },
-			{ operation: "test.agent.purge" },
+		const read = runtime.dbOwnerReadTranscriptUploadScope;
+		let reads = 0;
+		const scopes = spyOn(runtime, "dbOwnerReadTranscriptUploadScope").mockImplementation(
+			async (owner, input, options) => {
+				reads += 1;
+				if (reads === 2) throw new Error("owner down");
+				return await read(owner, input, options);
+			},
 		);
+		let purge: Promise<unknown> = Promise.resolve();
+		let purgedDuringUpload = true;
+		const commits = spyOn(runtime, "dbOwnerCommitTranscriptUpload").mockImplementationOnce(async () => {
+			purge = dbOwnerAgentRemove(
+				{ agentId: "noam", mode: "purge", changedBy: "test", changedAt: "2026-11-26T10:00:00.000Z" },
+				{ operation: "test.agent.purge" },
+			);
+			await Bun.sleep(100);
+			purgedDuringUpload = (await uploadPurges()).length > 0;
+			throw new Error("owner down");
+		});
+		try {
+			await expect(
+				uploadTranscriptRange(accessor, request('{"stale":1}\n', { sessionKey: "sess-3", sessionId: "sess-3" })),
+			).rejects.toThrow("owner down");
+		} finally {
+			scopes.mockRestore();
+			commits.mockRestore();
+		}
+		expect(purgedDuringUpload).toBe(false);
+		expect(existsSync(transcriptUploadFilePath(dir, "noam", 0, "sess-3", 0))).toBe(true);
+		await purge;
 		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
-		mkdirSync(transcriptUploadSessionDirectory(dir, "noam", 0, "sess-1"), { recursive: true });
-		writeFileSync(file(), '{"old":1}\n');
-		expect(await uploadTranscriptRange(accessor, request('{"new":1}\n'))).toMatchObject({ status: "committed" });
-		expect(await drainTranscriptUploadPurges(dir, { reopen: true })).toEqual({ status: "removed" });
 		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
-		expect(readFileSync(transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0), "utf8")).toBe('{"new":1}\n');
+		expect(
+			await uploadTranscriptRange(accessor, request('{"new":1}\n', { sessionKey: "sess-2", sessionId: "sess-2" })),
+		).toMatchObject({ status: "committed" });
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		expect(readFileSync(transcriptUploadFilePath(dir, "noam", 1, "sess-2", 0), "utf8")).toBe('{"new":1}\n');
 	});
 
 	it("removes the bytes of a range whose commit fails while the daemon keeps running", async () => {
@@ -321,9 +353,9 @@ describe("transcript upload ranges", () => {
 		init();
 		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
 		await getDbAccessor().withWriteTxAsync((db) => {
-			db.prepare(
-				"INSERT INTO session_transcript_upload_purges (path, epoch, requested_at, drained_at) VALUES (?, 1, 'now', 'now')",
-			).run(transcriptUploadAgentRelativePath("noam"));
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
 		});
 		const drain = runtime.dbOwnerDrainTranscriptUploadPurges;
 		let overlapped = false;
@@ -331,7 +363,7 @@ describe("transcript upload ranges", () => {
 			async (owner, input, options) => {
 				if (!overlapped) {
 					overlapped = true;
-					void drainTranscriptUploadPurges(dir, { reopen: true });
+					void drainTranscriptUploadPurges(dir);
 				}
 				return await drain(owner, input, options);
 			},

@@ -50,6 +50,7 @@ import type {
 	DbOwnerWorkloadClass,
 	DbOwnerDreamingEvidenceCoverageResult,
 } from "./db-owner-protocol";
+import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -649,7 +650,7 @@ export async function dbOwnerCommitTranscriptUpload(
 
 export async function dbOwnerDrainTranscriptUploadPurges(
 	owner: DbOwnerClient,
-	input: { readonly basePath: string; readonly reopen: boolean },
+	input: { readonly basePath: string },
 	options: DbOwnerSqlOptions,
 ): Promise<{ readonly pending: number; readonly progressed: boolean }> {
 	return await submitWithAdmission(
@@ -777,11 +778,13 @@ export async function dbOwnerAgentRemove(
 	options: DbOwnerSqlOptions,
 ): Promise<AgentRemovalResult> {
 	const owner = await getDbOwner();
-	return await submitWithAdmission<AgentRemovalResult>(
-		owner,
-		{ kind: "agent_remove", input },
-		{ ...options, lane: options.lane ?? "write" },
-	);
+	const remove = () =>
+		submitWithAdmission<AgentRemovalResult>(
+			owner,
+			{ kind: "agent_remove", input },
+			{ ...options, lane: options.lane ?? "write" },
+		);
+	return input.mode === "purge" ? withTranscriptUploadAgentLock(input.agentId, "exclusive", remove) : remove();
 }
 
 export async function dbOwnerSourceArtifactUpsert(

@@ -2115,12 +2115,7 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 	if (input.source.sizeBytes <= input.expectedOffset) throw new Error("Transcript upload range is empty");
 	if (!admitSessionTranscriptInDb(db, input)) return { status: "bypassed" };
 	const scope = readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey);
-	if (scope.purgeEpoch !== input.purgeEpoch) {
-		db.prepare("UPDATE session_transcript_upload_purges SET drained_at = NULL WHERE path = ?").run(
-			transcriptUploadAgentRelativePath(input.agentId),
-		);
-		return { status: "purge_pending" };
-	}
+	if (scope.purgeEpoch !== input.purgeEpoch) return { status: "purge_pending" };
 	const conflict = transcriptUploadConflict(scope, { ...input, offset: input.expectedOffset });
 	if (conflict) return conflict;
 	const now = new Date().toISOString();
@@ -2170,14 +2165,10 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 
 export async function drainTranscriptUploadPurgesOwned(
 	db: WriteDb,
-	input: { readonly basePath: string; readonly reopen: boolean },
+	input: { readonly basePath: string },
 	transact: (operation: () => void) => Promise<void>,
 ): Promise<{ readonly pending: number; readonly progressed: boolean }> {
 	const basePath = input.basePath;
-	if (input.reopen)
-		await transact(() => {
-			db.prepare("UPDATE session_transcript_upload_purges SET drained_at = NULL WHERE drained_at IS NOT NULL").run();
-		});
 	const budget = { remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES };
 	const intents = prepareTypedStatement<{ path: string; epoch: number }>(
 		db,

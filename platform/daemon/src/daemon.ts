@@ -2884,7 +2884,7 @@ async function main() {
 		logFdSnapshot("post-pipeline");
 
 		initCheckpointFlush(getDbAccessor());
-		void drainTranscriptUploadPurges(AGENTS_DIR, { reopen: true });
+		void drainTranscriptUploadPurges(AGENTS_DIR);
 
 		if (!transcriptCaptureWorkerHandle) {
 			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
