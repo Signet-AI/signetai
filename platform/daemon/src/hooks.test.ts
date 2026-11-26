@@ -742,8 +742,8 @@ describe("handleSessionStart", () => {
 		const db = openTestDb();
 		db.prepare(
 			`INSERT INTO session_checkpoints
-				(id, session_key, harness, project, project_normalized, trigger, digest, prompt_count, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				(id, session_key, harness, project, project_normalized, trigger, digest, prompt_count, created_at, agent_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'default')`,
 		).run(
 			"recovery-history-checkpoint",
 			"earlier-session",

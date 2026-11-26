@@ -183,6 +183,7 @@ export function checkRepairGate(
 function writeRepairAudit(db: WriteDb, action: string, ctx: RepairContext, affected: number, message: string): void {
 	insertHistoryEvent(db, {
 		memoryId: "system",
+		workspaceAudit: true,
 		event: "none",
 		oldContent: null,
 		newContent: null,

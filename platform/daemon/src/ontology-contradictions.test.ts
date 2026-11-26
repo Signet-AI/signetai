@@ -205,7 +205,7 @@ describe("persisted ontology contradictions", () => {
 		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
 	});
 
-	it("reconciles when generic entity repair deletes the contested entity", async () => {
+	it("purges contradiction snapshots when generic repair removes their claim evidence", async () => {
 		await seedContradiction();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE entities SET name = 'Sender', canonical_name = 'sender' WHERE agent_id = ? AND name = ?").run(
@@ -222,7 +222,7 @@ describe("persisted ontology contradictions", () => {
 		);
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
-		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+		expect(storedStatuses("owner")).toEqual([]);
 	});
 
 	it("reconciles when skill uninstall deletes the contested entity", async () => {
