@@ -3,16 +3,12 @@ import { usePanelQuery } from "@/lib/use-panel-query";
 import { useAgentContext } from "@/lib/agent-context";
 import { useWhoami } from "@/lib/session";
 import { Panel } from "@/components/shell/panel";
-import { ClassificationBadges } from "@/components/shell/attribution";
-import type {
-	OrganizationAgent,
-	OrganizationClassification,
-	OrganizationGroup,
-	OrganizationUserRow,
-} from "@/lib/organization";
+import { ClassificationBadges, type ClassificationLabel } from "@/components/shell/attribution";
+import type { OrganizationAgent, OrganizationClassification, OrganizationGroup } from "@/lib/organization";
 import { Action, Choice, OrganizationBlock, TextField, agentDisplayName } from "./controls";
 import { EvidenceList } from "./evidence-list";
 import { ClassifyAction } from "./classifications";
+import { UserLookup, type LookupPerson } from "./user-lookup";
 
 interface MemoryRow {
 	readonly id: string;
@@ -20,101 +16,87 @@ interface MemoryRow {
 	readonly authorUserId?: string;
 	readonly agent_id: string;
 	readonly type?: string;
-}
-interface AssignmentPage {
-	readonly items: readonly {
-		target_kind: string;
-		target_id: string;
-		agent_id: string;
-		memory?: { id: string; content: string } | null;
-	}[];
-	readonly nextCursor: string | null;
+	readonly classifications?: readonly ClassificationLabel[];
 }
 export function OrganizationMemory() {
 	const whoami = useWhoami();
 	const agentId = useAgentContext();
-	const [offset, setOffset] = useState(0);
-	const [query, setQuery] = useState("");
-	const [author, setAuthor] = useState("");
-	const [team, setTeam] = useState("");
-	const [classification, setClassification] = useState("");
-	const [cursor, setCursor] = useState("");
-	const [history, setHistory] = useState<readonly string[]>([]);
+	const [offset, setOffset] = useState(0),
+		[query, setQuery] = useState(""),
+		[author, setAuthor] = useState(""),
+		[team, setTeam] = useState(""),
+		[classification, setClassification] = useState("");
+	const [person, setPerson] = useState<LookupPerson | null>(null);
 	const [selected, setSelected] = useState<MemoryRow | null>(null);
 	useEffect(() => {
-		if (!agentId) return;
-		setOffset(0);
-		setCursor("");
-		setHistory([]);
-		setSelected(null);
+		if (agentId) {
+			setOffset(0);
+			setSelected(null);
+		}
 	}, [agentId]);
+	const params = new URLSearchParams({
+		limit: "100",
+		offset: String(offset),
+		agentId: agentId ?? whoami?.agents.defaultRead ?? "",
+	});
+	for (const [key, value] of Object.entries({ author, team, classification })) if (value) params.set(key, value);
 	const memories = usePanelQuery<{ memories: readonly MemoryRow[]; stats: { readonly total: number } }>(
-		whoami
-			? `/api/memories?limit=100&offset=${offset}&agentId=${encodeURIComponent(agentId ?? whoami.agents.defaultRead)}`
-			: null,
+		whoami ? `/api/memories?${params}` : null,
 	);
 	const agents = usePanelQuery<{ agents: readonly OrganizationAgent[] }>(whoami ? "/api/agents" : null);
 	const groups = usePanelQuery<{ groups: readonly OrganizationGroup[] }>(whoami ? "/api/org/groups" : null);
-	const people = usePanelQuery<{ users: readonly OrganizationUserRow[] }>(
-		whoami?.user.role === "admin" ? "/api/org/users" : null,
-	);
 	const definitions = usePanelQuery<readonly OrganizationClassification[]>(whoami ? "/api/classifications" : null);
-	const assignments = usePanelQuery<AssignmentPage>(
-		classification
-			? `/api/classifications/${encodeURIComponent(classification)}/items${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`
-			: null,
-	);
 	if (!whoami) return null;
+	const change = (setter: (value: string) => void) => (value: string) => {
+		setter(value);
+		setOffset(0);
+		setSelected(null);
+	};
+	const rows = memories.result?.data?.memories ?? [];
+	const visible = rows.filter((row) => row.content.toLowerCase().includes(query.toLowerCase()));
+	const personName = (id: string) =>
+		id === whoami.user.id ? whoami.user.displayName : person?.id === id ? person.displayName : "Another person";
 	const audienceIds = new Set(
 		(definitions.result?.data ?? [])
-			.filter(
-				(definition) =>
-					!whoami.user.compliance ||
-					definition.audience?.some((principal) =>
-						principal.kind === "user"
-							? principal.id === whoami.user.id
-							: whoami.user.groups.some((group) => group.id === principal.id),
-					),
+			.filter((definition) =>
+				definition.audience?.some((principal) =>
+					principal.kind === "user"
+						? principal.id === whoami.user.id
+						: whoami.user.groups.some((group) => group.id === principal.id),
+				),
 			)
 			.map((definition) => definition.id),
 	);
-	const rows: readonly MemoryRow[] = classification
-		? (assignments.result?.data?.items ?? []).flatMap((item) =>
-				item.target_kind === "memory" && item.memory ? [{ ...item.memory, agent_id: item.agent_id }] : [],
-			)
-		: (memories.result?.data?.memories ?? []);
-	const filtered = rows.filter(
-		(row) =>
-			row.agent_id === (agentId ?? whoami.agents.defaultRead) &&
-			row.content.toLowerCase().includes(query.toLowerCase()) &&
-			(!author || row.authorUserId === author) &&
-			(!team || agents.result?.data?.agents.some((agent) => agent.id === row.agent_id && agent.ownerGroupId === team)),
-	);
-	const result = classification ? assignments.result : memories.result;
-	const personName = (id: string) =>
-		id === whoami.user.id
-			? whoami.user.displayName
-			: (people.result?.data?.users.find((person) => person.id === id)?.display_name ?? "Another person");
+	const authorOptions = Array.from(
+		new Set([
+			whoami.user.id,
+			...rows.flatMap((row) => (row.authorUserId ? [row.authorUserId] : [])),
+			...(person ? [person.id] : []),
+		]),
+	).map((id) => ({ value: id, label: personName(id) }));
 	return (
 		<OrganizationBlock title="Memory">
 			<div className="flex flex-col gap-3">
 				<TextField label="Search this page" value={query} onChange={setQuery} />
+				{(whoami.user.role === "admin" || whoami.user.compliance) && (
+					<UserLookup
+						label="Find an author"
+						onSelect={(value) => {
+							setPerson(value);
+							change(setAuthor)(value.id);
+						}}
+					/>
+				)}
 				<Choice
 					label="Author"
 					value={author}
-					onChange={setAuthor}
-					options={[
-						{ value: "", label: "All authors" },
-						...Array.from(new Set(rows.flatMap((row) => (row.authorUserId ? [row.authorUserId] : [])))).map((id) => ({
-							value: id,
-							label: personName(id),
-						})),
-					]}
+					onChange={change(setAuthor)}
+					options={[{ value: "", label: "All authors" }, ...authorOptions]}
 				/>
 				<Choice
 					label="Team"
 					value={team}
-					onChange={setTeam}
+					onChange={change(setTeam)}
 					options={[
 						{ value: "", label: "All teams" },
 						...(groups.result?.data?.groups ?? []).map((group) => ({ value: group.id, label: group.name })),
@@ -123,12 +105,7 @@ export function OrganizationMemory() {
 				<Choice
 					label="Classification"
 					value={classification}
-					onChange={(value) => {
-						setClassification(value);
-						setCursor("");
-						setHistory([]);
-						setSelected(null);
-					}}
+					onChange={change(setClassification)}
 					options={[
 						{ value: "", label: "All readable memory" },
 						...(definitions.result?.data ?? [])
@@ -138,29 +115,36 @@ export function OrganizationMemory() {
 				/>
 			</div>
 			<p className="settings-row-description">
-				Author, team, and text filters apply to the current page. Classification results use the daemon's
-				audience-scoped material pages.
+				Author, team, and classification filters apply across readable memory before pagination. Text search narrows
+				this page only.
 			</p>
-			<Panel<unknown>
-				result={result}
-				empty={filtered.length === 0}
-				emptyMessage="No readable memory matches these filters."
-				onRetry={classification ? assignments.refresh : memories.refresh}
+			<Panel result={memories.result} onRetry={memories.refresh}>
+				{(data) => (
+					<p role="status" className="settings-row-description">
+						{data.stats.total} corpus matches
+					</p>
+				)}
+			</Panel>
+			<Panel
+				result={memories.result}
+				empty={!visible.length}
+				emptyMessage={
+					query ? "No memory on this page matches the text search." : "No readable memory matches these filters."
+				}
+				onRetry={memories.refresh}
 			>
 				{() => (
 					<EvidenceList
-						rows={filtered.map((row) => ({
+						rows={visible.map((row) => ({
 							key: row.id,
 							title: row.content.slice(0, 180),
 							kind: row.type ?? "memory",
 							agent: agentDisplayName(agents.result?.data?.agents.find((agent) => agent.id === row.agent_id)),
 							author: row.authorUserId ? personName(row.authorUserId) : undefined,
-							badges: classification ? (
+							badges: row.classifications?.length ? (
 								<ClassificationBadges
-									classifications={(definitions.result?.data ?? []).filter(
-										(definition) => definition.id === classification,
-									)}
-									audienceIds={audienceIds}
+									classifications={row.classifications}
+									audienceIds={new Set(row.classifications.map((label) => label.id))}
 								/>
 							) : undefined,
 							onOpen: () => setSelected(row),
@@ -171,37 +155,26 @@ export function OrganizationMemory() {
 			<div className="flex gap-2">
 				<Action
 					secondary
-					disabled={classification ? !history.length : offset === 0}
+					disabled={!offset}
 					onClick={() => {
-						if (classification) {
-							setCursor(history.at(-1) ?? "");
-							setHistory(history.slice(0, -1));
-						} else setOffset(Math.max(0, offset - 100));
+						setOffset(Math.max(0, offset - 100));
+						setSelected(null);
 					}}
 				>
 					Previous page
 				</Action>
 				<Action
 					secondary
-					disabled={
-						classification
-							? !assignments.result?.data?.nextCursor
-							: offset + 100 >= (memories.result?.data?.stats.total ?? 0)
-					}
+					disabled={offset + 100 >= (memories.result?.data?.stats.total ?? 0)}
 					onClick={() => {
-						if (classification) {
-							const next = assignments.result?.data?.nextCursor;
-							if (next) {
-								setHistory([...history, cursor]);
-								setCursor(next);
-							}
-						} else setOffset(offset + 100);
+						setOffset(offset + 100);
+						setSelected(null);
 					}}
 				>
 					Next page
 				</Action>
 			</div>
-			{selected && selected.agent_id === (agentId ?? whoami.agents.defaultRead) && (
+			{selected && (
 				<OrganizationBlock title="Memory detail">
 					<p className="whitespace-pre-wrap break-words text-small">{selected.content}</p>
 					<ClassifyAction target={{ kind: "memory", id: selected.id, agentId: selected.agent_id }} />

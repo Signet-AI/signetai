@@ -1,14 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeading } from "@/components/dashboard/heading";
 import { Panel } from "@/components/shell/panel";
 import { MarkdownSummary } from "@/components/dreams/summary";
 import { usePanelQuery } from "@/lib/use-panel-query";
 import { useAgentContext } from "@/lib/agent-context";
 import type { DreamPass, DreamToolCall } from "@/lib/api";
-import type { OrganizationAgent, OrganizationGroup } from "@/lib/organization";
+import { ClassificationBadges, type ClassificationLabel } from "@/components/shell/attribution";
+import type { OrganizationAgent } from "@/lib/organization";
 import { Action, Choice, OrganizationBlock, TextField, displayLabel } from "./controls";
 import { EvidenceList } from "./evidence-list";
 import { OrganizationResource } from "@/views/organization";
+
+interface ReviewedPass extends DreamPass {
+	readonly author?: { readonly kind: string; readonly name: string };
+	readonly team?: { readonly id: string; readonly name: string } | null;
+	readonly classifications?: readonly ClassificationLabel[];
+}
 
 function EvidenceValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 	if (depth > 5) return <span className="text-muted-foreground">Further details omitted.</span>;
@@ -47,17 +54,34 @@ export function OrganizationDreams() {
 	const [query, setQuery] = useState("");
 	const [author, setAuthor] = useState("");
 	const [team, setTeam] = useState("");
-	const [selected, setSelected] = useState<DreamPass | null>(null);
-	const status = usePanelQuery<{ passes: readonly DreamPass[] }>(
+	const [classification, setClassification] = useState("");
+	const [selected, setSelected] = useState<ReviewedPass | null>(null);
+	useEffect(() => {
+		if (agentId) setSelected(null);
+	}, [agentId]);
+	const status = usePanelQuery<{ passes: readonly ReviewedPass[] }>(
 		`/api/dream/status?agentId=${encodeURIComponent(agentId ?? "default")}`,
 	);
 	const agents = usePanelQuery<{ agents: readonly OrganizationAgent[] }>("/api/agents");
-	const groups = usePanelQuery<{ groups: readonly OrganizationGroup[] }>("/api/org/groups");
+	const passes = status.result?.data?.passes ?? [];
+	const authors = Array.from(
+		new Map(passes.flatMap((pass) => (pass.author ? [[pass.author.kind, pass.author.name] as const] : []))).entries(),
+	);
+	const teams = Array.from(
+		new Map(passes.flatMap((pass) => (pass.team ? [[pass.team.id, pass.team.name] as const] : []))).entries(),
+	);
+	const labels = Array.from(
+		new Map(
+			passes.flatMap((pass) => (pass.classifications ?? []).map((label) => [label.id, label.name] as const)),
+		).entries(),
+	);
 	const agent = agents.result?.data?.agents.find((item) => item.id === agentId);
 	const rows = (status.result?.data?.passes ?? []).filter(
 		(pass) =>
 			(pass.summary ?? pass.mode).toLowerCase().includes(query.toLowerCase()) &&
-			(!team || agent?.ownerGroupId === team),
+			(!author || pass.author?.kind === author) &&
+			(!team || pass.team?.id === team) &&
+			(!classification || pass.classifications?.some((label) => label.id === classification)),
 	);
 	return (
 		<div className="dreams-page">
@@ -69,23 +93,25 @@ export function OrganizationDreams() {
 						label="Author"
 						value={author}
 						onChange={setAuthor}
-						options={[
-							{ value: "", label: "All authors" },
-							{ value: "dreaming", label: "Dreaming" },
-						]}
+						options={[{ value: "", label: "All authors" }, ...authors.map(([value, label]) => ({ value, label }))]}
 					/>
 					<Choice
 						label="Team"
 						value={team}
 						onChange={setTeam}
+						options={[{ value: "", label: "All teams" }, ...teams.map(([value, label]) => ({ value, label }))]}
+					/>
+					<Choice
+						label="Classification"
+						value={classification}
+						onChange={setClassification}
 						options={[
-							{ value: "", label: "All teams" },
-							...(groups.result?.data?.groups ?? []).map((group) => ({ value: group.id, label: group.name })),
+							{ value: "", label: "All readable classifications" },
+							...labels.map(([value, label]) => ({ value, label })),
 						]}
 					/>
 					<p className="settings-row-description">
-						Dreaming authors every pass. Classification access is enforced by the instance; per-pass classification
-						labels are not exposed by this API.
+						Filters review recent readable passes. Author, team, and labels come from each pass.
 					</p>
 					<Panel
 						result={status.result}
@@ -100,8 +126,15 @@ export function OrganizationDreams() {
 									title: `${displayLabel(pass.mode)} pass — ${displayLabel(pass.status)}`,
 									identifier: pass.id,
 									kind: "dream",
-									author: "Dreaming",
-									agent: agent?.name ?? "Selected agent",
+									author: pass.author?.name,
+									team: pass.team?.name ?? (pass.team === null ? "No team" : "Not recorded"),
+									badges: pass.classifications?.length ? (
+										<ClassificationBadges
+											classifications={pass.classifications}
+											audienceIds={new Set(pass.classifications.map((label) => label.id))}
+										/>
+									) : undefined,
+									agent: agentId === "default" ? "Organization scope" : (agent?.name ?? "Selected scope"),
 									onOpen: () => setSelected(pass),
 								}))}
 							/>

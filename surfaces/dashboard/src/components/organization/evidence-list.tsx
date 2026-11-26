@@ -7,11 +7,13 @@ export interface EvidenceListRow {
 	readonly kind: string;
 	readonly agent: string;
 	readonly author?: string;
+	readonly team?: string;
 	readonly identifier?: string;
 	readonly badges?: ReactNode;
 	readonly onOpen?: () => void;
 }
 export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
+	const hasTeam = rows.some((row) => row.team !== undefined);
 	const title = (row: EvidenceListRow) => (
 		<div className="min-w-0">
 			<div className="flex flex-wrap items-center gap-2">
@@ -30,13 +32,14 @@ export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
 	return (
 		<>
 			<div className="hidden sm:block">
-				<OrganizationTable columns={["Material", "Kind", "Author", "Agent"]}>
+				<OrganizationTable columns={["Material", "Kind", "Author", "Agent", ...(hasTeam ? ["Team"] : [])]}>
 					{rows.map((row) => (
 						<tr key={row.key} className={rowClass}>
 							<td className={cellClass}>{title(row)}</td>
 							<td className={cellClass}>{displayLabel(row.kind)}</td>
 							<td className={cellClass}>{row.author ?? "Not recorded"}</td>
 							<td className={cellClass}>{row.agent}</td>
+							{hasTeam && <td className={cellClass}>{row.team ?? "Not recorded"}</td>}
 						</tr>
 					))}
 				</OrganizationTable>
@@ -47,6 +50,7 @@ export function EvidenceList({ rows }: { rows: readonly EvidenceListRow[] }) {
 						{title(row)}
 						<p className="m-0 mt-2 text-small text-muted-foreground">
 							{displayLabel(row.kind)} · {row.author ?? "Not recorded"} · {row.agent}
+							{row.team !== undefined ? ` · ${row.team}` : ""}
 						</p>
 					</li>
 				))}
