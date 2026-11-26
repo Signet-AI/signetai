@@ -1,5 +1,6 @@
 import { useWhoami } from "@/lib/session";
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { ClassificationBadges } from "@/components/shell/attribution";
 import { Panel } from "@/components/shell/panel";
 import { usePanelQuery } from "@/lib/use-panel-query";
 import { getJSONResult } from "@/lib/api";
@@ -35,6 +36,9 @@ export function ClassifyAction({ target }: { target: ClassificationTarget }) {
 	);
 }
 function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClose: () => void }) {
+	const whoami = useWhoami();
+	const [completed, setCompleted] = useState(false);
+	const finished = useCallback(() => setCompleted(true), []);
 	const classifications = usePanelQuery<readonly OrganizationClassification[]>("/api/classifications");
 	const [classificationId, setClassificationId] = useState("");
 	const [preview, setPreview] = useState<{ evidence: number; derived: number } | null>(null);
@@ -70,7 +74,31 @@ function ClassifyForm({ target, onClose }: { target: ClassificationTarget; onClo
 			description="Classification changes include evidence and the derived state that cites it. Only the audience can read classified material."
 		>
 			{jobId ? (
-				<TrackedJob id={jobId} />
+				<>
+					<TrackedJob id={jobId} onComplete={finished} />
+					{completed && whoami && (
+						<ClassificationBadges
+							classifications={(classifications.result?.data ?? []).filter(
+								(definition) => definition.id === classificationId,
+							)}
+							audienceIds={
+								new Set(
+									(classifications.result?.data ?? [])
+										.filter(
+											(definition) =>
+												!whoami.user.compliance ||
+												definition.audience?.some((principal) =>
+													principal.kind === "user"
+														? principal.id === whoami.user.id
+														: whoami.user.groups.some((group) => group.id === principal.id),
+												),
+										)
+										.map((definition) => definition.id),
+								)
+							}
+						/>
+					)}
+				</>
 			) : (
 				<>
 					<Panel
