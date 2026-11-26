@@ -149,6 +149,52 @@ if (!process.env.SIGNET_SIGN_IN_FORM_CHILD) {
 		expect(document.body.textContent).not.toContain("Your session ends at");
 	});
 
+	test("identity menu uses sans text, grouped menu items, and destructive everywhere logout", async () => {
+		const { createRoot } = await import("react-dom/client");
+		const { SessionChip } = await import("./sign-in");
+		const expiry = Date.now() + 600_000;
+		const session = {
+			kind: "signed-in",
+			mode: "team",
+			identity: { sub: "usr_alice", name: "Alice", role: "member", expiresAt: expiry },
+			permissions: ["recall"],
+			expiresSoon: false,
+			whoami: {
+				organization: { name: "Acme", agentModel: "personal" },
+				user: {
+					id: "usr_alice",
+					username: "alice",
+					displayName: "Alice",
+					email: null,
+					role: "member",
+					compliance: false,
+					groups: [],
+				},
+				agents: { defaultRead: "default", defaultWrite: "alice" },
+				credential: { kind: "session", id: "ses_browser", expiresAt: new Date(expiry).toISOString() },
+			},
+		} as const;
+		await act(async () => root?.unmount());
+		const container = document.createElement("div");
+		document.body.replaceChildren(container);
+		root = createRoot(container);
+		await act(async () => root?.render(<SessionChip session={session} />));
+		const trigger = container.querySelector("button");
+		expect(trigger?.className).not.toContain("font-mono");
+		await act(async () =>
+			trigger?.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+		);
+		await wait(50);
+		expect(Array.from(document.querySelectorAll('[role="menuitem"]'), (item) => item.textContent)).toEqual([
+			"My account",
+			"Devices and connectors",
+			"Sign out of this browser",
+			"Sign out everywhere",
+		]);
+		expect(document.querySelectorAll('[role="separator"]').length).toBe(2);
+		expect(document.querySelector('[data-variant="destructive"]')?.textContent).toBe("Sign out everywhere");
+	});
+
 	const wait = (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
 	const submit = () => document.querySelector<HTMLButtonElement>("button[type=submit]");
 	const alertText = () => document.querySelector("[role=alert]")?.textContent ?? null;
