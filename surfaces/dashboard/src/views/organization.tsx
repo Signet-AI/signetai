@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AgentsContent } from "@/components/organization/agents";
 import { AuthenticationContent } from "@/components/organization/authentication";
 import { ClassificationsContent } from "@/components/organization/classifications";
@@ -18,7 +18,7 @@ import {
 	type OrganizationUserRow,
 	organizationUser,
 } from "@/lib/organization";
-import { useSession } from "@/lib/session";
+import { useSession, useWhoami } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
 import { useAgentContext } from "@/lib/agent-context";
 
@@ -47,22 +47,14 @@ export function OrganizationResource<T>({
 	children: (data: T, refresh: () => void) => ReactNode;
 }) {
 	const agentId = useAgentContext();
-	return (
-		<OrganizationResourceContent key={agentId ?? "local"} path={path} empty={empty}>
-			{children}
-		</OrganizationResourceContent>
-	);
-}
-function OrganizationResourceContent<T>({
-	path,
-	empty,
-	children,
-}: {
-	path: string;
-	empty?: (data: T) => boolean;
-	children: (data: T, refresh: () => void) => ReactNode;
-}) {
 	const resource = usePanelQuery<T>(path);
+	const previousAgent = useRef(agentId);
+	useEffect(() => {
+		if (agentId && agentId !== previousAgent.current) {
+			previousAgent.current = agentId;
+			resource.refresh();
+		}
+	}, [agentId, resource.refresh]);
 	return (
 		<Panel result={resource.result} onRetry={resource.refresh}>
 			{(data) => (
@@ -81,7 +73,7 @@ function OrganizationResourceContent<T>({
 
 export function OrganizationSection({ section }: { section: OrganizationSectionId }) {
 	const session = useSession();
-	const whoami = session.kind === "signed-in" ? session.whoami : undefined;
+	const whoami = useWhoami();
 	if (!whoami) return null;
 	const admin = whoami.user.role === "admin";
 	const allowed =

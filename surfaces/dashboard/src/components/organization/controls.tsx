@@ -13,7 +13,7 @@ export function OrganizationBlock({
 	children: ReactNode;
 }) {
 	return (
-		<section className="flex min-w-0 flex-col gap-3">
+		<section aria-label={title} className="flex min-w-0 flex-col gap-3">
 			<GroupLabel>{title}</GroupLabel>
 			{description && <p className="settings-row-description">{description}</p>}
 			{children}
@@ -56,7 +56,13 @@ export function Choice({
 	const id = `org-${label.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
 	return (
 		<Field label={label} htmlFor={id}>
-			<NativeSelect id={id} value={value} required={required} onChange={(event) => onChange(event.target.value)}>
+			<NativeSelect
+				id={id}
+				aria-label={label}
+				value={value}
+				required={required}
+				onChange={(event) => onChange(event.target.value)}
+			>
 				{options.map((option) => (
 					<option key={option.value} value={option.value}>
 						{option.label}
