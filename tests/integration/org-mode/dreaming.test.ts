@@ -322,7 +322,11 @@ async function graphBytes(daemon: OrgDaemon, credential: Credential, entityId: s
 	const items = record(JSON.parse(aspects)).items;
 	assert(Array.isArray(items));
 	const attributes = await Promise.all(
-		items.map((item) => read(`${base}/aspects/${text(record(record(item).aspect).id)}/attributes`)),
+		items.map((item) => {
+			const aspect = record(record(item).aspect);
+			assert.equal(typeof aspect.id, "string", JSON.stringify(item));
+			return read(`${base}/aspects/${text(aspect.id)}/attributes`);
+		}),
 	);
 	return [entity, aspects, ...attributes];
 }
