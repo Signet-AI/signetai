@@ -12,6 +12,7 @@ import type { MigrationDb } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { gatherProjectionRows } from "./umap-projection";
 import type { ContentReadRequest } from "./content-read";
+import { DB_OWNER_MAX_RESULT_BYTES } from "./db-owner-protocol";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { exportSourceSnapshotInDb } from "./source-snapshots";
 import { expandTemporalNodeInDb } from "./temporal-expand";
@@ -291,7 +292,12 @@ export function executeContentRead(
 					: [];
 			return { ...row, ...(labels.length ? { classifications: labels } : {}) };
 		});
-		return { memories, stats };
+		const result = { memories, stats };
+		if (Buffer.byteLength(JSON.stringify(result)) > DB_OWNER_MAX_RESULT_BYTES)
+			throw Object.assign(new Error("Memory list exceeds the DB owner result budget"), {
+				code: "DB_OWNER_RESULT_TOO_LARGE",
+			});
+		return result;
 	}
 	if (request.op === "readable_pointers") {
 		if (request.references.length > 2000) throw new Error("Pointer admission limit exceeded");
