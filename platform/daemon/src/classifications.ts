@@ -10,6 +10,7 @@ import { getDbAccessor } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 
 export interface ClassificationActor extends AudienceSubject {
+	readonly legacy?: true;
 	readonly compliance: boolean;
 	readonly boundAgentId: string | null;
 	readonly allowedProjects: readonly string[] | null;
@@ -30,10 +31,14 @@ export function importActor(principal: Principal | undefined): ClassificationAct
 				userId: principal.userId,
 				groupIds: principal.groupIds,
 				local: principal.kind === "local",
+				...(principal.kind === "legacy" ? { legacy: true as const } : {}),
 				compliance: principal.compliance && principal.permissions.has("classify"),
 				boundAgentId: principal.boundAgentId,
 				allowedProjects: principal.allowedProjects,
-				credential: `${principal.credential.kind}:${principal.credential.id}`,
+				credential:
+					principal.kind === "legacy" && principal.credential.kind === "api_key"
+						? `token:api-key:${principal.credential.id}`
+						: `${principal.credential.kind}:${principal.credential.id}`,
 			}
 		: undefined;
 }

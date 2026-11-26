@@ -1036,6 +1036,14 @@ function importLabels(
 	actor: ClassificationActor | undefined,
 	selected: string | undefined,
 ): string[] {
+	if (actor?.legacy === true) {
+		if (actor.userId !== null || author.userId !== null || actor.credential !== author.credential)
+			throw new Error("permission");
+		if (actor.boundAgentId !== agentId) throw new Error("agent_binding_conflict");
+		if (actor.allowedProjects !== null) throw new Error("project_not_permitted");
+		if (selected || classificationsForWrite(db, { agentId }).length > 0) throw new Error("classified_destination");
+		return [];
+	}
 	if (actor && !actor.local) {
 		if (
 			actor.userId !== author.userId ||

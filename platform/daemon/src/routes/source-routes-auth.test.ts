@@ -46,9 +46,9 @@ function teamApp(): Hono {
 	return app;
 }
 
-function bearer(role: TokenRole): Record<string, string> {
+function bearer(role: TokenRole, sub = `source-auth-${role}`): Record<string, string> {
 	if (!state.authSecret) throw new Error("expected auth secret");
-	const token = createToken(state.authSecret, { sub: `source-auth-${role}`, role, scope: { agent: "agent-a" } }, 60);
+	const token = createToken(state.authSecret, { sub, role, scope: { agent: "agent-a" } }, 60);
 	return { authorization: `Bearer ${token}` };
 }
 
@@ -146,6 +146,23 @@ describe("source route authorization in team mode", () => {
 		});
 		expect(agent.status).toBe(201);
 		expect(admitted).toEqual(["note.txt"]);
+		const legacyKey = await teamApp().request("http://localhost/api/sources/import", {
+			method: "POST",
+			headers: bearer("agent", "api-key:source-auth-key"),
+			body: upload(),
+		});
+		expect(legacyKey.status).toBe(201);
+		expect(admitted).toEqual(["note.txt", "note.txt"]);
+		admitted = [];
+		const classified = upload();
+		classified.append("classificationId", "unreadable-classification");
+		const deniedClassification = await teamApp().request("http://localhost/api/sources/import", {
+			method: "POST",
+			headers: bearer("agent"),
+			body: classified,
+		});
+		expect(deniedClassification.status).toBe(403);
+		expect(admitted).toEqual([]);
 	});
 
 	it("requires admin for routes that read or browse the daemon host", async () => {
