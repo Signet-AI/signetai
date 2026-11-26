@@ -499,7 +499,7 @@ export function executeContentRead(
 		const args = [...predicate.args, ...(request.id ? [request.id] : []), ...(request.status ? [request.status] : [])];
 		if (request.mode === "chunks") {
 			const exists = db.prepare(`SELECT d.id FROM ${documentTable} d WHERE ${where}`).get(...args);
-			if (!exists) return null;
+			if (!exists) return request.scope.organizationMode !== true ? [] : null;
 			return db
 				.prepare(
 					`SELECT m.id,m.content,m.type,m.created_at,m.author_user_id AS authorUserId,dm.chunk_index FROM document_memories dm JOIN ${documentTable} d ON d.id=dm.document_id JOIN memories m ON m.id=dm.memory_id WHERE ${where} AND COALESCE(m.is_deleted,0)=0${memories.sql} ORDER BY dm.chunk_index,m.id LIMIT 1000`,
@@ -891,6 +891,12 @@ function namedReadStatement(request: NamedContentReadRequest): {
 				result: "all",
 			};
 		case "memory.projection.threads":
+			if (request.scope.organizationMode !== true && request.scope.compartments === "all")
+				return {
+					sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM memory_thread_heads WHERE agent_id=? ORDER BY latest_at DESC,thread_key LIMIT 12`,
+					tables: ["memory_thread_heads"],
+					result: "all",
+				};
 			return {
 				sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM (SELECT COALESCE('project:'||NULLIF(project,''),'session:'||NULLIF(session_key,''),'harness:'||NULLIF(harness,''),'thread:unscoped') AS label,COALESCE(source_type,kind) AS source_type,latest_at,substr(content,1,240) AS sample,id AS node_id,project,session_key,harness,ROW_NUMBER() OVER (PARTITION BY agent_id,project,source_ref,session_key,harness ORDER BY latest_at DESC,id) AS rank FROM session_summaries WHERE agent_id=? AND COALESCE(source_type,kind)!='chunk') WHERE rank=1 ORDER BY latest_at DESC,node_id LIMIT 12`,
 				tables: ["session_summaries"],

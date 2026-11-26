@@ -1030,6 +1030,7 @@ export function telemetrySnapshotReadScopeSql(alias: string, scope: ReadScope): 
 
 export function telemetryLabelReadScopeSql(alias: string, scope: ReadScope): { sql: string; args: unknown[] } {
 	if (!/^[a-z_][a-z0-9_]*$/i.test(alias)) throw new Error("invalid_telemetry_identifier");
+	if (scope.organizationMode === false) return { sql: "", args: [] };
 	const attributed = `EXISTS(SELECT 1 FROM evidence_citations telemetry_origin WHERE telemetry_origin.derived_kind='telemetry' AND telemetry_origin.agent_id=${alias}.agent_id AND telemetry_origin.derived_id=${alias}.id)`;
 	if (scope.reach.kind !== "all")
 		return { sql: ` AND (${alias}.compartment_id IS NOT NULL OR ${attributed})`, args: [] };

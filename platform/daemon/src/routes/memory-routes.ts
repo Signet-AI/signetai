@@ -3786,7 +3786,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const id = crypto.randomUUID();
 			const now = new Date().toISOString();
 
-			const resolved = await resolveRouteReadScope(c, { agentId: scopedAgent.agentId, project: scopedProject.project });
+			const resolved = await resolveRouteReadScope(c, { project: scopedProject.project });
 			if (resolved instanceof Response) return resolved;
 			const documentAccess = readScopeSql("d", resolved.scope, {
 				visibility: null,

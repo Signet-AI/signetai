@@ -81,7 +81,13 @@ export async function resolveRouteReadScope(
 					? { kind: "group" as const, agentId, group: policy.policyGroup }
 					: { kind: "own" as const, agentId };
 	const scope = {
-		...(await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] })),
+		...(await resolveReadScope(
+			{ reach, projects },
+			principal && principal.kind !== "legacy"
+				? audienceSubjectFromPrincipal(principal)
+				: { local: true, userId: null, groupIds: [] },
+		)),
+		...(principal?.kind === "legacy" ? { compartments: [] } : {}),
 		organizationMode: false,
 	};
 	c.set("readResponseScope", scope);
