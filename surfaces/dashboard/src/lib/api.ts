@@ -3,7 +3,7 @@ import { selectedAgentId } from "./agent-context";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
-import { type Session, authHeaders, can, currentSession, noteUnauthorized } from "./session";
+import { type Session, authHeaders, can, currentSession, noteUnauthorized, sessionFetch } from "./session";
 
 export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true;
 
@@ -61,11 +61,7 @@ export async function dashboardFetch(path: string, init?: RequestInit): Promise<
 	const isEventStream = accept.includes("text/event-stream");
 	const deadline = method === "GET" && !isEventStream ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
-	const headers = new Headers(authHeaders());
-	new Headers(init?.headers).forEach((value, key) => {
-		headers.set(key, value);
-	});
-	const response = await fetch(path, { ...init, credentials: "same-origin", headers, signal });
+	const response = await sessionFetch(path, { ...init, signal });
 	if (response.status === 401) {
 		noteUnauthorized();
 		dashboardQueryCache.clear(false);
@@ -111,6 +107,11 @@ export interface ApiReadResult<T> {
 }
 
 function describeForbidden(reason: string): string {
+	if (reason === "org_policy") return "Your organization’s policy does not allow this action. Ask an administrator.";
+	if (reason === "not_owner") return "Ask the owner of this device, key, or team for access.";
+	if (reason === "agent_not_permitted" || reason === "agent_binding_conflict")
+		return "Choose an agent you own or one of your teams’ agents.";
+	if (reason === "csrf") return "Your browser session protection is out of date. Sign in again before retrying.";
 	const permission = /lacks '([a-z]+)' permission/.exec(reason)?.[1];
 	if (permission) return `Requires the ${permission} permission.`;
 	const scope = /scope restricted to (\w+) '([^']+)'/.exec(reason);

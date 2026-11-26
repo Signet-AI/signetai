@@ -92,6 +92,11 @@ if (!process.env.SIGNET_ORG_SESSION_CHILD) {
 		expect(await session.signInWithPassword("alice", "password")).toEqual({ ok: true });
 		expect(localStorage.getItem("signet-token")).toBeNull();
 	});
+	test("credentials cannot be sent to another origin", () => {
+		expect(() => session.sessionFetch("https://other.example/api/auth/whoami")).toThrow("must stay on this instance");
+		expect(() => session.sessionFetch("//other.example/api/auth/whoami")).toThrow("must stay on this instance");
+	});
+
 	test("content reads follow agent context without rewriting mutations", async () => {
 		const { getJSONResult } = await import("./api");
 		const { selectAgent } = await import("./agent-context");

@@ -164,6 +164,11 @@ function SignInForm({ session }: { session: SignedOut }) {
 					Password sign-in is not configured on this daemon.
 				</p>
 			)}
+			{!session.expired && session.mode === "team" && !session.organizationName && (
+				<a className="text-center text-small underline" href="/auth/setup">
+					Claim a new organization
+				</a>
+			)}
 			{session.renewal && (
 				<Button type="button" variant="ghost" size="sm" className="self-center" onClick={() => void cancelRenewal()}>
 					Not now

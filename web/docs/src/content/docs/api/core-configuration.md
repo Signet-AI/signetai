@@ -18,9 +18,11 @@ Returns the identity and claims of the current request's credential. This route
 is open so the dashboard can determine whether to show the login screen; if an
 `Authorization` header is present, the signed token or API key is validated the
 same way protected routes validate it. In `local` mode, `authenticated` is
-always `false` and `claims` is `null`. `effectiveAccess` is `true` when the
-current request can use the dashboard without another login, including trusted
-localhost requests in `hybrid` mode. `error` is the reason a presented
+always `false` and `claims` is `null`. `effectiveAccess` is `open` for local or
+trusted hybrid requests, `authenticated` for a valid credential, and `none` when
+sign-in is required. Organization sessions report `organization`, `user`,
+`credential`, and default read/write `agents`; legacy token claims are not the
+organization user record. `error` is the reason a presented
 credential was rejected, such as `token expired`, `invalid api key`,
 `api key revoked`, or `credential could not be verified` when the key store is
 unavailable, and `null` when none was presented or it was accepted.
@@ -46,7 +48,7 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
     "exp": 1740086400
   },
   "trustedLocal": false,
-  "effectiveAccess": true,
+  "effectiveAccess": "authenticated",
   "error": null,
   "permissions": ["remember", "recall", "modify", "forget", "recover", "documents", "connectors", "diagnostics", "analytics"],
   "mode": "team",
@@ -60,11 +62,12 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
 
 ### PATCH /api/auth/preferences
 
-In a claimed organization, a signed-in user session can send
-`{ "defaultReadAgentId": "<agent-id>" }` to change its default read agent.
-The target must exist and be unarchived. This changes neither write ownership
-nor another person's preferences. API keys cannot change account preferences.
-The daemon audits the change and returns it in the next identity response.
+Updates the signed-in organization user's default read agent. Requires a user
+session; API keys cannot change this preference. Cookie-authenticated requests
+require `x-signet-csrf`. Send `{ "defaultReadAgentId": "agent-id" }`. The daemon
+checks access to the target, saves the preference, and returns
+`{ "defaultReadAgentId": "agent-id" }`. A subsequent `GET /api/auth/whoami`
+reports it in `agents.defaultRead`.
 
 ### GET /api/auth/methods
 
