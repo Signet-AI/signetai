@@ -65,7 +65,10 @@ function denied(reason: string, status: 400 | 403 = 403): Result<never> {
 	return { ok: false, error: { status, reason, error: reason.replaceAll("_", " ") } };
 }
 
-export function canActAs(p: Principal, agent: AgentRecord): boolean {
+export function canActAs(
+	p: Pick<Principal, "kind" | "role" | "credential" | "boundAgentId" | "userId" | "groupIds">,
+	agent: AgentRecord,
+): boolean {
 	if (agent.archived_at) return false;
 	if (p.kind === "local") return true;
 	if (agent.kind === "legacy")

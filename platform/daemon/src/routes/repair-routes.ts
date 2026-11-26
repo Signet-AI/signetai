@@ -120,9 +120,13 @@ export function registerRepairRoutes(
 	const resolveExecutable = deps.resolveExecutable ?? which;
 	const spawnCommand = deps.spawnCommand ?? spawnHidden;
 	app.use("/api/repair/*", async (c, next) => {
+		if (c.get("organization"))
+			return c.json({ error: "Use a tracked organization operator job", reason: "tracked_job_required" }, 409);
 		return requirePermission("admin", effectiveAuthConfig)(c, next);
 	});
 	app.use("/api/troubleshoot/*", async (c, next) => {
+		if (c.get("organization"))
+			return c.json({ error: "Use a tracked organization operator job", reason: "tracked_job_required" }, 409);
 		return requirePermission("admin", effectiveAuthConfig)(c, next);
 	});
 

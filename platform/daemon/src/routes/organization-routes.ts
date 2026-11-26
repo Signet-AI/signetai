@@ -6,6 +6,7 @@ import { authCookies } from "../auth/cookies";
 import { failure } from "../auth/identity-middleware";
 import { hybridProxyDetected } from "../auth/middleware";
 import { oidcCallback, oidcStart } from "../auth/oidc";
+import { startOperatorJob } from "../operator-jobs";
 import * as admin from "../auth/organization-admin";
 import * as operations from "../auth/organization-operations";
 import {
@@ -435,6 +436,10 @@ export function registerOrganizationRoutes(
 			const result = await admin.auditExport(user(c), c.req.query());
 			return new Response(result, { headers: { "Content-Type": "application/x-ndjson" } });
 		}),
+	);
+	app.post(
+		"/api/org/operator/jobs",
+		active(async (c) => c.json(await startOperatorJob(user(c), await body(c), c.req.header("x-signet-agent-id")), 202)),
 	);
 	app.get(
 		"/api/org/jobs",

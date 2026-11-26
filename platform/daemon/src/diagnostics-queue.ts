@@ -61,7 +61,7 @@ interface OldestDeadRow {
 	readonly error: string | null;
 }
 
-function readableJobPredicate(scope?: ReadScope): { sql: string; args: unknown[] } {
+export function readableJobPredicate(scope?: ReadScope): { sql: string; args: unknown[] } {
 	if (!scope) return { sql: "", args: [] };
 	const readable = readScopeSql("m", scope);
 	const copied = citedEvidenceReadScopeSql("m", scope, "memory");

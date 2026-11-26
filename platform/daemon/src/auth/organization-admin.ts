@@ -1,3 +1,4 @@
+import { operatorActor, operatorRequest } from "../operator-jobs";
 import { z } from "zod";
 import { readableClassificationsFor } from "../classification-access";
 import { audienceSubjectFromPrincipal, inFlightClassificationSql, resolveReadScope } from "../read-scope";
@@ -517,20 +518,31 @@ export async function bulkRevoke(p: Principal, input: unknown) {
 export async function jobs(p: Principal, kind?: string) {
 	requireAdmin(p);
 	return {
-		jobs: await organizationQuery(
-			statement(
-				"SELECT * FROM org_jobs WHERE (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
-				[kind ?? null, kind ?? null],
-				"all",
-			),
-		),
+		jobs: [
+			...(
+				await operatorRequest<readonly import("../operator-job-contract").OperatorJobRow[]>({
+					op: "list",
+					actor: operatorActor(p),
+				})
+			).filter(() => !kind || kind === "operator"),
+			...(await organizationQuery<readonly import("../operator-job-contract").OperatorJobRow[]>(
+				statement(
+					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
+					[kind ?? null, kind ?? null],
+					"all",
+				),
+			)),
+		]
+			.sort((a, b) => b.created_at.localeCompare(a.created_at))
+			.slice(0, 1000),
 	};
 }
 export async function job(p: Principal, jobId: string) {
-	const result = await organizationQuery<{ created_by: string } | null>(
+	const result = await organizationQuery<{ created_by: string; kind: string } | null>(
 		statement("SELECT * FROM org_jobs WHERE id = ?", [jobId], "get"),
 	);
 	if (!result) throw new IdentityError(404, "not_found");
+	if (result.kind === "operator") return operatorRequest({ op: "get", actor: operatorActor(p), jobId });
 	if (result.created_by !== p.userId) requireAdmin(p);
 	return result;
 }

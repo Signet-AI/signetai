@@ -196,3 +196,36 @@ Open authentication endpoints are rate-limited by client address. Login allows f
 Claiming does not delete or remap old data. Existing agents are marked `legacy`; administrators can inspect and map them through `/api/org/agents/legacy` and `/api/org/agents/:id/map`.
 
 Existing API keys receive a migration grace period of fourteen days after claim. Inspect them with `/api/org/keys?legacy=1`, assign them to active users, or revoke them before the deadline. Administrators can adjust `legacyKeyDeadline`. Legacy signed tokens do not authenticate after claim; replace them with user sessions or owned API keys.
+
+## Tracked operator jobs
+
+`POST /api/org/operator/jobs` accepts `action`, an optional `agentId`, and
+`options`. Actions are `queue.requeue`, `queue.cancel`, `queue.prune`,
+`embed.audit`, and `embed.backfill`. Queue changes require `admin`; embedding
+audits require `diagnostics`. These organization operations are available to
+administrators. A bound credential cannot select a different agent or project.
+Reads and mutations exclude classifications outside the caller's audience,
+including previews and totals.
+
+The response is HTTP 202 with `{jobId}`. Poll `/api/org/jobs/:id` for durable
+completion. The job and its audit events are committed with each owner batch;
+acceptance is not completion. Queue repairs share the existing repair owner
+implementation. Legacy unscoped repair endpoints refuse organization requests.
+MCP exposes `signet_operator_job` and `signet_org_job`.
+
+Queue actions default to a dry run, 20 rows, with a maximum of 100. Embedding
+backfill defaults to a dry run through the API and selects at most 20 memories,
+32 KiB each. It runs at most two jobs concurrently, with a 60-second deadline
+and a 10-second deadline per provider request. It rechecks live user, credential,
+agent, project, audience, source hash, and active embedding profile before writes.
+An interrupted run reports `failed` after restart; unfinished coverage reports
+`incomplete`, never success. Source contents and provider secrets are not stored
+in job parameters. Scoped job reads omit the internal authorization snapshot.
+
+`signet repair queue requeue|cancel|prune --wait --json` follows the remote job.
+Without `--apply`, queue repair is a preview. `signet embed audit --wait --json`
+and `signet embed backfill --dry-run --wait --json` use the same job interface.
+Pass `--agent` to select an agent; backfill otherwise uses the personal write
+default. Remote embedding-profile migrations remain host operations; run them
+with `--local` on the instance host. A non-preview backfill that needs more than
+one bounded batch reports incomplete coverage, so scripts must inspect its job.
