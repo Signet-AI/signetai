@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { addImportedSource, resolveDefaultBasePath } from "@signet/core";
+import {
+	addImportedSource,
+	deterministicImportedSourceId,
+	loadSourcesConfig,
+	resolveDefaultBasePath,
+} from "@signet/core";
+import type { ClassificationActor } from "./classifications";
 import type { WriteAuthor } from "./auth/audit-owner";
 import {
 	appendTranscriptChunk,
@@ -19,6 +25,8 @@ export interface TranscriptImportAdmissionInput {
 	readonly bytes: Uint8Array;
 	readonly duplicateMode?: "skip" | "replace" | "reimport";
 	readonly workspaceRoot?: string;
+	readonly classificationId?: string;
+	readonly actor?: ClassificationActor;
 }
 
 export interface TranscriptImportAdmissionResult {
@@ -46,6 +54,8 @@ export async function stageTranscriptImport(
 			schemaId: "signet-export",
 			duplicateMode: input.duplicateMode ?? "skip",
 			files: [{ id: fileId, name: input.fileName }],
+			classificationId: input.classificationId,
+			actor: input.actor,
 		});
 		await beginTranscriptUpload(scope, input.bytes.byteLength);
 		for (let offset = 0; offset < input.bytes.byteLength; offset += TRANSCRIPT_UPLOAD_BYTES) {
@@ -54,19 +64,36 @@ export async function stageTranscriptImport(
 		}
 		const sealed = await sealTranscriptUpload(scope);
 		if (!sealed.content_hash) throw new Error("transcript import did not seal");
+		const duplicate = loadSourcesConfig(input.workspaceRoot ?? resolveDefaultBasePath()).sources.find(
+			(source) =>
+				source.kind === "import" &&
+				source.providerSettings?.agentId === input.agentId &&
+				source.providerSettings?.contentHash === sealed.content_hash,
+		);
+		const sourceId =
+			input.duplicateMode === "reimport"
+				? `imp_${randomUUID()}`
+				: (duplicate?.id ?? deterministicImportedSourceId(sealed.content_hash, input.agentId));
+		await bindTranscriptSource(scope, sourceId, duplicate?.id);
 		const added = addImportedSource(
 			{
 				fileName: input.fileName,
+				writeIdentity: {
+					agentId: input.agentId,
+					authorUserId: input.author.userId,
+					authorCredential: input.author.credential,
+				},
 				contentHash: sealed.content_hash,
 				format: "jsonl",
 				agentId: input.agentId,
 				duplicateMode: input.duplicateMode ?? "skip",
 				importKey: `${jobId}:${fileId}:0`,
+				sourceId,
 			},
 			input.workspaceRoot ?? resolveDefaultBasePath(),
 		);
 		if (!added.ok) throw new Error(added.error);
-		await bindTranscriptSource(scope, added.source.id);
+		if (added.source.id !== sourceId) await bindTranscriptSource(scope, added.source.id);
 		const started = await controlImport(createOwnerTranscriptImportStore(), {
 			jobId,
 			agentId: input.agentId,

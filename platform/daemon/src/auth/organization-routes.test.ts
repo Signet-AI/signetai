@@ -88,6 +88,59 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("classified import admission is atomic and hidden staging jobs stay absent", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		const { registerTranscriptImportRoutes } = await import("../routes/transcript-import-routes");
+		registerClassificationRoutes(app);
+		registerTranscriptImportRoutes(app);
+		await claim();
+		const bob = await member("bob");
+		const alice = await member("alice");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Import HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const denied = await call(
+			"/api/sources/imports",
+			"POST",
+			{ classificationId: label.id, files: [{ name: "classified.jsonl" }] },
+			alice.token,
+		);
+		expect({ status: denied.status, body: await denied.json() }).toMatchObject({ status: 403 });
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM source_import_jobs", [], "get"))).toEqual({
+			n: 0,
+		});
+		const created = await call(
+			"/api/sources/imports",
+			"POST",
+			{ classificationId: label.id, files: [{ name: "classified.jsonl" }] },
+			bob.token,
+		);
+		expect({ status: created.status, body: await created.clone().json() }).toMatchObject({ status: 201 });
+		const job = await created.json();
+		expect(
+			await organizationQuery(statement("SELECT labels_json FROM source_import_jobs WHERE id=?", [job.id], "get")),
+		).toEqual({ labels_json: JSON.stringify([label.id]) });
+		expect(
+			(
+				await organizationQuery<{ n: number }>(
+					statement(
+						"SELECT COUNT(*) AS n FROM classification_assignments WHERE target_kind='source' AND agent_id=? AND classification_id=?",
+						[bob.agentId, label.id],
+						"get",
+					),
+				)
+			).n,
+		).toBe(1);
+		const hidden = await call(`/api/sources/imports?agentId=${bob.agentId}`, "GET", undefined, alice.token);
+		expect(hidden.status).toBe(200);
+		expect(JSON.stringify(await hidden.json())).not.toContain(job.id);
+	});
 	test("personal-key cookie sessions retain durable permission, agent and expiry ceilings", async () => {
 		const root = await claim();
 		const bob = await member("bob");

@@ -1,3 +1,4 @@
+import { assertImportSourceLabelsInTx } from "./classification-owner";
 import { createHash } from "node:crypto";
 import { getDbOwner } from "./db-owner-runtime";
 import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
@@ -70,7 +71,7 @@ export function commitTranscriptImportBatchInTx(
 		throw new Error("transcript commit provenance does not match owner request");
 	const lease = db
 		.prepare(
-			"SELECT author_user_id,author_credential FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
+			"SELECT author_user_id,author_credential,labels_json FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
 		)
 		.get(input.jobId, input.agentId, input.generation, input.leaseToken);
 	if (lease == null) throw new Error("stale import lease");
@@ -83,6 +84,13 @@ export function commitTranscriptImportBatchInTx(
 		);
 		if (user?.status !== "active") throw new Error("Transcript import author is inactive");
 	}
+	assertImportSourceLabelsInTx(
+		db,
+		input.agentId,
+		input.sourceId,
+		z.string().nullable().parse(lease.labels_json),
+		author,
+	);
 	const inventory = input.inventory;
 	if (inventory) {
 		const file = db

@@ -4,6 +4,8 @@ import { readPointerMiddleware } from "../read-pointers";
 import { contentRead } from "../content-read";
 import { type ReadScope, audienceSubjectFromPrincipal } from "../read-scope";
 import { resolveRouteReadScope } from "./read-scope";
+import { IdentityError } from "../auth/organization-store";
+import { importActor } from "../classifications";
 import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
@@ -166,6 +168,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 	const app = new Hono();
 	app.use("*", readPointerMiddleware);
 	app.onError((error, c) => {
+		if (error instanceof IdentityError) return c.json({ error: error.message, reason: error.reason }, error.status);
 		const code = error instanceof DbOwnerError ? String(error.code) : "transcript_import_conflict";
 		const status =
 			code === "SQLITE_FULL"
@@ -205,6 +208,19 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 	};
 	app.use("/api/sources/imports", bindRead);
 	app.use("/api/sources/imports/*", bindRead);
+	app.use("/api/sources/imports/:jobId/*", async (c, next) => {
+		if (c.req.method !== "GET" && c.get("principal")) {
+			const jobId = c.req.param("jobId");
+			const agentId = agent(c);
+			if (!jobId || !agentId) return c.json({ error: "import not found" }, 404);
+			const resolved = await resolveRouteReadScope(c, { allowAllAgents: true });
+			if (resolved instanceof Response) return resolved;
+			importReadScopes.set(c, resolved.scope);
+			const visible = await readImportQuery(c, "sources.import.status", [jobId, agentId]);
+			if (!visible) return c.json({ error: "import not found" }, 404);
+		}
+		await next();
+	});
 	app.post("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
@@ -228,7 +244,21 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			requestedFiles.push({ id: randomUUID(), name: file.name.trim() });
 		}
 		const jobId = randomUUID();
-		await createJob({ jobId, agentId, author: c.get("author"), schemaId, duplicateMode, files: requestedFiles });
+		if (
+			body.classificationId !== undefined &&
+			(typeof body.classificationId !== "string" || !body.classificationId || body.classificationId.length > 200)
+		)
+			return c.json({ error: "invalid classificationId" }, 400);
+		await createJob({
+			jobId,
+			agentId,
+			author: c.get("author"),
+			schemaId,
+			duplicateMode,
+			files: requestedFiles,
+			classificationId: body.classificationId,
+			actor: importActor(c.get("principal")),
+		});
 		return c.json({ id: jobId, jobId, agentId, state: "staging", duplicateMode, files: requestedFiles }, 201);
 	});
 	app.get("/api/sources/imports", async (c) => {
@@ -383,16 +413,26 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 					source.providerSettings?.contentHash === file.content_hash,
 			);
 			const sourceId =
-				replay?.id ??
-				(file.duplicate_mode === "reimport"
-					? `import:${file.content_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
-					: (duplicate?.id ?? deterministicImportedSourceId(file.content_hash, upload.agentId)));
+				file.state === "ready"
+					? file.source_id
+					: (replay?.id ??
+						(file.duplicate_mode === "reimport"
+							? `import:${file.content_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
+							: (duplicate?.id ?? deterministicImportedSourceId(file.content_hash, upload.agentId))));
 			const releaseSourceMutation = beginSourceMutation(sourceId);
 			if (releaseSourceMutation === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
 			try {
+				await bindTranscriptSource(upload, sourceId, duplicate?.id);
 				const added = addImportedSource(
 					{
 						fileName: file.name,
+						writeIdentity: c.get("author")
+							? {
+									agentId: upload.agentId,
+									authorUserId: c.get("author").userId,
+									authorCredential: c.get("author").credential,
+								}
+							: undefined,
 						contentHash: file.content_hash,
 						format: "jsonl",
 						agentId: upload.agentId,
@@ -404,7 +444,6 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				);
 				if (!added.ok) return c.json({ error: added.error }, 400);
 				if (added.source.id !== sourceId) throw new Error("Imported Source identity changed during finalization");
-				await bindTranscriptSource(upload, added.source.id);
 				return c.json(
 					{
 						fileId: upload.fileId,

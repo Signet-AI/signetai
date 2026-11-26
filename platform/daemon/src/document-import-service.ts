@@ -1,4 +1,12 @@
-import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
+import { randomUUID } from "node:crypto";
+import { importClassificationRequest, type ClassificationActor } from "./classifications";
+import {
+	addImportedSource,
+	deterministicImportedSourceId,
+	loadSourcesConfig,
+	markSourceIndexed,
+	removeSourceIfGeneration,
+} from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
@@ -43,6 +51,9 @@ export interface DocumentImportInput {
 	readonly maxPersistedBytes?: number;
 	readonly agentId?: string;
 	readonly workspaceRoot?: string;
+	readonly classificationId?: string;
+	readonly actor?: ClassificationActor;
+	readonly admitOriginal?: () => Promise<void>;
 }
 
 export interface DocumentImportResult {
@@ -89,15 +100,30 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 	const agentsDir = input.workspaceRoot ?? process.env.SIGNET_PATH;
 	const agentId = input.agentId ?? resolveDaemonAgentId();
 	const duplicateMode = input.duplicateMode ?? "skip";
-	const replacedSource =
-		duplicateMode === "replace"
-			? loadSourcesConfig(agentsDir).sources.find(
-					(source) =>
-						source.kind === "import" &&
-						source.providerSettings?.contentHash === normalized.value.contentHash &&
-						source.providerSettings?.agentId === agentId,
-				)
-			: undefined;
+	const duplicateSource = loadSourcesConfig(agentsDir).sources.find(
+		(source) =>
+			source.kind === "import" &&
+			source.providerSettings?.contentHash === normalized.value.contentHash &&
+			source.providerSettings?.agentId === agentId,
+	);
+	const replacedSource = duplicateMode === "replace" ? duplicateSource : undefined;
+	const sourceId =
+		duplicateMode === "reimport" || replacedSource
+			? `imp_${randomUUID()}`
+			: (duplicateSource?.id ?? deterministicImportedSourceId(normalized.value.contentHash, agentId));
+	await importClassificationRequest({
+		op: "import-document",
+		input: {
+			author: input.author,
+			jobId: randomUUID(),
+			agentId,
+			sourceId,
+			duplicateSourceId: duplicateSource?.id,
+			classificationId: input.classificationId,
+			actor: input.actor,
+		},
+	});
+	await input.admitOriginal?.();
 	const added = addImportedSource(
 		{
 			writeIdentity: input.author
@@ -108,11 +134,24 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 			format: normalized.value.format,
 			agentId,
 			duplicateMode: replacedSource === undefined ? duplicateMode : "reimport",
+			sourceId,
 		},
 		agentsDir,
 	);
 	if (added.ok === false)
 		return { status: { fileName: input.fileName, status: "failed", error: added.error }, persistedBytes };
+	if (added.source.id !== sourceId)
+		await importClassificationRequest({
+			op: "import-document",
+			input: {
+				author: input.author,
+				jobId: randomUUID(),
+				agentId,
+				sourceId: added.source.id,
+				classificationId: input.classificationId,
+				actor: input.actor,
+			},
+		});
 	const existingOutcome =
 		added.duplicate && duplicateMode === "skip" && added.source.lastIndexedAt !== undefined
 			? readImportedSourceOutcome(added.source.id, agentId)
