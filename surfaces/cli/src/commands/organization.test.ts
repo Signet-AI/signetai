@@ -98,6 +98,55 @@ test("classify previews impact before dispatch and waits for terminal status", a
 	}
 });
 
+test("classification definition commands keep audience principals explicit", async () => {
+	const calls: { path: string; method: string; body: unknown }[] = [];
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(request) {
+			calls.push({
+				path: new URL(request.url).pathname,
+				method: request.method,
+				body: request.method === "GET" ? null : await request.json(),
+			});
+			return Response.json([]);
+		},
+	});
+	try {
+		for (const args of [
+			["classification", "create", "HR", "--audience", "group:grp_hr", "user:usr_carol"],
+			["classification", "audience", "cls_hr", "--audience", "group:grp_hr"],
+			["classification", "list"],
+			["org", "agents", "list"],
+		]) {
+			const program = new Command();
+			registerOrganizationCommands(program, {
+				env: { SIGNET_DAEMON_URL: server.url.origin, SIGNET_API_KEY: "fixture" },
+				print: () => {},
+			});
+			await program.parseAsync([...args, "--json"], { from: "user" });
+		}
+		expect(calls).toEqual([
+			{
+				path: "/api/classifications",
+				method: "POST",
+				body: {
+					name: "HR",
+					audience: [
+						{ kind: "group", id: "grp_hr" },
+						{ kind: "user", id: "usr_carol" },
+					],
+				},
+			},
+			{ path: "/api/classifications/cls_hr/audience", method: "PUT", body: [{ kind: "group", id: "grp_hr" }] },
+			{ path: "/api/classifications", method: "GET", body: null },
+			{ path: "/api/agents", method: "GET", body: null },
+		]);
+	} finally {
+		server.stop(true);
+	}
+});
+
 test("offboarding defaults to preview and --confirm --wait follows the job", async () => {
 	const calls: { path: string; body: unknown }[] = [];
 	const server = Bun.serve({

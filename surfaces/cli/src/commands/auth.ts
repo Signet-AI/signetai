@@ -10,6 +10,7 @@ import {
 	SignetUnauthorizedError,
 } from "../../../../libs/sdk/src/index.js";
 import { LoginStore, NodeTransport, resolveTarget, type ResolveTargetOptions } from "../../../../libs/sdk/src/node.js";
+import { cliTarget, cliTransport } from "../lib/organization-target.js";
 
 export interface AuthCommandDeps extends ResolveTargetOptions {
 	readonly print?: (value: string) => void;
@@ -21,6 +22,7 @@ interface AuthOptions {
 	json?: boolean;
 	all?: boolean;
 	deviceCode?: boolean;
+	nonInteractive?: boolean;
 }
 interface DeviceStart {
 	deviceCode: string;
@@ -48,18 +50,33 @@ export function reportAuthError(
 			: error instanceof SignetError
 				? error.code
 				: "request_failed";
+	const target = cliTarget();
+	const expiredMessage =
+		target?.remote && unauthorizedMessage === "Signet session expired, run `signet login`"
+			? `Session expired for \`${new URL(target.url).hostname}\`. Run \`signet login\`.`
+			: unauthorizedMessage;
 	const message =
-		status === 401 ? unauthorizedMessage : error instanceof Error ? error.message : "Signet request failed";
-	process.stderr.write(`${json ? JSON.stringify({ error: message, reason, status }) : message}\n`);
+		status === 401
+			? expiredMessage
+			: error instanceof SignetForbiddenError && error.required
+				? error.required
+				: error instanceof Error
+					? error.message
+					: "Signet request failed";
+	process.stderr.write(
+		`${json ? JSON.stringify({ error: message, reason, status, ...(error instanceof SignetForbiddenError && error.required ? { required: error.required } : {}) }) : message}\n`,
+	);
 	process.exitCode = status === 401 ? 3 : status === 403 ? 4 : 1;
 }
 export async function authTransport(options: AuthOptions, deps: AuthCommandDeps = {}): Promise<NodeTransport> {
+	const selected = cliTransport();
+	if (selected) return selected;
 	return new NodeTransport(await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl }), { env: deps.env });
 }
 function loginTarget(options: AuthOptions, deps: AuthCommandDeps): { url: string; origin: string } {
 	const env = deps.env ?? process.env;
 	const url = resolveSignetDaemonUrl({
-		env: { ...env, SIGNET_DAEMON_URL: options.url ?? deps.flagUrl ?? env.SIGNET_DAEMON_URL },
+		env: { ...env, SIGNET_DAEMON_URL: options.url ?? cliTarget()?.url ?? deps.flagUrl ?? env.SIGNET_DAEMON_URL },
 		configUrl: deps.configUrl,
 	});
 	return { url, origin: new URL(url).origin };
@@ -77,8 +94,13 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 		command.option("--url <url>", "Signet instance URL").option("--json", "Machine-readable output");
 	options(program.command("login").description("Sign in through the browser device flow"))
 		.option("--device-code", "Print the approval URL without opening a browser")
+		.option("--non-interactive", "Refuse interactive sign-in")
 		.action(
 			action(async (opts) => {
+				if (opts.nonInteractive || program.opts().nonInteractive)
+					throw new Error(
+						"Login requires interactive approval. Omit --non-interactive, or provide credentials through the environment.",
+					);
 				const target = loginTarget(opts, deps);
 				const transport = new SignetTransport({ baseUrl: target.url, retries: 0 });
 				const device = await transport.post<DeviceStart>("/api/auth/device/start", {
@@ -177,8 +199,10 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 		);
 	options(program.command("whoami").description("Show the authenticated identity")).action(
 		action(async (opts) => {
-			const target = await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl });
-			const identity = await new NodeTransport(target, { env: deps.env }).get<unknown>("/api/auth/whoami");
+			const target = cliTarget() ?? (await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl }));
+			const identity = await (cliTransport() ?? new NodeTransport(target, { env: deps.env })).get<unknown>(
+				"/api/auth/whoami",
+			);
 			print(
 				JSON.stringify(
 					{ identity, url: target.url, credentialSource: target.credential.source },

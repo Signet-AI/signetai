@@ -127,6 +127,33 @@ export function registerOrganizationCommands(program: Command, deps: AuthCommand
 				return transport.get(`/api/org/audit${query.size ? `?${query}` : ""}`);
 			}),
 		);
+	const agents = org.command("agents").description("Inspect organization agents");
+	standard(agents.command("list")).action(run((transport) => transport.get("/api/agents")));
+	const classification = program.command("classification").description("Manage classifications");
+	const audience = (values: readonly string[] | undefined) =>
+		(values ?? []).map((value) => {
+			const separator = value.indexOf(":");
+			const kind = value.slice(0, separator);
+			const id = value.slice(separator + 1);
+			if (separator < 1 || !id || (kind !== "user" && kind !== "group"))
+				throw new Error("Audience must be user:<id> or group:<id>");
+			return { kind, id };
+		});
+	standard(classification.command("list")).action(run((transport) => transport.get("/api/classifications")));
+	standard(classification.command("create <name>"))
+		.option("--audience <principals...>", "user:<id> or group:<id>")
+		.action(
+			run((transport, opts, args) =>
+				transport.post("/api/classifications", { name: args[0], audience: audience(opts.audience) }),
+			),
+		);
+	standard(classification.command("audience <id>"))
+		.requiredOption("--audience <principals...>", "Replace audience: user:<id> or group:<id>")
+		.action(
+			run((transport, opts, args) =>
+				transport.request("PUT", `/api/classifications/${encoded(args)}/audience`, { body: audience(opts.audience) }),
+			),
+		);
 	standard(program.command("classify <target>"))
 		.requiredOption("--as <classification>", "Classification name or ID")
 		.option("--agent <id>", "Target agent ID")
