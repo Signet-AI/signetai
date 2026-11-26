@@ -14,7 +14,7 @@ from unittest.mock import patch
 import signet_transport as transport
 
 
-class TransportTests(unittest.TestCase):
+class UploadResumeConformanceTests(unittest.TestCase):
     def test_shared_upload_process_restart_conformance(self):
         root=Path(__file__).resolve().parents[4]
         fixture=json.loads((root/"tests/fixtures/connector-conformance.json").read_text())
@@ -24,6 +24,7 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                 print(result.stdout.strip())
 
+class TransportTests(unittest.TestCase):
     def test_long_error_message_preserves_structured_reason(self):
         for status, reason in ((401, "expired"), (403, "permission")):
             error = transport._api_error(status, {"error": "x" * 8192, "reason": reason, "required": "audit"})

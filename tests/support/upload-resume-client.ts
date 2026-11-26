@@ -23,9 +23,9 @@ if (!target.remote || target.url !== raw.url) throw new Error("Registry target w
 const transport = new NodeTransport(target, { timeoutMs: 60_000, retries: 0 });
 if (process.argv[3] === "resume") {
 	const result = await transport.flush({ force: true, timeoutMs: 60_000 });
-	if ("changed" in raw && raw.changed === true) {
+	if ("retained" in raw && raw.retained === true) {
 		if (result.state !== "failed" || result.pending !== 1 || result.sent !== 0)
-			throw new Error("Changed source was not retained");
+			throw new Error("Rejected source evidence was not retained");
 	} else if (result.state !== "complete" || result.sent !== 1)
 		throw new Error(`Resumed delivery did not complete: ${JSON.stringify(result)}`);
 } else

@@ -329,7 +329,10 @@ upload sweep. Terminal capture failures release staging the same way; replay
 returns `queued: false` and `captureFailed: true`. Normal session-transcript
 deletion also purges its receipts. The client outbox keeps its upload ID and
 last acknowledged offset across process exits. Replay asks the server for its
-current offset and resumes there. Keep the original client file until handoff
+current offset and resumes there. A stored ID returning `404` or `410` is
+cleared before re-hashing and redeclaring the same original file. A `422` checksum
+rejection gets one recovery attempt; a second rejection remains pending.
+Keep the original client file until handoff
 is acknowledged; if it changes during an interrupted transfer, delivery fails
 and the outbox retains the original reference rather than sending replacement
 bytes as the original evidence.

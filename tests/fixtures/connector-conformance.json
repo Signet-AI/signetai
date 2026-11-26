@@ -321,13 +321,57 @@
       "name": "lost-ack-process-restart",
       "totalBytes": 6291456,
       "interruptAfterChunks": 2,
-      "changeAfterKill": false
+      "changeAfterKill": false,
+      "recovery": "none",
+      "changeOnFailure": false
     },
     {
       "name": "changed-file-after-process-restart",
       "totalBytes": 6291456,
       "interruptAfterChunks": 2,
-      "changeAfterKill": true
+      "changeAfterKill": true,
+      "recovery": "none",
+      "changeOnFailure": false
+    },
+    {
+      "name": "expired-upload-404",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false,
+      "recovery": "missing404",
+      "changeOnFailure": false
+    },
+    {
+      "name": "expired-upload-410",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false,
+      "recovery": "missing410",
+      "changeOnFailure": false
+    },
+    {
+      "name": "checksum-upload-redeclare",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false,
+      "recovery": "checksum",
+      "changeOnFailure": false
+    },
+    {
+      "name": "checksum-retry-bounded",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false,
+      "recovery": "checksum-repeat",
+      "changeOnFailure": false
+    },
+    {
+      "name": "checksum-changed-source",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false,
+      "recovery": "checksum",
+      "changeOnFailure": true
     }
   ]
 }

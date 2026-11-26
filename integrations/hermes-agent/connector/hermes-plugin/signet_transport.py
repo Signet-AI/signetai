@@ -32,7 +32,7 @@ def _upload_state(value):
     return {k:value[k] for k in ("uploadId","receivedBytes","totalBytes","sha256","fingerprint")}
 
 
-def _capture_remote_session_end(body,state,checkpoint,request,end,cancel):
+def _capture_remote_session_end(body,state,checkpoint,request,end,cancel,rehash=False):
     if not isinstance(body,dict) or not isinstance(body.get("transcriptPath"),str) or not body["transcriptPath"]:
         return body
     _check_control(end,cancel)
@@ -67,7 +67,7 @@ def _capture_remote_session_end(body,state,checkpoint,request,end,cancel):
             state=_upload_state(state)
             if state["fingerprint"] != identity or state["totalBytes"] != before.st_size:
                 raise ValueError("Transcript changed since upload admission")
-        else:
+        def hash_state(previous=None):
             digest=hashlib.sha256()
             offset=0
             while offset<before.st_size:
@@ -77,18 +77,28 @@ def _capture_remote_session_end(body,state,checkpoint,request,end,cancel):
                 offset+=len(block)
             if fingerprint(os.fstat(fd)) != identity:
                 raise ValueError("Transcript changed during hashing")
-            state={"uploadId":None,"receivedBytes":0,"totalBytes":before.st_size,"sha256":digest.hexdigest(),"fingerprint":identity}
-            checkpoint(state)
+            sha256=digest.hexdigest()
+            if previous is not None and previous["sha256"] != sha256:
+                raise ValueError("Transcript changed since upload admission")
+            current={"uploadId":None,"receivedBytes":0,"totalBytes":before.st_size,"sha256":sha256,"fingerprint":identity}
+            checkpoint(current)
+            return current
+        if state is None or rehash:
+            state=hash_state(state)
         session=body.get("sessionKey") or body.get("sessionId")
         if not isinstance(session,str) or not isinstance(body.get("harness"),str):
             raise ValueError("Staged session-end requires harness and session identity")
         base="/api/hooks/session-end/uploads"
+        def declare(saved):
+            return request("POST",base,body={"sessionKey":session,"harness":body["harness"],"totalBytes":saved["totalBytes"],"sha256":saved["sha256"],**({"agentId":body["agentId"]} if "agentId" in body else {})})
         try:
-            current=request("GET",base+"/"+state["uploadId"]) if state["uploadId"] else request("POST",base,body={"sessionKey":session,"harness":body["harness"],"totalBytes":state["totalBytes"],"sha256":state["sha256"],**({"agentId":body["agentId"]} if "agentId" in body else {})})
+            current=request("GET",base+"/"+state["uploadId"]) if state["uploadId"] else declare(state)
         except SignetApiError as error:
-            if error.status == 404:
-                raise SignetNetworkError("Upload unavailable; original transcript retained in outbox") from error
-            raise
+            if state["uploadId"] is None or error.status not in (404,410):
+                raise
+            checkpoint({**state,"uploadId":None,"receivedBytes":0})
+            state=hash_state(state)
+            current=declare(state)
         if not isinstance(current,dict) or not isinstance(current.get("uploadId"),str) or not re.fullmatch(r"[a-f0-9-]{36}",current["uploadId"]) or type(current.get("receivedBytes")) is not int or not 0<=current["receivedBytes"]<=state["totalBytes"] or type(current.get("chunkBytes")) is not int or not 65536<=current["chunkBytes"]<=1024*1024 or current["chunkBytes"]%65536:
             raise ValueError("Invalid upload progress")
         if state["uploadId"] and state["uploadId"]!=current["uploadId"]:
@@ -124,6 +134,10 @@ def _invalid_json_constant(value):
 
 def _json_load(text):
     return json.loads(text, parse_constant=_invalid_json_constant)
+
+
+class SignetUploadChecksumError(ValueError):
+    code = "transcript_upload_checksum_failed"
 
 
 class SignetApiError(Exception):
@@ -1689,14 +1703,24 @@ class NodeTransport(SignetTransport):
             _delivery_path(path)
 
     def _send_entry(self, entry, deadline, **options):
-        if self.target.remote and entry["path"] == "/api/hooks/session-end":
-            end=deadline/1000
-            def checkpoint(state):
-                self.outbox.checkpoint_upload(entry,state,end=end,cancel=options.get("cancel"))
-            body=_capture_remote_session_end(entry["body"],entry.get("upload"),checkpoint,lambda method,path,**step:self._send(method,path,captured_headers=entry["headers"],deadline=deadline,cancel=options.get("cancel"),timeout=options.get("timeout"),**step),end,options.get("cancel"))
-        else:
-            body=entry["body"]
-        return self._send(entry["method"],entry["path"],body,captured_headers=entry["headers"],deadline=deadline,**options)
+        if not self.target.remote or entry["path"] != "/api/hooks/session-end":
+            return self._send(entry["method"],entry["path"],entry["body"],captured_headers=entry["headers"],deadline=deadline,**options)
+        upload=entry.get("upload")
+        end=deadline/1000
+        def checkpoint(state):
+            nonlocal upload
+            self.outbox.checkpoint_upload(entry,state,end=end,cancel=options.get("cancel"))
+            upload=state
+        for recovering in (False,True):
+            try:
+                body=_capture_remote_session_end(entry["body"],upload,checkpoint,lambda method,path,**step:self._send(method,path,captured_headers=entry["headers"],deadline=deadline,cancel=options.get("cancel"),timeout=options.get("timeout"),**step),end,options.get("cancel"),rehash=recovering)
+                return self._send(entry["method"],entry["path"],body,captured_headers=entry["headers"],deadline=deadline,**options)
+            except SignetApiError as error:
+                if error.status != 422 or upload is None:
+                    raise
+                if recovering:
+                    raise SignetUploadChecksumError("Upload checksum failed after recovery; original transcript retained") from error
+                checkpoint({**upload,"uploadId":None,"receivedBytes":0})
 
     def _send(self, method, path, body=None, *, captured_headers=None, **options):
         used = [None]

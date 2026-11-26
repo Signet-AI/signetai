@@ -49,6 +49,7 @@ export function parseUploadState(value: unknown): UploadState {
 }
 interface RemoteCapture {
 	readonly state?: UploadState;
+	readonly rehash?: boolean;
 	readonly checkpoint: (state: UploadState) => Promise<void>;
 	readonly request: (method: string, path: string, options: RequestOptions) => Promise<unknown>;
 }
@@ -112,47 +113,59 @@ export async function captureRemoteSessionEnd(
 			let state = remote.state;
 			if (state && (state.fingerprint !== fingerprint || state.totalBytes !== before.size))
 				throw new SignetError("Transcript changed since upload admission", "transcript_source_changed");
-			if (!state) {
+			const rehash = async (previous?: UploadState): Promise<UploadState> => {
 				const hash = createHash("sha256"),
 					block = Buffer.alloc(256 * 1024);
 				for (let offset = 0; offset < before.size; ) {
 					signal?.throwIfAborted();
 					const { bytesRead } = await handle.read(block, 0, Math.min(block.length, before.size - offset), offset);
-					if (!bytesRead) throw new Error("Transcript changed during hashing");
+					if (!bytesRead) throw new SignetError("Transcript changed during hashing", "transcript_source_changed");
 					hash.update(block.subarray(0, bytesRead));
 					offset += bytesRead;
 				}
 				if ((await fileFingerprint(handle)) !== fingerprint)
 					throw new SignetError("Transcript changed during hashing", "transcript_source_changed");
-				state = { uploadId: null, receivedBytes: 0, totalBytes: before.size, sha256: hash.digest("hex"), fingerprint };
-				await remote.checkpoint(state);
-			}
+				const sha256 = hash.digest("hex");
+				if (previous && previous.sha256 !== sha256)
+					throw new SignetError("Transcript changed since upload admission", "transcript_source_changed");
+				const next = { uploadId: null, receivedBytes: 0, totalBytes: before.size, sha256, fingerprint };
+				await remote.checkpoint(next);
+				return next;
+			};
+			if (!state || remote.rehash) state = await rehash(state);
 			const sessionKey = "sessionKey" in body ? body.sessionKey : "sessionId" in body ? body.sessionId : undefined;
 			if (typeof sessionKey !== "string" || !("harness" in body) || typeof body.harness !== "string")
 				throw new TypeError("Staged session-end requires harness and session identity");
 			const base = "/api/hooks/session-end/uploads";
+			const declare = (saved: UploadState) =>
+				remote.request("POST", base, {
+					body: {
+						sessionKey,
+						...("agentId" in body ? { agentId: body.agentId } : {}),
+						harness: body.harness,
+						totalBytes: saved.totalBytes,
+						sha256: saved.sha256,
+					},
+					signal,
+				});
 			let declaration: unknown;
 			try {
 				declaration =
 					state.uploadId === null
-						? await remote.request("POST", base, {
-								body: {
-									sessionKey,
-									...("agentId" in body ? { agentId: body.agentId } : {}),
-									harness: body.harness,
-									totalBytes: state.totalBytes,
-									sha256: state.sha256,
-								},
-								signal,
-							})
+						? await declare(state)
 						: await remote.request("GET", `${base}/${state.uploadId}`, { signal });
 			} catch (error) {
-				if (typeof error === "object" && error !== null && "status" in error && error.status === 404)
-					throw new SignetError(
-						"Upload unavailable; original transcript retained in outbox",
-						"transcript_upload_unavailable",
-					);
-				throw error;
+				if (
+					state.uploadId !== null &&
+					typeof error === "object" &&
+					error !== null &&
+					"status" in error &&
+					(error.status === 404 || error.status === 410)
+				) {
+					await remote.checkpoint({ ...state, uploadId: null, receivedBytes: 0 });
+					state = await rehash(state);
+					declaration = await declare(state);
+				} else throw error;
 			}
 			const current = progress(declaration, state.totalBytes);
 			if (state.uploadId !== null && current.uploadId !== state.uploadId) throw new Error("Upload identity changed");

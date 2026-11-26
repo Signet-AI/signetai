@@ -90,18 +90,20 @@ for server in servers: server.shutdown()
 	expect({ exit: await child.exited, output, error }).toMatchObject({ exit: 0, output: "" });
 });
 
-test("bundled Python SDK regression suite including shared upload resume", async () => {
-	const child = Bun.spawn(["python", "-m", "unittest", "-q", "test_signet_transport"], {
-		cwd: join(import.meta.dir, "hermes-plugin"),
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const [output, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-	expect({ exit: await child.exited, output, error }).toMatchObject({ exit: 0 });
-	console.log(
-		(output + error)
-			.split("\n")
-			.filter((line) => /^python:|^Ran \d+ tests|^OK$/.test(line))
-			.join("\n"),
-	);
-}, 120000);
+for (const suite of ["TransportTests", "UploadResumeConformanceTests"]) {
+	test(`bundled Python SDK regression suite: ${suite}`, async () => {
+		const child = Bun.spawn(["python", "-m", "unittest", "-q", `test_signet_transport.${suite}`], {
+			cwd: join(import.meta.dir, "hermes-plugin"),
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [output, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+		expect({ exit: await child.exited, output, error }).toMatchObject({ exit: 0 });
+		console.log(
+			(output + error)
+				.split("\n")
+				.filter((line) => /^python:|^Ran \d+ tests?|^OK$/.test(line))
+				.join("\n"),
+		);
+	}, 120000);
+}

@@ -2,6 +2,7 @@ import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { randomUUID } from "node:crypto";
 import {
 	SignetError,
+	SignetApiError,
 	SignetCredentialError,
 	SignetNetworkError,
 	SignetTimeoutError,
@@ -54,6 +55,45 @@ export class NodeTransport extends SignetTransport {
 		upload?: OutboxEntry["upload"],
 		checkpoint?: UploadCheckpoint,
 	): Promise<T> {
+		let current = upload;
+		const save = checkpoint
+			? async (state: NonNullable<OutboxEntry["upload"]>) => {
+					await checkpoint(state);
+					current = state;
+				}
+			: undefined;
+		for (const recovering of [false, true]) {
+			try {
+				return await this.sendAttempt<T>(method, path, opts, capturedHeaders, current, save, recovering);
+			} catch (error) {
+				if (
+					!(error instanceof SignetApiError) ||
+					error.status !== 422 ||
+					!this.target.remote ||
+					path !== "/api/hooks/session-end" ||
+					!current ||
+					!save
+				)
+					throw error;
+				if (recovering)
+					throw new SignetError(
+						"Upload checksum failed after recovery; original transcript retained",
+						"transcript_upload_checksum_failed",
+					);
+				await save({ ...current, uploadId: null, receivedBytes: 0 });
+			}
+		}
+		throw new SignetError("Upload recovery exhausted", "transcript_upload_checksum_failed");
+	}
+	private async sendAttempt<T>(
+		method: string,
+		path: string,
+		opts: RequestOptions,
+		capturedHeaders?: Readonly<Record<string, string>>,
+		upload?: OutboxEntry["upload"],
+		checkpoint?: UploadCheckpoint,
+		rehash = false,
+	): Promise<T> {
 		if (this.target.remote && path === "/api/hooks/session-end") {
 			try {
 				opts = {
@@ -64,6 +104,7 @@ export class NodeTransport extends SignetTransport {
 						checkpoint
 							? {
 									state: upload,
+									rehash,
 									checkpoint,
 									request: (method, path, step) =>
 										this.send(
