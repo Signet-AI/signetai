@@ -42,7 +42,7 @@ The global agent switcher offers the organization agent, your team agents, and y
 
 For a new instance, open the printed `/auth/setup` URL (or `/auth/claim`) and paste the setup token printed by the daemon. Supply the organization name and first administrator’s details. Keep the bootstrap password until SSO is configured and verified.
 
-Open `/auth/device` while signed in, enter the code from the CLI or desktop app, and review the device name before approving or denying it. `/auth/invite` accepts an invitation token and lets password accounts choose their credentials. SSO invitation continuation requires a token-free handoff from the daemon; this screen reports that limitation instead of putting the invitation token into an SSO URL.
+Open `/auth/device` while signed in, enter the code from the CLI or desktop app, and review the device name and instance before approving or denying it. Approved desktop requests offer **Return to Signet**, which opens the desktop app without putting credentials in the link. `/auth/invite` accepts an invitation token and lets password accounts choose their credentials. SSO invitation continuation requires a token-free handoff from the daemon; this screen reports that limitation instead of putting the invitation token into an SSO URL.
 
 ## Navigation and cached data
 

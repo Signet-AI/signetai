@@ -56,16 +56,53 @@ async function mint(): Promise<{ token: string; expiresAt: string }> {
 }
 
 describe("whoami", () => {
+	test("local mode preserves origin/main's legacy keys and value types", async () => {
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: local\n");
+		state.reloadAuthState(dir);
+		const { registerAuthRoutes } = await import("./auth-routes.js");
+		const local = new Hono();
+		local.use("*", createAuthMiddleware(state.authConfig, state.authSecret, verifyKey));
+		registerAuthRoutes(local);
+		const response = await local.request("/api/auth/whoami");
+		const value = await response.json();
+		expect(typeof value.effectiveAccess).toBe("boolean");
+		expect(value.effectiveAccess).toBe(true);
+		const { accessMode, ...legacy } = value;
+		expect(accessMode).toBe("open");
+		expect(Object.keys(legacy).sort()).toEqual(
+			[
+				"authenticated",
+				"trustedLocal",
+				"effectiveAccess",
+				"claims",
+				"error",
+				"permissions",
+				"mode",
+				"providers",
+			].sort(),
+		);
+		expect(legacy).toMatchObject({
+			authenticated: false,
+			trustedLocal: false,
+			claims: null,
+			error: null,
+			mode: "local",
+		});
+		expect(Array.isArray(legacy.permissions)).toBe(true);
+		expect(Array.isArray(legacy.providers)).toBe(true);
+	});
+
 	test("distinguishes authenticated from missing access without a truthy boolean fallback", async () => {
 		const signedIn = await app.request("/api/auth/whoami", { headers: bearer(KEY) });
 		expect(await signedIn.json()).toMatchObject({
-			effectiveAccess: "authenticated",
+			effectiveAccess: true,
+			accessMode: "authenticated",
 			organization: null,
 			user: null,
 			agents: { defaultRead: "default", defaultWrite: "default" },
 		});
 		const signedOut = await app.request("/api/auth/whoami");
-		expect(await signedOut.json()).toMatchObject({ effectiveAccess: "none", authenticated: false });
+		expect(await signedOut.json()).toMatchObject({ effectiveAccess: false, accessMode: "none", authenticated: false });
 	});
 	test("reports an API key as authenticated with its claims", async () => {
 		const res = await app.request("/api/auth/whoami", { headers: bearer(KEY) });

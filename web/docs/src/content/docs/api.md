@@ -186,7 +186,7 @@ remain protected in `team` mode. See [Core configuration](/api/core-configuratio
 
 After a team workspace is claimed, credentials resolve a server-side principal. User deactivation, session revocation, device revocation, and key revocation take effect on the next request. Legacy signed tokens are rejected with `401 legacy_token`. Existing API keys keep their migration grace period; new credentials must have an owned identity or explicit scope.
 
-Browser login and claim responses set `signet_session` and `signet_csrf`. Cookie-authenticated POST, PUT, PATCH, and DELETE requests require `x-signet-csrf`. Device sessions use `sig_ses_` access and `sig_ref_` rotating refresh tokens. Bearer requests do not require CSRF. `whoami` returns organization, user, groups, credential, effective permissions, default read/write agents, providers, and `hybridProxyDetected`; `effectiveAccess` is `open`, `authenticated`, or `none`.
+Browser login and claim responses set `signet_session` and `signet_csrf`. Cookie-authenticated POST, PUT, PATCH, and DELETE requests require `x-signet-csrf`. Device sessions use `sig_ses_` access and `sig_ref_` rotating refresh tokens. Bearer requests do not require CSRF. `whoami` returns organization, user, groups, credential, effective permissions, default read/write agents, providers, and `hybridProxyDetected`; `effectiveAccess` remains a boolean; the new `accessMode` field is `open`, `authenticated`, or `none`.
 
 All organization API bodies are JSON. Error responses include `error` and `reason`; missing permissions may also name `required`. `401` responses include `WWW-Authenticate: Bearer`. Invitation, device-start, device-token, refresh, claim, login, methods, and OIDC entry points are open. Other operations require authentication and the authority noted below.
 
@@ -194,6 +194,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 |---|---|---|
 | GET | `/api/auth/methods` | Mode, organization claim state, and available password/OIDC providers. |
 | GET | `/api/auth/whoami` | Resolved identity and effective access; safe without a credential. |
+| PATCH | `/api/auth/preferences` | User session; `{ defaultReadAgentId }` sets only the caller's default read agent. |
 | POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited. |
 | GET | `/api/auth/sso/start` | OIDC authorization redirect; optional invite token. |
 | GET | `/api/auth/sso/callback` | PKCE code exchange with one-use state and nonce validation. |

@@ -1,10 +1,11 @@
 import { type FormEvent, type ReactNode, useState } from "react";
+import { SignetMark } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { PageHeading } from "@/components/dashboard/heading";
 import { Panel } from "@/components/shell/panel";
 import { getJSONResult } from "@/lib/api";
-import { refreshSession } from "@/lib/session";
+import { refreshSession, useWhoami } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
 
 export function authEntryKind(path: string, mode: string): "claim" | "invite" | "device" | null {
@@ -17,16 +18,40 @@ export function authEntryKind(path: string, mode: string): "claim" | "invite" | 
 export function AuthPage({
 	title,
 	description,
+	organizationName,
+	instanceOrigin = typeof location === "undefined" ? "" : location.origin,
 	children,
 }: {
 	readonly title: string;
 	readonly description: string;
-	readonly children: ReactNode;
+	readonly organizationName?: string;
+	readonly instanceOrigin?: string;
+	readonly children?: ReactNode;
 }) {
 	return (
 		<section className="settings-page">
+			{organizationName && (
+				<header className="flex shrink-0 items-center gap-2.5">
+					<SignetMark className="h-6 w-5 shrink-0" aria-label="Signet" />
+					<span className="text-[15px] font-medium tracking-tight">Signet</span>
+				</header>
+			)}
 			<div className="mx-auto flex w-full max-w-xl flex-col gap-6 overflow-auto p-6">
-				<PageHeading title={title} description={description} />
+				<PageHeading
+					title={title}
+					description={
+						organizationName ? (
+							<>
+								<span className="inline-block rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground">
+									{organizationName} · {instanceOrigin}
+								</span>
+								<span className="mt-3 block text-small">{description}</span>
+							</>
+						) : (
+							description
+						)
+					}
+				/>
 				{children}
 			</div>
 		</section>
@@ -64,19 +89,39 @@ export function AuthField({
 	);
 }
 
+type DeviceDecision = { readonly client: "cli" | "desktop"; readonly decision: "approve" | "deny" };
+
+export function DeviceApprovalResult({ client, decision }: DeviceDecision) {
+	return (
+		<div className="flex flex-col gap-4">
+			<p role="status">
+				{decision === "approve" ? "Sign-in approved. Return to your device." : "Sign-in denied. No access was granted."}
+			</p>
+			{client === "desktop" && decision === "approve" && (
+				<Button asChild className="self-start">
+					<a href="signet://auth/complete">Return to Signet</a>
+				</Button>
+			)}
+		</div>
+	);
+}
+
 export function DeviceApprovalPage() {
+	const whoami = useWhoami();
 	const [code, setCode] = useState(() => new URLSearchParams(location.search).get("user_code") ?? "");
 	const [lookup, setLookup] = useState("");
-	const [done, setDone] = useState<string | null>(null);
+	const [done, setDone] = useState<DeviceDecision | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const { result, refresh } = usePanelQuery<{
-		client: string;
+		client: "cli" | "desktop";
 		deviceName: string;
 		platform: string | null;
 		createdAt: string;
 	}>(lookup ? `/api/auth/device/${encodeURIComponent(lookup)}` : null);
 	const decide = async (decision: "approve" | "deny") => {
+		const client = result?.data?.client;
+		if (!client) return;
 		setBusy(true);
 		setError(null);
 		const response = await getJSONResult<{ ok: boolean }>("/api/auth/device/approve", {
@@ -86,15 +131,16 @@ export function DeviceApprovalPage() {
 		});
 		setBusy(false);
 		if (response.error) setError(response.error);
-		else
-			setDone(
-				decision === "approve" ? "Sign-in approved. Return to your device." : "Sign-in denied. No access was granted.",
-			);
+		else setDone({ client, decision });
 	};
 	return (
-		<AuthPage title="Approve device sign-in" description="Only approve a code from a device you are signing in on.">
+		<AuthPage
+			title="Approve device sign-in"
+			organizationName={whoami?.organization.name}
+			description="Only approve a code from a device you are signing in on."
+		>
 			{done ? (
-				<p role="status">{done}</p>
+				<DeviceApprovalResult {...done} />
 			) : (
 				<>
 					<form
@@ -106,7 +152,7 @@ export function DeviceApprovalPage() {
 						}}
 					>
 						<AuthField name="userCode" label="Code from your terminal" value={code} onChange={setCode} />
-						<Button type="submit" className="self-start">
+						<Button type="submit" variant="outline" className="self-start">
 							Review device
 						</Button>
 					</form>
