@@ -205,9 +205,14 @@ export async function stopSourceIndexJobs(): Promise<void> {
 	for (const [sourceId, routeJob] of routeSourceJobs) {
 		const current = getSourceIndexJob(sourceId);
 		if (current?.id !== routeJob.job.id || (current.status !== "queued" && current.status !== "running")) continue;
+		const agentId = routeJob.input.source.writeIdentity?.agentId;
+		if (!agentId) {
+			invalidateSourceIndexJob(sourceId);
+			continue;
+		}
 		await recordSourceIndexOperation({
 			source: routeJob.input.source,
-			agentId: resolveDaemonAgentId(),
+			agentId,
 			discovered: current.total ?? current.scanned ?? 0,
 			accepted: current.indexed ?? 0,
 			durationMs: Math.max(0, Date.now() - Date.parse(current.startedAt ?? current.queuedAt)),
@@ -254,6 +259,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				.filter(
 					(source) =>
 						isSourceVisibleToAgent(source, agentId) &&
+						!legacySourceMutationDenied(c, source) &&
 						!isSourceGenerationTombstoned(source, tombstonedSourceGenerations),
 				)
 				.map(async (source) => {
@@ -442,7 +448,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const resolved = resolveSourceAgentId(c);
 		if (resolved.error) return c.json({ error: resolved.error }, 403);
 		const source = findConfiguredSource(sourceId, agentsDir, resolved.agentId);
-		if (!source) return c.json({ error: "Source not found" }, 404);
+		if (!source || legacySourceMutationDenied(c, source)) return c.json({ error: "Source not found" }, 404);
 		const includeLocalDiscord = c.req.query("includeLocalDiscord") === "true";
 		return c.json(
 			exportSourceSnapshot({
@@ -458,7 +464,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const resolved = resolveSourceAgentId(c);
 		if (resolved.error) return c.json({ error: resolved.error }, 403);
 		const source = findConfiguredSource(sourceId, agentsDir, resolved.agentId);
-		if (!source) return c.json({ error: "Source not found" }, 404);
+		if (!source || legacySourceMutationDenied(c, source)) return c.json({ error: "Source not found" }, 404);
 		const agentId = resolved.agentId;
 		const stats = await sourceStats(source, agentId);
 		return c.json({ source: publicSource(source), stats, health: await sourceHealth(source, agentId, stats) });
@@ -993,7 +999,11 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 
 async function executeSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
 	const startedAt = Date.now();
-	const agentId = input.source.writeIdentity?.agentId ?? resolveDaemonAgentId();
+	const agentId = input.source.writeIdentity?.agentId;
+	if (!agentId) {
+		failSourceIndexJob(input.source.id, job.id, new Error("source_identity_required"));
+		return;
+	}
 	if (isSourceIndexInFlight(input.source.id)) {
 		scheduleSourceIndexJob(input, job, 50);
 		return;

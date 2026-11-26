@@ -77,6 +77,15 @@ function legacySource() {
 	if (!added.ok) throw new Error(added.error);
 	return added.source;
 }
+it("hides legacy source reads from organization members", async () => {
+	const source = legacySource();
+	const member = app("member");
+	const listed = await member.request("/api/sources");
+	expect(await listed.json()).toMatchObject({ sources: [] });
+	for (const suffix of ["health", "snapshot"])
+		expect((await member.request(`/api/sources/${encodeURIComponent(source.id)}/${suffix}`)).status).toBe(404);
+	expect((await (await app("admin").request("/api/sources")).json()).sources).toHaveLength(1);
+});
 it("denies member deletion of legacy sources without identity", async () => {
 	const source = legacySource();
 	expect(
@@ -130,7 +139,13 @@ it("redacts source identity from list and health responses", async () => {
 });
 it("source reads use principal agent reach", async () => {
 	const added = addImportedSource(
-		{ fileName: "alice.md", contentHash: "a".repeat(64), format: "markdown", agentId: "alice-agent" },
+		{
+			fileName: "alice.md",
+			contentHash: "a".repeat(64),
+			format: "markdown",
+			agentId: "alice-agent",
+			writeIdentity: { agentId: "alice-agent", authorUserId: "alice", authorCredential: "session:alice-session" },
+		},
 		dir,
 	);
 	if (!added.ok) throw new Error(added.error);
