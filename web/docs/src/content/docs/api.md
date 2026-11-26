@@ -222,6 +222,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | POST | `/api/auth/invites/lookup` | JSON `{ token }`; returns organization, role, and optional invite email. Tokens never appear in API paths. |
 | POST | `/api/auth/invites/accept` | `{ token, username, displayName, password? }`; browser session or `ssoStartPath`. |
 | GET | `/api/org/users` | Admin; optional `status`, `role`, `group`, `q`. |
+| GET | `/api/org/users/lookup` | Admin or compliance, without agent/project restrictions; required `q` searches active display names/emails. Returns `{ users: [{ id, displayName, email }], nextCursor }`; optional `limit` (1–50, default 20) and `cursor`. |
 | PATCH | `/api/org/users/:id` | Admin; `{ role?, compliance?, displayName? }`. |
 | POST | `/api/org/users/:id/deactivate` | Admin; `{ mode: "keep" | "transfer" | "purge", transferTo?, dryRun?: true }`; plan, or `202 { jobId }` when `dryRun: false`. |
 | POST | `/api/org/users/:id/reactivate` | Admin; does not restore revoked credentials. |
