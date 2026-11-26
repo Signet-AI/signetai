@@ -1005,7 +1005,10 @@ describe("organization HTTP flows", () => {
 		]);
 		const who = await call("/api/auth/whoami", "GET", undefined, key.secret);
 		expect(who.status).toBe(200);
-		expect(await who.json()).toMatchObject({ user: { username: "alice" }, credential: { harness: "hermes-agent" } });
+		expect(await who.json()).toMatchObject({
+			user: { username: "alice" },
+			credential: { harness: "hermes-agent", keyKind: "connector" },
+		});
 		const renewed = await organizationQuery<{ expires_at: string }>(
 			statement("SELECT expires_at FROM api_keys WHERE id = ?", [key.key.id], "get"),
 		);

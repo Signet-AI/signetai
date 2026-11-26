@@ -88,10 +88,18 @@ function canonicalHarness(harness: string): string {
 }
 interface Identity {
 	mode: string;
-	credential?: { kind?: string; deviceId?: string; expiresAt?: string };
+	credential?: {
+		kind?: string;
+		keyKind?: string;
+		harness?: string;
+		id?: string;
+		agentId?: string;
+		deviceId?: string;
+		expiresAt?: string;
+	};
 }
 interface IssuedKey {
-	key: { id: string; agentId?: string; deviceId?: string; expiresAt: string };
+	key: { id: string; agentId?: string; deviceId?: string; expiresAt?: string };
 	secret: string;
 }
 async function revokeConnectorKey(
@@ -126,11 +134,40 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 	);
 	const previous = (await registry.read())[registryKey];
 	const provision = identity.mode !== "local" && (target.remote || identity.mode === "team");
-	if (provision && (identity.credential?.kind !== "session" || !identity.credential.deviceId))
+	const manual = deps.flagKey !== undefined;
+	if (
+		manual &&
+		(identity.credential?.kind !== "api_key" ||
+			identity.credential.keyKind !== "connector" ||
+			identity.credential.harness !== harness ||
+			!identity.credential.id ||
+			!identity.credential.deviceId)
+	)
+		throw new Error(
+			`--api-key-stdin requires a connector key bound to ${harness}; personal, session, and other-harness credentials are not accepted`,
+		);
+	if (
+		manual &&
+		identity.credential?.agentId &&
+		(options.agent ?? options.agentId) &&
+		identity.credential.agentId !== (options.agent ?? options.agentId)
+	)
+		throw new Error("The connector key is bound to a different agent");
+	if (provision && !manual && (identity.credential?.kind !== "session" || !identity.credential.deviceId))
 		throw new SignetUnauthorizedError("missing_credential");
 	await revokeConnectorKey(previous, deps);
 	let issued: IssuedKey | undefined;
-	if (provision) {
+	if (manual && deps.flagKey && identity.credential?.id) {
+		issued = {
+			secret: deps.flagKey,
+			key: {
+				id: identity.credential.id,
+				deviceId: identity.credential.deviceId,
+				agentId: identity.credential.agentId,
+				expiresAt: identity.credential.expiresAt,
+			},
+		};
+	} else if (provision) {
 		issued = await transport.post<IssuedKey>("/api/auth/connector-keys", {
 			harness,
 			deviceId: identity.credential?.deviceId,

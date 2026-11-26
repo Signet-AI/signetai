@@ -81,8 +81,8 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 			: null;
 	const key =
 		p?.credential.kind === "api_key"
-			? await organizationQuery<{ expires_at: string | null } | null>(
-					statement("SELECT expires_at FROM api_keys WHERE id = ?", [p.credential.id], "get"),
+			? await organizationQuery<{ expires_at: string | null; kind: string } | null>(
+					statement("SELECT expires_at,kind FROM api_keys WHERE id = ?", [p.credential.id], "get"),
 				)
 			: null;
 	return {
@@ -94,6 +94,8 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 		credential: p
 			? {
 					...p.credential,
+					keyKind: key?.kind ?? null,
+					agentId: p.boundAgentId,
 					expiresAt: session?.access_expires_at ?? key?.expires_at ?? null,
 					deviceId: p.deviceId,
 					harness: p.harness,
