@@ -1,15 +1,15 @@
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
+import type {} from "./auth/identity-middleware";
+import { initDbAccessor, closeDbAccessor } from "./db-accessor";
 import { constants, mkdtempSync } from "node:fs";
 import { openContainedTranscriptFile, resolveManagedTranscriptPath } from "./transcript-import-safe-fs";
-import { addImportedSource, loadSourcesConfig } from "@signet/core";
+import { addImportedSource, loadSourcesConfig, initializeDatabaseSchema } from "@signet/core";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { rm, mkdir, writeFile, access, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { up as ledger } from "../../core/src/migrations/146-source-transcript-import";
-import { up as controls } from "../../core/src/migrations/149-transcript-import-state-machine";
-import { up as bytesMigration } from "../../core/src/migrations/151-transcript-import-bytes";
 import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
 import {
 	closeRegisteredDbOwnerMaintenance,
@@ -60,19 +60,18 @@ beforeEach(async () => {
 	process.env.SIGNET_AGENT_ID = "a";
 	const path = join(root, "test.db");
 	const db = new Database(path);
-	db.exec(
-		"CREATE TABLE session_transcripts (session_key TEXT, agent_id TEXT, content TEXT, harness TEXT, project TEXT, created_at TEXT, updated_at TEXT, completed_at TEXT, content_hash TEXT, PRIMARY KEY(agent_id,session_key))",
-	);
-	ledger(db);
-	controls(db);
-	bytesMigration(db);
-	bytesMigration(db);
-	db.exec("ALTER TABLE source_import_record_attempts ADD COLUMN source_id TEXT");
+	initializeDatabaseSchema(db);
 	db.close(true);
+	initDbAccessor(path, { agentsDir: root });
 	owner = createDbOwnerClient({ dbPath: path });
 	await owner.start();
 	registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: path, owner }));
-	await createJob({ jobId: scope.jobId, agentId: scope.agentId, files: [{ id: scope.fileId, name: "test.jsonl" }] });
+	await createJob({
+		author: SYSTEM_AUTHOR,
+		jobId: scope.jobId,
+		agentId: scope.agentId,
+		files: [{ id: scope.fileId, name: "test.jsonl" }],
+	});
 }, 20_000);
 afterEach(async () => {
 	if (oldPath === undefined) delete process.env.SIGNET_PATH;
@@ -81,6 +80,7 @@ afterEach(async () => {
 	else process.env.SIGNET_AGENT_ID = oldAgent;
 	await closeRegisteredDbOwnerMaintenance();
 	await owner?.close();
+	await closeDbAccessor();
 	for (let attempt = 0; ; attempt++) {
 		try {
 			await rm(root, { recursive: true, force: true });
@@ -114,12 +114,12 @@ test("owner persists chunks across restart, rejects cross-agent access and seals
 		await failure(
 			appendTranscriptChunk(scope, 0, Buffer.alloc(first.length, 66), checksum(Buffer.alloc(first.length, 66))),
 		),
-	).toContain("replay");
+	).toContain("Upload offset conflict");
 	await appendTranscriptChunk(scope, first.length, last, checksum(last));
 	const sealed = await sealTranscriptUpload(scope);
 	expect(sealed.content_hash).toBe(checksum(Buffer.concat([first, last])));
 	expect(await readTranscriptBytes(scope, first.length)).toEqual(last);
-	expect(await failure(appendTranscriptChunk(scope, 0, first, checksum(first)))).toContain("not writable");
+	expect(await failure(appendTranscriptChunk(scope, 0, first, checksum(first)))).toContain("Upload offset conflict");
 	expect(await failure(readTranscriptBytes({ ...scope, agentId: "b" }, 0))).toContain("unavailable");
 }, 20_000);
 
@@ -213,6 +213,7 @@ test("owner rolls back evidence when ledger write fails and preserves imported o
 		{ agentId: "a", sourceId: "s", sourceRecordId: "r" },
 	);
 	const input = {
+		author: SYSTEM_AUTHOR,
 		agentId: "a",
 		jobId: "job",
 		generation: 0,
@@ -429,6 +430,10 @@ test("finalize refuses pending records and rejection audit retains its source", 
 
 function http(): Hono {
 	const app = new Hono();
+	app.use("*", async (c, next) => {
+		c.set("author", SYSTEM_AUTHOR);
+		await next();
+	});
 	registerTranscriptImportRoutes(app);
 	return app;
 }
@@ -473,7 +478,9 @@ test("concurrent chunks cannot replace bytes; interrupted reset is retryable", a
 	const reset = await http().request("/api/sources/imports/job/files/file/reset", { method: "POST" });
 	expect(reset.status).toBe(200);
 	expect(await reset.json()).toMatchObject({ upload_generation: 1, upload_offset: 0, storage_state: "uploading" });
-	expect(await failure(appendTranscriptChunk(scope, 0, content, checksum(content)))).toContain("not writable");
+	expect(await failure(appendTranscriptChunk(scope, 0, content, checksum(content)))).toContain(
+		"Upload offset conflict",
+	);
 }, 20_000);
 
 test("a reset upload exports its current generation without a special read header", async () => {
@@ -670,6 +677,7 @@ test("replacement cannot register a Source while its deletion lease is active", 
 
 	try {
 		await createJob({
+			author: SYSTEM_AUTHOR,
 			jobId: "replace-job",
 			agentId: "a",
 			duplicateMode: "replace",
