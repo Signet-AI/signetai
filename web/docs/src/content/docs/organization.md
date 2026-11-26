@@ -376,5 +376,33 @@ Organization exports are scoped evidence, not a privileged database backup.
 To bring a JSON, JSONL, or NDJSON file back as immutable source evidence, explicitly
 add `--as-evidence`. Its original bytes and claimed provenance remain evidence;
 foreign author IDs, entity rows, relationships, configuration, and derived claims
-are not restored as authority. Direct remote restoration of legacy derived-state
-bundles remains unsupported. Local portable import behavior is unchanged.
+are not restored as authority. Remote restoration of derived-state bundles is
+permanently refused with `derived_state_restore_forbidden`, not deferred to a
+future restore implementation. Use `--as-evidence` for source-evidence ingestion;
+Dreaming is the only automatic author of semantic claims and rebuilds the graph
+from evidence. Bundled graph rows and foreign authors are not authoritative
+evidence. Local offline portable restore keeps its current behavior.
+
+## Failures and scripts
+
+Authentication failures exit **3** and name the instance: `Session expired for
+acme.example. Run signet login.` Permission failures exit **4**, identify the
+missing requirement, and direct team membership changes to a team owner. There
+is no retry against a local daemon after either failure. Other failures exit 1;
+`doctor` uses 2 when it successfully reports degraded health.
+
+With `--json`, request and argument errors are JSON objects on stderr with
+`error`, `reason`, and `status`;
+403 responses also include `required` when available. This also applies to command
+syntax errors (`invalid_arguments`). Partial transitions remain explicit rather
+than being reported as complete. One-time key-creation warnings also use stderr;
+those warnings are not operation failures. Put global
+flags before or after the command, for example `signet --json whoami`.
+
+`--non-interactive` refuses browser sign-in, dashboard opening, keychain prompts,
+and unconfirmed agent purge. Supply credentials through `SIGNET_API_KEY` or a
+protected `SIGNET_API_KEY_FILE` for unattended calls. JSON login keeps approval
+instructions and browser-unavailable notices on stderr, leaving one final JSON
+result on stdout. JSON onboarding detects harnesses without changing them;
+connection remains an explicit choice. Use explicit classification flags for
+scripted imports and `--confirm --wait` for destructive organization jobs.

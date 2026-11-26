@@ -40,7 +40,7 @@ import {
 } from "@signet/core";
 import { detectExistingSetup } from "./lib/setup-detection.js";
 import chalk from "chalk";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { confirm, isCancel } from "@clack/prompts";
 import { onboardOrganizationHarnesses } from "./features/organization-onboarding.js";
 
@@ -837,6 +837,12 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 
 program.name("signet").version(VERSION);
 program.showHelpAfterError();
+program.exitOverride();
+program.configureOutput({
+	writeErr: (value) => {
+		if (!process.argv.includes("--json")) process.stderr.write(value);
+	},
+});
 program.addHelpText(
 	"after",
 	`
@@ -1252,6 +1258,9 @@ if (isDaemonEntrypoint) {
 	try {
 		await program.parseAsync();
 	} catch (error) {
-		reportAuthError(error, process.argv.includes("--json"));
+		if (error instanceof CommanderError) {
+			process.exitCode = error.exitCode;
+			if (error.exitCode !== 0 && process.argv.includes("--json")) reportAuthError(error, true);
+		} else reportAuthError(error, process.argv.includes("--json"));
 	}
 }

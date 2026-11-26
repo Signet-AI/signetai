@@ -1,3 +1,4 @@
+import { credentialOptions } from "../lib/organization-target.js";
 import { rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { PendingRevokes, type PendingRevoke } from "../lib/connector-revocations.js";
@@ -370,7 +371,11 @@ function addOptions(command: Command): Command {
 		.option("--profile <name>", "Hermes profile")
 		.option("--json", "Machine-readable output");
 }
-export function registerConnectorCommands(program: Command, deps: ConnectorDeps): void {
+export function registerConnectorCommands(program: Command, baseDeps: ConnectorDeps): void {
+	let deps = baseDeps;
+	program.hook("preAction", (_root, command) => {
+		deps = credentialOptions(baseDeps, command.optsWithGlobals().nonInteractive === true);
+	});
 	const action =
 		(run: (harness: string, options: ConnectorInstallOptions, deps: ConnectorDeps) => Promise<void>) =>
 		async (harness: string, options: ConnectorInstallOptions) => {

@@ -396,5 +396,19 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 export function failure(c: Context, error: IdentityError): Response {
 	c.set("authFailureReason", error.reason);
 	if (error.status === 401) c.header("WWW-Authenticate", "Bearer");
-	return c.json({ error: error.message, reason: error.reason }, error.status);
+	const required =
+		error.status === 403
+			? error.message !== error.reason
+				? error.message
+				: error.reason === "not_owner"
+					? "Ask a team owner"
+					: error.reason === "permission"
+						? "Requires the role and permission for this operation"
+						: error.reason === "agent_not_permitted"
+							? "Use a credential authorized for the requested agent"
+							: error.reason === "project_not_permitted"
+								? "Use a credential authorized for the requested project"
+								: "Ask an organization administrator"
+			: undefined;
+	return c.json({ error: error.message, reason: error.reason, ...(required ? { required } : {}) }, error.status);
 }

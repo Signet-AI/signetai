@@ -21,6 +21,11 @@ export async function importOrganizationEvidence(
 ) {
 	if (!options.agent)
 		throw new SignetError("Organization import requires --agent; no local database was opened", "agent_required");
+	if (/\.(?:json|jsonl|ndjson)$/i.test(path) && !options.asEvidence)
+		throw new SignetError(
+			"Remote derived-state restore is permanently refused. Use --as-evidence to ingest source evidence; Dreaming rebuilds semantic claims. Bundled entities, relations, and foreign authors are never restored as authority",
+			"derived_state_restore_forbidden",
+		);
 	if (options.classification && options.unclassified)
 		throw new SignetError("Choose --classification or --unclassified, not both", "invalid_request");
 	const transport = cliTransport();
@@ -49,15 +54,16 @@ export async function importOrganizationEvidence(
 		if (isCancel(choice)) throw new SignetError("Import cancelled; nothing was uploaded", "cancelled");
 		classificationId = choice || undefined;
 	}
-	if (/\.(?:json|jsonl|ndjson)$/i.test(path) && !options.asEvidence)
-		throw new SignetError(
-			"Portable derived-state restoration is not supported remotely. Use --as-evidence to preserve this file as source evidence instead; author and entity IDs are not trusted as authority",
-			"evidence_confirmation_required",
-		);
+
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	let bytes: Buffer;
 	try {
 		const stat = await file.stat();
+		if (stat.isDirectory())
+			throw new SignetError(
+				"Remote portable directories cannot be restored. Use --as-evidence with an evidence file; Dreaming rebuilds the graph",
+				"derived_state_restore_forbidden",
+			);
 		if (!stat.isFile() || stat.size > 16 * 1024 * 1024)
 			throw new SignetError("Import requires a regular file of at most 16 MiB", "import_limit");
 		const buffer = Buffer.alloc(16 * 1024 * 1024 + 1);
