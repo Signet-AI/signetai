@@ -47,7 +47,9 @@ The default local daemon still works without a login:
 
 A loopback URL without a credential remains local, including an explicitly
 configured URL or registry entry. Local capture passes the transcript path to
-the daemon rather than uploading its contents.
+the daemon rather than uploading its contents. Claude session-end dispatch is
+detached: a stalled daemon does not keep the harness process alive. Dispatch
+acceptance is not confirmation that the daemon has stored the evidence.
 
 ```bash
 signet connect claude-code
@@ -61,19 +63,28 @@ signet disconnect codex
 ```
 
 Reconnecting or rotating refreshes the managed integration and removes legacy
-inline Signet credentials. Rotation verifies revocation of the previous key
-before replacing local state. If subsequent provisioning fails, the old key can
-already be revoked: fix the reported error and reconnect.
+inline Signet credentials. Rotation issues a replacement, installs the integration,
+swaps the protected key file and registry entry, and only then revokes the old key.
+A failed installation restores the saved configuration and previous credential;
+an unused newly issued key is revoked or recorded for cleanup.
 
-Disconnect revokes the server-side key, uninstalls the integration, and removes
-its registry entry and key file. Already-revoked keys do not prevent cleanup.
-If the server is unavailable, Signet reports failure and retains local state for
-a retry; it does not claim that disconnect completed.
+Disconnect uninstalls the integration, removes its registry entry and key file,
+and revokes the server-side key last. If revocation fails, local cleanup stays
+complete and a protected pending-revocation record survives. The command reports
+the pending revocation and exits nonzero; `connector doctor` retries it after you
+restore connectivity or sign in again. Already-revoked keys do not prevent cleanup.
+
+Session evidence is kept by default. To explicitly delete this harness target's
+pending and quarantined outbox entries, run `signet disconnect codex --purge-outbox`.
+Other harnesses' outboxes are untouched. If already disconnected, also provide the
+original `--url` to select the retained outbox.
 
 Never pass a key in argv or save it in a harness config. Automation that already
-holds an authorized user-session credential can pipe it through
-`--api-key-stdin`. A connector or operator key cannot mint a new session-bound
-connector key.
+holds a connector key can pipe it through `signet connect codex --api-key-stdin`.
+Signet first asks the daemon to confirm that it is a connector key bound to Codex;
+personal keys, user-session tokens, unbound keys, and other-harness keys are
+rejected without writing a key file. Ordinary `connect` provisions a new key using
+your signed-in user session.
 
 ## Hermes profiles
 
@@ -110,11 +121,14 @@ than presented as a verified last-use time.
 failures, and pending or quarantined outbox entries. It reports whether it could
 inspect unassigned legacy keys. Its configuration scan is bounded and reports
 incomplete scans; unavailable inspection is not proof that nothing is wrong.
+Each connector declares its configuration paths, including Claude’s global
+`~/.claude.json` MCP configuration. Pending revocations are reported and retried;
+an active registry credential is never revoked by that retry.
 
 A `401` prints "Signet session expired, run `signet login`". Rejected session-end
 evidence stays in that harness's durable outbox. Sign in to the same instance
-and reconnect or run doctor to trigger replay. Permission-denied captures are
-quarantined, not discarded or sent under another agent.
+and reconnect or run doctor to trigger replay. Permission denials never trigger a retry under another agent. Outbox status
+reports quarantine and permanent-rejection counters separately.
 
 Remote file capture is recorded in the outbox before the client reads the
 transcript. The current daemon has no chunked transcript-upload route, so files

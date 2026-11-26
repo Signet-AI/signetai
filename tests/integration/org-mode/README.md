@@ -46,7 +46,7 @@ Each surface also requires a successful HR-audience content or changed-aggregate
 
 The fixture includes Alice-authored HR-hidden rows as an own-export negative control. The per-user export probe uses each caller's own author ID: the contract forbids Alice from exporting Carol's material even when unclassified. AC9 repeats binding, read isolation, classification propagation/restart, unnamed-speaker attribution, and deactivation with `agentModel=single`; all three users' default writes must actually resolve to `default`.
 
-AC10 builds the CLI and invokes `connect` for each supported harness in a fresh isolated client HOME. It supplies the key through stdin, scans changed files and sampled `ps -eo args` output for the secret and its unique prefix, and checks key-file permissions. The designated credential/key storage directories are allowed to contain their secret; harness configuration, registry metadata, hook commands, and other files are not.
+AC10 builds the CLI and invokes `connect` for each supported harness in a fresh isolated client HOME. The first pass provisions a key using a real device session saved through LoginStore. The reinstall pass supplies a separately issued, harness-bound connector key through stdin and seeds the old inline credential to prove migration. It scans files and sampled `ps -eo args` output for both secrets and their unique prefixes and checks key-file permissions. The designated credential/key storage directories are allowed to contain their secret; harness configuration, registry metadata, hook commands, and other files are not.
 
 ## AC8 eval artifact
 

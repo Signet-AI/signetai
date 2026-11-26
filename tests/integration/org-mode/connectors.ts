@@ -4,8 +4,9 @@ import { mkdir, readdir, readFile, stat, writeFile, realpath, readlink, cp } fro
 import { dirname, join, relative } from "node:path";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
 import { repo, terminateOwnedGroup } from "./daemon";
-import type { Fixture } from "./fixture";
-import { ConnectorRegistry, readKeyFile } from "../../../libs/sdk/src/node";
+import { connector, type Fixture } from "./fixture";
+import { request, success, record, text } from "./http";
+import { ConnectorRegistry, LoginStore, readKeyFile } from "../../../libs/sdk/src/node";
 
 export const harnesses = [
 	"claude-code",
@@ -153,6 +154,41 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 			const user = fixture.user("alice");
 			const session = user.session.bearer;
 			assert(session);
+			const response = success(
+				await request(fixture.daemon.origin, "/api/auth/sessions", user.session),
+				"GET /api/auth/sessions",
+			);
+			assert(Array.isArray(response.sessions));
+			const metadata = response.sessions.map(record).find((item) => item.id === user.sessionId);
+			assert(metadata, "CLI fixture session must exist");
+			await new LoginStore(fixture.daemon.origin, {
+				env,
+				keyring: {
+					get: async () => ({ state: "unsupported" as const }),
+					set: async () => ({ state: "unsupported" as const }),
+				},
+			}).save({
+				accessToken: session,
+				refreshToken: user.refreshToken,
+				accessExpiresAt: text(metadata.access_expires_at),
+				refreshExpiresAt: text(metadata.refresh_expires_at),
+			});
+			const supplied =
+				pass === 1
+					? (
+							await connector(
+								fixture.daemon,
+								user.session,
+								user.deviceId,
+								user.agentId,
+								harness === "hermes" ? "hermes-agent" : harness,
+							)
+						).credential.bearer
+					: undefined;
+			if (supplied) {
+				secrets.add(supplied);
+				secrets.add(supplied.slice("sig_sk_".length).split("_")[0] ?? supplied);
+			}
 			const samples: string[] = [];
 			const child = Bun.spawn(
 				[
@@ -161,7 +197,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 					join(repo, "surfaces/cli/dist/cli.js"),
 					"connect",
 					harness,
-					"--api-key-stdin",
+					...(supplied ? ["--api-key-stdin"] : []),
 					"--url",
 					fixture.daemon.origin,
 					...(harness === "hermes" ? ["--profile", "acceptance"] : []),
@@ -173,7 +209,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 			let argvLeak = false;
 			let processSamples = 0;
 			try {
-				child.stdin.write(`${session}\n`);
+				if (supplied) child.stdin.write(`${supplied}\n`);
 				child.stdin.end();
 				const deadline = Date.now() + 30_000;
 				do {
@@ -194,7 +230,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 
 			if (exit !== 0) {
 				failures.push(
-					`${harness}: signet connect --api-key-stdin exited ${exit}: ${`${out}\n${err}`
+					`${harness}: signet connect (stdin=${Boolean(supplied)}) exited ${exit}: ${`${out}\n${err}`
 						.replaceAll(session, "[redacted]")
 						.replace(/sig_sk_\S+/g, "[redacted]")
 						.slice(0, 2000)}`,
