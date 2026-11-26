@@ -9,6 +9,7 @@ import type { WriteCheckpointParams } from "./session-checkpoints";
 import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { type DbAccessor, getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
 import {
+	dbOwnerSessionFinalizerAuthor,
 	dbOwnerCommitCompactionSummary,
 	dbOwnerWriteSessionTranscript,
 	getDbOwnerForAccessor,
@@ -152,7 +153,13 @@ export interface CompactionSummaryInput {
 	readonly capturedAt?: string;
 }
 
-export { sessionFinalizerAuthor } from "./db-helpers";
+export async function sessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<WriteAuthor> {
+	return await dbOwnerSessionFinalizerAuthor(accessor, agentId, sessionKey);
+}
 
 export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointParams, maxPerSession: number): void {
 	const admittedAuthor = requireWriteAuthor(params.author);

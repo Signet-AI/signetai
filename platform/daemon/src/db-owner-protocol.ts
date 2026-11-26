@@ -372,6 +372,7 @@ export type DbOwnerRequest =
 			readonly input: import("./session-checkpoints").WriteCheckpointParams;
 			readonly maxPerSession: number;
 	  }
+	| { readonly kind: "session_finalizer_author"; readonly agentId: string; readonly sessionKey: string }
 	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";

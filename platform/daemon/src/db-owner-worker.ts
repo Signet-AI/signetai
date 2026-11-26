@@ -1239,6 +1239,10 @@ export function runDbOwnerWorker(): void {
 			const request = job.request;
 			return withBusyRetry(() => writeFilesystemDocumentInTx(db, request.input), context);
 		}
+		if (job.request.kind === "session_finalizer_author") {
+			const { readSessionFinalizerAuthorInTx } = await import("./db-helpers");
+			return readSessionFinalizerAuthorInTx(db, job.request.agentId, job.request.sessionKey);
+		}
 		if (job.request.kind === "session_checkpoint_write") {
 			const { writeSessionCheckpointInTx } = await import("./session-transcripts");
 			const request = job.request;

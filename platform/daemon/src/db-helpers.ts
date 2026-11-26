@@ -1,6 +1,3 @@
-import { ownerReadOne } from "./db-owner-sql";
-import { getDbOwnerForAccessor } from "./db-owner-runtime";
-import type { DbAccessor } from "./db-accessor";
 import { createRequire } from "node:module";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { readScopeSql } from "./read-scope";
@@ -84,7 +81,7 @@ export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceI
 	try {
 		const rows = db
 			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ?")
-			.all(sourceType, sourceId) as Array<{ id: string }>;
+			.all<{ id: string }>(sourceType, sourceId);
 		if (rows.length === 0) return;
 		deleteCompartmentVectors(
 			db,
@@ -319,20 +316,17 @@ export function recallResultEvidenceInTx(
 	return [{ kind: "memory", id: item.id }];
 }
 
-export async function sessionFinalizerAuthor(
-	accessor: DbAccessor,
+export function readSessionFinalizerAuthorInTx(
+	db: Pick<WriteDb, "prepare">,
 	agentId: string,
 	sessionKey: string,
-): Promise<WriteAuthor> {
-	const row = await ownerReadOne<{ speaker_user_id: string | null }>(
-		await getDbOwnerForAccessor(accessor),
+): WriteAuthor {
+	const row = prepareTypedStatement<{ speaker_user_id: string | null }>(
+		db,
 		"SELECT speaker_user_id FROM session_transcripts WHERE session_key=? AND agent_id=?",
-		[sessionKey, agentId],
-		{ operation: "session.finalizer.author", deadlineMs: 5000 },
-	);
+	).get(sessionKey, agentId);
 	return { userId: row?.speaker_user_id ?? null, credential: "system" };
 }
-
 export function pruneSessionRecallEventsInTx(db: WriteDb, cutoff: string, limit: number): number {
 	return db
 		.prepare(

@@ -227,6 +227,12 @@ async function executeInlineOwnerRequest(
 			return writeFilesystemDocumentInTx(db, request.input);
 		});
 	}
+	if (request.kind === "session_finalizer_author") {
+		const { readSessionFinalizerAuthorInTx } = await import("./db-helpers");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readSessionFinalizerAuthorInTx(db, request.agentId, request.sessionKey),
+		);
+	}
 	if (request.kind === "session_checkpoint_write") {
 		const { writeSessionCheckpointInTx } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
@@ -927,6 +933,17 @@ export async function dbOwnerFilesystemDocument(
 			deadlineMs: 5000,
 			estimatedWorkUnits: 1,
 		},
+	);
+}
+export async function dbOwnerSessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<import("./auth/audit-owner").WriteAuthor> {
+	return await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "session_finalizer_author", agentId, sessionKey },
+		{ operation: "session.finalizer.author", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
 	);
 }
 export async function dbOwnerCheckpoint(
