@@ -371,7 +371,7 @@ export function startDreamingWorker(
 	caps?: GraphHygieneCaps,
 ): DreamingWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
-	let checkRequested = false;
+	const settledTimers = new Map<"public" | "classified", ReturnType<typeof setTimeout>>();
 	let stopped = false;
 	let admission: Promise<void> | null = null;
 	let activeWork: Promise<void> | null = null;
@@ -654,7 +654,7 @@ export function startDreamingWorker(
 			.finally(() => {
 				runningPasses.delete(entry);
 				release();
-				if (madeProgress) checkSoon();
+				if (madeProgress) checkSoon(compartmentId);
 			});
 		return { passId, result, firstToolCall };
 	}
@@ -843,7 +843,11 @@ export function startDreamingWorker(
 	}
 
 	async function check(): Promise<void> {
-		await checkLane(null);
+		try {
+			await checkLane(null);
+		} finally {
+			schedule();
+		}
 		await checkLane(1);
 	}
 
@@ -984,8 +988,7 @@ export function startDreamingWorker(
 
 	function schedule(): void {
 		if (stopped) return;
-		const delay = checkRequested ? PASS_SETTLED_CHECK_DELAY_MS : nextCheckDelay();
-		checkRequested = false;
+		const delay = nextCheckDelay();
 		timer = setTimeout(async () => {
 			timer = null;
 			try {
@@ -998,16 +1001,26 @@ export function startDreamingWorker(
 					{ error: e instanceof Error ? e.message : String(e) },
 				);
 			}
-			schedule();
 		}, delay);
 	}
-	function checkSoon(): void {
-		checkRequested = true;
-		if (stopped || timer === null) return;
-		clearTimeout(timer);
-		timer = null;
-		schedule();
+	function checkSoon(compartmentId: number | null): void {
+		const lane = compartmentId === null ? "public" : "classified";
+		if (stopped || settledTimers.has(lane)) return;
+		settledTimers.set(
+			lane,
+			setTimeout(async () => {
+				settledTimers.delete(lane);
+				try {
+					await checkLane(compartmentId);
+				} catch (error) {
+					logger.error("dreaming-worker", "Settled lane check failed", error instanceof Error ? error : undefined, {
+						lane,
+					});
+				}
+			}, PASS_SETTLED_CHECK_DELAY_MS),
+		);
 	}
+
 	function nextCheckDelay(): number {
 		const interval = options.checkIntervalMs ?? CHECK_INTERVAL_MS;
 		return scheduler.reason === "inference_unavailable" ? Math.min(interval, INFERENCE_RECHECK_MS) : interval;
@@ -1028,6 +1041,8 @@ export function startDreamingWorker(
 	return {
 		stop() {
 			stopped = true;
+			for (const pending of settledTimers.values()) clearTimeout(pending);
+			settledTimers.clear();
 			if (timer) {
 				clearTimeout(timer);
 				timer = null;

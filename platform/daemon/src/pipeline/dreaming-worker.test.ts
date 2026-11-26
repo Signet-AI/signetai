@@ -414,7 +414,7 @@ describe("dreaming worker agent scope", () => {
 		db.close();
 	});
 
-	it("keeps public starts first and available with an earlier classified backlog held", async () => {
+	it("O1 keeps public start order and timing independent of classified backlog and progress", async () => {
 		async function starts(secret: boolean): Promise<string[]> {
 			if (secret) {
 				db.close();
@@ -473,6 +473,101 @@ describe("dreaming worker agent scope", () => {
 		expect(withSecret.filter((start) => start.endsWith(":public"))).toEqual(without);
 		expect(withSecret[0]).toBe("default:public");
 		expect(withSecret).toContain("aaa:1");
+		async function publicStartAfterProgress(secret: boolean): Promise<number> {
+			db.close();
+			db = new Database(":memory:");
+			runMigrations(db);
+			accessor = wrapDb(db);
+			db.exec(
+				"INSERT INTO agents(id,name,created_at,updated_at) VALUES('aaa','aaa','now','now'); INSERT INTO classifications(id,name) VALUES('cls_secret','Secret'); INSERT INTO compartments(id,key) VALUES(1,'cls_secret'); INSERT INTO compartment_members VALUES(1,'cls_secret')",
+			);
+			db.exec(
+				"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at) VALUES('timing-public','default','Public timing evidence','pi','now','now','now')",
+			);
+			if (secret)
+				db.exec(
+					"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id) VALUES('timing-secret','aaa','Hidden progress project exists.','pi','now','now','now',1)",
+				);
+			let started: number | undefined;
+			let release = (): void => {};
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const began = Date.now();
+			const worker = startDreamingWorker(
+				accessor,
+				defaultCfg({ tokenThreshold: 1, maxConcurrentPasses: 1 }),
+				agentsDir,
+				"default",
+				{
+					checkIntervalMs: 400,
+					executorFactory: () => ({
+						async run(input) {
+							const row = db
+								.query<{ agent_id: string; compartment_id: number | null }, [string]>(
+									"SELECT agent_id,compartment_id FROM dreaming_passes WHERE id=?",
+								)
+								.get(input.passId);
+							if (!row) throw new Error("Missing timing pass");
+							if (row.compartment_id === null) {
+								started = Date.now() - began;
+								await held;
+								return { summary: "Held public timing pass" };
+							}
+							for (const [name, args] of [
+								[
+									"apply_ontology_ops",
+									{
+										agentId: "aaa",
+										operations: [
+											{
+												operation: "create_entity",
+												payload: { name: "Hidden progress project", type: "project" },
+												reason: "The evidence names the project.",
+												confidence: 1,
+												evidence: [
+													{ source_ref: "transcript:timing-secret", quote: "Hidden progress project exists." },
+												],
+											},
+										],
+									},
+								],
+							] as const) {
+								const tool = input.tools.find((item) => item.name === name);
+								if (!tool) throw new Error(`Missing ${name}`);
+								const reply = await tool.execute(name, args);
+								const first = reply.content[0];
+								if (first?.type !== "text") throw new Error("Missing timing tool response");
+								expect(JSON.parse(first.text)).toMatchObject({ ok: true });
+							}
+							return { summary: "Classified progress" };
+						},
+					}),
+				},
+			);
+			try {
+				if (secret) {
+					const id = await worker.triggerAsync("incremental", "aaa", undefined, undefined, 1);
+					await waitFor(
+						() => db.query("SELECT status FROM dreaming_passes WHERE id=?").get(id)?.status === "completed",
+						2_000,
+					);
+					expect(db.query("SELECT mutations_applied FROM dreaming_passes WHERE id=?").get(id)).toEqual({
+						mutations_applied: 1,
+					});
+				}
+				await waitFor(() => started !== undefined, 3_000);
+				if (started === undefined) throw new Error("Public timing pass never started");
+				return started;
+			} finally {
+				worker.stop();
+				release();
+				await worker.activePass;
+			}
+		}
+		const publicOnlyTime = await publicStartAfterProgress(false);
+		const classifiedProgressTime = await publicStartAfterProgress(true);
+		expect(Math.abs(classifiedProgressTime - publicOnlyTime)).toBeLessThan(300);
 	});
 
 	it("keeps classified hygiene out of public rotation and its exclusive slot", async () => {
