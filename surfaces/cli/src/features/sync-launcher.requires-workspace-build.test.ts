@@ -104,7 +104,7 @@ test.each([false, true, null, "node /x/signet.js", "[broken"])(
 					[
 						process.execPath,
 						"--eval",
-						`process.execPath = "/app/bin/signet"; process.execArgv = []; process.argv = ["signet", ${JSON.stringify(cli)}, "sync"]; await import(${JSON.stringify(cli)});`,
+						`process.execPath = "/app/bin/signet"; process.execArgv = []; process.argv = ["signet", ${JSON.stringify(cli)}, "--local", "sync"]; await import(${JSON.stringify(cli)});`,
 					],
 					{ env, stdout: "pipe", stderr: "pipe" },
 				);
