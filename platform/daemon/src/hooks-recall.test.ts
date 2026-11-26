@@ -967,7 +967,7 @@ memory:
 				agent: "stop-reader",
 				role: "readonly",
 				agentId: "stop-reader",
-				error: "role 'readonly' lacks 'remember' permission",
+				error: "credential lacks 'remember' permission",
 			},
 			{
 				agent: "stop-writer",

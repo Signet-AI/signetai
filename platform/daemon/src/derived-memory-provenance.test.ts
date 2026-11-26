@@ -195,7 +195,7 @@ test("reflection creation unions every evidence label and rolls back foreign evi
 				insights: [{ ...input.insights[0], id: "denied" }],
 			}),
 		)(),
-	).toThrow("evidence_not_in_agent");
+	).toThrow("evidence_missing");
 	expect(db.prepare("SELECT count(*) n FROM daily_reflections WHERE id='denied'").get()).toEqual({ n: 0 });
 	db.close();
 });

@@ -48,6 +48,6 @@ test("derived writes union evidence labels and retain citations atomically", () 
 	expect(db.prepare("SELECT count(*) n FROM evidence_citations WHERE derived_id='rolled-back'").get()).toEqual({
 		n: 0,
 	});
-	expect(() => evidenceCompartmentInTx(db, "other-agent", evidence)).toThrow("evidence_not_in_agent");
+	expect(() => evidenceCompartmentInTx(db, "other-agent", evidence)).toThrow("evidence_missing");
 	db.close();
 });
