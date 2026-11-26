@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { withWritePrincipal } from "@signet/core";
+import { admitWriteDestination } from "./auth/write-destination";
 import type { SessionEndResponse } from "./hooks";
 import type { Principal } from "./auth/principal";
 import { principalAccess, resolveWriteAgent } from "./auth/agent-access";
@@ -358,6 +360,9 @@ export async function createHookUpload(
 	input: { sessionKey: string; harness: string; totalBytes: number; sha256: string },
 ): Promise<{ readonly id: string; readonly upload_offset: number }> {
 	requireUploadAgent(principal, agentId);
+	await withWritePrincipal({ userId: principal.userId }, () =>
+		admitWriteDestination(agentId, input, "/api/hooks/session-end/uploads", undefined),
+	);
 	if (!Number.isSafeInteger(input.totalBytes) || input.totalBytes < 1 || input.totalBytes > HOOK_TRANSCRIPT_BYTES)
 		throw new RangeError("Transcript exceeds upload byte limit");
 	const receipt = await dbOwnerQuery<{ id: string; agent_id: string; size_bytes: number }>(

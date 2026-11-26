@@ -46,6 +46,55 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test("A16 hook uploads deny classified sessions before staging", async () => {
+		const { registerHookUploadRoutes, hookUploadErrorResponse } = await import("../routes/hook-upload-routes");
+		const { createHookUpload } = await import("../hook-transcript-uploads");
+		registerHookUploadRoutes(app);
+		const agentId = `personal-${userId.slice(4)}`;
+		const input = { sessionKey: "classified-upload", harness: "codex", totalBytes: 1, sha256: "a".repeat(64) };
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_upload','Upload')"),
+			statement("INSERT INTO classification_assignments VALUES('session',?,?,'cls_upload',?,'now')", [
+				input.sessionKey,
+				agentId,
+				userId,
+			]),
+		]);
+		app.post("/api/upload-owner", async (c) => {
+			const principal = c.get("principal");
+			if (!principal) return c.json({ error: "Authentication required" }, 401);
+			try {
+				return c.json(await createHookUpload(principal, agentId, input), 201);
+			} catch (error) {
+				return hookUploadErrorResponse(c, error);
+			}
+		});
+		for (const [path, body] of [
+			["/api/upload-owner", {}],
+			["/api/hooks/session-end/uploads", input],
+		] as const) {
+			const response = await app.request(`${path}?agentId=${agentId}`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			expect(response.status).toBe(403);
+			expect((await response.json()).reason).toBe("classified_destination");
+			for (const table of ["hook_transcript_uploads", "hook_transcript_chunks"])
+				expect(await organizationQuery(statement(`SELECT count(*) n FROM ${table}`, [], "get"))).toEqual({ n: 0 });
+		}
+		await organizationWrite([statement("INSERT INTO classification_audience VALUES('cls_upload','user',?)", [userId])]);
+		const admitted = await app.request(`/api/hooks/session-end/uploads?agentId=${agentId}`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		expect(admitted.status).toBe(201);
+		expect(await organizationQuery(statement("SELECT count(*) n FROM hook_transcript_uploads", [], "get"))).toEqual({
+			n: 1,
+		});
+	});
+
 	test.each([
 		"/api/memory/remember",
 		"/api/memory/save",

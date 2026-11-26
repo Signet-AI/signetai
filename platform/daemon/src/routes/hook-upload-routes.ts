@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { DbOwnerError } from "../db-owner-client";
 import { resolveDaemonAgentId } from "../agent-id";
 import type { Context, Hono } from "hono";
 import { jsonBody } from "../request-body";
@@ -30,6 +31,8 @@ export function isHookUploadCallerError(error: unknown): boolean {
 	);
 }
 export function hookUploadErrorResponse(c: Context, error: unknown): Response {
+	if (error instanceof DbOwnerError && error.code === "classified_destination")
+		return c.json({ error: "classified destination", reason: "classified_destination" }, 403);
 	if (error instanceof UploadOffsetConflict)
 		return c.json(
 			{ error: "Upload offset conflict", reason: "upload_offset_conflict", receivedBytes: error.receivedBytes },
