@@ -978,6 +978,7 @@ interface TranscriptUploadScope {
 	readonly sessionId: string;
 	readonly harness: string;
 	readonly project: string | null;
+	readonly projectScoped: boolean;
 }
 
 async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploadScope | Response> {
@@ -1007,6 +1008,7 @@ async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploa
 		sessionId,
 		harness,
 		project: project.project ?? null,
+		projectScoped: shouldEnforceAuthScope(c) && Boolean(c.get("auth")?.claims?.scope?.project),
 	};
 }
 

@@ -274,7 +274,7 @@ import {
 	telemetryDisabledByEnv,
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
-import { drainTranscriptUploadPurges } from "./transcript-upload";
+import { drainTranscriptUploadPurges, stopTranscriptUploadPurges } from "./transcript-upload";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
@@ -1751,6 +1751,7 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		transcriptCaptureWorkerHandle = null;
 	}
+	await stopTranscriptUploadPurges();
 
 	try {
 		await stopPipeline();

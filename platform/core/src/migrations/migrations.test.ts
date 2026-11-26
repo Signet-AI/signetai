@@ -530,7 +530,7 @@ describe("migration framework", () => {
 				.prepare("PRAGMA table_info(session_transcript_upload_purges)")
 				.all()
 				.map((row) => (row as { name: string }).name),
-		).toEqual(["path", "created_at"]);
+		).toEqual(["path", "epoch", "requested_at", "drained_at"]);
 	});
 
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {

@@ -16,7 +16,9 @@ export function up(db: MigrationDb): void {
 		);
 		CREATE TABLE IF NOT EXISTS session_transcript_upload_purges (
 			path TEXT PRIMARY KEY,
-			created_at TEXT NOT NULL
+			epoch INTEGER NOT NULL CHECK (epoch >= 1),
+			requested_at TEXT NOT NULL,
+			drained_at TEXT
 		)
 	`);
 }

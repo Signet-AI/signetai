@@ -784,6 +784,8 @@ describe("transcript upload state", () => {
 			sessionId: "sess-1",
 			harness: "codex",
 			project: "/repo",
+			projectScoped: false,
+			purgeEpoch: 0,
 			generation: 0,
 			expectedOffset: 0,
 			tailSha256: `tail-${committedOffset}`,

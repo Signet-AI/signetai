@@ -127,6 +127,32 @@ describe("transcript upload route", () => {
 		await patch('{"a":1}\n');
 		expect((await app.request(query({ cwd: "/other" }))).status).toBe(403);
 		expect((await app.request(query())).status).toBe(200);
+		expect((await app.request(query({ cwd: null }))).status).toBe(200);
+	});
+
+	it("hides an upload with no project from a project-scoped token", async () => {
+		await patch('{"a":1}\n', { query: { cwd: null } });
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		const claims: TokenClaims = {
+			sub: "project-token",
+			scope: { agent: "noam", project: "/repo" },
+			role: "agent",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const scoped = new Hono();
+		scoped.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerHooksRoutes(scoped);
+		try {
+			expect((await scoped.request(query({ agentId: null }))).status).toBe(403);
+			expect((await patch('{"b":2}\n', { offset: 8, target: scoped, query: { agentId: null } })).status).toBe(403);
+		} finally {
+			authConfig.mode = previousMode;
+		}
 	});
 
 	it("uses the token agent and rejects another agent in team mode", async () => {

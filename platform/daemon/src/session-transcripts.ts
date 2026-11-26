@@ -2001,6 +2001,8 @@ export interface TranscriptUploadCommit {
 	readonly sessionId: string;
 	readonly harness: string;
 	readonly project: string | null;
+	readonly projectScoped: boolean;
+	readonly purgeEpoch: number;
 	readonly generation: number;
 	readonly expectedOffset: number;
 	readonly tailSha256: string;
@@ -2020,6 +2022,7 @@ export interface TranscriptUploadScope {
 	readonly state: TranscriptUploadState | null;
 	readonly stored: { readonly harness: string | null; readonly project: string | null } | null;
 	readonly purgePending: boolean;
+	readonly purgeEpoch: number;
 }
 
 export function readTranscriptUploadStateInDb(
@@ -2052,27 +2055,30 @@ export function readTranscriptUploadScopeInDb(db: ReadDb, agentId: string, sessi
 		db,
 		"SELECT harness, project FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
 	).get(agentId, sessionKey);
-	const purge = prepareTypedStatement<{ found: number }>(
+	const purge = prepareTypedStatement<{ epoch: number; drained_at: string | null }>(
 		db,
-		"SELECT 1 AS found FROM session_transcript_upload_purges WHERE path = ?",
+		"SELECT epoch, drained_at FROM session_transcript_upload_purges WHERE path = ?",
 	).get(transcriptUploadAgentRelativePath(agentId));
 	return {
 		state: readTranscriptUploadStateInDb(db, agentId, sessionKey),
 		stored: stored ?? null,
-		purgePending: Boolean(purge),
+		purgePending: purge?.drained_at === null,
+		purgeEpoch: purge?.epoch ?? 0,
 	};
 }
 
 export function transcriptUploadScopeConflict(
 	scope: TranscriptUploadScope,
-	request: { readonly harness: string; readonly project: string | null },
+	request: { readonly harness: string; readonly project: string | null; readonly projectScoped: boolean },
 ): TranscriptUploadCommitResult | null {
 	if (scope.purgePending) return { status: "purge_pending" };
 	const harness = scope.state?.harness ?? scope.stored?.harness;
 	if (harness != null && harness !== request.harness) return { status: "harness_mismatch" };
-	if ([scope.state?.project, scope.stored?.project].some((project) => project != null && project !== request.project))
-		return { status: "project_mismatch" };
-	return null;
+	const projects = [scope.state, scope.stored].flatMap((row) => (row ? [row.project] : []));
+	const outside = request.projectScoped
+		? projects.some((project) => project !== request.project)
+		: request.project !== null && projects.some((project) => project !== null && project !== request.project);
+	return outside ? { status: "project_mismatch" } : null;
 }
 
 export function transcriptUploadConflict(
@@ -2080,6 +2086,7 @@ export function transcriptUploadConflict(
 	request: {
 		readonly harness: string;
 		readonly project: string | null;
+		readonly projectScoped: boolean;
 		readonly generation: number;
 		readonly offset: number;
 	},
@@ -2097,11 +2104,10 @@ export function transcriptUploadConflict(
 export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadCommit): TranscriptUploadCommitResult {
 	if (input.source.sizeBytes <= input.expectedOffset) throw new Error("Transcript upload range is empty");
 	if (!admitSessionTranscriptInDb(db, input)) return { status: "bypassed" };
-	const conflict = transcriptUploadConflict(readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey), {
-		...input,
-		offset: input.expectedOffset,
-	});
+	const scope = readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey);
+	const conflict = transcriptUploadConflict(scope, { ...input, offset: input.expectedOffset });
 	if (conflict) return conflict;
+	if (scope.purgeEpoch !== input.purgeEpoch) return { status: "offset_mismatch", state: scope.state };
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at)
@@ -2153,24 +2159,28 @@ export async function drainTranscriptUploadPurgesOwned(
 	transact: (operation: () => void) => Promise<void>,
 ): Promise<{ readonly pending: number; readonly progressed: boolean }> {
 	const budget = { remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES };
-	const intents = prepareTypedStatement<{ path: string }>(
+	const intents = prepareTypedStatement<{ path: string; epoch: number }>(
 		db,
-		"SELECT path FROM session_transcript_upload_purges ORDER BY created_at, path LIMIT 16",
+		"SELECT path, epoch FROM session_transcript_upload_purges WHERE drained_at IS NULL ORDER BY requested_at, path LIMIT 16",
 	).all();
-	const removed: string[] = [];
+	const removed: Array<{ path: string; epoch: number }> = [];
 	for (const intent of intents) {
 		if (!(await removeTranscriptUploadTree(basePath, join(transcriptUploadsRoot(basePath), intent.path), budget)))
 			break;
-		removed.push(intent.path);
+		removed.push(intent);
 	}
-	if (removed.length > 0)
+	if (removed.length > 0) {
+		const drainedAt = new Date().toISOString();
 		await transact(() => {
-			const remove = db.prepare("DELETE FROM session_transcript_upload_purges WHERE path = ?");
-			for (const path of removed) remove.run(path);
+			const drained = db.prepare(
+				"UPDATE session_transcript_upload_purges SET drained_at = ? WHERE path = ? AND epoch = ? AND drained_at IS NULL",
+			);
+			for (const intent of removed) drained.run(drainedAt, intent.path, intent.epoch);
 		});
+	}
 	const left = prepareTypedStatement<{ count: number }>(
 		db,
-		"SELECT COUNT(*) AS count FROM session_transcript_upload_purges",
+		"SELECT COUNT(*) AS count FROM session_transcript_upload_purges WHERE drained_at IS NULL",
 	).get();
 	return {
 		pending: left?.count ?? 0,

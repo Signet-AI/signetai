@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, prepareTypedStatement } from "./db-accessor";
-import { dbOwnerAgentRemove } from "./db-owner-runtime";
+import { dbOwnerAgentRemove, dbOwnerCommitTranscriptUpload, getDbOwnerForAccessor } from "./db-owner-runtime";
 import { deleteSessionTranscript } from "./session-transcript-lifecycle";
 import {
 	getStoredSessionTranscriptInfoAsync,
@@ -53,6 +53,7 @@ describe("transcript upload ranges", () => {
 			sessionId: "sess-1",
 			harness: "codex",
 			project: "/repo",
+			projectScoped: false,
 			generation: 0,
 			offset: 0,
 			checksum: sha(bytes),
@@ -65,7 +66,10 @@ describe("transcript upload ranges", () => {
 	async function uploadPurges(): Promise<string[]> {
 		return (
 			await getDbAccessor().withReadDbAsync((db) =>
-				prepareTypedStatement<{ path: string }>(db, "SELECT path FROM session_transcript_upload_purges").all(),
+				prepareTypedStatement<{ path: string }>(
+					db,
+					"SELECT path FROM session_transcript_upload_purges WHERE drained_at IS NULL",
+				).all(),
 			)
 		).map((row) => row.path);
 	}
@@ -202,7 +206,7 @@ describe("transcript upload ranges", () => {
 	it("refuses ranges while a purge of the same agent is pending", async () => {
 		init();
 		await getDbAccessor().withWriteTxAsync((db) => {
-			db.prepare("INSERT INTO session_transcript_upload_purges (path, created_at) VALUES (?, 'now')").run(
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
 				transcriptUploadAgentRelativePath("noam"),
 			);
 		});
@@ -213,12 +217,60 @@ describe("transcript upload ranges", () => {
 		});
 	});
 
+	it("refuses a commit that read the scope before a purge of its agent", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await accessor.withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		const result = await dbOwnerCommitTranscriptUpload(
+			await getDbOwnerForAccessor(accessor),
+			{
+				agentId: "noam",
+				sessionKey: "sess-1",
+				sessionId: "sess-1",
+				harness: "codex",
+				project: "/repo",
+				projectScoped: false,
+				purgeEpoch: 0,
+				generation: 0,
+				expectedOffset: 0,
+				tailSha256: sha('{"a":1}\n'),
+				source: { path: file(), sizeBytes: 8, mtimeMs: 1 },
+				capturedAt: "2026-11-26T10:00:00.000Z",
+			},
+			{ operation: "test.transcript-upload.commit" },
+		);
+		expect(result).toEqual({ status: "offset_mismatch", state: null });
+		expect(await accessor.withReadDbAsync((db) => readTranscriptUploadStateInDb(db, "noam", "sess-1"))).toBeNull();
+		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
+		expect(await uploadTranscriptRange(accessor, request('{"a":1}\n'))).toMatchObject({ status: "committed" });
+	});
+
+	it("finishes a purge in the background after the caller stops waiting", async () => {
+		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
+		for (let generation = 1; generation <= 600; generation++) writeFileSync(file(generation), "x\n");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		expect(await drainTranscriptUploadPurges(dir, 0)).toEqual({ status: "pending" });
+		expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "removed" });
+		expect(existsSync(transcriptUploadAgentDirectory(dir, "noam"))).toBe(false);
+		expect(await uploadPurges()).toEqual([]);
+	});
+
 	it("keeps draining while each pass removes part of a large tree", async () => {
 		init();
 		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
 		for (let generation = 1; generation <= 600; generation++) writeFileSync(file(generation), "x\n");
 		await getDbAccessor().withWriteTxAsync((db) => {
-			db.prepare("INSERT INTO session_transcript_upload_purges (path, created_at) VALUES (?, 'now')").run(
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
 				transcriptUploadAgentRelativePath("noam"),
 			);
 		});

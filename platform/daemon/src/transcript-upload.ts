@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { attemptAsync } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import {
 	dbOwnerCommitTranscriptUpload,
@@ -18,7 +19,6 @@ import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsR
 
 export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
 const TAIL_HASH_BYTES = 64 * 1024;
-const MAX_PURGE_PASSES = 64;
 
 export interface TranscriptUploadRequest {
 	readonly basePath: string;
@@ -27,6 +27,7 @@ export interface TranscriptUploadRequest {
 	readonly sessionId: string;
 	readonly harness: string;
 	readonly project: string | null;
+	readonly projectScoped: boolean;
 	readonly generation: number;
 	readonly offset: number;
 	readonly checksum: string;
@@ -113,6 +114,8 @@ export async function uploadTranscriptRange(
 				sessionId: input.sessionId,
 				harness: input.harness,
 				project: input.project,
+				projectScoped: input.projectScoped,
+				purgeEpoch: scope.purgeEpoch,
 				generation: input.generation,
 				expectedOffset: input.offset,
 				tailSha256,
@@ -131,7 +134,8 @@ async function discardUncommittedRange(root: string, path: string, offset: numbe
 		await removeContainedTranscriptPath(root, path, { force: true });
 		return;
 	}
-	const handle = await openContainedTranscriptFile(root, path, constants.O_RDWR);
+	const handle = await attemptAsync(() => openContainedTranscriptFile(root, path, constants.O_RDWR));
+	if (!handle) return;
 	try {
 		await handle.truncate(offset);
 	} finally {
@@ -143,25 +147,67 @@ export type TranscriptUploadPurgeResult =
 	| { readonly status: "removed" | "pending" }
 	| { readonly status: "failed"; readonly error: string };
 
+interface PurgeDrain {
+	readonly done: Promise<TranscriptUploadPurgeResult>;
+	readonly abort: AbortController;
+}
+
+const purgeDrains = new Map<string, PurgeDrain>();
+const purgeRequests = new Set<string>();
+
 export async function drainTranscriptUploadPurges(
 	basePath: string,
-	signal?: AbortSignal,
+	waitMs?: number,
 ): Promise<TranscriptUploadPurgeResult> {
+	let drain = purgeDrains.get(basePath);
+	if (drain) purgeRequests.add(basePath);
+	else {
+		const abort = new AbortController();
+		drain = { abort, done: runTranscriptUploadPurges(basePath, abort.signal) };
+		purgeDrains.set(basePath, drain);
+	}
+	if (waitMs === undefined) return await drain.done;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const waited = new Promise<TranscriptUploadPurgeResult>((resolve) => {
+		timer = setTimeout(() => resolve({ status: "pending" }), waitMs);
+	});
+	try {
+		return await Promise.race([drain.done, waited]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+export async function stopTranscriptUploadPurges(): Promise<void> {
+	const drains = [...purgeDrains.values()];
+	for (const drain of drains) drain.abort.abort();
+	await Promise.all(drains.map((drain) => drain.done));
+}
+
+async function runTranscriptUploadPurges(basePath: string, signal: AbortSignal): Promise<TranscriptUploadPurgeResult> {
 	try {
 		const owner = await getDbOwner();
-		for (let pass = 0; pass < MAX_PURGE_PASSES; pass++) {
+		for (;;) {
+			purgeRequests.delete(basePath);
 			const { pending, progressed } = await dbOwnerDrainTranscriptUploadPurges(
 				owner,
 				{ basePath },
 				{ operation: "transcript-upload.purge", signal },
 			);
+			if (purgeRequests.has(basePath)) continue;
 			if (pending === 0) return { status: "removed" };
-			if (!progressed) return { status: "pending" };
+			if (!progressed) {
+				logger.warn("transcripts", "Transcript upload purge stopped without progress", { pending });
+				return { status: "pending" };
+			}
 		}
-		return { status: "pending" };
 	} catch (error) {
+		if (signal.aborted) return { status: "pending" };
 		const message = error instanceof Error ? error.message : String(error);
 		logger.warn("transcripts", "Transcript upload purge failed", { error: message });
 		return { status: "failed", error: message };
+	} finally {
+		purgeDrains.delete(basePath);
+		purgeRequests.delete(basePath);
 	}
 }

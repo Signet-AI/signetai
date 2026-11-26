@@ -229,6 +229,12 @@ Requires `admin` permission. The `default` agent cannot be removed.
 }
 ```
 
+With `purge=true`, the daemon also removes the agent's transcript upload
+files. When that takes more than 10 seconds, the response adds
+`"uploadFiles": "pending"` and the removal continues in the background. When
+the removal fails, it adds `"uploadFiles": "failed"`; the daemon retries it on
+the next start.
+
 If any step fails, nothing is committed and the route returns `500` with an
 `error` message.
 

@@ -287,7 +287,9 @@ purging its agent, removes every generation file.
   newline, a checksum mismatch, or no agent.
 - `403`: an agent scope, project scope, or session-binding violation, or a
   session whose upload or stored transcript belongs to another project. The
-  first range that names a project fixes it for the session.
+  first range that names a project fixes it for the session. A project-scoped
+  token also gets `403` for a session with no project. Without such a token, a
+  request with no `cwd` skips the project check.
 - `409`: `{ "error": "offset_mismatch", "committedOffset", "generation",
   "tailSha256" }` when the offset or generation does not continue the
   committed state, or `{ "error": "harness_mismatch" }` when the session's
