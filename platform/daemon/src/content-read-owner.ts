@@ -44,6 +44,16 @@ function scopedContentDb(
 					cached.tables.set(table, columns);
 				}
 
+				if (table === "memory_thread_heads") {
+					const predicate = readScopeSql("_content", scope, {
+						visibility: null,
+						memory: null,
+						session: "session_key",
+						source: null,
+					});
+					args.push(...predicate.args);
+					return `memory_thread_heads AS (SELECT _content.* FROM (SELECT head.*,parent.compartment_id FROM main.memory_thread_heads head LEFT JOIN main.session_summaries parent ON parent.id=head.node_id AND parent.agent_id=head.agent_id${scope.organizationMode === true ? " WHERE parent.id IS NOT NULL" : ""}) _content WHERE 1=1${predicate.sql})`;
+				}
 				if (!columns.has("compartment_id")) {
 					if (!subject && scope.compartments !== "all") throw new Error("Import read requires a principal");
 					const access = readScopeSql(
@@ -891,15 +901,9 @@ function namedReadStatement(request: NamedContentReadRequest): {
 				result: "all",
 			};
 		case "memory.projection.threads":
-			if (request.scope.organizationMode !== true && request.scope.compartments === "all")
-				return {
-					sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM memory_thread_heads WHERE agent_id=? ORDER BY latest_at DESC,thread_key LIMIT 12`,
-					tables: ["memory_thread_heads"],
-					result: "all",
-				};
 			return {
-				sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM (SELECT COALESCE('project:'||NULLIF(project,''),'session:'||NULLIF(session_key,''),'harness:'||NULLIF(harness,''),'thread:unscoped') AS label,COALESCE(source_type,kind) AS source_type,latest_at,substr(content,1,240) AS sample,id AS node_id,project,session_key,harness,ROW_NUMBER() OVER (PARTITION BY agent_id,project,source_ref,session_key,harness ORDER BY latest_at DESC,id) AS rank FROM session_summaries WHERE agent_id=? AND COALESCE(source_type,kind)!='chunk') WHERE rank=1 ORDER BY latest_at DESC,node_id LIMIT 12`,
-				tables: ["session_summaries"],
+				sql: `SELECT label,source_type,latest_at,sample,node_id,project,session_key,harness FROM memory_thread_heads WHERE agent_id=? ORDER BY latest_at DESC,thread_key LIMIT 12`,
+				tables: ["memory_thread_heads"],
 				result: "all",
 			};
 		case "memory.projection.top":
