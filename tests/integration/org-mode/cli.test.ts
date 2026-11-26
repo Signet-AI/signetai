@@ -66,7 +66,9 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		const access = await cli(["org", "access", memberId, "--json"]);
 		expect(access.actAs.some((entry: { agentId: string }) => entry.agentId === agentId)).toBe(true);
 		const plan = await cli(["org", "users", "deactivate", memberId, "--json"]);
-		expect(plan.plan.counts.keys).toBeGreaterThan(0);
+		expect(plan.plan.counts.keys).toBe(0);
+		expect(plan.plan.counts.memories).toBe(0);
+		expect(plan.plan.counts.sessions).toBeGreaterThan(0);
 		const offboard = await cli(["org", "users", "deactivate", memberId, "--confirm", "--wait", "--json"]);
 		expect(offboard.status).toBe("complete");
 		const denied = await request(daemon.origin, "/api/agents", memberDevice.credential);

@@ -18,6 +18,8 @@ import {
 	personalAgentStatements,
 	readBoundKey,
 	readOrganization,
+	resolveSessionPrincipal,
+	sourceSessionBinding,
 	readUser,
 	type SessionRow,
 	secret,
@@ -62,8 +64,23 @@ export async function redeemDashboardHandoff(input: unknown) {
 	const entry = dashboardHandoffs.get(key);
 	dashboardHandoffs.delete(key);
 	if (!entry || entry.expiresAt <= Date.now()) throw new IdentityError(401, "invalid_credential");
-	const user = await activeUser(entry.userId, entry.deviceId);
-	const material = sessionMaterial(user.id, "browser", entry.deviceId, await readOrganization());
+	const source = await organizationQuery<SessionRow | null>(
+		statement("SELECT * FROM auth_sessions WHERE id=? AND user_id=?", [entry.sessionId, entry.userId], "get"),
+	);
+	if (!source) throw new IdentityError(401, "invalid_credential");
+	const org = await readOrganization();
+	const { user, expiresAtCeiling } = await resolveSessionPrincipal(source, org);
+	const binding = sourceSessionBinding(source);
+	const material = sessionMaterial(
+		user.id,
+		"browser",
+		entry.deviceId,
+		org,
+		binding && {
+			sourceKeyId: binding.sourceKeyId,
+			ceiling: { ...binding.ceiling, expiresAt: expiresAtCeiling ?? binding.ceiling.expiresAt },
+		},
+	);
 	await organizationWrite(
 		[
 			{
@@ -100,7 +117,8 @@ export function requireAudit(p: Principal): void {
 }
 export async function updatePreferences(p: Principal, input: unknown) {
 	const user = requireUser(p);
-	if (p.credential.kind !== "session") throw new IdentityError(403, "permission", "Requires a signed-in user session");
+	if (p.credential.kind !== "session" || p.sourceKeyId)
+		throw new IdentityError(403, "permission", "Requires a signed-in user session");
 	const data = z.object({ defaultReadAgentId: text }).strict().parse(input);
 	await bindRequestedReadAgent(p, data.defaultReadAgentId);
 	const target = resolveReadAgent(p, data.defaultReadAgentId);
@@ -127,7 +145,8 @@ export async function profile(p: Principal) {
 }
 export async function updateProfile(p: Principal, input: unknown) {
 	const identity = requireUser(p);
-	if (p.credential.kind !== "session") throw new IdentityError(403, "permission", "Requires a signed-in user session");
+	if (p.credential.kind !== "session" || p.sourceKeyId)
+		throw new IdentityError(403, "permission", "Requires a signed-in user session");
 	const data = z
 		.object({ displayName: text.optional(), email: z.email().max(320).nullable().optional() })
 		.strict()
@@ -335,6 +354,7 @@ export async function deviceInfo(userCode: string) {
 	return row;
 }
 export async function deviceApprove(p: Principal, input: unknown) {
+	if (p.sourceKeyId) throw new IdentityError(403, "org_policy", "Key-derived browser sessions cannot approve devices");
 	const data = z.object({ userCode: text, decision: z.enum(["approve", "deny"]) }).parse(input);
 	const row = await deviceInfo(data.userCode);
 	if (row.status !== "pending") throw new IdentityError(409, "already_decided");
@@ -464,6 +484,8 @@ export async function listKeys(p: Principal, all = false, kind?: string): Promis
 	);
 }
 export async function createKey(p: Principal, input: unknown, connector: boolean) {
+	if (p.sourceKeyId)
+		throw new IdentityError(403, "org_policy", "Key-derived browser sessions cannot issue credentials");
 	const data = z
 		.object({
 			name: text.optional(),
@@ -476,7 +498,7 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 			allowedProjects: z.array(text).max(100).optional(),
 		})
 		.parse(input);
-	if (connector && (p.credential.kind !== "session" || !data.deviceId || !data.harness))
+	if (connector && (p.credential.kind !== "session" || p.sourceKeyId || !data.deviceId || !data.harness))
 		throw new IdentityError(403, "org_policy", "A user session, harness, and device are required");
 	const org = await readOrganization();
 	let agentId = data.agentId ?? p.boundAgentId;
@@ -671,7 +693,8 @@ export async function listUsers(p: Principal, filters: Record<string, string | u
 }
 export async function connectorErrors(p: Principal, keyId: string) {
 	const identity = requireUser(p);
-	if (p.credential.kind !== "session") throw new IdentityError(403, "permission", "Requires a signed-in user session");
+	if (p.credential.kind !== "session" || p.sourceKeyId)
+		throw new IdentityError(403, "permission", "Requires a signed-in user session");
 	const key = await readBoundKey(keyId);
 	if (!key || key.kind !== "connector" || key.user_id !== identity.userId) throw new IdentityError(403, "not_owner");
 	const since = new Date(Date.now() - 7 * 86400_000).toISOString();
