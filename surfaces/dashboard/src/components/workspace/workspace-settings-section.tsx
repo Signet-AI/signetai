@@ -1,3 +1,4 @@
+import { OrganizationSources } from "@/components/organization/sources";
 import { OrganizationImportLauncher } from "@/components/organization/import-launcher";
 import { ProtectionRecoveryData } from "@/components/sources/protection-recovery";
 import { DurableImportStatus } from "@/components/workspace/import-inbox";
@@ -29,6 +30,7 @@ export function WorkspaceSettingsSection() {
 				<p className="settings-row-description mt-2">This page does not change your storage location automatically.</p>
 			</SettingsGroup>
 			{whoami && <OrganizationImportLauncher onImported={() => void status.refresh()} />}
+			{whoami && <OrganizationSources />}
 			<ProtectionRecoveryData />
 			{canImport ? <DurableImportStatus /> : <NotPermitted what="Viewing file imports" permission="modify" />}
 		</section>
