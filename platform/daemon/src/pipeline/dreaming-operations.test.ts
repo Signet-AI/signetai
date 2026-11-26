@@ -146,7 +146,7 @@ describe("dreaming operations", () => {
 				{ operation: "archive_entity", payload: { target: "foreign-archive-target" }, provenance: "attention:$0" },
 			],
 		});
-		expect(result).toMatchObject({ ok: false, items: [], error: "compartment_mismatch" });
+		expect(result).toMatchObject({ ok: false, items: [], error: "Entity not found: foreign-archive-target" });
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
 		).toEqual({ count: 0 });
