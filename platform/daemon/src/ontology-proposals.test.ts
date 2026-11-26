@@ -150,7 +150,7 @@ describe("ontology proposals", () => {
 		});
 
 	it.each([false, true])(
-		"labels aliases on structural people without changing the parent and archives only its own partition (public first: %s)",
+		"O6 labels aliases on structural people, reports typed duplicates, and archives only its partition (public first: %s)",
 		async (publicFirst) => {
 			partitionFixture();
 			insertEntity("alias-person", "Alice", "person:alias-alice", "ant", 0, false, "person");
@@ -177,6 +177,11 @@ describe("ontology proposals", () => {
 				apply("create_entity_alias", { entity_id: "alias-person", alias: "Night Owl" }, passId);
 			const first = await createAlias(publicFirst ? undefined : "pass-alpha");
 			const second = await createAlias(publicFirst ? "pass-alpha" : undefined);
+			await expect(createAlias("pass-alpha")).rejects.toMatchObject({
+				name: "OntologyProposalError",
+				status: 409,
+				message: "duplicate_entity_alias",
+			});
 			const classified = publicFirst ? second : first;
 			const publicAlias = publicFirst ? first : second;
 			expect(
@@ -295,6 +300,119 @@ describe("ontology proposals", () => {
 			),
 		).toEqual({ source_entity_id: "neighbor-target", target_entity_id: "neighbor-person" });
 	});
+
+	it("B1 a public pass cannot squat a future group member's structural identity", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('alice','alice','Alex','member'); INSERT INTO groups(id,name) VALUES('team-group','Team'); INSERT INTO agents(id,name,kind,owner_group_id,created_at,updated_at) VALUES('team','Team','team','team-group','now','now'); INSERT INTO dreaming_passes(id,agent_id,scope_key,status) VALUES('team-pass','team','team','running')",
+			);
+		});
+		const create = () =>
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "team",
+				actor: "dreaming",
+				passId: "team-pass",
+				operation: "create_entity",
+				payload: { name: "Alex (alice)", entity_type: "project" },
+			});
+		const ordinary = await create();
+		const before = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM entities WHERE id=?").get(ordinary.result?.entityId),
+		);
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec("INSERT INTO group_members(group_id,user_id,role) VALUES('team-group','alice','member')"),
+		);
+		const person = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM entities WHERE agent_id='team' AND person_user_id='alice'").get(),
+		);
+		expect(person?.name).toBe("Alex (alice)");
+		const resolved = await create();
+		expect(resolved.result?.entityId).toBe(person?.id);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT * FROM entities WHERE id=?").get(ordinary.result?.entityId),
+			),
+		).toEqual(before);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT * FROM entities WHERE id=?").get(person?.id)),
+		).toEqual(person);
+	});
+
+	it("B1 classified name resolution prefers a structural person over an exact-label ordinary entity", async () => {
+		partitionFixture();
+		insertEntity("preferred-person", "Alex (alice)", "person:alice", "ant", 0, false, "person");
+		insertEntity("name-squatter", "Other ordinary", "other ordinary", "ant", 0);
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"UPDATE entities SET person_user_id='alice' WHERE id='preferred-person'; UPDATE entities SET name='Alex (alice)',canonical_name='alex (alice)',compartment_id=91 WHERE id='name-squatter'",
+			);
+		});
+		const before = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM entities ORDER BY id").all(),
+		);
+		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_entity",
+			payload: { name: "Alex (alice)", entity_type: "project" },
+		});
+		expect(applied.result?.entityId).toBe("preferred-person");
+		const child = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_aspect",
+			payload: { entity: "Alex (alice)", name: "Preferences" },
+		});
+		expect(child.result?.entityId).toBe("preferred-person");
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT entity_id,compartment_id FROM entity_aspects WHERE id=?").get(child.result?.aspectId),
+			),
+		).toEqual({ entity_id: "preferred-person", compartment_id: 91 });
+		expect(
+			await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT * FROM entities ORDER BY id").all()),
+		).toEqual(before);
+	});
+
+	it.each([null, 91])(
+		"B1 rename_entity rejects a person destination with new_name in compartment %s before side effects",
+		async (compartmentId: number | null) => {
+			partitionFixture();
+			insertEntity("rename-person", "Alex (alice)", "person:alice", "ant", 0, false, "person");
+			insertEntity("rename-source", "Ordinary source", "ordinary source", "ant", 0);
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.exec("UPDATE entities SET person_user_id='alice' WHERE id='rename-person'");
+				db.prepare("UPDATE entities SET compartment_id=? WHERE id='rename-source'").run(compartmentId);
+				db.exec(
+					"INSERT INTO dreaming_passes(id,agent_id,scope_key,status) VALUES('public-rename','ant','ant','running')",
+				);
+			});
+			const before = await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT * FROM entities ORDER BY id").all(),
+			);
+			await expect(
+				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
+					agentId: "ant",
+					actor: "dreaming",
+					passId: compartmentId === null ? "public-rename" : "pass-alpha",
+					operation: "rename_entity",
+					payload: { entity_id: "rename-source", new_name: "Alex (alice)" },
+				}),
+			).rejects.toThrow("person_identity_immutable");
+			expect(
+				await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT * FROM entities ORDER BY id").all()),
+			).toEqual(before);
+			expect(
+				await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT COUNT(*) AS n FROM ontology_proposals").get()),
+			).toEqual({ n: 0 });
+		},
+	);
 
 	for (const first of ["pass-alpha", "pass-public"] as const)
 		it(`keeps equal canonical entity names independent when ${first} creates first`, async () => {

@@ -17,6 +17,92 @@ function people(db: Database) {
 }
 
 describe("identity-owned structural people", () => {
+	it("B1 migrates a legacy squatted display name without changing the ordinary entity", () => {
+		const db = new Database(":memory:");
+		try {
+			for (const migration of MIGRATIONS.filter((m) => m.version < 179)) migration.up(db);
+			seed(db);
+			db.exec("INSERT INTO group_members(group_id,user_id,role) VALUES('eng','alice','member')");
+			db.exec(
+				"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) VALUES('squatter','Alex (alice)','alex (alice)','project','team','then','then')",
+			);
+			const before = db
+				.query(
+					"SELECT id,name,canonical_name,entity_type,agent_id,compartment_id,created_at,updated_at FROM entities WHERE id='squatter'",
+				)
+				.get();
+			const migration = MIGRATIONS.find((m) => m.version === 179);
+			if (!migration) throw new Error("Missing migration");
+			migration.up(db);
+			migration.up(db);
+			expect(
+				db
+					.query("SELECT name,compartment_id,status FROM entities WHERE agent_id='team' AND person_user_id='alice'")
+					.get(),
+			).toEqual({ name: "Alex (alice)", compartment_id: null, status: "active" });
+			expect(
+				db
+					.query(
+						"SELECT id,name,canonical_name,entity_type,agent_id,compartment_id,created_at,updated_at FROM entities WHERE id='squatter'",
+					)
+					.get(),
+			).toEqual(before);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("B1 identity renames succeed even when an ordinary entity owns the new display name", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			seed(db);
+			db.exec("INSERT INTO group_members(group_id,user_id,role) VALUES('eng','alice','member')");
+			db.exec(
+				"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) VALUES('squatter','New Alex (alice)','new alex (alice)','project','team','then','then')",
+			);
+			const before = db.query("SELECT * FROM entities WHERE id='squatter'").get();
+			db.exec("UPDATE users SET display_name='New Alex' WHERE id='alice'");
+			expect(db.query("SELECT name FROM entities WHERE agent_id='team' AND person_user_id='alice'").get()).toEqual({
+				name: "New Alex (alice)",
+			});
+			expect(db.query("SELECT * FROM entities WHERE id='squatter'").get()).toEqual(before);
+		} finally {
+			db.close();
+		}
+	});
+
+	it.each(["users", "api_keys"] as const)("O3 %s activity updates never enter identity projection", (table) => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			seed(db);
+			db.exec("INSERT INTO group_members(group_id,user_id,role) VALUES('eng','alice','member')");
+			db.exec(
+				"INSERT INTO api_keys(id,prefix,name,key_hash,user_id,agent_id,created_at) VALUES('activity-key','activity-prefix','Activity fixture','fixture-hash','alice','team','now')",
+			);
+			const before = people(db);
+			db.exec(
+				"CREATE TRIGGER identity_projection_probe BEFORE INSERT ON entities WHEN NEW.person_user_id IS NOT NULL BEGIN SELECT RAISE(ABORT,'activity_entered_identity_projection'); END",
+			);
+			expect(() =>
+				db.exec(
+					table === "users"
+						? "UPDATE users SET last_active_at='later' WHERE id='alice'"
+						: "UPDATE api_keys SET last_used_at='later' WHERE id='activity-key'",
+				),
+			).not.toThrow();
+			expect(people(db)).toEqual(before);
+			db.exec("DROP TRIGGER identity_projection_probe");
+			db.exec("UPDATE users SET display_name='Alicia' WHERE id='alice'");
+			expect(db.query("SELECT name FROM entities WHERE agent_id='team' AND person_user_id='alice'").get()).toEqual({
+				name: "Alicia (alice)",
+			});
+		} finally {
+			db.close();
+		}
+	});
+
 	it("upgrades partition keys without cascading children and restores foreign-key enforcement", () => {
 		const db = new Database(":memory:");
 		try {

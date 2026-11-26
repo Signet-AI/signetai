@@ -1173,7 +1173,11 @@ aggregator and does not Dream; with the single-agent model it Dreams normally.
 Connector-bound evidence identifies the human speaker and a person entity in the
 pass's agent. Account and grant management maintain one structural person entity
 per authorized human in that agent, with disambiguated names when needed. Dreaming
-never creates, renames, merges, or archives these identities. Self-disclosures are
+never creates, renames, merges, or archives these identities. An ordinary entity
+with the same name cannot block account creation, grants, or identity renames.
+A `create_entity` request for an existing person’s name resolves to that person
+without changing either entity; new claims attach to the person. Renaming an ordinary entity to a
+person’s name is rejected with `person_identity_immutable`. Self-disclosures are
 filed under the same person across classification partitions, even when a person
 never says their name. The identity remains unclassified; its claims, aliases, and
 other derived children retain their own pass label and audience. Missing identity

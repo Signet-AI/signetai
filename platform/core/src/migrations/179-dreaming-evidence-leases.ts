@@ -16,7 +16,7 @@ function partitionDreamingHistory(db: MigrationDb): void {
 		);
 		INSERT INTO dreaming_history_nodes_v179
 			(agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,compartment_id)
-		SELECT agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,NULL
+		SELECT agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,compartment_id
 		FROM dreaming_history_nodes;
 		DROP TABLE dreaming_history_nodes;
 		ALTER TABLE dreaming_history_nodes_v179 RENAME TO dreaming_history_nodes;
@@ -73,8 +73,15 @@ function partitionOntologyKeys(db: MigrationDb): void {
 			if (legacyAlter !== 1) db.exec("PRAGMA legacy_alter_table=OFF");
 		}
 		for (const row of attached) if (typeof row.sql === "string") db.exec(row.sql);
-		db.exec(`CREATE UNIQUE INDEX ${index} ON ${table}(${key},COALESCE(compartment_id,0));`);
+		db.exec(
+			`CREATE UNIQUE INDEX ${index} ON ${table}(${key},COALESCE(compartment_id,0))${table === "entities" ? " WHERE person_user_id IS NULL" : ""};`,
+		);
 	}
+	const entityIndex = db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_entities_partition_name'").get()?.sql;
+	if (typeof entityIndex !== "string" || !entityIndex.includes("WHERE person_user_id IS NULL"))
+		db.exec(
+			"DROP INDEX IF EXISTS idx_entities_partition_name; CREATE UNIQUE INDEX idx_entities_partition_name ON entities(agent_id,name,COALESCE(compartment_id,0)) WHERE person_user_id IS NULL;",
+		);
 }
 
 function installPersonIdentityOwner(db: MigrationDb): void {
@@ -111,14 +118,14 @@ function installPersonIdentityOwner(db: MigrationDb): void {
 			canonical_name='person:' || person_user_id,entity_type='person',description=NULL,embedding=NULL,mentions=0,
 			pinned=0,pinned_at=NULL,last_synthesized_at=NULL,community_id=NULL,source_id=NULL,source_kind=NULL,source_path=NULL,source_root=NULL
 			WHERE person_user_id IS NOT NULL;`);
-		db.exec(project("1"));
 	}
-	for (const [table, key, predicate] of [
-		["users", "id", "user_id"],
-		["agents", "id", "agent_id"],
-		["group_members", "user_id", "user_id"],
-		["api_keys", "user_id", "user_id"],
-		["groups", "id", "agent_id IN (SELECT id FROM agents WHERE owner_group_id"],
+	db.exec(project("1"));
+	for (const [table, key, predicate, columns] of [
+		["users", "id", "user_id", "id,username,display_name,role,status"],
+		["agents", "id", "agent_id", "id,kind,owner_user_id,owner_group_id,archived_at"],
+		["group_members", "user_id", "user_id", "group_id,user_id"],
+		["api_keys", "user_id", "user_id", "user_id,agent_id,revoked_at,expires_at"],
+		["groups", "id", "agent_id IN (SELECT id FROM agents WHERE owner_group_id", "id"],
 	] as const) {
 		for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
 			const refs =
@@ -128,8 +135,9 @@ function installPersonIdentityOwner(db: MigrationDb): void {
 						? [`OLD.${key}`]
 						: [`NEW.${key}`, `OLD.${key}`];
 			const scope = table === "groups" ? `${predicate} IN (${refs.join(",")}))` : `${predicate} IN (${refs.join(",")})`;
+			if (operation === "UPDATE") db.exec(`DROP TRIGGER IF EXISTS identity_person_${table}_update`);
 			db.exec(
-				`CREATE TRIGGER IF NOT EXISTS identity_person_${table}_${operation.toLowerCase()} AFTER ${operation} ON ${table} BEGIN ${project(scope)} END;`,
+				`CREATE TRIGGER IF NOT EXISTS identity_person_${table}_${operation.toLowerCase()} AFTER ${operation}${operation === "UPDATE" ? ` OF ${columns}` : ""} ON ${table} BEGIN ${project(scope)} END;`,
 			);
 		}
 	}

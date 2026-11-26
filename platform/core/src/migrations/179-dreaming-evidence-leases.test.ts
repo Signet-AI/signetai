@@ -168,7 +168,7 @@ describe("Dreaming lease migration", () => {
 		}
 	});
 
-	it("preserves every legacy history level with NULL labels and stable indexes", () => {
+	it("O4 preserves every legacy history level and its compartment with stable indexes", () => {
 		const db = new Database(":memory:");
 		try {
 			for (const migration of MIGRATIONS.filter((migration) => migration.version < 179)) migration.up(db);
@@ -180,7 +180,7 @@ describe("Dreaming lease migration", () => {
 			('alice','alice',2,0,NULL,'higher aggregate',NULL),('bob','bob',0,8,NULL,'orphan leaf',NULL)`);
 			const before = db
 				.query(
-					"SELECT agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,NULL AS compartment_id FROM dreaming_history_nodes ORDER BY agent_id,scope_key,level,idx",
+					"SELECT agent_id,scope_key,level,idx,pass_id,text,tokens_input,tokens_output,tokens_cache_read,created_at,compartment_id FROM dreaming_history_nodes ORDER BY agent_id,scope_key,level,idx",
 				)
 				.all();
 			const migration = MIGRATIONS.find((migration) => migration.version === 179);

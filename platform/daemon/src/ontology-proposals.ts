@@ -832,8 +832,8 @@ function resolveOntologyRow(
 		`SELECT item.id,item.name,item.compartment_id,item.status,${table === "entities" ? "item.person_user_id" : "NULL AS person_user_id"}
  FROM ${table} item WHERE item.agent_id=? AND (${includeArchived ? "1=1" : "COALESCE(item.status,'active')='active'"} ${table === "entities" ? "OR (item.id=? AND item.person_user_id IS NOT NULL)" : ""})
  AND (item.id=? OR COALESCE(item.canonical_name,LOWER(item.name))=? OR LOWER(item.name)=?)
- ${entityId === undefined ? "" : "AND item.entity_id=?"} ${exact ? "AND item.compartment_id IS ?" : ""} ${scope.sql}
- ORDER BY item.compartment_id IS ? DESC,item.compartment_id IS NULL DESC,item.id=? DESC,item.updated_at DESC,item.id LIMIT 2`,
+ ${entityId === undefined ? "" : "AND item.entity_id=?"} ${exact ? `AND (item.compartment_id IS ?${table === "entities" ? " OR item.person_user_id IS NOT NULL" : ""})` : ""} ${scope.sql}
+ ORDER BY item.id=? DESC,${table === "entities" ? "item.person_user_id IS NOT NULL DESC," : ""}item.compartment_id IS ? DESC,item.compartment_id IS NULL DESC,item.updated_at DESC,item.id LIMIT 2`,
 	).all(
 		agentId,
 		...(table === "entities" ? [selector] : []),
@@ -843,11 +843,16 @@ function resolveOntologyRow(
 		...(entityId === undefined ? [] : [entityId]),
 		...(exact ? [partition.compartmentId] : []),
 		...scope.args,
-		partition.compartmentId,
 		selector,
+		partition.compartmentId,
 	);
 	const first = rows[0];
-	if (first && first.id !== selector && rows[1]?.compartment_id === first.compartment_id)
+	if (
+		first &&
+		first.id !== selector &&
+		rows[1]?.compartment_id === first.compartment_id &&
+		(first.person_user_id === null || rows[1]?.person_user_id !== null)
+	)
 		throw new OntologyProposalError(
 			`${table === "entities" ? "Entity" : "Aspect"} selector is ambiguous: ${selector}. Use an id.`,
 			409,
@@ -957,7 +962,17 @@ function applyCreateEntity(
 ): Readonly<Record<string, unknown>> {
 	const name = readString(payload, "name");
 	if (name === null) throw new OntologyProposalError("payload.name is required", 400);
-	const existingEntityId = resolveEntity(db, agentId, name, proposal.dreaming_pass_id ?? undefined, true);
+	const existing = resolveOntologyRow(
+		db,
+		"entities",
+		agentId,
+		name,
+		proposal.dreaming_pass_id ?? undefined,
+		undefined,
+		true,
+	);
+	if (existing && existing.person_user_id !== null) return { entityId: existing.id, entity: existing.name };
+	const existingEntityId = existing?.id ?? null;
 	const entityId =
 		existingEntityId ??
 		resolveOrCreateEntity(db, agentId, name, normalizeEntityType(readString(payload, "entity_type")), proposal, true);
@@ -2823,21 +2838,31 @@ function applyCreateEntityAlias(
 	const confidence = clamp01(readNumber(payload, "confidence") ?? 1);
 	const source = readString(payload, "source");
 	const id = crypto.randomUUID();
-	db.prepare(
-		`INSERT INTO entity_aliases
+	try {
+		db.prepare(
+			`INSERT INTO entity_aliases
 		 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at, compartment_id, dreaming_pass_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'), ?, ?)`,
-	).run(
-		id,
-		entity.id,
-		agentId,
-		alias.trim(),
-		canonicalAlias,
-		confidence,
-		source ?? null,
-		proposal.compartment_id,
-		proposal.dreaming_pass_id,
-	);
+		).run(
+			id,
+			entity.id,
+			agentId,
+			alias.trim(),
+			canonicalAlias,
+			confidence,
+			source ?? null,
+			proposal.compartment_id,
+			proposal.dreaming_pass_id,
+		);
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			error.message.includes("UNIQUE constraint failed") &&
+			error.message.includes("idx_entity_aliases_active_unique")
+		)
+			throw new OntologyProposalError("duplicate_entity_alias", 409);
+		throw error;
+	}
 	labelProposalRowInTx(db, "entity_aliases", "alias", id, proposal);
 	return { aliasId: id, entityId: entity.id, alias: alias.trim(), canonicalAlias };
 }
@@ -3056,7 +3081,10 @@ export function assertOntologyOperationPartitionInTx(
 			return null;
 		}
 		if (entityMutations.has(input.operation)) {
-			if (visible.person_user_id !== null) throw new OntologyProposalError("person_identity_immutable", 409);
+			if (visible.person_user_id !== null) {
+				if (input.operation === "create_entity") return visible.id;
+				throw new OntologyProposalError("person_identity_immutable", 409);
+			}
 			const target = ["create_entity", "create_action_type", "create_interface"].includes(input.operation)
 				? resolveOntologyRow(db, "entities", input.agentId, selector, input.passId, undefined, true)
 				: visible;
@@ -3082,6 +3110,13 @@ export function assertOntologyOperationPartitionInTx(
 	};
 	const p = input.payload;
 	const op = input.operation;
+	if (op === "rename_entity") {
+		const name = readString(p, "new_name");
+		const destination =
+			name === null ? undefined : resolveOntologyRow(db, "entities", input.agentId, name, input.passId);
+		if (destination && destination.person_user_id !== null)
+			throw new OntologyProposalError("person_identity_immutable", 409);
+	}
 	const e = entity(
 		op === "create_policy"
 			? readPayloadSelector(p, "target_entity", "entity", "entity_id")
