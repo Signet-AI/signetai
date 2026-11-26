@@ -4,8 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import { execFileSyncHidden } from "./child-process";
+import { compartmentForWrite } from "./compartment-shards";
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
+import { configureEvidencePurgeConnection } from "./migrations/177-classifications";
 import { resolveSqliteJournalConfig } from "./sqlite-journal";
 import type { Memory } from "./types";
 import type { MemoryHistory, MemoryJob } from "./types";
@@ -218,6 +220,7 @@ export class Database {
 			else (this.getDb() as { pragma(s: string): void }).pragma(journalMode);
 			if (journal.networkFilesystem) this.getDb().exec("PRAGMA synchronous = FULL");
 		}
+		configureEvidencePurgeConnection(this.getDb());
 		runMigrations(this.getDb());
 	}
 	private getDb(): SQLiteDatabase {
@@ -227,20 +230,29 @@ export class Database {
 		return this.db;
 	}
 
-	addMemory(memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version">): string {
+	addMemory(
+		memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version">,
+		identity: { readonly agentId: string; readonly authorUserId: string | null },
+	): string {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
 
-		this.getDb()
-			.prepare(
+		const db = this.getDb();
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const compartment = compartmentForWrite(db, {
+				agentId: identity.agentId,
+				memoryId: id,
+				sourceId: memory.sourceId,
+			});
+			db.prepare(
 				`INSERT INTO memories
 				 (id, type, category, content, confidence, source_id,
 				  source_type, source_path, runtime_path, idempotency_key,
 				  tags, created_at, updated_at, updated_by, vector_clock,
-				  manual_override, memory_kind)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
+				  manual_override, memory_kind, agent_id, author_user_id, compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
 				id,
 				memory.type,
 				memory.category ?? null,
@@ -258,9 +270,17 @@ export class Database {
 				JSON.stringify(memory.vectorClock),
 				memory.manualOverride ? 1 : 0,
 				isDaemonDerivedMemorySourceType(memory.sourceType) ? null : "episodic",
+				identity.agentId,
+				identity.authorUserId,
+				compartment,
 			);
 
-		return id;
+			db.exec("COMMIT");
+			return id;
+		} catch (error) {
+			db.exec("ROLLBACK");
+			throw error;
+		}
 	}
 
 	getMemories(type?: string): Memory[] {

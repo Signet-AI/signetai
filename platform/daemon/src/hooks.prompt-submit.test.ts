@@ -21,9 +21,21 @@ const warnMock = mock((..._args: unknown[]) => {});
 const errorMock = mock((..._args: unknown[]) => {});
 type RecallRow = { readonly id: string; readonly content: string; readonly score: number };
 let recallRows: readonly RecallRow[] = [];
-const hybridRecallMock = mock(async (..._args: Parameters<PromptDeps["hybridRecall"]>) => ({
-	results: recallRows.map((row) => ({ ...row, source: "hybrid", type: "fact", pinned: false, importance: 0.8 })),
-}));
+async function seedRecallRows(rows: readonly RecallRow[]): Promise<void> {
+	await getDbAccessor().withWriteTxAsync((db) => {
+		for (const row of rows) {
+			db.prepare(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES(?,?,'default',?,?) ON CONFLICT(id) DO NOTHING",
+			).run(row.id, row.content, new Date().toISOString(), new Date().toISOString());
+		}
+	});
+}
+const hybridRecallMock = mock(async (..._args: Parameters<PromptDeps["hybridRecall"]>) => {
+	await seedRecallRows(recallRows);
+	return {
+		results: recallRows.map((row) => ({ ...row, source: "hybrid", type: "fact", pinned: false, importance: 0.8 })),
+	};
+});
 const fetchEmbeddingMock = mock(
 	async (..._args: Parameters<PromptDeps["fetchEmbedding"]>): ReturnType<PromptDeps["fetchEmbedding"]> => null,
 );
@@ -117,7 +129,10 @@ const SIGNET_RECALL: readonly RecallRow[] = [
 ];
 
 async function submit(userMessage: string, sessionKey: string, deps = makeDeps()) {
-	return await handleUserPromptSubmit({ harness: "codex", userMessage, sessionKey }, deps);
+	return await handleUserPromptSubmit(
+		{ author: { userId: null, credential: "local" }, harness: "codex", userMessage, sessionKey },
+		deps,
+	);
 }
 
 describe("handleUserPromptSubmit entity-gated recall", () => {
@@ -228,6 +243,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 
 		const result = await handleUserPromptSubmit(
 			{
+				author: { userId: null, credential: "local" },
 				harness: "codex",
 				userMessage: "hi",
 				sessionKey: "session-bookkeeping",
@@ -536,6 +552,7 @@ for await (const _ of Bun.stdin.stream()) {
 
 	it("injects source memories instead of an unattributed model summary", async () => {
 		seedEntityContext();
+		await seedRecallRows(SIGNET_RECALL);
 		const deps = makeDeps({
 			hybridRecall: (async () => ({
 				results: [
@@ -568,7 +585,13 @@ for await (const _ of Bun.stdin.stream()) {
 
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "deduped", memoryCount: 0 });
-		await handleSessionEnd({ harness: "codex", sessionKey: "session-cleared", cwd: "/repo", reason: "clear" });
+		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey: "session-cleared",
+			cwd: "/repo",
+			reason: "clear",
+		});
 
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 	});

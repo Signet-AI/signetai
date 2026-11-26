@@ -1,7 +1,15 @@
-import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { compartmentForWrite } from "@signet/core";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import {
+	evidenceCompartmentInTx,
+	memoryWriteDedupeSql,
+	recordEvidenceCitationsInTx,
+	syncVecDeleteBySourceExceptHash,
+	syncVecDeleteBySourceId,
+	syncVecInsert,
+	vectorToBlob,
+} from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
@@ -36,6 +44,9 @@ export interface IngestEnvelope {
 	visibility?: "global" | "private" | "archived";
 	reviewAfter?: string | null;
 	createdAt: string;
+	sessionKey?: string | null;
+	parentCompartment?: number | null;
+	evidence?: readonly import("./db-helpers").CitationEvidence[];
 }
 
 export interface AccessUpdate {
@@ -72,7 +83,7 @@ export interface ModifyMemoryTxInput {
 	embeddingModelOnContentChange?: string | null;
 	embeddingVector?: readonly number[] | null;
 	embeddingConfig?: EmbeddingConfig;
-	ctx?: MutationContext;
+	ctx: MutationContext & { readonly author: WriteAuthor };
 }
 
 export type ModifyMemoryTxStatus =
@@ -247,7 +258,16 @@ function invalidateDerivedMemoriesForMemoryInTx(
 }
 export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 	if (!mem.agentId) throw new Error("agent_required");
-	const compartment = compartmentForWrite(db, { agentId: mem.agentId, memoryId: mem.id, sourceId: mem.sourceId });
+	const parentCompartment = mem.evidence
+		? evidenceCompartmentInTx(db, mem.agentId, mem.evidence, mem.parentCompartment)
+		: mem.parentCompartment;
+	const compartment = compartmentForWrite(db, {
+		agentId: mem.agentId,
+		sessionKey: mem.sessionKey,
+		memoryId: mem.id,
+		sourceId: mem.sourceId,
+		parentCompartment,
+	});
 	db.prepare(
 		`INSERT INTO memories
 		 (id, content, normalized_content, content_hash, who, why, project,
@@ -289,10 +309,18 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.author.userId,
 		compartment,
 	);
-	auditAuthoredWriteInTx(db, mem.author, "memory.created", "memory", mem.id, mem.agentId ?? "default");
+	if (mem.evidence)
+		recordEvidenceCitationsInTx(db, {
+			agentId: mem.agentId,
+			derivedKind: "memory",
+			derivedId: mem.id,
+			evidence: mem.evidence,
+		});
+	auditAuthoredWriteInTx(db, mem.author, "memory.created", "memory", mem.id, mem.agentId);
 	return mem.id;
 }
 export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {
+	const author = requireWriteAuthor(input.ctx?.author);
 	const existing = db
 		.prepare(
 			`SELECT id, content, type, tags, importance, pinned, version, is_deleted,
@@ -366,6 +394,11 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		finalContent = input.patch.content;
 
 		if (input.patch.contentHash !== undefined && input.patch.contentHash !== null) {
+			if (!existing.agent_id) throw new Error("agent_required");
+			const boundary = memoryWriteDedupeSql(db, {
+				writeScope: { agentId: existing.agent_id, memoryId: input.memoryId },
+				author,
+			});
 			const duplicate = db
 				.prepare(
 					`SELECT id FROM memories
@@ -375,7 +408,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 					   AND COALESCE(project, '') = COALESCE(?, '')
 					   AND COALESCE(scope, '__NULL__') = COALESCE(?, '__NULL__')
 					   AND COALESCE(visibility, 'global') = COALESCE(?, 'global')
-					   AND is_deleted = 0
+					   AND is_deleted = 0 ${boundary.sql}
 					 LIMIT 1`,
 				)
 				.get(
@@ -385,6 +418,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 					existing.project,
 					existing.scope,
 					existing.visibility,
+					...boundary.params,
 				) as { id: string } | undefined;
 			if (duplicate) {
 				return {
@@ -474,21 +508,39 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		}
 
 		if (newHash && input.embeddingVector && input.embeddingVector.length > 0 && embeddingGenerationActive) {
-			const embId = crypto.randomUUID();
+			if (!existing.agent_id) throw new Error("agent_required");
+			const compartment = compartmentForWrite(db, { agentId: existing.agent_id, memoryId: input.memoryId });
 			const blob = vectorToBlob(input.embeddingVector);
-			db.prepare(
-				`INSERT INTO embeddings
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+			const stored = db
+				.prepare(
+					`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+				 VALUES (COALESCE((SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND content_hash=? AND compartment_id IS ? ORDER BY id LIMIT 1),?), ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text,
-				   created_at = excluded.created_at`,
-			).run(embId, newHash, blob, input.embeddingVector.length, input.memoryId, input.patch.content, input.changedAt);
-			syncVecInsert(db, embId, input.embeddingVector);
+				   created_at = excluded.created_at, agent_id = excluded.agent_id, compartment_id = excluded.compartment_id RETURNING id`,
+				)
+				.get(
+					input.memoryId,
+					existing.agent_id,
+					newHash,
+					compartment,
+					crypto.randomUUID(),
+					newHash,
+					blob,
+					input.embeddingVector.length,
+					input.memoryId,
+					input.patch.content,
+					input.changedAt,
+					existing.agent_id,
+					compartment,
+				);
+			if (typeof stored?.id !== "string") throw new Error("embedding_write_failed");
+			syncVecInsert(db, stored.id, input.embeddingVector);
 		}
 	}
 
@@ -505,7 +557,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			contentChanged,
 		}),
 		createdAt: input.changedAt,
-		author: input.ctx?.author,
+		author,
 		agentId: existing.agent_id,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,

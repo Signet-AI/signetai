@@ -1,5 +1,8 @@
 import type { SQLQueryBindings } from "bun:sqlite";
-import type { DbAccessor } from "./db-accessor";
+import { type DbAccessor, type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { compartmentForWrite } from "@signet/core";
+import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
+import { recallResultEvidenceInTx } from "./db-helpers";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
 
@@ -226,6 +229,8 @@ function rowToItem(row: MemorySearchTelemetryRow): MemorySearchTelemetryItem {
 	};
 }
 
+export { recallResultEvidenceInTx } from "./db-helpers";
+
 export async function recordMemorySearchTelemetry(
 	db: DbAccessor,
 	input: MemorySearchTelemetryRecordInput,
@@ -243,14 +248,22 @@ export async function recordMemorySearchTelemetry(
 
 	try {
 		await withWriteTxAsync((w) => {
+			const id = crypto.randomUUID();
+			const evidence = input.response.results.flatMap((result) => recallResultEvidenceInTx(w, input.agentId, result));
+			const compartment = evidenceCompartmentInTx(
+				w,
+				input.agentId,
+				evidence,
+				compartmentForWrite(w, { agentId: input.agentId, sessionKey: input.sessionKey }),
+			);
 			w.prepare(
 				`INSERT INTO memory_search_telemetry
 				 (id, created_at, route, agent_id, session_key, project, query,
 				  keyword_query, filters_json, method, result_count, top_score,
-				  no_hits, duration_ms, timings_json, results_json, sources_json)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  no_hits, duration_ms, timings_json, results_json, sources_json, compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
-				crypto.randomUUID(),
+				id,
 				createdAt,
 				input.route,
 				input.agentId,
@@ -267,7 +280,9 @@ export async function recordMemorySearchTelemetry(
 				stringifyJson(input.response.meta.timings, '{"totalMs":0,"stages":[]}'),
 				stringifyJson(results, "[]"),
 				null,
+				compartment,
 			);
+			recordEvidenceCitationsInTx(w, { agentId: input.agentId, derivedKind: "telemetry", derivedId: id, evidence });
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});
 	} catch (err) {
@@ -333,6 +348,6 @@ export async function listMemorySearchTelemetry(
 				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
 			return rows.map(rowToItem);
 		},
-		{ siteToken: "memory-search-telemetry.ts:321" },
+		{ siteToken: "db:memory-search-telemetry.site.321" },
 	);
 }

@@ -726,6 +726,7 @@ export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat"
 export {
 	compartmentFor,
 	compartmentForWrite,
+	classificationsForWrite,
 	type CompartmentWriteScope,
 	ensureCompartmentShards,
 	ftsShardTables,
@@ -738,4 +739,16 @@ export {
 	deleteCompartmentVectors,
 	inheritEmbeddingCompartment,
 } from "./compartment-shards";
-export { COMPARTMENT_TABLES, backfillEvidenceCitations } from "./migrations/177-classifications";
+export {
+	ClassifiedDestinationError,
+	withWritePrincipal,
+	currentWritePrincipal,
+	classifiedDestinationDenied,
+	recordClassifiedDestination,
+	type WritePrincipal,
+} from "./write-principal";
+export {
+	COMPARTMENT_TABLES,
+	backfillEvidenceCitations,
+	configureEvidencePurgeConnection,
+} from "./migrations/177-classifications";

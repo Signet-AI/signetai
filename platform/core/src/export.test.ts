@@ -36,6 +36,31 @@ function exported(db: Database): ReadonlyMap<string, string> {
 }
 
 describe("portable bundle identity", () => {
+	test("offline bundle import inherits assignments and preserves source authors", () => {
+		const db = open();
+		db.exec(
+			"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_assignments VALUES('agent','alice','alice','cls_hr','carol','now')",
+		);
+		expect(
+			importBundle(db, {
+				memories: JSON.stringify({
+					id: "classified",
+					content: "bundlesecret",
+					agent_id: "alice",
+					visibility: "private",
+					author_user_id: "alice",
+				}),
+			}),
+		).toMatchObject({ memoriesImported: 1 });
+		expect(db.prepare("SELECT compartment_id,author_user_id FROM memories WHERE id='classified'").get()).toEqual({
+			compartment_id: expect.any(Number),
+			author_user_id: "alice",
+		});
+		expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'bundlesecret'").get()).toEqual({
+			n: 0,
+		});
+		db.close();
+	});
 	test("round-trips agent, scope, and visibility for memories and entities", () => {
 		const source = open();
 		insert(source, "m1", "alice private note", "alice", "project-x", "private");

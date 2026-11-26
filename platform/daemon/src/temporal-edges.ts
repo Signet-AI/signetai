@@ -1,4 +1,5 @@
 import type { WriteDb } from "./db-accessor";
+import { evidenceCompartmentInTx } from "./db-helpers";
 import { createTemporalEdgeId } from "./temporal-recall";
 
 export interface MemoryTemporalEdgeInput {
@@ -17,14 +18,14 @@ export function txInsertMemoryTemporalEdges(params: {
 	readonly now: string;
 }): void {
 	if (params.inputs.length === 0) return;
-	const table = params.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='temporal_edges'").get();
-	if (!table) return;
+	const compartment = evidenceCompartmentInTx(params.db, params.agentId, [{ kind: "memory", id: params.memoryId }]);
 	const stmt = params.db.prepare(
 		`INSERT INTO temporal_edges
 		   (id, agent_id, subject_type, subject_id, facet, start_at, end_at, confidence,
-		    provenance_json, metadata_json, created_at, updated_at)
-		 VALUES (?, ?, 'memory', ?, ?, ?, ?, 1.0, ?, ?, ?, ?)
+		    provenance_json, metadata_json, created_at, updated_at, compartment_id)
+		 VALUES (?, ?, 'memory', ?, ?, ?, ?, 1.0, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
+		   compartment_id = excluded.compartment_id,
 		   end_at = excluded.end_at,
 		   confidence = excluded.confidence,
 		   provenance_json = excluded.provenance_json,
@@ -49,6 +50,7 @@ export function txInsertMemoryTemporalEdges(params: {
 			input.metadata === undefined ? null : JSON.stringify(input.metadata),
 			params.now,
 			params.now,
+			compartment,
 		);
 	}
 }

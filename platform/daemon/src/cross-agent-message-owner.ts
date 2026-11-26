@@ -1,3 +1,4 @@
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { authoredAuditStatements, type WriteAuthor } from "./auth/audit-owner";
 import type { CrossAgentMessageRow } from "./cross-agent";
 import type { DbOwnerStatement } from "./db-owner-protocol";
@@ -48,8 +49,12 @@ export function agentMessageWriteStatements(
 		},
 		{ sql: "DELETE FROM cross_agent_messages WHERE expires_at <= ?", params: [row.created_at], result: "run" },
 		{
-			sql: `INSERT INTO cross_agent_messages (${columns.join(",")}) SELECT ${columns.map(() => "?").join(",")} WHERE (SELECT COUNT(*) FROM cross_agent_messages) < 10000`,
-			params: columns.map((name) => row[name]),
+			sql: `INSERT INTO cross_agent_messages (${columns.join(",")},author_user_id,compartment_id) SELECT ${columns.map(() => "?").join(",")},?,? WHERE (SELECT COUNT(*) FROM cross_agent_messages) < 10000`,
+			params: [
+				...columns.map((name) => row[name]),
+				author?.userId ?? null,
+				{ type: "compartment", scope: { agentId: row.from_agent_id, sessionKey: row.from_session_key } },
+			],
 			result: "run",
 			requireChanges: true,
 		},
@@ -69,4 +74,20 @@ export async function persistAgentMessage(row: CrossAgentMessageRow, author: Wri
 			throw new AgentMessageCapacityError();
 		throw error;
 	}
+}
+
+export function agentMessageReadPredicate(scope: ReadScope, alias = "m"): { sql: string; args: (string | number)[] } {
+	const clause = readScopeSql(
+		alias,
+		{
+			...scope,
+			reach:
+				scope.reach.kind === "shared" || scope.reach.kind === "group"
+					? { kind: "own", agentId: scope.reach.agentId }
+					: scope.reach,
+			projects: null,
+		},
+		{ agent: "from_agent_id", visibility: null, memory: null, session: "from_session_key", source: null },
+	);
+	return { ...clause, sql: clause.sql + (scope.projects === null ? "" : " AND 0") };
 }

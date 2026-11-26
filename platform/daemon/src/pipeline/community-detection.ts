@@ -1,4 +1,5 @@
 import { UndirectedGraph } from "graphology";
+import { resetCommunityProjectionInTx, writeCommunityProjectionInTx } from "../db-helpers";
 import louvain from "graphology-communities-louvain";
 import type { ReadDb, WriteDb } from "../db-accessor";
 
@@ -111,13 +112,7 @@ export function persistCommunities(
 			groups.set(community, [nodeId]);
 		}
 	}
-	db.prepare("DELETE FROM entity_communities WHERE agent_id = ?").run(agentId);
-	db.prepare("UPDATE entities SET community_id = NULL WHERE agent_id = ?").run(agentId);
-
-	const insertCommunity = db.prepare(
-		`INSERT INTO entity_communities (id, agent_id, name, cohesion, member_count, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-	);
+	resetCommunityProjectionInTx(db, agentId);
 
 	const updateEntity = db.prepare("UPDATE entities SET community_id = ? WHERE id = ? AND agent_id = ?");
 
@@ -142,7 +137,8 @@ export function persistCommunities(
 		}
 		const cohesion = computeCohesion(graph, nodeIds);
 
-		insertCommunity.run(communityId, agentId, bestName, cohesion, nodeIds.length);
+		if (!writeCommunityProjectionInTx(db, { id: communityId, agentId, name: bestName, cohesion, memberIds: nodeIds }))
+			continue;
 
 		for (const nodeId of nodeIds) {
 			updateEntity.run(communityId, nodeId, agentId);

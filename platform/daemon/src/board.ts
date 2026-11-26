@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentRosterReadPolicy } from "@signet/core";
 import { getAgentScope } from "./agent-id";
+import { agentMessageReadPredicate } from "./cross-agent-message-owner";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { authoredAuditStatements, requireWriteAuthor } from "./auth/audit-owner";
 import {
@@ -50,6 +51,7 @@ export type BoardViewer =
 	  };
 
 export interface BoardAuthor {
+	readonly messageReadScope?: import("./read-scope").ReadScope;
 	readonly principalAuthor: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionKey?: string;
@@ -694,9 +696,16 @@ function defaultTitleFrom(content: string): string {
 }
 
 async function readPromotableMessage(messageId: string, author: BoardAuthor): Promise<AgentMessage> {
+	const scope =
+		author.messageReadScope ??
+		(author.principalAuthor.credential === "local" || author.principalAuthor.credential === "system"
+			? { reach: { kind: "all" as const }, compartments: "all" as const, projects: null }
+			: undefined);
+	if (!scope) throw new BoardNotFoundError(`cross-agent message not found or not visible: ${messageId}`);
+	const predicate = agentMessageReadPredicate(scope);
 	const rows = await readAll<CrossAgentMessageRow>(
-		"SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ?",
-		[messageId],
+		`SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ? ${predicate.sql}`,
+		[messageId, ...predicate.args],
 		"board.promote.message",
 	);
 	const row = rows[0];

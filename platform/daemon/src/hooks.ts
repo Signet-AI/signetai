@@ -242,9 +242,13 @@ function identityBudgetFor(path: string): number {
 	return IDENTITY_BUDGET_BY_FILE[filename] ?? 4_000;
 }
 
+import { requireWriteAuthor } from "./auth/audit-owner";
+import { sessionFinalizerAuthor } from "./session-transcripts";
+
 export type { HooksConfig };
 
 export interface SessionStartRequest {
+	author: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	project?: string;
 	cwd?: string;
@@ -288,6 +292,7 @@ export interface SessionStartResponse {
 }
 
 export interface PreCompactionRequest {
+	author: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	sessionContext?: string;
 	messageCount?: number;
@@ -302,6 +307,7 @@ export interface PreCompactionResponse {
 }
 
 export interface UserPromptSubmitRequest {
+	author: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	project?: string;
 	agentId?: string;
@@ -362,6 +368,7 @@ export function formatPromptClockContext(date: Date, requestedTimeZone?: string)
 }
 
 export interface SessionEndRequest {
+	author: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	transcriptPath?: string;
 	transcript?: string;
@@ -383,6 +390,7 @@ export interface SessionEndResponse {
 }
 
 export interface StopRequest {
+	author: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	sessionKey: string;
 	agentId: string;
@@ -400,6 +408,7 @@ export interface StopResponse {
 }
 
 export interface CheckpointExtractRequest {
+	author: import("./auth/audit-owner").WriteAuthor;
 	harness: string;
 	sessionKey: string;
 	agentId?: string;
@@ -623,6 +632,7 @@ function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: strin
 }
 
 export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {
+	requireWriteAuthor(req.author);
 	const start = Date.now();
 	const agentId = resolveAgentId(req);
 	await ensureAgentRegistered(agentId);
@@ -1311,6 +1321,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 }
 
 export async function handlePreCompaction(req: PreCompactionRequest): Promise<PreCompactionResponse> {
+	requireWriteAuthor(req.author);
 	const config = loadHooksConfig().preCompaction || {};
 
 	logger.info("hooks", "Pre-compaction hook", {
@@ -1356,6 +1367,8 @@ ${guidelines}
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
+					agentId: resolveAgentId(req),
+					author: req.author,
 					harness: snap.harness,
 					project: snap.project,
 					projectNormalized: snap.projectNormalized,
@@ -1539,6 +1552,7 @@ export async function handleUserPromptSubmit(
 	overrides?: Partial<UserPromptSubmitDeps>,
 	scope: { readonly project?: string } = {},
 ): Promise<UserPromptSubmitResponse> {
+	requireWriteAuthor(req.author);
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = deps.now();
 	const clockContext = formatPromptClockContext(new Date(start));
@@ -1578,6 +1592,8 @@ export async function handleUserPromptSubmit(
 				deps.queueCheckpointWrite(
 					{
 						sessionKey: snap.sessionKey,
+						agentId: resolveAgentId(req),
+						author: req.author,
 						harness: snap.harness,
 						project: snap.project,
 						projectNormalized: snap.projectNormalized,
@@ -1611,6 +1627,7 @@ export async function handleUserPromptSubmit(
 			});
 			if (appended) {
 				await deps.appendSessionTranscriptAsync({
+					author: req.author,
 					sessionKey: req.sessionKey,
 					agentId,
 					harness: req.harness,
@@ -1972,6 +1989,7 @@ function isClearSessionStart(req: SessionStartRequest): boolean {
 	return req.source?.trim().toLowerCase() === "clear";
 }
 async function appendLiveAssistantTurn(params: {
+	readonly author: import("./auth/audit-owner").WriteAuthor;
 	readonly harness: string;
 	readonly sessionKey: string;
 	readonly agentId: string;
@@ -1988,6 +2006,7 @@ async function appendLiveAssistantTurn(params: {
 		return true;
 	}
 	await appendSessionTranscriptAsync({
+		author: params.author,
 		sessionKey: params.sessionKey,
 		agentId: params.agentId,
 		harness: params.harness,
@@ -1998,7 +2017,9 @@ async function appendLiveAssistantTurn(params: {
 }
 
 export async function handleStop(req: StopRequest): Promise<StopResponse> {
+	requireWriteAuthor(req.author);
 	const recorded = await appendLiveAssistantTurn({
+		author: req.author,
 		harness: req.harness,
 		sessionKey: req.sessionKey,
 		agentId: req.agentId,
@@ -2016,6 +2037,7 @@ async function appendSessionEndAssistantTurn(
 	if (!sessionKey || req.transcriptPath || req.transcript?.trim()) return;
 	try {
 		await appendLiveAssistantTurn({
+			author: req.author,
 			harness: req.harness,
 			sessionKey,
 			agentId,
@@ -2032,6 +2054,7 @@ async function appendSessionEndAssistantTurn(
 }
 
 export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionEndResponse> {
+	requireWriteAuthor(req.author);
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
 	await ensureAgentRegistered(agentId);
@@ -2090,6 +2113,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
+					agentId: resolveAgentId(req),
+					author: req.author,
 					harness: snap.harness,
 					project: snap.project,
 					projectNormalized: snap.projectNormalized,
@@ -2218,6 +2243,7 @@ async function runStaleSessionSweep(options: {
 
 		try {
 			await handleSessionEnd({
+				author: await sessionFinalizerAuthor(getDbAccessor(), session.agentId, session.sessionKey),
 				harness: session.harness ?? "hermes-agent",
 				sessionKey: session.sessionKey,
 				agentId: session.agentId,
@@ -2287,6 +2313,7 @@ async function deferSessionEndWork(params: {
 }
 
 export async function handleCheckpointExtract(req: CheckpointExtractRequest): Promise<CheckpointExtractResponse> {
+	requireWriteAuthor(req.author);
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	await ensureAgentRegistered(agentId);
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
@@ -2349,6 +2376,8 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
+					agentId: resolveAgentId(req),
+					author: req.author,
 					harness: snap.harness,
 					project: snap.project,
 					projectNormalized: snap.projectNormalized,

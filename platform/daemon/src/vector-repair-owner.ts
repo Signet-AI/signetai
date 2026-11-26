@@ -170,17 +170,11 @@ function orphanEmbeddingWhere(
 		sql: `
 			FROM embeddings e
 			LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
-			LEFT JOIN memories m2
-				ON e.source_type = 'memory'
-				AND e.content_hash = m2.content_hash
-				AND m2.is_deleted = 0
-				AND COALESCE(NULLIF(m2.agent_id, ''), 'default') = COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default')
 			WHERE e.source_type = 'memory'
-			  AND (m.id IS NULL OR m.is_deleted = 1)
-			  AND m2.id IS NULL
-			  AND COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default') = ?
+			  AND (m.id IS NULL OR m.is_deleted = 1 OR (e.agent_id IS NOT NULL AND e.agent_id<>m.agent_id))
+			  AND (e.agent_id = ? OR (e.agent_id IS NULL AND m.agent_id = ?))
 			${keyset.sql}`,
-		params: [agentId, ...keyset.params],
+		params: [agentId, agentId, ...keyset.params],
 	};
 }
 

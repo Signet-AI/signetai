@@ -3,9 +3,12 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { dirname, resolve } from "node:path";
 import {
 	compartmentForWrite,
+	configureEvidencePurgeConnection,
+	withWritePrincipal,
 	syncEmbeddingCompartment,
 	deleteCompartmentVectors,
 	activeVectorProjectionTable,
@@ -190,6 +193,7 @@ export function runDbOwnerWorker(): void {
 			Database.setCustomSQLite(sqlitePath);
 		}
 		db = new Database(dbPath);
+		configureEvidencePurgeConnection(db);
 		db.exec("PRAGMA busy_timeout = 5000");
 		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
@@ -292,19 +296,7 @@ export function runDbOwnerWorker(): void {
 	function bindParameter(value: DbOwnerParameter, writeBatch = false): unknown {
 		if (typeof value === "object" && value !== null && value.type === "compartment") {
 			if (!writeBatch) throw new Error("compartment_parameter_requires_batch");
-			const parent =
-				value.parentMemoryId === undefined
-					? undefined
-					: db
-							.prepare("SELECT compartment_id FROM memories WHERE id=? AND agent_id=?")
-							.get(value.parentMemoryId, value.scope.agentId);
-			if (value.parentMemoryId !== undefined && !parent) throw new Error("parent_not_found");
-			return compartmentForWrite(db, {
-				...value.scope,
-				...(parent
-					? { parentCompartment: typeof parent.compartment_id === "number" ? parent.compartment_id : null }
-					: {}),
-			});
+			return resolveWriteCompartmentParameterInTx(db, value);
 		}
 		if (typeof value === "object" && value !== null && value.type === "bytes") {
 			return Buffer.from(value.base64, "base64");
@@ -337,8 +329,12 @@ export function runDbOwnerWorker(): void {
 		return value;
 	}
 
-	function executeStatement(statement: DbOwnerStatement, context?: JobExecutionContext): unknown {
-		const params = (statement.params ?? []).map((value) => bindParameter(value));
+	function executeStatement(
+		statement: DbOwnerStatement,
+		context?: JobExecutionContext,
+		writeTransaction = false,
+	): unknown {
+		const params = (statement.params ?? []).map((value) => bindParameter(value, writeTransaction));
 		const prepared = db.prepare(statement.sql);
 		if (statement.result === "all" && statement.readonly !== false)
 			return enforceResultLimit(statement, prepared.all(...params));
@@ -363,6 +359,7 @@ export function runDbOwnerWorker(): void {
 	function executeReadOnlyStatement(statement: DbOwnerStatement): unknown {
 		if (statement.result === "run") throw new Error("DB owner readonly statements must return rows");
 		const readonlyDb = new Database(ownerDbPath, { readonly: true });
+		configureEvidencePurgeConnection(readonlyDb);
 		try {
 			const params = (statement.params ?? []).map((value) => bindParameter(value));
 			const prepared = readonlyDb.prepare(statement.sql);
@@ -388,7 +385,7 @@ export function runDbOwnerWorker(): void {
 		return withBusyRetry(() => {
 			const results: unknown[] = [];
 			for (const statement of statements) {
-				const result = executeStatement({ ...statement, transactional: false }, context);
+				const result = executeStatement({ ...statement, transactional: false }, context, true);
 				results.push(result);
 				if (
 					statement?.requireChanges === true &&
@@ -782,6 +779,7 @@ export function runDbOwnerWorker(): void {
 			agentId: input.agentId,
 			sourcePath,
 			sourceSha256: input.sourceHash,
+			author: input.author,
 			sourceKind: input.sourceKind,
 			sessionId: `native:${input.harness}:${sourcePath}`,
 			sessionKey: `native:${input.harness}`,
@@ -893,7 +891,7 @@ export function runDbOwnerWorker(): void {
 						`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-					 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+					 ON CONFLICT(id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
 					 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
 					 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 					)
@@ -910,7 +908,7 @@ export function runDbOwnerWorker(): void {
 						compartmentForWrite(database, { agentId: input.agentId, sourceId: chunk.id }),
 					);
 				if (vecAvailable && vecDimensions === String(vector.length)) {
-					for (const stored of database.prepare("SELECT id FROM embeddings WHERE content_hash=?").all(contentHash))
+					for (const stored of database.prepare("SELECT id FROM embeddings WHERE id=?").all(embeddingId))
 						if (typeof stored === "object" && stored !== null && "id" in stored && typeof stored.id === "string")
 							syncEmbeddingCompartment(database, "embeddings", stored.id, vecTable);
 				}
@@ -1237,6 +1235,20 @@ export function runDbOwnerWorker(): void {
 			);
 		}
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
+		if (job.request.kind === "filesystem_document_write") {
+			const { writeFilesystemDocumentInTx } = await import("./embedding-projection-owner");
+			const request = job.request;
+			return withBusyRetry(() => writeFilesystemDocumentInTx(db, request.input), context);
+		}
+		if (job.request.kind === "session_finalizer_author") {
+			const { readSessionFinalizerAuthorInTx } = await import("./db-helpers");
+			return readSessionFinalizerAuthorInTx(db, job.request.agentId, job.request.sessionKey);
+		}
+		if (job.request.kind === "session_checkpoint_write") {
+			const { writeSessionCheckpointInTx } = await import("./session-transcripts");
+			const request = job.request;
+			return withBusyRetry(() => writeSessionCheckpointInTx(db, request.input, request.maxPerSession), context);
+		}
 		if (job.request.kind === "session_transcript_write")
 			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "session_compaction_summary")
@@ -1300,6 +1312,11 @@ export function runDbOwnerWorker(): void {
 				} catch {}
 				throw error;
 			}
+		}
+		if (job.request.kind === "reflection_generate") {
+			const { txCreateDailyReflections } = await import("./reflection-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => txCreateDailyReflections(db, input), context);
 		}
 		if (job.request.kind === "reflection_answer") {
 			const { txAnswerReflection } = await import("./reflection-owner");
@@ -1423,7 +1440,7 @@ export function runDbOwnerWorker(): void {
 				} else if (Date.now() >= job.deadlineAt) {
 					result(job.id, "timed_out");
 				} else {
-					const value = await execute(job, context);
+					const value = await withWritePrincipal(job.writePrincipal, () => execute(job, context));
 					if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
 					else
 						result(job.id, "completed", value, {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DependencyType } from "@signet/core";
-import { SYSTEM_AUTHOR } from "./auth/audit-owner";
+import type { WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { applyOntologyOperationBatchInTx } from "./ontology-proposals";
 import { recordAgentFeedbackInner } from "./session-memories";
@@ -266,7 +266,7 @@ function updateDependencies(
 	path: FeedbackPath,
 	rating: number,
 	cfg: PathFeedbackConfig,
-	feedback: { readonly memoryId: string; readonly sessionKey: string },
+	feedback: { readonly memoryId: string; readonly sessionKey: string; readonly author: WriteAuthor },
 ): number {
 	if (rating === 0 || path.dependencyIds.length === 0) return 0;
 	const select = db.prepare(
@@ -303,7 +303,7 @@ function updateDependencies(
 				? clamp(Math.max(row.confidence + cfg.confidenceDelta * mag, base), cfg.minConfidence, 1)
 				: clamp(Math.min(row.confidence - cfg.confidenceDelta * mag, base), cfg.minConfidence, 1);
 		applyOntologyOperationBatchInTx(db, {
-			author: SYSTEM_AUTHOR,
+			author: feedback.author,
 			agentId,
 			actor: "path-feedback",
 			operations: [
@@ -460,7 +460,7 @@ function maybePromoteDirected(
 	edgeTarget: string,
 	total: number,
 	cfg: PathFeedbackConfig,
-	feedback: { readonly memoryIds: readonly string[]; readonly sessionKey: string },
+	feedback: { readonly memoryIds: readonly string[]; readonly sessionKey: string; readonly author: WriteAuthor },
 ): boolean {
 	if (total <= 1) return false;
 	const pair = db
@@ -523,7 +523,7 @@ function maybePromoteDirected(
 	if (!existing) {
 		if (countAutoEdges(db, agentId, edgeSource) >= cfg.autoEdgeCap) return false;
 		applyOntologyOperationBatchInTx(db, {
-			author: SYSTEM_AUTHOR,
+			author: feedback.author,
 			agentId,
 			actor: "path-feedback",
 			operations: [
@@ -547,7 +547,7 @@ function maybePromoteDirected(
 		return true;
 	}
 	applyOntologyOperationBatchInTx(db, {
-		author: SYSTEM_AUTHOR,
+		author: feedback.author,
 		agentId,
 		actor: "path-feedback",
 		operations: [
@@ -576,7 +576,7 @@ function maybePromotePair(
 	target: string,
 	total: number,
 	cfg: PathFeedbackConfig,
-	feedback: { readonly memoryIds: readonly string[]; readonly sessionKey: string },
+	feedback: { readonly memoryIds: readonly string[]; readonly sessionKey: string; readonly author: WriteAuthor },
 ): number {
 	const [pairSource, pairTarget] = canonicalPair(source, target);
 	let count = 0;
@@ -592,6 +592,7 @@ function maybePromotePair(
 export function recordPathFeedback(
 	accessor: DbAccessor,
 	input: {
+		readonly author: WriteAuthor;
 		readonly sessionKey: string;
 		readonly agentId: string;
 		readonly ratings: Readonly<Record<string, number>>;
@@ -667,6 +668,7 @@ export function recordPathFeedback(
 			updateAspects(db, input.agentId, path, rating, cfg, ts);
 			dependenciesUpdated += updateDependencies(db, input.agentId, path, rating, cfg, {
 				memoryId,
+				author: input.author,
 				sessionKey: input.sessionKey,
 			});
 			propagated++;
@@ -698,6 +700,7 @@ export function recordPathFeedback(
 		for (const [source, target] of pairs) {
 			const promoted = maybePromotePair(db, input.agentId, source, target, total, cfg, {
 				memoryIds: positiveMemoryIds,
+				author: input.author,
 				sessionKey: input.sessionKey,
 			});
 			if (promoted > 0) {
@@ -707,5 +710,5 @@ export function recordPathFeedback(
 		}
 
 		return { accepted, propagated, cooccurrenceUpdated, dependenciesUpdated };
-	}, "path-feedback.ts:613");
+	}, "db:path-feedback.site.613");
 }

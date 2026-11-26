@@ -385,7 +385,7 @@ export function parseTagsMutation(value: unknown): string | null | undefined {
 }
 
 export interface MutationActor {
-	author?: WriteAuthor;
+	author: WriteAuthor;
 	changedBy: string;
 	actorType: string;
 	sessionId: string | undefined;
@@ -426,6 +426,7 @@ export function resolveMutationActor(c: Context, fallback?: string): MutationAct
 	const auth = c.get("auth");
 	if (auth?.claims) {
 		return {
+			author: c.get("author"),
 			changedBy: auth.claims.sub,
 			actorType: auth.claims.role,
 			sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
@@ -440,6 +441,7 @@ export function resolveMutationActor(c: Context, fallback?: string): MutationAct
 	const actorType = rawType && ACTOR_TYPES.has(rawType) ? rawType : "operator";
 
 	return {
+		author: c.get("author"),
 		changedBy,
 		actorType,
 		sessionId: parseOptionalString(c.req.header("x-signet-session-id")),

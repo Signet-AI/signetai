@@ -62,6 +62,14 @@ describe("embedding coverage queries", () => {
 		expect(listAllUnembeddedMemories(readDb, 10).map((row) => row.id)).toEqual(["mem-b"]);
 	});
 
+	it("requires a parent vector even when another parent has the same hash", () => {
+		db.exec(
+			"INSERT INTO memories(id,content,content_hash,created_at,updated_at) VALUES('parent-a','equal','equal','now','now'),('parent-b','equal','equal','now','now')",
+		);
+		insertEmbedding(db, { id: "embedding-a", sourceId: "parent-a", contentHash: "equal" });
+		expect(listStaleEmbeddingRows(db, "test", 10).map((row) => row.id)).toEqual(["parent-b"]);
+	});
+
 	it("still flags stale source-linked embeddings when the content hash changed", () => {
 		const now = new Date().toISOString();
 		db.prepare(

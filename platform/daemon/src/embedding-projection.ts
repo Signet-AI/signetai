@@ -3,7 +3,6 @@ export interface EmbeddingProjectionRequest {
 	readonly store: "embeddings" | "embeddings_staging";
 	readonly projection: "vec_embeddings" | "vec_embeddings_staging";
 	readonly ids: readonly string[];
-	readonly contentHashes?: readonly string[];
 	readonly resetDimensions?: number;
 }
 export async function projectEmbeddingRows(owner: DbOwnerClient, request: EmbeddingProjectionRequest): Promise<void> {

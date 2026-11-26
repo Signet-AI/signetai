@@ -28,7 +28,8 @@ export interface TranscriptImportWorkerOptions {
 	readonly workspaceRoot?: string;
 	readonly pressure?: () => boolean;
 	readonly yield?: () => Promise<void>;
-	readonly onBatch?: (jobId: string, sourceId: string) => Promise<void>;
+	readonly onBatch?: (jobId: string, sourceId: string, agentId: string) => Promise<void>;
+	readonly nextAgentId?: (after: string) => Promise<string | undefined>;
 	readonly pollMs?: number;
 }
 interface Job {
@@ -52,6 +53,7 @@ interface File {
 	readonly state: string;
 }
 export function startTranscriptImportWorker(options: TranscriptImportWorkerOptions): TranscriptImportWorkerHandle {
+	let agentId = options.agentId;
 	let active = true;
 	let wake: (() => void) | undefined;
 	const wait = (): Promise<void> =>
@@ -69,9 +71,9 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		operation: Parameters<ImportStore["run"]>[0]["operation"],
 		payload: Readonly<Record<string, unknown>>,
 	): Promise<Result> =>
-		options.store.run<Result>({ kind: "source_import", operation, jobId, agentId: options.agentId, payload });
+		options.store.run<Result>({ kind: "source_import", operation, jobId, agentId: agentId, payload });
 	const processJob = async (job: Job): Promise<void> => {
-		while (active && (await prepareTranscriptRetry(job.id, options.agentId, job.generation))) await options.yield?.();
+		while (active && (await prepareTranscriptRetry(job.id, agentId, job.generation))) await options.yield?.();
 		if (!active) return;
 		const leaseToken = randomUUID();
 		const leased = await store<Job | null>(job.id, "lease", { token: leaseToken, generation: job.generation });
@@ -92,7 +94,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 				if (file.storage_state !== "sealed")
 					throw new RangeError("source evidence requires migration or is unavailable");
 				const scope: TranscriptUploadScope = {
-					agentId: options.agentId,
+					agentId: agentId,
 					jobId: job.id,
 					fileId: file.id,
 					generation: file.upload_generation,
@@ -128,7 +130,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 						}
 						const commit = buildCompletedTranscriptCommit(value, {
 							author,
-							agentId: options.agentId,
+							agentId: agentId,
 							sourceId: file.source_id,
 							sourceRecordId: row.id,
 							sourceMetaJson: JSON.stringify({ fileId: file.id, uploadGeneration: file.upload_generation }),
@@ -202,7 +204,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 								? undefined
 								: buildCompletedTranscriptCommit(record.value, {
 										author,
-										agentId: options.agentId,
+										agentId: agentId,
 										sourceId: file.source_id,
 										sourceRecordId: `${job.id}:${file.id}:${record.ordinal}`,
 										sourceMetaJson: JSON.stringify({ fileId: file.id, uploadGeneration: file.upload_generation }),
@@ -231,7 +233,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					await flush(scanned.checkpoint, scanned.complete);
 					complete = scanned.complete;
 				}
-				await options.onBatch?.(job.id, file.source_id);
+				await options.onBatch?.(job.id, file.source_id, agentId);
 			}
 			await guard();
 			await store(job.id, "finalize", { generation, leaseToken });
@@ -249,14 +251,15 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		let recovered = false;
 		while (active) {
 			try {
-				await cleanupCancelledTranscriptImport(options.agentId, undefined, () => active);
+				const nextAgent = await options.nextAgentId?.(agentId);
+				if (nextAgent !== undefined && nextAgent !== agentId) {
+					agentId = nextAgent;
+					recovered = false;
+				}
+				await cleanupCancelledTranscriptImport(agentId, undefined, () => active);
 				if (!recovered) {
 					try {
-						await migrateTranscriptImports(
-							options.workspaceRoot ?? resolveDefaultBasePath(),
-							options.agentId,
-							() => active,
-						);
+						await migrateTranscriptImports(options.workspaceRoot ?? resolveDefaultBasePath(), agentId, () => active);
 					} catch (error) {
 						if (!active) return;
 						const message = error instanceof Error ? error.message : String(error);
@@ -264,7 +267,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 							[
 								{
 									sql: "UPDATE source_import_migrations SET state = 'failed', error = ? WHERE agent_id = ?",
-									params: [message, options.agentId],
+									params: [message, agentId],
 									result: "run",
 								},
 							],
@@ -274,7 +277,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 							const legacy = await dbOwnerQuery<{ id: string }>(
 								{
 									sql: "SELECT j.id FROM source_import_jobs j WHERE j.agent_id = ? AND j.state IN ('queued','running','inventorying') AND EXISTS (SELECT 1 FROM source_import_files f WHERE f.job_id = j.id AND f.agent_id = j.agent_id AND f.storage_state = 'legacy') LIMIT 1",
-									params: [options.agentId],
+									params: [agentId],
 									result: "get",
 									readonly: true,
 								},
@@ -285,7 +288,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 								[
 									{
 										sql: "UPDATE source_import_jobs SET state = 'failed',error = ?,generation = generation + 1,lease_token = NULL WHERE id = ? AND agent_id = ?",
-										params: [message, legacy.id, options.agentId],
+										params: [message, legacy.id, agentId],
 										result: "run",
 									},
 								],

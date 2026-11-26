@@ -1,6 +1,6 @@
 import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
-import type { WriteAuthor } from "./auth/audit-owner";
+import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, normalizeImportedFile } from "./import-normalizer";
 import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
@@ -35,7 +35,7 @@ export type DocumentImportStatus =
 	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
 
 export interface DocumentImportInput {
-	readonly author?: WriteAuthor;
+	readonly author: WriteAuthor;
 	readonly fileName: string;
 	readonly bytes: Uint8Array;
 	readonly contentType?: string;
@@ -50,6 +50,7 @@ export interface DocumentImportResult {
 	readonly persistedBytes: number;
 }
 export async function importDocument(input: DocumentImportInput): Promise<DocumentImportResult> {
+	requireWriteAuthor(input.author);
 	if (input.bytes.byteLength === 0)
 		return { status: { fileName: input.fileName, status: "failed", error: "File is empty" }, persistedBytes: 0 };
 	if (input.bytes.byteLength > IMPORT_MAX_FILE_BYTES)
@@ -99,6 +100,9 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 			: undefined;
 	const added = addImportedSource(
 		{
+			writeIdentity: input.author
+				? { agentId, authorUserId: input.author.userId, authorCredential: input.author.credential }
+				: undefined,
 			fileName: normalized.value.fileName,
 			contentHash: normalized.value.contentHash,
 			format: normalized.value.format,

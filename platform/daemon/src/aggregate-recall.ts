@@ -6,11 +6,12 @@ import {
 	redactCredentials,
 	summarizeAccountingProvenance,
 } from "@signet/core";
-import type { WriteAuthor } from "./auth/audit-owner";
+import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
-import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
+import { memoryWriteDedupeSql, evidenceCompartmentInTx } from "./db-helpers";
+import { citationKind, linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
@@ -500,20 +501,22 @@ function loadAggregateByKey(
 	db: WriteDb,
 	key: string,
 	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
+	boundary: ReturnType<typeof memoryWriteDedupeSql>,
 ): RecallResult | null {
 	const row = db
 		.prepare(
 			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
 			 FROM memories
 			 WHERE idempotency_key = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND agent_id = ?
+			   AND project IS ?
 			   AND source_type = 'aggregate-recall'
 			   AND visibility = ?
 			   AND scope IS NULL
-			   AND is_deleted = 0
+			   AND is_deleted = 0 ${boundary.sql}
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId, input.visibility) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.project, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
 	if (!row || row.stale_at !== null) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return rowToRecallResult(row);
@@ -523,42 +526,47 @@ function loadStaleAggregateByKey(
 	db: WriteDb,
 	key: string,
 	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
+	boundary: ReturnType<typeof memoryWriteDedupeSql>,
 ): AggregateMemoryRow | null {
 	const row = db
 		.prepare(
 			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
 			 FROM memories
 			 WHERE idempotency_key = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND agent_id = ?
+			   AND project IS ?
 			   AND source_type = 'aggregate-recall'
 			   AND visibility = ?
 			   AND scope IS NULL
-			   AND is_deleted = 0
+			   AND is_deleted = 0 ${boundary.sql}
 			   AND stale_at IS NOT NULL
 			 LIMIT 1`,
 		)
-		.get(key, input.agentId, input.visibility) as AggregateMemoryRow | undefined;
+		.get(key, input.agentId, input.project, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return row;
 }
 
-function loadMemoryByContentHash(
+function loadMemoryByDedupeKey(
 	db: WriteDb,
-	contentHash: string,
-	input: { readonly agentId: string; readonly project: string | null },
+	column: "content_hash" | "idempotency_key",
+	value: string,
+	input: { readonly agentId: string; readonly project: string | null; readonly visibility: "global" | "private" },
+	boundary: ReturnType<typeof memoryWriteDedupeSql>,
 ): ContentHashMatch | null {
 	const row = db
 		.prepare(
 			`SELECT id, content, source_type, source_id, type, tags, pinned, importance, who, project, visibility, created_at
 			 FROM memories
-			 WHERE content_hash = ?
-			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			 WHERE ${column} = ?
+			   AND agent_id = ?
+			   AND project IS ? AND visibility=?
 			   AND scope IS NULL
-			   AND is_deleted = 0
+			   AND is_deleted = 0 ${boundary.sql}
 			 LIMIT 1`,
 		)
-		.get(contentHash, input.agentId) as AggregateMemoryRow | undefined;
+		.get(value, input.agentId, input.project, input.visibility, ...boundary.params) as AggregateMemoryRow | undefined;
 	if (!row) return null;
 	return {
 		row: rowToRecallResult(row),
@@ -637,15 +645,17 @@ function linkAggregateQueryHint(
 	const hint = query.trim();
 	if (hint.length === 0) return;
 	db.prepare(
-		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-	).run(randomUUID(), aggregateMemoryId, agentId, hint, now);
+		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at, compartment_id)
+		 SELECT ?, id, agent_id, ?, ?, compartment_id FROM memories WHERE id=? AND agent_id=?`,
+	).run(randomUUID(), hint, now, aggregateMemoryId, agentId);
 }
 
 function resolveAggregateDuplicate(
 	db: WriteDb,
 	input: {
 		readonly key: string;
+		readonly author: WriteAuthor;
+		readonly sessionKey?: string;
 		readonly agentId: string;
 		readonly project: string | null;
 		readonly query: string;
@@ -658,21 +668,45 @@ function resolveAggregateDuplicate(
 		readonly now: string;
 	},
 ): AggregateDuplicateResolution | null {
-	const existing = loadAggregateByKey(db, input.key, {
-		agentId: input.agentId,
-		project: input.project,
-		visibility: input.saveVisibility,
+	const parent = evidenceCompartmentInTx(
+		db,
+		input.agentId,
+		input.evidenceSources.map((source) => ({ kind: citationKind(source.sourceKind), id: source.sourceId })),
+	);
+	const boundary = memoryWriteDedupeSql(db, {
+		author: input.author,
+		writeScope: {
+			agentId: input.agentId,
+			sessionKey: input.sessionKey,
+			sourceId: input.key,
+			parentCompartment: parent,
+		},
 	});
+	const existing = loadAggregateByKey(
+		db,
+		input.key,
+		{
+			agentId: input.agentId,
+			project: input.project,
+			visibility: input.saveVisibility,
+		},
+		boundary,
+	);
 	if (existing) {
 		linkAggregateEvidenceSources(db, existing.id, input.evidenceSources, input.agentId, input.now);
 		linkAggregateQueryHint(db, existing.id, input.agentId, input.query, input.now);
 		return { row: existing, saved: true };
 	}
-	const stale = loadStaleAggregateByKey(db, input.key, {
-		agentId: input.agentId,
-		project: input.project,
-		visibility: input.saveVisibility,
-	});
+	const stale = loadStaleAggregateByKey(
+		db,
+		input.key,
+		{
+			agentId: input.agentId,
+			project: input.project,
+			visibility: input.saveVisibility,
+		},
+		boundary,
+	);
 	if (stale) {
 		return {
 			row: refreshStaleAggregateMemory(db, {
@@ -688,10 +722,10 @@ function resolveAggregateDuplicate(
 			refreshed: true,
 		};
 	}
-	const duplicateContent = loadMemoryByContentHash(db, input.contentHash, {
-		agentId: input.agentId,
-		project: input.project,
-	});
+	const duplicateScope = { agentId: input.agentId, project: input.project, visibility: input.saveVisibility };
+	const duplicateContent =
+		loadMemoryByDedupeKey(db, "content_hash", input.contentHash, duplicateScope, boundary) ??
+		loadMemoryByDedupeKey(db, "idempotency_key", input.key, duplicateScope, boundary);
 	if (!duplicateContent) return null;
 	if (
 		duplicateContent.row.visibility !== input.saveVisibility ||
@@ -705,10 +739,6 @@ function resolveAggregateDuplicate(
 	return { row: duplicateContent.row, saved: true };
 }
 
-function isUniqueConstraintError(err: unknown): boolean {
-	return err instanceof Error && /UNIQUE constraint failed|constraint failed/i.test(err.message);
-}
-
 async function embedAggregateMemory(
 	memoryId: string,
 	content: string,
@@ -718,7 +748,7 @@ async function embedAggregateMemory(
 	embedFn: EmbedFn,
 ): Promise<boolean> {
 	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-		siteToken: "aggregate-recall.ts:720",
+		siteToken: "db:aggregate-recall.site.720",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
@@ -731,14 +761,14 @@ async function embedAggregateMemory(
 			db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
 			db.prepare(`
 			INSERT INTO embeddings
-			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-			VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-		`).run(embId, contentHash, vectorToBlob(vec), vec.length, memoryId, content, createdAt);
+			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+			SELECT ?, ?, ?, ?, 'memory', id, ?, ?, agent_id, compartment_id FROM memories WHERE id=?
+		`).run(embId, contentHash, vectorToBlob(vec), vec.length, content, createdAt, memoryId);
 			syncVecInsert(db, embId, vec);
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
-		{ siteToken: "aggregate-recall.ts:726" },
+		{ siteToken: "db:aggregate-recall.site.726" },
 	);
 	return written;
 }
@@ -842,6 +872,8 @@ export async function aggregateRecall(
 	cfg: ResolvedMemoryConfig,
 	deps: AggregateRecallDeps,
 ): Promise<RecallResponse> {
+	const author = requireWriteAuthor(deps.author);
+	if (author.userId !== null && !params.agentId?.trim()) throw new Error("agent_required");
 	const budget = normalizeBudget(params.aggregateBudget ?? params.aggregate_budget);
 	const maxQueries = BUDGET_QUERY_LIMITS[budget];
 	const recall = deps.hybridRecall ?? hybridRecall;
@@ -987,6 +1019,8 @@ export async function aggregateRecall(
 				await getDbAccessor().withWriteTxAsync(
 					(db) => {
 						const duplicate = resolveAggregateDuplicate(db, {
+							author,
+							sessionKey: params.sessionKey,
 							key,
 							agentId,
 							project,
@@ -1006,7 +1040,12 @@ export async function aggregateRecall(
 						}
 						const id = deps.idFactory?.() ?? randomUUID();
 						const envelope: IngestEnvelope = {
-							author: deps.author,
+							author,
+							evidence: evidenceSources.map((source) => ({
+								kind: citationKind(source.sourceKind),
+								id: source.sourceId,
+							})),
+							sessionKey: params.sessionKey,
 							id,
 							content: normalized.storageContent,
 							normalizedContent: normalized.normalizedContent || normalized.hashBasis,
@@ -1031,38 +1070,13 @@ export async function aggregateRecall(
 							visibility: saveVisibility,
 							createdAt: now,
 						};
-						try {
-							ingestEnvelope(db, envelope);
-						} catch (err) {
-							if (!isUniqueConstraintError(err)) throw err;
-							const racedDuplicate = resolveAggregateDuplicate(db, {
-								key,
-								agentId,
-								project,
-								query: params.query,
-								contentHash: normalized.contentHash,
-								normalizedContent: normalized.normalizedContent || normalized.hashBasis,
-								storageContent: normalized.storageContent,
-								answer,
-								evidenceSources,
-								saveVisibility,
-								now,
-							});
-							if (!racedDuplicate) {
-								deduped = true;
-								saved = false;
-								return unsavedAggregateResult(answer, key, project);
-							}
-							deduped = racedDuplicate.refreshed !== true;
-							saved = racedDuplicate.saved;
-							return racedDuplicate.row;
-						}
+						ingestEnvelope(db, envelope);
 						linkAggregateEvidenceSources(db, id, evidenceSources, agentId, now);
 						linkAggregateQueryHint(db, id, agentId, params.query, now);
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:987" },
+					{ siteToken: "db:aggregate-recall.site.987" },
 				),
 		);
 		if (row && !deduped) {

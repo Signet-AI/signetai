@@ -48,6 +48,7 @@ describe("cross-agent hook notifications", () => {
 		});
 
 		const notifications = collectCrossAgentNotifications({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			harness: "claude-code",
 			hook: "PreToolUse",
 			agentId: "beta",
@@ -73,6 +74,7 @@ describe("cross-agent hook notifications", () => {
 		});
 
 		const notifications = collectCrossAgentNotifications({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			harness: "pi",
 			hook: "context",
 			agentId: "beta",
@@ -85,6 +87,7 @@ describe("cross-agent hook notifications", () => {
 
 	it("marks board-only notices as untrusted peer content", () => {
 		const notifications = collectCrossAgentNotifications({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			harness: "claude-code",
 			hook: "UserPromptSubmit",
 			agentId: "beta",
@@ -105,6 +108,7 @@ describe("cross-agent hook notifications", () => {
 		});
 
 		const before = collectCrossAgentNotifications({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			harness: "opencode",
 			hook: "experimental.chat.system.transform",
 			agentId: "beta",
@@ -112,8 +116,13 @@ describe("cross-agent hook notifications", () => {
 		expect(before?.items[0]?.contentTruncated).toBe(true);
 		expect(before?.items[0]?.content.length).toBeLessThanOrEqual(1_801);
 
-		acknowledgeAgentMessage({ messageId: message.id, agentId: "beta" });
+		acknowledgeAgentMessage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			messageId: message.id,
+			agentId: "beta",
+		});
 		const after = collectCrossAgentNotifications({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			harness: "opencode",
 			hook: "experimental.chat.system.transform",
 			agentId: "beta",

@@ -46,6 +46,254 @@ afterEach(async () => {
 });
 
 describe("organization credential boundary", () => {
+	test.each([
+		"/api/memory/remember",
+		"/api/memory/save",
+		"/api/hooks/remember",
+		"/api/hooks/session-start",
+		"/api/hooks/user-prompt-submit",
+		"/api/hooks/stop",
+		"/api/hooks/session-end",
+		"/api/hooks/compaction-complete",
+		"/api/documents",
+		"/api/sources/import",
+		"/api/sources/imports",
+	])("A16 rejects blind writes before handlers and side effects: %s", async (path) => {
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_destination','Destination')"),
+			statement("INSERT INTO classification_assignments VALUES('agent',?,?,'cls_destination',?,'now')", [
+				agentId,
+				agentId,
+				userId,
+			]),
+			statement("CREATE TABLE destination_side_effects(id INTEGER)"),
+		]);
+		let entered = false;
+		app.post(path, async (c) => {
+			entered = true;
+			await organizationWrite([statement("INSERT INTO destination_side_effects VALUES(1)")]);
+			return c.json({ ok: true });
+		});
+		const response = await app.request(`${path}?agentId=${agentId}`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ agentId, sessionKey: "blind-session", content: "Blind evidence" }),
+		});
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "classified destination", reason: "classified_destination" });
+		expect(entered).toBe(false);
+		expect(await organizationQuery(statement("SELECT count(*) n FROM destination_side_effects", [], "get"))).toEqual({
+			n: 0,
+		});
+		expect(await organizationQuery(statement("SELECT count(*) n FROM session_transcripts", [], "get"))).toEqual({
+			n: 0,
+		});
+	});
+	test("A16 source route bindings are decoded before snapshot import side effects", async () => {
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_destination','Destination')"),
+			statement(
+				"INSERT INTO classification_assignments VALUES('source','source:classified',?,'cls_destination',?,'now')",
+				[agentId, userId],
+			),
+		]);
+		let entered = false;
+		app.post("/api/sources/:sourceId/snapshot/import", (c) => {
+			entered = true;
+			return c.json({ ok: true });
+		});
+		const response = await app.request("/api/sources/source%3Aclassified/snapshot/import", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ agentId }),
+		});
+		expect(response.status).toBe(403);
+		expect((await response.json()).reason).toBe("classified_destination");
+		expect(entered).toBe(false);
+	});
+	test("A16 static route names are not interpreted as source destinations", async () => {
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_destination','Destination')"),
+			statement("INSERT INTO classification_assignments VALUES('source','import',?,'cls_destination',?,'now')", [
+				agentId,
+				userId,
+			]),
+		]);
+		app.post("/api/sources/import", (c) => c.json({ ok: true }));
+		const response = await app.request("/api/sources/import", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ agentId }),
+		});
+		expect(response.status).toBe(200);
+	});
+	test("A16 owner inheritance rejects principals but permits daemon-internal writes", async () => {
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_destination','Destination')"),
+			statement(
+				"INSERT INTO classification_assignments VALUES('session','owner-destination',?,'cls_destination',?,'now')",
+				[agentId, userId],
+			),
+		]);
+		const write = (author: string | null) =>
+			organizationWrite([
+				statement(
+					"INSERT INTO memories(id,content,agent_id,author_user_id,compartment_id,created_at,updated_at) VALUES('owner-evidence','Owner evidence',?,?,?,'now','now')",
+					[agentId, author, { type: "compartment", scope: { agentId, sessionKey: "owner-destination" } }],
+				),
+			]);
+		app.post("/api/owner-inheritance", async (c) => {
+			await write(userId);
+			return c.json({ ok: true });
+		});
+		const denied = await app.request("/api/owner-inheritance", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: "{}",
+		});
+		expect(denied.status).toBe(403);
+		expect((await denied.json()).reason).toBe("classified_destination");
+		expect(
+			await organizationQuery(statement("SELECT count(*) n FROM memories WHERE id='owner-evidence'", [], "get")),
+		).toEqual({ n: 0 });
+		expect(await organizationQuery(statement("SELECT count(*) n FROM compartments", [], "get"))).toEqual({ n: 0 });
+		await write(null);
+		expect(
+			await organizationQuery(
+				statement("SELECT author_user_id,compartment_id FROM memories WHERE id='owner-evidence'", [], "get"),
+			),
+		).toEqual({ author_user_id: null, compartment_id: expect.any(Number) });
+	});
+	test("A16 classified session denies outsiders and audience retries dedupe", async () => {
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		let embeddingCalls = 0;
+		registerMemoryRoutes(app, {
+			fetchEmbedding: async () => {
+				embeddingCalls++;
+				return null;
+			},
+		});
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_destination','Destination')"),
+			statement(
+				"INSERT INTO classification_assignments VALUES('session','blind-session',?,'cls_destination',?,'now')",
+				[agentId, userId],
+			),
+		]);
+		const post = () =>
+			app.request("/api/memory/remember", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+					"x-signet-session-key": "blind-session",
+				},
+				body: JSON.stringify({
+					agentId,
+					sessionKey: "blind-session",
+					content: "Blind evidence",
+					idempotencyKey: "destination-retry",
+				}),
+			});
+		const denied = await post();
+		expect(denied.status).toBe(403);
+		expect((await denied.json()).reason).toBe("classified_destination");
+		expect(embeddingCalls).toBe(0);
+		expect(await organizationQuery(statement("SELECT count(*) n FROM memories", [], "get"))).toEqual({ n: 0 });
+		await organizationWrite([
+			statement("INSERT INTO classification_audience VALUES('cls_destination','user',?)", [userId]),
+		]);
+		const first = await post();
+		expect(first.status).toBe(200);
+		const memory = await first.json();
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT m.author_user_id, cm.classification_id FROM memories m JOIN compartment_members cm ON cm.compartment_id=m.compartment_id WHERE m.id=?",
+					[memory.id],
+					"get",
+				),
+			),
+		).toEqual({ author_user_id: userId, classification_id: "cls_destination" });
+		const second = await post();
+		expect(second.status).toBe(200);
+		expect(await second.json()).toMatchObject({ id: memory.id, deduped: true });
+		await organizationWrite([
+			statement("DELETE FROM classification_audience WHERE classification_id='cls_destination'"),
+		]);
+		const revoked = await post();
+		expect(revoked.status).toBe(403);
+		expect((await revoked.json()).reason).toBe("classified_destination");
+		expect(await organizationQuery(statement("SELECT count(*) n FROM memories", [], "get"))).toEqual({ n: 1 });
+	});
+	test("A14 hidden hash and idempotency duplicates produce ordinary fresh writes", async () => {
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		registerMemoryRoutes(app, { fetchEmbedding: async () => null });
+		const agentId = `personal-${userId.slice(4)}`;
+		for (const idempotencyKey of [undefined, "hidden-write-key"]) {
+			const content = `Identical classified evidence ${idempotencyKey ?? "hash"}`;
+			const post = () =>
+				app.request("/api/memory/remember", {
+					method: "POST",
+					headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+					body: JSON.stringify({ content, agentId, idempotencyKey }),
+				});
+			const first = await post();
+			expect(first.status).toBe(200);
+			const hidden = await first.json();
+			await organizationWrite([
+				statement("INSERT OR IGNORE INTO classifications(id,name) VALUES('cls_hidden','Hidden')"),
+				statement("INSERT OR IGNORE INTO compartments(key,created_at) VALUES('cls_hidden','now')"),
+				statement(
+					"INSERT OR IGNORE INTO compartment_members SELECT id,'cls_hidden' FROM compartments WHERE key='cls_hidden'",
+				),
+				statement(
+					"UPDATE memories SET compartment_id=(SELECT id FROM compartments WHERE key='cls_hidden') WHERE id=?",
+					[hidden.id],
+				),
+			]);
+			const fresh = await post();
+			expect(fresh.status).toBe(200);
+			const result = await fresh.json();
+			expect(result.id).toEqual(expect.any(String));
+			expect(result.id).not.toBe(hidden.id);
+			expect(result.deduped).not.toBe(true);
+			expect(
+				await organizationQuery(
+					statement("SELECT count(*) AS n FROM memories WHERE content=? AND agent_id=?", [content, agentId], "get"),
+				),
+			).toEqual({ n: 2 });
+			const retry = await post();
+			expect((await retry.json()).id).toBe(result.id);
+		}
+	});
+	test("cross-agent message content inherits the sender session and admitted author", async () => {
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')"),
+			statement(
+				"INSERT INTO classification_assignments VALUES('session','classified-sender','default','cls_hr',?,'now')",
+				[userId],
+			),
+		]);
+		const { createAgentMessageAsync } = await import("../cross-agent");
+		const message = await createAgentMessageAsync({
+			fromAgentId: "default",
+			fromSessionKey: "classified-sender",
+			toAgentId: "default",
+			content: "classifiedmessage",
+			author: { userId, credential: "session:test" },
+		});
+		expect(
+			await organizationQuery(
+				statement("SELECT compartment_id,author_user_id FROM cross_agent_messages WHERE id=?", [message.id], "get"),
+			),
+		).toEqual({ compartment_id: expect.any(Number), author_user_id: userId });
+	});
 	test("R2 attribution does not manufacture organization jobs", async () => {
 		const { createAgentMessageAsync } = await import("../cross-agent");
 		await createAgentMessageAsync({
@@ -116,6 +364,34 @@ describe("organization credential boundary", () => {
 			await organizationQuery(statement("SELECT author_user_id FROM memories WHERE id='review-summary'", [], "get")),
 		).toEqual({ author_user_id: userId });
 	});
+	test("classified hook speaker binding inherits before the empty transcript insert", async () => {
+		const agentId = `personal-${userId.slice(4)}`;
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')"),
+			statement("INSERT INTO classification_audience VALUES('cls_hr','user',?)", [userId]),
+			statement("INSERT INTO classification_assignments VALUES('agent',?,?,'cls_hr',?,'now')", [
+				agentId,
+				agentId,
+				userId,
+			]),
+		]);
+		app.post("/api/hooks/session-start", (c) => c.json({ ok: true }));
+		const response = await app.request("/api/hooks/session-start", {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ sessionKey: "classified-bound", harness: "test" }),
+		});
+		expect(response.status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT speaker_user_id,compartment_id FROM session_transcripts WHERE session_key='classified-bound'",
+					[],
+					"get",
+				),
+			),
+		).toEqual({ speaker_user_id: userId, compartment_id: expect.any(Number) });
+	});
 	test("R2 compaction binds the session speaker before the handler", async () => {
 		app.post("/api/hooks/compaction-complete", (c) => c.json({ ok: true }));
 		const response = await app.request("/api/hooks/compaction-complete", {
@@ -155,6 +431,19 @@ describe("organization credential boundary", () => {
 				),
 			),
 		).toEqual({ actor_user_id: userId });
+	});
+	test("file import rejects a missing author before source registration", async () => {
+		const { importDocument } = await import("../document-import-service");
+		const input = {
+			author: { userId, credential: "session:source" },
+			fileName: "missing.md",
+			bytes: new TextEncoder().encode("No author"),
+			agentId: `personal-${userId.slice(4)}`,
+			workspaceRoot: dir,
+		};
+		Reflect.deleteProperty(input, "author");
+		await expect(importDocument(input)).rejects.toThrow("A write requires an explicit author");
+		expect((await import("node:fs")).existsSync(join(dir, "sources.json"))).toBe(false);
 	});
 	test("file imports retain the explicit principal on their evidence artifacts", async () => {
 		const { importDocument } = await import("../document-import-service");

@@ -1,4 +1,5 @@
-import type { WriteDb } from "./db-accessor";
+import { type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { completeDerivedMemoryCitationsInTx } from "./db-helpers";
 
 const SEMANTIC_PREMISE_KIND = "ontology_claim";
 const EPISODIC_SOURCE_KINDS = new Set(["memory", "artifact", "transcript", "summary"]);
@@ -119,7 +120,9 @@ export function linkDerivedMemorySourcesInTx(
 		validateDerivedMemorySourceInTx(db, { agentId, sourceKind, sourceId });
 		insert.run(derivedMemoryId, sourceKind, sourceId, source.sourcePath?.trim() || null, agentId, createdAt);
 	}
+	completeDerivedMemoryCitationsInTx(db, derivedMemoryId, agentId);
 }
+export { citationKind } from "./db-helpers";
 export function markDerivedMemoriesStaleForSourceInTx(
 	db: WriteDb,
 	input: {

@@ -1,5 +1,15 @@
 [
 	{
+		"path": "tests/integration/org-mode/l4-helper-benchmark.ts",
+		"reason": "Move the corpus-scale write admission benchmark to evals/compartment-writes/helper-overhead.ts.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "tests/integration/org-mode/l4-helper-overhead.test.ts",
+		"reason": "Rename the write-helper overhead contract test independently of its implementation lane.",
+		"retiredIn": "2026-11-25"
+	},
+	{
 		"path": "libs/sdk/src/generated/client.ts",
 		"reason": "Remove the unused regex-generated SDK; the handwritten client uses the shared transport.",
 		"retiredIn": "2026-11-25"

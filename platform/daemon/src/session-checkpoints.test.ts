@@ -22,7 +22,7 @@ import {
 	pruneCheckpoints,
 	queueCheckpointWrite,
 	redactCheckpointRow,
-	writeCheckpoint,
+	writeCheckpointAsync as writeCheckpoint,
 	writeCheckpointAsync,
 } from "./session-checkpoints";
 
@@ -97,9 +97,31 @@ describe("session-checkpoints", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	it("writes classified session checkpoints without losing agent or author", async () => {
+		await dbAcc.withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO classifications(id,name) VALUES('cls_session','Session')").run();
+			db.prepare(
+				"INSERT INTO classification_assignments VALUES('session','test-session','default','cls_session','carol','now')",
+			).run();
+		});
+		const params = {
+			...makeParams(),
+			sessionKey: "test-session",
+			agentId: "default",
+			author: { userId: "alice", credential: "session:alice" },
+		};
+		await writeCheckpointAsync(dbAcc, params, 50);
+		const row = await dbAcc.withReadDbAsync((db) =>
+			db.prepare("SELECT agent_id,compartment_id,author_user_id FROM session_checkpoints").get(),
+		);
+		expect(row).toEqual({ agent_id: "default", compartment_id: expect.any(Number), author_user_id: "alice" });
+	});
+
 	function makeParams(overrides?: Partial<WriteCheckpointParams>): WriteCheckpointParams {
 		return {
 			sessionKey: "sess-1",
+			agentId: "default",
+			author: { userId: null, credential: "system" },
 			harness: "claude-code",
 			project: "/tmp/project",
 			projectNormalized: "/tmp/project",
@@ -117,8 +139,8 @@ describe("session-checkpoints", () => {
 		};
 	}
 
-	test("writeCheckpoint and getCheckpointsBySession", () => {
-		writeCheckpoint(dbAcc, makeParams(), 50);
+	test("writeCheckpoint and getCheckpointsBySession", async () => {
+		await writeCheckpoint(dbAcc, makeParams(), 50);
 		const rows = getCheckpointsBySession(dbAcc, "sess-1");
 		expect(rows.length).toBe(1);
 		expect(rows[0].session_key).toBe("sess-1");
@@ -145,18 +167,18 @@ describe("session-checkpoints", () => {
 		expect(getCheckpointsBySession(dbAcc, "async-checkpoint")).toHaveLength(1);
 	});
 
-	test("writeCheckpoint enforces maxPerSession", () => {
+	test("writeCheckpoint enforces maxPerSession", async () => {
 		for (let i = 0; i < 5; i++) {
-			writeCheckpoint(dbAcc, makeParams({ promptCount: i }), 3);
+			await writeCheckpoint(dbAcc, makeParams({ promptCount: i }), 3);
 		}
 		const rows = getCheckpointsBySession(dbAcc, "sess-1");
 		expect(rows.length).toBe(3);
 		expect(rows[0].prompt_count).toBe(4);
 	});
 
-	test("getLatestCheckpoint filters by project and time", () => {
-		writeCheckpoint(dbAcc, makeParams({ projectNormalized: "/tmp/project" }), 50);
-		writeCheckpoint(dbAcc, makeParams({ projectNormalized: "/tmp/other" }), 50);
+	test("getLatestCheckpoint filters by project and time", async () => {
+		await writeCheckpoint(dbAcc, makeParams({ projectNormalized: "/tmp/project" }), 50);
+		await writeCheckpoint(dbAcc, makeParams({ projectNormalized: "/tmp/other" }), 50);
 
 		const result = getLatestCheckpoint(dbAcc, "/tmp/project", 60_000);
 		expect(result).toBeDefined();
@@ -165,23 +187,23 @@ describe("session-checkpoints", () => {
 		expect(noMatch).toBeUndefined();
 	});
 
-	test("getLatestCheckpoint returns undefined for expired checkpoints", () => {
-		writeCheckpoint(dbAcc, makeParams(), 50);
+	test("getLatestCheckpoint returns undefined for expired checkpoints", async () => {
+		await writeCheckpoint(dbAcc, makeParams(), 50);
 		const result = getLatestCheckpoint(dbAcc, "/tmp/project", 0);
 		expect(result).toBeUndefined();
 	});
 
-	test("getLatestCheckpointBySession returns newest for session", () => {
-		writeCheckpoint(dbAcc, makeParams({ digest: "first" }), 50);
-		writeCheckpoint(dbAcc, makeParams({ digest: "second" }), 50);
+	test("getLatestCheckpointBySession returns newest for session", async () => {
+		await writeCheckpoint(dbAcc, makeParams({ digest: "first" }), 50);
+		await writeCheckpoint(dbAcc, makeParams({ digest: "second" }), 50);
 
 		const result = getLatestCheckpointBySession(dbAcc, "sess-1");
 		expect(result?.digest).toBe("second");
 	});
 
-	test("getCheckpointsByProject returns rows for project", () => {
-		writeCheckpoint(dbAcc, makeParams({ sessionKey: "s1" }), 50);
-		writeCheckpoint(dbAcc, makeParams({ sessionKey: "s2" }), 50);
+	test("getCheckpointsByProject returns rows for project", async () => {
+		await writeCheckpoint(dbAcc, makeParams({ sessionKey: "s1" }), 50);
+		await writeCheckpoint(dbAcc, makeParams({ sessionKey: "s2" }), 50);
 
 		const rows = getCheckpointsByProject(dbAcc, "/tmp/project", 10);
 		expect(rows.length).toBe(2);
@@ -224,8 +246,8 @@ describe("session-checkpoints", () => {
 		expect(row.traversal_memory_count).toBe(24);
 	});
 
-	test("pruneCheckpoints deletes all old rows strictly", () => {
-		writeCheckpoint(dbAcc, makeParams(), 50);
+	test("pruneCheckpoints deletes all old rows strictly", async () => {
+		await writeCheckpoint(dbAcc, makeParams(), 50);
 		dbAcc.withWriteTx((wdb) => {
 			wdb.prepare("UPDATE session_checkpoints SET created_at = datetime('now', '-30 days')").run();
 		});
@@ -237,15 +259,15 @@ describe("session-checkpoints", () => {
 		expect(remaining.length).toBe(0);
 	});
 
-	test("pruneCheckpoints does not delete recent rows", () => {
-		writeCheckpoint(dbAcc, makeParams(), 50);
+	test("pruneCheckpoints does not delete recent rows", async () => {
+		await writeCheckpoint(dbAcc, makeParams(), 50);
 		const deleted = pruneCheckpoints(dbAcc, 7);
 		expect(deleted).toBe(0);
 	});
 });
 
 describe("redaction", () => {
-	test("redactCheckpointRow redacts digest and remembers", () => {
+	test("redactCheckpointRow redacts digest and remembers", async () => {
 		const row: CheckpointRow = {
 			id: "test-id",
 			session_key: "s1",
@@ -276,7 +298,7 @@ describe("redaction", () => {
 });
 
 describe("formatPeriodicDigest", () => {
-	test("formats a checkpoint digest with queries and remembers", () => {
+	test("formats a checkpoint digest with queries and remembers", async () => {
 		const state: ContinuityState = {
 			sessionKey: "s1",
 			harness: "test",
@@ -299,7 +321,7 @@ describe("formatPeriodicDigest", () => {
 		expect(digest).toContain("typescript, auth");
 	});
 
-	test("omits activity section when empty", () => {
+	test("omits activity section when empty", async () => {
 		const state: ContinuityState = {
 			sessionKey: "s1",
 			harness: "test",
@@ -319,7 +341,7 @@ describe("formatPeriodicDigest", () => {
 		expect(digest).not.toContain("Memory Activity");
 	});
 
-	it("includes prompt snippets when present", () => {
+	it("includes prompt snippets when present", async () => {
 		const state = makeState({
 			pendingPromptSnippets: ["fix the login bug", "run the test suite"],
 		});
@@ -329,7 +351,7 @@ describe("formatPeriodicDigest", () => {
 		expect(digest).toContain("- run the test suite");
 	});
 
-	it("omits prompt snippets section when empty", () => {
+	it("omits prompt snippets section when empty", async () => {
 		const state = makeState();
 		const digest = formatPeriodicDigest(state);
 		expect(digest).not.toContain("### Recent Prompts");
@@ -343,7 +365,7 @@ describe("formatPeriodicDigest", () => {
 		expect(digest).toContain("Queries: auth, login");
 	});
 
-	it("includes structural context ahead of prompts when present", () => {
+	it("includes structural context ahead of prompts when present", async () => {
 		const state = makeState({
 			structuralSnapshot: {
 				focalEntityIds: ["entity-1"],
@@ -364,7 +386,7 @@ describe("formatPeriodicDigest", () => {
 });
 
 describe("formatPreCompactionDigest", () => {
-	it("includes session context when provided", () => {
+	it("includes session context when provided", async () => {
 		const state = makeState();
 		const digest = formatPreCompactionDigest(state, "Working on authentication refactor");
 		expect(digest).toContain("## Pre-Compaction Checkpoint");
@@ -372,13 +394,13 @@ describe("formatPreCompactionDigest", () => {
 		expect(digest).toContain("Working on authentication refactor");
 	});
 
-	it("omits session context section when not provided", () => {
+	it("omits session context section when not provided", async () => {
 		const state = makeState();
 		const digest = formatPreCompactionDigest(state);
 		expect(digest).not.toContain("### Session Context");
 	});
 
-	it("includes prompt snippets", () => {
+	it("includes prompt snippets", async () => {
 		const state = makeState({
 			pendingPromptSnippets: ["deploy to staging", "check the logs"],
 		});
@@ -399,7 +421,7 @@ describe("formatPreCompactionDigest", () => {
 });
 
 describe("formatSessionEndDigest", () => {
-	it("produces full summary with all sections", () => {
+	it("produces full summary with all sections", async () => {
 		const state = makeState({
 			promptCount: 3,
 			totalPromptCount: 15,
@@ -415,7 +437,7 @@ describe("formatSessionEndDigest", () => {
 		expect(digest).toContain("Queries: deployment, config");
 	});
 
-	it("handles minimal state gracefully", () => {
+	it("handles minimal state gracefully", async () => {
 		const state = makeState({ promptCount: 1, totalPromptCount: 1 });
 		const digest = formatSessionEndDigest(state);
 		expect(digest).toContain("## Session End Checkpoint");
@@ -426,7 +448,7 @@ describe("formatSessionEndDigest", () => {
 });
 
 describe("formatRecoveryDigest", () => {
-	it("preserves structural context when truncating long prompt sections", () => {
+	it("preserves structural context when truncating long prompt sections", async () => {
 		const row: CheckpointRow = {
 			id: "cp-1",
 			session_key: "session-1",
@@ -484,6 +506,8 @@ describe("debounce merge", () => {
 
 	test("queuing two writes for same session merges data", async () => {
 		const base: WriteCheckpointParams = {
+			agentId: "default",
+			author: { userId: null, credential: "system" },
 			sessionKey: "merge-test",
 			harness: "test",
 			project: "/tmp/p",

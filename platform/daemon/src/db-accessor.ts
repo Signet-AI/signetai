@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
 	activeVectorProjectionTable,
+	configureEvidencePurgeConnection,
 	createMemoriesFts,
 	findSqliteVecExtension,
 	hasPendingMigrations,
@@ -1662,6 +1663,7 @@ function finishDbAccessorInit(
 	deadlineAt?: number,
 	skipMigrations = false,
 ): DbAccessorInitializationResult {
+	configureEvidencePurgeConnection(toMigrationDb(writeConn));
 	const auditHighWaterMark = migrationAuditHighWaterMark(writeConn);
 	if (!skipMigrations) {
 		assertMigrationStartupBudget(deadlineAt, "migrations");

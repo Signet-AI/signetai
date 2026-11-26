@@ -1,3 +1,4 @@
+import type { ReadScope } from "./read-scope";
 import { randomUUID } from "node:crypto";
 import type { WriteAuthor } from "./auth/audit-owner";
 import {
@@ -7,7 +8,7 @@ import {
 	cloneContext,
 	mergePresenceContext,
 } from "./cross-agent-context";
-import { persistAgentMessage } from "./cross-agent-message-owner";
+import { agentMessageReadPredicate, persistAgentMessage } from "./cross-agent-message-owner";
 import { type DbAccessor, getDbAccessor, hasDbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import { ownerRun } from "./db-owner-sql";
@@ -142,6 +143,8 @@ export interface CreateAgentMessageInput {
 }
 
 export interface ListAgentMessageOptions {
+	readonly readScope: ReadScope;
+	readonly messageId?: string;
 	readonly allAgents?: boolean;
 	readonly agentId?: string;
 	readonly sessionKey?: string;
@@ -165,6 +168,7 @@ export interface AgentMessagePage {
 }
 
 export interface AcknowledgeAgentMessageInput {
+	readonly readScope: ReadScope;
 	readonly messageId: string;
 	readonly agentId?: string;
 	readonly sessionKey?: string;
@@ -627,8 +631,15 @@ function buildMessageQuery(options: ListAgentMessageOptions, now: string): Messa
 	}
 	if (visibility.length === 0) return null;
 
+	if (!options.readScope) throw new Error("read_scope_required");
+	const predicate = agentMessageReadPredicate(options.readScope);
 	const filters = ["m.expires_at > ?", `(${visibility.join(" OR ")})`];
-	const args: unknown[] = [now, ...visibilityArgs];
+	const args: unknown[] = [now, ...visibilityArgs, ...predicate.args];
+	filters.push(`(1=1 ${predicate.sql})`);
+	if (options.messageId) {
+		filters.push("m.id=?");
+		args.push(options.messageId);
+	}
 	const sinceMs = parseIsoTimestamp(options.since);
 	if (sinceMs !== null) {
 		filters.push("m.created_at >= ?");
@@ -760,12 +771,12 @@ export interface AcpDeliveryAttempt {
 	};
 }
 
-function readMessageRow(db: ReadDb | WriteDb, messageId: string): CrossAgentMessageRow | null {
+function readMessageRow(db: ReadDb | WriteDb, messageId: string, scope?: ReadScope): CrossAgentMessageRow | null {
+	const predicate = scope ? agentMessageReadPredicate(scope) : { sql: "", args: [] };
 	return (
-		(db.prepare("SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ?").get(messageId) as
-			| CrossAgentMessageRow
-			| null
-			| undefined) ?? null
+		(db
+			.prepare(`SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ? ${predicate.sql}`)
+			.get(messageId, ...predicate.args) as CrossAgentMessageRow | null | undefined) ?? null
 	);
 }
 
@@ -794,6 +805,7 @@ function buildAcpAttempt(row: CrossAgentMessageRow): AcpDeliveryAttempt {
 }
 
 export function claimAcpMessageDelivery(input: {
+	readonly readScope: ReadScope;
 	readonly messageId: string;
 	readonly agentId?: string;
 	readonly retryIndeterminate?: boolean;
@@ -808,29 +820,41 @@ export function claimAcpMessageDelivery(input: {
 	const leaseToken = randomUUID();
 	const allowedState = input.retryIndeterminate ? "indeterminate" : "pending";
 	let attempt: AcpDeliveryAttempt | null = null;
+	if (!input.readScope) throw new Error("read_scope_required");
+	const predicate = agentMessageReadPredicate(input.readScope);
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	getDbAccessor().withWriteTx((db: WriteDb) => {
 		const result = db
 			.prepare(
-				`UPDATE cross_agent_messages
+				`UPDATE cross_agent_messages AS m
 				 SET delivery_state = 'in_flight', delivery_status = 'queued',
 				     delivery_attempts = delivery_attempts + 1,
 				     delivery_lease_token = ?, delivery_lease_expires_at = ?,
 				     delivery_attempt_started_at = ?, delivery_updated_at = ?
 				 WHERE id = ? AND delivery_path = 'acp'
 				   AND delivery_state = ? AND delivery_attempts < ?
-				   AND (delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?)`,
+				   AND (delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?) ${predicate.sql}`,
 			)
-			.run(leaseToken, leaseExpiresAt, now, now, messageId, allowedState, ACP_MAX_RETRY_ATTEMPTS, now);
+			.run(
+				leaseToken,
+				leaseExpiresAt,
+				now,
+				now,
+				messageId,
+				allowedState,
+				ACP_MAX_RETRY_ATTEMPTS,
+				now,
+				...predicate.args,
+			);
 		if (result.changes !== 1) {
-			const row = readMessageRow(db, messageId);
+			const row = readMessageRow(db, messageId, input.readScope);
 			if (row == null) throw new AgentMessageNotFoundError(messageId);
 			if (row.delivery_state === "in_flight") throw new Error("ACP delivery is already active");
 			if (row.delivery_attempts >= ACP_MAX_RETRY_ATTEMPTS) throw new Error("ACP retry limit reached");
 			throw new Error(`ACP delivery is not ${allowedState}`);
 		}
-		const row = readMessageRow(db, messageId);
+		const row = readMessageRow(db, messageId, input.readScope);
 		if (row == null) throw new AgentMessageNotFoundError(messageId);
 		if (agentId && row.from_agent_id !== agentId) throw new AgentMessageNotFoundError(messageId);
 		attempt = buildAcpAttempt(row);
@@ -954,7 +978,7 @@ export async function reconcileAcpDeliveries(
 	return result.changes;
 }
 
-export function listAgentMessagePage(options: ListAgentMessageOptions = {}): AgentMessagePage {
+export function listAgentMessagePage(options: ListAgentMessageOptions): AgentMessagePage {
 	const now = new Date().toISOString();
 	const limit = clampLimit(options.limit);
 	const offset = clampOffset(options.offset);
@@ -991,7 +1015,7 @@ export function listAgentMessagePage(options: ListAgentMessageOptions = {}): Age
 	}, "db:cross-agent.message-page.read");
 }
 
-export function listAgentMessages(options: ListAgentMessageOptions = {}): AgentMessage[] {
+export function listAgentMessages(options: ListAgentMessageOptions): AgentMessage[] {
 	return [...listAgentMessagePage(options).items];
 }
 
@@ -1007,6 +1031,7 @@ export function acknowledgeAgentMessage(input: AcknowledgeAgentMessageInput): Ac
 		pruneExpiredMessages(db, now);
 		const query = buildMessageQuery(
 			{
+				readScope: input.readScope,
 				agentId,
 				sessionKey,
 				includeBroadcast: true,

@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { getDbOwner } from "./db-owner-runtime";
+import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { z } from "zod";
+import { compartmentForWrite } from "@signet/core";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
@@ -341,6 +345,12 @@ function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscri
 		commit.agentId,
 		commit.capturedAt,
 	];
+	if (names.has("compartment_id")) {
+		insertColumns.push("compartment_id");
+		values.push(
+			compartmentForWrite(db, { agentId: commit.agentId, sessionKey: commit.canonicalKey, sourceId: commit.sourceId }),
+		);
+	}
 	if (commit.author) {
 		if (!names.has("speaker_user_id")) throw new Error("Transcript author schema is missing");
 		insertColumns.push("speaker_user_id");
@@ -393,6 +403,11 @@ function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscri
 	add("completed_at", commit.capturedAt);
 	add("content_hash", commit.contentHash);
 	add("source_id", commit.sourceId);
+	if (names.has("compartment_id"))
+		add(
+			"compartment_id",
+			compartmentForWrite(db, { agentId: commit.agentId, sessionKey: commit.canonicalKey, sourceId: commit.sourceId }),
+		);
 	add("source_record_id", commit.sourceRecordId);
 	add("source_meta_json", commit.sourceMetaJson);
 	if (commit.author && names.has("speaker_user_id")) {
@@ -625,6 +640,10 @@ function updateSessionTranscriptSource(
 	if (names.has("source_id")) {
 		updates.push("source_id = ?");
 		values.push(sourceId);
+		if (names.has("compartment_id")) {
+			updates.push("compartment_id = ?");
+			values.push(compartmentForWrite(db, { agentId, sessionKey, sourceId }));
+		}
 	}
 	if (names.has("source_record_id")) {
 		updates.push("source_record_id = ?");
@@ -636,4 +655,23 @@ function updateSessionTranscriptSource(
 	db.prepare(`UPDATE session_transcripts SET ${updates.join(", ")} WHERE agent_id = ? AND session_key = ?`).run(
 		...values,
 	);
+}
+export async function nextTranscriptImportAgent(after: string): Promise<string | undefined> {
+	const read = async (cursor: string) =>
+		z
+			.object({ agent_id: z.string() })
+			.nullable()
+			.optional()
+			.parse(
+				await dbOwnerQuery(
+					ownerStatement(
+						"SELECT agent_id FROM source_import_jobs WHERE agent_id>? AND (state IN ('queued','running','inventorying','cancelling') OR cleanup_state='pending' OR retry_requested=1) ORDER BY agent_id LIMIT 1",
+						[cursor],
+						"get",
+					),
+					{ operation: "sources.import.next-agent", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+				),
+			);
+	const next = (await read(after)) ?? (await read(""));
+	return next?.agent_id;
 }

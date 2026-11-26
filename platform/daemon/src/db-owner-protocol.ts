@@ -78,6 +78,7 @@ export interface DbOwnerSourceSnapshotArtifact {
 }
 
 export interface DbOwnerSourceSnapshotImport {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourceId: string;
 	readonly sourceRoot: string;
@@ -129,6 +130,7 @@ export interface DbOwnerSourceArtifactIndex {
 	readonly content: string;
 }
 export interface DbOwnerNativeMemoryIndex {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceHash: string;
@@ -361,6 +363,16 @@ export interface DbOwnerTranscriptBulkCommit {
 	};
 }
 export type DbOwnerRequest =
+	| {
+			readonly kind: "filesystem_document_write";
+			readonly input: Parameters<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>[1];
+	  }
+	| {
+			readonly kind: "session_checkpoint_write";
+			readonly input: import("./session-checkpoints").WriteCheckpointParams;
+			readonly maxPerSession: number;
+	  }
+	| { readonly kind: "session_finalizer_author"; readonly agentId: string; readonly sessionKey: string }
 	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";
@@ -393,6 +405,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
 	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
+	| { readonly kind: "reflection_generate"; readonly input: import("./reflection-owner").CreateDailyReflectionsInput }
 	| {
 			readonly kind: "organization_memory_purge";
 			readonly userId: string;
@@ -630,6 +643,7 @@ export interface DbOwnerProviderTrackerStats {
 }
 
 export interface DbOwnerJob {
+	readonly writePrincipal?: import("@signet/core").WritePrincipal;
 	readonly id: string;
 	readonly operation: string;
 	readonly lane: DbOwnerLane;

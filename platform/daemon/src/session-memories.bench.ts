@@ -176,7 +176,7 @@ writeFileSync(join(TEST_DIR, "agent.yaml"), "version: 1\n");
 const rBaseline = await bench(
 	"handleSessionStart (no sessionKey -- baseline)",
 	async () => {
-		await handleSessionStart({ harness: "bench" });
+		await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "bench" });
 	},
 	ITERS,
 );
@@ -187,6 +187,7 @@ const rWithRecording = await bench(
 	"handleSessionStart (with sessionKey -- recording active)",
 	async () => {
 		await handleSessionStart({
+			author: { userId: null, credential: "local" },
 			harness: "bench",
 			sessionKey: `bench-full-${sessionCounter++}`,
 		});
@@ -205,11 +206,12 @@ sessionCounter = 0;
 
 for (let i = 0; i < 100; i++) {
 	const t0 = performance.now();
-	await handleSessionStart({ harness: "bench" });
+	await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "bench" });
 	baselineTimes.push(performance.now() - t0);
 
 	const t1 = performance.now();
 	await handleSessionStart({
+		author: { userId: null, credential: "local" },
 		harness: "bench",
 		sessionKey: `bench-overhead-${sessionCounter++}`,
 	});

@@ -52,14 +52,14 @@ export function readScopeSql(
 		session?: string | null;
 		source?: string | null;
 	},
-): { sql: string; args: unknown[] } {
+): { sql: string; args: (string | number)[] } {
 	const prefix = alias ? `${identifier(alias)}.` : "";
 	const col = (name: string) => `${prefix}${identifier(name)}`;
 	const agent = col(cols?.agent ?? "agent_id");
 	const compartment = col(cols?.compartment ?? "compartment_id");
 	const project = col(cols?.project ?? "project");
 	const visibility = cols?.visibility === null ? null : col(cols?.visibility ?? "visibility");
-	const args: unknown[] = [];
+	const args: (string | number)[] = [];
 	const clauses: string[] = [];
 	const reach = scope.reach;
 	if (reach.kind === "all") {

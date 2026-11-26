@@ -5,7 +5,7 @@ import {
 	recreateMemoriesFts,
 	activeVectorProjectionTable,
 } from "@signet/core";
-import { readMemoriesFtsCanonicalRowCount } from "@signet/core";
+import { readMemoriesFtsCanonicalRowCount, inheritEmbeddingCompartment } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, SyncDbCallSiteToken, WriteDb } from "./db-accessor";
@@ -17,6 +17,7 @@ import {
 } from "./db-owner-maintenance";
 import {
 	countChanges,
+	evidenceCompartmentInTx,
 	readLiveVecDimensions,
 	syncVecDeleteBySourceExceptHash,
 	syncVecInsert,
@@ -613,19 +614,10 @@ export interface EmbeddingRepairStats {
 }
 
 function orphanedEmbeddingQuery(agentId?: string): { join: string; where: string; args: string[] } {
-	const agentScope =
-		agentId === undefined ? "" : " AND COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default') = ?";
-	const hashPeerScope =
-		agentId === undefined
-			? ""
-			: " AND COALESCE(NULLIF(m2.agent_id, ''), 'default') = COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default')";
 	return {
-		join: `LEFT JOIN memories m2
-			   ON e.source_type = 'memory' AND e.content_hash = m2.content_hash AND m2.is_deleted = 0${hashPeerScope}`,
-		where: `e.source_type = 'memory'
-			AND (m.id IS NULL OR m.is_deleted = 1)
-			AND m2.id IS NULL${agentScope}`,
-		args: agentId === undefined ? [] : [agentId],
+		join: "",
+		where: `e.source_type='memory' AND (m.id IS NULL OR m.is_deleted=1 OR (e.agent_id IS NOT NULL AND e.agent_id<>m.agent_id))${agentId === undefined ? "" : " AND (e.agent_id=? OR (e.agent_id IS NULL AND m.agent_id=?))"}`,
+		args: agentId === undefined ? [] : [agentId, agentId],
 	};
 }
 
@@ -800,15 +792,7 @@ async function reembedMissingMemoriesBatchWithSelector(
 			siteToken: "db:repair.missing-memory-selection.read",
 		},
 	);
-	return reembedMissingMemoriesBatchForRows(
-		accessor,
-		embeddingFn,
-		embeddingCfg,
-		unembedded,
-		agentId,
-		repairLease,
-		options,
-	);
+	return reembedMissingMemoriesBatchForRows(accessor, embeddingFn, embeddingCfg, unembedded, repairLease, options);
 }
 
 async function reembedMissingMemoriesBatchForRows(
@@ -816,7 +800,6 @@ async function reembedMissingMemoriesBatchForRows(
 	embeddingFn: ReembedEmbeddingFunction,
 	embeddingCfg: EmbeddingConfig,
 	unembedded: ReadonlyArray<UnembeddedRow>,
-	agentId?: string,
 	repairLease?: EmbeddingRepairLease,
 	options: ReembedOptions = {},
 ): Promise<ReembedBatchOutcome> {
@@ -977,16 +960,15 @@ async function reembedMissingMemoriesBatchForRows(
 			const now = new Date().toISOString();
 			let count = 0;
 			let stale = 0;
-			let crossAgentHashConflicts = 0;
+			const crossAgentHashConflicts = 0;
 			const successful: EmbeddingRepairKey[] = [];
 			const readCurrentMemory = db.prepare(
 				"SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0",
 			);
 			const writeHash = db.prepare("UPDATE memories SET content_hash = ? WHERE id = ? AND content_hash IS NULL");
-			const checkHash = db.prepare(
-				"SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 AND id <> ? LIMIT 1",
+			const readEmbeddingByHash = db.prepare(
+				"SELECT id, agent_id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND (agent_id=? OR agent_id IS NULL) LIMIT 1",
 			);
-			const readEmbeddingByHash = db.prepare("SELECT id, agent_id FROM embeddings WHERE content_hash = ? LIMIT 1");
 
 			for (const { memory, vector } of results) {
 				const current = readCurrentMemory.get(memory.id) as
@@ -1001,7 +983,10 @@ async function reembedMissingMemoriesBatchForRows(
 					stale++;
 					continue;
 				}
-				if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)) {
+				if (
+					!current.agent_id?.trim() ||
+					normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)
+				) {
 					stale++;
 					continue;
 				}
@@ -1010,21 +995,14 @@ async function reembedMissingMemoriesBatchForRows(
 					typeof current.content_hash === "string" && current.content_hash.trim().length > 0
 						? current.content_hash
 						: normalizeAndHashContent(current.content).contentHash;
-				const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
+				const memoryAgentId = normalizeRepairAgentId(current.agent_id);
 				if (current.content_hash == null) {
-					const collision = checkHash.get(contentHash, memory.id) as { id: string } | undefined;
-					if (!collision) writeHash.run(contentHash, memory.id);
+					writeHash.run(contentHash, memory.id);
 				}
-				const existing = readEmbeddingByHash.get(contentHash) as { id: string; agent_id: string | null } | undefined;
-				if (existing) {
-					const existingAgentId = normalizeRepairAgentId(existing.agent_id);
-					if (existingAgentId !== memoryAgentId) {
-						crossAgentHashConflicts++;
-						continue;
-					}
-				}
+				const existing = readEmbeddingByHash.get(contentHash, memory.id, memoryAgentId) as { id: string } | undefined;
+				if (existing) inheritEmbeddingCompartment(db, "embeddings", existing.id);
 
-				const embId = crypto.randomUUID();
+				const embId = existing?.id ?? crypto.randomUUID();
 				const blob = vectorToBlob(vector);
 				syncVecDeleteBySourceExceptHash(db, "memory", memory.id, contentHash);
 				db.prepare(
@@ -1035,18 +1013,31 @@ async function reembedMissingMemoriesBatchForRows(
 				db.prepare(
 					`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type,
-					  source_id, chunk_text, created_at, agent_id)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
-					 ON CONFLICT(content_hash) DO UPDATE SET
+					  source_id, chunk_text, created_at, agent_id, compartment_id)
+					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+					 ON CONFLICT(id) DO UPDATE SET
 					   vector = excluded.vector,
 					   dimensions = excluded.dimensions,
 					   source_type = excluded.source_type,
 					   chunk_text = excluded.chunk_text,
-					   created_at = excluded.created_at`,
-				).run(embId, contentHash, blob, vector.length, memory.id, memory.content, now, memoryAgentId);
-				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-					| { id: string }
-					| undefined;
+					   created_at = excluded.created_at,
+					   compartment_id = excluded.compartment_id`,
+				).run(
+					embId,
+					contentHash,
+					blob,
+					vector.length,
+					memory.id,
+					memory.content,
+					now,
+					memoryAgentId,
+					evidenceCompartmentInTx(db, memoryAgentId, [{ kind: "memory", id: memory.id }]),
+				);
+				const actualRow = db
+					.prepare(
+						"SELECT id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND agent_id=?",
+					)
+					.get(contentHash, memory.id, memoryAgentId) as { id: string } | undefined;
 				if (actualRow) {
 					syncVecInsert(db, actualRow.id, vector);
 					count++;
@@ -1546,7 +1537,10 @@ export async function reembedModelMigration(
 							crossAgentConflict: false,
 						};
 					}
-					if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)) {
+					if (
+						!current.agent_id?.trim() ||
+						normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)
+					) {
 						return {
 							wrote: false,
 							profileChanged: false,
@@ -1555,25 +1549,31 @@ export async function reembedModelMigration(
 							crossAgentConflict: false,
 						};
 					}
-					const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
-					const id = crypto.randomUUID();
+					const memoryAgentId = normalizeRepairAgentId(current.agent_id);
 					const existing = db
-						.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ? LIMIT 1")
-						.get(current.content_hash) as { agent_id: string | null } | null;
-					if (existing != null && normalizeRepairAgentId(existing.agent_id) !== memoryAgentId)
-						return {
-							wrote: false,
-							profileChanged: false,
-							contentChanged: false,
-							ownershipChanged: false,
-							crossAgentConflict: true,
-						};
+						.prepare(
+							"SELECT id FROM embeddings WHERE content_hash=? AND source_type='memory' AND source_id=? AND (agent_id=? OR agent_id IS NULL)",
+						)
+						.get(current.content_hash, row.id, memoryAgentId) as { id: string } | undefined;
+					if (existing) inheritEmbeddingCompartment(db, "embeddings", existing.id);
+					const id = existing?.id ?? crypto.randomUUID();
 					db.prepare(
-						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
-					).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content, memoryAgentId);
-					const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
-						| { id: string }
-						| undefined;
+						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?, ?) ON CONFLICT(id) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at, compartment_id=excluded.compartment_id`,
+					).run(
+						id,
+						current.content_hash,
+						vectorToBlob(vector),
+						vector.length,
+						row.id,
+						row.content,
+						memoryAgentId,
+						evidenceCompartmentInTx(db, memoryAgentId, [{ kind: "memory", id: row.id }]),
+					);
+					const embedding = db
+						.prepare(
+							"SELECT id FROM embeddings WHERE content_hash = ? AND source_type='memory' AND source_id=? AND agent_id=?",
+						)
+						.get(current.content_hash, row.id, memoryAgentId) as { id: string } | undefined;
 					if (!embedding)
 						return {
 							wrote: false,
@@ -1798,6 +1798,10 @@ interface DedupCandidate {
 	readonly id: string;
 	readonly content: string;
 	readonly content_hash: string;
+	readonly agent_id: string | null;
+	readonly project: string | null;
+	readonly visibility: string | null;
+	readonly compartment_id: number | null;
 	readonly tags: string | null;
 	readonly importance: number;
 	readonly access_count: number;
@@ -1844,6 +1848,25 @@ function processCluster(
 	candidates: readonly DedupCandidate[],
 	ctx: RepairContext,
 ): { keeperId: string; removed: number } | null {
+	const partitions = new Map<string, DedupCandidate[]>();
+	for (const candidate of candidates) {
+		const key = JSON.stringify([candidate.agent_id, candidate.project, candidate.visibility, candidate.compartment_id]);
+		const partition = partitions.get(key) ?? [];
+		partition.push(candidate);
+		partitions.set(key, partition);
+	}
+	if (partitions.size > 1) {
+		let keeperId: string | undefined;
+		let removed = 0;
+		for (const partition of partitions.values()) {
+			const result = processCluster(db, partition, ctx);
+			if (result) {
+				keeperId ??= result.keeperId;
+				removed += result.removed;
+			}
+		}
+		return keeperId === undefined ? null : { keeperId, removed };
+	}
 	if (candidates.some((c) => c.pinned || c.manual_override)) {
 		return null;
 	}
@@ -1942,16 +1965,24 @@ export async function deduplicateMemories(
 		async (db) => {
 			return db
 				.prepare(
-					`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
+					`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, agent_id, project, visibility, compartment_id, COUNT(*) AS cnt
 				 FROM memories
 				 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
 				   AND content_hash IS NOT NULL
-				 GROUP BY content_hash, scope_key
+				 GROUP BY content_hash, scope_key, agent_id, project, visibility, compartment_id
 				 HAVING COUNT(*) > 1
 				 ORDER BY cnt DESC
 				 LIMIT ?`,
 				)
-				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
+				.all<{
+					content_hash: string;
+					scope_key: string;
+					agent_id: string | null;
+					project: string | null;
+					visibility: string | null;
+					compartment_id: number | null;
+					cnt: number;
+				}>(batchSize);
 		},
 		{ siteToken: "db:repair.exact-duplicate-candidates.read" },
 	);
@@ -1987,15 +2018,22 @@ export async function deduplicateMemories(
 				const scopeArgs = cluster.scope_key === "__NULL__" ? [] : [cluster.scope_key];
 				const candidates = db
 					.prepare(
-						`SELECT id, content, content_hash, tags, importance,
+						`SELECT id, content, content_hash, agent_id, project, visibility, compartment_id, tags, importance,
 							access_count, update_count, updated_at, pinned, manual_override
 					 FROM memories
 					 WHERE content_hash = ? AND is_deleted = 0
 					   AND pinned = 0 AND manual_override = 0
-					   ${scopeFilter}
+					   ${scopeFilter} AND agent_id IS ? AND project IS ? AND visibility IS ? AND compartment_id IS ?
 					 ORDER BY importance DESC`,
 					)
-					.all(cluster.content_hash, ...scopeArgs) as DedupCandidate[];
+					.all<DedupCandidate>(
+						cluster.content_hash,
+						...scopeArgs,
+						cluster.agent_id,
+						cluster.project,
+						cluster.visibility,
+						cluster.compartment_id,
+					);
 
 				const result = processCluster(db, candidates, ctx);
 				return result?.removed ?? 0;
@@ -2019,12 +2057,12 @@ export async function deduplicateMemories(
 					const placeholders = ids.map(() => "?").join(", ");
 					const candidates = db
 						.prepare(
-							`SELECT id, content, content_hash, tags, importance,
+							`SELECT id, content, content_hash, agent_id, project, visibility, compartment_id, tags, importance,
 								access_count, update_count, updated_at, pinned, manual_override
 						 FROM memories
 						 WHERE id IN (${placeholders}) AND is_deleted = 0`,
 						)
-						.all(...ids) as DedupCandidate[];
+						.all<DedupCandidate>(...ids);
 
 					const result = processCluster(db, candidates, ctx);
 					return result?.removed ?? 0;

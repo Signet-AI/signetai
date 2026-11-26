@@ -1711,6 +1711,7 @@ describe("native memory sources", () => {
 		const provider = Bun.serve({
 			port: 0,
 			fetch: async (request) => {
+				if (request.method === "HEAD") return new Response(null);
 				const body = (await request.json()) as { readonly input?: string | readonly string[] };
 				const text = typeof body.input === "string" ? body.input : (body.input?.join("\n") ?? "");
 				requests.push(text);
@@ -1761,6 +1762,7 @@ describe("native memory sources", () => {
 		const provider = Bun.serve({
 			port: 0,
 			fetch: async (request) => {
+				if (request.method === "HEAD") return new Response(null);
 				const body = (await request.json()) as { readonly input?: string | readonly string[] };
 				const text = typeof body.input === "string" ? body.input : (body.input?.join("\n") ?? "");
 				calls.push(text);

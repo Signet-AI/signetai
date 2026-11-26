@@ -1,3 +1,4 @@
+import { sourceWriteAuthor } from "./auth/audit-owner";
 import { createHash } from "node:crypto";
 import {
 	type GitHubSourceSettings,
@@ -247,6 +248,7 @@ async function writeResourceArtifact(
 	const sourceKind = `source_github_${resource.type}`;
 	const content = resourceContent(repo, resource);
 	await indexExternalMemoryArtifact({
+		author: sourceWriteAuthor(source),
 		agentId,
 		harness: GITHUB_HARNESS,
 		sourceId: source.id,
@@ -301,6 +303,7 @@ async function writeCommentArtifact(
 	const path = `${resourcePath(repo, resource)}#comment-${commentId}`;
 	const content = [`# Comment on ${resource.title}`, "", `Author: ${author ?? "unknown"}`, "", comment.body].join("\n");
 	await indexExternalMemoryArtifact({
+		author: sourceWriteAuthor(source),
 		agentId,
 		harness: GITHUB_HARNESS,
 		sourceId: source.id,
@@ -355,6 +358,7 @@ async function writeFailureArtifact(
 	failure: SourceFailureState,
 ): Promise<number> {
 	await indexExternalMemoryArtifact({
+		author: sourceWriteAuthor(source),
 		agentId,
 		harness: GITHUB_HARNESS,
 		sourceId: source.id,
@@ -473,7 +477,7 @@ async function purgeStaleGitHubArtifacts(
 				rowid: number;
 				source_path: string;
 			}>,
-		{ siteToken: "github-source-provider.ts:460" },
+		{ siteToken: "db:github-source-provider.site.460" },
 	);
 	for (const row of rows) {
 		if (seenPaths.has(row.source_path)) continue;
@@ -490,7 +494,7 @@ async function purgeStaleGitHubArtifacts(
 				);
 			}
 		},
-		{ siteToken: "github-source-provider.ts:482" },
+		{ siteToken: "db:github-source-provider.site.482" },
 	);
 }
 
@@ -522,7 +526,7 @@ async function purgeStaleGitHubFailureArtifacts(
 					),
 			);
 		},
-		{ siteToken: "github-source-provider.ts:502" },
+		{ siteToken: "db:github-source-provider.site.502" },
 	);
 }
 

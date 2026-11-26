@@ -45,7 +45,28 @@ function failIndexStateUpdateOnce(raw: Database): WriteDb {
 	};
 }
 
+function addScopeColumns(raw: Database): void {
+	for (const table of ["memories", "embeddings", "embeddings_staging", "embedding_index_failures"]) {
+		if (!raw.prepare("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'").get(table)) continue;
+		const present = new Set(
+			raw
+				.prepare(`PRAGMA table_info(${table})`)
+				.all()
+				.map((row) => row.name),
+		);
+		for (const [column, type] of [
+			["agent_id", "TEXT"],
+			["compartment_id", "INTEGER"],
+			["source_type", "TEXT"],
+			["source_id", "TEXT"],
+		] as const) {
+			if (!present.has(column)) raw.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+		}
+	}
+}
+
 function testAccessor(raw: Database, db: WriteDb, withClassifications = false): DbAccessor {
+	addScopeColumns(raw);
 	if (withClassifications) {
 		raw.exec("CREATE TABLE IF NOT EXISTS memories(id TEXT PRIMARY KEY,agent_id TEXT,compartment_id INTEGER)");
 		raw.exec(
@@ -88,6 +109,7 @@ describe("staging embedding coverage", () => {
 			INSERT INTO embeddings VALUES ('s1', 'source-hash', 768, '2026-01-02');
 			INSERT INTO embeddings_staging VALUES ('m2', 'memory-hash', 1024);
 		`);
+		addScopeColumns(raw);
 		const db = raw as unknown as ReadDb;
 		expect(stagingCoverage(db, 1024)).toEqual({
 			active: 2,
@@ -98,7 +120,7 @@ describe("staging embedding coverage", () => {
 			ready: false,
 		});
 
-		raw.exec("INSERT INTO embeddings_staging VALUES ('s2', 'source-hash', 768)");
+		raw.exec("INSERT INTO embeddings_staging(id,content_hash,dimensions) VALUES ('s2', 'source-hash', 768)");
 		expect(stagingCoverage(db, 1024)).toEqual({
 			active: 2,
 			staged: 2,
@@ -136,6 +158,7 @@ describe("staging embedding coverage", () => {
 				('hash-b', 'target-profile', 'quarantined');
 		`);
 
+		addScopeColumns(raw);
 		expect(stagingCoverage(raw as unknown as ReadDb, 768, "target-profile")).toEqual({
 			active: 2,
 			staged: 0,
@@ -257,7 +280,7 @@ describe("staging embedding coverage", () => {
 				target_fingerprint TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
 				failure_class TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 1,
 				retry_policy TEXT NOT NULL DEFAULT 'quarantined', first_failed_at TEXT NOT NULL,
-				last_failed_at TEXT NOT NULL, UNIQUE(content_hash, target_fingerprint)
+				last_failed_at TEXT NOT NULL, UNIQUE(agent_id,source_type,source_id,content_hash,target_fingerprint)
 			);
 			INSERT INTO embeddings VALUES
 				('poison', 'poison-hash', X'00', 768, 'memory', 'memory-poison', 'poison', '2026-01-01', 'agent-a'),
@@ -354,7 +377,7 @@ describe("staging promotion", () => {
 		ensureEmbeddingIndexState(db, config);
 		beginEmbeddingIndexBuild(db, { ...config, model: "qwen3-embedding:0.6b", dimensions: 1024 });
 		raw.exec(`
-				INSERT INTO memories VALUES ('memory-1', 'nomic-embed-text');
+				INSERT INTO memories(id,embedding_model) VALUES ('memory-1', 'nomic-embed-text');
 			INSERT INTO embeddings VALUES ('old', 'content', 768, 'memory', 'memory-1', '2026-01-01');
 			INSERT INTO embeddings_staging VALUES ('new', 'content', 1024, 'memory', 'memory-1', '2026-01-01');
 			INSERT INTO vec_embeddings VALUES ('old', X'00');
@@ -391,7 +414,7 @@ describe("staging promotion", () => {
 		ensureEmbeddingIndexState(db, config);
 		beginEmbeddingIndexBuild(db, { ...config, model: "qwen3-embedding:0.6b" });
 		raw.exec(`
-			INSERT INTO memories VALUES ('memory-1', 'nomic-embed-text');
+			INSERT INTO memories(id,embedding_model) VALUES ('memory-1', 'nomic-embed-text');
 			INSERT INTO embeddings VALUES ('old', 'content', X'0000803F0000000000000000', 3, 'memory', 'memory-1', '2026-01-01');
 			INSERT INTO embeddings_staging VALUES ('new', 'content', X'000000000000803F00000000', 3, 'memory', 'memory-1', '2026-01-01');
 		`);
@@ -399,6 +422,7 @@ describe("staging promotion", () => {
 		raw
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
+		addScopeColumns(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, db, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
@@ -447,6 +471,7 @@ describe("staging promotion", () => {
 		raw
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
+		addScopeColumns(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, db, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
@@ -461,7 +486,7 @@ describe("staging promotion", () => {
 
 		raw.exec(`
 			INSERT INTO memories (id, embedding_model) VALUES ('memory-2', 'qwen3-embedding:0.6b');
-			INSERT INTO embeddings VALUES ('fresh', 'fresh-content', X'00000000000000000000803F', 3, 'memory', 'memory-2', '2026-01-02');
+			INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,created_at) VALUES ('fresh', 'fresh-content', X'00000000000000000000803F', 3, 'memory', 'memory-2', '2026-01-02');
 		`);
 		syncVecInsert(db, "fresh", [0, 0, 1]);
 
@@ -500,6 +525,7 @@ describe("staging promotion", () => {
 		raw
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
+		addScopeColumns(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, db, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
@@ -514,7 +540,7 @@ describe("staging promotion", () => {
 
 		raw.exec(`
 			INSERT INTO memories (id, embedding_model) VALUES ('memory-2', 'qwen3-embedding:0.6b');
-			INSERT INTO embeddings VALUES ('fresh', 'fresh-content', X'00000000000000000000803F', 3, 'memory', 'memory-2', '2026-01-02');
+			INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,created_at) VALUES ('fresh', 'fresh-content', X'00000000000000000000803F', 3, 'memory', 'memory-2', '2026-01-02');
 		`);
 		raw.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("fresh", new Float32Array([0, 0, 1]));
 		expect(
@@ -550,7 +576,7 @@ describe("staging promotion", () => {
 		ensureEmbeddingIndexState(db, active);
 		beginEmbeddingIndexBuild(db, staged);
 		raw.exec(`
-			INSERT INTO memories VALUES ('memory-1', 'nomic-embed-text');
+			INSERT INTO memories(id,embedding_model) VALUES ('memory-1', 'nomic-embed-text');
 			INSERT INTO embeddings VALUES ('old', 'shared-content', X'0000803F0000000000000000', 3, 'memory', 'memory-1', '2026-01-01');
 			INSERT INTO embeddings_staging VALUES ('new', 'shared-content', X'000000000000803F00000000', 3, 'memory', 'memory-1', '2026-01-01');
 		`);
@@ -560,6 +586,7 @@ describe("staging promotion", () => {
 			.run("new", new Float32Array([0, 1, 0]));
 
 		const failingDb = failIndexStateUpdateOnce(raw);
+		addScopeColumns(raw);
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => testTransaction(raw, failingDb, fn),
 			withWriteTxAsync: async (fn) => testTransaction(raw, failingDb, fn),

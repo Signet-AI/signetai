@@ -1,3 +1,4 @@
+import { compartmentForWrite } from "../../core/src/compartment-shards";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,11 @@ describe("memory search telemetry", () => {
 		prevSignetPath = process.env.SIGNET_PATH;
 		process.env.SIGNET_PATH = dir;
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('mem-1','Recall QA context','ant','now','now')",
+			),
+		);
 	});
 
 	afterEach(async () => {
@@ -97,6 +103,51 @@ describe("memory search telemetry", () => {
 		expect(items[0]?.duration_ms).toBe(12.34);
 		expect(items[0]?.results[0]?.rank).toBe(1);
 		expect(items[0]?.results[0]?.content).toContain("manual review");
+	});
+
+	it("copies classified result labels and citations into telemetry", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_assignments VALUES('memory','mem-1','ant','cls_hr','alice','now')",
+			);
+			const compartment = compartmentForWrite(db, { agentId: "ant", memoryId: "mem-1" });
+			db.prepare("UPDATE memories SET compartment_id=? WHERE id='mem-1'").run(compartment);
+		});
+		await recordMemorySearchTelemetry(getDbAccessor(), {
+			route: "test",
+			agentId: "ant",
+			sessionKey: null,
+			project: null,
+			params: { query: "secret" },
+			response: response(),
+			retentionDays: 90,
+		});
+		const persisted = await getDbAccessor().withReadDbAsync((db) => ({
+			row: db.prepare("SELECT compartment_id FROM memory_search_telemetry").get(),
+			citations: db
+				.prepare("SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='telemetry'")
+				.all(),
+		}));
+		expect(persisted.row).toEqual({ compartment_id: expect.any(Number) });
+		expect(persisted.citations).toEqual([{ evidence_kind: "memory", evidence_id: "mem-1" }]);
+	});
+
+	it("does not persist snapshots whose result evidence cannot be resolved", async () => {
+		for (const id of ["foreign-memory", "constructed:Private", "summary:digest"]) {
+			const source = response();
+			const result = source.results[0];
+			if (!result) throw new Error("missing test result");
+			await recordMemorySearchTelemetry(getDbAccessor(), {
+				route: "test",
+				agentId: "ant",
+				sessionKey: null,
+				project: null,
+				params: { query: "private" },
+				response: { ...source, results: [{ ...result, id }] },
+				retentionDays: 90,
+			});
+		}
+		expect(await listMemorySearchTelemetry(getDbAccessor(), {})).toEqual([]);
 	});
 
 	it("resolves telemetry project from effective recall params", () => {

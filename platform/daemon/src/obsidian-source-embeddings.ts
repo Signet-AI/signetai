@@ -210,7 +210,7 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-				 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+				 ON CONFLICT(id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
 				 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
 				 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 				[
@@ -235,7 +235,7 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 			estimatedWorkUnits: statements.length,
 			signal: input.signal,
 			...(vecAvailable && vecDimensions === vector.length
-				? { embeddingProjection: { store: "embeddings", projection: vecTable, ids: [], contentHashes: [contentHash] } }
+				? { embeddingProjection: { store: "embeddings", projection: vecTable, ids: [embeddingId] } }
 				: {}),
 		});
 		embedded++;
@@ -496,7 +496,7 @@ export async function indexObsidianSourceEmbeddings(
 				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,
@@ -516,9 +516,7 @@ export async function indexObsidianSourceEmbeddings(
 				input.agentId,
 				compartmentForWrite(db, { agentId: input.agentId, sourceId: chunk.id }),
 			);
-			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-				| { id: string }
-				| undefined;
+			const stored = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as { id: string } | undefined;
 			syncVecInsert(db, stored?.id ?? embId, vector);
 			return true;
 		}, "db:obsidian-source.persist-chunk");

@@ -78,6 +78,10 @@ describe("memory capture admission (#1342)", () => {
 
 	it("reports the actual configured capture capacity", async () => {
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("author", { userId: null, credential: "token:test" });
+			await next();
+		});
 		registerMemoryRoutes(app, { memoryCaptureAdmission: createConcurrencyAdmission(0) });
 		const response = await app.request("/api/memory/remember", { method: "POST", body: "{}" });
 		expect(response.status).toBe(503);
@@ -90,6 +94,10 @@ describe("memory capture admission (#1342)", () => {
 		const telemetry = captureTelemetry();
 		setActiveTelemetry(telemetry.collector);
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("author", { userId: null, credential: "token:test" });
+			await next();
+		});
 		registerMemoryRoutes(app, { memoryCaptureAdmission: createConcurrencyAdmission(0) });
 
 		const response = await app.request("/api/memory/remember", { method: "POST", body: "{}" });

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attemptAsync } from "@signet/core";
+import { attemptAsync, type CompartmentWriteScope } from "@signet/core";
 import { logger } from "./logger";
 import { DbOwnerError, type DbOwnerClient } from "./db-owner-client";
 import type { AudienceSubject, ReadScope } from "./read-scope";
@@ -22,6 +22,7 @@ export interface ClassificationPrincipal {
 	readonly id: string;
 }
 export type ClassificationRequest =
+	| { readonly op: "admit-write"; readonly scopes: readonly CompartmentWriteScope[] }
 	| { readonly op: "record-error"; readonly jobId: string; readonly error: string }
 	| { readonly op: "readable" | "visibility"; readonly subject: AudienceSubject }
 	| { readonly op: "list" | "get"; readonly actor: ClassificationActor; readonly id?: string }
@@ -82,14 +83,15 @@ export async function classificationRequest<Result>(
 	suppliedOwner?: DbOwnerClient,
 ): Promise<Result> {
 	const owner = suppliedOwner ?? (await getDbOwnerForAccessor(getDbAccessor()));
+	const readonly = request.op === "readable" || request.op === "visibility" || request.op === "admit-write";
 	return owner.submit<Result>(
 		{ kind: "classification", request },
 		{
 			operation: `classification.${request.op}`,
-			lane: request.op === "readable" || request.op === "visibility" ? "read" : "maintenance",
-			workloadClass: request.op === "readable" || request.op === "visibility" ? "foreground" : "maintenance",
-			deadlineMs: request.op === "readable" || request.op === "visibility" ? 5000 : 15 * 60_000,
-			estimatedWorkUnits: request.op === "readable" || request.op === "visibility" ? 1 : 10000,
+			lane: readonly ? "read" : "maintenance",
+			workloadClass: readonly ? "foreground" : "maintenance",
+			deadlineMs: readonly ? 5000 : 15 * 60_000,
+			estimatedWorkUnits: readonly ? 1 : 10000,
 		},
 	).result;
 }

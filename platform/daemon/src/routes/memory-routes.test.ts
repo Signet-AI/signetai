@@ -3,6 +3,23 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { writeCodexNativeNote } from "./memory-routes";
+import { registerMemoryRoutes } from "./memory-routes";
+import { Hono } from "hono";
+
+it("denies authorless memory and document mutations", async () => {
+	const app = new Hono();
+	registerMemoryRoutes(app);
+	for (const path of ["/api/memory/remember", "/api/memory/feedback", "/api/documents"]) {
+		const response = await app.request(path, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ content: "durable evidence", sessionKey: "authorless", feedback: { memory: 1 } }),
+		});
+		expect(response.status).toBe(401);
+		expect(response.headers.get("WWW-Authenticate")).toBe("Bearer");
+		expect(await response.json()).toMatchObject({ reason: "missing_credential" });
+	}
+});
 
 let dir: string | undefined;
 const originalCodexHome = process.env.CODEX_HOME;

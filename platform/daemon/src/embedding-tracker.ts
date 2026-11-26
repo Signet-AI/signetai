@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PipelineEmbeddingTrackerConfig, PipelineRepairConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { evidenceCompartmentInTx, syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { listStaleEmbeddingRows } from "./embedding-coverage";
 import { isActiveEmbeddingConfig } from "./embedding-index-state";
 import {
@@ -244,21 +244,34 @@ export function startEmbeddingTracker(
 							if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
 							for (const { row, vector, contentHash } of cycle.results) {
 								syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
-								const embId = randomUUID();
+								const compartment = evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id: row.id }]);
+								const previous = db
+									.prepare(
+										"SELECT id FROM embeddings WHERE content_hash=? AND source_type='memory' AND source_id=? AND agent_id=? AND compartment_id IS ?",
+									)
+									.get(contentHash, row.id, agentId, compartment);
+								const embId = typeof previous?.id === "string" ? previous.id : randomUUID();
 								db.prepare(
 									`INSERT INTO embeddings
-								   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at)
-								 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'))
-								 ON CONFLICT(content_hash) DO UPDATE SET
+								   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at, agent_id, compartment_id)
+								 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
+								 ON CONFLICT(id) DO UPDATE SET
 								   vector = excluded.vector,
 								   dimensions = excluded.dimensions,
 								   chunk_text = excluded.chunk_text,
-								   created_at = excluded.created_at`,
-								).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length, row.content);
-								const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-									| { id: string }
-									| undefined;
-								if (actualRow) syncVecInsert(db, actualRow.id, vector);
+								   created_at = excluded.created_at,
+								   compartment_id = excluded.compartment_id`,
+								).run(
+									embId,
+									row.id,
+									contentHash,
+									vectorToBlob(vector),
+									vector.length,
+									row.content,
+									agentId,
+									compartment,
+								);
+								syncVecInsert(db, embId, vector);
 								db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
 								processed++;
 							}

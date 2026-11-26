@@ -94,6 +94,7 @@ describe("H: artifact files follow transcript admission", () => {
 		await deleteCompletely("default", "h-checkpoint");
 		await updateTranscriptLifecycle({ agentId: "default", sessionKey: "h-checkpoint", action: "start" });
 		await handleCheckpointExtract({
+			author: { userId: null, credential: "local" },
 			agentId: "default",
 			sessionKey: "h-checkpoint",
 			harness: "claude-code",
@@ -115,6 +116,7 @@ describe("I: a wake that lands during session end keeps the session open", () =>
 			if (input.action === "end") {
 				createAgentMessage({ fromAgentId: "sender", toAgentId: "default", content: "wake up" });
 				const woke = await waitForDirectMessageWake({
+					readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 					agentId: "default",
 					sessionKey,
 					harness: "claude-code",

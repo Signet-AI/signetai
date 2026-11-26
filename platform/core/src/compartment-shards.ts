@@ -1,4 +1,5 @@
 import type { MigrationDb } from "./migrations/contract";
+import { ClassifiedDestinationError, currentWritePrincipal } from "./write-principal";
 
 export const FTS_BASES = [
 	"memories_fts",
@@ -143,9 +144,13 @@ export interface CompartmentWriteScope {
 	readonly memoryId?: string | null;
 	readonly parentCompartment?: number | null;
 }
-export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+export function classificationsForWrite(
+	db: Pick<MigrationDb, "prepare">,
+	input: CompartmentWriteScope,
+): readonly string[] {
 	if (!input.agentId) throw new Error("agent_required");
 	const labels = new Set<string>();
+	const schema = shardSchema(db);
 	const add = (rows: readonly Record<string, unknown>[]) => {
 		for (const row of rows) if (typeof row.classification_id === "string") labels.add(row.classification_id);
 	};
@@ -155,16 +160,56 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
 				.all(input.parentCompartment),
 		);
-	const assignments = (session: unknown, source: unknown, memory: unknown) =>
+	const assignments = (session: unknown, source: unknown, memory: unknown) => {
+		const sessions =
+			typeof session === "string"
+				? [...new Set([session, `session:${session}`, ...(session.startsWith("session:") ? [session.slice(8)] : [])])]
+				: [];
+		const sources: string[] = [];
+		if (typeof source === "string") {
+			sources.push(source);
+			for (let i = source.indexOf(":"); i >= 0; i = source.indexOf(":", i + 1)) sources.push(source.slice(0, i));
+		}
 		add(
 			db
 				.prepare(
-					"SELECT classification_id FROM classification_assignments WHERE agent_id=? AND (target_kind='agent' OR (target_kind='session' AND (target_id=? OR target_id='session:'||? OR 'session:'||target_id=?)) OR (target_kind='source' AND (target_id=? OR substr(?,1,length(target_id)+1)=target_id||':')) OR (target_kind='memory' AND target_id=?))",
+					"SELECT classification_id FROM classification_assignments WHERE target_kind='agent' AND agent_id=? UNION ALL SELECT classification_id FROM classification_assignments WHERE target_kind='session' AND target_id IN (SELECT value FROM json_each(?)) AND agent_id=? UNION ALL SELECT classification_id FROM classification_assignments WHERE target_kind='source' AND target_id IN (SELECT value FROM json_each(?)) AND agent_id=? UNION ALL SELECT classification_id FROM classification_assignments WHERE target_kind='memory' AND target_id=? AND agent_id=?",
 				)
-				.all(input.agentId, session, session, session, source, source, memory),
+				.all(
+					input.agentId,
+					JSON.stringify(sessions),
+					input.agentId,
+					JSON.stringify(sources),
+					input.agentId,
+					memory,
+					input.agentId,
+				),
 		);
+		if (schema.tables.has("org_jobs")) {
+			const targets = [
+				["agent", [input.agentId]],
+				["session", sessions],
+				["source", sources],
+				["memory", typeof memory === "string" ? [memory] : []],
+			] as const;
+			const arms: string[] = [];
+			const args: string[] = [];
+			for (const [kind, ids] of targets) {
+				if (ids.length === 0) continue;
+				arms.push(
+					"SELECT json_extract(params_json,'$.id') AS classification_id FROM org_jobs WHERE json_valid(params_json) AND kind='classify' AND status IN ('pending','running') AND json_extract(params_json,'$.target.agentId')=? AND json_extract(params_json,'$.target.kind')=? " +
+						(kind === "agent"
+							? ""
+							: " AND json_extract(params_json,'$.target.id') IN (SELECT value FROM json_each(?))"),
+				);
+				args.push(input.agentId, kind);
+				if (kind !== "agent") args.push(JSON.stringify(ids));
+			}
+			add(db.prepare(arms.join(" UNION ALL ")).all(...args));
+		}
+	};
 	assignments(input.sessionKey ?? null, input.sourceId ?? null, input.memoryId ?? null);
-	if (input.memoryId && shardSchema(db).tables.has("memories")) {
+	if (input.memoryId && schema.tables.has("memories")) {
 		const columns = tableColumns(db, "memories");
 		const parent = db
 			.prepare(
@@ -184,7 +229,7 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 			["memory_artifacts", "source_path"],
 			["session_transcripts", "session_key"],
 		]) {
-			if (!table || !key || !shardSchema(db).tables.has(table)) continue;
+			if (!table || !key || !schema.tables.has(table)) continue;
 			for (const parent of db
 				.prepare(`SELECT compartment_id,source_id,session_key FROM ${table} WHERE agent_id=? AND ${key}=?`)
 				.all(input.agentId, input.sourceId)) {
@@ -197,7 +242,21 @@ export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScop
 				assignments(parent.session_key, parent.source_id, null);
 			}
 		}
-	return compartmentFor(db, [...labels]);
+	const principal = currentWritePrincipal();
+	if (
+		principal &&
+		labels.size > 0 &&
+		db
+			.prepare(
+				"SELECT 1 FROM json_each(?) label WHERE NOT EXISTS(SELECT 1 FROM classification_audience a WHERE a.classification_id=label.value AND ((a.principal_kind='user' AND a.principal_id=?) OR (a.principal_kind='group' AND a.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?)))) LIMIT 1",
+			)
+			.get(JSON.stringify([...labels]), principal.userId, principal.userId)
+	)
+		throw new ClassifiedDestinationError();
+	return [...labels].sort();
+}
+export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
+	return compartmentFor(db, classificationsForWrite(db, input));
 }
 
 interface ShardSchema {
@@ -205,8 +264,8 @@ interface ShardSchema {
 	tables: Map<string, string>;
 	columns: Map<string, ReadonlySet<string>>;
 }
-const shardSchemas = new WeakMap<MigrationDb, ShardSchema>();
-function shardSchema(db: MigrationDb): ShardSchema {
+const shardSchemas = new WeakMap<Pick<MigrationDb, "prepare">, ShardSchema>();
+function shardSchema(db: Pick<MigrationDb, "prepare">): ShardSchema {
 	const version = db.prepare("PRAGMA schema_version").get()?.schema_version;
 	const hit = shardSchemas.get(db);
 	if (hit?.version === version) return hit;
@@ -217,7 +276,7 @@ function shardSchema(db: MigrationDb): ShardSchema {
 	shardSchemas.set(db, schema);
 	return schema;
 }
-function tableColumns(db: MigrationDb, table: string): ReadonlySet<string> {
+function tableColumns(db: Pick<MigrationDb, "prepare">, table: string): ReadonlySet<string> {
 	const schema = shardSchema(db);
 	const hit = schema.columns.get(table);
 	if (hit) return hit;
@@ -310,10 +369,12 @@ export function inheritEmbeddingCompartment(
 	const sources =
 		row.source_type === "memory"
 			? [["memories", "id"]]
-			: [
-					["memory_artifacts", "source_path"],
-					["session_transcripts", "session_key"],
-				];
+			: row.source_type === "skill"
+				? [["entities", "id"]]
+				: [
+						["memory_artifacts", "source_path"],
+						["session_transcripts", "session_key"],
+					];
 	for (const [table, key] of sources) {
 		if (!table || !key || !shardSchema(db).tables.has(table)) continue;
 		const source = db

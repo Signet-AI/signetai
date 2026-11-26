@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
@@ -79,14 +80,21 @@ function invokeAccessorAsync<Result>(
 	return method.call(accessor, callback) as Promise<Result>;
 }
 
-function inlineParameter(value: DbOwnerParameter): string | number | boolean | null | Uint8Array {
+function inlineParameter(
+	value: DbOwnerParameter,
+	db: ReadDb | WriteDb,
+	writeTransaction: boolean,
+): string | number | boolean | null | Uint8Array {
 	if (typeof value !== "object" || value === null) return value;
-	if (value.type !== "bytes") throw new Error("compartment_parameter_requires_owner");
+	if (value.type === "compartment") {
+		if (!writeTransaction || !("exec" in db)) throw new Error("compartment_parameter_requires_owner");
+		return resolveWriteCompartmentParameterInTx(db, value);
+	}
 	return Uint8Array.from(Buffer.from(value.base64, "base64"));
 }
 
-function inlineStatement(db: ReadDb | WriteDb, statement: DbOwnerStatement): unknown {
-	const params = (statement.params ?? []).map(inlineParameter);
+function inlineStatement(db: ReadDb | WriteDb, statement: DbOwnerStatement, writeTransaction = false): unknown {
+	const params = (statement.params ?? []).map((value) => inlineParameter(value, db, writeTransaction));
 	const prepared = db.prepare(statement.sql);
 	if (statement.result === "all") return prepared.all(...params);
 	if (statement.result === "get") return prepared.get(...params);
@@ -147,7 +155,7 @@ async function executeInlineOwnerRequest(
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			const results: unknown[] = [];
 			for (const statement of request.transaction.statements) {
-				const result = inlineStatement(db, statement);
+				const result = inlineStatement(db, statement, true);
 				results.push(result);
 				if (
 					statement?.requireChanges === true &&
@@ -164,7 +172,7 @@ async function executeInlineOwnerRequest(
 	}
 	if (request.kind === "batch") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
-			const results = request.statements.map((statement) => inlineStatement(db, statement));
+			const results = request.statements.map((statement) => inlineStatement(db, statement, true));
 			if (
 				request.requireChanges === true ||
 				request.statements.some((statement) => statement.requireChanges === true)
@@ -212,6 +220,26 @@ async function executeInlineOwnerRequest(
 			deadlineAt,
 		);
 	}
+	if (request.kind === "filesystem_document_write") {
+		const { writeFilesystemDocumentInTx } = await import("./embedding-projection-owner");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Filesystem documents require owner write access");
+			return writeFilesystemDocumentInTx(db, request.input);
+		});
+	}
+	if (request.kind === "session_finalizer_author") {
+		const { readSessionFinalizerAuthorInTx } = await import("./db-helpers");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readSessionFinalizerAuthorInTx(db, request.agentId, request.sessionKey),
+		);
+	}
+	if (request.kind === "session_checkpoint_write") {
+		const { writeSessionCheckpointInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Checkpoints require owner write access");
+			return writeSessionCheckpointInTx(db, request.input, request.maxPerSession);
+		});
+	}
 	if (request.kind === "session_transcript_write") {
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
@@ -239,6 +267,13 @@ async function executeInlineOwnerRequest(
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
 		});
+	if (request.kind === "reflection_generate") {
+		const { txCreateDailyReflections } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Reflection generation requires owner write access");
+			return txCreateDailyReflections(db, request.input);
+		});
+	}
 	if (request.kind === "reflection_answer")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			if (!("exec" in db)) throw new Error("Reflection requires writer");
@@ -881,5 +916,50 @@ export async function dbOwnerDreamingEvidenceCoverage(
 		owner,
 		{ kind: "dreaming_evidence_coverage", input },
 		{ ...options, lane: "read" },
+	);
+}
+
+export async function dbOwnerFilesystemDocument(
+	accessor: DbAccessor,
+	input: Parameters<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>[1],
+): Promise<ReturnType<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>> {
+	return await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "filesystem_document_write", input },
+		{
+			operation: "documents.filesystem.write",
+			lane: "write",
+			workloadClass: "maintenance",
+			deadlineMs: 5000,
+			estimatedWorkUnits: 1,
+		},
+	);
+}
+export async function dbOwnerSessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<import("./auth/audit-owner").WriteAuthor> {
+	return await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "session_finalizer_author", agentId, sessionKey },
+		{ operation: "session.finalizer.author", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+	);
+}
+export async function dbOwnerCheckpoint(
+	accessor: DbAccessor,
+	input: import("./session-checkpoints").WriteCheckpointParams,
+	maxPerSession: number,
+): Promise<void> {
+	await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "session_checkpoint_write", input, maxPerSession },
+		{
+			operation: "sessions.checkpoint.write",
+			lane: "write",
+			workloadClass: "foreground",
+			deadlineMs: 5000,
+			estimatedWorkUnits: 1,
+		},
 	);
 }

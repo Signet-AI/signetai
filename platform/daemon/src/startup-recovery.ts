@@ -271,7 +271,7 @@ async function runOwnerStartupRecovery(owner: DbOwnerClient): Promise<StartupRec
 					owner,
 					"startup-recovery.staging.select",
 					`SELECT s.id FROM embeddings_staging s
-					 WHERE EXISTS (SELECT 1 FROM embeddings e WHERE e.content_hash = s.content_hash)
+					 WHERE EXISTS (SELECT 1 FROM embeddings e WHERE e.content_hash = s.content_hash AND e.source_type=s.source_type AND e.source_id=s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id)
 					 LIMIT ?`,
 					[Math.min(BATCH_SIZE, STAGING_MAX_TOTAL - stagingRowsCleaned)],
 					{ estimatedWorkUnits: BATCH_SIZE },
@@ -532,7 +532,7 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 						.prepare(
 							`SELECT s.id FROM embeddings_staging s
 							 WHERE EXISTS (
-							   SELECT 1 FROM embeddings e WHERE e.content_hash = s.content_hash
+							   SELECT 1 FROM embeddings e WHERE e.content_hash = s.content_hash AND e.source_type=s.source_type AND e.source_id=s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id
 							 )
 							 LIMIT ?`,
 						)

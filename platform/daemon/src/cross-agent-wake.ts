@@ -1,3 +1,5 @@
+import type { ReadScope } from "./read-scope";
+import { agentMessageReadPredicate } from "./cross-agent-message-owner";
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
 import { logger } from "./logger";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
@@ -36,7 +38,9 @@ export type WakeWaitResult =
 			readonly retryAfterMs?: number;
 	  };
 
+type WakeReadScope = ReadScope | (() => Promise<ReadScope>);
 export interface WakeWaitInput {
+	readonly readScope: WakeReadScope;
 	readonly agentId: string;
 	readonly sessionKey: string;
 	readonly harness: string;
@@ -45,6 +49,7 @@ export interface WakeWaitInput {
 }
 
 interface Waiter {
+	readonly readScope: WakeReadScope;
 	readonly id: number;
 	readonly agentId: string;
 	readonly sessionKey: string;
@@ -145,6 +150,7 @@ const CLAIMABLE_SQL = `SELECT m.*, NULL AS acknowledged_at
 	LIMIT ?`;
 
 export async function claimDirectMessageWakes(input: {
+	readonly readScope: WakeReadScope;
 	readonly agentId: string;
 	readonly sessionKey: string;
 	readonly harness: string;
@@ -152,12 +158,15 @@ export async function claimDirectMessageWakes(input: {
 	readonly agentAddressedOnlyFromSession?: string;
 	readonly nowMs?: number;
 }): Promise<readonly AgentMessage[]> {
+	if (!input.readScope) throw new Error("read_scope_required");
+	const scope = typeof input.readScope === "function" ? await input.readScope() : input.readScope;
+	const predicate = agentMessageReadPredicate(scope);
 	const now = new Date(input.nowMs ?? Date.now()).toISOString();
 	const agentAddressed =
 		input.agentAddressedOnlyFromSession !== undefined ? 2 : input.includeAgentAddressed === false ? 0 : 1;
 	const rows = await dbOwnerQuery<readonly CrossAgentMessageRow[]>(
 		ownerStatement(
-			CLAIMABLE_SQL,
+			CLAIMABLE_SQL.replace("ORDER BY", `${predicate.sql} ORDER BY`),
 			[
 				input.agentId,
 				now,
@@ -168,6 +177,7 @@ export async function claimDirectMessageWakes(input: {
 				agentAddressed,
 				agentAddressed,
 				input.agentAddressedOnlyFromSession ?? "",
+				...predicate.args,
 				MAX_WAKE_BATCH,
 			],
 			"all",
@@ -179,8 +189,8 @@ export async function claimDirectMessageWakes(input: {
 		rows.map((row) =>
 			ownerStatement(
 				`INSERT OR IGNORE INTO cross_agent_message_wakes (message_id, agent_id, session_key, harness, woken_at)
-				 VALUES (?, ?, ?, ?, ?)`,
-				[row.id, input.agentId, input.sessionKey, input.harness, now],
+				 SELECT ?, ?, ?, ?, ? FROM cross_agent_messages m WHERE m.id=? ${predicate.sql}`,
+				[row.id, input.agentId, input.sessionKey, input.harness, now, row.id, ...predicate.args],
 			),
 		),
 		{ operation: "cross-agent.wake.claim", lane: "write", deadlineMs: 5_000, estimatedWorkUnits: rows.length },
@@ -263,6 +273,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 			let claimed: readonly AgentMessage[];
 			try {
 				claimed = await claimDirectMessageWakes({
+					readScope: waiter.readScope,
 					agentId: waiter.agentId,
 					sessionKey: waiter.sessionKey,
 					harness: waiter.harness,
@@ -421,6 +432,7 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 			return true;
 		};
 		const waiter: Waiter = {
+			readScope: input.readScope,
 			id: nextWaiterId++,
 			agentId: input.agentId,
 			sessionKey: input.sessionKey,

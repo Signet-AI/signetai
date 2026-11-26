@@ -1,9 +1,10 @@
+import { compartmentForWrite } from "@signet/core";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import type { WriteDb } from "./db-accessor";
-import { getDbAccessor } from "./db-accessor";
-import { tableExists } from "./db-helpers";
+import { getDbAccessor, prepareTypedStatement } from "./db-accessor";
+import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx, tableExists } from "./db-helpers";
 import { requireDependencyReason } from "./dependency-history";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
@@ -11,6 +12,8 @@ import {
 	flagDreamingClaimsForRemovedSourcePathInTx,
 	flagDreamingClaimsForSourceRevisionInTx,
 } from "./source-claim-review";
+
+import { purgeSourceStructureCitationsInTx, sourceStructureEvidenceInTx } from "./source-artifact-graph";
 
 const OBSIDIAN_SOURCE_KIND = "source_obsidian_markdown";
 
@@ -113,17 +116,25 @@ function upsertSourceEntity(
 		readonly sourceRoot: string;
 		readonly sourcePath: string;
 		readonly now: string;
+		readonly evidence: readonly CitationEvidence[];
 	},
 ): { readonly id: string; readonly inserted: boolean } {
 	const uniqueName = `${input.name} — ${input.canonicalName} — ${input.agentId}`;
-	const existing = db
-		.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
-		.get(input.canonicalName, input.agentId) as { id: string } | undefined;
+	const existing = prepareTypedStatement<{ id: string; compartment_id: number | null }>(
+		db,
+		"SELECT id, compartment_id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1",
+	).get(input.canonicalName, input.agentId);
+	const compartment = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		parentCompartment: evidenceCompartmentInTx(db, input.agentId, input.evidence, existing?.compartment_id),
+	});
+	const entityId = existing?.id ?? input.id;
 	if (existing) {
 		db.prepare(
 			`UPDATE entities
 			 SET name = ?, entity_type = ?, mentions = MAX(COALESCE(mentions, 0), 1), updated_at = ?,
-			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?, compartment_id = ?
 			 WHERE id = ?`,
 		).run(
 			uniqueName,
@@ -133,15 +144,22 @@ function upsertSourceEntity(
 			OBSIDIAN_SOURCE_KIND,
 			input.sourcePath,
 			input.sourceRoot,
+			compartment,
 			existing.id,
 		);
+		recordEvidenceCitationsInTx(db, {
+			agentId: input.agentId,
+			derivedKind: "entity",
+			derivedId: entityId,
+			evidence: input.evidence,
+		});
 		return { id: existing.id, inserted: false };
 	}
 	db.prepare(
 		`INSERT INTO entities
 		 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at,
-		  source_id, source_kind, source_path, source_root)
-		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+		  source_id, source_kind, source_path, source_root, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		input.id,
 		uniqueName,
@@ -154,7 +172,14 @@ function upsertSourceEntity(
 		OBSIDIAN_SOURCE_KIND,
 		input.sourcePath,
 		input.sourceRoot,
+		compartment,
 	);
+	recordEvidenceCitationsInTx(db, {
+		agentId: input.agentId,
+		derivedKind: "entity",
+		derivedId: entityId,
+		evidence: input.evidence,
+	});
 	return { id: input.id, inserted: true };
 }
 
@@ -170,17 +195,18 @@ function upsertCommunity(
 		readonly now: string;
 	},
 ): void {
+	const compartment = compartmentForWrite(db, { agentId: input.agentId, sourceId: input.sourceId });
 	db.prepare(
 		`INSERT INTO entity_communities
-		 (id, agent_id, name, cohesion, member_count, created_at, updated_at, source_id, source_kind, source_path, source_root)
-		 VALUES (?, ?, ?, 1.0, 0, ?, ?, ?, ?, ?, ?)
+		 (id, agent_id, name, cohesion, member_count, created_at, updated_at, source_id, source_kind, source_path, source_root, compartment_id)
+		 VALUES (?, ?, ?, 1.0, 0, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name = excluded.name,
 		   updated_at = excluded.updated_at,
 		   source_id = excluded.source_id,
 		   source_kind = excluded.source_kind,
 		   source_path = excluded.source_path,
-		   source_root = excluded.source_root`,
+		   source_root = excluded.source_root, compartment_id = excluded.compartment_id`,
 	).run(
 		input.id,
 		input.agentId,
@@ -191,6 +217,7 @@ function upsertCommunity(
 		OBSIDIAN_SOURCE_KIND,
 		input.sourcePath,
 		input.sourceRoot,
+		compartment,
 	);
 }
 
@@ -208,20 +235,27 @@ function upsertDependency(
 		readonly sourceRoot: string;
 		readonly sourcePath: string;
 		readonly now: string;
+		readonly evidence: readonly CitationEvidence[];
 	},
 ): boolean {
-	const existing = db
-		.prepare(
-			`SELECT id FROM entity_dependencies
+	const existing = prepareTypedStatement<{ id: string; compartment_id: number | null }>(
+		db,
+		`SELECT id, compartment_id FROM entity_dependencies
 			 WHERE source_entity_id = ? AND target_entity_id = ? AND dependency_type = ? AND agent_id = ?
 			 LIMIT 1`,
-		)
-		.get(input.sourceEntityId, input.targetEntityId, input.type, input.agentId) as { id: string } | undefined;
+	).get(input.sourceEntityId, input.targetEntityId, input.type, input.agentId);
+	const compartment = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		parentCompartment: evidenceCompartmentInTx(db, input.agentId, input.evidence, existing?.compartment_id),
+	});
+	const dependencyId =
+		existing?.id ?? idFor("dep", input.agentId, input.type, input.sourceEntityId, input.targetEntityId);
 	if (existing) {
 		db.prepare(
 			`UPDATE entity_dependencies
 			 SET strength = MAX(strength, ?), confidence = MAX(COALESCE(confidence, 0), ?),
-			     reason = ?, updated_at = ?, source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			     reason = ?, updated_at = ?, source_id = ?, source_kind = ?, source_path = ?, source_root = ?, compartment_id = ?
 			 WHERE id = ?`,
 		).run(
 			input.strength,
@@ -232,16 +266,23 @@ function upsertDependency(
 			OBSIDIAN_SOURCE_KIND,
 			input.sourcePath,
 			input.sourceRoot,
+			compartment,
 			existing.id,
 		);
+		recordEvidenceCitationsInTx(db, {
+			agentId: input.agentId,
+			derivedKind: "dependency",
+			derivedId: dependencyId,
+			evidence: input.evidence,
+		});
 		return false;
 	}
 	const id = idFor("dep", input.agentId, input.type, input.sourceEntityId, input.targetEntityId);
 	db.prepare(
 		`INSERT INTO entity_dependencies
 		 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason,
-		  created_at, updated_at, source_id, source_kind, source_path, source_root)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  created_at, updated_at, source_id, source_kind, source_path, source_root, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		input.sourceEntityId,
@@ -257,7 +298,14 @@ function upsertDependency(
 		OBSIDIAN_SOURCE_KIND,
 		input.sourcePath,
 		input.sourceRoot,
+		compartment,
 	);
+	recordEvidenceCitationsInTx(db, {
+		agentId: input.agentId,
+		derivedKind: "dependency",
+		derivedId: dependencyId,
+		evidence: input.evidence,
+	});
 	return true;
 }
 
@@ -424,6 +472,12 @@ function removeObsidianSourceFileStructureInTx(
 ): PurgeObsidianSourceStructureResult {
 	const root = normalizedRoot(input.root);
 	const filePath = normalizedPath(input.filePath);
+	purgeSourceStructureCitationsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourcePath: filePath,
+		sourceRoot: root,
+	});
 	const fileRel = relPath(root, filePath);
 	const documentEntityId = idFor(input.agentId, input.sourceId, "document", fileRel);
 	purgeAttributeMemoryProjectionsInTx(db, {
@@ -494,6 +548,7 @@ export function applyObsidianSourceStructureInTx(
 		content: input.content,
 	});
 
+	const evidence = sourceStructureEvidenceInTx(db, input.agentId, input.sourceId, filePath);
 	let folderEntitiesTouched = 0;
 	let documentEntitiesTouched = 0;
 	let communitiesTouched = 0;
@@ -508,6 +563,7 @@ export function applyObsidianSourceStructureInTx(
 		sourceId: input.sourceId,
 		sourceRoot: root,
 		sourcePath: root,
+		evidence,
 		now,
 	});
 
@@ -536,6 +592,7 @@ export function applyObsidianSourceStructureInTx(
 			sourceId: input.sourceId,
 			sourceRoot: root,
 			sourcePath: normalizedPath(folderPath),
+			evidence,
 			now,
 		});
 		folderEntitiesTouched++;
@@ -554,6 +611,7 @@ export function applyObsidianSourceStructureInTx(
 				sourceId: input.sourceId,
 				sourceRoot: root,
 				sourcePath: filePath,
+				evidence,
 				now,
 			})
 		)
@@ -571,6 +629,7 @@ export function applyObsidianSourceStructureInTx(
 		sourceId: input.sourceId,
 		sourceRoot: root,
 		sourcePath: filePath,
+		evidence,
 		now,
 	});
 	documentEntitiesTouched++;
@@ -587,6 +646,7 @@ export function applyObsidianSourceStructureInTx(
 			sourceId: input.sourceId,
 			sourceRoot: root,
 			sourcePath: filePath,
+			evidence,
 			now,
 		})
 	)
@@ -611,6 +671,7 @@ export function applyObsidianSourceStructureInTx(
 			sourceId: input.sourceId,
 			sourceRoot: root,
 			sourcePath: targetPath.path,
+			evidence,
 			now,
 		});
 		documentEntitiesTouched++;
@@ -626,6 +687,7 @@ export function applyObsidianSourceStructureInTx(
 				sourceId: input.sourceId,
 				sourceRoot: root,
 				sourcePath: filePath,
+				evidence,
 				now,
 			})
 		)
@@ -674,6 +736,7 @@ export function applyObsidianSourceStructurePurgeInTx(
 	input: PurgeObsidianSourceStructureInput,
 ): PurgeObsidianSourceStructureResult {
 	const root = normalizedRoot(input.root);
+	purgeSourceStructureCitationsInTx(db, { agentId: input.agentId, sourceId: input.sourceId, sourceRoot: root });
 	const agentWhere = input.agentId ? "agent_id = ? AND " : "";
 	const params = input.agentId ? [input.agentId, input.sourceId, root] : [input.sourceId, root];
 	purgeAttributeMemoryProjectionsInTx(db, {

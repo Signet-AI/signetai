@@ -8,7 +8,7 @@ import { fetchEmbedding } from "../embedding-fetch.js";
 import { linkMemoryToEntities, previewMemoryEntityLinks } from "../inline-entity-linker.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
-import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
+import { getRetentionWorker } from "../pipeline/index.js";
 import {
 	checkFtsConsistency,
 	cleanOrphanedEmbeddings,
@@ -153,14 +153,17 @@ export function registerRepairRoutes(
 	});
 
 	app.post("/api/repair/retention-sweep", async (c) => {
-		const details = await runRetentionSweepOnce(getDbAccessor(), DEFAULT_RETENTION);
+		const worker = getRetentionWorker();
+		if (!worker) return c.json({ error: "retention worker unavailable" }, 503);
+		const details = await worker.sweep();
 		const affected =
 			details.graphLinksPurged +
 			details.embeddingsPurged +
 			details.tombstonesPurged +
 			details.historyPurged +
 			details.completedJobsPurged +
-			details.deadJobsPurged;
+			details.deadJobsPurged +
+			details.sessionRecallEventsPurged;
 		return c.json({
 			action: "retention_sweep",
 			success: true,

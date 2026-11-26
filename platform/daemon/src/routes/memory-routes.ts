@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	type AgentRosterReadPolicy,
 	applyRecallScoreThreshold,
+	compartmentForWrite,
 	redactCredentials,
 	vectorSearchWithMetadata,
 } from "@signet/core";
@@ -17,7 +18,9 @@ import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } f
 import { normalizeAndHashContent } from "../content-normalization";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { getDbAccessor, prepareTypedStatement, type ReadDb, runWriteTxAsync, type WriteDb } from "../db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { evidenceCompartmentInTx, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { memoryWriteDedupeSql } from "../db-helpers";
+import { requireWriteAuthor } from "../auth/audit-owner";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
@@ -125,7 +128,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:127",
+			siteToken: "db:routes.memory-routes.site.127",
 		}),
 	};
 }
@@ -262,6 +265,8 @@ interface RememberRowProvenance {
 }
 
 interface RememberDedupeScope {
+	readonly writeScope: import("@signet/core").CompartmentWriteScope;
+	readonly author: import("../auth/audit-owner").WriteAuthor;
 	readonly agentId: string;
 	readonly visibility: "global" | "private" | "archived";
 	readonly project: string | null;
@@ -347,34 +352,21 @@ function chunkIdempotencyIndex(baseKey: string, key: string): number | null {
 	return Number.isSafeInteger(index) && index > 0 ? index - 1 : null;
 }
 
-function scopedMemoryPredicate(input: RememberDedupeScope): {
-	readonly sql: string;
-	readonly params: readonly string[];
-} {
+function scopedMemoryPredicate(
+	db: ReadDb,
+	input: RememberDedupeScope,
+): { readonly sql: string; readonly params: readonly unknown[] } {
+	const boundary = memoryWriteDedupeSql(db, input);
 	return {
-		sql: `
-			COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			AND COALESCE(project, '') = ?
-			AND COALESCE(visibility, 'global') = ?
-			AND COALESCE(scope, '__NULL__') = ?
-		`,
-		params: [input.agentId || "default", input.project ?? "", input.visibility, input.scope ?? "__NULL__"],
+		sql: `COALESCE(project,'')=? AND COALESCE(visibility,'global')=? AND COALESCE(scope,'__NULL__')=? ${boundary.sql}`,
+		params: [input.project ?? "", input.visibility, input.scope ?? "__NULL__", ...boundary.params],
 	};
 }
-
-function scopedContentHashPredicate(input: RememberDedupeScope): {
-	readonly sql: string;
-	readonly params: readonly string[];
-} {
-	return {
-		sql: `
-			COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			AND COALESCE(project, '') = ?
-			AND COALESCE(scope, '__NULL__') = ?
-			AND COALESCE(visibility, 'global') = ?
-		`,
-		params: [input.agentId || "default", input.project ?? "", input.scope ?? "__NULL__", input.visibility],
-	};
+function scopedContentHashPredicate(
+	db: ReadDb,
+	input: RememberDedupeScope,
+): { readonly sql: string; readonly params: readonly unknown[] } {
+	return scopedMemoryPredicate(db, input);
 }
 
 function getScopedIdempotencyMemoryId(
@@ -383,7 +375,7 @@ function getScopedIdempotencyMemoryId(
 	input: RememberDedupeScope,
 ): RememberDedupeIdRow | undefined {
 	if (!key) return undefined;
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, source_id AS sourceId
@@ -400,7 +392,7 @@ function getScopedIdempotencyDedupeRow(
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
 	if (!key) return undefined;
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
@@ -436,7 +428,7 @@ function getScopedSourceDedupeRow(
 	sourceId: string,
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
@@ -452,7 +444,7 @@ function getScopedContentHashMemoryId(
 	contentHash: string,
 	input: RememberDedupeScope,
 ): { readonly id: string } | undefined {
-	const scoped = scopedContentHashPredicate(input);
+	const scoped = scopedContentHashPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id
@@ -473,7 +465,7 @@ function getScopedContentHashDedupeRow(
 	contentHash: string,
 	input: RememberDedupeScope,
 ): RememberDedupeRow | undefined {
-	const scoped = scopedContentHashPredicate(input);
+	const scoped = scopedContentHashPredicate(db, input);
 	return db
 		.prepare(
 			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
@@ -490,7 +482,7 @@ function getScopedChunkIdempotencyRows(
 	input: RememberDedupeScope,
 ): readonly RememberChunkDedupeRow[] {
 	if (!baseKey) return [];
-	const scoped = scopedMemoryPredicate(input);
+	const scoped = scopedMemoryPredicate(db, input);
 	return prepareTypedStatement<RememberChunkDedupeRow>(
 		db,
 		`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
@@ -803,6 +795,19 @@ export function createMemoryCaptureAdmissionMiddleware(admission: ConcurrencyAdm
 }
 
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
+	for (const path of ["/api/memory/*", "/api/memories/*", "/api/documents", "/api/documents/*", "/api/hook/remember"]) {
+		app.use(path, async (c, next) => {
+			if (
+				["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+				c.req.path !== "/api/memory/recall" &&
+				!c.get("author")
+			) {
+				c.header("WWW-Authenticate", "Bearer");
+				return c.json({ error: "A write requires an explicit author", reason: "missing_credential" }, 401);
+			}
+			await next();
+		});
+	}
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
 	const recallOwner = deps.recallOwner;
@@ -1018,14 +1023,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					sql: `SELECT COUNT(*) AS total,
 					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
 					        COALESCE(SUM(CASE WHEN
-					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
-					          OR (m.content_hash IS NOT NULL AND EXISTS (
-					            SELECT 1 FROM embeddings e
-					            JOIN memories owner ON owner.id = e.source_id
-					            WHERE e.source_type = 'memory'
-					              AND e.content_hash = m.content_hash
-					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-					          ))
+					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id AND e.agent_id=m.agent_id)
 					        THEN 1 ELSE 0 END), 0) AS with_embeddings
 					 FROM memories m
 					 ${whereSql}`,
@@ -1461,7 +1459,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		await ensureAgentRegistered(agentId);
 		const visibility: RememberDedupeScope["visibility"] = body.visibility === "private" ? "private" : "global";
-		const dedupeScope: RememberDedupeScope = { agentId, visibility, project: body.project ?? null, scope };
+		const dedupeScope: RememberDedupeScope = {
+			agentId,
+			visibility,
+			project: body.project ?? null,
+			scope,
+			author: requireWriteAuthor(c.get("author")),
+			writeScope: { agentId, sessionKey: c.req.header("x-signet-session-key") ?? null, sourceId: body.sourceId },
+		};
 		const hasBodyTags = Object.hasOwn(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
@@ -1528,17 +1533,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return c.json({ error: "content produced no valid chunks" }, 400);
 			}
 
-			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
-				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "db:memory.capture.base-idempotency.read" },
+			const baseIdempotencyMemory = await runWriteTxAsync(getDbAccessor(), (db) =>
+				getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
 			}
 
-			const existingChunks = await getDbAccessor().withReadDbAsync(
-				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "db:memory.capture.chunk-idempotency.read" },
+			const existingChunks = await runWriteTxAsync(getDbAccessor(), (db) =>
+				getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1569,16 +1572,16 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return c.json({ error: "chunked content contains duplicate chunks" }, 409);
 				}
 				contentHashes.add(plan.normalized.contentHash);
-				const byHash = await getDbAccessor().withReadDbAsync(
-					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "db:memory.capture.chunk-hash.read" },
+				const byHash = await runWriteTxAsync(getDbAccessor(), (db) =>
+					getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
 				}
 			}
 
-			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
+			const groupId =
+				sourceId ?? chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
 			const now = new Date().toISOString();
 			const plannedChunkIds = chunkPlans.map(() => crypto.randomUUID());
 			type ChunkInsertResult =
@@ -1621,6 +1624,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						const plan = chunkPlans[chunkIndex];
 						const chunkId = plannedChunkIds[chunkIndex];
 						txIngestEnvelope(db, {
+							sessionKey: c.req.header("x-signet-session-key") ?? null,
 							author: c.get("author"),
 							id: chunkId,
 							content: plan.normalized.storageContent,
@@ -1682,7 +1686,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					const plan = chunkPlans[chunkIndex];
 					const chunkId = savedChunkIds[chunkIndex];
 					try {
-						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding, "document", {
+						const vec = await fetchEmbeddingFn(plan.normalized.storageContent, fullCfg.embedding, "document", {
 							usage: { source: "memory-capture", agentId },
 							onFailure: recordRouteOperationFailure(c),
 						});
@@ -1704,9 +1708,19 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 									db.prepare(`
 										INSERT INTO embeddings
-										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-									`).run(embId, embHash, blob, vec.length, chunkId, plan.normalized.storageContent, now);
+										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+									`).run(
+										embId,
+										embHash,
+										blob,
+										vec.length,
+										chunkId,
+										plan.normalized.storageContent,
+										now,
+										agentId,
+										evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id: chunkId }]),
+									);
 									syncVecInsert(db, embId, vec);
 									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 										fullCfg.embedding.model,
@@ -1776,9 +1790,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const chunkedIdempotencyMemory =
 			rowProvenance.idempotencyKey === undefined
 				? []
-				: await getDbAccessor().withReadDbAsync(
-						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "db:memory.capture.single-idempotency.read" },
+				: await runWriteTxAsync(getDbAccessor(), (db) =>
+						getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1818,6 +1831,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				const byHash = getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				if (byHash) return { deduped: true as const, row: byHash };
 				txIngestEnvelope(db, {
+					sessionKey: c.req.header("x-signet-session-key") ?? null,
 					author: c.get("author"),
 					id,
 					content: normalizedContent.storageContent,
@@ -1911,43 +1925,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				});
 			}
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : "";
-			if (msg.includes("UNIQUE constraint")) {
-				const existing = await getDbAccessor().withReadDbAsync(
-					async (db) => {
-						const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
-						if (byIdempotencyKey) return byIdempotencyKey;
-						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
-					},
-					{ siteToken: "db:memory.capture.conflict-dedupe.read" },
-				);
-				if (existing) {
-					c.header("x-signet-operation-skipped", "1");
-					await runWriteTxAsync(getDbAccessor(), (db) =>
-						txInsertMemoryTemporalEdges({
-							db,
-							memoryId: existing.id,
-							agentId: existing.agentId,
-							inputs: temporalInputs.inputs ?? [],
-							now,
-						}),
-					);
-					recordFirstUseTelemetry("remember");
-					return c.json({
-						id: existing.id,
-						type: existing.type,
-						tags: existing.tags || "",
-						pinned: !!existing.pinned,
-						importance: existing.importance,
-						content: existing.content,
-						embedded: true,
-						deduped: true,
-					});
-				}
-				if (msg.includes("idempotency_key")) {
-					return c.json({ error: "idempotencyKey is already used by a memory outside this project" }, 409);
-				}
-			}
 			if (e instanceof Error && e.message === TRANSCRIPT_PROJECT_CONFLICT) {
 				return c.json({ error: "this session's transcript belongs to another project" }, 409);
 			}
@@ -1961,7 +1938,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const baseCfg = loadMemoryConfig(AGENTS_DIR);
 			const cfg = await withActiveEmbeddingConfig(baseCfg);
-			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding, "document", {
+			const vec = await fetchEmbeddingFn(normalizedContent.storageContent, cfg.embedding, "document", {
 				usage: { source: "memory-capture", agentId },
 				onFailure: recordRouteOperationFailure(c),
 			});
@@ -1983,9 +1960,19 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
 						db.prepare(`
 							INSERT INTO embeddings
-							  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-							VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-						`).run(embId, embHash, blob, vec.length, id, normalizedContent.storageContent, now);
+							  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+							VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+						`).run(
+							embId,
+							embHash,
+							blob,
+							vec.length,
+							id,
+							normalizedContent.storageContent,
+							now,
+							agentId,
+							evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id }]),
+						);
 						syncVecInsert(db, embId, vec);
 						db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.embedding.model, id);
 						return true;
@@ -2008,13 +1995,20 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				try {
 					await runWriteTxAsync(getDbAccessor(), (db) => {
 						const stmt = db.prepare(
-							`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
-							 VALUES (?, ?, ?, ?, ?)`,
+							`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at, compartment_id)
+							 VALUES (?, ?, ?, ?, ?, ?)`,
 						);
 						for (const hint of allHints) {
 							const h = typeof hint === "string" ? hint.trim() : "";
 							if (h.length < 5 || h.length > 300) continue;
-							stmt.run(crypto.randomUUID(), id, agentId, h, now);
+							stmt.run(
+								crypto.randomUUID(),
+								id,
+								agentId,
+								h,
+								now,
+								evidenceCompartmentInTx(db, agentId, [{ kind: "memory", id }]),
+							);
 							hintsWritten++;
 						}
 					});
@@ -2892,6 +2886,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
 		try {
 			const result = recordPathFeedback(getDbAccessor(), {
+				author: requireWriteAuthor(c.get("author")),
 				sessionKey,
 				agentId,
 				ratings: parsed,
@@ -3807,7 +3802,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
 		await ensureAgentRegistered(scopedAgent.agentId);
 		const metadataJson = documentMetadataJson(body.metadata);
-		const author = c.get("author");
+		const author = requireWriteAuthor(c.get("author"));
 
 		const accessor = getDbAccessor();
 
@@ -3838,8 +3833,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					`INSERT INTO documents
 					 (id, source_url, source_type, content_type, title,
 					  raw_content, status, connector_id, chunk_count,
-					  memory_count, metadata_json, agent_id, project, created_at, updated_at, author_user_id)
-					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?, ?, ?)`,
+					  memory_count, metadata_json, agent_id, project, created_at, updated_at, author_user_id, compartment_id)
+					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
 				).run(
 					id,
 					sourceUrl,
@@ -3853,7 +3848,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					scopedProject.project ?? null,
 					now,
 					now,
-					author?.userId ?? null,
+					author.userId,
+					compartmentForWrite(db, {
+						agentId: scopedAgent.agentId,
+						sessionKey: c.req.header("x-signet-session-key") ?? null,
+						sourceId: parseOptionalString(body.connector_id) ?? id,
+					}),
 				);
 
 				auditAuthoredWriteInTx(db, author, "document.created", "document", id, scopedAgent.agentId);

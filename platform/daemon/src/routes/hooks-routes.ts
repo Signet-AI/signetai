@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { principalMessageReadScope } from "../auth/message-read-scope";
 import { withStopAdmission } from "../stop-admission";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
@@ -25,7 +27,6 @@ import {
 	createAgentMessageAsync,
 	getAgentPresenceForSession,
 	getAgentPresenceForSessionAgent,
-	isMessageVisibleToAgent,
 	listAgentMessagePage,
 	listAgentMessages,
 	listAgentPresence,
@@ -367,7 +368,11 @@ function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?:
 	return isSessionBypassed(key, resolveAgentId({ agentId: body?.agentId, sessionKey: key }));
 }
 
+async function messageReadScope(c: Context): Promise<ReadScope> {
+	return principalMessageReadScope(c.get("principal"), Boolean(c.get("organization")));
+}
 interface HookNotificationContext {
+	readonly readScope: ReadScope;
 	readonly harness: string;
 	readonly hook: string;
 	readonly agentId: string;
@@ -543,8 +548,9 @@ function registerSessionStart(app: Hono): void {
 
 			recordRecallAttempt("prompt_injection");
 			recallAttempted = true;
-			const result = await handleSessionStart(body);
+			const result = await handleSessionStart({ ...body, author: c.get("author") });
 			const response = await withCrossAgentNotifications(result, {
+				readScope: await messageReadScope(c),
 				harness: body.harness,
 				hook: "SessionStart",
 				agentId: scopedAgent.agentId,
@@ -675,7 +681,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			}
 			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
 			try {
-				result = await handleUserPromptSubmit(body, undefined, {
+				result = await handleUserPromptSubmit({ ...body, author: c.get("author") }, undefined, {
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
 				});
 			} finally {
@@ -687,6 +693,7 @@ function registerUserPromptSubmit(app: Hono): void {
 					{
 						harness: body.harness,
 						hook: "UserPromptSubmit",
+						readScope: await messageReadScope(c),
 						agentId,
 						sessionKey,
 					},
@@ -746,6 +753,7 @@ function registerNotifications(app: Hono): void {
 			stampHarness(harness);
 
 			const notifications = collectCrossAgentNotifications({
+				readScope: await messageReadScope(c),
 				harness,
 				hook,
 				agentId: scopedAgent.agentId,
@@ -800,6 +808,7 @@ function registerDirectMessageWake(app: Hono): void {
 
 		try {
 			const result = await waitForDirectMessageWake({
+				readScope: () => messageReadScope(c),
 				agentId: scopedAgent.agentId,
 				sessionKey,
 				harness,
@@ -937,6 +946,7 @@ function registerStop(app: Hono): void {
 				}
 				return c.json(
 					await handleStop({
+						author: c.get("author"),
 						harness,
 						sessionKey,
 						agentId,
@@ -1012,7 +1022,7 @@ function registerSessionEnd(app: Hono): void {
 			}
 
 			try {
-				const result = await handleSessionEnd(body);
+				const result = await handleSessionEnd({ ...body, author: c.get("author") });
 				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken = (): boolean =>
 					sessionKey !== undefined &&
@@ -1181,7 +1191,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			renewSession(body.sessionKey, agentId);
 
-			const result = await handleCheckpointExtract(body);
+			const result = await handleCheckpointExtract({ ...body, author: c.get("author") });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Checkpoint extract hook failed", e as Error);
@@ -1440,7 +1450,7 @@ function registerPreCompaction(app: Hono): void {
 				return c.json({ instructions: "", bypassed: true });
 			}
 
-			const result = handlePreCompaction(body);
+			const result = handlePreCompaction({ ...body, author: c.get("author") });
 			if (transcriptPath) {
 				setImmediate(() =>
 					recordSkillsFromTranscript({
@@ -1600,37 +1610,6 @@ function registerCompactionComplete(app: Hono): void {
 				cwd: cwd ?? undefined,
 				sessionKey: body.sessionKey,
 			});
-
-			if (body.sessionKey) {
-				try {
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					getDbAccessor().withWriteTx((db: WriteDb) => {
-						const hasTx = db
-							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
-							.get();
-						if (hasTx) {
-							db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(
-								body.sessionKey,
-								agentId,
-							);
-						}
-						const hasCur = db
-							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'")
-							.get();
-						if (hasCur) {
-							db.prepare("DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?").run(
-								body.sessionKey,
-								agentId,
-							);
-						}
-					}, "db:hooks.compaction.transcript-state.delete");
-				} catch (err) {
-					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
-						error: err instanceof Error ? err.message : String(err),
-						sessionKey: body.sessionKey,
-					});
-				}
-			}
 
 			void getSynthesisWorker()
 				?.triggerNow({
@@ -1880,7 +1859,7 @@ async function relayClaimedAcpMessage(attempt: AcpDeliveryAttempt): Promise<Agen
 }
 
 function registerCrossAgentMessages(app: Hono): void {
-	app.get("/api/cross-agent/messages", (c) => {
+	app.get("/api/cross-agent/messages", async (c) => {
 		const scope = c.req.query("scope");
 		if (scope !== undefined && scope !== "all") return c.json({ error: "scope must be 'all' when provided" }, 400);
 		const operator = scope === "all";
@@ -1909,6 +1888,7 @@ function registerCrossAgentMessages(app: Hono): void {
 		}
 
 		const page = listAgentMessagePage({
+			readScope: await messageReadScope(c),
 			allAgents: operator,
 			agentId: scopedAgent.agentId,
 			sessionKey,
@@ -1947,6 +1927,7 @@ function registerCrossAgentMessages(app: Hono): void {
 		try {
 			return c.json(
 				acknowledgeAgentMessage({
+					readScope: await messageReadScope(c),
 					messageId,
 					agentId: scopedAgent.agentId,
 					sessionKey,
@@ -1977,6 +1958,7 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		try {
 			const attempt = claimAcpMessageDelivery({
+				readScope: await messageReadScope(c),
 				messageId,
 				agentId: scopedAgent.agentId,
 				retryIndeterminate: true,
@@ -2093,7 +2075,11 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		if (acpRequest) {
 			try {
-				const attempt = claimAcpMessageDelivery({ messageId: message.id, agentId: scopedSender.agentId });
+				const attempt = claimAcpMessageDelivery({
+					readScope: await messageReadScope(c),
+					messageId: message.id,
+					agentId: scopedSender.agentId,
+				});
 				message = await relayClaimedAcpMessage(attempt);
 			} catch (error) {
 				logger.error(
@@ -2137,6 +2123,7 @@ function registerCrossAgentStream(app: Hono): void {
 			logger.error("hooks", "Presence stream scope failed", error instanceof Error ? error : new Error(String(error)));
 			return c.json({ error: "Failed to resolve presence visibility" }, 500);
 		}
+		const streamReadScope = await messageReadScope(c);
 		let presenceQueue: Promise<void> = Promise.resolve();
 
 		const sse = openBoundedSse({
@@ -2172,6 +2159,7 @@ function registerCrossAgentStream(app: Hono): void {
 						allowedAgentIds: snapshotAudience,
 					}),
 					messages: listAgentMessages({
+						readScope: streamReadScope,
 						agentId,
 						sessionKey,
 						includeSent,
@@ -2184,17 +2172,27 @@ function registerCrossAgentStream(app: Hono): void {
 
 				const nextUnsubscribe = subscribeCrossAgentEvents((event) => {
 					if (event.type === "message") {
-						if (
-							!isMessageVisibleToAgent(event.message, {
-								agentId,
-								sessionKey,
-								includeBroadcast: true,
+						presenceQueue = presenceQueue
+							.then(async () => {
+								if (producer.isClosed) return;
+								const page = listAgentMessagePage({
+									readScope: await messageReadScope(c),
+									agentId,
+									sessionKey,
+									includeSent,
+									includeBroadcast: true,
+									messageId: event.message.id,
+									limit: 1,
+								});
+								const message = page.items[0];
+								if (message) writeEvent({ ...event, message });
 							})
-						) {
-							if (!(includeSent && event.message.fromAgentId === agentId)) {
-								return;
-							}
-						}
+							.catch((error: unknown) => {
+								logger.warn("hooks", "Message stream visibility failed", {
+									error: error instanceof Error ? error.message : String(error),
+								});
+							});
+						return;
 					}
 
 					if (event.type === "presence" && !includeSelf && event.presence.agentId === agentId) {
@@ -2313,6 +2311,15 @@ const SESSION_LIFECYCLE_HOOKS = [
 ] as const;
 
 export function registerHooksRoutes(app: Hono): void {
+	for (const path of ["/api/hooks/*", "/api/cross-agent", "/api/cross-agent/*"]) {
+		app.use(path, async (c, next) => {
+			if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) && !c.get("author")) {
+				c.header("WWW-Authenticate", "Bearer");
+				return c.json({ error: "A write requires an explicit author", reason: "missing_credential" }, 401);
+			}
+			await next();
+		});
+	}
 	for (const path of SESSION_LIFECYCLE_HOOKS) {
 		app.use(path, async (c, next) => requirePermission("remember", authConfig)(c, next));
 	}

@@ -1,7 +1,13 @@
+import { compartmentForWrite } from "@signet/core";
 import { createHash } from "node:crypto";
 import type { WriteDb } from "./db-accessor";
-import { getDbAccessor } from "./db-accessor";
-import { countChanges } from "./db-helpers";
+import { getDbAccessor, prepareTypedStatement } from "./db-accessor";
+import {
+	type CitationEvidence,
+	countChanges,
+	evidenceCompartmentInTx,
+	recordEvidenceCitationsInTx,
+} from "./db-helpers";
 import { requireDependencyReason } from "./dependency-history";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
@@ -38,6 +44,60 @@ export interface PurgeSourceArtifactStructureResult {
 	readonly aspects: number;
 	readonly attributes: number;
 	readonly dependencies: number;
+}
+
+export function sourceStructureEvidenceInTx(
+	db: WriteDb,
+	agentId: string,
+	sourceId: string,
+	sourcePath: string,
+): readonly CitationEvidence[] {
+	return prepareTypedStatement<{ source_path: string }>(
+		db,
+		"SELECT source_path FROM memory_artifacts WHERE agent_id=? AND source_id=? AND source_path=? AND COALESCE(is_deleted,0)=0",
+	)
+		.all(agentId, sourceId, sourcePath)
+		.map((row) => ({ kind: "artifact", id: row.source_path }));
+}
+
+export function purgeSourceStructureCitationsInTx(
+	db: WriteDb,
+	input: {
+		readonly agentId?: string;
+		readonly sourceId: string;
+		readonly sourcePath?: string;
+		readonly sourceRoot?: string;
+	},
+): void {
+	for (const [kind, table] of [
+		["entity", "entities"],
+		["dependency", "entity_dependencies"],
+	] as const) {
+		db.prepare(`DELETE FROM evidence_citations WHERE derived_kind=? AND EXISTS (
+			SELECT 1 FROM ${table} row WHERE row.id=evidence_citations.derived_id AND row.agent_id=evidence_citations.agent_id
+			AND row.source_id=? AND (? IS NULL OR row.agent_id=?) AND (? IS NULL OR row.source_root=?)
+			AND row.source_root NOT IN ('dreaming','dreaming_attention')
+			AND (? IS NULL OR row.source_path=? OR (evidence_citations.evidence_kind='artifact' AND evidence_citations.evidence_id=?)))`).run(
+			kind,
+			input.sourceId,
+			input.agentId ?? null,
+			input.agentId ?? null,
+			input.sourceRoot ?? null,
+			input.sourceRoot ?? null,
+			input.sourcePath ?? null,
+			input.sourcePath ?? null,
+			input.sourcePath ?? null,
+		);
+	}
+}
+
+export function skillEntityCompartmentInTx(db: WriteDb, agentId: string, entityId: string): number | null {
+	const row = prepareTypedStatement<{ compartment_id: number | null }>(
+		db,
+		"SELECT compartment_id FROM entities WHERE id=? AND agent_id=?",
+	).get(entityId, agentId);
+	if (!row) throw new Error("skill_entity_not_in_agent");
+	return compartmentForWrite(db, { agentId, parentCompartment: row.compartment_id });
 }
 
 function canonicalSegment(value: string): string {
@@ -93,17 +153,25 @@ function upsertSourceEntity(
 		readonly sourceRoot: string;
 		readonly sourcePath: string;
 		readonly now: string;
+		readonly evidence: readonly CitationEvidence[];
 	},
 ): { readonly id: string; readonly inserted: boolean } {
 	const uniqueName = `${input.name} - ${input.canonicalName} - ${input.agentId}`;
-	const existing = db
-		.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
-		.get(input.canonicalName, input.agentId) as { id: string } | undefined;
+	const existing = prepareTypedStatement<{ id: string; compartment_id: number | null }>(
+		db,
+		"SELECT id, compartment_id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1",
+	).get(input.canonicalName, input.agentId);
+	const compartment = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		parentCompartment: evidenceCompartmentInTx(db, input.agentId, input.evidence, existing?.compartment_id),
+	});
+	const entityId = existing?.id ?? input.id;
 	if (existing) {
 		db.prepare(
 			`UPDATE entities
 			 SET name = ?, entity_type = ?, mentions = MAX(COALESCE(mentions, 0), 1), updated_at = ?,
-			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?, compartment_id = ?
 			 WHERE id = ?`,
 		).run(
 			uniqueName,
@@ -113,15 +181,22 @@ function upsertSourceEntity(
 			input.sourceKind,
 			input.sourcePath,
 			input.sourceRoot,
+			compartment,
 			existing.id,
 		);
+		recordEvidenceCitationsInTx(db, {
+			agentId: input.agentId,
+			derivedKind: "entity",
+			derivedId: entityId,
+			evidence: input.evidence,
+		});
 		return { id: existing.id, inserted: false };
 	}
 	db.prepare(
 		`INSERT INTO entities
 		 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at,
-		  source_id, source_kind, source_path, source_root)
-		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+		  source_id, source_kind, source_path, source_root, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		input.id,
 		uniqueName,
@@ -134,7 +209,14 @@ function upsertSourceEntity(
 		input.sourceKind,
 		input.sourcePath,
 		input.sourceRoot,
+		compartment,
 	);
+	recordEvidenceCitationsInTx(db, {
+		agentId: input.agentId,
+		derivedKind: "entity",
+		derivedId: entityId,
+		evidence: input.evidence,
+	});
 	return { id: input.id, inserted: true };
 }
 
@@ -150,20 +232,27 @@ function upsertDependency(
 		readonly sourcePath: string;
 		readonly reason: string;
 		readonly now: string;
+		readonly evidence: readonly CitationEvidence[];
 	},
 ): boolean {
-	const existing = db
-		.prepare(
-			`SELECT id FROM entity_dependencies
+	const existing = prepareTypedStatement<{ id: string; compartment_id: number | null }>(
+		db,
+		`SELECT id, compartment_id FROM entity_dependencies
 			 WHERE source_entity_id = ? AND target_entity_id = ? AND dependency_type = 'contains' AND agent_id = ?
 			 LIMIT 1`,
-		)
-		.get(input.sourceEntityId, input.targetEntityId, input.agentId) as { id: string } | undefined;
+	).get(input.sourceEntityId, input.targetEntityId, input.agentId);
+	const compartment = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		parentCompartment: evidenceCompartmentInTx(db, input.agentId, input.evidence, existing?.compartment_id),
+	});
+	const dependencyId =
+		existing?.id ?? idFor("dep", input.agentId, "contains", input.sourceEntityId, input.targetEntityId);
 	if (existing) {
 		db.prepare(
 			`UPDATE entity_dependencies
 			 SET strength = MAX(strength, 1), confidence = MAX(COALESCE(confidence, 0), 1),
-			     reason = ?, updated_at = ?, source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			     reason = ?, updated_at = ?, source_id = ?, source_kind = ?, source_path = ?, source_root = ?, compartment_id = ?
 			 WHERE id = ?`,
 		).run(
 			requireDependencyReason("related_to", input.reason),
@@ -172,15 +261,22 @@ function upsertDependency(
 			input.sourceKind,
 			input.sourcePath,
 			input.sourceRoot,
+			compartment,
 			existing.id,
 		);
+		recordEvidenceCitationsInTx(db, {
+			agentId: input.agentId,
+			derivedKind: "dependency",
+			derivedId: dependencyId,
+			evidence: input.evidence,
+		});
 		return false;
 	}
 	db.prepare(
 		`INSERT INTO entity_dependencies
 		 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason,
-		  created_at, updated_at, source_id, source_kind, source_path, source_root)
-		 VALUES (?, ?, ?, ?, 'contains', 1, 1, ?, ?, ?, ?, ?, ?, ?)`,
+		  created_at, updated_at, source_id, source_kind, source_path, source_root, compartment_id)
+		 VALUES (?, ?, ?, ?, 'contains', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		idFor("dep", input.agentId, "contains", input.sourceEntityId, input.targetEntityId),
 		input.sourceEntityId,
@@ -193,7 +289,14 @@ function upsertDependency(
 		input.sourceKind,
 		input.sourcePath,
 		input.sourceRoot,
+		compartment,
 	);
+	recordEvidenceCitationsInTx(db, {
+		agentId: input.agentId,
+		derivedKind: "dependency",
+		derivedId: dependencyId,
+		evidence: input.evidence,
+	});
 	return true;
 }
 
@@ -212,6 +315,7 @@ function removeSourceArtifactStructureInTx(
 	db: WriteDb,
 	input: PurgeSourceArtifactStructureInput,
 ): PurgeSourceArtifactStructureResult {
+	purgeSourceStructureCitationsInTx(db, input);
 	const entityRows = db
 		.prepare(
 			`SELECT id FROM entities
@@ -328,6 +432,7 @@ export function indexSourceArtifactStructureInTx(
 		content: input.content,
 	});
 
+	const evidence = sourceStructureEvidenceInTx(db, input.agentId, input.sourceId, input.sourcePath);
 	let entitiesTouched = 0;
 	let dependenciesTouched = 0;
 
@@ -341,6 +446,7 @@ export function indexSourceArtifactStructureInTx(
 		sourceKind: input.sourceKind,
 		sourceRoot: input.sourceRoot,
 		sourcePath: input.sourceRoot,
+		evidence,
 		now,
 	});
 	entitiesTouched++;
@@ -358,6 +464,7 @@ export function indexSourceArtifactStructureInTx(
 			sourceKind: input.sourceKind,
 			sourceRoot: input.sourceRoot,
 			sourcePath: parentPath,
+			evidence,
 			now,
 		});
 		entitiesTouched++;
@@ -374,6 +481,7 @@ export function indexSourceArtifactStructureInTx(
 		sourceKind: input.sourceKind,
 		sourceRoot: input.sourceRoot,
 		sourcePath: input.sourcePath,
+		evidence,
 		now,
 	});
 	entitiesTouched++;
@@ -388,6 +496,7 @@ export function indexSourceArtifactStructureInTx(
 			sourceRoot: input.sourceRoot,
 			sourcePath: input.sourcePath,
 			reason: `Source artifact ${input.sourcePath} belongs to ${input.sourceParentPath ?? input.sourceRoot}`,
+			evidence,
 			now,
 		})
 	) {
