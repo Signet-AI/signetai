@@ -11,15 +11,25 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 	try {
 		const fixture = await Fixture.create(daemon, "personal", false);
 		const admin = await device(daemon, fixture.admin, "cli-admin");
-		const cli = async (args: readonly string[], bearer = admin.credential.bearer ?? "", expectedCode = 0) => {
+		const cli = async (
+			args: readonly string[],
+			bearer = admin.credential.bearer ?? "",
+			expectedCode = 0,
+			input?: string,
+		) => {
 			const env: NodeJS.ProcessEnv = { ...daemon.env, SIGNET_API_KEY: bearer };
 			delete env.SIGNET_DAEMON_ENTRYPOINT;
 			const child = Bun.spawn([process.execPath, join(repo, "surfaces/cli/src/cli.ts"), ...args], {
 				env,
 				cwd: repo,
+				stdin: input === undefined ? "ignore" : "pipe",
 				stdout: "pipe",
 				stderr: "pipe",
 			});
+			if (input !== undefined && child.stdin) {
+				child.stdin.write(input);
+				child.stdin.end();
+			}
 			const [stdout, stderr, code] = await Promise.all([
 				new Response(child.stdout).text(),
 				new Response(child.stderr).text(),
@@ -103,6 +113,38 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		expect(agentInventory.agents.some((agent: { id: string }) => agent.id === purgedAgent.agentId)).toBe(false);
 		expect((await request(daemon.origin, "/api/agents", purgeKey.credential)).status).toBe(401);
 		expect((await cli(["audit", "--action", "agent.purged", "--json"])).events.length).toBe(1);
+
+		const sso = await cli(
+			[
+				"auth",
+				"sso",
+				"set",
+				"--issuer",
+				"https://idp.example",
+				"--client-id",
+				"isolated-client",
+				"--client-secret-stdin",
+				"--json",
+			],
+			text(admin.credential.bearer),
+			0,
+			"isolated-sso-secret\n",
+		);
+		expect(sso.oidc.issuer).toBe("https://idp.example");
+		expect(JSON.stringify(sso)).not.toContain("isolated-sso-secret");
+		const referenced = await cli([
+			"auth",
+			"sso",
+			"set",
+			"--issuer",
+			"https://idp.example",
+			"--client-id",
+			"isolated-client",
+			"--client-secret-ref",
+			sso.oidc.clientSecretRef,
+			"--json",
+		]);
+		expect(referenced.oidc.clientSecretRef).toBe(sso.oidc.clientSecretRef);
 		const exportedPath = join(daemon.root, "organization-export.ndjson");
 		const exported = await cli(["export", "bundle", "--all", "--output", exportedPath, "--json"]);
 		expect(exported.exported).toBe(true);

@@ -339,3 +339,22 @@ operator, or cleanup that exceeds the one-minute deadline leaves a refused or
 incomplete result rather than claiming successful deletion. Use the job ID to
 inspect the result; resolve the blocker before retrying. Purge responses never
 include counts of content outside the caller's audience.
+
+## Configuring SSO from the CLI
+
+Run `signet auth sso set --issuer https://idp.example.com --client-id signet
+--client-secret-ref SIGNET_OIDC_CLIENT_SECRET`. The reference is resolved by the
+instance's secret store, not the developer's machine. Alternatively, pipe a
+secret-manager command into the same command with `--client-secret-stdin`.
+There is no secret-value argument. Stdin is bounded to 16 KiB and ten seconds;
+`--non-interactive` does not request keychain authorization. A locked instance
+store fails with `secret_store_unavailable` rather than opening an OS prompt.
+
+Settings and their audit event commit together through the DB owner with current,
+unrestricted admin authorization. A staged secret is read back before publication,
+and failed publication removes it only after confirming it is not referenced.
+If publication cannot be checked, `sso_publication_uncertain` retains the secret
+rather than risking a broken live configuration. Successful replacement does not
+delete older operator-managed secret references; retire them explicitly through
+Signet's secret store after verifying the new configuration. Secret values never
+appear in settings, audit output, or command output.

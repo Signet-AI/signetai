@@ -1,3 +1,4 @@
+import { readSecretFromStdin } from "../lib/stdin-secret.js";
 import { confirm, password } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { Command } from "commander";
@@ -18,14 +19,6 @@ interface SecretDeps {
 
 function append(value: string, previous: string[]): string[] {
 	return [...previous, value];
-}
-
-async function readSecretFromStdin(): Promise<string> {
-	const chunks: Buffer[] = [];
-	for await (const chunk of process.stdin) {
-		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-	}
-	return Buffer.concat(chunks).toString("utf-8").trim();
 }
 
 export function registerSecretCommands(program: Command, deps: SecretDeps): void {

@@ -429,6 +429,8 @@ without hiding setup affordances).
 
 ### Supervised organization operations
 
+- `POST /api/org/sso`: unrestricted admin; OIDC issuer/client ID and exactly one `clientSecretRef` or write-only `clientSecret`. Uses Signet Secrets, verifies storage, publishes settings and audit through the DB owner, and never returns secret values. MCP `signet_org_sso_set` accepts references only.
+
 - `POST /api/org/agents/:id/purge`: empty body; archived non-organization agent; unrestricted admin; returns HTTP 202 `{jobId}`. Poll `/api/org/jobs/:id`. MCP: `signet_agent_purge` with `confirm: true`.
 
 - `POST /api/org/bootstrap`: unclaimed team instance only; setup nonce and validated public URL.

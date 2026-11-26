@@ -44,7 +44,9 @@ export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
 					? 404
 					: reason === "capacity"
 						? 429
-						: ["purge_requires_archive", "purge_limit", "protected_agent", "purge_blocked"].includes(reason)
+						: ["purge_requires_archive", "purge_limit", "protected_agent", "purge_blocked", "org_policy"].includes(
+									reason,
+								)
 							? 409
 							: 403,
 				reason,

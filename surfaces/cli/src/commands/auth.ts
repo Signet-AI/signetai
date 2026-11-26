@@ -1,3 +1,4 @@
+import { readSecretFromStdin } from "../lib/stdin-secret.js";
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { hostname, platform } from "node:os";
 import type { Command } from "commander";
@@ -31,6 +32,10 @@ export interface LoginOnboardingContext {
 	readonly json: boolean;
 }
 interface AuthOptions {
+	issuer?: string;
+	clientId?: string;
+	clientSecretRef?: string;
+	clientSecretStdin?: boolean;
 	url?: string;
 	json?: boolean;
 	all?: boolean;
@@ -247,6 +252,26 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 		}),
 	);
 	const auth = program.command("auth").description("Manage your devices and sessions");
+	options(auth.command("sso").command("set").description("Configure organization SSO without putting a secret in argv"))
+		.requiredOption("--issuer <url>", "OIDC issuer")
+		.requiredOption("--client-id <id>", "OIDC client ID")
+		.option("--client-secret-ref <name>", "Secret-store reference (default: SIGNET_OIDC_CLIENT_SECRET)")
+		.option("--client-secret-stdin", "Read the client secret from a bounded stdin pipe")
+		.action(
+			action(async (opts) => {
+				if (opts.clientSecretStdin && opts.clientSecretRef)
+					throw new SignetError("Choose a secret reference or stdin, not both", "invalid_request");
+				const secret = opts.clientSecretStdin ? await readSecretFromStdin(16384) : undefined;
+				const result = await (await authTransport(opts, deps)).post("/api/org/sso", {
+					issuer: opts.issuer,
+					clientId: opts.clientId,
+					...(secret
+						? { clientSecret: secret }
+						: { clientSecretRef: opts.clientSecretRef ?? "SIGNET_OIDC_CLIENT_SECRET" }),
+				});
+				print(JSON.stringify(result, null, opts.json ? undefined : 2));
+			}),
+		);
 	for (const kind of ["devices", "sessions"] as const) {
 		const group = options(auth.command(kind).description(`List your ${kind}`));
 		group.action(

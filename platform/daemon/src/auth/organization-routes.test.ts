@@ -88,6 +88,28 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("SSO configuration refuses narrowed authority before secret access and never publishes missing secrets", async () => {
+		await claim();
+		const alice = await member("sso-alice");
+		const identity = await (await call("/api/auth/whoami")).json();
+		const input = { issuer: "https://idp.example", clientId: "fixture-client", clientSecretRef: "MISSING_SSO_FIXTURE" };
+		expect((await call("/api/org/sso", "POST", input, alice.token)).status).toBe(403);
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "scoped SSO",
+				agentId: identity.agents.defaultWrite,
+				permissions: ["admin"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		expect(typeof key.secret).toBe("string");
+		expect((await call("/api/org/sso", "POST", input, key.secret)).status).toBe(403);
+		const before = await (await call("/api/org/settings")).json();
+		expect((await call("/api/org/sso", "POST", { ...input, clientSecret: "fixture-secret" })).status).toBe(400);
+		expect((await call("/api/org/sso", "POST", input)).status).toBe(503);
+		expect(await (await call("/api/org/settings")).json()).toEqual(before);
+	});
+
 	test("agent purge is an audited owner job and refuses narrowed credentials", async () => {
 		await claim();
 		const alice = await member("purge-alice");

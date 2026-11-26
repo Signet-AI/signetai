@@ -1,3 +1,4 @@
+import { oidcSchema, settingsSchema } from "./organization-settings-contract";
 import { operatorActor, operatorRequest } from "../operator-jobs";
 import { attemptAsync } from "@signet/core";
 import { z } from "zod";
@@ -327,52 +328,7 @@ export async function effectiveAccess(p: Principal, userId: string) {
 		readableClassifications: await readableClassificationsFor(userId),
 	};
 }
-const oidcSchema = z
-	.object({
-		issuer: z.url(),
-		clientId: text,
-		clientSecretRef: text.optional(),
-		scopes: z.array(text).max(20).optional(),
-		groupClaim: text.optional(),
-		groupMap: z.record(z.string(), text).optional(),
-		allowedDomains: z.array(text).max(100).default([]),
-	})
-	.strict();
-const settingsSchema = z
-	.object({
-		name: text.optional(),
-		agentModel: z.enum(["personal", "single"]).optional(),
-		personalAgentsSelfService: z.boolean().optional(),
-		passwordLogin: z.boolean().optional(),
-		requireSso: z.boolean().optional(),
-		sessionTtlSeconds: z.number().int().min(60).max(31_536_000).optional(),
-		refreshTtlSeconds: z.number().int().min(60).max(31_536_000).optional(),
-		accessTtlSeconds: z.number().int().min(60).max(86400).optional(),
-		connectorKeyTtlSeconds: z.number().int().min(60).max(31_536_000).optional(),
-		legacyKeyDeadline: z.iso.datetime().nullable().optional(),
-		auditRetentionDays: z.number().int().min(1).max(3650).optional(),
-		publicUrl: z
-			.url()
-			.refine((value) => ["http:", "https:"].includes(new URL(value).protocol))
-			.optional(),
-		oidc: oidcSchema.nullable().optional(),
-	})
-	.strict();
-const settingsColumns = {
-	name: "name",
-	agentModel: "agent_model",
-	personalAgentsSelfService: "personal_agents_self_service",
-	passwordLogin: "password_login",
-	requireSso: "require_sso",
-	sessionTtlSeconds: "session_ttl_seconds",
-	refreshTtlSeconds: "refresh_ttl_seconds",
-	accessTtlSeconds: "access_ttl_seconds",
-	connectorKeyTtlSeconds: "connector_key_ttl_seconds",
-	legacyKeyDeadline: "legacy_key_deadline",
-	auditRetentionDays: "audit_retention_days",
-	publicUrl: "public_url",
-	oidc: "oidc_json",
-};
+
 export async function settings(p: Principal) {
 	requireAdmin(p);
 	const org = await readOrganization();
@@ -395,43 +351,10 @@ export async function settings(p: Principal) {
 export async function updateSettings(p: Principal, input: unknown) {
 	requireAdmin(p);
 	const data = settingsSchema.parse(input);
-	const current = await readOrganization();
-	const nextOidc = data.oidc === undefined ? current.oidc_json : data.oidc;
-	if ((data.passwordLogin ?? Boolean(current.password_login)) === false && !nextOidc)
-		throw new IdentityError(409, "org_policy", "Configure OIDC before disabling passwords");
-	if ((data.requireSso ?? Boolean(current.require_sso)) && !nextOidc)
-		throw new IdentityError(409, "org_policy", "Configure OIDC before requiring SSO");
-	if (data.requireSso === true && !(data.oidc ?? current.oidc_json))
-		throw new IdentityError(403, "org_policy", "Configure SSO before requiring it");
-	const writes: DbOwnerStatement[] = [];
-	for (const key of Object.keys(settingsColumns)) {
-		const value = Reflect.get(data, key);
-		if (value === undefined) continue;
-		const column = Reflect.get(settingsColumns, key);
-		if (typeof column !== "string") throw new Error("Unknown organization setting");
-		const normalized =
-			key === "oidc"
-				? value === null
-					? null
-					: JSON.stringify(value)
-				: typeof value === "boolean"
-					? Number(value)
-					: value;
-		if (typeof normalized !== "string" && typeof normalized !== "number" && normalized !== null)
-			throw new IdentityError(400, "invalid_request");
-		writes.push(
-			statement(`UPDATE organization SET ${column} = ?,updated_at = ? WHERE id = 1`, [
-				normalized,
-				new Date().toISOString(),
-			]),
-		);
-	}
-	await organizationWrite([
-		...writes,
-		auditStatement(p, "organization.settings_updated", "organization", "1", { fields: Object.keys(data) }),
-	]);
+	await operatorRequest({ op: "settings", actor: operatorActor(p), input: data });
 	return settings(p);
 }
+
 export async function keys(p: Principal, filters: Record<string, string | undefined>) {
 	requireAdmin(p);
 	const where: string[] = [];

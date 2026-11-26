@@ -436,6 +436,19 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 	registerMcpTool(
 		server,
+		"signet_org_sso_set",
+		{
+			title: "Configure Organization SSO",
+			description:
+				"Configure SSO using an existing Signet secret-store reference. Requires unrestricted admin. Secret values are never returned.",
+			inputSchema: z
+				.object({ issuer: z.url(), clientId: z.string().min(1).max(128), clientSecretRef: z.string().min(1).max(128) })
+				.strict(),
+		},
+		async (input) => organizationResult("/api/org/sso", "POST", input),
+	);
+	registerMcpTool(
+		server,
 		"signet_operator_restart",
 		{
 			title: "Request Supervised Restart",

@@ -1,3 +1,4 @@
+import { setOrganizationSso } from "../organization-sso";
 import { startAgentPurge } from "../agent-purge";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -195,6 +196,10 @@ export function registerOrganizationRoutes(
 	app.delete(
 		"/api/auth/sessions/:id",
 		active(async (c) => c.json(await operations.revokeSession(user(c), c.req.param("id") ?? ""))),
+	);
+	app.post(
+		"/api/org/sso",
+		active(async (c) => c.json(await setOrganizationSso(user(c), await body(c)))),
 	);
 	app.post(
 		"/api/auth/device/start",
