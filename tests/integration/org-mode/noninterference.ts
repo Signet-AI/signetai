@@ -12,6 +12,8 @@ const probeVolatile = new Set([
 	"latencyMs",
 	"generatedAt",
 	"serverTime",
+	"at",
+	"timings",
 ]);
 export function normalize(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(normalize);

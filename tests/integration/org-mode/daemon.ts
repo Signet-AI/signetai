@@ -119,7 +119,7 @@ export class OrgDaemon {
 			assert(version, "Cannot locate current configVersion in config-migration.ts");
 			await writeFile(
 				join(daemon.workspace, "agent.yaml"),
-				`version: 1\nconfigVersion: ${version}\nembedding:\n  provider: none\nharnesses: []\ncapabilities:\n  identity:\n    mode: off\nauth:\n  mode: team\nmemory:\n  dreaming:\n    enabled: false\n  pipelineV2:\n    enabled: false\n    reranker:\n      enabled: false\n`,
+				`version: 1\nconfigVersion: ${version}\nembedding:\n  provider: none\nharnesses: []\ncapabilities:\n  identity:\n    mode: off\nauth:\n  mode: team\nsearch:\n  rehearsal_enabled: false\n  temporal_prior_enabled: false\nmemory:\n  dreaming:\n    enabled: false\n  pipelineV2:\n    enabled: false\n    reranker:\n      enabled: false\n`,
 			);
 			const modulePath = join(repo, "platform/daemon/src/db-accessor.ts");
 			const initializer = Bun.spawn(
