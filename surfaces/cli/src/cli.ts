@@ -41,6 +41,8 @@ import {
 import { detectExistingSetup } from "./lib/setup-detection.js";
 import chalk from "chalk";
 import { Command } from "commander";
+import { confirm, isCancel } from "@clack/prompts";
+import { onboardOrganizationHarnesses } from "./features/organization-onboarding.js";
 
 import { registerBrowseCommand } from "./browse.js";
 import { registerAccelerateCommands } from "./commands/accelerate.js";
@@ -1042,7 +1044,19 @@ registerDaemonCommands(program, {
 
 registerAuthCommands(program, {
 	configUrl: readDaemonUrlConfig(AGENTS_DIR),
-	saveUrl: (url) => saveDaemonLoginUrl(AGENTS_DIR, url),
+	saveUrl: (url) => saveDaemonLoginUrl(url),
+	afterLogin: (context) =>
+		onboardOrganizationHarnesses(context, {
+			agentsDir: AGENTS_DIR,
+			interactive: process.stdin.isTTY === true,
+			print: console.log,
+			confirm: async (message) => {
+				const value = await confirm({ message, initialValue: false });
+				if (isCancel(value))
+					throw new Error("Connection cancelled; login was kept and no further harnesses were changed");
+				return value;
+			},
+		}),
 });
 registerConnectorCommands(program, {
 	configUrl: readDaemonUrlConfig(AGENTS_DIR),

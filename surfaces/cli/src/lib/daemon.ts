@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { atomicPrivateWrite, configDirectory, withFileLock } from "../../../../libs/sdk/src/node/storage.js";
 import { formatYaml } from "@signet/core";
 import { join } from "node:path";
 import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
@@ -287,31 +287,37 @@ export function createDaemonClient(
 		secretApiCall,
 	};
 }
-export async function saveDaemonLoginUrl(agentsDir: string, url: string): Promise<void> {
-	const normalized = resolveSignetDaemonUrl({ env: {}, configUrl: url });
-	const file = join(agentsDir, "agent.yaml");
+function clientConfigFile() {
+	return join(configDirectory(), "config.yaml");
+}
+function daemonConfiguration(file: string): Record<string, unknown> {
 	const value: unknown = existsSync(file) ? parseSimpleYaml(readFileSync(file, "utf8")) : {};
 	if (typeof value !== "object" || value === null || Array.isArray(value))
-		throw new Error("Invalid agent configuration");
-	const daemon = "daemon" in value ? value.daemon : {};
-	if (typeof daemon !== "object" || daemon === null || Array.isArray(daemon))
-		throw new Error("Invalid daemon configuration");
-	await mkdir(agentsDir, { recursive: true });
-	const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-	await writeFile(temporary, formatYaml({ ...value, daemon: { ...daemon, url: normalized } }), { mode: 0o600 });
-	await rename(temporary, file);
+		throw new Error("Invalid client daemon configuration");
+	return Object.fromEntries(Object.entries(value));
+}
+export async function saveDaemonLoginUrl(url: string): Promise<void> {
+	const normalized = resolveSignetDaemonUrl({ env: {}, configUrl: url });
+	const file = clientConfigFile();
+	await withFileLock(`${file}.lock`, async () => {
+		const value = daemonConfiguration(file);
+		const daemon = value.daemon ?? {};
+		if (typeof daemon !== "object" || daemon === null || Array.isArray(daemon))
+			throw new Error("Invalid client daemon configuration");
+		await atomicPrivateWrite(file, formatYaml({ ...value, daemon: { ...daemon, url: normalized } }));
+	});
 }
 export function readDaemonUrlConfig(agentsDir: string): string | undefined {
-	const file = join(agentsDir, "agent.yaml");
-	if (!existsSync(file)) return undefined;
-	try {
-		const cfg = parseSimpleYaml(readFileSync(file, "utf-8")) as Record<string, unknown>;
-		const daemon = cfg.daemon as Record<string, unknown> | undefined;
-		const url = daemon?.url;
-		return typeof url === "string" && url.trim() ? url.trim() : undefined;
-	} catch {
-		return undefined;
-	}
+	const file = existsSync(clientConfigFile()) ? clientConfigFile() : join(agentsDir, "agent.yaml");
+	const value = daemonConfiguration(file);
+	const daemon = value.daemon;
+	if (daemon === undefined) return undefined;
+	if (typeof daemon !== "object" || daemon === null || Array.isArray(daemon))
+		throw new Error("Invalid client daemon configuration");
+	const url = "url" in daemon ? daemon.url : undefined;
+	if (url === undefined) return undefined;
+	if (typeof url !== "string" || !url.trim()) throw new Error("Invalid client daemon URL");
+	return resolveSignetDaemonUrl({ env: {}, configUrl: url });
 }
 
 export async function ensureDaemonRunning(

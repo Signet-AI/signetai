@@ -308,3 +308,17 @@ configuring local inference providers, or starting a local daemon. `--device-cod
 prints the approval URL instead of opening a browser. `--non-interactive` refuses
 human approval and keychain prompts; use an already provisioned credential for
 unattended commands instead. Connect local harnesses after signing in.
+
+After sign-in, the CLI explains personal-agent visibility, shows the read and
+write defaults, detects installed harnesses, and asks about each one separately.
+An existing personal or other-instance connection is kept unless you explicitly
+approve switching that harness. Nothing is imported automatically. In a pipe or
+JSON mode, detection is reported without changing connectors; use `signet connect`
+explicitly afterward.
+
+The selected instance is saved as `daemon.url` in the client's
+`~/.config/signet/config.yaml` (the Signet application-data directory on Windows).
+Signing in does not create `~/.agents`, rewrite a personal workspace's `agent.yaml`,
+or start local services. An existing workspace `daemon.url` remains readable for
+compatibility until a client target is saved. Flags and environment credentials
+still take precedence.
