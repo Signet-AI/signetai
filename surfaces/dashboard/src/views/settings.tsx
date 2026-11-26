@@ -9,7 +9,9 @@ import { InferenceSection } from "@/components/settings/inference";
 import { NetworkSection } from "@/components/settings/network";
 import { WorkspaceSettingsSection } from "@/components/workspace/workspace-settings-section";
 import type { SettingsSection } from "@/lib/settings-sections";
-import { useCan } from "@/lib/session";
+import { ORGANIZATION_NAV, OrganizationSection } from "@/views/organization";
+import { organizationSections } from "@/lib/organization";
+import { useCan, useSession } from "@/lib/session";
 import { useView } from "@/lib/view-context";
 import { SearchField } from "@/components/ui/field";
 import {
@@ -108,6 +110,12 @@ const NAV: {
 export function SettingsView() {
 	const { settingsSection: section, openSettings } = useView();
 	const isAdmin = useCan("admin");
+	const session = useSession();
+	const whoami = session.kind === "signed-in" ? session.whoami : undefined;
+	const organizationNav = ORGANIZATION_NAV.filter((item) =>
+		organizationSections(Boolean(whoami), whoami?.user.role ?? "", whoami?.user.compliance ?? false).includes(item.id),
+	);
+	const orgCurrent = ORGANIZATION_NAV.find((item) => item.id === section);
 	const current = NAV.find((n) => n.id === section);
 	const [query, setQuery] = useState("");
 	const search = query.trim().toLowerCase();
@@ -150,7 +158,30 @@ export function SettingsView() {
 								</section>
 							);
 						})}
-						{!visible.length && (
+						{(["Teams", "Organization", "Compliance"] as const).map((group) => {
+							const items = organizationNav.filter(
+								(item) => item.group === group && item.label.toLowerCase().includes(search),
+							);
+							return items.length ? (
+								<section className="settings-nav-group" key={group} aria-label={group}>
+									<h3 className="settings-nav-group-label">{group}</h3>
+									<div className="settings-group-items">
+										{items.map((item) => (
+											<button
+												key={item.id}
+												type="button"
+												onClick={() => openSettings(item.id)}
+												aria-current={section === item.id ? "page" : undefined}
+												className="settings-section-link"
+											>
+												{item.label}
+											</button>
+										))}
+									</div>
+								</section>
+							) : null;
+						})}
+						{!visible.length && !organizationNav.length && (
 							<p className="px-3 text-small text-muted-foreground" role="status">
 								No settings found.
 							</p>
@@ -161,8 +192,10 @@ export function SettingsView() {
 				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 					<div className="settings-scroll">
 						<div className="settings-content">
-							<h2 className="settings-title">{current?.label}</h2>
-							{current?.adminOnly && !isAdmin ? (
+							<h2 className="settings-title">{whoami && orgCurrent ? orgCurrent.label : current?.label}</h2>
+							{whoami && orgCurrent ? (
+								<OrganizationSection key={orgCurrent.id} section={orgCurrent.id} />
+							) : current?.adminOnly && !isAdmin ? (
 								<NotPermitted what={`${current.label} settings`} permission="admin" className="max-w-xl" />
 							) : (
 								<>

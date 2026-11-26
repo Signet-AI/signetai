@@ -46,6 +46,28 @@ export interface OrganizationUser {
 	readonly status: "active" | "deactivated";
 	readonly lastActiveAt?: string | null;
 }
+export interface OrganizationUserRow {
+	readonly id: string;
+	readonly username: string;
+	readonly display_name: string;
+	readonly email: string | null;
+	readonly role: OrganizationRole;
+	readonly compliance: number;
+	readonly status: "active" | "deactivated";
+	readonly last_active_at: string | null;
+}
+export function organizationUser(row: OrganizationUserRow): OrganizationUser {
+	return {
+		id: row.id,
+		username: row.username,
+		displayName: row.display_name,
+		email: row.email,
+		role: row.role,
+		compliance: Boolean(row.compliance),
+		status: row.status,
+		lastActiveAt: row.last_active_at,
+	};
+}
 export interface OrganizationGroup {
 	readonly id: string;
 	readonly name: string;

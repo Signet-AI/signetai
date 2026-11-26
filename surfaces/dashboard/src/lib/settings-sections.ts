@@ -8,5 +8,16 @@ export const SETTINGS_SECTIONS = [
 	"logs",
 	"advanced",
 	"licenses",
+	"teams",
+	"users",
+	"org-teams",
+	"org-agents",
+	"roles",
+	"access",
+	"org-keys",
+	"authentication",
+	"audit",
+	"health",
+	"classifications",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
