@@ -52,6 +52,9 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 async function invoke(name: string, permissions: readonly ("admin" | "recall")[], args: Record<string, unknown> = {}) {
+	return invokeBody({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, permissions);
+}
+async function invokeBody(body: unknown, permissions: readonly ("admin" | "recall")[]) {
 	const app = new Hono();
 	app.use("*", async (c, next) => {
 		c.set("principal", { ...localPrincipal(), permissions: new Set(permissions) });
@@ -61,7 +64,7 @@ async function invoke(name: string, permissions: readonly ("admin" | "recall")[]
 	return app.request("/mcp", {
 		method: "POST",
 		headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+		body: JSON.stringify(body),
 	});
 }
 test("MCP request classification is not globally read-only", () => {
@@ -75,6 +78,40 @@ test("mounted MCP cannot run GraphIQ clear without admin permission", async () =
 	const allowed = await invoke("signet_code_clear", ["admin"], { confirm: true });
 	expect(allowed.status).toBe(200);
 	expect(existsSync(marker)).toBe(true);
+});
+test("mounted MCP denies a clear batch before any plugin handler runs", async () => {
+	const response = await invokeBody(
+		[
+			{
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: { name: "signet_code_clear", arguments: { confirm: true } },
+			},
+		],
+		["recall"],
+	);
+	expect(response.status).toBe(403);
+	expect(await response.json()).toMatchObject({ required: "admin" });
+	expect(existsSync(marker)).toBe(false);
+});
+test("mounted MCP denies a mixed list and call batch atomically", async () => {
+	const response = await invokeBody(
+		[
+			{ jsonrpc: "2.0", id: 1, method: "tools/list" },
+			{ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "code_search", arguments: { query: "hello" } } },
+			{
+				jsonrpc: "2.0",
+				id: 3,
+				method: "tools/call",
+				params: { name: "signet_code_clear", arguments: { confirm: true } },
+			},
+		],
+		["recall"],
+	);
+	expect(response.status).toBe(403);
+	expect(await response.json()).toMatchObject({ required: "admin" });
+	expect(existsSync(marker)).toBe(false);
 });
 test("mounted MCP plugin reads require recall permission", async () => {
 	const denied = await invoke("code_search", [], { query: "hello" });

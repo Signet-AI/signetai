@@ -87,15 +87,17 @@ export function mountMcpRoute(app: Hono): void {
 			await mcpRequestGateForTests?.();
 			const parsedBody = await parseMcpJsonBody(c);
 			if (parsedBody instanceof Response) return parsedBody;
-			const call = z
-				.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) })
-				.safeParse(parsedBody);
-			if (call.success && /^(?:signet_)?code_/.test(call.data.params.name)) {
-				const permission = /clear|index/.test(call.data.params.name) ? "admin" : "recall";
-				if (!c.get("principal"))
-					return c.json({ reason: "permission", required: permission, error: "A principal is required" }, 403);
-				const denied = await requirePermission(permission, authConfig)(c, () => Promise.resolve());
-				if (denied) return denied;
+			for (const element of Array.isArray(parsedBody) ? parsedBody : [parsedBody]) {
+				const call = z
+					.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) })
+					.safeParse(element);
+				if (call.success && /^(?:signet_)?code_/.test(call.data.params.name)) {
+					const permission = /clear|index/.test(call.data.params.name) ? "admin" : "recall";
+					if (!c.get("principal"))
+						return c.json({ reason: "permission", required: permission, error: "A principal is required" }, 403);
+					const denied = await requirePermission(permission, authConfig)(c, () => Promise.resolve());
+					if (denied) return denied;
+				}
 			}
 
 			transport = new WebStandardStreamableHTTPServerTransport({
