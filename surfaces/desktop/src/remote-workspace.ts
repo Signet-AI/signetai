@@ -211,8 +211,19 @@ export class RemoteWorkspace {
 		return this.status("signed-out", "Signed out. The shared CLI and desktop login was removed.");
 	}
 	async proxy(request: Request): Promise<Response> {
-		const path = new URL(request.url).pathname.replace(/\/+$/, "");
-		if (PRIVATE_AUTH_PATHS.has(path))
+		let path: string;
+		try {
+			path = decodeURIComponent(new URL(request.url).pathname).replace(/\/+$/, "");
+		} catch {
+			return Response.json({ error: "Invalid route" }, { status: 400 });
+		}
+		if (
+			PRIVATE_AUTH_PATHS.has(path) ||
+			(path.startsWith("/api/auth/") &&
+				!/^\/api\/auth\/(?:whoami|methods|sessions(?:\/[^/]+)?|devices(?:\/[^/]+)?|connector-keys(?:\/[^/]+)?|api-keys(?:\/[^/]+)?|device\/approve|device\/[A-Z2-9-]+)$/.test(
+					path,
+				))
+		)
 			return Response.json({ error: "Use desktop sign-in controls", reason: "org_policy" }, { status: 403 });
 		try {
 			const signal = AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]);

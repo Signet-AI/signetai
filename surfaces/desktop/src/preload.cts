@@ -20,5 +20,11 @@ contextBridge.exposeInMainWorld("signetDesktop", {
 	pickFiles: (options?: { title?: string }) => ipcRenderer.invoke("desktop:pickFiles", options),
 	checkForUpdate: () => ipcRenderer.invoke("desktop:checkForUpdate"),
 	openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url),
+	getWorkspace: () => ipcRenderer.invoke("desktop:getWorkspace"),
+	selectWorkspace: (selection: unknown) => ipcRenderer.invoke("desktop:selectWorkspace", selection),
+	workspaceStatus: () => ipcRenderer.invoke("desktop:workspaceStatus"),
+	signIn: () => ipcRenderer.invoke("desktop:signIn"),
+	signOut: () => ipcRenderer.invoke("desktop:signOut"),
+	openWorkspaces: () => ipcRenderer.invoke("desktop:openWorkspaces"),
 	quit: () => ipcRenderer.invoke("desktop:quit"),
 });

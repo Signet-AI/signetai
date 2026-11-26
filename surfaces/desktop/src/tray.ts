@@ -125,7 +125,12 @@ export class DesktopTray {
 	#polling = false;
 	#pollAgain = false;
 
-	constructor(daemon: DaemonManager, openDashboard: () => void, checkForUpdate: () => void) {
+	constructor(
+		daemon: DaemonManager,
+		openDashboard: () => void,
+		checkForUpdate: () => void,
+		private readonly openWorkspaces?: () => void,
+	) {
 		this.#daemon = daemon;
 		this.#openDashboard = openDashboard;
 		this.#checkForUpdate = checkForUpdate;
@@ -212,6 +217,7 @@ export class DesktopTray {
 					: [{ label: "Daemon stopped", enabled: false }]),
 			{ type: "separator" },
 			{ label: "Open Dashboard", click: this.#openDashboard },
+			...(this.openWorkspaces ? [{ label: "Workspaces…", click: this.openWorkspaces }] : []),
 			{ label: "Quick Capture…", enabled: running, click: () => this.#openUtilityWindow("capture") },
 			{ label: "Search Memories…", enabled: running, click: () => this.#openUtilityWindow("search") },
 			{ type: "separator" },

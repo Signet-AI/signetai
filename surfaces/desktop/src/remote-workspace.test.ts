@@ -72,6 +72,44 @@ describe("desktop remote workspace", () => {
 		expect(started).toBe(1);
 	});
 
+	test("proxy rejects encoded credential endpoints and preserves forbidden requirements", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-status-"));
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname.includes("%")) return Response.json({ accessToken: "must-not-escape" });
+				return Response.json(
+					{ error: "Forbidden", reason: "permission", required: "Requires the operator role" },
+					{ status: 403 },
+				);
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			await login.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			expect((await desktop.proxy(new Request("app://signet/api/auth/%72efresh", { method: "POST" }))).status).toBe(
+				403,
+			);
+			const forbidden = await desktop.proxy(new Request("app://signet/api/memories"));
+			expect(forbidden.status).toBe(403);
+			expect(await forbidden.json()).toMatchObject({ required: "Requires the operator role" });
+			expect(await desktop.sessionStatus()).toMatchObject({
+				state: "forbidden",
+				message: "Requires the operator role",
+			});
+			server.stop(true);
+			expect(await desktop.sessionStatus()).toMatchObject({ state: "unreachable" });
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	test("CLI and desktop share the same credential and proxy hides tokens", async () => {
 		const root = await mkdtemp(join(tmpdir(), "desktop-login-"));
 		const server = Bun.serve({
@@ -90,7 +128,7 @@ describe("desktop remote workspace", () => {
 		});
 		try {
 			const origin = server.url.origin;
-			const options = { configDir: root, keyring: disposableKeyring() };
+			const options = { env: { HOME: root, APPDATA: root }, keyring: disposableKeyring() };
 			const cli = new LoginStore(origin, options);
 			const desktop = new RemoteWorkspace(origin, {
 				login: new LoginStore(origin, options),
