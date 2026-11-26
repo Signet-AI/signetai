@@ -19,6 +19,7 @@ export interface RequestControl {
 }
 export interface RequestOptions extends RequestControl {
 	readonly body?: unknown;
+	readonly rawBody?: Uint8Array;
 	readonly query?: Query;
 }
 export interface TransportConfig {
@@ -140,8 +141,15 @@ export class SignetTransport {
 		for (const [key, value] of Object.entries(opts.headers ?? {})) headers.set(key, value);
 		headers.delete("x-signet-actor");
 		headers.delete("x-signet-actor-type");
-		const body = opts.body === undefined ? undefined : JSON.stringify(opts.body);
-		if (body !== undefined) headers.set("content-type", "application/json");
+		if (opts.body !== undefined && opts.rawBody !== undefined) throw new TypeError("Use JSON or raw body, not both");
+		const body =
+			opts.rawBody !== undefined
+				? new Uint8Array(opts.rawBody)
+				: opts.body === undefined
+					? undefined
+					: JSON.stringify(opts.body);
+		if (body !== undefined)
+			headers.set("content-type", opts.rawBody === undefined ? "application/json" : "application/octet-stream");
 		method = method.toUpperCase();
 		const retryable =
 			["GET", "HEAD", "OPTIONS", "PUT", "DELETE"].includes(method) ||

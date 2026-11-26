@@ -26,6 +26,92 @@ import unicodedata
 import uuid
 
 
+def _upload_state(value):
+    if not isinstance(value,dict) or value.get("uploadId") is not None and (not isinstance(value.get("uploadId"),str) or not re.fullmatch(r"[a-f0-9-]{36}",value["uploadId"])) or any(type(value.get(k)) is not int for k in ("receivedBytes","totalBytes")) or not 0 <= value["receivedBytes"] <= value["totalBytes"] <= 64*1024**3 or value["totalBytes"] < 1 or not isinstance(value.get("sha256"),str) or not re.fullmatch(r"[a-f0-9]{64}",value["sha256"]) or not isinstance(value.get("fingerprint"),str) or len(value["fingerprint"]) > 200:
+        raise ValueError("Invalid upload checkpoint")
+    return {k:value[k] for k in ("uploadId","receivedBytes","totalBytes","sha256","fingerprint")}
+
+
+def _capture_remote_session_end(body,state,checkpoint,request,end,cancel):
+    if not isinstance(body,dict) or not isinstance(body.get("transcriptPath"),str) or not body["transcriptPath"]:
+        return body
+    _check_control(end,cancel)
+    fd=os.open(body["transcriptPath"],os.O_RDONLY|getattr(os,"O_NONBLOCK",0))
+    try:
+        before=os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("Transcript capture requires a regular file")
+        def fingerprint(info):
+            return ":".join(str(v) for v in (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns))
+        def read_at(length,offset):
+            _check_control(end,cancel)
+            if hasattr(os,"pread"):
+                return os.pread(fd,length,offset)
+            os.lseek(fd,offset,os.SEEK_SET)
+            return os.read(fd,length)
+        if before.st_size <= 4*1024*1024:
+            data=bytearray()
+            while len(data)<before.st_size:
+                block=read_at(before.st_size-len(data),len(data))
+                if not block: raise ValueError("Transcript changed during capture")
+                data.extend(block)
+            if fingerprint(os.fstat(fd)) != fingerprint(before):
+                raise ValueError("Transcript changed during capture")
+            return {**{k:v for k,v in body.items() if k != "transcriptPath"},"transcript":data.decode("utf-8",errors="replace")}
+        if before.st_size>64*1024**3:
+            raise ValueError("Transcript exceeds upload byte limit")
+        identity=fingerprint(before)
+        if state is not None:
+            state=_upload_state(state)
+            if state["fingerprint"] != identity or state["totalBytes"] != before.st_size:
+                raise ValueError("Transcript changed since upload admission")
+        else:
+            digest=hashlib.sha256()
+            offset=0
+            while offset<before.st_size:
+                block=read_at(min(256*1024,before.st_size-offset),offset)
+                if not block: raise ValueError("Transcript changed during hashing")
+                digest.update(block)
+                offset+=len(block)
+            if fingerprint(os.fstat(fd)) != identity:
+                raise ValueError("Transcript changed during hashing")
+            state={"uploadId":None,"receivedBytes":0,"totalBytes":before.st_size,"sha256":digest.hexdigest(),"fingerprint":identity}
+            checkpoint(state)
+        session=body.get("sessionKey") or body.get("sessionId")
+        if not isinstance(session,str) or not isinstance(body.get("harness"),str):
+            raise ValueError("Staged session-end requires harness and session identity")
+        base="/api/hooks/session-end/uploads"
+        try:
+            current=request("GET",base+"/"+state["uploadId"]) if state["uploadId"] else request("POST",base,body={"sessionKey":session,"harness":body["harness"],"totalBytes":state["totalBytes"],"sha256":state["sha256"],**({"agentId":body["agentId"]} if "agentId" in body else {})})
+        except SignetApiError as error:
+            if error.status == 404:
+                raise SignetNetworkError("Upload unavailable; original transcript retained in outbox") from error
+            raise
+        if not isinstance(current,dict) or not isinstance(current.get("uploadId"),str) or not re.fullmatch(r"[a-f0-9-]{36}",current["uploadId"]) or type(current.get("receivedBytes")) is not int or not 0<=current["receivedBytes"]<=state["totalBytes"] or type(current.get("chunkBytes")) is not int or not 65536<=current["chunkBytes"]<=1024*1024 or current["chunkBytes"]%65536:
+            raise ValueError("Invalid upload progress")
+        if state["uploadId"] and state["uploadId"]!=current["uploadId"]:
+            raise ValueError("Upload identity changed")
+        state={**state,"uploadId":current["uploadId"],"receivedBytes":current["receivedBytes"]}
+        checkpoint(state)
+        while state["receivedBytes"]<state["totalBytes"]:
+            block=bytearray()
+            length=min(current["chunkBytes"],state["totalBytes"]-state["receivedBytes"])
+            while len(block)<length:
+                part=read_at(length-len(block),state["receivedBytes"]+len(block))
+                if not part: raise ValueError("Transcript changed during upload")
+                block.extend(part)
+            if fingerprint(os.fstat(fd)) != identity:
+                raise ValueError("Transcript changed during upload")
+            reply=request("PATCH",base+"/"+state["uploadId"],raw_body=bytes(block),headers={"upload-offset":str(state["receivedBytes"]),"upload-checksum":hashlib.sha256(block).hexdigest()})
+            if not isinstance(reply,dict) or type(reply.get("receivedBytes")) is not int or not state["receivedBytes"]+len(block)<=reply["receivedBytes"]<=state["totalBytes"]:
+                raise ValueError("Invalid upload acknowledgement")
+            state={**state,"receivedBytes":reply["receivedBytes"]}
+            checkpoint(state)
+        return {**{k:v for k,v in body.items() if k not in ("transcriptPath","transcript")},"transcriptUpload":{"uploadId":state["uploadId"]}}
+    finally:
+        os.close(fd)
+
+
 def _json_dump(value, *, ensure_ascii=True):
     return json.dumps(value, ensure_ascii=ensure_ascii, allow_nan=False)
 
@@ -1019,16 +1105,20 @@ class SignetTransport:
 
         return _bounded(wire, end, cancel, interrupt)
 
-    def request(self, method, path, body=None, *, headers=None, timeout=None, deadline=None, cancel=None):
+    def request(self, method, path, body=None, *, headers=None, timeout=None, deadline=None, cancel=None, raw_body=None):
         if not path.startswith("/") or path.startswith("//") or any(c in path for c in "\\\r\n"):
             raise ValueError("Request path must be daemon-relative")
         method = method.upper()
         headers = {k.lower(): v for k, v in {**self.headers, **(headers or {})}.items() if k.lower() not in ("x-signet-actor", "x-signet-actor-type")}
         end = _request_end(self.timeout, timeout, deadline)
         retryable = method in ("GET", "HEAD", "OPTIONS", "PUT", "DELETE") or method == "POST" and bool(headers.get("idempotency-key"))
-        data = _json_dump(body, ensure_ascii=False).encode() if body is not None else None
+        if body is not None and raw_body is not None:
+            raise ValueError("Use JSON or raw body, not both")
+        if raw_body is not None and not isinstance(raw_body,bytes):
+            raise ValueError("Raw body must be bytes")
+        data = raw_body if raw_body is not None else _json_dump(body, ensure_ascii=False).encode() if body is not None else None
         if data is not None:
-            headers["content-type"] = "application/json"
+            headers["content-type"] = "application/octet-stream" if raw_body is not None else "application/json"
         for attempt in range(self.retries + 1 if retryable else 1):
             _check_control(end, cancel)
             if attempt:
@@ -1206,7 +1296,7 @@ class DurableOutbox:
 
     def _validate_entry(self, value):
         fields = {"version","harness","origin","headers","id","idempotencyKey","method","path","body","createdAt","attempts","lastError"}
-        if not isinstance(value,dict) or set(value) != fields or type(value["version"]) is not int or value["version"] != 1 or not isinstance(value["origin"],str) or not isinstance(value["createdAt"],str) or not isinstance(value["id"],str) or not isinstance(value["idempotencyKey"],str) or not re.fullmatch(r"[\x21-\x7e]{1,512}",value["idempotencyKey"]) or value["method"] != "POST" or type(value["attempts"]) is not int or value["attempts"] < 0 or value["lastError"] is not None and not isinstance(value["lastError"],str):
+        if not isinstance(value,dict) or set(value) not in (fields,fields|{"upload"}) or type(value["version"]) is not int or value["version"] != 1 or not isinstance(value["origin"],str) or not isinstance(value["createdAt"],str) or not isinstance(value["id"],str) or not isinstance(value["idempotencyKey"],str) or not re.fullmatch(r"[\x21-\x7e]{1,512}",value["idempotencyKey"]) or value["method"] != "POST" or type(value["attempts"]) is not int or value["attempts"] < 0 or value["lastError"] is not None and not isinstance(value["lastError"],str):
             raise ValueError("Corrupt Signet outbox entry")
         self._file(value["id"])
         _identifier(value["harness"])
@@ -1214,6 +1304,9 @@ class DurableOutbox:
             raise ValueError("Invalid outbox origin or scope")
         _timestamp(value["createdAt"])
         _delivery_path(value["path"])
+
+        if "upload" in value:
+            _upload_state(value["upload"])
 
     def _file(self, entry_id):
         if not re.fullmatch(r"[a-f0-9-]{36}", entry_id):
@@ -1373,6 +1466,23 @@ class DurableOutbox:
         with _ACTIVE_CLAIMS_LOCK:
             _ACTIVE_CLAIMS.add(owner["token"])
         return entry,owner
+
+    def checkpoint_upload(self, entry, state, *, end=None, cancel=None):
+        state=_upload_state(state)
+        with self._locked(end,cancel):
+            for path in self._names(self.directory/".claims"):
+                if not path.name.startswith(entry["id"]+".") or not path.name.endswith(".json"):
+                    continue
+                owner_text=_read_private(str(path)+".owner",4096)
+                owner=_json_load(owner_text) if owner_text is not None else None
+                with _ACTIVE_CLAIMS_LOCK:
+                    active=isinstance(owner,dict) and owner.get("token") in _ACTIVE_CLAIMS
+                if not active:
+                    continue
+                _atomic_write(path,_json_dump({**entry,"upload":state},ensure_ascii=False))
+                entry["upload"]=state
+                return
+            raise ValueError("Upload claim ownership changed")
 
     def _settle(self, claim, error=None, *, end=None, cancel=None):
         entry,owner = claim
@@ -1576,7 +1686,17 @@ class NodeTransport(SignetTransport):
         for path in self.delivery_paths:
             _delivery_path(path)
 
-    def _send(self, method, path, body, *, captured_headers=None, **options):
+    def _send_entry(self, entry, deadline, **options):
+        if self.target.remote and entry["path"] == "/api/hooks/session-end":
+            end=deadline/1000
+            def checkpoint(state):
+                self.outbox.checkpoint_upload(entry,state,end=end,cancel=options.get("cancel"))
+            body=_capture_remote_session_end(entry["body"],entry.get("upload"),checkpoint,lambda method,path,**step:self._send(method,path,captured_headers=entry["headers"],deadline=deadline,cancel=options.get("cancel"),timeout=options.get("timeout"),**step),end,options.get("cancel"))
+        else:
+            body=entry["body"]
+        return self._send(entry["method"],entry["path"],body,captured_headers=entry["headers"],deadline=deadline,**options)
+
+    def _send(self, method, path, body=None, *, captured_headers=None, **options):
         used = [None]
         acquired = [False]
         deadline = options.get("deadline")
@@ -1617,7 +1737,7 @@ class NodeTransport(SignetTransport):
             if set(headers) - {"idempotency-key"} - _DELIVERY_SCOPE_HEADERS:
                 raise ValueError("Durable delivery scope and provenance must be in the JSON body or fixed transport headers")
             headers.setdefault("idempotency-key", str(uuid.uuid4()))
-            result, cleanup_error = self.outbox.deliver("POST", path, body, lambda entry, end: self._send(method, path, entry["body"], headers=headers, captured_headers=entry["headers"], **options), idempotency_key=headers["idempotency-key"], deadline=deadline, cancel=options.get("cancel"), headers=_delivery_headers({**{k.lower(): v for k, v in self.headers.items()}, **headers}))
+            result, cleanup_error = self.outbox.deliver("POST", path, body, lambda entry, end: self._send_entry(entry,end,headers=headers,cancel=options.get("cancel"),timeout=options.get("timeout")), idempotency_key=headers["idempotency-key"], deadline=deadline, cancel=options.get("cancel"), headers=_delivery_headers({**{k.lower(): v for k, v in self.headers.items()}, **headers}))
             value = result
             if cleanup_error:
                 return value
@@ -1629,6 +1749,6 @@ class NodeTransport(SignetTransport):
 
     def flush(self, **options) -> OutboxFlushResult:
         try:
-            return self.outbox.flush(lambda entry, deadline: self._send(entry["method"],entry["path"],entry["body"],headers={"Idempotency-Key":entry["idempotencyKey"]},deadline=deadline,cancel=options.get("cancel"),captured_headers=entry["headers"]),**{**options,"origin":self.target.origin,"harness":self.target.harness})
+            return self.outbox.flush(lambda entry, deadline: self._send_entry(entry,deadline,headers={"Idempotency-Key":entry["idempotencyKey"]},cancel=options.get("cancel")),**{**options,"origin":self.target.origin,"harness":self.target.harness})
         except Exception as error:
             return {"state":"failed","pending":None,"sent":0,"failure":{"code":type(error).__name__,"status":getattr(error,"status",None),"reason":getattr(error,"reason",None)}}

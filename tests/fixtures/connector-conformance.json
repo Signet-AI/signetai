@@ -315,5 +315,12 @@
       "path",
       "version"
     ]
-  }
+  },
+  "uploads": [
+    {
+      "name": "lost-ack-process-restart",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2
+    }
+  ]
 }

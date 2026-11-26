@@ -1,3 +1,4 @@
+import { parseUploadState, type UploadState } from "./capture.js";
 import { SignetOutboxAdmissionError } from "../errors.js";
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 import { randomUUID } from "node:crypto";
@@ -74,7 +75,9 @@ function snapshotRequest(request: OutboxRequest): OutboxRequest {
 export interface OutboxOptions extends StorageOptions {
 	readonly harness?: string;
 }
+export type UploadCheckpoint = (state: UploadState) => Promise<void>;
 export interface OutboxEntry {
+	readonly upload?: UploadState;
 	readonly version: 1;
 	readonly harness: string;
 	readonly origin: string;
@@ -175,6 +178,7 @@ function parseEntry(value: unknown): OutboxEntry {
 		createdAt: value.createdAt,
 		attempts: value.attempts,
 		lastError: value.lastError,
+		...("upload" in value ? { upload: parseUploadState(value.upload) } : {}),
 	};
 }
 function statusCode(error: unknown): number | null {
@@ -526,6 +530,27 @@ export class DurableOutbox {
 		await rename(this.file(entry.id), path);
 		return { entry: claimed, owner };
 	}
+	private async checkpoint(
+		claim: { entry: OutboxEntry; owner: ProcessOwner },
+		state: UploadState,
+		signal: AbortSignal,
+	): Promise<void> {
+		const upload = parseUploadState(state);
+		await withFileLock(
+			join(this.directory, ".lock"),
+			async () => {
+				signal.throwIfAborted();
+				const path = join(this.directory, ".claims", `${claim.entry.id}.${claim.owner.token}.json`);
+				const text = await readPrivate(`${path}.owner`, 4096);
+				if (text === null || parseOwner(attempt(() => JSON.parse(text)))?.token !== claim.owner.token)
+					throw new Error("Upload claim ownership changed");
+				const next = { ...claim.entry, upload };
+				await atomicPrivateWrite(path, JSON.stringify(next));
+				claim.entry = next;
+			},
+			signal,
+		);
+	}
 	private async settle(
 		claim: { entry: OutboxEntry; owner: ProcessOwner },
 		error: unknown | null,
@@ -646,7 +671,7 @@ export class DurableOutbox {
 	}
 	async deliver<T>(
 		request: OutboxRequest,
-		send: (entry: OutboxEntry) => Promise<T>,
+		send: (entry: OutboxEntry, checkpoint: UploadCheckpoint) => Promise<T>,
 		control: RequestControl = {},
 	): Promise<{ value: T; cleanupError: Error | null }> {
 		const scope = requestSignal(control);
@@ -671,7 +696,10 @@ export class DurableOutbox {
 			let value: T;
 			try {
 				scope.signal.throwIfAborted();
-				value = await abortable(send(claim.entry), scope.signal);
+				value = await abortable(
+					send(claim.entry, (state) => this.checkpoint(claim, state, scope.signal)),
+					scope.signal,
+				);
 			} catch (error) {
 				if (!scope.signal.aborted) await attemptAsync(() => this.settle(claim, error, scope.signal));
 				throw error;
@@ -715,7 +743,7 @@ export class DurableOutbox {
 		});
 	}
 	async flush(
-		send: (entry: OutboxEntry, control: RequestControl) => Promise<unknown>,
+		send: (entry: OutboxEntry, control: RequestControl, checkpoint: UploadCheckpoint) => Promise<unknown>,
 		options: FlushOptions = {},
 	): Promise<OutboxFlushResult> {
 		const scope = requestSignal(options, 5000);
@@ -729,7 +757,7 @@ export class DurableOutbox {
 		}
 	}
 	private async flushOwned(
-		send: (entry: OutboxEntry, control: RequestControl) => Promise<unknown>,
+		send: (entry: OutboxEntry, control: RequestControl, checkpoint: UploadCheckpoint) => Promise<unknown>,
 		options: FlushOptions = {},
 	): Promise<OutboxFlushResult> {
 		if (
@@ -786,7 +814,9 @@ export class DurableOutbox {
 					);
 					try {
 						await abortable(
-							send(claim.entry, { signal: sendScope.signal, deadline: Date.now() + sendScope.timeoutMs }),
+							send(claim.entry, { signal: sendScope.signal, deadline: Date.now() + sendScope.timeoutMs }, (state) =>
+								this.checkpoint(claim, state, sendScope.signal),
+							),
 							sendScope.signal,
 						);
 					} finally {
