@@ -180,7 +180,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(after.kind === "signed-in" && after.expiresSoon).toBe(true);
 		});
 
-		test("does not warn about a session that starts inside the warning window", async () => {
+		test("warns about a session that starts inside the warning window", async () => {
 			handler = () =>
 				whoami({
 					authenticated: true,
@@ -190,7 +190,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 				});
 			await session.refreshSession();
 			const state = session.currentSession();
-			expect(state.kind === "signed-in" && state.expiresSoon).toBe(false);
+			expect(state.kind === "signed-in" && state.expiresSoon).toBe(true);
 		});
 
 		test("renewal opens sign-in without dropping the session, and can be cancelled", async () => {
