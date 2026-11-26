@@ -215,21 +215,20 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 				}
 			},
 		);
-	}
-	options(
-		auth.commands.find((command) => command.name() === "devices")?.command("rename <id> <name>") ??
-			auth.command("rename-device <id> <name>"),
-	).action(async (id: string, name: string, opts: AuthOptions) => {
-		try {
-			print(
-				JSON.stringify(
-					await (await authTransport(opts, deps)).request("PATCH", `/api/auth/devices/${encodeURIComponent(id)}`, {
-						body: { name },
-					}),
-				),
-			);
-		} catch (error) {
-			reportAuthError(error, opts.json);
+		if (kind === "devices") {
+			options(group.command("rename <id> <name>")).action(async (id: string, name: string, opts: AuthOptions) => {
+				try {
+					print(
+						JSON.stringify(
+							await (await authTransport(opts, deps)).request("PATCH", `/api/auth/devices/${encodeURIComponent(id)}`, {
+								body: { name },
+							}),
+						),
+					);
+				} catch (error) {
+					reportAuthError(error, opts.json);
+				}
+			});
 		}
-	});
+	}
 }
