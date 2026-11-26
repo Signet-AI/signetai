@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OffboardingWizard, RolesMatrix, UsersContent } from "./users";
+import { OffboardingImpact, RolesMatrix, UsersContent } from "./users";
 
 test("people use explicit row actions and stacked mobile cards", () => {
 	const html = renderToStaticMarkup(
@@ -26,25 +26,22 @@ test("people use explicit row actions and stacked mobile cards", () => {
 	expect(html).toContain("Member");
 });
 
-test("offboarding starts with preview, not a destructive submit", () => {
+test("offboarding preview uses plain impact labels", () => {
 	const html = renderToStaticMarkup(
-		<OffboardingWizard
-			user={{
-				id: "usr_bob",
-				username: "bob",
-				displayName: "Bob",
-				email: null,
-				role: "member",
-				compliance: false,
-				status: "active",
+		<OffboardingImpact
+			plan={{
+				userId: "usr_bob",
+				mode: "keep",
+				transferTo: null,
+				counts: { memories: 2, transcripts: 1, keys: 3, sessions: 4 },
 			}}
-			users={[]}
-			onClose={() => {}}
 		/>,
 	);
-	expect(html).toContain("Preview offboarding");
-	expect(html).not.toContain("Confirm offboarding");
-	expect(html).toContain("Authorship is preserved");
+	expect(html).toContain("Memories");
+	expect(html).toContain("Transcripts");
+	expect(html).toContain("API keys");
+	expect(html).toContain("Active sessions");
+	expect(html).not.toContain("userId");
 });
 
 test("roles matrix is read-only and distinguishes compliance", () => {

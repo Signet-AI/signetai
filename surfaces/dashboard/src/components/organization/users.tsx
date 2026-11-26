@@ -1,5 +1,13 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import {
 	DropdownMenu,
@@ -30,6 +38,28 @@ import {
 } from "./controls";
 import { TrackedJob } from "./job";
 
+export function OffboardingImpact({ plan }: { plan: OffboardingPlan }) {
+	const labels: Readonly<Record<string, string>> = {
+		memories: "Memories",
+		transcripts: "Transcripts",
+		keys: "API keys",
+		apiKeys: "API keys",
+		sessions: "Active sessions",
+		artifacts: "Source files",
+		documents: "Documents",
+		claims: "Derived claims",
+	};
+	return (
+		<dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-small">
+			{Object.entries(plan.counts).map(([kind, count]) => (
+				<div key={kind} className="contents">
+					<dt className="text-muted-foreground">{labels[kind] ?? displayLabel(kind)}</dt>
+					<dd className="text-right tabular-nums">{count.toLocaleString()}</dd>
+				</div>
+			))}
+		</dl>
+	);
+}
 export function OffboardingWizard({
 	user,
 	users,
@@ -39,6 +69,7 @@ export function OffboardingWizard({
 	users: readonly OrganizationUser[];
 	onClose: () => void;
 }) {
+	const [step, setStep] = useState(1);
 	const [mode, setMode] = useState("keep");
 	const [transferTo, setTransferTo] = useState("");
 	const [typed, setTyped] = useState("");
@@ -58,6 +89,7 @@ export function OffboardingWizard({
 		setBusy(false);
 		setError(result.error);
 		setPlan(result.data?.plan ?? null);
+		if (result.data) setStep(2);
 	};
 	const confirm = async () => {
 		const body = offboardingRequest(plan, user.displayName, typed);
@@ -73,74 +105,115 @@ export function OffboardingWizard({
 		setError(result.error);
 		setJobId(result.data?.jobId ?? null);
 	};
+	const destination = users.find((person) => person.id === transferTo)?.displayName ?? "the selected person";
 	return (
-		<OrganizationBlock
-			title={`Offboard ${user.displayName}`}
-			description="Sessions and keys are revoked. Authorship is preserved when agent ownership is transferred."
+		<Dialog
+			open
+			onOpenChange={(open) => {
+				if (!open && !busy) onClose();
+			}}
 		>
-			{jobId ? (
-				<TrackedJob id={jobId} />
-			) : (
-				<>
-					<Choice
-						label="Material handling"
-						value={mode}
-						onChange={(value) => {
-							setMode(value);
-							setPlan(null);
-							setTyped("");
+			<DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+				<DialogHeader>
+					<DialogTitle>Offboard {user.displayName}</DialogTitle>
+					<DialogDescription>
+						{jobId
+							? "Follow the offboarding job to its durable result."
+							: `Step ${step} of 3 · ${step === 1 ? "Material handling" : step === 2 ? "Impact preview" : "Confirm offboarding"}`}
+					</DialogDescription>
+				</DialogHeader>
+				{jobId ? (
+					<TrackedJob id={jobId} />
+				) : (
+					<>
+						{step === 1 && (
+							<div className="flex flex-col gap-4">
+								<p className="text-small text-muted-foreground">
+									Authorship is preserved when ownership is transferred. All active sessions and API keys will be
+									revoked.
+								</p>
+								<Choice
+									label="Material handling"
+									value={mode}
+									onChange={(value) => {
+										setMode(value);
+										setPlan(null);
+									}}
+									options={[
+										{ value: "keep", label: "Keep evidence and ownership" },
+										{ value: "transfer", label: "Transfer agent ownership" },
+										{ value: "purge", label: "Purge authored material" },
+									]}
+								/>
+								{mode === "transfer" && (
+									<Choice
+										label="New agent owner"
+										value={transferTo}
+										onChange={setTransferTo}
+										options={[
+											{ value: "", label: "Select a person" },
+											...users
+												.filter((person) => person.id !== user.id && person.status === "active")
+												.map((person) => ({ value: person.id, label: person.displayName })),
+										]}
+									/>
+								)}
+							</div>
+						)}
+						{step === 2 && plan && (
+							<div className="flex flex-col gap-4">
+								<OffboardingImpact plan={plan} />
+								<p className="text-small">
+									{mode === "transfer"
+										? `Personal agents transfer to ${destination}. Authorship stays with ${user.displayName}.`
+										: mode === "purge"
+											? "Authored evidence and its derived state will be purged. Existing agent ownership is unchanged."
+											: "Evidence and agent ownership stay in place. The deactivated person can no longer act as their agents."}{" "}
+									API keys and active sessions are revoked, never transferred.
+								</p>
+							</div>
+						)}
+						{step === 3 && (
+							<div className="flex flex-col gap-4">
+								<p className="text-small">
+									Offboarding prevents {user.displayName} from signing in. Revoked keys and sessions cannot be restored.
+								</p>
+								<TextField label={`Type ${user.displayName} to confirm`} value={typed} onChange={setTyped} />
+							</div>
+						)}
+					</>
+				)}
+				<Message error={error} />
+				<DialogFooter>
+					<Action
+						secondary
+						disabled={busy}
+						onClick={() => {
+							if (step > 1 && !jobId) setStep(step - 1);
+							else onClose();
 						}}
-						options={[
-							{ value: "keep", label: "Keep evidence and ownership" },
-							{ value: "transfer", label: "Transfer agent ownership" },
-							{ value: "purge", label: "Purge authored material" },
-						]}
-					/>
-					{mode === "transfer" && (
-						<Choice
-							label="Transfer to"
-							value={transferTo}
-							onChange={(value) => {
-								setTransferTo(value);
-								setPlan(null);
-							}}
-							options={[
-								{ value: "", label: "Select an active user" },
-								...users
-									.filter((item) => item.id !== user.id && item.status === "active")
-									.map((item) => ({ value: item.id, label: item.displayName })),
-							]}
-						/>
-					)}
-					<Action disabled={busy || (mode === "transfer" && !transferTo)} onClick={() => void preview()}>
-						Preview offboarding
+					>
+						{jobId ? "Close" : step > 1 ? "Back" : "Cancel"}
 					</Action>
-					{plan && (
-						<>
-							<OrganizationTable columns={["Affected material", "Readable count"]}>
-								{Object.entries(plan.counts).map(([kind, count]) => (
-									<tr key={kind} className={rowClass}>
-										<td className={cellClass}>{kind}</td>
-										<td className={cellClass}>{count}</td>
-									</tr>
-								))}
-							</OrganizationTable>
-							<TextField label={`Type ${user.displayName} to confirm`} value={typed} onChange={setTyped} />
+					{!jobId &&
+						(step === 1 ? (
+							<Action disabled={busy || (mode === "transfer" && !transferTo)} onClick={() => void preview()}>
+								Preview offboarding
+							</Action>
+						) : step === 2 ? (
+							<Action onClick={() => setStep(3)}>Continue</Action>
+						) : (
 							<Action
+								destructive
 								disabled={busy || !offboardingRequest(plan, user.displayName, typed)}
 								onClick={() => void confirm()}
 							>
-								Confirm offboarding
+								Offboard {user.displayName}
 							</Action>
-						</>
-					)}
-				</>
-			)}
-			<Message error={error} />
-			<Action secondary onClick={onClose}>
-				{jobId ? "Close" : "Cancel"}
-			</Action>
-		</OrganizationBlock>
+						))}
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
