@@ -266,6 +266,12 @@ function UserActions({
 		</DropdownMenu>
 	);
 }
+function userContact(user: OrganizationUser): string {
+	return [user.username.toLowerCase() === user.displayName.toLowerCase() ? null : user.username, user.email]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 export function UsersContent({ users, refresh }: { users: readonly OrganizationUser[]; refresh: () => void }) {
 	const [selected, setSelected] = useState<OrganizationUser | null>(null);
 	const [roleUser, setRoleUser] = useState<OrganizationUser | null>(null);
@@ -333,7 +339,7 @@ export function UsersContent({ users, refresh }: { users: readonly OrganizationU
 							<tr key={user.id} className={rowClass}>
 								<td className={cellClass}>
 									<div>{user.displayName}</div>
-									<div className="text-muted-foreground">{[user.username, user.email].filter(Boolean).join(" · ")}</div>
+									{userContact(user) && <div className="text-muted-foreground">{userContact(user)}</div>}
 								</td>
 								<td className={cellClass}>{displayLabel(user.role)}</td>
 								<td className={cellClass}>
@@ -354,9 +360,9 @@ export function UsersContent({ users, refresh }: { users: readonly OrganizationU
 							<div className="flex items-start justify-between gap-3">
 								<div className="min-w-0">
 									<p className="m-0 font-medium">{user.displayName}</p>
-									<p className="m-0 break-words text-small text-muted-foreground">
-										{[user.username, user.email].filter(Boolean).join(" · ")}
-									</p>
+									{userContact(user) && (
+										<p className="m-0 break-words text-small text-muted-foreground">{userContact(user)}</p>
+									)}
 								</div>
 								{actions(user)}
 							</div>

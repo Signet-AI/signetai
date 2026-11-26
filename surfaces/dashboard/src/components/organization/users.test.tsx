@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SharedKeyForm } from "./teams";
 import { AccessContent, OffboardingImpact, RolesMatrix, UsersContent } from "./users";
@@ -80,6 +81,30 @@ test("people use explicit row actions and stacked mobile cards", () => {
 	expect(html).toContain("Actions for Bob");
 	expect(html).toContain("sm:hidden");
 	expect(html).toContain("Member");
+});
+
+test("matching handles do not duplicate the user's name in either layout", () => {
+	for (const email of [null, "bob@example.com"]) {
+		const dom = new Window();
+		dom.document.body.innerHTML = renderToStaticMarkup(
+			<UsersContent
+				users={[
+					{
+						id: "usr_bob",
+						username: "bob",
+						displayName: "bob",
+						email,
+						role: "member",
+						compliance: false,
+						status: "active",
+					},
+				]}
+				refresh={() => {}}
+			/>,
+		);
+		expect(dom.document.querySelector("tbody tr td")?.textContent).toBe(`bob${email ?? ""}`);
+		expect(dom.document.querySelector("ul li p:nth-child(2)")?.textContent ?? null).toBe(email);
+	}
 });
 
 test("offboarding preview uses plain impact labels", () => {
