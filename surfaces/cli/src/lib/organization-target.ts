@@ -36,7 +36,35 @@ export async function resolveCliTarget(
 		const url = resolveSignetDaemonUrl({ env: { SIGNET_HOST: "127.0.0.1", SIGNET_PORT: env.SIGNET_PORT } });
 		return { url, origin: new URL(url).origin, remote: false, credential: { source: "none", get: async () => null } };
 	}
-	const target = await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl });
+	if (
+		options.nonInteractive &&
+		!options.org &&
+		!options.url &&
+		!deps.flagUrl &&
+		!deps.configUrl &&
+		!(deps.env ?? process.env).SIGNET_DAEMON_URL &&
+		!(deps.env ?? process.env).SIGNET_API_KEY &&
+		!(deps.env ?? process.env).SIGNET_API_KEY_FILE
+	)
+		return resolveCliTarget({ local: true }, deps);
+	const target = await resolveTarget({
+		...deps,
+		flagUrl: options.url ?? deps.flagUrl,
+		...(options.nonInteractive
+			? {
+					keyring: {
+						get: async () => {
+							throw new Error(
+								"Keychain access requires interactive mode; provide an environment credential or protected key file",
+							);
+						},
+						set: async () => {
+							throw new Error("Keychain writes require interactive mode");
+						},
+					},
+				}
+			: {}),
+	});
 	if (options.org && !target.remote)
 		throw new Error("No organization instance is configured. Run `signet login --url <url>`.");
 	return target;

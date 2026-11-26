@@ -247,7 +247,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/org/jobs` | Admin; optional `kind`. |
 | GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. |
 
-`POST /api/auth/token` and legacy stateless session/handoff exchanges are disabled after claim (`403 org_policy`). OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
+`POST /api/auth/token` and the legacy stateless `/api/auth/session` exchange are disabled after claim (`403 org_policy`). `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }`, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
 
 Roles and their permissions:
 

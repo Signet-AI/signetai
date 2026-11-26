@@ -26,6 +26,13 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 			expect(code, stderr).toBe(0);
 			return JSON.parse(stdout);
 		};
+		const status = await cli(["status", "--json"]);
+		expect(status.identity.organization.name).toBe("Org acceptance");
+		const definition = await cli(
+			["classification", "create", "CLI-private", "--audience", `group:${fixture.hrGroupId}`, "--json"],
+			fixture.user("cora").session.bearer,
+		);
+		expect(definition.id).toStartWith("cls_");
 		const invite = await cli(["org", "users", "invite", "--email", "cli-member@example.com", "--json"]);
 		const accepted = await request(daemon.origin, "/api/auth/invites/accept", {}, "POST", {
 			token: new URL(invite.inviteUrl).pathname.split("/").pop(),

@@ -125,6 +125,12 @@ Use server IDs for users and teams. Deactivation prints a plan unless `--confirm
 
 `signet classify memory:<id> --agent <agent-id> --as HR --wait` previews readable impact before submitting a classification job. Targets also accept `session:<key>`, `source:<id>`, and `agent:<id>`. `--json` returns the preview, job ID, and terminal job when waiting. Without `--json`, the preview is printed before dispatch. Classification authority and audience visibility are checked by the daemon, not inferred by the CLI.
 
+`signet status` against an organization starts with its name, your identity, default read agent, and credential expiry. `signet dashboard` opens the selected instance through a short-lived one-time handoff in the URL fragment, never a bearer token. The browser exchanges it for cookie authentication. `--non-interactive` refuses browser sign-in and dashboard opening; credential resolution refuses keychain access instead of prompting. Environment credentials and protected credential files remain usable for scripting.
+
+`signet classification list` shows definitions visible to your identity. Compliance users can create a definition with `signet classification create HR --audience group:<group-id> user:<user-id>` and replace its audience with `signet classification audience <classification-id> --audience group:<group-id>`. These commands do not grant the caller classification access automatically.
+
+Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_job`, and `signet_classify` (including `preview: true`). They call the same HTTP operations and retain the caller's permissions and scopes; forbidden responses never fall back to local access.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.

@@ -407,6 +407,79 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		name: "signet",
 		version,
 	});
+	const organizationResult = async (path: string, method = "GET", body?: unknown) => {
+		const result = await fetchDaemon<unknown>(baseUrl, path, { method, body });
+		return result.ok ? textResult(result.data) : errorResult(result.error);
+	};
+	registerMcpTool(
+		server,
+		"signet_org_access",
+		{
+			title: "Inspect Organization Access",
+			description: "Inspect a user's effective access with reasons. Requires admin or compliance.",
+			inputSchema: z.object({ userId: z.string().min(1).max(128) }).strict(),
+		},
+		async ({ userId }) => organizationResult(`/api/org/access/${encodeURIComponent(userId)}`),
+	);
+	registerMcpTool(
+		server,
+		"signet_org_job",
+		{
+			title: "Organization Job",
+			description: "Read your tracked job's status and progress; other users' jobs require admin.",
+			inputSchema: z.object({ jobId: z.string().min(1).max(128) }).strict(),
+		},
+		async ({ jobId }) => organizationResult(`/api/org/jobs/${encodeURIComponent(jobId)}`),
+	);
+	registerMcpTool(
+		server,
+		"signet_org_audit",
+		{
+			title: "Query Organization Audit",
+			description: "Query a bounded page of audit events. Requires audit permission.",
+			inputSchema: z
+				.object({
+					actor: z.string().max(128).optional(),
+					action: z.string().max(128).optional(),
+					since: z.iso.datetime().optional(),
+					cursor: z.string().max(1024).optional(),
+					limit: z.number().int().min(1).max(1000).optional(),
+				})
+				.strict(),
+		},
+		async (input) => {
+			const query = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) if (value !== undefined) query.set(key, String(value));
+			return organizationResult(`/api/org/audit${query.size ? `?${query}` : ""}`);
+		},
+	);
+	registerMcpTool(
+		server,
+		"signet_classify",
+		{
+			title: "Classify Material",
+			description: "Preview readable impact or submit a tracked classification job under the caller's authority.",
+			inputSchema: z
+				.object({
+					classificationId: z.string().min(1).max(200),
+					target: z
+						.object({
+							kind: z.enum(["memory", "session", "source", "agent"]),
+							id: z.string().min(1).max(4096),
+							agentId: z.string().min(1).max(200),
+						})
+						.strict(),
+					preview: z.boolean().optional(),
+				})
+				.strict(),
+		},
+		async ({ classificationId, target, preview }) =>
+			organizationResult(
+				`/api/classifications/${encodeURIComponent(classificationId)}/${preview ? "preview" : "apply"}`,
+				"POST",
+				{ target },
+			),
+	);
 	registerMcpTool(
 		server,
 		"memory_search",
