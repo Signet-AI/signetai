@@ -28,6 +28,31 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 		};
 		const status = await cli(["status", "--json"]);
 		expect(status.identity.organization.name).toBe("Org acceptance");
+		const browserKey = success(
+			await request(daemon.origin, "/api/auth/api-keys", admin.credential, "POST", {
+				name: "browser-ceiling-proof",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			}),
+			"create browser key",
+		);
+		const exchanged = await request(
+			daemon.origin,
+			"/api/auth/session",
+			{ bearer: text(browserKey.secret) },
+			"POST",
+			{},
+		);
+		const exchangedBody = success(exchanged, "exchange browser key");
+		expect(exchangedBody).not.toHaveProperty("accessToken");
+		const keyBrowser = browser(exchanged);
+		const keyIdentity = success(await request(daemon.origin, "/api/auth/whoami", keyBrowser), "key browser identity");
+		expect(keyIdentity.permissions).toEqual(["recall"]);
+		success(
+			await request(daemon.origin, `/api/auth/api-keys/${text(record(browserKey.key).id)}`, admin.credential, "DELETE"),
+			"revoke browser parent",
+		);
+		expect((await request(daemon.origin, "/api/agents", keyBrowser)).status).toBe(401);
 		const definition = await cli(
 			["classification", "create", "CLI-private", "--audience", `group:${fixture.hrGroupId}`, "--json"],
 			fixture.user("cora").session.bearer,
