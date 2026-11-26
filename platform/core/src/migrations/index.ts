@@ -1681,6 +1681,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				"idx_derived_memory_sources_compartment",
 				"idx_memory_history_compartment",
 				"idx_relations_compartment",
+				"idx_dreaming_citation_purge_lookup",
 				"idx_entity_aliases_compartment",
 				"idx_memory_head_revisions_partition",
 				"idx_memory_head_revision_entries_partition",

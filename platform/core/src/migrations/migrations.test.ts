@@ -1715,9 +1715,16 @@ describe("migration framework", () => {
 		expect(colNames).toContain("pinned_at");
 	});
 
-	test("unique partial index on content_hash is agent-, project-, and scope-aware", () => {
+	test("content-hash lookup indexes preserve scoped evidence without enforcing uniqueness", () => {
 		db = createFreshDb();
 		runMigrations(db);
+
+		expect(
+			db
+				.query<{ name: string; unique: number }, []>("PRAGMA index_list(memories)")
+				.all()
+				.find((row) => row.name === "idx_memories_dedupe_scope")?.unique,
+		).toBe(0);
 
 		const now = new Date().toISOString();
 		db.prepare(
@@ -1731,7 +1738,7 @@ describe("migration framework", () => {
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run("b", "hello again", "hash1", "fact", "default", null, now, now, "test"),
-		).toThrow();
+		).not.toThrow();
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1754,9 +1761,16 @@ describe("migration framework", () => {
 		).run("f", "deleted", "hash1", "fact", "default", null, now, now, "test");
 	});
 
-	test("unique partial index on idempotency_key is agent-, visibility-, and scope-aware", () => {
+	test("idempotency lookup indexes preserve scoped evidence without enforcing uniqueness", () => {
 		db = createFreshDb();
 		runMigrations(db);
+
+		expect(
+			db
+				.query<{ name: string; unique: number }, []>("PRAGMA index_list(memories)")
+				.all()
+				.find((row) => row.name === "idx_memories_idempotency_scope")?.unique,
+		).toBe(0);
 
 		const now = new Date().toISOString();
 		db.prepare(
@@ -1773,7 +1787,7 @@ describe("migration framework", () => {
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run("b", "same tuple import", "import-key", "fact", "default", "global", null, now, now, "test"),
-		).toThrow();
+		).not.toThrow();
 
 		db.prepare(
 			`INSERT INTO memories

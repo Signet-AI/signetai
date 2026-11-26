@@ -46,6 +46,10 @@ describe("Dreaming lease migration", () => {
 					"INSERT INTO entity_aliases(id,entity_id,alias,canonical_alias,agent_id,created_at,updated_at) VALUES('public-alias','parent','Compensation Review','compensation review','default','now','now')",
 				),
 			).not.toThrow();
+			db.exec("DELETE FROM memories WHERE id='own-source'");
+			expect(db.query("SELECT id FROM entity_aliases ORDER BY id").all()).toEqual([{ id: "public-alias" }]);
+			expect(db.query("SELECT id FROM entities WHERE id='parent'").get()).toEqual({ id: "parent" });
+			expect(db.query("SELECT * FROM evidence_citations WHERE evidence_id='own-source'").all()).toEqual([]);
 		} finally {
 			db.close();
 		}
