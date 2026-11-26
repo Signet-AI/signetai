@@ -43,6 +43,13 @@ test("read scope preserves all three local policies and restricts compartments a
 		[{ id: "hidden" }, { id: "other" }, { id: "own" }, { id: "peer" }],
 	);
 	expect(() => readScopeSql("m;DROP TABLE x", { reach: { kind: "all" }, compartments: [], projects: null })).toThrow();
+	db.exec(
+		"INSERT INTO agents VALUES('default',NULL,NULL); INSERT INTO memories VALUES('legacy','default',NULL,NULL,'p'),('missing',NULL,'global',NULL,'p'),('empty','','global',NULL,'p')",
+	);
+	const legacy = readScopeSql("m", { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null });
+	expect(db.prepare(`SELECT id FROM memories m WHERE 1=1 ${legacy.sql} ORDER BY id`).all(...legacy.args)).toEqual([
+		{ id: "legacy" },
+	]);
 	db.close();
 });
 

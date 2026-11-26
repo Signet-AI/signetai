@@ -113,7 +113,7 @@ export function readScopeSql(
 		clauses.push(`${agent} = ?`);
 		args.push(reach.agentId);
 	}
-	if (visibility) clauses.push(`${visibility} != 'archived'`);
+	if (visibility) clauses.push(`COALESCE(${visibility},'global') != 'archived'`);
 	if (scope.compartments !== "all") {
 		for (const c of scope.compartments) if (!Number.isSafeInteger(c) || c < 1) throw new Error("Invalid compartment");
 		clauses.push(
