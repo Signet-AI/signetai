@@ -1,3 +1,4 @@
+import { attemptAsync } from "@signet/core/attempt";
 import { LoginStore } from "@signet/sdk/node";
 import { SignetTransport, SignetUnauthorizedError } from "@signet/sdk";
 import { daemonRouteTarget } from "./protocol-routes.js";
@@ -289,10 +290,7 @@ export class RemoteWorkspace {
 			if (response.status === 401) this.status("expired", "Session expired or revoked. Sign in again.");
 			if (response.status >= 500) this.status("unreachable", `Instance returned HTTP ${response.status}. Try again.`);
 			if (response.status === 403) {
-				const denied: unknown = await response
-					.clone()
-					.json()
-					.catch(() => null);
+				const denied: unknown = await attemptAsync(() => response.clone().json());
 				this.status(
 					"forbidden",
 					typeof denied === "object" && denied !== null && "required" in denied && typeof denied.required === "string"
