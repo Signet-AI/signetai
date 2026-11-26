@@ -1,5 +1,10 @@
 [
 	{
+		"path": "integrations/openclaw/memory-adapter/src/signet-sdk.d.ts",
+		"reason": "Use the SDK's own declarations instead of masking its exports with an obsolete ambient module.",
+		"retiredIn": "2026-11-26"
+	},
+	{
 		"path": "tests/integration/org-mode/l4-helper-benchmark.ts",
 		"reason": "Move the corpus-scale write admission benchmark to evals/compartment-writes/helper-overhead.ts.",
 		"retiredIn": "2026-11-25"
