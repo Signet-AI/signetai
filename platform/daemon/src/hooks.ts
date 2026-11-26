@@ -379,6 +379,7 @@ export interface SessionEndRequest {
 
 export interface SessionEndResponse {
 	memoriesSaved: number;
+	captureFailed?: boolean;
 	queued?: boolean;
 	jobId?: string;
 	transcriptCaptureJobId?: string;

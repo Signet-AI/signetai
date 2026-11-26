@@ -363,6 +363,10 @@ export interface DbOwnerTranscriptBulkCommit {
 }
 export type DbOwnerRequest =
 	| { readonly kind: "transcript_capture_enqueue"; readonly input: CaptureEnqueueInput }
+	| {
+			readonly kind: "transcript_capture_transition";
+			readonly input: import("./transcript-capture-owner").CaptureTransitionInput;
+	  }
 	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";

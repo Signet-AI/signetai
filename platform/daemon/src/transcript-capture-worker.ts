@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
-import { dbOwnerEnqueueTranscriptCapture, getDbOwnerForAccessor } from "./db-owner-runtime";
+import { dbOwnerEnqueueTranscriptCapture, dbOwnerCaptureTransition, getDbOwnerForAccessor } from "./db-owner-runtime";
 import { readHookUploadTranscript, type HookUploadScope } from "./hook-transcript-uploads";
 export { TranscriptCaptureBacklogFullError } from "./transcript-capture-owner";
 import { logger } from "./logger";
@@ -261,16 +261,6 @@ export async function enqueueTranscriptCaptureJob(
 	});
 }
 
-function resetInterruptedJobs(db: WriteDb): void {
-	db.prepare(
-		`UPDATE transcript_capture_jobs
-		 SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END,
-		     error = CASE WHEN attempts >= max_attempts THEN COALESCE(error, 'interrupted while processing') ELSE error END,
-		     updated_at = ?
-		 WHERE status = 'processing'`,
-	).run(nowIso());
-}
-
 async function leaseJob(dbAccessor: DbAccessor): Promise<TranscriptCaptureJobRow | null> {
 	let leased: TranscriptCaptureJobRow | null = null;
 	await runWriteTxAsync(dbAccessor, (db) => {
@@ -509,46 +499,38 @@ async function processTranscriptCaptureJob(
 	return captureResult(auditPath, resolved);
 }
 
+function captureGeneration(job: TranscriptCaptureJobRow) {
+	return {
+		id: job.id,
+		agentId: job.agentId,
+		sourceSha256: job.sourceSha256,
+		sourceSizeBytes: job.sourceSizeBytes,
+		sourceMtimeMs: job.sourceMtimeMs,
+	};
+}
 async function markDone(
 	dbAccessor: DbAccessor,
 	job: TranscriptCaptureJobRow,
 	result: TranscriptCaptureResult,
 ): Promise<void> {
-	const completedAt = nowIso();
-	await runWriteTxAsync(dbAccessor, (db) => {
-		db.prepare(
-			`UPDATE transcript_capture_jobs
-			 SET status = 'completed', completed_at = ?, updated_at = ?, error = NULL,
-			     transcript = '', raw_transcript = NULL, audit_path = ?, source_format = ?,
-			     source_sha256 = ?, source_size_bytes = ?, source_mtime_ms = ?
-			 WHERE id = ? AND status = 'processing'
-			${SOURCE_GENERATION_MATCH}`,
-		).run(
-			completedAt,
-			completedAt,
-			result.auditPath,
-			result.sourceFormat,
-			result.sourceSha256,
-			result.sourceSizeBytes,
-			result.sourceMtimeMs,
-			job.id,
-			...sourceGenerationParams(job),
-		);
-	});
+	await dbOwnerCaptureTransition(
+		await getDbOwnerForAccessor(dbAccessor),
+		{ action: "complete", job: captureGeneration(job), result, at: nowIso() },
+		{ operation: "transcript-capture.complete" },
+	);
 }
-
 async function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, error: unknown): Promise<void> {
-	const message = error instanceof Error ? error.message : String(error);
-	const status: TranscriptCaptureJobStatus = job.attempts >= job.maxAttempts ? "dead" : "failed";
-	const updatedAt = nowIso();
-	await runWriteTxAsync(dbAccessor, (db) => {
-		db.prepare(
-			`UPDATE transcript_capture_jobs
-			 SET status = ?, error = ?, updated_at = ?
-			 WHERE id = ? AND status = 'processing'
-			${SOURCE_GENERATION_MATCH}`,
-		).run(status, message.slice(0, 2000), updatedAt, job.id, ...sourceGenerationParams(job));
-	});
+	await dbOwnerCaptureTransition(
+		await getDbOwnerForAccessor(dbAccessor),
+		{
+			action: "fail",
+			job: captureGeneration(job),
+			terminal: job.attempts >= job.maxAttempts,
+			error: error instanceof Error ? error.message : String(error),
+			at: nowIso(),
+		},
+		{ operation: "transcript-capture.fail" },
+	);
 }
 
 export async function cleanupTranscriptCaptureStorage(
@@ -629,7 +611,11 @@ export async function startTranscriptCaptureWorker(
 	let running = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 
-	await runWriteTxAsync(dbAccessor, resetInterruptedJobs);
+	await dbOwnerCaptureTransition(
+		await getDbOwnerForAccessor(dbAccessor),
+		{ action: "recover", at: nowIso() },
+		{ operation: "transcript-capture.recover" },
+	);
 	const cleanup = await cleanupTranscriptCaptureStorage(dbAccessor, basePath);
 	const auditCleanup = await pruneTranscriptAudit(basePath);
 	if (cleanup.clearedRows > 0 || auditCleanup.removedFiles > 0) {

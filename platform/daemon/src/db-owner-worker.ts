@@ -1218,6 +1218,11 @@ export function runDbOwnerWorker(): void {
 			const input = job.request.input;
 			return withBusyRetry(() => updateTranscriptLifecycleInTx(db, input), context);
 		}
+		if (job.request.kind === "transcript_capture_transition") {
+			const { transitionTranscriptCaptureInTx } = await import("./transcript-capture-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => transitionTranscriptCaptureInTx(db, input), context);
+		}
 		if (job.request.kind === "transcript_capture_enqueue") {
 			const { enqueueTranscriptCaptureInTx } = await import("./transcript-capture-owner");
 			const input = job.request.input;

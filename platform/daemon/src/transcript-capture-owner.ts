@@ -185,8 +185,8 @@ export function enqueueTranscriptCaptureInTx(db: WriteDb, prepared: CaptureEnque
 		});
 		const published = prepareTypedStatement<{ id: string }>(
 			db,
-			`UPDATE hook_transcript_uploads SET storage_state = CASE WHEN ? IS NULL THEN 'sealed' ELSE 'consumed' END, result_json = ?, updated_at = datetime('now') WHERE ${filter.sql} AND storage_state = 'sealed' RETURNING id`,
-		).get(id, receipt, ...filter.params);
+			`UPDATE hook_transcript_uploads SET storage_state = CASE WHEN ? IS NULL THEN 'sealed' ELSE 'consumed' END, result_json = ?, reserved_bytes = CASE WHEN ? IS NULL THEN reserved_bytes ELSE (SELECT COALESCE(SUM(length(content)),0) FROM hook_transcript_chunks WHERE file_id = hook_transcript_uploads.id AND agent_id = hook_transcript_uploads.agent_id) END, updated_at = datetime('now') WHERE ${filter.sql} AND storage_state = 'sealed' RETURNING id`,
+		).get(id, receipt, id, ...filter.params);
 		if (!published) throw new Error("Transcript upload receipt was not published");
 	}
 	return id;
@@ -198,8 +198,106 @@ export function purgeHookUploadSessionBatchInTx(db: WriteDb, agentId: string, se
 		`DELETE FROM hook_transcript_chunks WHERE (agent_id,file_id,generation,byte_offset) IN (SELECT c.agent_id,c.file_id,c.generation,c.byte_offset FROM hook_transcript_chunks c JOIN hook_transcript_uploads f ON f.agent_id = c.agent_id AND f.id = c.file_id WHERE f.agent_id = ? AND f.session_key IN (?,?) LIMIT 16) RETURNING file_id`,
 	).all(agentId, sessionKey, `session:${sessionKey}`);
 	if (rows.length) return rows.length;
-	return prepareTypedStatement<{ id: string }>(
+	const removed = prepareTypedStatement<{ id: string }>(
 		db,
 		`DELETE FROM hook_transcript_uploads WHERE id IN (SELECT id FROM hook_transcript_uploads WHERE agent_id = ? AND session_key IN (?,?) LIMIT 16) RETURNING id`,
 	).all(agentId, sessionKey, `session:${sessionKey}`).length;
+	if (removed) return removed;
+	return prepareTypedStatement<{ id: string }>(
+		db,
+		`DELETE FROM hook_transcript_receipts WHERE id IN (SELECT id FROM hook_transcript_receipts WHERE agent_id = ? AND session_key IN (?,?) LIMIT 16) RETURNING id`,
+	).all(agentId, sessionKey, `session:${sessionKey}`).length;
+}
+
+export interface CaptureGeneration {
+	readonly id: string;
+	readonly agentId: string;
+	readonly sourceSha256: string | null;
+	readonly sourceSizeBytes: number | null;
+	readonly sourceMtimeMs: number | null;
+}
+export type CaptureTransitionInput =
+	| { readonly action: "recover"; readonly at: string }
+	| { readonly action: "settle" }
+	| {
+			readonly action: "complete";
+			readonly job: CaptureGeneration;
+			readonly at: string;
+			readonly result: {
+				readonly auditPath: string | null;
+				readonly sourceFormat: string | null;
+				readonly sourceSha256: string;
+				readonly sourceSizeBytes: number | null;
+				readonly sourceMtimeMs: number | null;
+			};
+	  }
+	| {
+			readonly action: "fail";
+			readonly job: CaptureGeneration;
+			readonly at: string;
+			readonly error: string;
+			readonly terminal: boolean;
+	  };
+function settleCaptureUpload(db: WriteDb, agentId: string, jobId: string): number {
+	const rows = prepareTypedStatement<{ id: string }>(
+		db,
+		`SELECT id FROM hook_transcript_uploads WHERE agent_id = ? AND json_extract(result_json,'$.transcriptCaptureJobId') = ? AND storage_state = 'consumed' LIMIT 16`,
+	).all(agentId, jobId);
+	const job = prepareTypedStatement<{ status: string }>(
+		db,
+		`SELECT status FROM transcript_capture_jobs WHERE agent_id = ? AND id = ? AND status IN ('completed','dead')`,
+	).get(agentId, jobId);
+	if (!job) return 0;
+	if (job.status === "dead")
+		db.prepare(
+			`UPDATE hook_transcript_receipts SET result_json = json_object('memoriesSaved',0,'queued',json('false'),'captureFailed',json('true'),'transcriptCaptureJobId',?) WHERE agent_id = ? AND json_extract(result_json,'$.transcriptCaptureJobId') = ?`,
+		).run(jobId, agentId, jobId);
+	for (const row of rows) {
+		db.prepare("DELETE FROM hook_transcript_chunks WHERE agent_id = ? AND file_id = ?").run(agentId, row.id);
+		db.prepare("DELETE FROM hook_transcript_uploads WHERE agent_id = ? AND id = ?").run(agentId, row.id);
+	}
+	return rows.length;
+}
+function settleCompletedUploads(db: WriteDb): number {
+	const jobs = prepareTypedStatement<{ agent_id: string; id: string }>(
+		db,
+		`SELECT u.agent_id,json_extract(u.result_json,'$.transcriptCaptureJobId') AS id FROM hook_transcript_uploads u WHERE u.storage_state = 'consumed' AND EXISTS (SELECT 1 FROM transcript_capture_jobs j WHERE j.agent_id = u.agent_id AND j.id = json_extract(u.result_json,'$.transcriptCaptureJobId') AND j.status IN ('completed','dead')) LIMIT 16`,
+	).all();
+	return jobs.reduce((count, job) => count + settleCaptureUpload(db, job.agent_id, job.id), 0);
+}
+export function transitionTranscriptCaptureInTx(db: WriteDb, input: CaptureTransitionInput): number {
+	if (input.action === "recover") {
+		db.prepare(
+			`UPDATE transcript_capture_jobs SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END, error = CASE WHEN attempts >= max_attempts THEN COALESCE(error,'interrupted while processing') ELSE error END, updated_at = ? WHERE status = 'processing'`,
+		).run(input.at);
+		return settleCompletedUploads(db);
+	}
+	if (input.action === "settle") return settleCompletedUploads(db);
+	const job = input.job;
+	const params = [job.id, job.agentId, job.sourceSha256, job.sourceSizeBytes, job.sourceMtimeMs];
+	const match =
+		"WHERE id = ? AND agent_id = ? AND status = 'processing' AND source_sha256 IS ? AND source_size_bytes IS ? AND source_mtime_ms IS ?";
+	if (input.action === "complete") {
+		const result = input.result;
+		db.prepare(
+			`UPDATE transcript_capture_jobs SET status = 'completed', completed_at = ?, updated_at = ?, error = NULL, transcript = '', raw_transcript = NULL, audit_path = ?, source_format = ?, source_sha256 = ?, source_size_bytes = ?, source_mtime_ms = ? ${match}`,
+		).run(
+			input.at,
+			input.at,
+			result.auditPath,
+			result.sourceFormat,
+			result.sourceSha256,
+			result.sourceSizeBytes,
+			result.sourceMtimeMs,
+			...params,
+		);
+	} else {
+		db.prepare(`UPDATE transcript_capture_jobs SET status = ?, error = ?, updated_at = ? ${match}`).run(
+			input.terminal ? "dead" : "failed",
+			input.error.slice(0, 2000),
+			input.at,
+			...params,
+		);
+	}
+	return settleCaptureUpload(db, job.agentId, job.id);
 }

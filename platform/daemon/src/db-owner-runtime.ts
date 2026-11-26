@@ -258,6 +258,7 @@ async function executeInlineOwnerRequest(
 		);
 	}
 	switch (request.kind) {
+		case "transcript_capture_transition":
 		case "transcript_capture_enqueue":
 		case "fts_partition":
 		case "classification":
@@ -575,6 +576,17 @@ export async function dbOwnerQuery<Row = unknown>(
 	);
 }
 
+export async function dbOwnerCaptureTransition(
+	owner: DbOwnerClient,
+	input: import("./transcript-capture-owner").CaptureTransitionInput,
+	options: DbOwnerSqlOptions,
+): Promise<number> {
+	return submitWithAdmission(
+		owner,
+		{ kind: "transcript_capture_transition", input },
+		{ ...options, lane: "write", estimatedWorkUnits: 4096 },
+	);
+}
 export async function dbOwnerEnqueueTranscriptCapture(
 	owner: DbOwnerClient,
 	input: CaptureEnqueueInput,

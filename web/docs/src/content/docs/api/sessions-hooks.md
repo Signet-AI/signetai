@@ -320,8 +320,13 @@ with that upload returns the original result, including after daemon restart.
 the capture receipt when completion matters.
 
 Unconsumed uploads expire after 24 hours without progress and are purged with
-their chunks. Consumed bytes remain session evidence and are removed through
-normal session-transcript deletion. The client outbox keeps its upload ID and
+their chunks. Consumption releases the reservation down to the staged bytes.
+When capture completes, its job-completion transaction deletes the chunks and
+staging row and releases the remaining reservation. A small authority-bound
+receipt preserves replay for seven days after consumption, then expires in the
+upload sweep. Terminal capture failures release staging the same way; replay
+returns `queued: false` and `captureFailed: true`. Normal session-transcript
+deletion also purges its receipts. The client outbox keeps its upload ID and
 last acknowledged offset across process exits. Replay asks the server for its
 current offset and resumes there. Keep the original client file until handoff
 is acknowledged; if it changes during an interrupted transfer, delivery fails

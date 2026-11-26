@@ -1,8 +1,16 @@
 import type { MigrationDb } from "./contract";
 
 export const artifacts = {
-	tables: ["hook_transcript_uploads", "hook_transcript_chunks"],
-	indexes: ["idx_hook_transcript_upload_expiry", "idx_hook_transcript_upload_state"],
+	tables: ["hook_transcript_uploads", "hook_transcript_chunks", "hook_transcript_receipts"],
+	indexes: [
+		"idx_hook_transcript_upload_expiry",
+		"idx_hook_transcript_upload_state",
+		"idx_hook_transcript_receipt_expiry",
+		"idx_hook_transcript_receipt_job",
+		"idx_hook_transcript_receipt_binding",
+		"idx_hook_transcript_receipt_session",
+		"idx_hook_transcript_upload_job",
+	],
 	columns: [
 		"agent_id",
 		"principal_id",
@@ -66,5 +74,33 @@ export function up(db: MigrationDb): void {
 		BEGIN UPDATE source_import_capacity SET reserved_bytes = reserved_bytes - OLD.reserved_bytes + NEW.reserved_bytes WHERE id = 1; END;
 		CREATE TRIGGER IF NOT EXISTS hook_transcript_capacity_delete AFTER DELETE ON hook_transcript_uploads
 		BEGIN UPDATE source_import_capacity SET reserved_bytes = reserved_bytes - OLD.reserved_bytes WHERE id = 1; END;
+
+        CREATE TABLE IF NOT EXISTS hook_transcript_receipts (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            principal_id TEXT NOT NULL,
+            credential_kind TEXT NOT NULL,
+            credential_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+            consumed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_hook_transcript_receipt_expiry ON hook_transcript_receipts(consumed_at,id);
+        CREATE INDEX IF NOT EXISTS idx_hook_transcript_receipt_binding ON hook_transcript_receipts(principal_id,credential_kind,credential_id,agent_id,harness,session_key,sha256,consumed_at DESC,id);
+        CREATE INDEX IF NOT EXISTS idx_hook_transcript_receipt_session ON hook_transcript_receipts(agent_id,session_key,id);
+        CREATE INDEX IF NOT EXISTS idx_hook_transcript_receipt_job ON hook_transcript_receipts(agent_id,json_extract(result_json,'$.transcriptCaptureJobId'));
+        CREATE INDEX IF NOT EXISTS idx_hook_transcript_upload_job ON hook_transcript_uploads(agent_id,json_extract(result_json,'$.transcriptCaptureJobId'));
+        CREATE TRIGGER IF NOT EXISTS hook_transcript_consume_receipt AFTER UPDATE OF storage_state ON hook_transcript_uploads
+        WHEN NEW.storage_state = 'consumed' AND OLD.storage_state <> 'consumed'
+        BEGIN
+            INSERT INTO hook_transcript_receipts (id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256,size_bytes,result_json,consumed_at)
+            VALUES (NEW.id,NEW.agent_id,NEW.principal_id,NEW.credential_kind,NEW.credential_id,NEW.harness,NEW.session_key,NEW.sha256,NEW.size_bytes,NEW.result_json,NEW.updated_at);
+        END;
+        INSERT OR IGNORE INTO hook_transcript_receipts (id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256,size_bytes,result_json,consumed_at)
+        SELECT id,agent_id,principal_id,credential_kind,credential_id,harness,session_key,sha256,size_bytes,result_json,updated_at FROM hook_transcript_uploads WHERE storage_state = 'consumed' AND result_json IS NOT NULL;
+        UPDATE hook_transcript_uploads SET reserved_bytes = (SELECT COALESCE(SUM(length(content)),0) FROM hook_transcript_chunks WHERE file_id = hook_transcript_uploads.id AND agent_id = hook_transcript_uploads.agent_id) WHERE storage_state = 'consumed';
 	`);
 }

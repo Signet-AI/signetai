@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SessionEndResponse } from "./hooks";
 import type { Principal } from "./auth/principal";
 import { principalAccess, resolveWriteAgent } from "./auth/agent-access";
-import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
+import { dbOwnerQuery, dbOwnerTransaction, dbOwnerCaptureTransition, getDbOwner } from "./db-owner-runtime";
 import {
 	createStagingOwner,
 	stagedScopeFilter,
@@ -200,6 +200,16 @@ async function purge(row: HookUploadRow, active: () => boolean): Promise<void> {
 }
 export async function purgeExpiredHookUploads(): Promise<void> {
 	const deadline = Date.now() + 5000;
+	await dbOwnerCaptureTransition(await getDbOwner(), { action: "settle" }, { operation: "hooks.upload.settle" });
+	await dbOwnerTransaction(
+		[
+			{
+				sql: "DELETE FROM hook_transcript_receipts WHERE id IN (SELECT id FROM hook_transcript_receipts WHERE consumed_at <= datetime('now','-7 days') ORDER BY consumed_at,id LIMIT 16)",
+				result: "run",
+			},
+		],
+		write,
+	);
 	const rows = await dbOwnerQuery<HookUploadRow[]>(
 		{
 			sql: "SELECT *, 1 AS expired FROM hook_transcript_uploads WHERE storage_state <> 'consumed' AND updated_at <= datetime('now','-24 hours') ORDER BY updated_at,id LIMIT 16",
@@ -212,6 +222,46 @@ export async function purgeExpiredHookUploads(): Promise<void> {
 		if (Date.now() >= deadline) return;
 		await purge(row, () => Date.now() < deadline);
 	}
+}
+export type HookUploadEndState =
+	| (HookUploadRow & { readonly kind: "upload" })
+	| {
+			readonly kind: "receipt";
+			readonly id: string;
+			readonly agent_id: string;
+			readonly harness: string;
+			readonly session_key: string;
+			readonly result_json: string;
+			readonly expired: number;
+	  };
+export async function getHookUploadForSessionEnd(principal: Principal, id: string): Promise<HookUploadEndState> {
+	const row = await dbOwnerQuery<HookUploadEndState>(
+		{
+			sql: `SELECT CASE WHEN r.id IS NOT NULL THEN 'receipt' ELSE 'upload' END AS kind,
+ COALESCE(r.id,u.id) AS id,COALESCE(r.agent_id,u.agent_id) AS agent_id,COALESCE(r.principal_id,u.principal_id) AS principal_id,
+ COALESCE(r.credential_kind,u.credential_kind) AS credential_kind,COALESCE(r.credential_id,u.credential_id) AS credential_id,
+ COALESCE(r.harness,u.harness) AS harness,COALESCE(r.session_key,u.session_key) AS session_key,COALESCE(r.sha256,u.sha256) AS sha256,
+ COALESCE(r.result_json,u.result_json) AS result_json,u.upload_generation,u.upload_offset,u.upload_size,u.upload_digest,u.storage_state,u.content_hash,u.updated_at,
+ CASE WHEN r.id IS NOT NULL THEN r.consumed_at <= datetime('now','-7 days') ELSE u.updated_at <= datetime('now','-24 hours') END AS expired
+ FROM (SELECT ? AS id) target LEFT JOIN hook_transcript_receipts r ON r.id = target.id LEFT JOIN hook_transcript_uploads u ON u.id = target.id
+ WHERE (r.id IS NOT NULL OR u.id IS NOT NULL) AND COALESCE(r.principal_id,u.principal_id) = ? AND COALESCE(r.credential_kind,u.credential_kind) = ? AND COALESCE(r.credential_id,u.credential_id) = ?`,
+			params: [id, principalId(principal), principal.credential.kind, principal.credential.id],
+			result: "get",
+			readonly: true,
+		},
+		read,
+	);
+	if (!row) throw new HookUploadMissing();
+	requireUploadAgent(principal, row.agent_id);
+	if (row.kind === "receipt") {
+		if (!row.expired) return row;
+		await purgeExpiredHookUploads();
+	} else if (!row.expired && row.storage_state !== "purging" && row.storage_state !== "purged") return row;
+	else {
+		const deadline = Date.now() + 5000;
+		await purge(row, () => Date.now() < deadline);
+	}
+	throw new HookUploadMissing();
 }
 export async function getHookUpload(principal: Principal, id: string): Promise<HookUploadRow> {
 	const row = await dbOwnerQuery<HookUploadRow>(
@@ -240,10 +290,31 @@ export async function createHookUpload(
 	principal: Principal,
 	agentId: string,
 	input: { sessionKey: string; harness: string; totalBytes: number; sha256: string },
-): Promise<HookUploadRow> {
+): Promise<{ readonly id: string; readonly upload_offset: number }> {
 	requireUploadAgent(principal, agentId);
 	if (!Number.isSafeInteger(input.totalBytes) || input.totalBytes < 1 || input.totalBytes > HOOK_TRANSCRIPT_BYTES)
 		throw new RangeError("Transcript exceeds upload byte limit");
+	const receipt = await dbOwnerQuery<{ id: string; agent_id: string; size_bytes: number }>(
+		{
+			sql: "SELECT id,agent_id,size_bytes FROM hook_transcript_receipts WHERE principal_id = ? AND credential_kind = ? AND credential_id = ? AND agent_id = ? AND harness = ? AND session_key = ? AND sha256 = ? AND consumed_at > datetime('now','-7 days') ORDER BY consumed_at DESC,id LIMIT 1",
+			params: [
+				principalId(principal),
+				principal.credential.kind,
+				principal.credential.id,
+				agentId,
+				input.harness,
+				input.sessionKey,
+				input.sha256,
+			],
+			result: "get",
+			readonly: true,
+		},
+		read,
+	);
+	if (receipt) {
+		if (receipt.agent_id !== agentId || receipt.size_bytes !== input.totalBytes) throw new HookUploadMissing();
+		return { id: receipt.id, upload_offset: receipt.size_bytes };
+	}
 	const existing = await dbOwnerQuery<HookUploadRow>(
 		{
 			sql: "SELECT *, updated_at <= datetime('now','-24 hours') AS expired FROM hook_transcript_uploads WHERE principal_id = ? AND harness = ? AND session_key = ? AND sha256 = ?",
@@ -328,7 +399,12 @@ export function hookUploadResult(row: { readonly result_json: unknown }): Sessio
 		typeof result.queued !== "boolean"
 	)
 		throw new Error("Invalid upload receipt");
-	if (!result.queued) return { memoriesSaved: 0, queued: false };
+	if (!result.queued)
+		return {
+			memoriesSaved: 0,
+			queued: false,
+			...("captureFailed" in result && result.captureFailed === true ? { captureFailed: true } : {}),
+		};
 	if (!("transcriptCaptureJobId" in result) || typeof result.transcriptCaptureJobId !== "string")
 		throw new Error("Invalid upload receipt");
 	return { memoriesSaved: 0, queued: true, transcriptCaptureJobId: result.transcriptCaptureJobId };
