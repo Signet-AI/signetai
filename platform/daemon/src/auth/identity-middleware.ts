@@ -326,6 +326,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 							!c.req.path.startsWith("/api/auth/") &&
 							!c.req.path.startsWith("/api/org/") &&
 							!c.req.path.startsWith("/api/agents") &&
+							c.req.path !== "/mcp" &&
 							["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
 							!organizationReadRequest(c.req.method, c.req.path)
 						) {

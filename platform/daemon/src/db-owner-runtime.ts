@@ -274,6 +274,53 @@ async function executeInlineOwnerRequest(
 			return txCreateDailyReflections(db, request.input);
 		});
 	}
+	if (request.kind === "diagnostics_schema")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readDatabaseSchemaAsync(db, request.scope),
+		);
+	if (request.kind === "diagnostics_sample")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readTableSampleAsync(
+				db,
+				request.table,
+				request.limit,
+				request.offset,
+				request.scope,
+			),
+		);
+	if (request.kind === "search_telemetry_export_page")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readSearchTelemetryExportPage(request.query, request.cursor, db),
+		);
+	if (request.kind === "search_telemetry_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readScopedSearchTelemetry(request.query, db),
+		);
+	if (request.kind === "queue_diagnostics_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics-queue")).getQueueDiagnosticsSnapshot(db, { scope: request.scope, fresh: true }),
+		);
+
+	if (request.kind === "dreaming_reviewed_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
+				db,
+				request.agentId,
+				request.scope,
+			),
+		);
+	if (request.kind === "reflection_list") {
+		const { readReflectionsInOwner } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readReflectionsInOwner(db, request.scope, request.input),
+		);
+	}
+	if (request.kind === "reflection_get") {
+		const { readReflectionInOwner } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readReflectionInOwner(db, request.scope, request.id),
+		);
+	}
 	if (request.kind === "reflection_answer")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			if (!("exec" in db)) throw new Error("Reflection requires writer");
@@ -746,6 +793,92 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
+export async function dbOwnerDiagnosticSchema(
+	scope?: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): Promise<import("./diagnostics").DatabaseSchemaResponse> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "diagnostics_schema", scope },
+		{ operation: "diagnostics.schema", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerDiagnosticSample(
+	table: string,
+	limit: number,
+	offset: number,
+	scope?: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readTableSampleAsync> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "diagnostics_sample", scope, table, limit, offset },
+		{ operation: "diagnostics.sample", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerSearchTelemetry(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readScopedSearchTelemetry> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "search_telemetry_read", query },
+		{ operation: "telemetry.memory-search.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerSearchTelemetryExportPage(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readSearchTelemetryExportPage> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "search_telemetry_export_page", query, cursor },
+		{ operation: "telemetry.memory-search.export-page", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+
+export async function dbOwnerQueueDiagnostics(
+	scope: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): Promise<import("./diagnostics-queue").QueueDiagnosticsSnapshot> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "queue_diagnostics_read", scope },
+		{ operation: "diagnostics.queue.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerReviewedEvidence(
+	accessor: DbAccessor,
+	agentId: string,
+	scope?: import("./read-scope").ReadScope,
+): Promise<readonly import("./pipeline/dreaming-evidence-reviews").DreamingReviewedEvidence[]> {
+	return submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "dreaming_reviewed_read", agentId, scope },
+		{ operation: "dreaming.reviewed.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerReflectionList(
+	scope: import("./read-scope").ReadScope,
+	input: import("./reflection-owner").ReflectionListInput,
+): Promise<readonly import("./reflection-owner").ReflectionRow[]> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "reflection_list", scope, input },
+		{ operation: "reflection.list", lane: "read", deadlineMs: 3000 },
+	);
+}
+export async function dbOwnerReflectionGet(
+	scope: import("./read-scope").ReadScope,
+	id: string,
+): Promise<import("./reflection-owner").ReflectionRow | null> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "reflection_get", scope, id },
+		{ operation: "reflection.get", lane: "read", deadlineMs: 3000 },
+	);
+}
 export async function dbOwnerReflectionAnswer(input: ReflectionAnswerInput, accessor: DbAccessor): Promise<boolean> {
 	return submitWithAdmission(
 		await getDbOwnerForAccessor(accessor),

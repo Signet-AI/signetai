@@ -1,15 +1,17 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
 import { randomUUID } from "node:crypto";
 import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { resolveReadAgent } from "../auth/agent-access";
-import { getDbAccessor, type ReadDb } from "../db-accessor";
-import { dbOwnerQuery, dbOwnerReflectionAnswer } from "../db-owner-runtime";
+import { getDbAccessor } from "../db-accessor";
+import { dbOwnerReflectionAnswer } from "../db-owner-runtime";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { generateDailyBriefInsights, todayDateInTimeZone } from "../pipeline/reflection-worker";
+import { readReflection, readReflections, type ReflectionRow } from "../reflection-owner";
 import { jsonBody } from "../request-body";
+import { resolveKnowledgeReadScope } from "./read-scope";
 import { authConfig } from "./state";
 import { resolveScopedAgentId } from "./utils";
 
@@ -41,22 +43,6 @@ function parseGenerateCount(raw: string | undefined, fallback: number): number {
 	return Math.min(parsed, 6);
 }
 
-interface ReflectionRow {
-	id: string;
-	agent_id: string;
-	date: string;
-	summary: string;
-	patterns: string;
-	question: string | null;
-	answer: string | null;
-	answer_memory_id: string | null;
-	memory_ids: string;
-	summary_ids: string;
-	model: string | null;
-	created_at: string;
-	answered_at: string | null;
-}
-
 function formatReflection(r: ReflectionRow) {
 	return {
 		id: r.id,
@@ -72,6 +58,7 @@ function formatReflection(r: ReflectionRow) {
 }
 
 export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = {}): void {
+	registerPublicReadResponse(app, "/api/reflections/*");
 	const resolveDbAccessor = deps.getDbAccessor ?? getDbAccessor;
 
 	app.use("/api/reflections", async (c, next) => {
@@ -87,21 +74,14 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		return requirePermission("modify", authConfig)(c, next);
 	});
 
-	app.get("/api/reflections/today", (c) => {
-		const scoped = resolveScopedAgentId(c, c.req.query("agentId"));
-		if (scoped.error) return c.json({ error: scoped.error }, 403);
-		const agentId = scoped.agentId;
+	app.get("/api/reflections/today", async (c) => {
+		const scope = await resolveKnowledgeReadScope(c, c.req.query("agentId"));
 		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
 		const date = todayDateInTimeZone(pipelineCfg.reflections.timezone);
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
-				return db
-					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
-					.all(agentId, date, limit) as ReflectionRow[];
-			}, "routes/reflection-routes.ts:100");
+			const rows = await readReflections(scope, { date, limit });
 
 			const reflections = rows.map(formatReflection);
 			return c.json({ reflection: reflections[0] ?? null, reflections });
@@ -111,26 +91,12 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		}
 	});
 
-	app.get("/api/reflections", (c) => {
-		const scoped = resolveScopedAgentId(c, c.req.query("agentId"));
-		if (scoped.error) return c.json({ error: scoped.error }, 403);
-		const agentId = scoped.agentId;
+	app.get("/api/reflections", async (c) => {
+		const scope = await resolveKnowledgeReadScope(c, c.req.query("agentId"));
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
-				return db
-					.prepare(
-						`SELECT id, date, summary, patterns, question, answer,
-                        answer_memory_id, created_at, answered_at
-                 FROM daily_reflections
-                 WHERE agent_id = ?
-                 ORDER BY created_at DESC
-                 LIMIT ?`,
-					)
-					.all(agentId, limit) as ReflectionRow[];
-			}, "routes/reflection-routes.ts:122");
+			const rows = await readReflections(scope, { limit });
 
 			return c.json({ reflections: rows.map(formatReflection) });
 		} catch (e) {
@@ -172,14 +138,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 			});
 		}
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {
-			return db
-				.prepare(
-					`SELECT * FROM daily_reflections WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`,
-				)
-				.all(...ids) as ReflectionRow[];
-		}, "routes/reflection-routes.ts:176");
+		const rows = await readReflections(await resolveKnowledgeReadScope(c, c.req.query("agentId")), { ids, limit: 100 });
 
 		logger.info("reflections", "Generated daily brief questions", { agentId, date, count: rows.length });
 		const reflections = rows.map(formatReflection);
@@ -209,19 +168,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		}
 
 		try {
-			const readTarget = c.get("organization")
-				? resolveReadAgent(c.get("principal"), c.get("requestedOrganizationAgent"))
-				: { ok: true as const, value: agentId };
-			if (!readTarget.ok) return c.json({ error: readTarget.error.reason }, 403);
-			const sourceAgentId = readTarget.value;
-			const existing = await dbOwnerQuery<ReflectionRow | null>(
-				{
-					sql: "SELECT * FROM daily_reflections WHERE id=? AND agent_id IN (?,?)",
-					params: [id, sourceAgentId, agentId],
-					result: "get",
-				},
-				{ operation: "reflection.get-for-answer", lane: "read", deadlineMs: 3000 },
-			);
+			const existing = await readReflection(await resolveKnowledgeReadScope(c, c.req.query("agentId")), id);
 
 			if (!existing) {
 				return c.json({ error: "Reflection not found" }, 404);

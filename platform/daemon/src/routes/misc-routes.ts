@@ -59,6 +59,16 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
+	app.use("*", async (c, next) => {
+		if (
+			c.get("organization") &&
+			["/api/logs", "/api/logs/stream", "/api/config", "/api/identity"].includes(c.req.path) &&
+			c.req.method === "GET"
+		) {
+			return c.json({ error: "This diagnostic has no content read scope", reason: "org_policy" }, 403);
+		}
+		return next();
+	});
 	app.use("/api/config", async (c, next) => {
 		if (c.req.method === "POST") {
 			const cl = c.req.header("content-length");

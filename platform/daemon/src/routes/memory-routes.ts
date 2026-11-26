@@ -3610,6 +3610,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 	});
 	app.get("/api/embeddings/status", async (c) => {
+		if (c.get("organization")) {
+			return c.json({ status: "unavailable", reason: "scoped_embedding_diagnostics" });
+		}
 		const config = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const status = await checkEmbeddingProvider(config.embedding);
 		const tracker = embeddingTrackerHandle?.getStats() ?? null;
@@ -3625,6 +3628,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return c.json({ ...status, tracker, index });
 	});
 	app.get("/api/embeddings/health", async (c) => {
+		if (c.get("organization")) {
+			return c.json({ status: "unavailable", reason: "scoped_embedding_diagnostics" });
+		}
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(

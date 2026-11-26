@@ -132,10 +132,10 @@ describe("persisted ontology contradictions", () => {
 		});
 		const before = storedStatuses("owner");
 
-		const listed = listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
+		const listed = await listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
 		const contradiction = listed.items[0];
 		if (!contradiction) throw new Error("expected contradiction fixture");
-		expect(getOntologyContradiction(getDbAccessor(), { agentId: "owner", id: contradiction.id })?.status).toBe(
+		expect((await getOntologyContradiction(getDbAccessor(), { agentId: "owner", id: contradiction.id }))?.status).toBe(
 			"active",
 		);
 		expect(storedStatuses("owner")).toEqual(before);

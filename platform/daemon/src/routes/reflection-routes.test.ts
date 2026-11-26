@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
+import { bindPrincipalAccess } from "../auth/agent-access";
+import { readOrganization } from "../auth/organization-store";
+import { localPrincipal } from "../auth/principal";
 import { closeDbAccessor, type DbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "../llm";
 import { txIngestEnvelope } from "../transactions";
@@ -67,10 +70,23 @@ function seedReflection(
 	});
 }
 
-function app(): Hono {
+function app(userId?: string): Hono {
 	const next = new Hono();
 	next.use("*", async (c, next) => {
 		c.set("author", { userId: null, credential: "local" });
+		if (userId) {
+			const principal = { ...localPrincipal(), kind: "user" as const, userId };
+			bindPrincipalAccess(principal, {
+				agentModel: "single",
+				personalAgentsSelfService: false,
+				organizationAgentId: "default",
+				personalAgentId: null,
+				defaultReadAgentId: null,
+				agents: [{ id: "default", kind: "organization", owner_user_id: null, owner_group_id: null, archived_at: null }],
+			});
+			c.set("principal", principal);
+			c.set("organization", await readOrganization());
+		}
 		await next();
 	});
 	registerReflectionRoutes(next, {
@@ -120,6 +136,117 @@ afterEach(async () => {
 });
 
 describe("reflection routes", () => {
+	it("reflection answer pointers require a readable target", async () => {
+		seedReflection("pointer-reflection", "default");
+		await dbAccessor.withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_pointer','Pointer'); INSERT INTO classification_audience VALUES('cls_pointer','user','carol'); INSERT INTO compartments(id,key) VALUES(1,'cls_pointer'); INSERT INTO compartment_members VALUES(1,'cls_pointer'); INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('private-answer','private answer','default',1,'now','now'); UPDATE daily_reflections SET answer_memory_id='private-answer' WHERE id='pointer-reflection'",
+			),
+		);
+		expect(await (await app("alice").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: null }],
+		});
+		expect(await (await app("carol").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: "private-answer" }],
+		});
+		await dbAccessor.withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('answer-copy','copied answer','default','now','now'); INSERT INTO evidence_citations VALUES('memory','answer-copy','default','memory','private-answer'); UPDATE daily_reflections SET answer_memory_id='answer-copy' WHERE id='pointer-reflection'",
+			),
+		);
+		expect(await (await app("alice").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: null }],
+		});
+		expect(await (await app("carol").request("/api/reflections")).json()).toMatchObject({
+			reflections: [{ id: "pointer-reflection", answerMemoryId: "answer-copy" }],
+		});
+	});
+	it("reflection reads do not observe hidden inserts, edits, or reclassification", async () => {
+		const date = new Date().toISOString().slice(0, 10);
+		seedReflection("public", "default", date, "Public reflection", `${date}T08:00:00.000Z`);
+		dbAccessor.withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_audience VALUES('cls_hr','user','carol'); INSERT INTO compartments(id,key) VALUES(1,'cls_hr'); INSERT INTO compartment_members VALUES(1,'cls_hr')",
+			);
+		});
+		const paths = ["/api/reflections?limit=1", "/api/reflections/today?limit=1"];
+		const reader = app("alice");
+		const snapshot = async () =>
+			Promise.all(
+				paths.map(async (path) => {
+					const response = await reader.request(path);
+					expect(response.status).toBe(200);
+					return response.text();
+				}),
+			);
+		const before = await snapshot();
+		dbAccessor.withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO daily_reflections(id,agent_id,date,summary,patterns,memory_ids,summary_ids,created_at,compartment_id) VALUES('hidden','default',?,'Hidden reflection','[]','[]','[]',?,1)",
+			).run(date, `${date}T10:00:00.000Z`);
+		});
+		expect(await snapshot()).toEqual(before);
+		dbAccessor.withWriteTx((db) =>
+			db.exec("UPDATE daily_reflections SET summary='Hidden edited',question='Restricted question' WHERE id='hidden'"),
+		);
+		expect(await snapshot()).toEqual(before);
+		const audience = await app("carol").request(paths[0]);
+		expect((await audience.json()).reflections[0].summary).toBe("Hidden edited");
+		seedReflection("reclassified", "default", date, "Now hidden", `${date}T09:00:00.000Z`);
+		dbAccessor.withWriteTx((db) => db.exec("UPDATE daily_reflections SET compartment_id=1 WHERE id='reclassified'"));
+		expect(await snapshot()).toEqual(before);
+		const absent = await reader.request("/api/reflections/missing/answer", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: "answer" }),
+		});
+		const hidden = await reader.request("/api/reflections/hidden/answer", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: "answer" }),
+		});
+		expect(hidden.status).toBe(absent.status);
+		expect(await hidden.text()).toBe(await absent.text());
+	});
+
+	it("reflection reads hide citing rows while a classification batch is pending", async () => {
+		seedReflection("public-pending", "default", "2026-11-25", "Public", "2026-11-25T08:00:00.000Z");
+		const memoryId = seedMemory("default", "Restricted source");
+		seedReflection("pending-derived", "default", "2026-11-25", "Restricted reflection", "2026-11-25T09:00:00.000Z");
+		dbAccessor.withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_pending','Pending'); INSERT INTO classification_audience VALUES('cls_pending','user','carol')",
+			);
+			db.prepare(
+				"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('reflection','pending-derived','default','memory',?)",
+			).run(memoryId);
+			db.prepare(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('memory',?,'default','cls_pending')",
+			).run(memoryId);
+			db.prepare("INSERT INTO org_jobs(id,kind,status,params_json) VALUES('job_pending','classify','pending',?)").run(
+				JSON.stringify({ id: "cls_pending", target: { kind: "memory", id: memoryId, agentId: "default" } }),
+			);
+		});
+		const response = await app("alice").request("/api/reflections?limit=1");
+		expect(response.status).toBe(200);
+		expect((await response.json()).reflections.map((item: { id: string }) => item.id)).toEqual(["public-pending"]);
+		const allowed = await app("carol").request("/api/reflections?limit=1");
+		expect((await allowed.json()).reflections[0].id).toBe("pending-derived");
+	});
+
+	it("local reflection reads retain their agent boundary under group sharing", async () => {
+		dbAccessor.withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO agents(id,name,read_policy,policy_group,created_at,updated_at) VALUES('group-a','A','group','team','now','now'),('group-b','B','group','team','now','now')",
+			);
+		});
+		seedReflection("own-group", "group-a", "2026-11-25", "Own reflection", "2026-11-25T08:00:00.000Z");
+		seedReflection("peer-group", "group-b", "2026-11-25", "Peer reflection", "2026-11-25T09:00:00.000Z");
+		const response = await app().request("/api/reflections?agentId=group-a&limit=1");
+		expect(response.status).toBe(200);
+		expect((await response.json()).reflections.map((item: { id: string }) => item.id)).toEqual(["own-group"]);
+	});
+
 	it("loads pipeline config from SIGNET_PATH and persists manual generation", async () => {
 		const memoryId = seedMemory("agent-a");
 

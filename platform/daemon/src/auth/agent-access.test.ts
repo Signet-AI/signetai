@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	bindPrincipalAccess,
 	canActAs,
+	organizationReadRequest,
 	reconcileAgentSources,
 	resolveReadAgent,
 	resolveWriteAgent,
@@ -39,6 +40,32 @@ const org = {
 } as const;
 
 describe("organization act-as boundary", () => {
+	test("read-only POST transports resolve read reach without requiring peer write ownership", () => {
+		for (const path of [
+			"/api/assistant/chat",
+			"/api/knowledge/expand",
+			"/api/knowledge/expand/session",
+			"/api/sessions/summaries/expand",
+			...[
+				"memory_head_read",
+				"search_entities",
+				"get_entity",
+				"list_aspect_claims",
+				"search_evidence",
+				"validate_proposal",
+				"zoom_history",
+				"attention_list",
+			].map((id) => `/api/dream/tools/${id}`),
+		])
+			expect(organizationReadRequest("POST", path)).toBe(true);
+		for (const path of [
+			"/api/dream/tools/apply_ontology_ops",
+			"/api/dream/tools/runbook_write",
+			"/api/dream/tools/review_evidence",
+			"/api/memory/remember",
+		])
+			expect(organizationReadRequest("POST", path)).toBe(false);
+	});
 	test("personal ownership, groups, legacy credentials and archived state are enforced", () => {
 		for (const agent of agents) expect(canActAs(user, agent)).toBe(["default", "alice", "eng"].includes(agent.id));
 		const legacy = agents[4];

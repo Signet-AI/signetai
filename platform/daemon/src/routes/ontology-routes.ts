@@ -1,3 +1,5 @@
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
+import { resolveKnowledgeReadScope } from "./read-scope";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
@@ -126,6 +128,7 @@ function resolveAgent(c: Context, requested: string | undefined): { agentId: str
 }
 
 export function registerOntologyRoutes(app: Hono): void {
+	registerPublicReadResponse(app, "/api/ontology/*");
 	app.use("/api/ontology/proposals", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
@@ -177,34 +180,46 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/proposals", async (c) => {
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
 		const status = parseOntologyProposalStatus(c.req.query("status"));
 		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const operation = c.req.query("operation")?.trim() || undefined;
 		return c.json(
-			await listOntologyProposals(getDbAccessor(), {
-				agentId: scoped.agentId,
-				status,
-				operation,
-				limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
-				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
-			}),
+			await listOntologyProposals(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					status,
+					operation,
+					limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
+					offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+				},
+				readScope,
+			),
 		);
 	});
 
 	app.get("/api/ontology/entities/:id/aliases", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const status = c.req.query("status");
 		const parsedStatus = status === "active" || status === "archived" || status === "all" ? status : undefined;
 		if (status && !parsedStatus) return c.json({ error: "status is invalid" }, 400);
 		return c.json({
-			items: await listEntityAliases(getDbAccessor(), {
-				agentId: scoped.agentId,
-				entityId: c.req.param("id"),
-				status: parsedStatus,
-			}),
+			items: await listEntityAliases(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					entityId: c.req.param("id"),
+					status: parsedStatus,
+				},
+				readScope,
+			),
 		});
 	});
 
@@ -227,11 +242,16 @@ export function registerOntologyRoutes(app: Hono): void {
 					source: readString(body, "source") ?? null,
 				},
 			});
-			const aliases = await listEntityAliases(getDbAccessor(), {
-				agentId: scoped.agentId,
-				entityId: c.req.param("id"),
-				status: "all",
-			});
+			const readScope = await resolveKnowledgeReadScope(c);
+			const aliases = await listEntityAliases(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					entityId: c.req.param("id"),
+					status: "all",
+				},
+				readScope,
+			);
 			const item = aliases.find((row) => row.id === result?.aliasId);
 			return c.json({ item }, 201);
 		} catch (err) {
@@ -259,23 +279,34 @@ export function registerOntologyRoutes(app: Hono): void {
 			if (err instanceof OntologyProposalError && err.status === 404) return c.json({ error: "Alias not found" }, 404);
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
-		const aliases = await listEntityAliases(getDbAccessor(), {
-			agentId: scoped.agentId,
-			entityId: c.req.param("id"),
-			status: "all",
-		});
+		const readScope = await resolveKnowledgeReadScope(c);
+		const aliases = await listEntityAliases(
+			getDbAccessor(),
+			{
+				agentId: scoped.agentId,
+				entityId: c.req.param("id"),
+				status: "all",
+			},
+			readScope,
+		);
 		const item = aliases.find((row) => row.id === c.req.param("aliasId"));
 		return c.json({ item });
 	});
 
 	app.get("/api/ontology/proposals/conflicts", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		return c.json(
-			await listOntologyProposalConflicts(getDbAccessor(), {
-				agentId: scoped.agentId,
-				limit: parseBoundedInt(c.req.query("limit"), 500, 1, 1000),
-			}),
+			await listOntologyProposalConflicts(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					limit: parseBoundedInt(c.req.query("limit"), 500, 1, 1000),
+				},
+				readScope,
+			),
 		);
 	});
 
@@ -379,18 +410,22 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/proposals/:id/evidence", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		try {
-			return c.json(await getOntologyProposalEvidence(getDbAccessor(), c.req.param("id"), scoped.agentId));
+			return c.json(await getOntologyProposalEvidence(getDbAccessor(), c.req.param("id"), scoped.agentId, readScope));
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
 	});
 
 	app.get("/api/ontology/claims/evidence", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		const group = c.req.query("group")?.trim();
@@ -405,17 +440,21 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
 		try {
 			return c.json(
-				await getOntologyClaimEvidence(getDbAccessor(), {
-					agentId: scoped.agentId,
-					entity,
-					aspect,
-					group,
-					claim,
-					kind,
-					status,
-					limit: parseBoundedInt(c.req.query("limit"), 20, 1, 200),
-					offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
-				}),
+				await getOntologyClaimEvidence(
+					getDbAccessor(),
+					{
+						agentId: scoped.agentId,
+						entity,
+						aspect,
+						group,
+						claim,
+						kind,
+						status,
+						limit: parseBoundedInt(c.req.query("limit"), 20, 1, 200),
+						offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+					},
+					readScope,
+				),
 			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
@@ -423,8 +462,10 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/claims/versions", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		const group = c.req.query("group")?.trim();
@@ -437,7 +478,11 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
 		try {
 			return c.json(
-				await listClaimVersions(getDbAccessor(), { agentId: scoped.agentId, entity, aspect, group, claim, kind }),
+				await listClaimVersions(
+					getDbAccessor(),
+					{ agentId: scoped.agentId, entity, aspect, group, claim, kind },
+					readScope,
+				),
 			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
@@ -445,8 +490,10 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/claims/explain", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		const group = c.req.query("group")?.trim();
@@ -472,20 +519,24 @@ export function registerOntologyRoutes(app: Hono): void {
 		const project = claims?.role === "admin" ? null : (claims?.scope?.project ?? null);
 		try {
 			return c.json(
-				await explainOntologyClaim(getDbAccessor(), {
-					agentId: scoped.agentId,
-					entity,
-					aspect,
-					group,
-					claim,
-					kind,
-					versionLimit: parseBoundedInt(c.req.query("version_limit"), 20, 1, 50),
-					premiseLimit: parseBoundedInt(c.req.query("premise_limit"), 50, 1, 100),
-					reverseLimit: parseBoundedInt(c.req.query("reverse_limit"), 50, 1, 100),
-					maxDepth: parseBoundedInt(c.req.query("max_depth"), 3, 0, 3),
-					sessionKey,
-					project,
-				}),
+				await explainOntologyClaim(
+					getDbAccessor(),
+					{
+						agentId: scoped.agentId,
+						entity,
+						aspect,
+						group,
+						claim,
+						kind,
+						versionLimit: parseBoundedInt(c.req.query("version_limit"), 20, 1, 50),
+						premiseLimit: parseBoundedInt(c.req.query("premise_limit"), 50, 1, 100),
+						reverseLimit: parseBoundedInt(c.req.query("reverse_limit"), 50, 1, 100),
+						maxDepth: parseBoundedInt(c.req.query("max_depth"), 3, 0, 3),
+						sessionKey,
+						project,
+					},
+					readScope,
+				),
 			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
@@ -493,8 +544,10 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/claims/version", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		const group = c.req.query("group")?.trim();
@@ -508,15 +561,19 @@ export function registerOntologyRoutes(app: Hono): void {
 		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
 		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
 		try {
-			const item = await getClaimVersion(getDbAccessor(), {
-				agentId: scoped.agentId,
-				entity,
-				aspect,
-				group,
-				claim,
-				kind,
-				version,
-			});
+			const item = await getClaimVersion(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					entity,
+					aspect,
+					group,
+					claim,
+					kind,
+					version,
+				},
+				readScope,
+			);
 			if (item === null) return c.json({ error: "Claim version not found" }, 404);
 			return c.json(item);
 		} catch (err) {
@@ -525,18 +582,24 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/links/:id/evidence", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		try {
-			return c.json(await getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }));
+			return c.json(
+				await getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }, readScope),
+			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
 	});
 
 	app.get("/api/ontology/assertions", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		try {
 			validateEpistemicObserverScope(scoped.agentId, c.req.query("observer_id"));
 		} catch (err) {
@@ -547,68 +610,90 @@ export function registerOntologyRoutes(app: Hono): void {
 		const status = parseEpistemicAssertionStatus(c.req.query("status"));
 		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
 		return c.json(
-			listEpistemicAssertions(getDbAccessor(), {
-				agentId: scoped.agentId,
-				observerId: c.req.query("observer_id"),
-				entity: c.req.query("entity"),
-				entityId: c.req.query("entity_id"),
-				predicate,
-				status,
-				speaker: c.req.query("speaker"),
-				sourceKind: c.req.query("source_kind"),
-				sourceId: c.req.query("source_id"),
-				query: c.req.query("query"),
-				limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
-				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
-			}),
+			await listEpistemicAssertions(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					observerId: c.req.query("observer_id"),
+					entity: c.req.query("entity"),
+					entityId: c.req.query("entity_id"),
+					predicate,
+					status,
+					speaker: c.req.query("speaker"),
+					sourceKind: c.req.query("source_kind"),
+					sourceId: c.req.query("source_id"),
+					query: c.req.query("query"),
+					limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
+					offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+				},
+				readScope,
+			),
 		);
 	});
 
 	app.get("/api/ontology/contradictions", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		const status = parseOntologyContradictionStatus(c.req.query("status"));
 		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
 		return c.json(
-			listOntologyContradictions(getDbAccessor(), {
-				agentId: scoped.agentId,
-				entity: c.req.query("entity"),
-				entityId: c.req.query("entity_id"),
-				aspectId: c.req.query("aspect_id"),
-				groupKey: c.req.query("group"),
-				claimKey: c.req.query("claim"),
-				sourceId: c.req.query("source_id"),
-				status,
-				limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
-				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
-			}),
+			await listOntologyContradictions(
+				getDbAccessor(),
+				{
+					agentId: scoped.agentId,
+					entity: c.req.query("entity"),
+					entityId: c.req.query("entity_id"),
+					aspectId: c.req.query("aspect_id"),
+					groupKey: c.req.query("group"),
+					claimKey: c.req.query("claim"),
+					sourceId: c.req.query("source_id"),
+					status,
+					limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
+					offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+				},
+				readScope,
+			),
 		);
 	});
 
 	app.get("/api/ontology/contradictions/:id", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
-		const contradiction = getOntologyContradiction(getDbAccessor(), {
-			agentId: scoped.agentId,
-			id: c.req.param("id"),
-		});
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
+		const contradiction = await getOntologyContradiction(
+			getDbAccessor(),
+			{
+				agentId: scoped.agentId,
+				id: c.req.param("id"),
+			},
+			readScope,
+		);
 		if (contradiction === null) return c.json({ error: "Contradiction not found" }, 404);
 		return c.json(contradiction);
 	});
 
 	app.get("/api/ontology/assertions/:id", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
 		try {
 			validateEpistemicObserverScope(scoped.agentId, c.req.query("observer_id"));
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
-		const assertion = getEpistemicAssertion(getDbAccessor(), {
-			agentId: scoped.agentId,
-			id: c.req.param("id"),
-			observerId: c.req.query("observer_id"),
-		});
+		const assertion = await getEpistemicAssertion(
+			getDbAccessor(),
+			{
+				agentId: scoped.agentId,
+				id: c.req.param("id"),
+				observerId: c.req.query("observer_id"),
+			},
+			readScope,
+		);
 		if (assertion === null) return c.json({ error: "Assertion not found" }, 404);
 		return c.json(assertion);
 	});
@@ -788,9 +873,11 @@ export function registerOntologyRoutes(app: Hono): void {
 	});
 
 	app.get("/api/ontology/proposals/:id", async (c) => {
-		const scoped = resolveAgent(c, c.req.query("agent_id"));
-		if (scoped.response) return scoped.response;
-		const proposal = await getOntologyProposal(getDbAccessor(), c.req.param("id"), scoped.agentId);
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const scoped = { agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId };
+		const proposal = await getOntologyProposal(getDbAccessor(), c.req.param("id"), scoped.agentId, readScope);
 		if (proposal === null) return c.json({ error: "Proposal not found" }, 404);
 		return c.json(proposal);
 	});

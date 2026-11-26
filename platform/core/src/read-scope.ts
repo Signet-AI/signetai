@@ -4,6 +4,7 @@ export type AgentReach =
 	| { readonly kind: "shared"; readonly agentId: string }
 	| { readonly kind: "group"; readonly agentId: string; readonly group: string };
 export interface ReadScope {
+	readonly organizationMode?: boolean;
 	readonly reach: AgentReach;
 	readonly inFlightUserId?: string;
 	readonly compartments: "all" | readonly number[];

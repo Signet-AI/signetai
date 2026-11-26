@@ -63,14 +63,14 @@ function makeQueueHealth(): QueueHealth {
 	};
 }
 
-function makeOwner(getHealth: () => DbOwnerHealth, migrationsOk = true): DbOwnerClient {
+function makeOwner(getHealth: () => DbOwnerHealth, migrationsOk = true, queueHealth = makeQueueHealth): DbOwnerClient {
 	return {
 		health: getHealth,
 		submit: (request: { readonly kind?: string }) => ({
 			job: { enqueuedAt: Date.now() },
 			result: Promise.resolve(
 				request.kind === "health_ready"
-					? { migrationsOk, queueHealth: makeQueueHealth() }
+					? { migrationsOk, queueHealth: queueHealth() }
 					: request.kind === "embedding_migration_progress"
 						? null
 						: { value: 1 },
@@ -346,6 +346,52 @@ describe("GET /health/live", () => {
 });
 
 describe("GET /health/ready", () => {
+	test("organization readiness does not expose hidden queue counts, ids, errors, or threshold changes", async () => {
+		const { readOrganization } = await import("../auth/organization-store");
+		const organization = await readOrganization();
+		let hidden = false;
+		const owner = makeOwner(
+			() => makeOwnerHealth(1),
+			true,
+			() =>
+				hidden
+					? {
+							...makeQueueHealth(),
+							depth: 100_000,
+							deadRate: 1,
+							oldestAgeSec: 100_000,
+							memory: { ...EMPTY_QUEUE_COUNTS, dead: 100_000, lastError: "hidden queue error" },
+							oldestDeadMemoryJob: {
+								id: "hidden-job",
+								harness: "test",
+								sessionKey: "hidden-session",
+								createdAt: "2000",
+								attempts: 5,
+								error: "hidden queue error",
+							},
+						}
+					: makeQueueHealth(),
+		);
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("organization", organization);
+			await next();
+		});
+		mountHealthRoutes(app);
+		const before = await app.request("/health/ready");
+		expect(before.status).toBe(200);
+		const beforeBody = await before.json();
+		hidden = true;
+		const after = await app.request("/health/ready");
+		expect(after.status).toBe(200);
+		const afterBody = await after.json();
+		expect(afterBody.checks.queue).toEqual(beforeBody.checks.queue);
+		expect(afterBody.reasons).toEqual(beforeBody.reasons);
+		expect(JSON.stringify(afterBody)).not.toContain("hidden");
+		expect(afterBody.checks.embedding).not.toHaveProperty("migration");
+	});
+
 	test("returns 200 ready when the db is migrated and healthy", async () => {
 		const owner = makeOwner(() => makeOwnerHealth(1));
 		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));

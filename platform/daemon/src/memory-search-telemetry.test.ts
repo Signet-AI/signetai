@@ -1,5 +1,6 @@
 import { compartmentForWrite } from "../../core/src/compartment-shards";
 import { Database } from "bun:sqlite";
+import type { ReadScope } from "./read-scope";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,11 +12,13 @@ import type { RecallResponse } from "./memory-search";
 import { listMemorySearchTelemetry, recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "./memory-search-telemetry-project";
 
+const scope: ReadScope = { reach: { kind: "own", agentId: "ant" }, compartments: "all", projects: null };
+
 describe("memory search telemetry", () => {
 	let dir = "";
 	let prevSignetPath: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-memory-search-telemetry-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		writeFileSync(
@@ -29,9 +32,9 @@ describe("memory search telemetry", () => {
 		prevSignetPath = process.env.SIGNET_PATH;
 		process.env.SIGNET_PATH = dir;
 		initDbAccessor(join(dir, "memory", "memories.db"));
-		getDbAccessor().withWriteTx((db) =>
+		await getDbAccessor().withWriteTxAsync((db) =>
 			db.exec(
-				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('mem-1','Recall QA context','ant','now','now')",
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('mem-1','Recall QA context','ant','now','now'); INSERT INTO compartments(id,key) VALUES(1,'telemetry-fixture')",
 			),
 		);
 	});
@@ -44,6 +47,12 @@ describe("memory search telemetry", () => {
 			process.env.SIGNET_PATH = prevSignetPath;
 		}
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("rejects list callers that omit the required scope", async () => {
+		await expect(
+			Reflect.apply(listMemorySearchTelemetry, undefined, [getDbAccessor(), { agentId: "ant" }]),
+		).rejects.toThrow();
 	});
 
 	function response(): RecallResponse {
@@ -80,6 +89,11 @@ describe("memory search telemetry", () => {
 	}
 
 	it("stores query text, filters, timings, and result snapshots for QA", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec(
+				"INSERT INTO agents(id,name,created_at,updated_at) VALUES('ant','Ant','now','now'); INSERT INTO memories(id,agent_id,content,created_at,updated_at) VALUES('mem-1','ant','Recall QA should preserve enough context for manual review.','now','now')",
+			),
+		);
 		await recordMemorySearchTelemetry(getDbAccessor(), {
 			route: "POST /api/memory/recall",
 			agentId: "ant",
@@ -97,7 +111,8 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
-		const items = await listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant" });
+		await getDbAccessor().withWriteTxAsync((db) => db.exec("UPDATE memory_search_telemetry SET compartment_id=1"));
+		const items = await listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant", scope });
 
 		expect(items).toHaveLength(1);
 		expect(items[0]?.query).toBe("what did we decide about recall qa");
@@ -183,8 +198,9 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
-		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: true })).toHaveLength(1);
-		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: false })).toHaveLength(0);
+		await getDbAccessor().withWriteTxAsync((db) => db.exec("UPDATE memory_search_telemetry SET compartment_id=1"));
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: true, scope })).toHaveLength(1);
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: false, scope })).toHaveLength(0);
 	});
 
 	describe("compartment labels", () => {

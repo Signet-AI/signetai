@@ -18,6 +18,9 @@ interface McpServerOptions {
 	readonly daemonUrl?: string;
 	readonly version?: string;
 	readonly authorizationHeader?: string;
+	readonly forwardedHeaders?: Readonly<Record<string, string>>;
+	readonly allowEnvironmentAuth?: boolean;
+	readonly request?: (url: string, init: RequestInit) => Promise<Response>;
 	readonly agentId?: string;
 	readonly pluginHost?: GraphiqPluginPolicyHost;
 }
@@ -104,11 +107,13 @@ export async function daemonFetch<T>(
 		readonly timeout?: number;
 		readonly extraHeaders?: Readonly<Record<string, string>>;
 		readonly authorizationHeader?: string;
+		readonly allowEnvironmentAuth?: boolean;
+		readonly request?: (url: string, init: RequestInit) => Promise<Response>;
 	} = {},
 ): Promise<FetchResult<T>> {
 	const { method = "GET", body, timeout = 10_000, extraHeaders } = options;
 
-	const token = readDaemonAuthToken();
+	const token = options.allowEnvironmentAuth === false ? undefined : readDaemonAuthToken();
 	const authorizationHeader =
 		normalizeAuthorizationHeader(options.authorizationHeader) ?? (token ? `Bearer ${token}` : undefined);
 	const init: RequestInit = {
@@ -127,7 +132,7 @@ export async function daemonFetch<T>(
 	}
 
 	try {
-		const res = await fetch(`${baseUrl}${path}`, init);
+		const res = await (options.request ?? fetch)(`${baseUrl}${path}`, init);
 		if (!res.ok) {
 			const text = await res.text().catch(() => "unknown error");
 			return { ok: false, error: text, status: res.status };
@@ -386,7 +391,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		requestBaseUrl: string,
 		path: string,
 		options?: Parameters<typeof daemonFetch<T>>[2],
-	): Promise<FetchResult<T>> => daemonFetch<T>(requestBaseUrl, path, { ...options, authorizationHeader });
+	): Promise<FetchResult<T>> =>
+		daemonFetch<T>(requestBaseUrl, path, {
+			...options,
+			authorizationHeader,
+			allowEnvironmentAuth: opts?.allowEnvironmentAuth,
+			request: opts?.request,
+			extraHeaders: { ...options?.extraHeaders, ...opts?.forwardedHeaders },
+		});
 	const pluginHostProvider: GraphiqPluginPolicyHostProvider = opts?.pluginHost
 		? () => opts.pluginHost as GraphiqPluginPolicyHost
 		: () => createDefaultPluginHost({ persistRegistry: false });
@@ -1587,6 +1599,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					entity: entity_name,
+					agentId: configuredAgentId,
 					aspect: aspect_filter,
 					question,
 					maxTokens: max_tokens ?? 2000,
@@ -2024,6 +2037,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					entityName: entity_name,
+					agentId: configuredAgentId,
 					sessionId: session_id,
 					timeRange: time_range,
 					maxResults: max_results ?? 10,
@@ -2057,6 +2071,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					id,
+					agentId: configuredAgentId,
 					includeTranscript: include_transcript ?? true,
 					transcriptCharLimit: transcript_char_limit,
 				},

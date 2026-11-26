@@ -907,7 +907,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1392,
+      "line": 1426,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -1509,29 +1509,6 @@
       "siteToken": "db:sources.import-outcome.read"
     },
     {
-      "path": "knowledge-graph-hygiene.ts",
-      "line": 401,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1008,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path",
-      "siteToken": "db:knowledge.entity-knowledge-tree.read"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 2153,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path",
-      "siteToken": "db:knowledge.graph-constellation.read"
-    },
-    {
       "path": "lifecycle.ts",
       "line": 140,
       "api": "readFileSync",
@@ -1888,18 +1865,10 @@
     },
     {
       "path": "memory-search-telemetry.ts",
-      "line": 254,
+      "line": 267,
       "api": "withWriteTxAsync",
       "source": "await withWriteTxAsync((w) => {",
       "category": "hot-path"
-    },
-    {
-      "path": "memory-search-telemetry.ts",
-      "line": 356,
-      "api": "withReadDbAsync",
-      "source": "return db.withReadDbAsync(",
-      "category": "hot-path",
-      "siteToken": "db:recall.telemetry.list"
     },
     {
       "path": "memory-search.ts",
@@ -2288,75 +2257,35 @@
     },
     {
       "path": "ontology-assertions.ts",
-      "line": 307,
+      "line": 310,
       "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), \"ontology-assertions.ts:307\");",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-assertions.ts",
-      "line": 326,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-assertions.ts",
-      "line": 392,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-assertions.ts",
-      "line": 411,
-      "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-assertions.ts",
-      "line": 445,
-      "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-assertions.ts",
-      "line": 473,
-      "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-claim-evidence.ts",
-      "line": 153,
-      "api": "withReadDb",
-      "source": "const items = accessor.withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-claim-trace.ts",
-      "line": 1051,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-contradictions.ts",
-      "line": 546,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
+      "source": "return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), \"db:ontology.assertion.create.write\");",
       "category": "hot-path",
-      "siteToken": "db:ontology-contradictions.site.526"
+      "siteToken": "db:ontology.assertion.create.write"
     },
     {
-      "path": "ontology-contradictions.ts",
-      "line": 601,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
+      "path": "ontology-assertions.ts",
+      "line": 419,
+      "api": "withWriteTx",
+      "source": "return accessor.withWriteTx((db: WriteDb) => {",
       "category": "hot-path",
-      "siteToken": "db:ontology-contradictions.site.581"
+      "siteToken": "db:ontology.assertion.link-claim.write"
+    },
+    {
+      "path": "ontology-assertions.ts",
+      "line": 453,
+      "api": "withWriteTx",
+      "source": "return accessor.withWriteTx((db: WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:ontology.assertion.archive.write"
+    },
+    {
+      "path": "ontology-assertions.ts",
+      "line": 481,
+      "api": "withWriteTx",
+      "source": "return accessor.withWriteTx((db: WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:ontology.assertion.supersede.write"
     },
     {
       "path": "ontology-extraction.ts",
@@ -2373,67 +2302,28 @@
       "category": "hot-path"
     },
     {
-      "path": "ontology-link-evidence.ts",
-      "line": 92,
-      "api": "withReadDbAsync",
-      "source": "const items = await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
       "path": "ontology-proposals.ts",
-      "line": 602,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-proposals.ts",
-      "line": 2590,
-      "api": "withReadDbAsync",
-      "source": "const items = await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-proposals.ts",
-      "line": 2607,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-proposals.ts",
-      "line": 2639,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-proposals.ts",
-      "line": 2723,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "ontology-proposals.ts",
-      "line": 3203,
+      "line": 3204,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.duplicate-merges.read"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 3214,
+      "line": 3215,
       "api": "withReadDbAsync",
       "source": "const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.duplicate-merge-candidates.read"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 3265,
+      "line": 3266,
       "api": "withReadDbAsync",
       "source": "const plan = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.entity-merge-plan.read"
     },
     {
       "path": "path-feedback.ts",
@@ -2512,38 +2402,35 @@
     },
     {
       "path": "pipeline/dreaming-attention.ts",
-      "line": 140,
+      "line": 142,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:dreaming.attention.read"
     },
     {
       "path": "pipeline/dreaming-attention.ts",
-      "line": 152,
+      "line": 154,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:dreaming.attention.workload"
     },
     {
       "path": "pipeline/dreaming-attention.ts",
-      "line": 226,
+      "line": 260,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:dreaming.attention.by-id"
     },
     {
       "path": "pipeline/dreaming-attention.ts",
-      "line": 257,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "pipeline/dreaming-attention.ts",
-      "line": 291,
+      "line": 294,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:dreaming.attention.snapshots"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
@@ -2603,10 +2490,11 @@
     },
     {
       "path": "pipeline/dreaming-runbook.ts",
-      "line": 218,
+      "line": 65,
       "api": "withWriteTx",
       "source": "return accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:dreaming.runbook.write"
     },
     {
       "path": "pipeline/dreaming-token-cache.ts",
@@ -3220,20 +3108,6 @@
       "category": "hot-path"
     },
     {
-      "path": "routes/database-diagnostics.ts",
-      "line": 266,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync((db) => readDatabaseSchemaFromDb(db), {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/database-diagnostics.ts",
-      "line": 305,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync((db) => readTableSampleFromDb(db, table, limit, offset), {",
-      "category": "hot-path"
-    },
-    {
       "path": "routes/git-config.ts",
       "line": 71,
       "api": "existsSync",
@@ -3340,34 +3214,6 @@
       "siteToken": "db:hooks.session-transcript.project.read"
     },
     {
-      "path": "routes/knowledge-routes.ts",
-      "line": 357,
-      "api": "withReadDbAsync",
-      "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/knowledge-routes.ts",
-      "line": 546,
-      "api": "withReadDbAsync",
-      "source": "const hasSessionSummaries = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/knowledge-routes.ts",
-      "line": 563,
-      "api": "withReadDbAsync",
-      "source": "return await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/knowledge-routes.ts",
-      "line": 665,
-      "api": "withReadDbAsync",
-      "source": "const result = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
       "path": "routes/marketplace-reviews.ts",
       "line": 60,
       "api": "existsSync",
@@ -3425,7 +3271,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 124,
+      "line": 123,
       "api": "withReadDbAsync",
       "source": "embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {",
       "category": "hot-path",
@@ -3433,14 +3279,14 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 227,
+      "line": 226,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 243,
+      "line": 242,
       "api": "writeFileSync",
       "source": "writeFileSync(path, noteContent, { encoding: \"utf-8\", flag: \"wx\" });",
       "category": "hot-path"
@@ -3455,7 +3301,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3633,
+      "line": 3636,
       "api": "withReadDbAsync",
       "source": "const report = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3463,35 +3309,35 @@
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 104,
+      "line": 114,
       "api": "readdirSync",
       "source": "const dirFiles = readdirSync(AGENTS_DIR);",
       "category": "hot-path"
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 109,
+      "line": 119,
       "api": "statSync",
       "source": "const fileStat = statSync(filePath);",
       "category": "hot-path"
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 111,
+      "line": 121,
       "api": "readFileSync",
       "source": "const content = readFileSync(filePath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/misc-routes.ts",
-      "line": 188,
+      "line": 198,
       "api": "writeFileSync",
       "source": "writeFileSync(filePath, content, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 148,
+      "line": 153,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: ReadDb) => {",
       "category": "hot-path",
@@ -3499,58 +3345,30 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 381,
+      "line": 412,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 382,
+      "line": 413,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 425,
+      "line": 456,
       "api": "existsSync",
       "source": "memoryDb: existsSync(MEMORY_DB),",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 484,
+      "line": 515,
       "api": "readFileSync",
       "source": "soulContent = readFileSync(soulPath, \"utf-8\").slice(0, 500);",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/queue-diagnostics.ts",
-      "line": 157,
-      "api": "withReadDb",
-      "source": "const response = resolveAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/reflection-routes.ts",
-      "line": 100,
-      "api": "withReadDb",
-      "source": "const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/reflection-routes.ts",
-      "line": 122,
-      "api": "withReadDb",
-      "source": "const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/reflection-routes.ts",
-      "line": 176,
-      "api": "withReadDb",
-      "source": "const rows = resolveDbAccessor().withReadDb((db: ReadDb) => {",
       "category": "hot-path"
     },
     {
@@ -3901,67 +3719,60 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1347,
+      "line": 1358,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1349,
+      "line": 1360,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1359,
+      "line": 1370,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1361,
+      "line": 1372,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1362,
+      "line": 1373,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
     },
     {
       "path": "routes/state.ts",
-      "line": 343,
+      "line": 344,
       "api": "existsSync",
       "source": "if (!existsSync(candidate)) continue;",
       "category": "hot-path"
     },
     {
       "path": "routes/state.ts",
-      "line": 345,
+      "line": 346,
       "api": "readFileSync",
       "source": "const raw = readFileSync(candidate, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/state.ts",
-      "line": 412,
+      "line": 413,
       "api": "withReadDb",
       "source": "const report = getDbAccessor().withReadDb(",
       "category": "hot-path",
       "siteToken": "db:diagnostics.cached.read"
-    },
-    {
-      "path": "routes/telemetry-routes.ts",
-      "line": 204,
-      "api": "withReadDb",
-      "source": "const mutationHealth = getDbAccessor().withReadDb(",
-      "category": "hot-path"
     },
     {
       "path": "service.ts",
@@ -4343,7 +4154,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 124,
+      "line": 128,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path",
@@ -4351,7 +4162,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 144,
+      "line": 148,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path",
@@ -4359,7 +4170,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 158,
+      "line": 162,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path",
@@ -4367,7 +4178,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 172,
+      "line": 176,
       "api": "withReadDbAsync",
       "source": "return await db.withReadDbAsync(",
       "category": "hot-path",
@@ -4375,7 +4186,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 190,
+      "line": 194,
       "api": "withReadDb",
       "source": "return db.withReadDb((rdb: ReadDb) => {",
       "category": "hot-path",
@@ -4383,7 +4194,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 205,
+      "line": 209,
       "api": "withWriteTx",
       "source": "return db.withWriteTx((wdb: WriteDb) => {",
       "category": "hot-path",
@@ -4391,7 +4202,7 @@
     },
     {
       "path": "session-checkpoints.ts",
-      "line": 220,
+      "line": 224,
       "api": "withWriteTxAsync",
       "source": "return await db.withWriteTxAsync(",
       "category": "hot-path",

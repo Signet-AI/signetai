@@ -1,3 +1,5 @@
+import { knowledgeReadDb, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
 import type { OntologyContradiction, OntologyContradictionStatus } from "@signet/core";
 import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
 import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx, tableExists } from "./db-helpers";
@@ -536,14 +538,15 @@ export function reconcileOntologyContradictionsInTx(
 	return resolved;
 }
 
-export function listOntologyContradictions(
-	accessor: DbAccessor,
+export async function listOntologyContradictions(
+	_accessor: DbAccessor,
 	params: ListOntologyContradictionsParams,
-): ListOntologyContradictionsResult {
+	readScope?: ReadScope,
+): Promise<ListOntologyContradictionsResult> {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+
+	return (async (db: KnowledgeReadDb) => {
 		const where = ["c.agent_id = ?"];
 		const args: unknown[] = [params.agentId];
 		if (params.status !== "all") {
@@ -575,36 +578,36 @@ export function listOntologyContradictions(
 			args.push(params.sourceId, params.sourceId);
 		}
 		const clause = where.join(" AND ");
-		const rows = db
+		const rows = (await db
 			.prepare(`${CONTRADICTION_SELECT}
 				WHERE ${clause}
 				ORDER BY CASE WHEN c.status = 'active' THEN 0 ELSE 1 END, c.updated_at DESC
 				LIMIT ? OFFSET ?`)
-			.all(...args, limit, offset) as Array<ContradictionRow>;
-		const count = db.prepare(`SELECT COUNT(*) AS count FROM ontology_contradictions c WHERE ${clause}`).get(...args) as
-			| { count: number }
-			| undefined;
+			.all(...args, limit, offset)) as Array<ContradictionRow>;
+		const count = (await db
+			.prepare(`SELECT COUNT(*) AS count FROM ontology_contradictions c WHERE ${clause}`)
+			.get(...args)) as { count: number } | undefined;
 		return {
 			items: rows.map(rowToContradiction),
 			count: count?.count ?? rows.length,
 			limit,
 			offset,
 		};
-	}, "db:ontology-contradictions.site.526");
+	})(knowledgeReadDb(readScope));
 }
 
-export function getOntologyContradiction(
-	accessor: DbAccessor,
+export async function getOntologyContradiction(
+	_accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string },
-): OntologyContradiction | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const row = db
+	readScope?: ReadScope,
+): Promise<OntologyContradiction | null> {
+	return (async (db: KnowledgeReadDb) => {
+		const row = (await db
 			.prepare(`${CONTRADICTION_SELECT}
 				WHERE c.id = ? AND c.agent_id = ?`)
-			.get(params.id, params.agentId) as ContradictionRow | undefined | null;
+			.get(params.id, params.agentId)) as ContradictionRow | undefined | null;
 		return row == null ? null : rowToContradiction(row);
-	}, "db:ontology-contradictions.site.581");
+	})(knowledgeReadDb(readScope));
 }
 
 export function parseOntologyContradictionStatus(

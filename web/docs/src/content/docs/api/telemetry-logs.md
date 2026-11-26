@@ -7,6 +7,19 @@ Analytics, telemetry, log, and MCP endpoints.
 
 [Back to HTTP API overview](/api/).
 
+In organization mode, analytics, general telemetry (including delivery health),
+and log endpoints return `403` with `reason: "org_policy"`. These collectors do
+not carry content classifications, so an administrator's analytics permission
+cannot authorize their contents. Memory-search telemetry and its NDJSON export
+remain available through the caller's agent, project, and classification scope.
+Rows without a compartment label are omitted before pagination, export, and
+database-inspection counts unless the reader has all-agent reach and access to
+every existing compartment. An administrator role alone does not bypass this
+check. Producer labeling and historical snapshot backfill remain separate from
+this read policy.
+Checkpoint reads require `recall` permission and use the same scope before
+selecting or limiting results.
+
 ## Analytics
 
 Requires `analytics` permission.
@@ -569,3 +582,9 @@ admission cap returns HTTP 503 with a JSON-RPC error and should be retried.
 **GET /mcp** — Open an SSE stream for server-initiated notifications.
 
 **DELETE /mcp** — Terminate MCP session (no-op in stateless mode).
+
+Organization-mode memory-search snapshots are omitted when a referenced result cannot be authorized, including incomplete legacy snapshots. Snapshot result metadata omits secondary source and session pointers and opaque source bookkeeping; use the authorized result ID to inspect its source. Snapshot inspection accepts arrays up to 128 results and 64 KiB. Checkpoint session links and graph references are checked independently of the checkpoint, focal names are read from authorized entities, and cached constraint and traversal counters are omitted. Database samples omit opaque JSON bookkeeping and unresolved foreign-key fields.
+
+Memory-search NDJSON exports stream incrementally with backpressure and keyset pagination. Each database-owner read is bounded to 4 MiB; an individual row that cannot fit is not emitted. An omitted or invalid `limit` caps the export at 10000 readable records, subject to a two-minute deadline. An explicit `limit` is clamped to 1-10000. Records are separated by a newline with no trailing newline. If an owner read, encoding, size check, or deadline fails after the response starts, the final NDJSON record has `kind: "error"`; consumers must treat the export as incomplete. Client cancellation stops further reads.
+
+Telemetry rows without a compartment label fail closed, including for administrators, unless the caller has agent reach `all` and can read every existing compartment. Supplying `compartments: "all"` without agent reach `all` is not sufficient. The same predicate applies to list, inspector, and export reads.

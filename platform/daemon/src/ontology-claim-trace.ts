@@ -1,7 +1,13 @@
 import type { AttributeKind, Entity, EntityAspect, EntityAttribute, EpistemicAssertion } from "@signet/core";
-import type { DbAccessor, ReadDb } from "./db-accessor";
-import { tableExists } from "./db-helpers";
-import { findEpisodicSourceAgentIds, readEpisodicSource, sourceIdCandidates } from "./episodic-sources";
+import type { DbAccessor } from "./db-accessor";
+import {
+	knowledgeReadDb,
+	knowledgeTableExists as tableExists,
+	readKnowledgeTraceSource,
+	type KnowledgeReadDb,
+} from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
+import { sourceIdCandidates } from "./episodic-sources";
 import { listEntityAttributesByPath } from "./knowledge-graph";
 import { redactCredentials } from "@signet/core";
 
@@ -39,7 +45,7 @@ interface TraceSource {
 
 interface TraceEvidence {
 	readonly sourceKind: TraceSourceKind;
-	readonly sourceId: string;
+	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
 	readonly exactQuote: string | null;
 	readonly excerpt: string | null;
@@ -415,39 +421,50 @@ function boundedDepth(value: number | undefined): number {
 	return normalized;
 }
 
-function memoryState(db: ReadDb, agentId: string, memoryId: string | null): MemoryStateRow | null {
-	if (!memoryId || !tableExists(db, "memories")) return null;
+async function memoryState(
+	db: KnowledgeReadDb,
+	agentId: string,
+	memoryId: string | null,
+	_readScope?: ReadScope,
+): Promise<MemoryStateRow | null> {
+	if (!memoryId || !(await tableExists(db, "memories"))) return null;
 	return (
-		(db
+		((await db
 			.prepare(
 				`SELECT id, COALESCE(is_deleted, 0) AS is_deleted, stale_at, superseded_by, project, visibility, scope
 			 FROM memories WHERE id = ? AND agent_id = ? LIMIT 1`,
 			)
-			.get(memoryId, agentId) as MemoryStateRow | undefined) ?? null
+			.get(memoryId, agentId)) as MemoryStateRow | undefined) ?? null
 	);
 }
 
-function requireProjectScopedAttribute(db: ReadDb, attribute: EntityAttribute, project: string | null): void {
+async function requireProjectScopedAttribute(
+	db: KnowledgeReadDb,
+	attribute: EntityAttribute,
+	project: string | null,
+	readScope?: ReadScope,
+): Promise<void> {
 	if (project === null) return;
-	const memory = memoryState(db, attribute.agentId, attribute.memoryId);
+	const memory = await memoryState(db, attribute.agentId, attribute.memoryId, readScope);
 	if (!memory || memory.project !== project) {
 		throw new OntologyClaimTraceError("Claim is outside the authorized project scope", 403);
 	}
 }
 
-function sourceSessionKeys(
-	db: ReadDb,
+async function sourceSessionKeys(
+	db: KnowledgeReadDb,
 	agentId: string,
 	kind: TraceSourceKind,
 	id: string,
 	path: string | null,
-): string[] {
+	_readScope?: ReadScope,
+): Promise<string[]> {
 	const keys = new Set<string>();
 	const candidates = sourceIdCandidates(id);
 	const placeholders = candidates.map(() => "?").join(", ");
 	if (kind === "transcript") keys.add(id.replace(/^(transcript|session):/, ""));
-	if (kind === "artifact" && tableExists(db, "memory_artifacts")) {
-		const rows = db
+	if (kind === "artifact" && (await tableExists(db, "memory_artifacts"))) {
+		const rows = (await db
 			.prepare(
 				`SELECT session_id, session_key, session_token
 				 FROM memory_artifacts
@@ -456,7 +473,7 @@ function sourceSessionKeys(
 				   OR session_key IN (${placeholders}) OR session_token IN (${placeholders})
 				 )`,
 			)
-			.all(agentId, path ?? id, ...candidates, ...candidates, ...candidates, ...candidates) as Array<{
+			.all(agentId, path ?? id, ...candidates, ...candidates, ...candidates, ...candidates)) as Array<{
 			readonly session_id: string | null;
 			readonly session_key: string | null;
 			readonly session_token: string | null;
@@ -467,13 +484,13 @@ function sourceSessionKeys(
 			}
 		}
 	}
-	if (kind === "summary" && tableExists(db, "session_summaries")) {
-		const rows = db
+	if (kind === "summary" && (await tableExists(db, "session_summaries"))) {
+		const rows = (await db
 			.prepare(
 				`SELECT session_key, source_ref FROM session_summaries
 				 WHERE agent_id = ? AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))`,
 			)
-			.all(agentId, ...candidates, ...candidates) as Array<{
+			.all(agentId, ...candidates, ...candidates)) as Array<{
 			readonly session_key: string | null;
 			readonly source_ref: string | null;
 		}>;
@@ -485,21 +502,21 @@ function sourceSessionKeys(
 			}
 		}
 	}
-	if (kind === "memory" && tableExists(db, "memories")) {
-		const row = db
+	if (kind === "memory" && (await tableExists(db, "memories"))) {
+		const row = (await db
 			.prepare("SELECT source_type, source_id FROM memories WHERE id = ? AND agent_id = ? LIMIT 1")
-			.get(id, agentId) as { readonly source_type: string | null; readonly source_id: string | null } | undefined;
+			.get(id, agentId)) as { readonly source_type: string | null; readonly source_id: string | null } | undefined;
 		if (row?.source_id) {
 			if (row.source_type === "transcript" || row.source_type === "session") {
 				keys.add(row.source_id.replace(/^(transcript|session):/, ""));
 			}
-			if (tableExists(db, "memory_artifacts")) {
-				const linked = db
+			if (await tableExists(db, "memory_artifacts")) {
+				const linked = (await db
 					.prepare(
 						`SELECT session_key, session_id, session_token FROM memory_artifacts
 							 WHERE agent_id = ? AND (source_node_id = ? OR source_id = ?)`,
 					)
-					.all(agentId, row.source_id, row.source_id) as Array<{
+					.all(agentId, row.source_id, row.source_id)) as Array<{
 					readonly session_key: string | null;
 					readonly session_id: string | null;
 					readonly session_token: string | null;
@@ -515,56 +532,63 @@ function sourceSessionKeys(
 	return [...keys];
 }
 
-function sourceAgentIds(db: ReadDb, kind: TraceSourceKind, id: string, path: string | null): readonly string[] {
-	const owners = new Set(findEpisodicSourceAgentIds(db, `${kind}:${path ?? id}`));
+async function sourceAgentIds(
+	db: KnowledgeReadDb,
+	kind: TraceSourceKind,
+	id: string,
+	path: string | null,
+	_readScope?: ReadScope,
+): Promise<readonly string[]> {
+	const owners = new Set<string>();
 	const candidates = sourceIdCandidates(id);
 	const placeholders = candidates.map(() => "?").join(", ");
-	if (kind === "memory" && tableExists(db, "memories")) {
-		const rows = db
+	if (kind === "memory" && (await tableExists(db, "memories"))) {
+		const rows = (await db
 			.prepare(`SELECT DISTINCT agent_id FROM memories WHERE id IN (${placeholders})`)
-			.all(...candidates) as Array<{ readonly agent_id: string | null }>;
+			.all(...candidates)) as Array<{ readonly agent_id: string | null }>;
 		for (const row of rows) if (row.agent_id) owners.add(row.agent_id);
 	}
-	if (kind === "artifact" && tableExists(db, "memory_artifacts")) {
-		const rows = db
+	if (kind === "artifact" && (await tableExists(db, "memory_artifacts"))) {
+		const rows = (await db
 			.prepare(
 				`SELECT DISTINCT agent_id FROM memory_artifacts
 				 WHERE source_path = ? OR source_node_id IN (${placeholders}) OR session_id IN (${placeholders})
 				    OR session_key IN (${placeholders}) OR session_token IN (${placeholders})`,
 			)
-			.all(path ?? id, ...candidates, ...candidates, ...candidates, ...candidates) as Array<{
+			.all(path ?? id, ...candidates, ...candidates, ...candidates, ...candidates)) as Array<{
 			readonly agent_id: string | null;
 		}>;
 		for (const row of rows) if (row.agent_id) owners.add(row.agent_id);
 	}
 	if (
 		(kind === "transcript" || kind === "summary") &&
-		tableExists(db, kind === "transcript" ? "session_transcripts" : "session_summaries")
+		(await tableExists(db, kind === "transcript" ? "session_transcripts" : "session_summaries"))
 	) {
 		const rows =
 			kind === "transcript"
-				? (db
+				? ((await db
 						.prepare(`SELECT DISTINCT agent_id FROM session_transcripts WHERE session_key IN (${placeholders})`)
-						.all(...candidates) as Array<{ readonly agent_id: string | null }>)
-				: (db
+						.all(...candidates)) as Array<{ readonly agent_id: string | null }>)
+				: ((await db
 						.prepare(
 							`SELECT DISTINCT agent_id FROM session_summaries
 							 WHERE id IN (${placeholders}) OR source_ref IN (${placeholders})`,
 						)
-						.all(...candidates, ...candidates) as Array<{ readonly agent_id: string | null }>);
+						.all(...candidates, ...candidates)) as Array<{ readonly agent_id: string | null }>);
 		for (const row of rows) if (row.agent_id) owners.add(row.agent_id);
 	}
 	return [...owners];
 }
 
-function readDeletedArtifact(
-	db: ReadDb,
+async function readDeletedArtifact(
+	db: KnowledgeReadDb,
 	params: { readonly agentId: string; readonly id: string; readonly path: string | null },
-): TraceSource | null {
-	if (!tableExists(db, "memory_artifacts")) return null;
+	_readScope?: ReadScope,
+): Promise<TraceSource | null> {
+	if (!(await tableExists(db, "memory_artifacts"))) return null;
 	const candidates = sourceIdCandidates(params.id);
 	const placeholders = candidates.map(() => "?").join(", ");
-	const row = db
+	const row = (await db
 		.prepare(
 			`SELECT source_path, source_node_id, session_id, session_key, session_token, project, content
 			 FROM memory_artifacts
@@ -574,7 +598,7 @@ function readDeletedArtifact(
 			 )
 			 ORDER BY captured_at DESC LIMIT 1`,
 		)
-		.get(params.agentId, params.path ?? params.id, ...candidates, ...candidates, ...candidates, ...candidates) as
+		.get(params.agentId, params.path ?? params.id, ...candidates, ...candidates, ...candidates, ...candidates)) as
 		| {
 				readonly source_path: string;
 				readonly source_node_id: string | null;
@@ -601,8 +625,8 @@ function readDeletedArtifact(
 	};
 }
 
-function readSource(
-	db: ReadDb,
+async function readSource(
+	db: KnowledgeReadDb,
 	params: {
 		readonly agentId: string;
 		readonly kind: TraceSourceKind;
@@ -611,18 +635,27 @@ function readSource(
 		readonly project: string | null;
 		readonly sessionKey: string | null;
 	},
-): TraceSource {
+	readScope?: ReadScope,
+): Promise<TraceSource> {
 	const normalizedId = params.id.replace(new RegExp(`^${params.kind}:`), "");
 	const sourceRef = `${params.kind}:${params.path ?? normalizedId}`;
-	const source = readEpisodicSource(db, { agentId: params.agentId, from: sourceRef });
+	const source =
+		params.kind === "memory"
+			? null
+			: await readKnowledgeTraceSource(db, {
+					kind: params.kind,
+					agentId: params.agentId,
+					id: params.path ?? normalizedId,
+					candidates: sourceIdCandidates(normalizedId),
+				});
 	if (!source) {
-		const agents = sourceAgentIds(db, params.kind, normalizedId, params.path);
+		const agents = await sourceAgentIds(db, params.kind, normalizedId, params.path, readScope);
 		if (agents.some((agentId) => agentId !== params.agentId)) {
 			throw new OntologyClaimTraceError("Claim premise crosses the authorized agent scope", 403);
 		}
 		const deleted =
 			params.kind === "artifact"
-				? readDeletedArtifact(db, { agentId: params.agentId, id: normalizedId, path: params.path })
+				? await readDeletedArtifact(db, { agentId: params.agentId, id: normalizedId, path: params.path }, readScope)
 				: null;
 		if (deleted) {
 			if (params.project !== null && deleted.project !== params.project) {
@@ -638,7 +671,7 @@ function readSource(
 	if (params.project !== null && source.project !== params.project) {
 		throw new OntologyClaimTraceError("Claim premise is outside the authorized project scope", 403);
 	}
-	const sessionKeys = sourceSessionKeys(db, params.agentId, params.kind, normalizedId, params.path);
+	const sessionKeys = await sourceSessionKeys(db, params.agentId, params.kind, normalizedId, params.path, readScope);
 	if (params.sessionKey !== null && !sessionKeys.includes(params.sessionKey)) {
 		throw new OntologyClaimTraceError("Claim trace premise crosses the authorized session boundary", 403);
 	}
@@ -656,22 +689,23 @@ function readSource(
 	};
 }
 
-function readMemorySource(
-	db: ReadDb,
+async function readMemorySource(
+	db: KnowledgeReadDb,
 	params: {
 		readonly agentId: string;
 		readonly id: string;
 		readonly project: string | null;
 		readonly sessionKey: string | null;
 	},
-): TraceSource {
-	const row = db
+	readScope?: ReadScope,
+): Promise<TraceSource> {
+	const row = (await db
 		.prepare(
 			`SELECT id, content, source_path, project, visibility, scope, memory_kind, COALESCE(is_deleted, 0) AS is_deleted,
 			        stale_at, superseded_by, source_type, source_id
 			 FROM memories WHERE id = ? AND agent_id = ? LIMIT 1`,
 		)
-		.get(params.id, params.agentId) as
+		.get(params.id, params.agentId)) as
 		| {
 				readonly id: string;
 				readonly content: string;
@@ -688,14 +722,14 @@ function readMemorySource(
 		  }
 		| undefined;
 	if (!row) {
-		const crossAgent = db.prepare("SELECT 1 FROM memories WHERE id = ? LIMIT 1").get(params.id);
+		const crossAgent = await db.prepare("SELECT 1 FROM memories WHERE id = ? LIMIT 1").get(params.id);
 		if (crossAgent) throw new OntologyClaimTraceError("Claim premise crosses the authorized agent scope", 403);
 		throw new OntologyClaimTraceError(`Claim premise 'memory:${params.id}' was not found`, 409);
 	}
 	if (params.project !== null && row.project !== params.project) {
 		throw new OntologyClaimTraceError("Claim premise is outside the authorized project scope", 403);
 	}
-	const sessionKeys = sourceSessionKeys(db, params.agentId, "memory", row.id, null);
+	const sessionKeys = await sourceSessionKeys(db, params.agentId, "memory", row.id, null, readScope);
 	if (params.sessionKey !== null && !sessionKeys.includes(params.sessionKey)) {
 		throw new OntologyClaimTraceError("Claim trace premise crosses the authorized session boundary", 403);
 	}
@@ -720,15 +754,16 @@ function readMemorySource(
 	};
 }
 
-function sourceFromReference(
-	db: ReadDb,
+async function sourceFromReference(
+	db: KnowledgeReadDb,
 	params: {
 		readonly agentId: string;
 		readonly reference: TraceReference;
 		readonly project: string | null;
 		readonly sessionKey: string | null;
 	},
-): TraceEvidence {
+	readScope?: ReadScope,
+): Promise<TraceEvidence> {
 	const kind = canonicalSourceKind(params.reference.sourceKind);
 	const id = params.reference.sourceId?.trim() ?? "";
 	if (!kind || !id) {
@@ -736,20 +771,28 @@ function sourceFromReference(
 	}
 	const source =
 		kind === "memory"
-			? readMemorySource(db, {
-					agentId: params.agentId,
-					id: id.replace(/^memory:/, ""),
-					project: params.project,
-					sessionKey: params.sessionKey,
-				})
-			: readSource(db, {
-					agentId: params.agentId,
-					kind,
-					id,
-					path: params.reference.sourcePath,
-					project: params.project,
-					sessionKey: params.sessionKey,
-				});
+			? await readMemorySource(
+					db,
+					{
+						agentId: params.agentId,
+						id: id.replace(/^memory:/, ""),
+						project: params.project,
+						sessionKey: params.sessionKey,
+					},
+					readScope,
+				)
+			: await readSource(
+					db,
+					{
+						agentId: params.agentId,
+						kind,
+						id,
+						path: params.reference.sourcePath,
+						project: params.project,
+						sessionKey: params.sessionKey,
+					},
+					readScope,
+				);
 	const quote = params.reference.quote;
 	const exact = source.content !== null && quote !== null && source.content.includes(quote);
 	if (source.state === "available" && quote === null) {
@@ -767,7 +810,7 @@ function sourceFromReference(
 				visibility: source.visibility,
 				sessionKeys: visibleSessionKeys(params.sessionKey),
 			},
-			reference: publicReference(params.reference.reference),
+			reference: readScope ? null : publicReference(params.reference.reference),
 		};
 	}
 	if (source.state === "available" && quote !== null && !exact) {
@@ -775,8 +818,8 @@ function sourceFromReference(
 	}
 	return {
 		sourceKind: kind,
-		sourceId: source.id,
-		sourcePath: source.path,
+		sourceId: readScope && source.state === "deleted" ? null : source.id,
+		sourcePath: readScope && source.state === "deleted" ? null : source.path,
 		exactQuote: exact ? quote : null,
 		excerpt: exact && source.content !== null && quote !== null ? compactExcerpt(source.content, quote) : null,
 		found: source.state !== "deleted",
@@ -787,23 +830,24 @@ function sourceFromReference(
 			visibility: source.visibility,
 			sessionKeys: visibleSessionKeys(params.sessionKey),
 		},
-		reference: publicReference(params.reference.reference),
+		reference: readScope ? null : publicReference(params.reference.reference),
 	};
 }
 
-function attributeReferences(
-	db: ReadDb,
+async function attributeReferences(
+	db: KnowledgeReadDb,
 	attribute: EntityAttribute,
 	proposalEvidence: readonly unknown[],
-): TraceReference[] {
+	_readScope?: ReadScope,
+): Promise<TraceReference[]> {
 	const references: TraceReference[] = [];
-	if (tableExists(db, "derived_memory_sources") && attribute.memoryId) {
-		const rows = db
+	if ((await tableExists(db, "derived_memory_sources")) && attribute.memoryId) {
+		const rows = (await db
 			.prepare(
 				`SELECT source_kind, source_id, source_path FROM derived_memory_sources
 				 WHERE derived_memory_id = ? AND agent_id = ? ORDER BY created_at ASC LIMIT ?`,
 			)
-			.all(attribute.memoryId, attribute.agentId, MAX_PREMISE_LIMIT + 1) as Array<{
+			.all(attribute.memoryId, attribute.agentId, MAX_PREMISE_LIMIT + 1)) as Array<{
 			readonly source_kind: string;
 			readonly source_id: string;
 			readonly source_path: string | null;
@@ -860,8 +904,12 @@ function attributeReferences(
 	);
 }
 
-function traceVersion(db: ReadDb, attribute: EntityAttribute): TraceVersion {
-	const memory = memoryState(db, attribute.agentId, attribute.memoryId);
+async function traceVersion(
+	db: KnowledgeReadDb,
+	attribute: EntityAttribute,
+	readScope?: ReadScope,
+): Promise<TraceVersion> {
+	const memory = await memoryState(db, attribute.agentId, attribute.memoryId, readScope);
 	return {
 		attribute: {
 			...attribute,
@@ -883,18 +931,28 @@ function traceVersion(db: ReadDb, attribute: EntityAttribute): TraceVersion {
 	};
 }
 
-function readProposalEvidence(db: ReadDb, agentId: string, proposalId: string | null): readonly unknown[] {
-	if (!proposalId || !tableExists(db, "ontology_proposals")) return [];
-	const row = db
+async function readProposalEvidence(
+	db: KnowledgeReadDb,
+	agentId: string,
+	proposalId: string | null,
+	_readScope?: ReadScope,
+): Promise<readonly unknown[]> {
+	if (!proposalId || !(await tableExists(db, "ontology_proposals"))) return [];
+	const row = (await db
 		.prepare("SELECT evidence FROM ontology_proposals WHERE id = ? AND agent_id = ? LIMIT 1")
-		.get(proposalId, agentId) as { readonly evidence: string | null } | undefined;
+		.get(proposalId, agentId)) as { readonly evidence: string | null } | undefined;
 	return parseJsonArray(row?.evidence);
 }
 
-function readAssertions(db: ReadDb, agentId: string, attributeIds: readonly string[]): TraceAssertion[] {
-	if (!tableExists(db, "epistemic_assertions") || attributeIds.length === 0) return [];
+async function readAssertions(
+	db: KnowledgeReadDb,
+	agentId: string,
+	attributeIds: readonly string[],
+	_readScope?: ReadScope,
+): Promise<TraceAssertion[]> {
+	if (!(await tableExists(db, "epistemic_assertions")) || attributeIds.length === 0) return [];
 	const placeholders = attributeIds.map(() => "?").join(", ");
-	const rows = db
+	const rows = (await db
 		.prepare(
 			`SELECT a.*, e.name AS subject_entity_name
 			 FROM epistemic_assertions a
@@ -903,7 +961,7 @@ function readAssertions(db: ReadDb, agentId: string, attributeIds: readonly stri
 			 ORDER BY a.asserted_at DESC, a.created_at DESC
 			 LIMIT ?`,
 		)
-		.all(agentId, ...attributeIds, MAX_PREMISE_LIMIT) as RawAssertionRow[];
+		.all(agentId, ...attributeIds, MAX_PREMISE_LIMIT)) as RawAssertionRow[];
 	return rows.map((row) => {
 		const evidenceRefs = [
 			...parseJsonArray(row.evidence),
@@ -952,8 +1010,8 @@ function readAssertions(db: ReadDb, agentId: string, attributeIds: readonly stri
 	});
 }
 
-function readReverse(
-	db: ReadDb,
+async function readReverse(
+	db: KnowledgeReadDb,
 	params: {
 		readonly agentId: string;
 		readonly project: string | null;
@@ -961,8 +1019,9 @@ function readReverse(
 		readonly limit: number;
 		readonly maxDepth: number;
 	},
-): { readonly items: ReverseTraceItem[]; readonly truncated: boolean; readonly maxDepthReached: number } {
-	if (!tableExists(db, "derived_memory_sources") || params.memoryIds.length === 0 || params.maxDepth === 0) {
+	_readScope?: ReadScope,
+): Promise<{ readonly items: ReverseTraceItem[]; readonly truncated: boolean; readonly maxDepthReached: number }> {
+	if (!(await tableExists(db, "derived_memory_sources")) || params.memoryIds.length === 0 || params.maxDepth === 0) {
 		return { items: [], truncated: false, maxDepthReached: 0 };
 	}
 	const visited = new Set(params.memoryIds);
@@ -972,7 +1031,7 @@ function readReverse(
 	let maxDepthReached = 0;
 	for (let depth = 1; depth <= params.maxDepth && frontier.length > 0 && items.length < params.limit; depth += 1) {
 		const placeholders = frontier.map(() => "?").join(", ");
-		const rows = db
+		const rows = (await db
 			.prepare(
 				`SELECT DISTINCT dms.derived_memory_id AS memory_id, ea.id AS attribute_id,
 				        e.name AS entity_name, eas.name AS aspect_name, ea.group_key, ea.claim_key,
@@ -994,7 +1053,7 @@ function readReverse(
 				params.project,
 				params.project,
 				params.limit - items.length + 1,
-			) as RawReverseRow[];
+			)) as RawReverseRow[];
 		if (rows.length > params.limit - items.length) truncated = true;
 		const nextFrontier: string[] = [];
 		for (const row of rows) {
@@ -1025,6 +1084,7 @@ function readReverse(
 export async function explainOntologyClaim(
 	accessor: DbAccessor,
 	params: ExplainClaimParams,
+	readScope?: ReadScope,
 ): Promise<ClaimTraceResult> {
 	const started = performance.now();
 	const versionLimit = boundedInteger(params.versionLimit, 20, MAX_VERSION_LIMIT, "versionLimit");
@@ -1033,43 +1093,54 @@ export async function explainOntologyClaim(
 	const maxDepth = boundedDepth(params.maxDepth);
 	const sessionKey = params.sessionKey?.trim() || null;
 	const project = params.project?.trim() || null;
-	const result = await listEntityAttributesByPath(accessor, {
-		agentId: params.agentId,
-		entity: params.entity,
-		aspect: params.aspect,
-		group: params.group,
-		claim: params.claim,
-		kind: params.kind,
-		status: "all",
-		limit: versionLimit + 1,
-		offset: 0,
-	});
+	const result = await listEntityAttributesByPath(
+		accessor,
+		{
+			agentId: params.agentId,
+			entity: params.entity,
+			aspect: params.aspect,
+			group: params.group,
+			claim: params.claim,
+			kind: params.kind,
+			status: "all",
+			limit: versionLimit + 1,
+			offset: 0,
+		},
+		readScope,
+	);
 	if (result === null) throw new OntologyClaimTraceError("Claim path not found", 404);
 	if (result.items.length === 0) throw new OntologyClaimTraceError("Claim path has no versions", 404);
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	return (async (db: KnowledgeReadDb) => {
 		if (project !== null) {
-			for (const attribute of result.items) requireProjectScopedAttribute(db, attribute, project);
+			for (const attribute of result.items) await requireProjectScopedAttribute(db, attribute, project, readScope);
 		}
-		const versions = result.items.slice(0, versionLimit).map((attribute) => traceVersion(db, attribute));
+		const versions = await Promise.all(
+			result.items.slice(0, versionLimit).map((attribute) => traceVersion(db, attribute, readScope)),
+		);
 		const current = versions.filter((version) => version.attribute.status === "active");
 		const currentContent = new Set(current.map((version) => version.attribute.normalizedContent));
-		const assertions = readAssertions(
+		const assertions = await readAssertions(
 			db,
 			params.agentId,
 			versions.map((version) => version.attribute.id),
+			readScope,
 		);
 		const contradictoryAssertions = assertions.filter(
 			(assertion) => assertion.predicate === "denies" && assertion.status === "active",
 		);
-		const references = versions.flatMap((version) =>
-			attributeReferences(
-				db,
-				version.attribute,
-				readProposalEvidence(db, params.agentId, version.attribute.proposalId),
-			),
-		);
+		const references = (
+			await Promise.all(
+				versions.map(async (version) =>
+					attributeReferences(
+						db,
+						version.attribute,
+						await readProposalEvidence(db, params.agentId, version.attribute.proposalId, readScope),
+						readScope,
+					),
+				),
+			)
+		).flat();
 		references.push(...assertions.flatMap((assertion) => assertion.evidenceRefs));
 		const uniqueReferences = mergeReferences(references);
 		const premiseItems: TracePremise[] = [];
@@ -1078,12 +1149,16 @@ export async function explainOntologyClaim(
 		let unverifiedPremises = 0;
 		for (const reference of uniqueReferences.slice(0, premiseLimit + 1)) {
 			if (premiseItems.length >= premiseLimit) break;
-			const evidence = sourceFromReference(db, {
-				agentId: params.agentId,
-				reference,
-				project,
-				sessionKey,
-			});
+			const evidence = await sourceFromReference(
+				db,
+				{
+					agentId: params.agentId,
+					reference,
+					project,
+					sessionKey,
+				},
+				readScope,
+			);
 			const derivedMemoryId = reference.derivedMemoryId ?? null;
 			const depth = 0;
 			premiseItems.push({ depth, derivedMemoryId, evidence });
@@ -1094,15 +1169,19 @@ export async function explainOntologyClaim(
 				invalidatedPremises += 1;
 			}
 		}
-		const reverseTrace = readReverse(db, {
-			agentId: params.agentId,
-			project,
-			memoryIds: versions
-				.map((version) => version.attribute.memoryId)
-				.filter((memoryId): memoryId is string => memoryId !== null),
-			limit: reverseLimit,
-			maxDepth,
-		});
+		const reverseTrace = await readReverse(
+			db,
+			{
+				agentId: params.agentId,
+				project,
+				memoryIds: versions
+					.map((version) => version.attribute.memoryId)
+					.filter((memoryId): memoryId is string => memoryId !== null),
+				limit: reverseLimit,
+				maxDepth,
+			},
+			readScope,
+		);
 		const integrity: TraceIntegrity =
 			invalidatedPremises > 0
 				? "invalidated"
@@ -1171,7 +1250,7 @@ export async function explainOntologyClaim(
 			},
 			latencyMs: Math.round((performance.now() - started) * 100) / 100,
 		};
-	}, "ontology-claim-trace.ts:1051");
+	})(knowledgeReadDb(readScope));
 }
 
 export type { TraceAssertion, TraceEvidence, TracePremise, TraceVersion, ReverseTraceItem };

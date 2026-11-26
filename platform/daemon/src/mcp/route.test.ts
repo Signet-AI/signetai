@@ -11,6 +11,13 @@ import {
 
 function makeApp(): Hono {
 	const app = new Hono();
+	app.all("/api/*", async (c) =>
+		globalThis.fetch(c.req.url, {
+			method: c.req.method,
+			headers: c.req.raw.headers,
+			body: ["GET", "HEAD"].includes(c.req.method) ? undefined : await c.req.text(),
+		}),
+	);
 	mountMcpRoute(app);
 	return app;
 }
@@ -43,6 +50,60 @@ describe("MCP route", () => {
 		globalThis.fetch = originalFetch;
 		__setMcpAdmissionForTests(null);
 		__setMcpRequestGateForTests(null);
+	});
+
+	it("dispatches MCP tools through the mounted daemon rather than a default loopback port", async () => {
+		const app = new Hono();
+		app.get("/api/memories", (c) => c.json({ memories: [{ id: "same-daemon" }], stats: {} }));
+		mountMcpRoute(app);
+		const response = await app.request("/mcp", {
+			method: "POST",
+			headers: streamableHeaders,
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: { name: "memory_list", arguments: {} },
+			}),
+		});
+		expect(JSON.stringify(await response.json())).toContain("same-daemon");
+	});
+
+	it("keeps cookie-authenticated MCP calls on the caller credential without actor impersonation", async () => {
+		const previousKey = process.env.SIGNET_API_KEY;
+		process.env.SIGNET_API_KEY = "test-daemon-only-credential";
+		const observed: Headers[] = [];
+		globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			observed.push(headers);
+			const caller =
+				headers.get("cookie") === "signet_session=test-browser-session" &&
+				headers.get("x-signet-csrf") === "test-csrf" &&
+				!headers.has("authorization") &&
+				!headers.has("x-signet-actor") &&
+				!headers.has("x-signet-actor-type");
+			return Response.json(caller ? { memories: [], stats: {} } : { error: "actor_conflict" }, {
+				status: caller ? 200 : 403,
+			});
+		});
+		try {
+			const response = await makeApp().request("/mcp", {
+				method: "POST",
+				headers: { ...streamableHeaders, cookie: "signet_session=test-browser-session", "x-signet-csrf": "test-csrf" },
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: { name: "memory_list", arguments: { limit: 3 } },
+				}),
+			});
+			const body = await response.json();
+			expect(body.result.isError).not.toBe(true);
+			expect(observed.length).toBeGreaterThan(0);
+		} finally {
+			if (previousKey === undefined) delete process.env.SIGNET_API_KEY;
+			else process.env.SIGNET_API_KEY = previousKey;
+		}
 	});
 
 	it("rejects requests when the in-flight admission cap is saturated", async () => {

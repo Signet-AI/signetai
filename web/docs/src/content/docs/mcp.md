@@ -72,6 +72,14 @@ agent's memories. The stdio server (`signet mcp`) does not read
 `SIGNET_AGENT_ID` from its own environment. `memory_list` does not accept
 `all`; the all-agents view is for operator surfaces such as the dashboard.
 
+In a claimed organization, the credential identifies the person and bounds the
+agent and project reach. Knowledge expansion tools keep the same requested agent
+as memory tools. Reads use the caller's classification audiences, including when
+an MCP tool forwards to another HTTP endpoint. Cookie-authenticated HTTP MCP
+requests preserve the session cookie and CSRF header; they never substitute the
+daemon's environment credential. The daemon attributes operations to the
+verified caller, not an MCP-supplied actor header.
+
 ## Tool Reference
 
 All tools are defined in `platform/daemon/src/mcp/tools.ts`. Tool handlers
@@ -929,3 +937,5 @@ Phase 2 tool candidates (not yet implemented):
 - `diagnostics` — health score summary
 - `config_read` — read agent config
 - `document_ingest` — ingest a document
+
+The `/mcp` transport does not grant read access as a whole. HTTP-backed tools re-enter their HTTP permission and scope checks. Non-HTTP GraphIQ tools require `recall` for reads and `admin` for clearing or indexing, including compatibility aliases. A missing principal or permission cannot execute a plugin command. JSON-RPC batch bodies apply the same gate to every element before dispatch. If any element fails that gate, the whole batch returns `403` and no tool handler runs.

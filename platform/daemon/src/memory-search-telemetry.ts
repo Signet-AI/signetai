@@ -1,4 +1,6 @@
-import { type ReadScope, readScopeSql } from "@signet/core";
+import { readScopedSearchTelemetry, readSearchTelemetryExportPage, SEARCH_TELEMETRY_EXPORT_BYTES } from "./diagnostics";
+import { attemptAsync } from "@signet/core";
+import type { ReadScope } from "./read-scope";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
@@ -21,6 +23,7 @@ export interface MemorySearchTelemetryRecordInput {
 
 export interface MemorySearchTelemetryQuery {
 	readonly agentId?: string;
+	readonly scope: ReadScope;
 	readonly sessionKey?: string;
 	readonly project?: string;
 	readonly route?: string;
@@ -30,6 +33,16 @@ export interface MemorySearchTelemetryQuery {
 	readonly limit?: number;
 	readonly offset?: number;
 	readonly readScope?: ReadScope;
+}
+
+export interface MemorySearchTelemetryCursor {
+	readonly createdAt: string;
+	readonly id: string;
+}
+export interface MemorySearchTelemetryExportPage {
+	readonly rows: readonly MemorySearchTelemetryRow[];
+	readonly hasMore: boolean;
+	readonly oversized: boolean;
 }
 
 export interface MemorySearchTelemetryResultSnapshot {
@@ -73,7 +86,7 @@ export interface MemorySearchTelemetryItem {
 	readonly sources: Readonly<Record<string, string>> | null;
 }
 
-interface MemorySearchTelemetryRow {
+export interface MemorySearchTelemetryRow {
 	readonly id: string;
 	readonly created_at: string;
 	readonly route: string;
@@ -302,72 +315,93 @@ export async function recordMemorySearchTelemetry(
 	}
 }
 
+export function streamMemorySearchTelemetry(
+	db: DbAccessor,
+	query: MemorySearchTelemetryQuery,
+	signal?: AbortSignal,
+	refreshScope?: () => Promise<ReadScope>,
+): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+	let cancelled = false;
+	let emitted = false;
+	const encodeRecord = (value: unknown) => encoder.encode(`${emitted ? "\n" : ""}${JSON.stringify(value)}`);
+	async function* records() {
+		let cursor: MemorySearchTelemetryCursor | undefined;
+		let remaining = query.limit;
+		const deadline = Date.now() + 120000;
+		for (;;) {
+			if (cancelled || signal?.aborted) return;
+			if (Date.now() >= deadline) {
+				yield encodeRecord({ kind: "error", error: "export_deadline" });
+				return;
+			}
+			const page = await attemptAsync(async () =>
+				readSearchTelemetryExportPage(
+					{
+						...query,
+						scope: cursor && refreshScope ? await refreshScope() : query.scope,
+						limit: remaining,
+						offset: undefined,
+					},
+					cursor,
+					db,
+				),
+			);
+			if (cancelled || signal?.aborted) return;
+			if (!page || page.oversized) {
+				yield encodeRecord({ kind: "error", error: page?.oversized ? "export_row_too_large" : "export_failed" });
+				return;
+			}
+			for (const row of page.rows) {
+				if (cancelled || signal?.aborted) return;
+				if (Date.now() >= deadline) {
+					yield encodeRecord({ kind: "error", error: "export_deadline" });
+					return;
+				}
+				const line = encodeRecord(rowToItem(row));
+				if (line.byteLength > SEARCH_TELEMETRY_EXPORT_BYTES) {
+					yield encodeRecord({ kind: "error", error: "export_row_too_large" });
+					return;
+				}
+				yield line;
+				emitted = true;
+				cursor = { createdAt: row.created_at, id: row.id };
+				if (remaining !== undefined && --remaining === 0) return;
+			}
+			if (!page.hasMore) return;
+			if (page.rows.length === 0) {
+				yield encodeRecord({ kind: "error", error: "export_failed" });
+				return;
+			}
+		}
+	}
+	const iterator = records();
+	return new ReadableStream({
+		async pull(controller) {
+			const next = await attemptAsync(() => iterator.next());
+			if (cancelled || signal?.aborted) {
+				await iterator.return();
+				if (!cancelled) controller.close();
+				return;
+			}
+			if (!next) {
+				controller.enqueue(encodeRecord({ kind: "error", error: "export_failed" }));
+				controller.close();
+				return;
+			}
+			if (next.done) controller.close();
+			else controller.enqueue(next.value);
+		},
+		async cancel() {
+			cancelled = true;
+			await iterator.return();
+		},
+	});
+}
+
 export async function listMemorySearchTelemetry(
 	db: DbAccessor,
-	query: MemorySearchTelemetryQuery = {},
+	query: MemorySearchTelemetryQuery,
 ): Promise<readonly MemorySearchTelemetryItem[]> {
-	const conditions: string[] = [];
-	const args: unknown[] = [];
-
-	if (query.agentId) {
-		conditions.push("agent_id = ?");
-		args.push(query.agentId);
-	}
-	if (query.sessionKey) {
-		conditions.push("session_key = ?");
-		args.push(query.sessionKey);
-	}
-	if (query.project) {
-		conditions.push("project = ?");
-		args.push(query.project);
-	}
-	if (query.route) {
-		conditions.push("route = ?");
-		args.push(query.route);
-	}
-	if (query.since) {
-		conditions.push("created_at >= ?");
-		args.push(query.since);
-	}
-	if (query.until) {
-		conditions.push("created_at <= ?");
-		args.push(query.until);
-	}
-	if (typeof query.noHits === "boolean") {
-		conditions.push("no_hits = ?");
-		args.push(query.noHits ? 1 : 0);
-	}
-
-	if (query.readScope) {
-		const scope = readScopeSql("t", query.readScope, {
-			visibility: null,
-			memory: null,
-			session: "session_key",
-			source: null,
-		});
-		conditions.push(`1 = 1${scope.sql}`);
-		args.push(...scope.args);
-	}
-
-	const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-	const limit = query.limit ?? 100;
-	const offset = query.offset ?? 0;
-
-	return db.withReadDbAsync(
-		async (r) => {
-			const rows = r
-				.prepare(
-					`SELECT id, created_at, route, agent_id, session_key, project, query,
-				        keyword_query, filters_json, method, result_count, top_score,
-				        no_hits, duration_ms, timings_json, results_json, sources_json
-				 FROM memory_search_telemetry t
-				 ${where}
-				 ORDER BY created_at DESC
-				 LIMIT ? OFFSET ?`,
-				)
-				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
-			return rows.map(rowToItem);
-		},
-		{ siteToken: "db:recall.telemetry.list" },
-	);
+	return (await readScopedSearchTelemetry(query, db)).map(rowToItem);
 }

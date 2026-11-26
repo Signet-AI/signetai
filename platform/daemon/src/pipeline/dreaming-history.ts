@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { readDreamingHistoryLinePage } from "./dreaming";
 import type { LlmUsage } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
@@ -161,25 +163,18 @@ async function readLines(
 	agentId: string,
 	scopeKey: string,
 	nodes: readonly HistoryNode[],
+	readScope?: ReadScope,
 ): Promise<HistoryLine[]> {
 	const lines: HistoryLine[] = [];
 	for (let start = 0; start < nodes.length; start += PAGE_ROWS) {
 		const page = nodes.slice(start, start + PAGE_ROWS);
-		const rows = await ownerQueryAll<{
-			level: number;
-			idx: number;
-			hex: string;
-			bytes: number;
-			passId: string | null;
-		}>(
+		const rows = await readDreamingHistoryLinePage(
 			owner,
-			"dreaming.history.lines",
-			`SELECT level, idx, hex(substr(CAST(text AS BLOB), 1, ?)) AS hex, length(CAST(text AS BLOB)) AS bytes,
-			        pass_id AS passId
-			 FROM dreaming_history_nodes
-			 WHERE agent_id = ? AND scope_key = ? AND (level, idx) IN (VALUES ${page.map(() => "(?, ?)").join(", ")})`,
-			[DREAMING_HISTORY_LINE_BYTES, agentId, scopeKey, ...page.flatMap((node) => [node.level, node.idx])],
-			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+			agentId,
+			scopeKey,
+			page,
+			DREAMING_HISTORY_LINE_BYTES,
+			readScope,
 		);
 		const byKey = new Map(rows.map((row) => [`${row.level}:${row.idx}`, row]));
 		for (const node of page) {
@@ -355,6 +350,7 @@ export async function zoomDreamingHistory(
 		readonly allowedScopes: readonly string[];
 		readonly id: number;
 		readonly n: number;
+		readonly readScope?: ReadScope;
 	},
 ): Promise<
 	| { readonly ok: true; readonly lines?: readonly string[]; readonly record?: unknown }
@@ -368,22 +364,51 @@ export async function zoomDreamingHistory(
 		return { ok: false, error: `No line ${id}+${n}: n must be a power of two and id a multiple of n.` };
 	}
 	const owner = await getDbOwnerForAccessor(accessor);
+	if (params.readScope) {
+		if (n > 128 || !Number.isSafeInteger(id + n))
+			return { ok: false, error: "History range exceeds 128 readable passes." };
+		const leaves = await readLines(
+			owner,
+			agentId,
+			scopeKey,
+			Array.from({ length: n }, (_, offset) => ({ level: 0, idx: id + offset })),
+			params.readScope,
+		);
+		if (leaves.length !== n) return { ok: false, error: `No line ${id}+${n}.` };
+		if (n > 1) return { ok: true, lines: leaves.map((line) => line.text) };
+		const leaf = leaves[0];
+		if (!leaf || leaf.passId === null) return { ok: false, error: `No line ${id}+1.` };
+		const record = await readDreamingPassRecord(owner, agentId, leaf.passId, params.readScope);
+		return record === null ? { ok: false, error: `No line ${id}+1.` } : { ok: true, record };
+	}
 	const level = Math.log2(n);
 	if (level === 0) {
-		const [leaf] = await readLines(owner, agentId, scopeKey, [{ level: 0, idx: id }]);
+		const [leaf] = await readLines(owner, agentId, scopeKey, [{ level: 0, idx: id }], params.readScope);
 		if (leaf === undefined || leaf.passId === null) return { ok: false, error: `No line ${id}+1.` };
-		const record = await readDreamingPassRecord(owner, agentId, leaf.passId);
+		const record = await readDreamingPassRecord(owner, agentId, leaf.passId, params.readScope);
 		return record === null
-			? { ok: false, error: `Pass ${leaf.passId} for line ${id}+1 is no longer retained.` }
+			? {
+					ok: false,
+					error: params.readScope ? `No line ${id}+1.` : `Pass ${leaf.passId} for line ${id}+1 is no longer retained.`,
+				}
 			: { ok: true, record };
 	}
-	const lines = await readLines(owner, agentId, scopeKey, [
-		{ level, idx: id / n },
-		{ level: level - 1, idx: (id / n) * 2 },
-		{ level: level - 1, idx: (id / n) * 2 + 1 },
-	]);
+	const lines = await readLines(
+		owner,
+		agentId,
+		scopeKey,
+		[
+			{ level, idx: id / n },
+			{ level: level - 1, idx: (id / n) * 2 },
+			{ level: level - 1, idx: (id / n) * 2 + 1 },
+		],
+		params.readScope,
+	);
 	if (lines.length !== 3) return { ok: false, error: `No line ${id}+${n}.` };
-	return { ok: true, lines: lines.slice(1).map((line) => `${lineLabel(line.node)}|${line.text}`) };
+	return {
+		ok: true,
+		lines: lines.slice(1).map((line) => (params.readScope ? line.text : `${lineLabel(line.node)}|${line.text}`)),
+	};
 }
 
 function nextMerge(counts: readonly number[]): HistoryNode | null {

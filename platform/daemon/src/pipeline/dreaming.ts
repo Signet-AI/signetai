@@ -1,3 +1,274 @@
+import { z } from "zod";
+import { attempt as attemptRunbookJson } from "@signet/core";
+function runbookRecord(value: unknown): Record<string, unknown> | null {
+	const parsed = z.record(z.string(), z.unknown()).safeParse(value);
+	return parsed.success ? parsed.data : null;
+}
+function parseRecord(value: string | null): Record<string, unknown> | null {
+	if (!value) return null;
+	return runbookRecord(attemptRunbookJson(() => JSON.parse(value)));
+}
+
+function parseTextList(value: unknown): readonly string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function parseDeferredEvidenceList(
+	value: unknown,
+): readonly import("./dreaming-runbook").DreamingDeferredEvidenceEntry[] {
+	if (!Array.isArray(value)) return [];
+	const entries: import("./dreaming-runbook").DreamingDeferredEvidenceEntry[] = [];
+	for (const item of value) {
+		if (typeof item === "string") {
+			entries.push(item);
+			continue;
+		}
+		if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+		const entry = runbookRecord(item);
+		if (!entry) continue;
+		if (typeof entry.agentId === "string" && typeof entry.sourceRef === "string") {
+			entries.push({ agentId: entry.agentId, sourceRef: entry.sourceRef });
+		}
+	}
+	return entries;
+}
+
+function parseReviewedExcludedEvidenceList(
+	value: unknown,
+): readonly import("./dreaming-evidence-reviews").DreamingReviewedExcludedEvidenceEntry[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item) => {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
+		const entry = runbookRecord(item);
+		if (!entry) return [];
+		if (typeof entry.agentId !== "string" || typeof entry.sourceRef !== "string" || typeof entry.reason !== "string")
+			return [];
+		const agentId = entry.agentId.trim();
+		const sourceRef = entry.sourceRef.trim();
+		const reason = entry.reason.trim();
+		if (!agentId || !sourceRef || !reason) return [];
+		return [
+			{
+				agentId,
+				sourceRef,
+				reason,
+			},
+		];
+	});
+}
+
+function parseRunbook(value: string | null): import("./dreaming-runbook").DreamingRunbookEntry | null {
+	const row = parseRecord(value);
+	if (!row || typeof row.summary !== "string") return null;
+	return {
+		summary: row.summary,
+		openQuestions: parseTextList(row.openQuestions),
+		deferred: parseTextList(row.deferred),
+		deferredEvidence: parseDeferredEvidenceList(row.deferredEvidence),
+		reviewedExcludedEvidence: parseReviewedExcludedEvidenceList(row.reviewedExcludedEvidence),
+	};
+}
+
+function parseEvidenceWindow(value: string | null): import("./dreaming-runbook").DreamingEvidenceWindow | null {
+	const row = parseRecord(value);
+	if (!row || typeof row.cursor !== "object" || row.cursor === null || Array.isArray(row.cursor)) return null;
+	const cursor = runbookRecord(row.cursor);
+	if (!cursor) return null;
+	if (typeof cursor.capturedAt !== "string" || typeof cursor.id !== "string") return null;
+	const sources = Array.isArray(row.sources)
+		? row.sources.flatMap((source) => {
+				if (typeof source !== "object" || source === null || Array.isArray(source)) return [];
+				const item = runbookRecord(source);
+				if (!item) return [];
+				if (
+					typeof item.sourceRef !== "string" ||
+					typeof item.sourceKind !== "string" ||
+					typeof item.sourceId !== "string"
+				)
+					return [];
+				return [
+					{
+						sourceRef: item.sourceRef,
+						sourceKind: item.sourceKind,
+						sourceId: item.sourceId,
+						sourcePath: typeof item.sourcePath === "string" ? item.sourcePath : null,
+						chars: typeof item.chars === "number" && Number.isFinite(item.chars) ? Math.max(0, item.chars) : 0,
+					},
+				];
+			})
+		: [];
+	return {
+		cursor: {
+			capturedAt: cursor.capturedAt,
+			kind: typeof cursor.kind === "string" ? cursor.kind : null,
+			id: cursor.id,
+			...(typeof cursor.fragmentOffset === "number" &&
+			Number.isSafeInteger(cursor.fragmentOffset) &&
+			cursor.fragmentOffset > 0
+				? { fragmentOffset: cursor.fragmentOffset }
+				: {}),
+		},
+		sources,
+	};
+}
+
+function operationResults(
+	inputJson: string,
+	outputJson: string,
+): readonly { readonly operation: string; readonly ok: boolean; readonly error: string | null }[] {
+	const input = parseRecord(inputJson);
+	const output = parseRecord(outputJson);
+	const operations = Array.isArray(input?.operations) ? input.operations : [];
+	const items = Array.isArray(output?.items) ? output.items : [];
+	const fallbackError = typeof output?.error === "string" ? output.error : null;
+	return operations.flatMap((operation, index) => {
+		if (typeof operation !== "object" || operation === null || Array.isArray(operation)) return [];
+		const name = runbookRecord(operation)?.operation;
+		if (typeof name !== "string") return [];
+		const item = items[index];
+		const result = runbookRecord(item);
+		return [
+			{
+				operation: name,
+				ok: result?.ok === true,
+				error: typeof result?.error === "string" ? result.error : fallbackError,
+			},
+		];
+	});
+}
+
+function summarizeOperations(
+	results: readonly { readonly operation: string; readonly ok: boolean; readonly error: string | null }[],
+): import("./dreaming-runbook").DreamingRunbookOperations {
+	const applied: Record<string, number> = {};
+	const failed = new Map<string, { operation: string; error: string | null; count: number }>();
+	for (const result of results) {
+		if (result.ok) {
+			applied[result.operation] = (applied[result.operation] ?? 0) + 1;
+			continue;
+		}
+		const key = `${result.operation}\u0000${result.error ?? ""}`;
+		const existing = failed.get(key);
+		if (existing === undefined) failed.set(key, { operation: result.operation, error: result.error, count: 1 });
+		else existing.count += 1;
+	}
+	return { applied, failed: [...failed.values()] };
+}
+
+export async function readDreamingPassRecord(
+	owner: import("../db-owner-client").DbOwnerClient,
+	agentId: string,
+	passId: string,
+	readScope?: ReadScope,
+): Promise<import("./dreaming-runbook").DreamingRunbookPass | null> {
+	const predicate = dreamingReadPredicate("", readScope);
+	const passPredicate = dreamingReadPredicate("p", readScope);
+	const raw = await ownerQueryOne<Record<string, unknown>>(
+		owner,
+		"dreaming.pass-record.read",
+		`SELECT agent_id AS agentId, id, mode, status, started_at AS startedAt, completed_at AS completedAt,
+		        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
+		        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
+		 FROM dreaming_passes WHERE ${readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql}`,
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+	if (raw === undefined) return null;
+	const row = z
+		.object({
+			id: z.string(),
+			agentId: z.string(),
+			mode: z.string(),
+			status: z.string(),
+			startedAt: z.string(),
+			completedAt: z.string().nullable(),
+			summary: z.string().nullable(),
+			error: z.string().nullable(),
+			mutationsApplied: z.number().nullable(),
+			mutationsFailed: z.number().nullable(),
+			evidenceWindowJson: z.string().nullable(),
+			runbookJson: z.string().nullable(),
+		})
+		.parse(raw);
+	const recordAgentId = row.agentId;
+	const [calls, quarantines] = await Promise.all([
+		ownerQueryAll<{ inputJson: string; outputJson: string }>(
+			owner,
+			"dreaming.pass-record.operations",
+			`SELECT input_json AS inputJson, output_json AS outputJson
+			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops' ${predicate.sql}
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_tool_calls.pass_id AND p.agent_id = dreaming_tool_calls.agent_id ${passPredicate.sql})` : ""}
+			 ORDER BY sequence ASC`,
+			[recordAgentId, passId, ...predicate.args, ...(readScope ? passPredicate.args : [])],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		),
+		ownerQueryAll<import("./dreaming-runbook").DreamingRunbookPass["quarantines"][number]>(
+			owner,
+			"dreaming.pass-record.quarantines",
+			`SELECT source_kind AS sourceKind, source_id AS sourceId, reason
+			 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND pass_id = ? AND resolved_at IS NULL
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_exclusions.pass_id AND p.agent_id = dreaming_evidence_exclusions.agent_id ${passPredicate.sql})` : ""}
+			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
+			[recordAgentId, passId, ...(readScope ? passPredicate.args : [])],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		),
+	]);
+	return {
+		passId: row.id,
+		mode: row.mode,
+		status: row.status,
+		startedAt: row.startedAt,
+		completedAt: row.completedAt ?? null,
+		summary: row.summary ?? null,
+		error: row.error ?? null,
+		mutationsApplied: typeof row.mutationsApplied === "number" ? row.mutationsApplied : null,
+		mutationsFailed: typeof row.mutationsFailed === "number" ? row.mutationsFailed : null,
+		operations: summarizeOperations(calls.flatMap((call) => operationResults(call.inputJson, call.outputJson))),
+		evidenceWindow: parseEvidenceWindow(row.evidenceWindowJson ?? null),
+		runbook: parseRunbook(row.runbookJson ?? null),
+		quarantines,
+	};
+}
+
+import type { ReadScope } from "../read-scope";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
+import type { DbOwnerClient } from "../db-owner-client";
+export async function readDreamingHistoryLinePage(
+	owner: DbOwnerClient,
+	agentId: string,
+	scopeKey: string,
+	page: readonly { readonly level: number; readonly idx: number }[],
+	lineBytes: number,
+	readScope?: ReadScope,
+): Promise<readonly { level: number; idx: number; hex: string; bytes: number; passId: string | null }[]> {
+	if (page.length === 0 || page.length > 256 || lineBytes < 1 || lineBytes > 4096)
+		throw new Error("invalid_history_line_page");
+	const predicate = dreamingReadPredicate("", readScope);
+	const parent = dreamingReadPredicate("history_pass", readScope);
+	return await ownerQueryAll<{
+		level: number;
+		idx: number;
+		hex: string;
+		bytes: number;
+		passId: string | null;
+	}>(
+		owner,
+		"dreaming.history.lines",
+		`SELECT level, idx, hex(substr(CAST(text AS BLOB), 1, ?)) AS hex, length(CAST(text AS BLOB)) AS bytes,
+			        pass_id AS passId
+			 FROM ${readScope ? `(SELECT level,ROW_NUMBER() OVER(PARTITION BY level ORDER BY idx)-1 AS idx,text,pass_id FROM dreaming_history_nodes WHERE agent_id=? AND scope_key=? ${predicate.sql} AND (pass_id IS NULL OR EXISTS(SELECT 1 FROM dreaming_passes history_pass WHERE history_pass.id=dreaming_history_nodes.pass_id AND history_pass.agent_id=dreaming_history_nodes.agent_id${parent.sql}))) readable_history` : `dreaming_history_nodes WHERE agent_id=? AND scope_key=? ${predicate.sql}`} ${readScope ? "WHERE" : "AND"} (level, idx) IN (VALUES ${page.map(() => "(?, ?)").join(", ")})`,
+		[
+			lineBytes,
+			agentId,
+			scopeKey,
+			...predicate.args,
+			...(readScope ? parent.args : []),
+			...page.flatMap((node) => [node.level, node.idx]),
+		],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+}
+
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { compartmentForWrite, withWritePrincipal } from "@signet/core";
@@ -631,7 +902,9 @@ export async function getDreamingPasses(
 	accessor: DbAccessor,
 	agentId: string,
 	limit = 10,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingPassRow[]> {
+	const predicate = dreamingReadPredicate("", readScope);
 	return await ownerQueryAll<DreamingPassRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.list",
@@ -647,10 +920,10 @@ export async function getDreamingPasses(
 		        summary, error,
 		        policy_hash AS policyHash, policy_source AS policySource
 		 FROM dreaming_passes
-		 WHERE agent_id = ?
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"} ${predicate.sql}
 		 ORDER BY created_at DESC
 		 LIMIT ?`,
-		[agentId, limit],
+		[...(readScope ? [] : [agentId]), ...predicate.args, limit],
 		{ deadlineMs: 30_000, estimatedWorkUnits: Math.max(1, Math.min(limit, 100)) },
 	);
 }
@@ -665,7 +938,9 @@ export async function getDreamingPassPolicy(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<{ readonly policy: DreamingPassPolicyRecord | null } | null> {
+	const predicate = dreamingReadPredicate("pass", readScope);
 	const row = await ownerQueryOne<{
 		readonly hash: string | null;
 		readonly source: "default" | "custom" | null;
@@ -676,9 +951,9 @@ export async function getDreamingPassPolicy(
 		`SELECT pass.policy_hash AS hash, pass.policy_source AS source, policy.text AS text
 		 FROM dreaming_passes pass
 		 LEFT JOIN dreaming_policies policy ON policy.hash = pass.policy_hash
-		 WHERE pass.agent_id = ? AND pass.id = ?
+		 WHERE ${readScope ? "1=1" : "pass.agent_id = ?"} AND pass.id = ? ${predicate.sql}
 		 LIMIT 1`,
-		[agentId, passId],
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args],
 		{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
 	);
 	if (row == null) return null;
@@ -691,6 +966,7 @@ export interface DreamingPassScope extends DreamingPassRow {
 }
 
 interface DreamingPassReadOptions {
+	readonly readScope?: ReadScope;
 	readonly signal?: AbortSignal;
 }
 
@@ -715,12 +991,13 @@ export async function getDreamingPass(
 	passId: string,
 	options: DreamingPassReadOptions = {},
 ): Promise<DreamingPassScope | null> {
+	const predicate = dreamingReadPredicate("", options.readScope);
 	return (
 		(await ownerQueryOne<DreamingPassScope>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.pass.read",
-			`${dreamingPassSelect(true)} WHERE agent_id = ? AND id = ? LIMIT 1`,
-			[agentId, passId],
+			`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND id = ? ${predicate.sql} LIMIT 1`,
+			[...(options.readScope ? [] : [agentId]), passId, ...predicate.args],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1, signal: options.signal },
 		)) ?? null
 	);
@@ -731,11 +1008,12 @@ export async function getActiveDreamingPasses(
 	agentId: string,
 	options: DreamingPassReadOptions = {},
 ): Promise<readonly DreamingPassScope[]> {
+	const predicate = dreamingReadPredicate("", options.readScope);
 	return await ownerQueryAll<DreamingPassScope>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.active",
-		`${dreamingPassSelect(true)} WHERE agent_id = ? AND status = 'running' ORDER BY started_at ASC, id ASC`,
-		[agentId],
+		`${dreamingPassSelect(true)} WHERE ${options.readScope ? "1=1" : "agent_id = ?"} AND status = 'running' ${predicate.sql} ORDER BY started_at ASC, id ASC`,
+		[...(options.readScope ? [] : [agentId]), ...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10, signal: options.signal },
 	);
 }
@@ -818,7 +1096,10 @@ export async function getDreamingToolCalls(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingToolCall[]> {
+	const predicate = dreamingReadPredicate("", readScope);
+	const passPredicate = dreamingReadPredicate("p", readScope);
 	const rows = await ownerQueryAll<{
 		id: string;
 		passId: string;
@@ -833,13 +1114,14 @@ export async function getDreamingToolCalls(
 	}>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.tool-calls.list",
-		`SELECT id, pass_id AS passId, sequence, tool_call_id AS toolCallId,
+		`SELECT id, pass_id AS passId, ${readScope ? "ROW_NUMBER() OVER(ORDER BY sequence,id)-1" : "sequence"} AS sequence, tool_call_id AS toolCallId,
 		        tool_name AS toolName, input_json AS inputJson, output_json AS outputJson,
 		        success, latency_ms AS latencyMs, created_at AS createdAt
 		 FROM dreaming_tool_calls
-		 WHERE agent_id = ? AND pass_id = ?
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"} AND pass_id = ? ${predicate.sql}
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_tool_calls.pass_id AND p.agent_id = dreaming_tool_calls.agent_id ${passPredicate.sql})` : ""}
 		 ORDER BY sequence ASC`,
-		[agentId, passId],
+		[...(readScope ? [] : [agentId]), passId, ...predicate.args, ...(readScope ? passPredicate.args : [])],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
 	);
 	return rows.map((typed) => ({
@@ -859,7 +1141,9 @@ export async function getDreamingToolCalls(
 export async function getDreamingEvidenceExclusions(
 	accessor: DbAccessor,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingEvidenceExclusion[]> {
+	const predicate = dreamingReadPredicate("p", readScope);
 	return await ownerQueryAll<DreamingEvidenceExclusion>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.evidence-exclusions.list",
@@ -869,9 +1153,10 @@ export async function getDreamingEvidenceExclusions(
 		        pass_id AS passId, excluded_at AS excludedAt,
 		        requeue_requested_at AS requeueRequestedAt, resolved_at AS resolvedAt
 		 FROM dreaming_evidence_exclusions
-		 WHERE agent_id = ? AND resolved_at IS NULL
+		 WHERE ${readScope ? "1=1" : "agent_id = ?"} AND resolved_at IS NULL
+ ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_exclusions.pass_id AND p.agent_id = dreaming_evidence_exclusions.agent_id ${predicate.sql})` : ""}
 		 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
-		[agentId],
+		[...(readScope ? predicate.args : [agentId])],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
 	);
 }

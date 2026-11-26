@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { getAgentScope, resolveDaemonAgentId } from "../agent-id";
 import { principalAccess, resolveReadAgent } from "../auth/agent-access";
 import { requirePermission } from "../auth";
@@ -59,7 +60,10 @@ export async function resolveRouteReadScope(
 			(options.allReadable && !requested && !principal.boundAgentId)
 				? { kind: "all" as const }
 				: { kind: "own" as const, agentId };
-		const scope = await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal));
+		const scope = {
+			...(await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal))),
+			organizationMode: true,
+		};
 		c.set("readAuditAgent", agentId);
 		c.set("readResponseScope", scope);
 		return { agentId, scope };
@@ -76,4 +80,11 @@ export async function resolveRouteReadScope(
 	const scope = await resolveReadScope({ reach, projects }, { local: true, userId: null, groupIds: [] });
 	c.set("readResponseScope", scope);
 	return { agentId, scope };
+}
+
+export async function resolveKnowledgeReadScope(c: Context, agentId?: string): Promise<ReadScope> {
+	const resolved = await resolveRouteReadScope(c, { agentId, memory: true });
+	if (resolved instanceof Response)
+		throw new HTTPException(resolved.status === 401 ? 401 : resolved.status === 400 ? 400 : 403, { res: resolved });
+	return resolved.scope;
 }

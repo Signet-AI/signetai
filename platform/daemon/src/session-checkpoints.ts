@@ -52,7 +52,11 @@ export interface WriteCheckpointParams {
 	readonly surfacedConstraintCount?: number;
 	readonly traversalMemoryCount?: number;
 }
-export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
+export type CheckpointReadRow = Omit<CheckpointRow, "session_key"> & { readonly session_key: string | null };
+
+export function redactCheckpointRow(row: CheckpointRow): CheckpointRow;
+export function redactCheckpointRow(row: CheckpointReadRow): CheckpointReadRow;
+export function redactCheckpointRow(row: CheckpointReadRow): CheckpointReadRow {
 	return {
 		...row,
 		digest: redactCredentials(row.digest),

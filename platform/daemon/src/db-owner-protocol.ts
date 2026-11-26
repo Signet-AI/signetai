@@ -406,6 +406,35 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
+	| {
+			readonly kind: "reflection_list";
+			readonly scope: import("./read-scope").ReadScope;
+			readonly input: import("./reflection-owner").ReflectionListInput;
+	  }
+	| {
+			readonly kind: "dreaming_reviewed_read";
+			readonly agentId: string;
+			readonly scope?: import("./read-scope").ReadScope;
+	  }
+	| { readonly kind: "reflection_get"; readonly scope: import("./read-scope").ReadScope; readonly id: string }
+	| { readonly kind: "diagnostics_schema"; readonly scope?: import("./read-scope").ReadScope }
+	| {
+			readonly kind: "diagnostics_sample";
+			readonly table: string;
+			readonly limit: number;
+			readonly offset: number;
+			readonly scope?: import("./read-scope").ReadScope;
+	  }
+	| {
+			readonly kind: "search_telemetry_export_page";
+			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
+			readonly cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor;
+	  }
+	| {
+			readonly kind: "search_telemetry_read";
+			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
+	  }
+	| { readonly kind: "queue_diagnostics_read"; readonly scope: import("./read-scope").ReadScope }
 	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
 	| { readonly kind: "reflection_generate"; readonly input: import("./reflection-owner").CreateDailyReflectionsInput }
 	| {

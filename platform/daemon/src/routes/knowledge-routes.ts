@@ -1,4 +1,7 @@
-import { redactCredentials } from "@signet/core";
+import { registerPublicReadResponse, publicReadValue } from "../public-read-response";
+import { reconcileAgentSources } from "../auth/agent-access";
+import { resolveKnowledgeReadScope } from "./read-scope";
+import { knowledgeReadOwner, getKnowledgeCommunities, expandKnowledgeSessions } from "../knowledge-graph-hygiene";
 import type { Hono } from "hono";
 import { etag } from "hono/etag";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
@@ -41,113 +44,133 @@ import { AGENTS_DIR, authConfig } from "./state";
 import { resolveMutationActor, resolveScopedAgentId, resolveScopedProject } from "./utils";
 
 export function registerKnowledgeRoutes(app: Hono): void {
+	registerPublicReadResponse(app, "/api/knowledge/*");
 	const parseNavigationLimit = (value: string | undefined, fallback: number, max: number): number => {
 		const parsed = Number.parseInt(value ?? String(fallback), 10);
 		return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), max) : fallback;
 	};
 
 	app.get("/api/knowledge/entities", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
 		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 
 		return c.json({
-			items: await listKnowledgeEntities(getDbAccessor(), {
-				agentId,
-				type: c.req.query("type") ?? undefined,
-				query: c.req.query("q") ?? undefined,
-				limit,
-				offset,
-			}),
+			items: await listKnowledgeEntities(
+				getDbAccessor(),
+				{
+					agentId,
+					type: c.req.query("type") ?? undefined,
+					query: c.req.query("q") ?? undefined,
+					limit,
+					offset,
+				},
+				readScope,
+			),
 			limit,
 			offset,
 		});
 	});
 
 	app.get("/api/knowledge/navigation/entities", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
 		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 
 		return c.json({
-			items: await listKnowledgeEntities(getDbAccessor(), {
-				agentId,
-				type: c.req.query("type") ?? undefined,
-				query: c.req.query("q") ?? undefined,
-				limit,
-				offset,
-			}),
+			items: await listKnowledgeEntities(
+				getDbAccessor(),
+				{
+					agentId,
+					type: c.req.query("type") ?? undefined,
+					query: c.req.query("q") ?? undefined,
+					limit,
+					offset,
+				},
+				readScope,
+			),
 			limit,
 			offset,
 		});
 	});
 
 	app.get("/api/knowledge/navigation/entity", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const name = c.req.query("name")?.trim();
 		if (!name) return c.json({ error: "name is required" }, 400);
-		const entity = await getKnowledgeEntityByName(getDbAccessor(), { agentId, name });
+		const entity = await getKnowledgeEntityByName(getDbAccessor(), { agentId, name }, readScope);
 		if (!entity) return c.json({ error: "Entity not found" }, 404);
 		return c.json(entity);
 	});
 
 	app.get("/api/knowledge/navigation/tree", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const entity = c.req.query("entity")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
-		const result = await getEntityKnowledgeTree(getDbAccessor(), {
-			agentId,
-			entity,
-			maxAspects: parseNavigationLimit(c.req.query("max_aspects"), 20, 100),
-			maxGroups: parseNavigationLimit(c.req.query("max_groups"), 20, 100),
-			maxClaims: parseNavigationLimit(c.req.query("max_claims"), 50, 200),
-			maxTotalClaims: parseNavigationLimit(c.req.query("max_total_claims"), 1_000, 10_000),
-			depth: parseNavigationLimit(c.req.query("depth"), 3, 3),
-		});
+		const result = await getEntityKnowledgeTree(
+			getDbAccessor(),
+			{
+				agentId,
+				entity,
+				maxAspects: parseNavigationLimit(c.req.query("max_aspects"), 20, 100),
+				maxGroups: parseNavigationLimit(c.req.query("max_groups"), 20, 100),
+				maxClaims: parseNavigationLimit(c.req.query("max_claims"), 50, 200),
+				maxTotalClaims: parseNavigationLimit(c.req.query("max_total_claims"), 1_000, 10_000),
+				depth: parseNavigationLimit(c.req.query("depth"), 3, 3),
+			},
+			readScope,
+		);
 		if (!result) return c.json({ error: "Entity not found" }, 404);
 		return c.json(result);
 	});
 
 	app.get("/api/knowledge/navigation/aspects", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const entity = c.req.query("entity")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
-		const result = await getEntityAspectsByName(getDbAccessor(), { agentId, entity });
+		const result = await getEntityAspectsByName(getDbAccessor(), { agentId, entity }, readScope);
 		if (!result) return c.json({ error: "Entity not found" }, 404);
 		return c.json(result);
 	});
 
 	app.get("/api/knowledge/navigation/groups", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
 		if (!aspect) return c.json({ error: "aspect is required" }, 400);
-		const result = await listEntityGroups(getDbAccessor(), { agentId, entity, aspect });
+		const result = await listEntityGroups(getDbAccessor(), { agentId, entity, aspect }, readScope);
 		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
 		return c.json(result);
 	});
 
 	app.get("/api/knowledge/navigation/claims", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		const group = c.req.query("group")?.trim();
@@ -157,15 +180,20 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const limit = parseNavigationLimit(c.req.query("limit"), 50, 200);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const offset = Number.isFinite(offsetParam) ? Math.min(Math.max(offsetParam, 0), Number.MAX_SAFE_INTEGER) : 0;
-		const result = await listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group, limit, offset });
+		const result = await listEntityClaims(
+			getDbAccessor(),
+			{ agentId, entity, aspect, group, limit, offset },
+			readScope,
+		);
 		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
 		return c.json(result);
 	});
 
 	app.get("/api/knowledge/navigation/attributes", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
 		const group = c.req.query("group")?.trim();
@@ -185,17 +213,21 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			statusQuery === "active" || statusQuery === "superseded" || statusQuery === "deleted" || statusQuery === "all"
 				? statusQuery
 				: undefined;
-		const result = await listEntityAttributesByPath(getDbAccessor(), {
-			agentId,
-			entity,
-			aspect,
-			group,
-			claim,
-			kind,
-			status,
-			limit,
-			offset,
-		});
+		const result = await listEntityAttributesByPath(
+			getDbAccessor(),
+			{
+				agentId,
+				entity,
+				aspect,
+				group,
+				claim,
+				kind,
+				status,
+				limit,
+				offset,
+			},
+			readScope,
+		);
 		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
 		return c.json({ ...result, limit, offset });
 	});
@@ -245,16 +277,18 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.get("/api/knowledge/entities/pinned", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
-		return c.json(await getPinnedEntities(getDbAccessor(), agentId));
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
+		return c.json(await getPinnedEntities(getDbAccessor(), agentId, readScope));
 	});
 
 	app.get("/api/knowledge/entities/health", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const minComparisonsParam = Number.parseInt(c.req.query("min_comparisons") ?? "3", 10);
 		return c.json(
 			await getEntityHealth(
@@ -262,28 +296,35 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				agentId,
 				c.req.query("since") ?? undefined,
 				Number.isFinite(minComparisonsParam) ? Math.max(minComparisonsParam, 1) : 3,
+				readScope,
 			),
 		);
 	});
 
 	app.get("/api/knowledge/hygiene", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		return c.json(
-			await getKnowledgeHygieneReport(getDbAccessor(), {
-				agentId,
-				limit: parseNavigationLimit(c.req.query("limit"), 50, 500),
-				memoryLimit: parseNavigationLimit(c.req.query("memory_limit"), 200, 1000),
-			}),
+			await getKnowledgeHygieneReport(
+				getDbAccessor(),
+				{
+					agentId,
+					limit: parseNavigationLimit(c.req.query("limit"), 50, 500),
+					memoryLimit: parseNavigationLimit(c.req.query("memory_limit"), 200, 1000),
+				},
+				readScope,
+			),
 		);
 	});
 
 	app.get("/api/knowledge/entities/:id", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
-		const entity = await getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
+		const entity = await getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId, readScope);
 		if (!entity) {
 			return c.json({ error: "Entity not found" }, 404);
 		}
@@ -291,18 +332,20 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.get("/api/knowledge/entities/:id/aspects", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		return c.json({
-			items: await getEntityAspectsWithCounts(getDbAccessor(), c.req.param("id"), agentId),
+			items: await getEntityAspectsWithCounts(getDbAccessor(), c.req.param("id"), agentId, readScope),
 		});
 	});
 
 	app.get("/api/knowledge/entities/:id/aspects/:aspectId/attributes", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
@@ -311,117 +354,133 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const status = c.req.query("status");
 
 		return c.json({
-			items: await getAttributesForAspectFiltered(getDbAccessor(), {
-				entityId: c.req.param("id"),
-				aspectId: c.req.param("aspectId"),
-				agentId,
-				kind: kind === "attribute" || kind === "constraint" || kind === "claim" ? kind : undefined,
-				status: status === "active" || status === "superseded" || status === "deleted" ? status : undefined,
-				limit,
-				offset,
-			}),
+			items: await getAttributesForAspectFiltered(
+				getDbAccessor(),
+				{
+					entityId: c.req.param("id"),
+					aspectId: c.req.param("aspectId"),
+					agentId,
+					kind: kind === "attribute" || kind === "constraint" || kind === "claim" ? kind : undefined,
+					status: status === "active" || status === "superseded" || status === "deleted" ? status : undefined,
+					limit,
+					offset,
+				},
+				readScope,
+			),
 			limit,
 			offset,
 		});
 	});
 
 	app.get("/api/knowledge/entities/:id/dependencies", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const directionQuery = c.req.query("direction");
 		const direction =
 			directionQuery === "incoming" || directionQuery === "outgoing" || directionQuery === "both"
 				? directionQuery
 				: "both";
 		return c.json({
-			items: await getEntityDependenciesDetailed(getDbAccessor(), {
-				entityId: c.req.param("id"),
-				agentId,
-				direction,
-			}),
+			items: await getEntityDependenciesDetailed(
+				getDbAccessor(),
+				{
+					entityId: c.req.param("id"),
+					agentId,
+					direction,
+				},
+				readScope,
+			),
 		});
 	});
 
 	app.get("/api/knowledge/stats", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
-		return c.json(await getKnowledgeStats(getDbAccessor(), agentId));
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
+		return c.json(await getKnowledgeStats(getDbAccessor(), agentId, readScope));
 	});
 
 	app.get("/api/knowledge/communities", async (c) => {
-		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const agentId = scopedAgent.agentId;
-		const rows = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				return db
-					.prepare(
-						`SELECT id, name, cohesion, member_count, created_at, updated_at
-					 FROM entity_communities
-					 WHERE agent_id = ?
-					 ORDER BY member_count DESC`,
-					)
-					.all(agentId) as ReadonlyArray<{
-					id: string;
-					name: string | null;
-					cohesion: number;
-					member_count: number;
-					created_at: string;
-					updated_at: string;
-				}>;
-			},
-			{ siteToken: "routes/knowledge-routes.ts:357" },
-		);
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
+		const agentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
+		const rows = await getKnowledgeCommunities(agentId, readScope);
 		return c.json({ items: rows, count: rows.length });
 	});
 
 	app.get("/api/knowledge/traversal/status", async (c) => {
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		const readScope = await resolveKnowledgeReadScope(c, requestedReadAgent);
+
 		return c.json({
-			status: getTraversalStatus(),
+			status: readScope.reach.kind === "all" && readScope.compartments === "all" ? getTraversalStatus() : null,
 		});
 	});
 	app.get("/api/knowledge/constellation", etag(), async (c) => {
+		const requestedReadAgent = c.req.query("agent_id") ?? c.req.query("agentId");
+		let readScope = await resolveKnowledgeReadScope(c, requestedReadAgent === "all" ? undefined : requestedReadAgent);
+
 		const requested = c.req.query("agent_id") ?? c.req.query("agentId");
 		const allAgents = requested === "all";
+		if (allAgents && !c.get("organization")) readScope = { ...readScope, reach: { kind: "all" } };
 		if (allAgents) {
 			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
 		}
-		const scopedAgent = allAgents ? undefined : resolveScopedAgentId(c, requested, resolveDaemonAgentId());
+		const scopedAgent = allAgents
+			? undefined
+			: {
+					agentId: readScope.reach.kind === "all" ? "default" : readScope.reach.agentId,
+					error: undefined,
+					response: undefined,
+				};
 		if (scopedAgent?.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent?.agentId ?? resolveDaemonAgentId();
 		const accessor = getDbAccessor();
-		const backlogProbe = await probeDreamingEpisodicBacklog(
-			accessor,
-			agentId,
-			loadMemoryConfig(AGENTS_DIR).dreaming.tokenThreshold,
-		);
-		return c.json(
-			await getKnowledgeGraphForConstellation(accessor, agentId, {
-				limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
-				maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
-				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
-				maxAttributes: parseNavigationLimit(
-					c.req.query("max_attributes"),
-					MAX_CONSTELLATION_ATTRIBUTES,
-					MAX_CONSTELLATION_ATTRIBUTES,
+		const backlogProbe =
+			!c.get("organization") || (readScope.reach.kind === "all" && readScope.compartments === "all")
+				? await probeDreamingEpisodicBacklog(accessor, agentId, loadMemoryConfig(AGENTS_DIR).dreaming.tokenThreshold)
+				: undefined;
+		return c.body(
+			JSON.stringify(
+				publicReadValue(
+					await getKnowledgeGraphForConstellation(
+						accessor,
+						agentId,
+						{
+							limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
+							maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
+							maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
+							maxAttributes: parseNavigationLimit(
+								c.req.query("max_attributes"),
+								MAX_CONSTELLATION_ATTRIBUTES,
+								MAX_CONSTELLATION_ATTRIBUTES,
+							),
+							dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
+							assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
+							backlogProbe,
+							allAgents,
+						},
+						readScope,
+					),
+					Boolean(c.get("organization")),
 				),
-				dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
-				assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
-				backlogProbe,
-				allAgents,
-			}),
+			),
+			200,
+			{ "Content-Type": "application/json; charset=UTF-8" },
 		);
 	});
 
 	app.post("/api/knowledge/expand", async (c) => {
 		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
+		const readScope = await resolveKnowledgeReadScope(c);
 
-		const scopedAgent = resolveScopedAgentId(c, undefined, "default");
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const resolvedReadAgentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
 		const entityName = typeof body.entity === "string" ? body.entity.trim() : "";
 		const aspectFilter = typeof body.aspect === "string" ? body.aspect.trim() : undefined;
@@ -443,16 +502,20 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			timeoutMs: 500,
 		};
 		const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
-		const agentId = scopedAgent.agentId;
-		const readScope = await resolveHookReadScope(c, agentId);
+		const agentId = resolvedReadAgentId;
 
 		try {
-			const owner = await getDbOwner(getDbAccessorPath());
-			const resolved = await resolveNamedEntity(getDbAccessor(), {
-				agentId,
-				name: entityName,
-				deadlineAt: traversalDeadlineAt,
-			});
+			const baseOwner = await getDbOwner(getDbAccessorPath());
+			const owner = await knowledgeReadOwner(baseOwner, readScope);
+			const resolved = await resolveNamedEntity(
+				getDbAccessor(),
+				{
+					agentId,
+					name: entityName,
+					deadlineAt: traversalDeadlineAt,
+				},
+				readScope,
+			);
 			const focal: Awaited<ReturnType<typeof resolveFocalEntitiesViaOwner>> =
 				resolved !== null
 					? {
@@ -500,14 +563,18 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			});
 
 			return c.json(
-				await expandKnowledgeGraphViaOwner(owner, {
-					primaryEntityId: focal.entityIds[0],
-					agentId,
-					maxTokens,
-					aspectFilter,
-					traversalConfig: { ...traversalCfg, readScope },
-					traversal,
-				}),
+				await expandKnowledgeGraphViaOwner(
+					baseOwner,
+					{
+						primaryEntityId: focal.entityIds[0],
+						agentId,
+						maxTokens,
+						aspectFilter,
+						traversalConfig: { ...traversalCfg, readScope },
+						traversal,
+					},
+					readScope,
+				),
 			);
 		} catch {
 			return c.json({ error: "Knowledge graph expansion unavailable.", code: "knowledge_graph_unavailable" }, 503);
@@ -519,22 +586,26 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		if (denied) return denied;
 
 		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
-		const entityName = typeof body.entityName === "string" ? body.entityName.trim() : "";
-		const scopedAgent = resolveScopedAgentId(
+		const requestedAgent = typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id");
+		const requestedSession = typeof body.sessionId === "string" ? body.sessionId : c.req.header("x-signet-session-key");
+		const sessionAgent = requestedSession?.startsWith("agent:") ? requestedSession.split(":")[1] : undefined;
+		const reconciled = reconcileAgentSources([requestedAgent, c.req.query("agent_id"), sessionAgent]);
+		if (!reconciled.ok)
+			return c.json({ error: reconciled.error.error, reason: reconciled.error.reason }, reconciled.error.status);
+		const readScope = await resolveKnowledgeReadScope(
 			c,
-			resolveAgentId({
-				agentId: typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
-				sessionKey: typeof body.sessionId === "string" ? body.sessionId : c.req.header("x-signet-session-key"),
-			}),
+			c.get("organization")
+				? reconciled.value
+				: resolveAgentId({ agentId: reconciled.value, sessionKey: requestedSession }),
 		);
-		if (scopedAgent.error) {
-			return c.json({ error: scopedAgent.error }, 403);
-		}
+
+		const entityName = typeof body.entityName === "string" ? body.entityName.trim() : "";
+		const resolvedReadAgentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const scopedProject = resolveScopedProject(c, undefined);
 		if (scopedProject.error) {
 			return c.json({ error: scopedProject.error }, 403);
 		}
-		const agentId = scopedAgent.agentId;
+		const agentId = resolvedReadAgentId;
 		const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : undefined;
 		const timeRange = typeof body.timeRange === "string" ? body.timeRange.trim() : undefined;
 		const maxResults = typeof body.maxResults === "number" ? Math.max(1, Math.min(body.maxResults, 50)) : 10;
@@ -543,103 +614,21 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityName is required" }, 400);
 		}
 
-		const hasSessionSummaries = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const tbl = db
-					.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
-					.get() as { name: string } | undefined;
-				return tbl !== undefined;
+		const entity = await resolveNamedEntity(
+			getDbAccessor(),
+			{
+				agentId,
+				name: entityName,
 			},
-			{ siteToken: "routes/knowledge-routes.ts:546" },
+			readScope,
 		);
-		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
-
-		const entity = await resolveNamedEntity(getDbAccessor(), {
-			agentId,
-			name: entityName,
-		});
 		if (!entity) return c.json({ entityName, summaries: [], total: 0 });
 
-		return await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const conditions = [
-					"ss.agent_id = ?",
-					"ss.kind = 'session'",
-					"COALESCE(ss.source_type, 'summary') = 'summary'",
-				];
-				const args: Array<string | number> = [agentId];
-
-				if (scopedProject.project) {
-					conditions.push("ss.project = ?");
-					args.push(scopedProject.project);
-				}
-
-				if (sessionId) {
-					conditions.push("ss.session_key = ?");
-					args.push(sessionId);
-				}
-
-				if (timeRange === "last_week") {
-					conditions.push("ss.latest_at >= datetime('now', '-7 days')");
-				} else if (timeRange === "last_month") {
-					conditions.push("ss.latest_at >= datetime('now', '-30 days')");
-				} else if (timeRange && timeRange.length > 0) {
-					conditions.push("ss.latest_at >= ?");
-					args.push(timeRange);
-				}
-
-				const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
-				const useTextFallback = cn.length >= 4;
-				const normalizedContent =
-					`LOWER(' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(` +
-					"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ss.content," +
-					`',', ' '), '.', ' '), '!', ' '), '?', ' '), ';', ' '), '"', ' '),` +
-					`char(39), ' '), char(40), ' '), char(41), ' '),` +
-					`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
-				const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
-				const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
-				const rows = db
-					.prepare(
-						`SELECT DISTINCT ss.id, ss.content, ss.session_key,
-					        ss.harness, ss.earliest_at, ss.latest_at
-					 FROM session_summaries ss
-					 WHERE ${conditions.join(" AND ")}
-					   AND (
-							EXISTS (
-								SELECT 1
-								FROM session_summary_memories ssm
-								JOIN memory_entity_mentions mem
-								  ON mem.memory_id = ssm.memory_id
-								WHERE ssm.summary_id = ss.id
-								  AND mem.entity_id = ?
-							)
-							${fallbackClause}
-					   )
-					 ORDER BY ss.latest_at DESC
-					 LIMIT ?`,
-					)
-					.all(...args, entity.id, ...fallbackArgs, maxResults) as Array<{
-					id: string;
-					content: string;
-					session_key: string | null;
-					harness: string | null;
-					earliest_at: string;
-					latest_at: string;
-				}>;
-				return c.json({
-					entityName: entity.name,
-					summaries: rows.map((row) => ({
-						id: row.id,
-						sessionKey: row.session_key,
-						harness: row.harness,
-						earliestAt: row.earliest_at,
-						latestAt: row.latest_at,
-						content: redactCredentials(row.content),
-					})),
-					total: rows.length,
-				});
-			},
-			{ siteToken: "routes/knowledge-routes.ts:563" },
+		return c.json(
+			await expandKnowledgeSessions(
+				{ agentId, entity, project: scopedProject.project, sessionId, timeRange, maxResults },
+				readScope,
+			),
 		);
 	});
 
@@ -648,12 +637,12 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		if (denied) return denied;
 
 		const body = await jsonBody(c)().catch((): Record<string, unknown> => ({}));
-		const scopedAgent = resolveScopedAgentId(
+		const readScope = await resolveKnowledgeReadScope(
 			c,
-			typeof body.agentId === "string" ? body.agentId : c.req.query("agent_id"),
-			"default",
+			typeof body.agentId === "string" ? body.agentId : (c.req.query("agent_id") ?? c.req.header("x-signet-agent-id")),
 		);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+
+		const resolvedReadAgentId = readScope.reach.kind === "all" ? "default" : readScope.reach.agentId;
 		const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
 		const direction = body.direction === "upstream" ? "upstream" : "downstream";
 		const maxDepth = typeof body.maxDepth === "number" ? Math.max(1, Math.min(body.maxDepth, 10)) : 3;
@@ -662,9 +651,10 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityId is required" }, 400);
 		}
 
-		const result = await getDbAccessor().withReadDbAsync(
-			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:665" },
+		const result = await walkImpact(
+			getDbAccessor(),
+			{ entityId, agentId: resolvedReadAgentId, direction, maxDepth, timeoutMs: 200 },
+			readScope,
 		);
 		return c.json(result);
 	});

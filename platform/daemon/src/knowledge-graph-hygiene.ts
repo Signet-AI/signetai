@@ -1,5 +1,11 @@
+import { COMPARTMENT_TABLES } from "@signet/core";
+import { citedEvidenceReadScopeSql, telemetryLabelReadScopeSql, telemetrySnapshotReadScopeSql } from "./diagnostics";
+import { z } from "zod";
+import { dbOwnerQuery, DB_OWNER_READ_DEADLINE_MS } from "./db-owner-runtime";
+import type { DbOwnerParameter } from "./db-owner-protocol";
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { createHash } from "node:crypto";
-import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
+import { attempt, redactCredentials, SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
 import { classifyEntityQuality, normalizeEntityName } from "./entity-quality";
 
@@ -390,16 +396,16 @@ export function getDreamingHygieneCandidatesInDb(
 		.slice(0, limit);
 }
 
-export function getKnowledgeHygieneReport(
-	accessor: DbAccessor,
+export async function getKnowledgeHygieneReport(
+	_accessor: DbAccessor,
 	opts: { readonly agentId: string; readonly limit?: number; readonly memoryLimit?: number },
-): KnowledgeHygieneReport {
+	readScope?: ReadScope,
+): Promise<KnowledgeHygieneReport> {
 	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
 	const memoryLimit = Math.min(Math.max(opts.memoryLimit ?? 200, 1), 1000);
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const entities = db
+	return (async (db: KnowledgeReadDb) => {
+		const entities = (await db
 			.prepare(
 				`SELECT id, name, canonical_name, entity_type, mentions
 				 FROM entities
@@ -407,7 +413,7 @@ export function getKnowledgeHygieneReport(
 				 ORDER BY updated_at DESC
 				 LIMIT ?`,
 			)
-			.all(opts.agentId, Math.max(limit * 4, 100)) as Array<{
+			.all(opts.agentId, Math.max(limit * 4, 100))) as Array<{
 			id: string;
 			name: string;
 			canonical_name: string | null;
@@ -439,7 +445,7 @@ export function getKnowledgeHygieneReport(
 			.slice(0, limit);
 
 		const duplicateEntities = (
-			db
+			(await db
 				.prepare(
 					`SELECT canonical_name, COUNT(*) AS count,
 					        GROUP_CONCAT(id, char(31)) AS ids,
@@ -453,7 +459,7 @@ export function getKnowledgeHygieneReport(
 					 ORDER BY count DESC, canonical_name ASC
 					 LIMIT ?`,
 				)
-				.all(opts.agentId, limit) as Array<{
+				.all(opts.agentId, limit)) as Array<{
 				canonical_name: string;
 				count: number;
 				ids: string | null;
@@ -466,7 +472,7 @@ export function getKnowledgeHygieneReport(
 			names: row.names?.split("\u001f") ?? [],
 		}));
 
-		const attributeSummary = db
+		const attributeSummary = (await db
 			.prepare(
 				`SELECT
 				   SUM(CASE WHEN group_key IS NULL OR TRIM(group_key) = '' THEN 1 ELSE 0 END) AS missingGroupKey,
@@ -478,13 +484,13 @@ export function getKnowledgeHygieneReport(
 				 WHERE agent_id = ?
 				   AND status = 'active'`,
 			)
-			.get(opts.agentId) as {
+			.get(opts.agentId)) as {
 			missingGroupKey: number | null;
 			missingClaimKey: number | null;
 			missingSourceMemory: number | null;
 		};
 
-		const memories = db
+		const memories = (await db
 			.prepare(
 				`SELECT id, content
 				 FROM memories
@@ -493,7 +499,7 @@ export function getKnowledgeHygieneReport(
 				 ORDER BY created_at DESC
 				 LIMIT ?`,
 			)
-			.all(opts.agentId, memoryLimit) as Array<{ id: string; content: string }>;
+			.all(opts.agentId, memoryLimit)) as Array<{ id: string; content: string }>;
 
 		const safeMentionCandidates: SafeMentionCandidate[] = [];
 		const knownEntities = entities.filter(
@@ -504,13 +510,13 @@ export function getKnowledgeHygieneReport(
 			for (const entity of knownEntities) {
 				if (safeMentionCandidates.length >= limit) break;
 				if (!hasMention(memory.content, entity.name)) continue;
-				const existing = db
+				const existing = (await db
 					.prepare(
 						`SELECT 1 FROM memory_entity_mentions
 						 WHERE memory_id = ? AND entity_id = ?
 						 LIMIT 1`,
 					)
-					.get(memory.id, entity.id) as unknown | undefined;
+					.get(memory.id, entity.id)) as unknown | undefined;
 				if (existing) continue;
 				safeMentionCandidates.push({
 					memoryId: memory.id,
@@ -533,5 +539,1445 @@ export function getKnowledgeHygieneReport(
 			},
 			safeMentionCandidates,
 		};
-	}, "knowledge-graph-hygiene.ts:401");
+	})(knowledgeReadDb(readScope));
+}
+
+export interface KnowledgeReadDb {
+	readonly readScope: ReadScope | undefined;
+	prepare(sql: string): {
+		all(...params: readonly unknown[]): Promise<unknown>;
+		get(...params: readonly unknown[]): Promise<unknown>;
+	};
+}
+
+const KNOWLEDGE_CONTENT_TABLES = [
+	"entities",
+	"entity_aspects",
+	"entity_attributes",
+	"entity_dependencies",
+	"epistemic_assertions",
+	"ontology_proposals",
+	"ontology_contradictions",
+	"memories",
+	"memory_artifacts",
+	"session_transcripts",
+	"session_summaries",
+	"entity_communities",
+	"dreaming_passes",
+	"dreaming_attention",
+	"memory_search_telemetry",
+] as const;
+
+function knowledgeScopeForTable(scope: ReadScope, table: string): ReadScope {
+	const memory = table === "memories";
+	return {
+		...scope,
+		reach: !memory && scope.reach.kind === "shared" ? { kind: "own", agentId: scope.reach.agentId } : scope.reach,
+		projects: [
+			"memories",
+			"memory_artifacts",
+			"session_transcripts",
+			"session_summaries",
+			"memory_search_telemetry",
+		].includes(table)
+			? scope.projects
+			: scope.projects === null
+				? null
+				: [],
+	};
+}
+
+const KNOWLEDGE_READ_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+	memory_search_telemetry: [
+		"id",
+		"created_at",
+		"route",
+		"agent_id",
+		"session_key",
+		"project",
+		"query",
+		"keyword_query",
+		"filters_json",
+		"method",
+		"result_count",
+		"top_score",
+		"no_hits",
+		"duration_ms",
+		"timings_json",
+		"results_json",
+		"sources_json",
+		"compartment_id",
+	],
+	dreaming_attention: [
+		"id",
+		"agent_id",
+		"kind",
+		"subject_ref",
+		"details_json",
+		"priority",
+		"created_at",
+		"generation",
+		"resolved_at",
+		"resolved_by_pass_id",
+		"compartment_id",
+	],
+	dreaming_state: [
+		"agent_id",
+		"tokens_since_last_pass",
+		"consecutive_failures",
+		"last_pass_at",
+		"last_pass_id",
+		"last_pass_mode",
+		"created_at",
+		"updated_at",
+		"evidence_cursor",
+		"last_failure_at",
+	],
+	derived_memory_sources: ["derived_memory_id", "source_kind", "source_id", "source_path", "agent_id", "created_at"],
+	evidence_citations: ["derived_kind", "derived_id", "agent_id", "evidence_kind", "evidence_id"],
+
+	entities: [
+		"id",
+		"name",
+		"entity_type",
+		"description",
+		"created_at",
+		"updated_at",
+		"canonical_name",
+		"mentions",
+		"embedding",
+		"agent_id",
+		"pinned",
+		"pinned_at",
+		"last_synthesized_at",
+		"community_id",
+		"source_id",
+		"source_kind",
+		"source_path",
+		"source_root",
+		"status",
+		"archived_at",
+		"archived_by",
+		"archive_reason",
+		"proposal_id",
+		"proposal_evidence",
+		"person_user_id",
+		"compartment_id",
+	],
+	entity_aspects: [
+		"id",
+		"entity_id",
+		"agent_id",
+		"name",
+		"canonical_name",
+		"weight",
+		"created_at",
+		"updated_at",
+		"status",
+		"archived_at",
+		"archived_by",
+		"archive_reason",
+		"proposal_id",
+		"proposal_evidence",
+		"compartment_id",
+	],
+	entity_attributes: [
+		"id",
+		"aspect_id",
+		"agent_id",
+		"memory_id",
+		"kind",
+		"content",
+		"normalized_content",
+		"confidence",
+		"importance",
+		"status",
+		"superseded_by",
+		"created_at",
+		"updated_at",
+		"claim_key",
+		"group_key",
+		"source_id",
+		"source_kind",
+		"source_path",
+		"source_root",
+		"proposal_id",
+		"proposal_evidence",
+		"version",
+		"version_root_id",
+		"previous_attribute_id",
+		"archived_at",
+		"archived_by",
+		"archive_reason",
+		"occurred_start",
+		"occurred_end",
+		"valid_from",
+		"valid_until",
+		"time_precision",
+		"compartment_id",
+	],
+	entity_dependencies: [
+		"id",
+		"source_entity_id",
+		"target_entity_id",
+		"agent_id",
+		"aspect_id",
+		"dependency_type",
+		"strength",
+		"created_at",
+		"updated_at",
+		"reason",
+		"confidence",
+		"source_id",
+		"source_kind",
+		"source_path",
+		"source_root",
+		"proposal_id",
+		"proposal_evidence",
+		"status",
+		"archived_at",
+		"archived_by",
+		"archive_reason",
+		"compartment_id",
+	],
+	entity_communities: [
+		"id",
+		"agent_id",
+		"name",
+		"cohesion",
+		"member_count",
+		"created_at",
+		"updated_at",
+		"source_id",
+		"source_kind",
+		"source_path",
+		"source_root",
+		"compartment_id",
+	],
+	epistemic_assertions: [
+		"id",
+		"agent_id",
+		"subject_entity_id",
+		"claim_attribute_id",
+		"predicate",
+		"content",
+		"normalized_content",
+		"speaker",
+		"asserted_at",
+		"confidence",
+		"evidence",
+		"source_kind",
+		"source_id",
+		"source_path",
+		"source_root",
+		"status",
+		"supersedes_assertion_id",
+		"archived_at",
+		"archived_by",
+		"archive_reason",
+		"created_by",
+		"created_at",
+		"updated_at",
+		"compartment_id",
+	],
+	ontology_proposals: [
+		"id",
+		"agent_id",
+		"operation",
+		"status",
+		"payload",
+		"confidence",
+		"rationale",
+		"evidence",
+		"risk",
+		"source_kind",
+		"source_id",
+		"source_path",
+		"source_root",
+		"created_by",
+		"applied_by",
+		"rejected_by",
+		"result",
+		"created_at",
+		"updated_at",
+		"applied_at",
+		"rejected_at",
+		"author_user_id",
+		"compartment_id",
+	],
+	ontology_contradictions: [
+		"id",
+		"agent_id",
+		"entity_id",
+		"entity_name",
+		"aspect_id",
+		"aspect_name",
+		"group_key",
+		"claim_key",
+		"left_attribute_id",
+		"right_attribute_id",
+		"left_content",
+		"right_content",
+		"left_confidence",
+		"right_confidence",
+		"left_scope",
+		"right_scope",
+		"left_visibility",
+		"right_visibility",
+		"left_source_kind",
+		"left_source_id",
+		"left_source_path",
+		"left_source_root",
+		"right_source_kind",
+		"right_source_id",
+		"right_source_path",
+		"right_source_root",
+		"left_evidence",
+		"right_evidence",
+		"detector",
+		"reason",
+		"confidence",
+		"status",
+		"detected_at",
+		"resolved_at",
+		"resolution_reason",
+		"created_at",
+		"updated_at",
+		"compartment_id",
+	],
+	daily_reflections: [
+		"id",
+		"agent_id",
+		"date",
+		"summary",
+		"patterns",
+		"question",
+		"answer",
+		"answer_memory_id",
+		"content_key",
+		"memory_ids",
+		"summary_ids",
+		"model",
+		"created_at",
+		"answered_at",
+		"compartment_id",
+	],
+	dreaming_passes: [
+		"id",
+		"agent_id",
+		"mode",
+		"status",
+		"started_at",
+		"completed_at",
+		"tokens_consumed",
+		"mutations_applied",
+		"mutations_skipped",
+		"mutations_failed",
+		"summary",
+		"error",
+		"created_at",
+		"evidence_window_json",
+		"runbook_json",
+		"tokens_input",
+		"tokens_output",
+		"tokens_cache_read",
+		"tokens_cache_write",
+		"tokens_cost",
+		"head_revision",
+		"head_hash",
+		"head_added",
+		"head_updated",
+		"head_removed",
+		"head_deferred",
+		"head_no_op",
+		"head_base_revision",
+		"scope_key",
+		"tokens_peak_context",
+		"policy_hash",
+		"policy_source",
+		"compartment_id",
+	],
+	dreaming_tool_calls: [
+		"id",
+		"agent_id",
+		"pass_id",
+		"sequence",
+		"tool_call_id",
+		"tool_name",
+		"input_json",
+		"output_json",
+		"success",
+		"latency_ms",
+		"created_at",
+		"compartment_id",
+	],
+	dreaming_history_nodes: [
+		"agent_id",
+		"scope_key",
+		"level",
+		"idx",
+		"pass_id",
+		"text",
+		"tokens_input",
+		"tokens_output",
+		"tokens_cache_read",
+		"created_at",
+		"compartment_id",
+	],
+	dreaming_evidence_exclusions: [
+		"agent_id",
+		"source_kind",
+		"source_id",
+		"reason",
+		"pass_id",
+		"excluded_at",
+		"requeue_requested_at",
+		"resolved_at",
+		"failure_class",
+		"source_fingerprint",
+		"retry_count",
+		"last_requeued_at",
+	],
+	dreaming_evidence_reviews: [
+		"agent_id",
+		"source_kind",
+		"source_id",
+		"source_captured_at",
+		"source_entry_id",
+		"source_revision",
+		"reason",
+		"pass_id",
+		"reviewed_at",
+	],
+	memories: [
+		"id",
+		"type",
+		"category",
+		"content",
+		"confidence",
+		"importance",
+		"source_id",
+		"source_type",
+		"tags",
+		"who",
+		"why",
+		"project",
+		"created_at",
+		"updated_at",
+		"updated_by",
+		"last_accessed",
+		"access_count",
+		"vector_clock",
+		"version",
+		"manual_override",
+		"pinned",
+		"content_hash",
+		"normalized_content",
+		"is_deleted",
+		"deleted_at",
+		"extraction_status",
+		"embedding_model",
+		"extraction_model",
+		"update_count",
+		"idempotency_key",
+		"runtime_path",
+		"source_path",
+		"source_section",
+		"scope",
+		"agent_id",
+		"visibility",
+		"superseded_by",
+		"superseded_at",
+		"superseded_reason",
+		"memory_kind",
+		"evidence_meta",
+		"stale_at",
+		"review_after",
+		"author_user_id",
+		"compartment_id",
+	],
+	session_transcripts: [
+		"session_key",
+		"content",
+		"harness",
+		"project",
+		"agent_id",
+		"created_at",
+		"updated_at",
+		"completed_at",
+		"content_hash",
+		"source_id",
+		"source_record_id",
+		"source_meta_json",
+		"speaker_user_id",
+		"compartment_id",
+	],
+	session_summaries: [
+		"id",
+		"project",
+		"depth",
+		"kind",
+		"content",
+		"token_count",
+		"earliest_at",
+		"latest_at",
+		"session_key",
+		"harness",
+		"agent_id",
+		"created_at",
+		"source_type",
+		"source_ref",
+		"meta_json",
+		"author_user_id",
+		"compartment_id",
+	],
+	memory_artifacts: [
+		"agent_id",
+		"source_path",
+		"source_sha256",
+		"source_kind",
+		"session_id",
+		"session_key",
+		"session_token",
+		"project",
+		"harness",
+		"captured_at",
+		"started_at",
+		"ended_at",
+		"manifest_path",
+		"source_node_id",
+		"memory_sentence",
+		"memory_sentence_quality",
+		"content",
+		"updated_at",
+		"source_mtime_ms",
+		"is_deleted",
+		"deleted_at",
+		"source_id",
+		"source_root",
+		"source_external_id",
+		"source_parent_path",
+		"source_meta_json",
+		"author_user_id",
+		"compartment_id",
+	],
+};
+export function knowledgeTargetSql(table: string, alias: string, scope: ReadScope): { sql: string; args: unknown[] } {
+	const columns = KNOWLEDGE_READ_COLUMNS[table] ?? [];
+	const own = readScopeSql(alias, knowledgeScopeForTable(scope, table), {
+		visibility: table === "memories" ? "visibility" : null,
+		memory: table === "memories" ? "id" : null,
+		session: columns.includes("session_key") ? "session_key" : null,
+		source: columns.includes("source_id") ? "source_id" : null,
+	});
+	const parent =
+		table === "entity_attributes"
+			? { table: "entity_aspects", key: "aspect_id" }
+			: table === "entity_aspects"
+				? { table: "entities", key: "entity_id" }
+				: null;
+	const kinds: Readonly<Record<string, string>> = {
+		entities: "entity",
+		entity_aspects: "aspect",
+		entity_attributes: "attribute",
+		entity_dependencies: "dependency",
+		epistemic_assertions: "assertion",
+		ontology_proposals: "proposal",
+		ontology_contradictions: "contradiction",
+		memories: "memory",
+	};
+	const kind = kinds[table];
+	const citation = kind ? citedEvidenceReadScopeSql(alias, scope, kind) : { sql: "", args: [] };
+	const checked = {
+		sql:
+			own.sql +
+			citation.sql.replace(
+				/\bFROM (memories|entity_attributes|session_transcripts|session_summaries|memory_artifacts)\b/g,
+				"FROM main.$1",
+			),
+		args: [...own.args, ...citation.args],
+	};
+	if (!parent) return checked;
+	const parentAlias = alias + "_parent";
+	const readable = knowledgeTargetSql(parent.table, parentAlias, scope);
+	return {
+		sql: `${checked.sql} AND EXISTS(SELECT 1 FROM main.${parent.table} ${parentAlias} WHERE ${parentAlias}.id=${alias}.${parent.key}${readable.sql})`,
+		args: [...checked.args, ...readable.args],
+	};
+}
+function knowledgeJsonProjection(column: string, scope: ReadScope): { sql: string; args: unknown[] } {
+	const targets = [
+		{
+			table: "memories",
+			key: "id",
+			prefix: "memory:",
+			kind: "memory",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*memoryid*'",
+		},
+		{
+			table: "entities",
+			key: "id",
+			prefix: "entity:",
+			kind: "entity",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*entityid*'",
+		},
+		{
+			table: "entity_attributes",
+			key: "id",
+			prefix: "attribute:",
+			kind: "attribute",
+			typed:
+				"(LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*attributeid*' OR LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('supersededby','versionrootid'))",
+		},
+		{
+			table: "ontology_proposals",
+			key: "id",
+			prefix: "proposal:",
+			kind: "proposal",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*proposalid*'",
+		},
+		{
+			table: "session_transcripts",
+			key: "session_key",
+			prefix: "transcript:",
+			kind: "transcript",
+			typed:
+				"LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sessionkey','sessionkeys','sessionid','sessionids','sessiontoken')",
+		},
+		{
+			table: "session_summaries",
+			key: "id",
+			prefix: "summary:",
+			kind: "summary",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) GLOB '*summaryid*'",
+		},
+		{
+			table: "memory_artifacts",
+			key: "source_path",
+			prefix: "artifact:",
+			kind: "artifact",
+			typed: "LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sourcepath','artifactid','artifactids')",
+		},
+	];
+	const args: unknown[] = [];
+	const checks = targets.map((target) => {
+		const allowed = knowledgeTargetSql(target.table, "json_target", scope);
+		args.push(...allowed.args);
+		const sourceKind = `COALESCE(json_extract(r.${column},field.parent_path||'.source_kind'),json_extract(r.${column},field.parent_path||'.sourceKind'),json_extract(r.${column},field.parent_path||'.kind'),json_extract(r.${column},field.parent_path||'.type'))`;
+		const eligible = `(${target.typed} OR field.value GLOB '${target.prefix}*' OR (LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sourceid','sourceref','reference','id') AND ${sourceKind}='${target.kind}'))`;
+		return `(${eligible} AND EXISTS(SELECT 1 FROM main.${target.table} json_target WHERE (json_target.${target.key}=field.value OR '${target.prefix}'||json_target.${target.key}=field.value)${allowed.sql}))`;
+	});
+	const nodes = `SELECT key,value,type,id,parent,fullkey,path FROM json_tree(CASE WHEN json_valid(r.${column}) THEN r.${column} ELSE 'null' END)`;
+	const fields =
+		"SELECT ROW_NUMBER() OVER(ORDER BY node.fullkey) AS n,node.fullkey AS path,node.value,CASE WHEN parent.type='array' THEN parent.key ELSE node.key END AS key,CASE WHEN parent.type='array' THEN parent.path ELSE node.path END AS parent_path,CASE WHEN parent.type='array' THEN parent.parent ELSE node.parent END AS parent_order FROM nodes node LEFT JOIN nodes parent ON parent.id=node.parent WHERE node.type IN ('text','integer') AND (node.key IN ('id','reference','sourceRef','source_ref','parent','child','sourcePath','source_path','sessionKey','session_key') OR node.key GLOB '*_id' OR node.key GLOB '*Id' OR parent.key GLOB '*_ids' OR parent.key GLOB '*Ids' OR node.value GLOB 'memory:*' OR node.value GLOB 'attribute:*' OR node.value GLOB 'entity:*' OR node.value GLOB 'proposal:*' OR node.value GLOB 'transcript:*' OR node.value GLOB 'summary:*' OR node.value GLOB 'artifact:*')";
+	const memoryField =
+		"(LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('memoryid','memoryids') OR field.value GLOB 'memory:*' OR (LOWER(REPLACE(CAST(field.key AS TEXT),'_','')) IN ('sourceid','sourceref','reference','id') AND COALESCE(json_extract(r." +
+		column +
+		",field.parent_path||'.source_kind'),json_extract(r." +
+		column +
+		",field.parent_path||'.sourceKind'),json_extract(r." +
+		column +
+		",field.parent_path||'.kind'))='memory'))";
+	return {
+		sql: `CASE WHEN NOT json_valid(r.${column}) THEN r.${column} WHEN length(CAST(r.${column} AS BLOB))>65536 THEN 'null' ELSE (WITH RECURSIVE nodes AS (${nodes}),fields AS (${fields}),checked AS MATERIALIZED (SELECT field.*,(${checks.join(" OR ")}) AS readable,${memoryField} AS memory_field FROM fields field),safe(n,value,drops) AS (SELECT 0,r.${column},'[]' WHERE (SELECT COUNT(*) FROM fields)<=128 UNION ALL SELECT safe.n+1,CASE WHEN field.readable THEN safe.value WHEN field.memory_field THEN json_set(safe.value,field.parent_path,NULL) ELSE json_set(safe.value,field.path,NULL) END,CASE WHEN NOT field.readable AND field.memory_field THEN json_insert(safe.drops,'$[#]',json_object('path',field.parent_path,'position',field.parent_order)) ELSE safe.drops END FROM safe JOIN checked field ON field.n=safe.n+1),final AS (SELECT value,drops FROM safe ORDER BY n DESC LIMIT 1),removed AS (SELECT DISTINCT json_extract(item.value,'$.path') AS path,json_extract(item.value,'$.position') AS position FROM final,json_each(final.drops) item),paths AS (SELECT ROW_NUMBER() OVER(ORDER BY position DESC,path DESC) AS n,path FROM removed),pruned(n,value) AS (SELECT 0,value FROM final UNION ALL SELECT pruned.n+1,COALESCE(json_remove(pruned.value,paths.path),'null') FROM pruned JOIN paths ON paths.n=pruned.n+1) SELECT value FROM pruned ORDER BY n DESC LIMIT 1) END AS ${column}`,
+		args,
+	};
+}
+function knowledgeReadableProjection(table: string, scope: ReadScope): { sql: string; args: unknown[] } {
+	const columns = KNOWLEDGE_READ_COLUMNS[table];
+	if (!columns) return { sql: "r.*", args: [] };
+	const args: unknown[] = [];
+	const pointer = (column: string, target: string, key = "id") => {
+		const allowed = knowledgeTargetSql(target, "pointer_target", scope);
+		args.push(...allowed.args);
+		return `CASE WHEN EXISTS(SELECT 1 FROM main.${target} pointer_target WHERE pointer_target.${key}=r.${column}${allowed.sql}) THEN r.${column} ELSE NULL END AS ${column}`;
+	};
+	const members = (select: string, tail = "") => {
+		const allowed = knowledgeTargetSql("entities", "member", scope);
+		args.push(...allowed.args);
+		return `(SELECT ${select} FROM main.entities member WHERE member.community_id=r.id${allowed.sql} AND COALESCE(member.status,'active')='active'${tail})`;
+	};
+	const targets: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+		entities: { proposal_id: "ontology_proposals" },
+		dreaming_attention: { resolved_by_pass_id: "dreaming_passes" },
+		entity_aspects: { proposal_id: "ontology_proposals" },
+		entity_attributes: {
+			memory_id: "memories",
+			superseded_by: "entity_attributes",
+			version_root_id: "entity_attributes",
+			previous_attribute_id: "entity_attributes",
+			proposal_id: "ontology_proposals",
+		},
+		entity_dependencies: { aspect_id: "entity_aspects", proposal_id: "ontology_proposals" },
+		epistemic_assertions: { supersedes_assertion_id: "epistemic_assertions" },
+		memories: { superseded_by: "memories" },
+		session_summaries: { session_key: "session_transcripts" },
+	};
+	const projection = columns.map((column) => {
+		if (table === "memory_search_telemetry" && column === "sources_json") return "NULL AS sources_json";
+		if (table === "memory_search_telemetry" && column === "results_json")
+			return "(SELECT json_group_array(json(json_remove(item.value,'$.source_id','$.session_id','$.source_path'))) FROM json_each(CASE WHEN json_valid(r.results_json) THEN r.results_json ELSE '[]' END) item) AS results_json";
+
+		if (["proposal_evidence", "evidence", "payload", "result"].includes(column)) {
+			const json = knowledgeJsonProjection(column, scope);
+			args.push(...json.args);
+			return json.sql;
+		}
+		if (table === "entities" && column === "mentions")
+			return "(SELECT COUNT(DISTINCT mention.memory_id) FROM main.memory_entity_mentions mention JOIN memories memory ON memory.id=mention.memory_id WHERE mention.entity_id=r.id AND COALESCE(memory.is_deleted,0)=0) AS mentions";
+		if (table === "entities" && column === "community_id") {
+			const community = knowledgeTargetSql("entity_communities", "community_target", scope),
+				member = knowledgeTargetSql("entities", "community_member", scope);
+			args.push(...community.args, ...member.args);
+			return `CASE WHEN EXISTS(SELECT 1 FROM main.entity_communities community_target WHERE community_target.id=r.community_id${community.sql}) THEN (SELECT 'community:'||MIN(community_member.id) FROM main.entities community_member WHERE community_member.community_id=r.community_id${member.sql}) ELSE NULL END AS community_id`;
+		}
+		if (table === "entity_communities") {
+			if (column === "id") return `${members("'community:'||MIN(member.id)")} AS id`;
+			if (column === "name")
+				return `${members("member.name", " ORDER BY (SELECT COUNT(*) FROM main.memory_entity_mentions mention JOIN memories memory ON memory.id=mention.memory_id WHERE mention.entity_id=member.id) DESC,member.id LIMIT 1")} AS name`;
+			if (column === "member_count") return `${members("COUNT(*)")} AS member_count`;
+			if (column === "created_at") return `${members("MIN(member.created_at)")} AS created_at`;
+			if (column === "updated_at") return `${members("MAX(member.updated_at)")} AS updated_at`;
+			if (column === "cohesion") {
+				const one = members("COUNT(*)"),
+					two = members("COUNT(*)"),
+					three = members("COUNT(*)");
+				return `CASE WHEN ${one}<2 THEN 0.0 ELSE (SELECT COUNT(DISTINCT json_array(min(edge.source_entity_id,edge.target_entity_id),max(edge.source_entity_id,edge.target_entity_id))) FROM entity_dependencies edge JOIN main.entities source ON source.id=edge.source_entity_id JOIN main.entities target ON target.id=edge.target_entity_id WHERE edge.agent_id=r.agent_id AND source.community_id=r.id AND target.community_id=r.id AND source.id!=target.id AND COALESCE(edge.status,'active')='active')*2.0/(${two}*(${three}-1)) END AS cohesion`;
+			}
+		}
+		if (table === "entity_attributes" && column === "status") {
+			const allowed = knowledgeTargetSql("entity_attributes", "replacement", scope);
+			args.push(...allowed.args);
+			return `CASE WHEN r.status='superseded' AND r.superseded_by IS NOT NULL AND NOT EXISTS(SELECT 1 FROM main.entity_attributes replacement WHERE replacement.id=r.superseded_by${allowed.sql}) THEN 'active' ELSE r.status END AS status`;
+		}
+		if (table === "entity_attributes" && column === "version") {
+			const allowed = knowledgeTargetSql("entity_attributes", "version", scope);
+			args.push(...allowed.args);
+			return `(SELECT COUNT(*) FROM main.entity_attributes version WHERE COALESCE(version.version_root_id,version.id)=COALESCE(r.version_root_id,r.id) AND version.version<=r.version${allowed.sql}) AS version`;
+		}
+		if (column === "source_id" && columns.includes("source_kind")) {
+			const kinds = [
+				{ kind: "memory", table: "memories", key: "id" },
+				{ kind: "transcript", table: "session_transcripts", key: "session_key" },
+				{ kind: "summary", table: "session_summaries", key: "id" },
+				{ kind: "artifact", table: "memory_artifacts", key: "source_path" },
+			];
+			const cases = kinds.map((kind) => {
+				const allowed = knowledgeTargetSql(kind.table, "source_target", scope);
+				args.push(...allowed.args);
+				return `WHEN r.source_kind='${kind.kind}' AND EXISTS(SELECT 1 FROM main.${kind.table} source_target WHERE source_target.${kind.key}=r.source_id${allowed.sql}) THEN r.source_id`;
+			});
+			return `CASE ${cases.join(" ")} ELSE NULL END AS source_id`;
+		}
+		const target = targets[table]?.[column];
+		if (target) return pointer(column, target, column === "session_key" ? "session_key" : "id");
+		return `r.${column}`;
+	});
+	return { sql: projection.join(", "), args };
+}
+
+const knowledgeChildTables = [
+	"entity_aliases",
+	"task_meta",
+	"memory_entity_mentions",
+	"session_summary_memories",
+	"predictor_comparisons",
+	"derived_memory_sources",
+	"evidence_citations",
+	"dreaming_state",
+];
+const shadowedKnowledgeTables = new Set<string>([...KNOWLEDGE_CONTENT_TABLES, ...knowledgeChildTables]);
+const classifiedKnowledgeTables = new Set<string>(COMPARTMENT_TABLES);
+const metadataKnowledgeTables = new Set([
+	"agents",
+	"sqlite_master",
+	"sqlite_schema",
+	"json_each",
+	"json_tree",
+	"pragma_table_info",
+	"pragma_index_list",
+	"pragma_index_info",
+	"pragma_foreign_key_list",
+]);
+
+export function scopedKnowledgeTableSupported(table: string): boolean {
+	return shadowedKnowledgeTables.has(table.toLowerCase());
+}
+
+function scopedSqlInput(
+	input: string,
+	readScope: ReadScope,
+): { sql: string; tables: Set<string>; restore: (sql: string) => string } {
+	if (input.includes("__signet_sql_literal_")) throw new Error("scoped_sql_reserved_identifier");
+	const literals: string[] = [];
+	const sql = input.replace(
+		/--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[(?:\]\]|[^\]])*\]/g,
+		(token) => {
+			if (token.startsWith("--") || token.startsWith("/*")) return " ";
+			if (token.startsWith("'")) {
+				const index = literals.push(token) - 1;
+				return `__signet_sql_literal_${index}__`;
+			}
+			const name = token.slice(1, -1).replace(/""/g, '"').replace(/``/g, "`").replace(/\]\]/g, "]");
+			if (!/^[a-z_][a-z_0-9]*$/i.test(name)) throw new Error("scoped_sql_quoted_identifier");
+			return name;
+		},
+	);
+	const tokens = sql.match(/[a-z_][a-z_0-9]*|[(),.;]/gi) ?? [];
+	if (tokens.length > 65536) throw new Error("scoped_sql_limit");
+	if (!/^(SELECT|WITH|PRAGMA|EXPLAIN)$/i.test(tokens[0] ?? "")) throw new Error("scoped_sql_read_only");
+	if (tokens[0]?.toUpperCase() === "PRAGMA") {
+		const name = tokens[tokens[2] === "." ? 3 : 1]?.toLowerCase();
+		if (!name || !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list"].includes(name))
+			throw new Error("scoped_sql_pragma");
+		return {
+			sql,
+			tables: new Set(),
+			restore: (value) =>
+				value.replace(
+					/\b__signet_sql_literal_(\d+)__\b/g,
+					(_token, index: string) => literals[Number(index)] ?? "NULL",
+				),
+		};
+	}
+	const ctes = new Set<string>();
+	for (let index = 0; index < tokens.length; index++) {
+		const name = tokens[index]?.toLowerCase();
+		if (!name || !/^[a-z_]/i.test(name)) continue;
+		let next = index + 1;
+		if (tokens[next] === "(") {
+			let nesting = 1;
+			next++;
+			while (next < tokens.length && nesting) {
+				if (tokens[next] === "(") nesting++;
+				if (tokens[next] === ")") nesting--;
+				next++;
+			}
+		}
+		if (tokens[next]?.toUpperCase() === "AS") {
+			next++;
+			if (tokens[next]?.toUpperCase() === "NOT") next++;
+			if (tokens[next]?.toUpperCase() === "MATERIALIZED") next++;
+			if (tokens[next] !== "(") continue;
+			if (classifiedKnowledgeTables.has(name) || shadowedKnowledgeTables.has(name) || metadataKnowledgeTables.has(name))
+				throw new Error("scoped_sql_shadow_collision");
+			ctes.add(name);
+		}
+	}
+	const tables = new Set<string>();
+	const fromDepth: boolean[] = [false];
+	let depth = 0;
+	let expected = false;
+	for (let index = 0; index < tokens.length; index++) {
+		const word = tokens[index] ?? "",
+			upper = word.toUpperCase(),
+			lower = word.toLowerCase();
+		if (word === ";" && index < tokens.length - 1) throw new Error("scoped_sql_batch");
+		if (
+			["INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "ATTACH", "DETACH", "VACUUM", "REINDEX"].includes(upper)
+		)
+			throw new Error("scoped_sql_read_only");
+		if (classifiedKnowledgeTables.has(lower) || shadowedKnowledgeTables.has(lower)) {
+			if (!shadowedKnowledgeTables.has(lower)) throw new Error(`scoped_sql_uncovered:${lower}`);
+			if (tokens[index - 1] === "." && ["main", "temp"].includes(tokens[index - 2]?.toLowerCase() ?? ""))
+				throw new Error(`scoped_sql_qualified:${lower}`);
+			tables.add(lower);
+		}
+		if (word === "(") {
+			const groupedSource: boolean =
+				expected && !["SELECT", "WITH", "VALUES"].includes(tokens[index + 1]?.toUpperCase() ?? "");
+			depth++;
+			fromDepth[depth] = groupedSource;
+			expected = groupedSource;
+			continue;
+		}
+		if (word === ")") {
+			fromDepth.length = depth;
+			depth = Math.max(0, depth - 1);
+			expected = false;
+			continue;
+		}
+		if (["WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "UNION", "INTERSECT", "EXCEPT", "RETURNING"].includes(upper)) {
+			fromDepth[depth] = false;
+			expected = false;
+			continue;
+		}
+		if (upper === "FROM" || upper === "JOIN" || (word === "," && fromDepth[depth])) {
+			fromDepth[depth] = true;
+			expected = true;
+			continue;
+		}
+		if (!expected) continue;
+		expected = false;
+		let table = lower;
+		if (tokens[index + 1] === ".") {
+			table = tokens[index + 2]?.toLowerCase() ?? "";
+			if (
+				shadowedKnowledgeTables.has(table) ||
+				classifiedKnowledgeTables.has(table) ||
+				lower !== "main" ||
+				!metadataKnowledgeTables.has(table)
+			)
+				throw new Error(`scoped_sql_qualified:${table}`);
+			index += 2;
+		}
+		if (shadowedKnowledgeTables.has(table)) tables.add(table);
+		else if (/^entities_fts(?:__c[0-9]+)?$/.test(table)) {
+			const shape = sql.trim().replace(/\s+/g, " ");
+			if (
+				!/^SELECT e\.id(?:, (?:length\(e\.name\)|rank) AS knowledge_rank)? FROM (entities_fts(?:__c[0-9]+)?) (?:CROSS )?JOIN entities e ON e\.rowid\s*=\s*\1\.rowid WHERE \1 MATCH \? AND e\.agent_id\s*=\s*\? ORDER BY (?:rank|length\(e\.name\), e\.id) LIMIT 20$/i.test(
+					shape,
+				)
+			)
+				throw new Error("scoped_sql_fts_shape");
+
+			const match = /__c([0-9]+)$/.exec(table);
+			if (match && readScope.compartments !== "all" && !readScope.compartments.includes(Number(match[1])))
+				throw new Error("scoped_sql_unreadable_shard");
+		} else if (!metadataKnowledgeTables.has(table) && !ctes.has(table))
+			throw new Error(`scoped_sql_uncovered:${table}`);
+	}
+	return {
+		sql,
+		tables,
+		restore: (value) =>
+			value.replace(/\b__signet_sql_literal_(\d+)__\b/g, (_token, index: string) => literals[Number(index)] ?? "NULL"),
+	};
+}
+
+export function scopedKnowledgeStatement<T extends { readonly sql: string; readonly params?: readonly unknown[] }>(
+	statement: T,
+	readScope: ReadScope | undefined,
+): T & { readonly params: readonly unknown[] } {
+	if (!readScope) return { ...statement, params: statement.params ?? [] };
+	const input = scopedSqlInput(statement.sql, readScope);
+	const tables = input.tables;
+	const parents: Readonly<Record<string, readonly string[]>> = {
+		entity_aspects: ["entities"],
+		entity_communities: ["entities", "entity_dependencies"],
+		entity_attributes: ["entity_aspects"],
+		entity_dependencies: ["entities"],
+		epistemic_assertions: ["entities", "entity_attributes"],
+		entity_aliases: ["entities"],
+		task_meta: ["entities"],
+		memory_entity_mentions: ["entities", "memories"],
+		session_summary_memories: ["session_summaries", "memories"],
+		ontology_contradictions: ["entity_attributes"],
+		ontology_proposals: ["entity_attributes"],
+		predictor_comparisons: ["entities"],
+		derived_memory_sources: ["memories", "session_transcripts", "memory_artifacts", "session_summaries"],
+		evidence_citations: [
+			"memories",
+			"session_transcripts",
+			"memory_artifacts",
+			"session_summaries",
+			"entities",
+			"entity_aspects",
+			"entity_attributes",
+			"entity_dependencies",
+			"epistemic_assertions",
+			"ontology_proposals",
+			"ontology_contradictions",
+		],
+		dreaming_state: ["dreaming_passes"],
+	};
+	const addParents = (table: string): void => {
+		for (const parent of parents[table] ?? []) {
+			if (tables.has(parent)) continue;
+			tables.add(parent);
+			addParents(parent);
+		}
+	};
+	for (const table of tables) addParents(table);
+	const derivedKinds: Readonly<Record<string, string>> = {
+		memories: "memory",
+		entities: "entity",
+		memory_search_telemetry: "telemetry",
+		entity_aspects: "aspect",
+		entity_attributes: "attribute",
+		entity_dependencies: "dependency",
+		epistemic_assertions: "assertion",
+		ontology_proposals: "proposal",
+		ontology_contradictions: "contradiction",
+	};
+	if ([...tables].some((table) => derivedKinds[table]))
+		for (const table of ["memories", "session_transcripts", "memory_artifacts", "session_summaries"]) tables.add(table);
+	const ctes: string[] = [];
+	const args: unknown[] = [];
+	const relations: Readonly<Record<string, string>> = {
+		entity_aspects: "EXISTS (SELECT 1 FROM entities p WHERE p.id=r.entity_id AND p.agent_id=r.agent_id)",
+		entity_communities:
+			"EXISTS (SELECT 1 FROM entities visible_member JOIN main.entities stored_member ON stored_member.id=visible_member.id WHERE stored_member.community_id=r.id)",
+		entity_attributes: "EXISTS (SELECT 1 FROM entity_aspects p WHERE p.id=r.aspect_id AND p.agent_id=r.agent_id)",
+		entity_dependencies:
+			"EXISTS (SELECT 1 FROM entities p WHERE p.id=r.source_entity_id AND p.agent_id=r.agent_id) AND EXISTS (SELECT 1 FROM entities p WHERE p.id=r.target_entity_id AND p.agent_id=r.agent_id)",
+		epistemic_assertions:
+			"EXISTS (SELECT 1 FROM entities p WHERE p.id=r.subject_entity_id AND p.agent_id=r.agent_id) AND (r.claim_attribute_id IS NULL OR EXISTS (SELECT 1 FROM entity_attributes p WHERE p.id=r.claim_attribute_id AND p.agent_id=r.agent_id))",
+		entity_aliases: "EXISTS (SELECT 1 FROM entities p WHERE p.id=r.entity_id AND p.agent_id=r.agent_id)",
+		task_meta: "EXISTS (SELECT 1 FROM entities p WHERE p.id=r.entity_id AND p.agent_id=r.agent_id)",
+		memory_entity_mentions:
+			"EXISTS (SELECT 1 FROM entities p WHERE p.id=r.entity_id) AND EXISTS (SELECT 1 FROM memories p WHERE p.id=r.memory_id)",
+		session_summary_memories:
+			"EXISTS (SELECT 1 FROM session_summaries p WHERE p.id=r.summary_id) AND EXISTS (SELECT 1 FROM memories p WHERE p.id=r.memory_id)",
+		ontology_contradictions:
+			"EXISTS (SELECT 1 FROM entity_attributes p WHERE p.id=r.left_attribute_id AND p.agent_id=r.agent_id) AND EXISTS (SELECT 1 FROM entity_attributes p WHERE p.id=r.right_attribute_id AND p.agent_id=r.agent_id)",
+		predictor_comparisons: "0",
+	};
+	for (const table of KNOWLEDGE_CONTENT_TABLES) {
+		if (!tables.has(table)) continue;
+		const memory = table === "memories";
+		const source = [
+			"entities",
+			"entity_attributes",
+			"entity_dependencies",
+			"entity_communities",
+			"epistemic_assertions",
+			"ontology_proposals",
+			"memories",
+			"memory_artifacts",
+			"session_transcripts",
+		].includes(table);
+		const scope = readScopeSql("r", knowledgeScopeForTable(readScope, table), {
+			visibility: memory ? "visibility" : null,
+			memory: memory ? "id" : null,
+			session: table === "session_transcripts" || table === "session_summaries" ? "session_key" : null,
+			source: source ? "source_id" : null,
+		});
+
+		const derivedKind = derivedKinds[table];
+		const citations = derivedKind ? citedEvidenceReadScopeSql("r", readScope, derivedKind) : { sql: "", args: [] };
+		const telemetry =
+			table === "memory_search_telemetry" ? telemetrySnapshotReadScopeSql("r", readScope) : { sql: "", args: [] };
+		const label =
+			table === "memory_search_telemetry" ? telemetryLabelReadScopeSql("r", readScope) : { sql: "", args: [] };
+		const projection = knowledgeReadableProjection(table, readScope);
+		ctes.push(
+			`${table} AS NOT MATERIALIZED (SELECT r.rowid AS rowid, ${projection.sql} FROM main.${table} r WHERE 1${scope.sql}${relations[table] ? ` AND ${relations[table]}` : ""}${citations.sql}${label.sql}${telemetry.sql})`,
+		);
+
+		args.push(...projection.args, ...scope.args, ...citations.args, ...label.args, ...telemetry.args);
+	}
+	for (const table of [
+		"entity_aliases",
+		"task_meta",
+		"memory_entity_mentions",
+		"session_summary_memories",
+		"predictor_comparisons",
+	]) {
+		if (tables.has(table)) {
+			const own = classifiedKnowledgeTables.has(table)
+				? readScopeSql("r", knowledgeScopeForTable(readScope, table), {
+						visibility: null,
+						memory: null,
+						session: null,
+						source: null,
+					})
+				: { sql: "", args: [] };
+			ctes.push(`${table} AS NOT MATERIALIZED (SELECT r.* FROM main.${table} r WHERE ${relations[table]}${own.sql})`);
+			args.push(...own.args);
+		}
+	}
+	const referencePredicate = (kind: string, id: string, agent: string) => {
+		const targets = [
+			{ kind: "memory", table: "memories", key: "id" },
+			{ kind: "transcript", table: "session_transcripts", key: "session_key" },
+			{ kind: "artifact", table: "memory_artifacts", key: "source_path" },
+			{ kind: "summary", table: "session_summaries", key: "id" },
+			{ kind: "entity", table: "entities", key: "id" },
+			{ kind: "aspect", table: "entity_aspects", key: "id" },
+			{ kind: "attribute", table: "entity_attributes", key: "id" },
+			{ kind: "dependency", table: "entity_dependencies", key: "id" },
+			{ kind: "assertion", table: "epistemic_assertions", key: "id" },
+			{ kind: "proposal", table: "ontology_proposals", key: "id" },
+			{ kind: "contradiction", table: "ontology_contradictions", key: "id" },
+		];
+		const parameters: unknown[] = [];
+		const sql = targets
+			.map((target) => {
+				const allowed = knowledgeTargetSql(target.table, "citation_target", readScope);
+				parameters.push(...allowed.args);
+				return `(${kind}='${target.kind}' AND EXISTS(SELECT 1 FROM main.${target.table} citation_target WHERE citation_target.${target.key}=${id} AND citation_target.agent_id=${agent}${allowed.sql}))`;
+			})
+			.join(" OR ");
+		return { sql: `(${sql})`, args: parameters };
+	};
+	if (tables.has("derived_memory_sources")) {
+		const source = referencePredicate("r.source_kind", "r.source_id", "r.agent_id");
+		const parent = knowledgeTargetSql("memories", "lineage_parent", readScope);
+		ctes.push(
+			`derived_memory_sources AS NOT MATERIALIZED (SELECT r.derived_memory_id,r.source_kind,r.source_id,r.source_path,r.agent_id,r.created_at FROM main.derived_memory_sources r WHERE EXISTS(SELECT 1 FROM main.memories lineage_parent WHERE lineage_parent.id=r.derived_memory_id AND lineage_parent.agent_id=r.agent_id${parent.sql}) AND ${source.sql})`,
+		);
+		args.push(...parent.args, ...source.args);
+	}
+	if (tables.has("evidence_citations")) {
+		const derived = referencePredicate("r.derived_kind", "r.derived_id", "r.agent_id"),
+			source = referencePredicate("r.evidence_kind", "r.evidence_id", "r.agent_id");
+		ctes.push(
+			`evidence_citations AS NOT MATERIALIZED (SELECT r.derived_kind,r.derived_id,r.agent_id,r.evidence_kind,r.evidence_id FROM main.evidence_citations r WHERE ${derived.sql} AND ${source.sql})`,
+		);
+		args.push(...derived.args, ...source.args);
+	}
+	if (tables.has("dreaming_state")) {
+		const allowed =
+			readScope.organizationMode === false ||
+			(readScope.reach.kind === "all" && readScope.compartments === "all" && readScope.projects === null);
+		const agent =
+			readScope.reach.kind === "all"
+				? "r.agent_id IN (SELECT id FROM agents WHERE archived_at IS NULL)"
+				: "r.agent_id=?";
+		const columns = KNOWLEDGE_READ_COLUMNS.dreaming_state ?? [];
+		ctes.push(
+			`dreaming_state AS NOT MATERIALIZED (SELECT ${columns.map((column) => `r.${column}`).join(",")} FROM main.dreaming_state r WHERE ${allowed ? agent : "0"})`,
+		);
+		if (allowed && readScope.reach.kind !== "all") args.push(readScope.reach.agentId);
+	}
+	let sql = input.sql.replace(/\bINDEXED\s+BY\s+[a-z_][a-z_0-9]*\b/gi, "");
+	const aliases = new Map<string, string>();
+	for (const match of sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)(?:\s+(?:AS\s+)?([a-z_][a-z_0-9]*))?/gi)) {
+		const table = match[1];
+		if (!table || !KNOWLEDGE_READ_COLUMNS[table]) continue;
+		const alias =
+			match[2] &&
+			!new Set(["WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "ON", "ORDER", "GROUP", "LIMIT", "UNION"]).has(
+				match[2].toUpperCase(),
+			)
+				? match[2]
+				: table;
+		aliases.set(alias, table);
+	}
+	for (const [alias, table] of aliases) {
+		const columns = KNOWLEDGE_READ_COLUMNS[table];
+		if (!columns) continue;
+		sql = sql.replace(new RegExp(`\\b${alias}\\.\\*`, "g"), columns.map((column) => `${alias}.${column}`).join(","));
+	}
+	sql = sql.replace(
+		/SELECT\s+\*(?=\s+FROM\s+([a-z_][a-z_0-9]*)(?:\s+(?:AS\s+)?([a-z_][a-z_0-9]*))?)/gi,
+		(original: string, table: string, candidate: string | undefined) => {
+			const columns = KNOWLEDGE_READ_COLUMNS[table];
+			const alias =
+				candidate &&
+				!new Set(["WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "ON", "ORDER", "GROUP", "LIMIT", "UNION"]).has(
+					candidate.toUpperCase(),
+				)
+					? candidate
+					: table;
+			return columns ? `SELECT ${columns.map((column) => `${alias}.${column}`).join(",")}` : original;
+		},
+	);
+	if (readScope.reach.kind === "all")
+		sql = sql.replace(/\b(?:[a-z_][a-z_0-9]*\.)?agent_id\s*=\s*\?/gi, "? IS NOT NULL");
+	if (ctes.length)
+		sql = /^\s*WITH\s/i.test(sql)
+			? sql.replace(/^(\s*WITH\s+)(RECURSIVE\s+)?/i, `$1$2${ctes.join(", ")}, `)
+			: `WITH ${ctes.join(", ")} ${sql}`;
+	return { ...statement, sql: input.restore(sql), params: [...args, ...(statement.params ?? [])] };
+}
+
+export function knowledgeReadDb(readScope?: ReadScope): KnowledgeReadDb {
+	const parameter = (value: unknown): DbOwnerParameter => {
+		if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+			return value;
+		throw new Error("Invalid knowledge read parameter");
+	};
+	return {
+		readScope,
+		prepare(sql) {
+			scopedKnowledgeStatement({ sql }, readScope);
+			const query = (result: "all" | "get", params: readonly unknown[]) => {
+				const statement = scopedKnowledgeStatement({ sql, params, result }, readScope);
+				return dbOwnerQuery(
+					{ ...statement, params: statement.params.map(parameter) },
+					{
+						operation: "db:knowledge.scoped-read",
+						deadlineMs: DB_OWNER_READ_DEADLINE_MS,
+					},
+				);
+			};
+			return {
+				all: (...params) => query("all", params),
+				get: async (...params) => (await query("get", params)) ?? undefined,
+			};
+		},
+	};
+}
+
+export async function knowledgeTableExists(db: KnowledgeReadDb, table: string): Promise<boolean> {
+	return Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
+}
+
+export async function knowledgeReadQuery<Row>(
+	statement: import("./db-owner-protocol").DbOwnerStatement,
+	options: import("./db-owner-sql").DbOwnerSqlOptions,
+	readScope?: ReadScope,
+): Promise<Row> {
+	const scoped = scopedKnowledgeStatement(statement, readScope);
+	const params = scoped.params.map((value): DbOwnerParameter => {
+		if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+			return value;
+		throw new Error("Invalid knowledge read parameter");
+	});
+	return dbOwnerQuery<Row>({ ...scoped, params }, options);
+}
+
+export async function knowledgeReadOwner(
+	owner: import("./db-owner-client").DbOwnerClient,
+	readScope: ReadScope,
+): Promise<import("./db-owner-client").DbOwnerClient> {
+	const shards = await import("./db-owner-sql").then(({ ownerReadAll }) =>
+		ownerReadAll(
+			owner,
+			"SELECT name FROM sqlite_master WHERE type='table' AND (name='entities_fts' OR name GLOB 'entities_fts__c[0-9]*') ORDER BY name",
+			[],
+			{ operation: "knowledge.fts-shards", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+		),
+	);
+	const readableShards = z
+		.array(z.object({ name: z.string() }))
+		.parse(shards)
+		.flatMap(({ name }) => {
+			if (name === "entities_fts") return [name];
+			if (!/^entities_fts__c[1-9][0-9]*$/.test(name)) return [];
+			const compartment = Number(name.slice("entities_fts__c".length));
+			return Number.isSafeInteger(compartment) &&
+				(readScope.compartments === "all" || readScope.compartments.includes(compartment))
+				? [name]
+				: [];
+		});
+	const restrictedRanking =
+		readScope.reach.kind !== "all" || readScope.compartments !== "all" || readScope.projects !== null;
+	const submit = <Result>(
+		request: import("./db-owner-protocol").DbOwnerRequest,
+		options: import("./db-owner-client").DbOwnerSubmitOptions,
+	): import("./db-owner-client").DbOwnerJobHandle<Result> => {
+		if (request.kind !== "query") throw new Error("Knowledge reads require a query");
+		const statement = request.statement;
+		if (statement.result === "run") throw new Error("Knowledge read cannot mutate state");
+		const branches = /\bFROM entities_fts\b/i.test(statement.sql)
+			? readableShards.map((shard) =>
+					scopedKnowledgeStatement(
+						{
+							...statement,
+							sql: statement.sql
+								.replace(/\bentities_fts\b/g, shard)
+								.replace(
+									/SELECT e\.id\b/i,
+									`SELECT e.id, ${restrictedRanking ? "length(e.name)" : "rank"} AS knowledge_rank`,
+								)
+								.replace(/ORDER BY rank\b/i, restrictedRanking ? "ORDER BY length(e.name), e.id" : "ORDER BY rank"),
+						},
+						readScope,
+					),
+				)
+			: [scopedKnowledgeStatement(statement, readScope)];
+		const sql =
+			/\bFROM entities_fts\b/i.test(statement.sql) && branches.length > 0 && (restrictedRanking || branches.length > 1)
+				? `SELECT id FROM (${branches.map((branch) => `SELECT * FROM (${branch.sql})`).join(" UNION ALL ")}) ORDER BY knowledge_rank, id LIMIT 20`
+				: (branches[0]?.sql ?? "SELECT NULL AS id WHERE 0");
+		const params = branches
+			.flatMap((branch) => branch.params)
+			.map((value): DbOwnerParameter => {
+				if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+					return value;
+				throw new Error("Invalid knowledge read parameter");
+			});
+		return owner.submit<Result>({ ...request, statement: { ...statement, sql, params } }, options);
+	};
+	return new Proxy(owner, {
+		get(target, key) {
+			if (key === "submit") return submit;
+			const value: unknown = Reflect.get(target, key);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+}
+
+export async function readKnowledgeTraceSource(
+	db: KnowledgeReadDb,
+	params: {
+		readonly kind: "artifact" | "transcript" | "summary";
+		readonly agentId: string;
+		readonly id: string;
+		readonly candidates: readonly string[];
+	},
+): Promise<{
+	readonly id: string;
+	readonly content: string;
+	readonly sourcePath: string | null;
+	readonly project: string | null;
+	readonly completed: boolean;
+} | null> {
+	const ph = params.candidates.map(() => "?").join(",");
+	const queries = {
+		artifact: {
+			sql: `SELECT source_path AS id, content, source_path, project, 1 AS completed FROM memory_artifacts WHERE agent_id=? AND COALESCE(is_deleted,0)=0 AND (source_path=? OR source_node_id IN (${ph}) OR session_id IN (${ph}) OR session_key IN (${ph}) OR session_token IN (${ph})) ORDER BY captured_at DESC LIMIT 1`,
+			args: [
+				params.agentId,
+				params.id,
+				...params.candidates,
+				...params.candidates,
+				...params.candidates,
+				...params.candidates,
+			],
+		},
+		transcript: {
+			sql: `SELECT session_key AS id, content, source_meta_json, project, completed_at IS NOT NULL AS completed FROM session_transcripts WHERE agent_id=? AND session_key IN (${ph}) ORDER BY COALESCE(completed_at,updated_at,created_at) DESC,created_at DESC LIMIT 1`,
+			args: [params.agentId, ...params.candidates],
+		},
+		summary: {
+			sql: `SELECT id, content, project, 1 AS completed FROM session_summaries WHERE agent_id=? AND depth=0 AND COALESCE(source_type,'summary') IN ('summary','compaction','checkpoint') AND (id IN (${ph}) OR source_ref IN (${ph})) ORDER BY latest_at DESC LIMIT 1`,
+			args: [params.agentId, ...params.candidates, ...params.candidates],
+		},
+	};
+	const query = queries[params.kind];
+	const row = await db.prepare(query.sql).get(...query.args);
+	if (
+		typeof row !== "object" ||
+		row === null ||
+		!("id" in row) ||
+		typeof row.id !== "string" ||
+		!("content" in row) ||
+		typeof row.content !== "string"
+	)
+		return null;
+	let sourcePath = "source_path" in row && typeof row.source_path === "string" ? row.source_path : null;
+	if ("source_meta_json" in row && typeof row.source_meta_json === "string") {
+		const meta = row.source_meta_json;
+		const parsed: unknown = attempt(() => JSON.parse(meta));
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"managedPath" in parsed &&
+			typeof parsed.managedPath === "string"
+		)
+			sourcePath = parsed.managedPath.trim() || null;
+	}
+	return {
+		id: row.id,
+		content: row.content,
+		sourcePath,
+		project: "project" in row && typeof row.project === "string" ? row.project : null,
+		completed: "completed" in row && row.completed === 1,
+	};
+}
+
+export async function getKnowledgeCommunities(agentId: string, readScope: ReadScope) {
+	const db = knowledgeReadDb(readScope);
+
+	return z
+		.array(
+			z.object({
+				id: z.string(),
+				name: z.string().nullable(),
+				cohesion: z.number(),
+				member_count: z.number(),
+				created_at: z.string().nullable(),
+				updated_at: z.string().nullable(),
+			}),
+		)
+		.parse(
+			await db
+				.prepare(
+					`SELECT id, name, cohesion, member_count, created_at, updated_at
+					 FROM entity_communities
+					 WHERE agent_id = ?
+					 ORDER BY member_count DESC`,
+				)
+				.all(agentId),
+		);
+}
+
+export async function expandKnowledgeSessions(
+	params: {
+		readonly agentId: string;
+		readonly entity: { readonly id: string; readonly name: string; readonly canonicalName: string };
+		readonly project?: string;
+		readonly sessionId?: string;
+		readonly timeRange?: string;
+		readonly maxResults: number;
+	},
+	readScope: ReadScope,
+) {
+	const { agentId, entity, project, sessionId, timeRange, maxResults } = params;
+	const db = knowledgeReadDb(readScope);
+	if (!(await knowledgeTableExists(db, "session_summaries")))
+		return { entityName: entity.name, summaries: [], total: 0 };
+
+	const conditions = ["ss.agent_id = ?", "ss.kind = 'session'", "COALESCE(ss.source_type, 'summary') = 'summary'"];
+	const args: Array<string | number> = [agentId];
+
+	if (project) {
+		conditions.push("ss.project = ?");
+		args.push(project);
+	}
+
+	if (sessionId) {
+		conditions.push("ss.session_key = ?");
+		args.push(sessionId);
+	}
+
+	if (timeRange === "last_week") {
+		conditions.push("ss.latest_at >= datetime('now', '-7 days')");
+	} else if (timeRange === "last_month") {
+		conditions.push("ss.latest_at >= datetime('now', '-30 days')");
+	} else if (timeRange && timeRange.length > 0) {
+		conditions.push("ss.latest_at >= ?");
+		args.push(timeRange);
+	}
+
+	const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+	const useTextFallback = cn.length >= 4;
+	const normalizedContent =
+		`LOWER(' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(` +
+		"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ss.content," +
+		`',', ' '), '.', ' '), '!', ' '), '?', ' '), ';', ' '), '"', ' '),` +
+		`char(39), ' '), char(40), ' '), char(41), ' '),` +
+		`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
+	const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
+	const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
+	const rows = z
+		.array(
+			z.object({
+				id: z.string(),
+				content: z.string(),
+				session_key: z.string().nullable(),
+				harness: z.string().nullable(),
+				earliest_at: z.string(),
+				latest_at: z.string(),
+			}),
+		)
+		.parse(
+			await db
+				.prepare(
+					`SELECT DISTINCT ss.id, ss.content, ss.session_key,
+					        ss.harness, ss.earliest_at, ss.latest_at
+					 FROM session_summaries ss
+					 WHERE ${conditions.join(" AND ")}
+					   AND (
+							EXISTS (
+								SELECT 1
+								FROM session_summary_memories ssm
+								JOIN memory_entity_mentions mem
+								  ON mem.memory_id = ssm.memory_id
+								WHERE ssm.summary_id = ss.id
+								  AND mem.entity_id = ?
+							)
+							${fallbackClause}
+					   )
+					 ORDER BY ss.latest_at DESC
+					 LIMIT ?`,
+				)
+				.all(...args, entity.id, ...fallbackArgs, maxResults),
+		);
+	return {
+		entityName: entity.name,
+		summaries: rows.map((row) => ({
+			id: row.id,
+			sessionKey: row.session_key,
+			harness: row.harness,
+			earliestAt: row.earliest_at,
+			latestAt: row.latest_at,
+			content: redactCredentials(row.content),
+		})),
+		total: rows.length,
+	};
 }
