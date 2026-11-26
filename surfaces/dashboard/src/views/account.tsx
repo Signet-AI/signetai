@@ -6,7 +6,9 @@ import { Panel } from "@/components/shell/panel";
 import { AuthField } from "@/components/shell/auth-entry";
 import { getJSONResult } from "@/lib/api";
 import { usePanelQuery } from "@/lib/use-panel-query";
-import { useSession, useWhoami } from "@/lib/session";
+import { ConnectorErrors } from "@/components/settings/connector-errors";
+import { ProfileFields } from "@/components/settings/profile-fields";
+import { useSession, useWhoami, refreshSession, useCan } from "@/lib/session";
 
 const SECTIONS = ["Profile", "Sessions", "Devices and connectors", "Personal API keys", "My agents"] as const;
 type Section = (typeof SECTIONS)[number];
@@ -104,31 +106,90 @@ export function AccountView() {
 	);
 }
 
+interface ProfileResponse {
+	readonly user: { readonly id: string; readonly displayName: string; readonly email: string | null };
+	readonly identityProvider: { readonly kind: string; readonly issuer: string } | null;
+	readonly editableFields: readonly string[];
+}
+
 function Profile() {
 	const whoami = useWhoami();
+	const { result, refresh } = usePanelQuery<ProfileResponse>("/api/auth/profile");
+	const [name, setName] = useState(whoami?.user.displayName ?? "");
+	const [email, setEmail] = useState(whoami?.user.email ?? "");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 	if (!whoami) return null;
+	const submit = async (event: FormEvent) => {
+		event.preventDefault();
+		if (!result?.data || result.data.identityProvider) return;
+		const submitted = { displayName: name, email: email || null };
+		setBusy(true);
+		setError(null);
+		const response = await getJSONResult<ProfileResponse>("/api/auth/profile", {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(submitted),
+		});
+		if (response.error) {
+			setError(response.error);
+			setBusy(false);
+			return;
+		}
+		const confirmed = await getJSONResult<ProfileResponse>("/api/auth/profile");
+		if (
+			!confirmed.data ||
+			confirmed.data.user.displayName !== submitted.displayName.trim() ||
+			confirmed.data.user.email !== submitted.email
+		)
+			setError(confirmed.error ?? "The saved profile could not be confirmed. Refresh before retrying.");
+		else {
+			setName((current) =>
+				current === submitted.displayName ? (confirmed.data?.user.displayName ?? current) : current,
+			);
+			await refreshSession();
+			refresh();
+			toast.success("Profile saved");
+		}
+		setBusy(false);
+	};
 	return (
 		<div className="flex flex-col gap-6">
-			<dl className="grid grid-cols-[auto_1fr] gap-3 text-small">
-				<dt className="text-muted-foreground">Name</dt>
-				<dd>{whoami.user.displayName}</dd>
-				<dt className="text-muted-foreground">Email</dt>
-				<dd>{whoami.user.email ?? "Not set"}</dd>
-				<dt className="text-muted-foreground">Username</dt>
-				<dd>{whoami.user.username}</dd>
-				<dt className="text-muted-foreground">Role</dt>
-				<dd>{whoami.user.role}</dd>
-			</dl>
-			<p className="text-small text-muted-foreground">
-				Profile editing is not available on this instance. Contact an organization administrator to change your profile.
-			</p>
+			<ProfileFields
+				name={name}
+				email={email}
+				editableFields={result?.data?.editableFields ?? []}
+				ssoManaged={Boolean(result?.data?.identityProvider) || whoami.user.ssoManaged === true}
+				busy={busy}
+				onNameChange={setName}
+				onEmailChange={setEmail}
+				onSubmit={(event) => void submit(event)}
+			/>
+			{error && (
+				<p role="alert" className="text-small text-destructive">
+					{error}
+				</p>
+			)}
+			<Panel result={result} onRetry={refresh}>
+				{() => (
+					<dl className="grid grid-cols-[auto_1fr] gap-3 text-small">
+						<dt className="text-muted-foreground">Username</dt>
+						<dd>{whoami.user.username}</dd>
+						<dt className="text-muted-foreground">Role</dt>
+						<dd>{whoami.user.role}</dd>
+					</dl>
+				)}
+			</Panel>
 			<h2 className="text-body font-medium">Team memberships</h2>
 			{whoami.user.groups.length ? (
 				<ul className="m-0 list-none divide-y p-0">
 					{whoami.user.groups.map((group) => (
-						<li key={group.id} className="flex justify-between py-3 text-small">
+						<li key={group.id} className="flex flex-wrap justify-between gap-2 py-3 text-small">
 							<span>{group.name}</span>
-							<span className="text-muted-foreground">{group.role}</span>
+							<span className="text-muted-foreground">
+								{group.role}
+								{group.managedBy === "idp" ? " · Managed by your identity provider" : ""}
+							</span>
 						</li>
 					))}
 				</ul>
@@ -214,6 +275,7 @@ function KeyRows({ keys, refresh }: { readonly keys: readonly KeyRecord[]; reado
 					>
 						{key.revoked_at ? "Revoked" : "Revoke key"}
 					</Button>
+					{key.kind === "connector" && <ConnectorErrors keyId={key.id} />}
 				</li>
 			))}
 		</ul>
@@ -286,8 +348,8 @@ function Devices() {
 				)}
 			</Panel>
 			<p className="text-small text-muted-foreground">
-				Revoking a device also revokes its sessions and connector keys. Recent authentication error history is not
-				available on this instance.
+				Revoking a device also revokes its sessions and connector keys. Expand a connector’s recent errors to inspect
+				authentication failures from the past seven days.
 			</p>
 		</div>
 	);
@@ -429,6 +491,9 @@ function PersonalKeys() {
 
 function MyAgents() {
 	const whoami = useWhoami();
+	const canRename = useCan("modify");
+	const [renaming, setRenaming] = useState<string | null>(null);
+	const [renameValue, setRenameValue] = useState("");
 	const { result, refresh } = usePanelQuery<{ agents: readonly PersonalAgent[] }>("/api/agents");
 	const [name, setName] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -448,6 +513,31 @@ function MyAgents() {
 			setName("");
 			refresh();
 		}
+	};
+	const rename = async (event: FormEvent) => {
+		event.preventDefault();
+		if (!renaming) return;
+		setBusy(true);
+		setError(null);
+		const response = await getJSONResult(`/api/agents/${encodeURIComponent(renaming)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: renameValue }),
+		});
+		if (response.error) {
+			setError(response.error);
+			setBusy(false);
+			return;
+		}
+		const confirmed = await getJSONResult<{ agents: readonly PersonalAgent[] }>("/api/agents");
+		if (!confirmed.data?.agents.some((agent) => agent.id === renaming && agent.name === renameValue.trim()))
+			setError(confirmed.error ?? "The renamed agent could not be confirmed. Refresh before retrying.");
+		else {
+			setRenaming(null);
+			refresh();
+			toast.success("Agent renamed");
+		}
+		setBusy(false);
 	};
 	const own =
 		result?.data?.agents.filter((agent) => agent.kind === "personal" && agent.ownerUserId === whoami?.user.id) ?? [];
@@ -472,7 +562,45 @@ function MyAgents() {
 					<ul className="m-0 list-none divide-y p-0">
 						{own.map((agent) => (
 							<li className="py-4 text-small" key={agent.id}>
-								{agent.name}
+								<div className="flex items-center justify-between gap-3">
+									<span>{agent.name}</span>
+									<Button
+										size="sm"
+										variant="outline"
+										disabled={busy || !canRename || Boolean(agent.archivedAt)}
+										title={!canRename ? "Requires the modify permission" : undefined}
+										onClick={() => {
+											setRenaming(agent.id);
+											setRenameValue(agent.name);
+										}}
+									>
+										Rename
+									</Button>
+								</div>
+								{renaming === agent.id && (
+									<form className="my-3 flex flex-col gap-3" onSubmit={(event) => void rename(event)}>
+										<label htmlFor="rename-agent" className="text-small">
+											New agent name
+										</label>
+										<Input
+											id="rename-agent"
+											name="renameAgent"
+											value={renameValue}
+											required
+											maxLength={128}
+											disabled={busy}
+											onChange={(event) => setRenameValue(event.target.value)}
+										/>
+										<div className="flex gap-3">
+											<Button type="submit" disabled={busy}>
+												Save agent name
+											</Button>
+											<Button type="button" variant="outline" onClick={() => setRenaming(null)}>
+												Cancel
+											</Button>
+										</div>
+									</form>
+								)}
 								<p className="m-0 text-muted-foreground">
 									{agent.id}
 									{agent.archivedAt ? " · Archived" : ""}
@@ -482,9 +610,6 @@ function MyAgents() {
 					</ul>
 				)}
 			</Panel>
-			<p className="text-small text-muted-foreground">
-				Ask an administrator to rename an agent. Owner renaming is not available on this instance.
-			</p>
 		</div>
 	);
 }

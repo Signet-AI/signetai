@@ -1,7 +1,20 @@
 import { expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AuthPage, authEntryKind, DeviceApprovalResult } from "./auth-entry";
+import { AuthPage, authEntryKind, DeviceApprovalResult, invitationContinuationHref } from "./auth-entry";
+
+test("invitation SSO accepts only the daemon's same-instance continuation route", () => {
+	expect(invitationContinuationHref("/api/auth/sso/start?continuation=one-use-code", "https://org.example")).toBe(
+		"/api/auth/sso/start?continuation=one-use-code",
+	);
+	for (const path of [
+		"https://other.example/api/auth/sso/start?continuation=code",
+		"/api/auth/sso/start?invite=secret",
+		"/api/auth/sso/start?continuation=code&invite=secret",
+		"/api/auth/sso/start?continuation=code#secret",
+	])
+		expect(invitationContinuationHref(path, "https://org.example")).toBeNull();
+});
 
 test("only approved desktop flows offer the secret-free Return to Signet link", () => {
 	const desktop = renderToStaticMarkup(createElement(DeviceApprovalResult, { client: "desktop", decision: "approve" }));

@@ -32,17 +32,17 @@ In organization mode, browser sessions use HttpOnly cookies and CSRF protection.
 
 ## Your organization account
 
-The identity menu shows your name, role, organization, instance origin, and session expiry. Open **My account** to inspect your profile and memberships, revoke sessions, manage devices and connector keys, create personal API keys, or create personal agents. Local mode shows none of these account screens.
+The identity menu shows your name, role, organization, instance origin, and session expiry. Name and email can be edited in Profile unless they are managed by your identity provider. Synced memberships are marked as provider-managed. Open **My account** to inspect your profile and memberships, revoke sessions, manage devices and connector keys, create personal API keys, or create personal agents. Local mode shows none of these account screens.
 
-- **Devices and connectors** lists devices and their connector keys. Revoking a device also revokes its sessions and keys. **Connect a harness** provides commands to sign in from your computer and then connect a harness.
+- **Devices and connectors** lists devices and their connector keys. Revoking a device also revokes its sessions and keys. Expand **Recent errors** on a connector key to inspect up to ten failures from the past seven days. **Connect a harness** provides commands to sign in from your computer and then connect a harness.
 - **Personal API keys** asks for a name, agent, expiry, and a subset of your permissions. Copy a new key immediately; dismissing it or leaving the page removes it from view. It cannot be revealed again.
-- **My agents** creates personal agents when organization policy allows it. Profile editing, identity-provider management markers, recent connector error history, and owner-only agent renaming require daemon support and are not yet available on this screen.
+- **My agents** creates personal agents when organization policy allows it. Rename your personal agents from this screen when you have the modify permission.
 
 The global agent switcher offers the organization agent, your team agents, and your personal agents. Content reads in Home, Memory, and Dreams follow this context. A denied panel explains its missing requirement without signing you out or replacing the rest of the page.
 
 For a new instance, open the printed `/auth/setup` URL (or `/auth/claim`) and paste the setup token printed by the daemon. Supply the organization name and first administrator’s details. Keep the bootstrap password until SSO is configured and verified.
 
-Open `/auth/device` while signed in, enter the code from the CLI or desktop app, and review the device name and instance before approving or denying it. Approved desktop requests offer **Return to Signet**, which opens the desktop app without putting credentials in the link. `/auth/invite` accepts an invitation token and lets password accounts choose their credentials. SSO invitation continuation requires a token-free handoff from the daemon; this screen reports that limitation instead of putting the invitation token into an SSO URL.
+Open `/auth/device` while signed in, enter the code from the CLI or desktop app, and review the device name and instance before approving or denying it. Approved desktop requests offer **Return to Signet**, which opens the desktop app without putting credentials in the link. `/auth/invite` accepts an invitation token and lets password accounts choose their credentials. For SSO, Signet exchanges the invitation for a short-lived, one-use continuation code; the invitation token itself is never placed in the SSO URL.
 
 ## Navigation and cached data
 
