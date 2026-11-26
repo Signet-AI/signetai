@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePanelQuery } from "@/lib/use-panel-query";
 import { useAgentContext } from "@/lib/agent-context";
 import { useWhoami } from "@/lib/session";
@@ -41,6 +41,12 @@ export function OrganizationMemory() {
 	const [cursor, setCursor] = useState("");
 	const [history, setHistory] = useState<readonly string[]>([]);
 	const [selected, setSelected] = useState<MemoryRow | null>(null);
+	useEffect(() => {
+		setOffset(0);
+		setCursor("");
+		setHistory([]);
+		setSelected(null);
+	}, [agentId]);
 	const memories = usePanelQuery<{ memories: readonly MemoryRow[]; total: number }>(
 		whoami
 			? `/api/memories?limit=100&offset=${offset}&agentId=${encodeURIComponent(agentId ?? whoami.agents.defaultRead)}`
@@ -78,6 +84,7 @@ export function OrganizationMemory() {
 		: (memories.result?.data?.memories ?? []);
 	const filtered = rows.filter(
 		(row) =>
+			row.agent_id === (agentId ?? whoami.agents.defaultRead) &&
 			row.content.toLowerCase().includes(query.toLowerCase()) &&
 			(!author || row.authorUserId === author) &&
 			(!team || agents.result?.data?.agents.some((agent) => agent.id === row.agent_id && agent.ownerGroupId === team)),
@@ -191,7 +198,7 @@ export function OrganizationMemory() {
 					Next page
 				</Action>
 			</div>
-			{selected && (
+			{selected && selected.agent_id === (agentId ?? whoami.agents.defaultRead) && (
 				<OrganizationBlock title="Memory detail">
 					<p className="whitespace-pre-wrap break-words text-small">{selected.content}</p>
 					<ClassifyAction target={{ kind: "memory", id: selected.id, agentId: selected.agent_id }} />
