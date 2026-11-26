@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
+import { transcriptUploadAgentExclusiveHolds, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 
 function gate(): { readonly opened: Promise<void>; readonly open: () => void } {
 	let open = (): void => {};
@@ -76,27 +76,28 @@ describe("transcript upload agent lock", () => {
 		expect(events).toEqual(["ada purge", "noam upload"]);
 	});
 
-	it("tells a shared holder whether an exclusive holder ran while it waited", async () => {
-		const seen: boolean[] = [];
+	it("counts each finished exclusive hold per agent before a waiting shared holder runs", async () => {
+		const before = transcriptUploadAgentExclusiveHolds("noam");
+		const seen: number[] = [];
 		const purge = gate();
 		const exclusive = withTranscriptUploadAgentLock("noam", "exclusive", () => purge.opened);
-		const waited = withTranscriptUploadAgentLock("noam", "shared", async (preempted) => {
-			seen.push(preempted);
+		const waited = withTranscriptUploadAgentLock("noam", "shared", async () => {
+			seen.push(transcriptUploadAgentExclusiveHolds("noam") - before);
 		});
 		purge.open();
 		await Promise.all([exclusive, waited]);
-		await withTranscriptUploadAgentLock("noam", "shared", async (preempted) => {
-			seen.push(preempted);
-		});
-		expect(seen).toEqual([true, false]);
+		expect(seen).toEqual([1]);
+		expect(transcriptUploadAgentExclusiveHolds("ada-never-purged")).toBe(0);
 	});
 
-	it("releases the lock when the holder throws", async () => {
+	it("releases the lock and counts the hold when the exclusive holder throws", async () => {
+		const before = transcriptUploadAgentExclusiveHolds("noam");
 		await expect(
 			withTranscriptUploadAgentLock("noam", "exclusive", async () => {
 				throw new Error("boom");
 			}),
 		).rejects.toThrow("boom");
+		expect(transcriptUploadAgentExclusiveHolds("noam") - before).toBe(1);
 		expect(await withTranscriptUploadAgentLock("noam", "shared", async () => "ran")).toBe("ran");
 	});
 });

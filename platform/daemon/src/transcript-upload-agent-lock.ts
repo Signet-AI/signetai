@@ -1,7 +1,6 @@
 interface Waiter {
 	readonly exclusive: boolean;
-	preempted: boolean;
-	readonly grant: (preempted: boolean) => void;
+	readonly grant: () => void;
 }
 
 interface Gate {
@@ -11,37 +10,42 @@ interface Gate {
 }
 
 const gates = new Map<string, Gate>();
+const finishedExclusiveHolds = new Map<string, number>();
 
 function pump(gate: Gate): void {
 	while (!gate.writer) {
 		const next = gate.queue[0];
 		if (!next || (next.exclusive && gate.readers > 0)) return;
 		gate.queue.shift();
-		if (next.exclusive) {
-			gate.writer = true;
-			for (const waiter of gate.queue) waiter.preempted = true;
-		} else gate.readers += 1;
-		next.grant(next.preempted);
+		if (next.exclusive) gate.writer = true;
+		else gate.readers += 1;
+		next.grant();
 	}
+}
+
+export function transcriptUploadAgentExclusiveHolds(agentId: string): number {
+	return finishedExclusiveHolds.get(agentId) ?? 0;
 }
 
 export async function withTranscriptUploadAgentLock<Result>(
 	agentId: string,
 	mode: "shared" | "exclusive",
-	operation: (preempted: boolean) => Promise<Result>,
+	operation: () => Promise<Result>,
 ): Promise<Result> {
 	const gate = gates.get(agentId) ?? { readers: 0, writer: false, queue: [] };
 	gates.set(agentId, gate);
 	const exclusive = mode === "exclusive";
-	const preempted = await new Promise<boolean>((grant) => {
-		gate.queue.push({ exclusive, preempted: gate.writer, grant });
+	await new Promise<void>((grant) => {
+		gate.queue.push({ exclusive, grant });
 		pump(gate);
 	});
 	try {
-		return await operation(preempted);
+		return await operation();
 	} finally {
-		if (exclusive) gate.writer = false;
-		else gate.readers -= 1;
+		if (exclusive) {
+			gate.writer = false;
+			finishedExclusiveHolds.set(agentId, transcriptUploadAgentExclusiveHolds(agentId) + 1);
+		} else gate.readers -= 1;
 		pump(gate);
 		if (!gate.writer && gate.readers === 0 && gate.queue.length === 0) gates.delete(agentId);
 	}

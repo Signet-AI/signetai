@@ -15,7 +15,7 @@ import { type TranscriptUploadCommitResult, transcriptUploadConflict } from "./s
 import { sha256 } from "./transcript-capture-jobs";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import { openContainedTranscriptFile, removeContainedTranscriptPath } from "./transcript-import-safe-fs";
-import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
+import { transcriptUploadAgentExclusiveHolds, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsRoot } from "./transcript-upload-paths";
 
 export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
@@ -66,9 +66,12 @@ export async function uploadTranscriptRange(
 ): Promise<TranscriptUploadResult> {
 	const invalid = validate(input);
 	if (invalid) return invalid;
+	const purgesAtArrival = transcriptUploadAgentExclusiveHolds(input.agentId);
 	return await withTranscriptImportOperationLock(`upload\0${input.agentId}\0${input.sessionKey}`, () =>
-		withTranscriptUploadAgentLock(input.agentId, "shared", (purged) =>
-			purged ? Promise.resolve({ status: "purge_pending" }) : writeAndCommitRange(accessor, input),
+		withTranscriptUploadAgentLock(input.agentId, "shared", () =>
+			transcriptUploadAgentExclusiveHolds(input.agentId) === purgesAtArrival
+				? writeAndCommitRange(accessor, input)
+				: Promise.resolve({ status: "purge_pending" }),
 		),
 	);
 }

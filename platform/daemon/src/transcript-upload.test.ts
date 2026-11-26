@@ -182,16 +182,19 @@ describe("transcript upload ranges", () => {
 		expect(job?.project).toBe("/repo");
 	});
 
-	it("refuses a range that waited for its agent lock while a purge held it", async () => {
+	it("refuses every same-session range queued before a purge", async () => {
 		init();
 		const accessor = getDbAccessor();
-		let upload: Promise<unknown> = Promise.resolve();
+		const uploads: Promise<unknown>[] = [];
 		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {
-			upload = uploadTranscriptRange(accessor, request('{"a":1}\n'));
+			uploads.push(uploadTranscriptRange(accessor, request('{"a":1}\n')));
+			uploads.push(uploadTranscriptRange(accessor, request('{"b":2}\n')));
 			await Bun.sleep(20);
 		});
-		expect(await upload).toEqual({ status: "purge_pending" });
+		expect(await Promise.all(uploads)).toEqual([{ status: "purge_pending" }, { status: "purge_pending" }]);
 		expect(existsSync(file())).toBe(false);
+		expect(await accessor.withReadDbAsync((db) => readTranscriptUploadStateInDb(db, "noam", "sess-1"))).toBeNull();
+		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
 	});
 
 	it("removes the first range when the directory sync fails before the commit", async () => {
@@ -463,7 +466,7 @@ describe("transcript upload ranges", () => {
 		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
 	});
 
-	it("retries a drain whose owner pass failed", async () => {
+	it("retries a failed drain pass and reports the failure to a request that joined it", async () => {
 		init();
 		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
 		await getDbAccessor().withWriteTxAsync((db) => {
@@ -471,9 +474,14 @@ describe("transcript upload ranges", () => {
 				transcriptUploadAgentRelativePath("noam"),
 			);
 		});
-		const failing = spyOn(runtime, "dbOwnerDrainTranscriptUploadPurges").mockRejectedValueOnce(new Error("owner down"));
+		let joined: Promise<unknown> = Promise.resolve();
+		const failing = spyOn(runtime, "dbOwnerDrainTranscriptUploadPurges").mockImplementationOnce(async () => {
+			joined = drainTranscriptUploadPurges(dir);
+			throw new Error("owner down");
+		});
 		try {
 			expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "failed", error: "owner down" });
+			expect(await joined).toEqual({ status: "failed", error: "owner down" });
 			for (let i = 0; i < 100 && (await uploadPurges()).length > 0; i++) await Bun.sleep(100);
 		} finally {
 			failing.mockRestore();
