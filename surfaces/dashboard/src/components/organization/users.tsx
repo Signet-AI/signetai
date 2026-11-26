@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Panel } from "@/components/shell/panel";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -22,6 +23,8 @@ import {
 	ORGANIZATION_ROLES,
 	type OffboardingPlan,
 	type OrganizationUser,
+	type OrganizationGroup,
+	type OrganizationAgent,
 	offboardingRequest,
 	rolePermissions,
 } from "@/lib/organization";
@@ -458,34 +461,66 @@ export interface EffectiveAccess {
 	readonly actAs: readonly { agentId: string; kind: string; why: string }[];
 	readonly readableClassifications: readonly { id: string; name: string; why?: string }[];
 }
-export function AccessContent({ access }: { access: EffectiveAccess }) {
+export function AccessContent({
+	access,
+	groups = [],
+	agents = [],
+}: {
+	access: EffectiveAccess;
+	groups?: readonly OrganizationGroup[];
+	agents?: readonly OrganizationAgent[];
+}) {
 	return (
 		<div className="flex flex-col gap-6">
 			<OrganizationBlock
 				title={access.user.displayName}
-				description={`Role: ${access.role}. Groups: ${access.groups.join(", ") || "None"}.`}
+				description={`Role: ${displayLabel(access.role)}. Teams: ${access.groups.map((id) => groups.find((group) => group.id === id)?.name ?? "Team").join(", ") || "None"}.`}
 			>
-				<p className="text-small">Permissions from role and compliance: {access.permissions.join(", ") || "None"}</p>
+				<p className="text-small">
+					Permissions from role and compliance: {access.permissions.map(displayLabel).join(", ") || "None"}
+				</p>
 			</OrganizationBlock>
 			<OrganizationBlock title="May act as">
-				<OrganizationTable columns={["Agent", "Kind", "Why"]}>
-					{access.actAs.map((agent) => (
-						<tr key={agent.agentId} className={rowClass}>
-							<td className={cellClass}>{agent.agentId}</td>
-							<td className={cellClass}>{agent.kind}</td>
-							<td className={cellClass}>{agent.why}</td>
-						</tr>
-					))}
-				</OrganizationTable>
+				<Panel
+					result={{ data: access.actAs, error: null, status: 200 }}
+					empty={!access.actAs.length}
+					emptyMessage="No agents available."
+				>
+					{(rows) => (
+						<OrganizationTable columns={["Agent", "Kind", "Why"]}>
+							{rows.map((agent) => (
+								<tr key={agent.agentId} className={rowClass}>
+									<td className={cellClass}>
+										<div>
+											{agents.find((item) => item.id === agent.agentId)?.name ?? `${displayLabel(agent.kind)} agent`}
+										</div>
+										<div className="break-all text-xs text-muted-foreground">{agent.agentId}</div>
+									</td>
+									<td className={cellClass}>{displayLabel(agent.kind)}</td>
+									<td className={cellClass}>{displayLabel(agent.why)}</td>
+								</tr>
+							))}
+						</OrganizationTable>
+					)}
+				</Panel>
 			</OrganizationBlock>
 			<OrganizationBlock title="Readable classifications">
-				<ul className="text-small">
-					{access.readableClassifications.map((item) => (
-						<li key={item.id}>
-							{item.name} · {item.why ?? "Audience membership"}
-						</li>
-					))}
-				</ul>
+				<Panel
+					result={{ data: access.readableClassifications, error: null, status: 200 }}
+					empty={!access.readableClassifications.length}
+					emptyMessage="No readable classifications."
+				>
+					{(items) => (
+						<ul className="m-0 list-none divide-y p-0 text-small">
+							{items.map((item) => (
+								<li key={item.id} className="py-3">
+									{item.name}
+									<span className="ml-2 text-muted-foreground">{item.why ?? "Audience membership"}</span>
+								</li>
+							))}
+						</ul>
+					)}
+				</Panel>
 			</OrganizationBlock>
 		</div>
 	);
