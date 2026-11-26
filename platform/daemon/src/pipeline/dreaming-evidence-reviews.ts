@@ -210,10 +210,42 @@ const reviewedEvidenceRows = z.array(
 export async function getDreamingReviewedEvidence(
 	accessor: DbAccessor,
 	agentId: string,
-	readScope?: ReadScope,
+	callerReadScope?: ReadScope,
 ): Promise<readonly DreamingReviewedEvidence[]> {
-	const { dbOwnerReviewedEvidence } = await import("../db-owner-runtime");
-	return dbOwnerReviewedEvidence(accessor, agentId, readScope);
+	const callerScope: ReadScope = callerReadScope ?? {
+		reach: { kind: "own", agentId },
+		compartments: [],
+		projects: null,
+	};
+	const reach =
+		callerScope.reach.kind === "shared" || callerScope.reach.kind === "group"
+			? { kind: "own" as const, agentId: callerScope.reach.agentId }
+			: callerScope.reach;
+	const scope = readScopeSql(
+		"r",
+		{ ...callerScope, reach, projects: null },
+		{ visibility: null, memory: null, session: null, source: null },
+	);
+	const owner = await getDbOwnerForAccessor(accessor);
+	const exists = await ownerReadOne<{ readonly present: number }>(
+		owner,
+		"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+		["dreaming_evidence_reviews"],
+		{ operation: "dreaming.evidence-reviews-table", workloadClass: "foreground" },
+	);
+	if (exists === null) return [];
+	return await ownerReadAll<DreamingReviewedEvidence>(
+		owner,
+		`SELECT agent_id AS agentId, source_kind AS sourceKind, source_id AS sourceId,
+		        source_captured_at AS sourceCapturedAt, source_entry_id AS sourceEntryId,
+		        source_revision AS sourceRevision, reason, pass_id AS passId,
+		        reviewed_at AS reviewedAt
+		 FROM dreaming_evidence_reviews r
+		 WHERE agent_id = ? ${scope.sql} ${callerReadScope?.projects != null ? "AND 0" : ""}
+		 ORDER BY reviewed_at DESC, source_kind ASC, source_id ASC LIMIT 500`,
+		[agentId, ...scope.args],
+		{ operation: "dreaming.evidence-reviews-read", workloadClass: "foreground" },
+	);
 }
 export function readDreamingReviewedEvidenceInOwner(
 	db: ReadDb,

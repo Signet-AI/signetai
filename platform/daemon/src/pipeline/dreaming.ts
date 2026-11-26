@@ -1194,7 +1194,7 @@ export async function getDreamingEvidenceExclusions(
 	agentId: string,
 	readScope?: ReadScope,
 ): Promise<readonly DreamingEvidenceExclusion[]> {
-	const predicate = dreamingReadPredicate("p", readScope);
+	const predicate = passReadPredicate(agentId, readScope);
 	return await ownerQueryAll<DreamingEvidenceExclusion>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.evidence-exclusions.list",
@@ -1204,10 +1204,9 @@ export async function getDreamingEvidenceExclusions(
 		        pass_id AS passId, excluded_at AS excludedAt,
 		        requeue_requested_at AS requeueRequestedAt, resolved_at AS resolvedAt
 		 FROM dreaming_evidence_exclusions
-		 WHERE ${readScope ? "1=1" : "agent_id = ?"} AND resolved_at IS NULL
- ${readScope ? `AND EXISTS (SELECT 1 FROM dreaming_passes p WHERE p.id = dreaming_evidence_exclusions.pass_id AND p.agent_id = dreaming_evidence_exclusions.agent_id ${predicate.sql})` : ""}
-		 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
-		[...(readScope ? predicate.args : [agentId])],
+		 WHERE resolved_at IS NULL ${predicate.sql}
+		 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC LIMIT 500`,
+		[...predicate.args],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
 	);
 }
