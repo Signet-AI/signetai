@@ -92,7 +92,7 @@ export function Action({
 export function OrganizationTable({ columns, children }: { columns: readonly string[]; children: ReactNode }) {
 	return (
 		<div className="min-w-0 overflow-x-auto">
-			<table className="w-full text-left text-small">
+			<table className="w-full min-w-xl text-left text-small">
 				<thead>
 					<tr className="border-b">
 						{columns.map((column) => (
