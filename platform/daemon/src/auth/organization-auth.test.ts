@@ -435,7 +435,7 @@ describe("organization credential boundary", () => {
 			workspaceRoot: dir,
 		};
 		Reflect.deleteProperty(input, "author");
-		await expect(importDocument(input)).rejects.toThrow("write_author_required");
+		await expect(importDocument(input)).rejects.toThrow("A write requires an explicit author");
 		expect((await import("node:fs")).existsSync(join(dir, "sources.json"))).toBe(false);
 	});
 	test("file imports retain the explicit principal on their evidence artifacts", async () => {
