@@ -42,6 +42,46 @@ test("A16 actual HTTP writes reject classified destinations without persisted si
 			);
 		const forbiddenRoot = join(sweep.daemon.root, "forbidden-vault");
 		await mkdir(forbiddenRoot);
+		const { loadMemoryConfig } = await import("../../../platform/daemon/src/memory-config");
+		const { embeddingProfileFingerprint, recommendedEmbeddingProfileId } = await import(
+			"../../../platform/daemon/src/embedding-profile"
+		);
+		const configured = loadMemoryConfig(sweep.daemon.workspace).embedding;
+		const fingerprint = embeddingProfileFingerprint({
+			...configured,
+			profile: recommendedEmbeddingProfileId(configured),
+		});
+		await until(
+			async () =>
+				sweep.read((db) => {
+					const state = db
+						.query<
+							{
+								state: string;
+								active_profile_json: string;
+								staging_profile_json: string | null;
+								provider_endpoint: string | null;
+								last_error: string | null;
+							},
+							[]
+						>(
+							"SELECT state,active_profile_json,staging_profile_json,provider_endpoint,last_error FROM embedding_index_state WHERE id=1",
+						)
+						.get();
+					if (state === null) return false;
+					const active = record(JSON.parse(state.active_profile_json));
+					return (
+						state.state === "ready" &&
+						state.staging_profile_json === null &&
+						state.last_error === null &&
+						state.provider_endpoint === configured.base_url &&
+						active.fingerprint === fingerprint &&
+						active.baseUrl === configured.base_url
+					);
+				}),
+			"embedding index owner settled on the configured startup profile",
+			60_000,
+		);
 		const before = snapshot();
 		const sourceConfig = Bun.file(join(sweep.daemon.workspace, "sources.json"));
 		const configBefore = (await sourceConfig.exists()) ? await sourceConfig.text() : "";
