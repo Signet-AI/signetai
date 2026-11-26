@@ -390,7 +390,11 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(62);
+		expect(names).toContain("signet_org_access");
+		expect(names).toContain("signet_org_audit");
+		expect(names).toContain("signet_org_job");
+		expect(names).toContain("signet_classify");
+		expect(names.length).toBe(66);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {

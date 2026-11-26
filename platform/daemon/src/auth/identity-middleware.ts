@@ -76,6 +76,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		pairLimits = new AuthRateLimiter(60_000, 5),
 		deviceLimits = new AuthRateLimiter(60_000, 20);
 	const openAuthPaths = new Set([
+		"/api/auth/session",
 		"/api/auth/handoff/redeem",
 		"/api/auth/login",
 		"/api/org/claim",
@@ -148,7 +149,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		const org = await readOrganization();
 		if (
 			["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
-			isAuthOpenPath(c.req.path) &&
+			(isAuthOpenPath(c.req.path) || c.req.path === "/api/auth/session") &&
 			!acceptRequestOrigin(c, config, org.public_url)
 		)
 			return failure(c, new IdentityError(403, "org_policy", "Cross-origin authentication rejected"));
@@ -174,6 +175,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		const bearer = c.req.header("authorization");
 		const cookie = !bearer ? getCookie(c, authCookies(c).session) : undefined;
 		const token = bearer?.startsWith("Bearer ") ? bearer.slice(7) : cookie;
+		if (cookie && !token?.startsWith("sig_ses_")) return failure(c, new IdentityError(401, "invalid_credential"));
 		if (!token) {
 			c.set("auth", { authenticated: false, claims: null });
 			if (
@@ -202,7 +204,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 						sameSite: "Lax" as const,
 						path: "/",
 						secure: authCookies(c, org).secure,
-						maxAge: org.session_ttl_seconds,
+						maxAge: Math.max(0, Math.floor((Date.parse(result.session.access_expires_at) - Date.now()) / 1000)),
 					};
 					setCookie(c, authCookies(c).session, token, { ...options, httpOnly: true });
 					const csrfCookie = getCookie(c, authCookies(c).csrf);

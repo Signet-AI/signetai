@@ -126,7 +126,7 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 			headers: { Accept: "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
 		});
 		const body = (await res.json().catch(() => null)) as { error?: unknown; details?: unknown } | T | null;
-		const errorBody = typeof body === "object" && body !== null && "error" in body;
+		const errorBody = typeof body === "object" && body !== null && "error" in body && body.error != null;
 		if (!res.ok || errorBody) {
 			const reason =
 				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"

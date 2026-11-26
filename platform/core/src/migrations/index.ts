@@ -179,6 +179,7 @@ import { up as organizationIdentity, artifacts as organizationIdentityArtifacts 
 import { up as classifications } from "./177-classifications";
 import { up as writeInheritance, artifacts as writeInheritanceArtifacts } from "./178-write-inheritance";
 import { up as dreamingEvidenceLeases } from "./179-dreaming-evidence-leases";
+import { up as keySessionBinding, artifacts as keySessionBindingArtifacts } from "./181-key-session-binding";
 import { up as hookTranscriptUploads, artifacts as hookTranscriptUploadArtifacts } from "./180-hook-transcript-uploads";
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1727,6 +1728,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "hook-transcript-uploads",
 		up: hookTranscriptUploads,
 		artifacts: hookTranscriptUploadArtifacts,
+	},
+	{
+		version: 181,
+		name: "key-session-binding",
+		up: keySessionBinding,
+		artifacts: keySessionBindingArtifacts,
 	},
 ];
 function checksum(m: Migration): string {

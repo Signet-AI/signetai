@@ -43,9 +43,15 @@ The summary is backed by durable audit records and survives daemon restarts. It 
 
 `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a signed-in user session. It changes only your default read agent, not another user's preference or your default write ownership. The agent must exist and be unarchived; API keys cannot change the account preference. The change is audited and appears in `/api/auth/whoami`.
 
+## API-key browser sign-in
+
+`POST /api/auth/session` exchanges a personal API key supplied as a bearer credential for HttpOnly browser-session and CSRF cookies. The JSON response contains only `{ user, expiresAt, csrf }`. Shared, connector, and legacy keys cannot use this exchange. Do not persist the pasted key in browser storage.
+
+The daemon stores the parent-key binding and issuance permission, agent, project, and expiry ceilings in the session. Every request checks the live parent key and user; revocation, expiration, and permission narrowing take effect on the next request. Extending or widening the key does not widen an existing browser session. Sliding expiry and dashboard handoff preserve these ceilings, including across daemon restarts. Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations.
+
 ## Dashboard handoff
 
-A signed-in user session can call `POST /api/auth/handoff` to receive `{ code, expiresAt }`. The code expires after 60 seconds, is single use, and becomes invalid when its issuing session expires or is revoked. API keys cannot mint browser sessions. Pending handoffs are bounded and are invalidated by a daemon restart.
+A signed-in user session can call `POST /api/auth/handoff` to receive `{ code, expiresAt }`. The code expires after 60 seconds, is single use, and becomes invalid when its issuing session expires or is revoked. API keys cannot issue handoff codes directly; a key-derived browser session keeps its parent-key ceilings on redemption. Pending handoffs are bounded and are invalidated by a daemon restart.
 
 The browser sends the code in the JSON body of `POST /api/auth/handoff/redeem`. Redemption sets the browser session and CSRF cookies and returns `{ user, expiresAt, csrf }`, never a bearer token. Put the code in a URL fragment rather than a query string, clear it before redemption, and never put an access or refresh token in a URL.
 

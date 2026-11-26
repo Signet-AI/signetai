@@ -93,6 +93,25 @@ checks access to the target, saves the preference, and returns
 `{ "defaultReadAgentId": "agent-id" }`. A subsequent `GET /api/auth/whoami`
 reports it in `agents.defaultRead`.
 
+### GET /api/auth/profile
+
+Returns the current organization user, `identityProvider` (OIDC kind/issuer or
+null), and `editableFields`. Name and email are editable for password accounts.
+SSO-owned fields are read-only.
+
+### PATCH /api/auth/profile
+
+Updates your own `displayName` and `email` (string or null). Requires a user
+session and CSRF protection for cookie requests. SSO-managed profiles return
+403 `org_policy`; duplicate email returns 409 `email_in_use`. Read the profile
+again to confirm a successful save.
+
+### GET /api/auth/connector-keys/:id/errors
+
+Requires a user session and ownership of the connector key. Returns `keyId`,
+`since`, `limit: 10`, and recent `errors` containing `at`, `status`, and `reason`,
+newest first, bounded to the past seven days. Other users’ keys return 403.
+
 ### GET /api/auth/methods
 
 Open route returning configured dashboard login providers. Password login is

@@ -31,10 +31,21 @@ export interface Whoami {
 		readonly email: string | null;
 		readonly role: string;
 		readonly compliance: boolean;
-		readonly groups: readonly { readonly id: string; readonly name: string; readonly role: string }[];
+		readonly ssoManaged?: boolean;
+		readonly groups: readonly {
+			readonly id: string;
+			readonly name: string;
+			readonly role: string;
+			readonly managedBy?: string;
+		}[];
 	};
 	readonly agents: { readonly defaultRead: string; readonly defaultWrite: string | null };
-	readonly credential: { readonly id: string; readonly kind: string; readonly expiresAt: string | null };
+	readonly credential: {
+		readonly id: string;
+		readonly kind: string;
+		readonly expiresAt: string | null;
+		readonly agentId?: string | null;
+	};
 }
 
 export type Session =
@@ -208,13 +219,24 @@ function readWhoami(value: Record<string, unknown>): Whoami | undefined {
 				const id = text(group.id);
 				const name = text(group.name);
 				const role = text(group.role);
-				return id && name && role ? [{ id, name, role }] : [];
+				return id && name && role
+					? [{ id, name, role, ...(text(group.managedBy) ? { managedBy: String(group.managedBy) } : {}) }]
+					: [];
 			})
 		: [];
 	return {
 		organization: { name, agentModel },
-		user: { id, username, displayName, email: text(user.email), role, compliance: user.compliance === true, groups },
-		credential: { id: credentialId, kind, expiresAt: text(credential.expiresAt) },
+		user: {
+			id,
+			username,
+			displayName,
+			email: text(user.email),
+			role,
+			compliance: user.compliance === true,
+			ssoManaged: user.ssoManaged === true,
+			groups,
+		},
+		credential: { id: credentialId, kind, expiresAt: text(credential.expiresAt), agentId: text(credential.agentId) },
 		agents: { defaultRead, defaultWrite: text(agents.defaultWrite) },
 	};
 }
@@ -394,7 +416,8 @@ export async function signInWithPassword(username: string, password: string): Pr
 export async function signInWithKey(key: string): Promise<SignInResult> {
 	const res = await request("/api/auth/session", {
 		method: "POST",
-		headers: { Authorization: `Bearer ${key.trim()}` },
+		headers: { Authorization: `Bearer ${key.trim()}`, "Content-Type": "application/json" },
+		body: JSON.stringify({}),
 	});
 	if (res?.status === 200) return adopt(res);
 	const error = res && isRecord(res.body) ? text(res.body.error) : null;

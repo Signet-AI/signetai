@@ -7,7 +7,7 @@ import { type AgentRecord, bindPrincipalAccess, principalAccess } from "./agent-
 import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 import { appendRefreshRetry, replayRefreshRetry } from "./refresh-retry";
-import type { Permission, TokenRole } from "./types";
+import { PERMISSIONS, type Permission, type TokenRole } from "./types";
 
 export function organizationClaimedInDb(db: ReadDb): boolean {
 	return (
@@ -113,6 +113,8 @@ export interface SessionRow {
 	refresh_hash: string | null;
 	refresh_retry_json: string;
 	refresh_expires_at: string | null;
+	source_key_id: string | null;
+	source_key_ceiling_json: string | null;
 	csrf_hash: string | null;
 	created_at: string;
 	last_used_at: string | null;
@@ -290,20 +292,96 @@ export async function userPrincipal(
 		allowedProjects,
 	};
 }
+const keySessionCeilingSchema = z
+	.object({
+		permissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length),
+		agentId: z.string().min(1).max(200).nullable(),
+		projects: z.array(z.string().min(1).max(4096)).max(100).nullable(),
+		expiresAt: z.iso.datetime(),
+	})
+	.strict();
+export interface SessionKeyBinding {
+	readonly sourceKeyId: string;
+	readonly ceiling: z.infer<typeof keySessionCeilingSchema>;
+}
+function storedJson(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		throw new IdentityError(401, "invalid_credential");
+	}
+}
+export function sourceSessionBinding(session: SessionRow): SessionKeyBinding | undefined {
+	if (!session.source_key_id && !session.source_key_ceiling_json) return undefined;
+	if (!session.source_key_id || !session.source_key_ceiling_json) throw new IdentityError(401, "invalid_credential");
+	const ceiling = keySessionCeilingSchema.safeParse(storedJson(session.source_key_ceiling_json));
+	if (!ceiling.success) throw new IdentityError(401, "invalid_credential");
+	return { sourceKeyId: session.source_key_id, ceiling: ceiling.data };
+}
+function intersectProjects(left: readonly string[] | null, right: readonly string[] | null): readonly string[] | null {
+	if (left === null) return right;
+	return right === null ? left : left.filter((project) => right.includes(project));
+}
+async function sessionKeyLimits(session: SessionRow) {
+	const binding = sourceSessionBinding(session);
+	if (!binding) return undefined;
+	const key = await readBoundKey(binding.sourceKeyId);
+	if (!key || key.user_id !== session.user_id || key.kind !== "personal")
+		throw new IdentityError(401, "invalid_credential");
+	if (key.revoked_at) throw new IdentityError(401, "revoked");
+	await activeUser(session.user_id, key.device_id);
+	const expiresAt =
+		key.expires_at && key.expires_at < binding.ceiling.expiresAt ? key.expires_at : binding.ceiling.expiresAt;
+	if (expiresAt <= new Date().toISOString()) throw new IdentityError(401, "expired");
+	const scope = z
+		.object({ user: z.string().optional(), agent: z.string().optional(), project: z.string().optional() })
+		.passthrough()
+		.safeParse(storedJson(key.scope_json));
+	const permissions = z.array(z.enum(PERMISSIONS)).safeParse(storedJson(key.permissions_json));
+	const projects = key.allowed_projects_json
+		? z.array(z.string()).safeParse(storedJson(key.allowed_projects_json))
+		: { success: true as const, data: null };
+	if (
+		!scope.success ||
+		!permissions.success ||
+		!projects.success ||
+		(scope.data.user && scope.data.user !== session.user_id)
+	)
+		throw new IdentityError(401, "invalid_credential");
+	if (key.agent_id && scope.data.agent && key.agent_id !== scope.data.agent)
+		throw new IdentityError(401, "invalid_credential");
+	const liveAgent = key.agent_id ?? scope.data.agent ?? null;
+	if (binding.ceiling.agentId && liveAgent && binding.ceiling.agentId !== liveAgent)
+		throw new IdentityError(401, "agent_binding_conflict");
+	return {
+		sourceKeyId: key.id,
+		permissions: binding.ceiling.permissions.filter((permission) => permissions.data.includes(permission)),
+		agentId: binding.ceiling.agentId ?? liveAgent,
+		projects: intersectProjects(
+			binding.ceiling.projects,
+			intersectProjects(projects.data, scope.data.project ? [scope.data.project] : null),
+		),
+		expiresAt,
+	};
+}
+
 export function sessionMaterial(
 	userId: string,
 	kind: SessionRow["kind"],
 	deviceId: string | null,
 	org: OrganizationRow,
+	binding?: SessionKeyBinding,
 ) {
+	if (binding && kind !== "browser") throw new IdentityError(403, "org_policy");
 	const sessionId = id("ses");
 	const access = secret();
 	const refresh = kind === "browser" ? null : secret();
 	const csrf = kind === "browser" ? secret() : null;
 	const now = new Date().toISOString();
-	const accessExpiresAt = new Date(
+	const expires = new Date(
 		Date.now() + (kind === "browser" ? org.session_ttl_seconds : org.access_ttl_seconds) * 1000,
 	).toISOString();
+	const accessExpiresAt = binding && binding.ceiling.expiresAt < expires ? binding.ceiling.expiresAt : expires;
 	const refreshExpiresAt = refresh ? new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString() : null;
 	return {
 		sessionId,
@@ -315,7 +393,7 @@ export function sessionMaterial(
 		deviceId,
 		statements: [
 			statement(
-				"INSERT INTO auth_sessions (id,user_id,kind,device_id,token_hash,access_expires_at,refresh_hash,refresh_expires_at,csrf_hash,created_at,last_used_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+				"INSERT INTO auth_sessions (id,user_id,kind,device_id,token_hash,access_expires_at,refresh_hash,refresh_expires_at,csrf_hash,created_at,last_used_at,source_key_id,source_key_ceiling_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
 				[
 					sessionId,
 					userId,
@@ -328,6 +406,8 @@ export function sessionMaterial(
 					csrf ? digest(csrf) : null,
 					now,
 					now,
+					binding?.sourceKeyId ?? null,
+					binding ? JSON.stringify(binding.ceiling) : null,
 				],
 			),
 		],
@@ -412,6 +492,52 @@ export function parseSessionToken(token: string, prefix: "ses" | "ref"): { sessi
 	const match = new RegExp(`^sig_${prefix}_(ses_[a-f0-9]{32})_([A-Za-z0-9_-]{43})$`).exec(token);
 	return match?.[1] && match[2] ? { sessionId: match[1], secret: match[2] } : null;
 }
+export async function issueKeyBrowserSession(p: Principal) {
+	if (p.kind !== "user" || !p.userId || p.credential.kind !== "api_key")
+		throw new IdentityError(403, "org_policy", "Requires a personal API key");
+	const key = await readBoundKey(p.credential.id);
+	if (!key || key.user_id !== p.userId || key.kind !== "personal" || key.legacy)
+		throw new IdentityError(403, "org_policy", "Only personal API keys can be exchanged");
+	if (key.revoked_at) throw new IdentityError(401, "revoked");
+	if (key.expires_at && key.expires_at <= new Date().toISOString()) throw new IdentityError(401, "expired");
+	const user = await activeUser(p.userId, key.device_id);
+	const org = await readOrganization();
+	const binding: SessionKeyBinding = {
+		sourceKeyId: key.id,
+		ceiling: {
+			permissions: [...p.permissions],
+			agentId: p.boundAgentId,
+			projects: p.allowedProjects ? [...p.allowedProjects] : null,
+			expiresAt: key.expires_at ?? new Date(Date.now() + org.session_ttl_seconds * 1000).toISOString(),
+		},
+	};
+	const material = sessionMaterial(user.id, "browser", key.device_id, org, binding);
+	await organizationWrite([
+		...material.statements,
+		auditStatement(p, "session.key_exchanged", "session", material.sessionId, { sourceKeyId: key.id }),
+	]);
+	const { statements: _statements, ...result } = material;
+	return { ...result, user: userView(user) };
+}
+export async function resolveSessionPrincipal(session: SessionRow, org: OrganizationRow) {
+	if (session.revoked_at) throw new IdentityError(401, "revoked");
+	if (session.access_expires_at <= new Date().toISOString()) throw new IdentityError(401, "expired");
+	const user = await activeUser(session.user_id, session.device_id);
+	const limits = await sessionKeyLimits(session);
+	const base = await userPrincipal(
+		user,
+		{ kind: "session", id: session.id },
+		session.id,
+		session.device_id,
+		null,
+		limits?.agentId ?? null,
+		limits?.projects ?? null,
+		limits?.permissions,
+	);
+	const principal = limits ? { ...base, sourceKeyId: limits.sourceKeyId } : base;
+	await bindAccess(principal, user, org);
+	return { user, principal, expiresAtCeiling: limits?.expiresAt };
+}
 export async function verifySession(
 	token: string,
 	csrf: string | undefined,
@@ -424,9 +550,7 @@ export async function verifySession(
 		statement("SELECT * FROM auth_sessions WHERE id = ?", [parsed.sessionId], "get"),
 	);
 	if (!session || !matchesHash(parsed.secret, session.token_hash)) throw new IdentityError(401, "invalid_credential");
-	if (session.revoked_at) throw new IdentityError(401, "revoked");
-	if (session.access_expires_at <= new Date().toISOString()) throw new IdentityError(401, "expired");
-	const user = await activeUser(session.user_id, session.device_id);
+	const { user, principal, expiresAtCeiling } = await resolveSessionPrincipal(session, org);
 	if (requireCsrf && (!csrf || !matchesHash(csrf, session.csrf_hash))) throw new IdentityError(403, "csrf");
 	if (session.refresh_retry_json !== "[]")
 		await organizationWrite([
@@ -437,21 +561,24 @@ export async function verifySession(
 		]);
 	const now = Date.now();
 	let currentSession = session;
-	if (!session.last_used_at || Date.parse(session.last_used_at) <= now - 60_000) {
-		const expires =
+	if (
+		!session.last_used_at ||
+		Date.parse(session.last_used_at) <= now - 60_000 ||
+		(expiresAtCeiling && expiresAtCeiling < session.access_expires_at)
+	) {
+		const slidingExpires =
 			session.kind === "browser" && Date.parse(session.access_expires_at) - now < org.session_ttl_seconds * 500
 				? new Date(now + org.session_ttl_seconds * 1000).toISOString()
 				: session.access_expires_at;
+		const expires = expiresAtCeiling && expiresAtCeiling < slidingExpires ? expiresAtCeiling : slidingExpires;
 		await organizationWrite([
 			statement(
-				"UPDATE auth_sessions SET last_used_at = ?,access_expires_at = ? WHERE id = ? AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at <= ?)",
-				[new Date(now).toISOString(), expires, session.id, new Date(now - 60_000).toISOString()],
+				"UPDATE auth_sessions SET last_used_at = ?,access_expires_at = ? WHERE id = ? AND revoked_at IS NULL AND ((last_used_at IS NULL OR last_used_at <= ?) OR access_expires_at>?)",
+				[new Date(now).toISOString(), expires, session.id, new Date(now - 60_000).toISOString(), expires],
 			),
 		]);
 		currentSession = { ...session, access_expires_at: expires, last_used_at: new Date(now).toISOString() };
 	}
-	const principal = await userPrincipal(user, { kind: "session", id: session.id }, session.id, session.device_id);
-	await bindAccess(principal, user, org);
 	return {
 		principal,
 		user,
@@ -585,13 +712,14 @@ export interface BoundKeyRow {
 	agent_id: string | null;
 	allowed_projects_json: string | null;
 	permissions_json: string;
+	scope_json: string;
 	expires_at: string | null;
 	revoked_at: string | null;
 }
 export function readBoundKey(keyId: string): Promise<BoundKeyRow | null> {
 	return organizationQuery(
 		statement(
-			"SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,expires_at,revoked_at FROM api_keys WHERE id = ?",
+			"SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,scope_json,expires_at,revoked_at FROM api_keys WHERE id = ?",
 			[keyId],
 			"get",
 		),

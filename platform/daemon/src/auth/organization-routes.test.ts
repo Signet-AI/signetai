@@ -88,6 +88,160 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("personal-key cookie sessions retain durable permission, agent and expiry ceilings", async () => {
+		const root = await claim();
+		const bob = await member("bob");
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const issued = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "browser fallback",
+				permissions: ["recall"],
+				agentId: root.user.personalAgentId ?? (await (await call("/api/auth/whoami")).json()).agents.defaultWrite,
+				allowedProjects: ["project-a"],
+				expiresAt,
+			})
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		expect(exchanged.status).toBe(200);
+		const payload = await exchanged.json();
+		expect(payload).not.toHaveProperty("accessToken");
+		expect(payload.expiresAt).toBe(expiresAt);
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((item) => item.split(";")[0])
+			.join("; ");
+		const read = (path: string, headers: Record<string, string> = {}) =>
+			app.request(path, { headers: { cookie, ...headers } });
+		const identity = await (await read("/api/auth/whoami")).json();
+		expect(identity.permissions).toEqual(["recall"]);
+		const denied = await read(`/api/agents?agentId=${bob.agentId}`);
+		expect(denied.status).toBe(403);
+		expect(
+			(
+				await app.request("/api/org/invites", {
+					method: "POST",
+					headers: { cookie, "content-type": "application/json", "x-signet-csrf": payload.csrf },
+					body: "{}",
+				})
+			).status,
+		).toBe(403);
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"UPDATE auth_sessions SET last_used_at='2000-01-01T00:00:00.000Z',access_expires_at=? WHERE source_key_id=?",
+				[new Date(Date.now() + 90_000).toISOString(), issued.key.id],
+			),
+		]);
+		await read("/api/auth/whoami");
+		const persisted = await organizationQuery<{ access_expires_at: string }>(
+			statement("SELECT access_expires_at FROM auth_sessions WHERE source_key_id=?", [issued.key.id], "get"),
+		);
+		expect(persisted.access_expires_at).toBe(expiresAt);
+		await closeDbAccessor();
+		initDbAccessor((await import("@signet/core")).resolveWorkspaceLayout(dir).database, { agentsDir: dir });
+		expect((await (await read("/api/auth/whoami")).json()).permissions).toEqual(["recall"]);
+		expect((await call(`/api/auth/api-keys/${issued.key.id}`, "DELETE")).status).toBe(200);
+		expect((await read("/api/agents")).status).toBe(401);
+	});
+	test("key-cookie handoff and live parent narrowing cannot widen issuance ceilings", async () => {
+		await claim();
+		const own = (await (await call("/api/auth/whoami")).json()).agents.defaultWrite;
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const issued = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "handoff ceiling",
+				permissions: ["recall"],
+				agentId: own,
+				allowedProjects: ["project-a"],
+				expiresAt,
+			})
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, issued.secret);
+		expect(exchanged.status).toBe(200);
+		const initial = await exchanged.json();
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((item) => item.split(";")[0])
+			.join("; ");
+		const write = (path: string, body: unknown, csrf = initial.csrf) =>
+			app.request(path, {
+				method: "POST",
+				headers: { cookie, "content-type": "application/json", "x-signet-csrf": csrf },
+				body: JSON.stringify(body),
+			});
+		expect((await write("/api/auth/handoff", {}, "wrong")).status).toBe(403);
+		expect((await write("/api/auth/api-keys", { name: "escape", permissions: ["recall"] })).status).toBe(403);
+		expect((await write("/api/auth/device/approve", { userCode: "AAAA-AAAA", decision: "approve" })).status).toBe(403);
+		const handoff = await (await write("/api/auth/handoff", {})).json();
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		expect(redeemed.status).toBe(200);
+		expect((await redeemed.json()).expiresAt).toBe(expiresAt);
+		const secondCookie = redeemed.headers
+			.getSetCookie()
+			.map((item) => item.split(";")[0])
+			.join("; ");
+		const read = (path: string) => app.request(path, { headers: { cookie: secondCookie } });
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"UPDATE api_keys SET permissions_json=?,agent_id=NULL,scope_json=json_remove(scope_json,'$.agent'),allowed_projects_json=NULL,expires_at=? WHERE id=?",
+				[JSON.stringify(["recall", "remember"]), new Date(Date.now() + 86400_000).toISOString(), issued.key.id],
+			),
+		]);
+		expect((await (await read("/api/auth/whoami")).json()).permissions).toEqual(["recall"]);
+		expect((await read("/api/agents?agentId=default")).status).toBe(403);
+		expect((await read("/api/agents?project=project-b")).status).toBe(403);
+		await organizationWrite([
+			statement("UPDATE api_keys SET permissions_json='[]',expires_at=? WHERE id=?", [
+				new Date(Date.now() + 120_000).toISOString(),
+				issued.key.id,
+			]),
+		]);
+		const narrowed = await (await read("/api/auth/whoami")).json();
+		expect(narrowed.permissions).toEqual([]);
+		expect(Date.parse(narrowed.credential.expiresAt)).toBeLessThan(Date.parse(expiresAt));
+		await organizationWrite([
+			statement("UPDATE api_keys SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?", [issued.key.id]),
+		]);
+		const expired = await read("/api/agents");
+		expect(expired.status).toBe(401);
+		expect(await expired.json()).toMatchObject({ reason: "expired" });
+	});
+	test("key-cookie exchange denies wrong scope and shared credentials", async () => {
+		await claim();
+		const bob = await member("bob");
+		const issued = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "scope",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement("UPDATE api_keys SET agent_id=?,scope_json=json_set(scope_json,'$.agent',?) WHERE id=?", [
+				"default",
+				"default",
+				issued.key.id,
+			]),
+		]);
+		expect(
+			(
+				await app.request(`/api/auth/session?agentId=${bob.agentId}`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${issued.secret}`, "content-type": "application/json" },
+					body: "{}",
+				})
+			).status,
+		).toBe(403);
+		await organizationWrite([statement("UPDATE api_keys SET kind='shared' WHERE id=?", [issued.key.id])]);
+		expect((await call("/api/auth/session", "POST", {}, issued.secret)).status).toBe(403);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id=?", [bob.userId], "get"),
+			),
+		).toEqual({ n: 1 });
+	});
 	test("own profile updates are scoped and SSO identity fields are read-only", async () => {
 		await claim();
 		const alice = await member("alice");
@@ -250,6 +404,143 @@ describe("organization HTTP flows", () => {
 		expect((await (await call(path, "GET", undefined, alice.token)).json()).errors[0]).toMatchObject({
 			status: 401,
 			reason: "revoked",
+		});
+	});
+	test("classification principal metadata is visible only to definition managers", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const alice = await member("alice");
+		const bob = await member("bob");
+		expect((await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true })).status).toBe(200);
+		const created = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "HR", audience: [{ kind: "user", id: alice.userId }], appliers: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const managed = await (await call(`/api/classifications/${created.id}`, "GET", undefined, bob.token)).json();
+		expect(managed.audience).toEqual([{ kind: "user", id: alice.userId, displayName: "alice" }]);
+		expect(managed.appliers).toEqual([{ kind: "user", id: bob.userId, displayName: "bob" }]);
+		const readable = await (await call(`/api/classifications/${created.id}`, "GET", undefined, alice.token)).json();
+		expect(readable.id).toBe(created.id);
+		expect(readable).not.toHaveProperty("audience");
+		expect(readable).not.toHaveProperty("appliers");
+		expect((await call(`/api/classifications/${created.id}`)).status).toBe(404);
+		expect(await (await call("/api/classifications")).json()).toEqual([]);
+		expect((await (await call("/api/classifications", "GET", undefined, bob.token)).json())[0].audience).toEqual(
+			managed.audience,
+		);
+		const narrowed = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{ name: "limited", permissions: ["recall"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+				bob.token,
+			)
+		).json();
+		expect(
+			await (await call(`/api/classifications/${created.id}`, "GET", undefined, narrowed.secret)).json(),
+		).not.toHaveProperty("audience");
+	});
+	test("offboarding preview excludes HR evidence and reports only active sessions", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		const root = await claim();
+		const bob = await member("bob");
+		expect((await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true })).status).toBe(200);
+		const hrAgent = await (await call("/api/agents", "POST", { name: "HR notes", kind: "personal" }, bob.token)).json();
+		const { organizationWrite, issueSession } = await import("./organization-store");
+		const now = new Date().toISOString();
+		for (const [suffix, agentId] of [
+			["public", bob.agentId],
+			["hr", hrAgent.agentId],
+		]) {
+			await organizationWrite([
+				statement(
+					"INSERT INTO memories(id,content,agent_id,memory_kind,type,visibility,created_at,updated_at,author_user_id) VALUES (?, 'offboarding evidence',?,'episodic','fact','private',?,?,?)",
+					[`memory-${suffix}`, agentId, now, now, bob.userId],
+				),
+				statement(
+					"INSERT INTO session_transcripts(agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES (?,?,'offboarding transcript','test',?,?)",
+					[agentId, `session-${suffix}`, now, bob.userId],
+				),
+				statement(
+					"INSERT INTO documents(id,agent_id,source_type,raw_content,created_at,updated_at,author_user_id) VALUES (?,?,'text','offboarding document',?,?,?)",
+					[`doc-${suffix}`, agentId, now, now, bob.userId],
+				),
+				statement(
+					"INSERT INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,session_id,session_token,captured_at,updated_at,author_user_id) VALUES (?,?,'hash','summary','unbound','unbound',?,?,?)",
+					[agentId, `artifact-${suffix}`, now, now, bob.userId],
+				),
+			]);
+		}
+		const expired = await issueSession(bob.userId, "cli");
+		await organizationWrite([
+			statement(
+				"UPDATE auth_sessions SET access_expires_at='2000-01-01T00:00:00.000Z',refresh_expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+				[expired.sessionId],
+			),
+		]);
+		const hr = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "HR offboarding", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		expect(
+			(
+				await call(
+					`/api/classifications/${hr.id}/apply?wait=1`,
+					"POST",
+					{ target: { kind: "agent", id: hrAgent.agentId, agentId: hrAgent.agentId } },
+					bob.token,
+				)
+			).status,
+		).toBe(202);
+		const preview = await (
+			await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "transfer", transferTo: root.user.id })
+		).json();
+		expect(preview.plan.counts).toMatchObject({
+			memories: 1,
+			transcripts: 1,
+			artifacts: 1,
+			documents: 1,
+			sessions: 1,
+			agents: 1,
+		});
+		expect(preview.plan.ownedAgents).toEqual([
+			{ id: bob.agentId, name: "bob", kind: "personal", transferTo: { userId: root.user.id, displayName: "Admin" } },
+		]);
+		expect(JSON.stringify(preview)).not.toContain(hrAgent.agentId);
+		expect((await call(`/api/org/users/${root.user.id}/deactivate`, "POST", { mode: "keep" }, bob.token)).status).toBe(
+			403,
+		);
+		expect(
+			(
+				await call(
+					`/api/classifications/${hr.id}/audience`,
+					"PUT",
+					[
+						{ kind: "user", id: bob.userId },
+						{ kind: "user", id: root.user.id },
+					],
+					bob.token,
+				)
+			).status,
+		).toBe(200);
+		const authorized = await (await call(`/api/org/users/${bob.userId}/deactivate`, "POST", { mode: "keep" })).json();
+		expect(authorized.plan.counts).toMatchObject({
+			memories: 2,
+			transcripts: 2,
+			artifacts: 2,
+			documents: 2,
+			sessions: 1,
+			agents: 2,
 		});
 	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {

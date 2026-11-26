@@ -4,7 +4,8 @@ import { formatYaml } from "@signet/core";
 import { join } from "node:path";
 import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
-import { cliAgent, cliTransport } from "./organization-target.js";
+import { cliAgent, cliTarget, cliTransport } from "./organization-target.js";
+import { apiError, SignetNetworkError, SignetTimeoutError } from "../../../../libs/sdk/src/errors.js";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 
@@ -70,6 +71,7 @@ function readAuthToken(): string | undefined {
 
 function withAuthHeaders(headers?: HeadersInit): Headers {
 	const merged = new Headers(headers);
+	if (cliTarget()?.remote === false) return merged;
 	const token = readAuthToken();
 	if (token && !merged.has("Authorization")) {
 		merged.set("Authorization", `Bearer ${token}`);
@@ -144,7 +146,7 @@ export function createDaemonClient(
 			};
 		}
 		try {
-			const res = await fetch(`${url}${path}`, {
+			const res = await fetch(`${cliTarget()?.url ?? url}${path}`, {
 				...fetchOpts,
 				headers: withAuthHeaders(fetchOpts.headers),
 				signal: AbortSignal.timeout(timeout || 5_000),
@@ -172,9 +174,36 @@ export function createDaemonClient(
 		opts?: RequestInit & { timeout?: number },
 	): Promise<DaemonStreamResult> => {
 		const { timeout, ...fetchOpts } = opts || {};
+		const target = cliTarget();
+		if (target?.remote) {
+			const timeoutMs = timeout ?? 5000;
+			const signal = fetchOpts.signal
+				? AbortSignal.any([fetchOpts.signal, AbortSignal.timeout(timeoutMs)])
+				: AbortSignal.timeout(timeoutMs);
+			const headers = new Headers(fetchOpts.headers);
+			const token = await target.credential.get({ signal, timeoutMs });
+			if (token) headers.set("authorization", `Bearer ${token}`);
+			const agentId = cliAgent();
+			if (agentId) headers.set("x-signet-agent-id", agentId);
+			let response: Response;
+			try {
+				response = await fetch(`${target.url}${path}`, { ...fetchOpts, headers, signal });
+			} catch (error) {
+				if (signal.aborted) throw new SignetTimeoutError(timeoutMs);
+				throw new SignetNetworkError(
+					"Could not reach the organization instance",
+					error instanceof Error ? error : new Error(String(error)),
+				);
+			}
+			if (!response.ok) {
+				const error = await readHttpErrorBody(response);
+				throw apiError(response.status, error.body ?? { error: error.error ?? "Request failed" });
+			}
+			return { ok: true, response };
+		}
 		const streamSignal = createStreamAbortSignal(fetchOpts.signal ?? undefined, timeout ?? 5_000);
 		try {
-			const res = await fetch(`${url}${path}`, {
+			const res = await fetch(`${cliTarget()?.url ?? url}${path}`, {
 				...fetchOpts,
 				headers: withAuthHeaders(fetchOpts.headers),
 				signal: streamSignal.signal,
@@ -211,7 +240,7 @@ export function createDaemonClient(
 		const remote = cliTransport();
 		if (remote) return { ok: true, data: await remote.request(method, path, { body, timeoutMs }) };
 		try {
-			const res = await fetch(`${url}${path}`, {
+			const res = await fetch(`${cliTarget()?.url ?? url}${path}`, {
 				method,
 				headers: withAuthHeaders(body ? { "Content-Type": "application/json" } : undefined),
 				body: body ? JSON.stringify(body) : undefined,
@@ -240,9 +269,17 @@ export function createDaemonClient(
 	};
 
 	return {
-		url,
-		localWorkspace,
-		hasCredential: readAuthToken() !== undefined,
+		get url() {
+			return cliTarget()?.url ?? url;
+		},
+		get localWorkspace() {
+			const target = cliTarget();
+			return target ? !target.remote : localWorkspace;
+		},
+		get hasCredential() {
+			const target = cliTarget();
+			return target ? target.credential.source !== "none" : readAuthToken() !== undefined;
+		},
 		fetchFromDaemon,
 		fetchDaemonResult,
 		fetchDaemonStream,

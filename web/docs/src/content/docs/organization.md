@@ -100,6 +100,8 @@ The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL`
 
 Local filesystem and process commands (`start`, `stop`, `install`, `setup`, `migrate-schema`, `migrate-vectors`, `git`, `sync`, and `workspace`) refuse against a remote target. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
 
+Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. Remote operator commands (`logs`, `pause`, `resume`, `restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
+
 Administrators can use:
 
 ```bash
@@ -131,9 +133,13 @@ Use server IDs for users and teams. Deactivation prints a plan unless `--confirm
 
 Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_job`, and `signet_classify` (including `preview: true`). They call the same HTTP operations and retain the caller's permissions and scopes; forbidden responses never fall back to local access.
 
+Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge reports removed counts and a residual count for each content table. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its residuals instead of assuming it completed.
+
+Offboarding previews include readable impact counts for memories, transcripts, artifacts, documents, active keys and sessions, and owned agents. `ownedAgents` lists each readable agent and its transfer recipient. Counts respect the requesting administrator's agent, project, and classification scope: content outside an HR audience does not contribute, and no hidden totals are returned. Expired sessions without a valid refresh token do not count as active. Previewing is audited without deactivating the user.
 
 Deactivation revokes credentials before returning. The next request from a deactivated user fails, including a previously valid connector request. Reactivation does not restore revoked sessions or keys.
 

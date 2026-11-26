@@ -24,11 +24,36 @@ import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
+import { up as keySessionBinding } from "./181-key-session-binding";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
 }
+test("key session binding upgrades legacy rows idempotently and cascades parent deletion", () => {
+	const db = createFreshDb();
+	try {
+		db.exec(
+			"PRAGMA foreign_keys=ON; CREATE TABLE api_keys(id TEXT PRIMARY KEY); CREATE TABLE auth_sessions(id TEXT PRIMARY KEY); INSERT INTO auth_sessions(id) VALUES ('old'); INSERT INTO api_keys(id) VALUES ('parent')",
+		);
+		keySessionBinding(db);
+		keySessionBinding(db);
+		expect(db.query("SELECT * FROM auth_sessions WHERE id='old'").get()).toEqual({
+			id: "old",
+			source_key_id: null,
+			source_key_ceiling_json: null,
+		});
+		expect(() => db.exec("INSERT INTO auth_sessions(id,source_key_id) VALUES ('unbounded','parent')")).toThrow();
+		db.exec(
+			"INSERT INTO auth_sessions(id,source_key_id,source_key_ceiling_json) VALUES ('bounded','parent','{}'); DELETE FROM api_keys WHERE id='parent'",
+		);
+		expect(db.query("SELECT COUNT(*) AS n FROM auth_sessions WHERE id='bounded'").get()).toEqual({ n: 0 });
+		expect(db.query("SELECT COUNT(*) AS n FROM auth_sessions WHERE id='old'").get()).toEqual({ n: 1 });
+	} finally {
+		db.close();
+	}
+});
+
 function rewindToMigration(db: Database, version: 138 | 139): void {
 	db.exec("PRAGMA foreign_keys = OFF");
 	db.exec("DROP TABLE IF EXISTS source_sync_checkpoints");
