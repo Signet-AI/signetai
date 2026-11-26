@@ -71,6 +71,7 @@ const demo =
 let current: Session = demo ? { kind: "open", mode: "local", permissions: null } : { kind: "checking" };
 let boot: Promise<void> | null = null;
 let signedInOnce = false;
+let lastWhoami: Whoami | null = null;
 let pendingReason: string | null = null;
 let refreshing: Promise<void> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -122,7 +123,8 @@ function set(next: Session): void {
 	const wait = Math.min(Math.max(expiresAt - Date.now() + 1_000, recheck), MAX_TIMER_MS);
 	expiryTimer = setTimeout(() => void refreshSession(), wait);
 	const warnIn = expiresAt - EXPIRY_WARNING_MS - Date.now();
-	const expiresSoon = current.kind === "signed-in" && current.identity.expiresAt === expiresAt && current.expiresSoon;
+	const expiresSoon =
+		warnIn <= 0 || (current.kind === "signed-in" && current.identity.expiresAt === expiresAt && current.expiresSoon);
 	if (warnIn > 0) {
 		warningTimer = setTimeout(
 			() => {
@@ -218,9 +220,11 @@ function readWhoami(value: Record<string, unknown>): Whoami | undefined {
 
 export function useWhoami(): Whoami | null {
 	const session = useSession();
-	return session.kind === "signed-in" || (session.kind === "signed-out" && session.expired)
-		? (session.whoami ?? null)
-		: null;
+	return session.kind === "unreachable"
+		? lastWhoami
+		: session.kind === "signed-in" || (session.kind === "signed-out" && session.expired)
+			? (session.whoami ?? null)
+			: null;
 }
 
 function readIdentity(value: unknown): Identity | null {
@@ -273,6 +277,7 @@ async function check(retry = true): Promise<void> {
 			: null;
 	const permissions = readPermissions(body.permissions);
 	if (identity) {
+		lastWhoami = whoami ?? null;
 		pendingReason = null;
 		set({ kind: "signed-in", mode, identity, permissions, expiresSoon: false, ...(whoami ? { whoami } : {}) });
 		return;

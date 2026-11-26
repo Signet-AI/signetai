@@ -7,7 +7,7 @@ import { AccountView } from "@/views/account";
 import { ClaimPage, InvitationPage, DeviceApprovalPage } from "@/components/shell/auth-entry";
 import { useAgentContext } from "@/lib/agent-context";
 import { Topbar } from "@/components/shell/topbar";
-import { useSession } from "@/lib/session";
+import { useSession, useWhoami } from "@/lib/session";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
@@ -21,6 +21,7 @@ import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
 	const session = useSession();
+	const whoami = useWhoami();
 	const team = "mode" in session && session.mode === "team";
 	const path = location.pathname;
 	return (
@@ -33,7 +34,7 @@ export function App() {
 				<SignInScreen session={session} />
 			) : (
 				<>
-					{team && path === "/auth/device" ? <DeviceApprovalPage /> : <Shell />}
+					{team && path === "/auth/device" ? <DeviceApprovalPage /> : <Shell key={whoami?.user.id} />}
 					{session.kind === "signed-out" && <SignInDialog session={session} />}
 					<SessionExpiryToast session={session} />
 				</>
