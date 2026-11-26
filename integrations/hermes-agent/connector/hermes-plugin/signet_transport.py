@@ -49,6 +49,8 @@ def _capture_remote_session_end(body,state,checkpoint,request,end,cancel):
                 return os.pread(fd,length,offset)
             os.lseek(fd,offset,os.SEEK_SET)
             return os.read(fd,length)
+        if state is not None and (_upload_state(state)["totalBytes"] != before.st_size or state["fingerprint"] != fingerprint(before)):
+            raise ValueError("Transcript changed since upload admission")
         if before.st_size <= 4*1024*1024:
             data=bytearray()
             while len(data)<before.st_size:

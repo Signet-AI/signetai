@@ -320,7 +320,14 @@
     {
       "name": "lost-ack-process-restart",
       "totalBytes": 6291456,
-      "interruptAfterChunks": 2
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false
+    },
+    {
+      "name": "changed-file-after-process-restart",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": true
     }
   ]
 }

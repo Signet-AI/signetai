@@ -10,7 +10,10 @@ ConnectorRegistry().set("codex",{"url":config["url"],"keyFile":str(key_file),"ag
 transport=NodeTransport(resolve_target(harness="codex"),timeout=60,retries=0)
 if sys.argv[2] == "resume":
     result=transport.flush(force=True,timeout=60)
-    if result["state"] != "complete" or result["sent"] != 1:
+    if config.get("changed"):
+        if result["state"] != "failed" or result["pending"] != 1 or result["sent"] != 0:
+            raise RuntimeError("Changed source was not retained")
+    elif result["state"] != "complete" or result["sent"] != 1:
         raise RuntimeError("Resumed delivery did not complete: "+json.dumps(result))
 else:
     transport.request("POST","/api/hooks/session-end",{"harness":"codex","agentId":config["agentId"],"sessionKey":"a21-resume-conformance","reason":"session_shutdown","transcriptPath":config["source"],"transcript":""})

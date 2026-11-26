@@ -62,7 +62,13 @@ export async function runUploadResume(runtime: string, name: string): Promise<vo
 		assert(user.connector.bearer);
 		await writeFile(
 			config,
-			JSON.stringify({ url: origin, key: user.connector.bearer, source, agentId: user.agentId }),
+			JSON.stringify({
+				url: origin,
+				key: user.connector.bearer,
+				source,
+				agentId: user.agentId,
+				changed: scenario.changeAfterKill,
+			}),
 			{ mode: 0o600 },
 		);
 		const client =
@@ -114,6 +120,7 @@ export async function runUploadResume(runtime: string, name: string): Promise<vo
 			user.connector,
 		);
 		assert.equal(record(progress.body).receivedBytes, 2 * 1024 * 1024);
+		if (scenario.changeAfterKill) await writeFile(source, "changed", { mode: 0o600 });
 		paused = false;
 		release?.();
 		const trace = join(daemon.home, "resume-io.log");
@@ -132,6 +139,21 @@ export async function runUploadResume(runtime: string, name: string): Promise<vo
 			new Response(resumed.stderr).text(),
 		]);
 		assert.equal(code, 0, err.replace(/[A-Za-z0-9_-]{24,}/g, "[REDACTED]"));
+		if (scenario.changeAfterKill) {
+			assert.equal(resumedOffsets.length, 0, "Changed evidence must not be uploaded");
+			assert(
+				!calls.some((call) => call.startsWith("POST /api/hooks/session-end ")),
+				"Changed source must not finalize another transcript",
+			);
+			if (tracing)
+				assert(
+					!(await readFile(trace, "utf8"))
+						.split("\n")
+						.some((line) => line.includes(`<${source}>`) && /pread64\(/.test(line)),
+					"Changed source must be rejected before reading its bytes",
+				);
+			return;
+		}
 		assert.equal(resumedOffsets[0], 2 * 1024 * 1024, "Resume must use the server offset, not the stale checkpoint");
 		console.log(
 			`${runtime}: persisted offset=${savedOffset}, resumed server offset=${resumedOffsets[0]}, file-I/O trace=${tracing}`,

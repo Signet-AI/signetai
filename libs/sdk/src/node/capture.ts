@@ -94,6 +94,11 @@ export async function captureRemoteSessionEnd(
 		const before = await handle.stat();
 		if (!before.isFile())
 			throw new Error("Transcript capture requires a regular file; file reference retained in outbox");
+		if (
+			remote?.state &&
+			(remote.state.totalBytes !== before.size || remote.state.fingerprint !== (await fileFingerprint(handle)))
+		)
+			throw new SignetError("Transcript changed since upload admission", "transcript_source_changed");
 		if (before.size > 4 * 1024 * 1024 && !remote)
 			throw new SignetError(
 				"Transcript exceeds 4 MiB inline capture limit; file reference retained in outbox for chunked-upload retry",
