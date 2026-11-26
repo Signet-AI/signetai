@@ -16,7 +16,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { displayLabel } from "./controls";
+import { displayLabel, agentDisplayName } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import {
 	ORGANIZATION_PERMISSIONS,
@@ -500,20 +500,38 @@ export function AccessContent({
 					emptyMessage="No agents available."
 				>
 					{(rows) => (
-						<OrganizationTable columns={["Agent", "Kind", "Why"]}>
-							{rows.map((agent) => (
-								<tr key={agent.agentId} className={rowClass}>
-									<td className={cellClass}>
-										<div>
-											{agents.find((item) => item.id === agent.agentId)?.name ?? `${displayLabel(agent.kind)} agent`}
-										</div>
-										<div className="break-all text-xs text-muted-foreground">{agent.agentId}</div>
-									</td>
-									<td className={cellClass}>{displayLabel(agent.kind)}</td>
-									<td className={cellClass}>{displayLabel(agent.why)}</td>
-								</tr>
-							))}
-						</OrganizationTable>
+						<>
+							<div className="hidden sm:block">
+								<OrganizationTable columns={["Agent", "Kind", "Why"]}>
+									{rows.map((agent) => (
+										<tr key={agent.agentId} className={rowClass}>
+											<td className={cellClass}>
+												<div>{agentDisplayName(agents.find((item) => item.id === agent.agentId))}</div>
+												<div className="break-all text-xs text-muted-foreground">{agent.agentId}</div>
+											</td>
+											<td className={cellClass}>{displayLabel(agent.kind)}</td>
+											<td className={cellClass}>{displayLabel(agent.why)}</td>
+										</tr>
+									))}
+								</OrganizationTable>
+							</div>
+							<ul className="m-0 list-none divide-y p-0 sm:hidden">
+								{rows.map((agent) => (
+									<li key={agent.agentId} className="py-4">
+										<p className="m-0 text-small font-medium">
+											{agentDisplayName(agents.find((item) => item.id === agent.agentId))}
+										</p>
+										<p className="m-0 mt-1 break-all text-xs text-muted-foreground">{agent.agentId}</p>
+										<dl className="mt-3 grid grid-cols-2 gap-2 text-small">
+											<dt className="text-muted-foreground">Kind</dt>
+											<dd>{displayLabel(agent.kind)}</dd>
+											<dt className="text-muted-foreground">Why</dt>
+											<dd>{displayLabel(agent.why)}</dd>
+										</dl>
+									</li>
+								))}
+							</ul>
+						</>
 					)}
 				</Panel>
 			</OrganizationBlock>

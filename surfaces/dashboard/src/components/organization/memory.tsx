@@ -10,7 +10,7 @@ import type {
 	OrganizationGroup,
 	OrganizationUserRow,
 } from "@/lib/organization";
-import { Action, Choice, OrganizationBlock, TextField } from "./controls";
+import { Action, Choice, OrganizationBlock, TextField, agentDisplayName } from "./controls";
 import { EvidenceList } from "./evidence-list";
 import { ClassifyAction } from "./classifications";
 
@@ -145,7 +145,7 @@ export function OrganizationMemory() {
 							key: row.id,
 							title: row.content.slice(0, 180),
 							kind: row.type ?? "memory",
-							agent: agents.result?.data?.agents.find((agent) => agent.id === row.agent_id)?.name ?? "Agent",
+							agent: agentDisplayName(agents.result?.data?.agents.find((agent) => agent.id === row.agent_id)),
 							author: row.authorUserId ? personName(row.authorUserId) : undefined,
 							badges: classification ? (
 								<ClassificationBadges

@@ -4,7 +4,7 @@ import { usePanelQuery } from "@/lib/use-panel-query";
 import type { OrganizationAgent } from "@/lib/organization";
 import { OrganizationResource } from "@/views/organization";
 import { ClassifyAction } from "./classifications";
-import { Action, OrganizationBlock, displayLabel } from "./controls";
+import { Action, OrganizationBlock, displayLabel, agentDisplayName } from "./controls";
 import { EvidenceList } from "./evidence-list";
 
 interface SessionRecord {
@@ -33,7 +33,7 @@ export function OrganizationSessions() {
 								title: `${displayLabel(session.harness)} session`,
 								identifier: session.sessionKey,
 								kind: "session",
-								agent: agents.result?.data?.agents.find((agent) => agent.id === session.agentId)?.name ?? "Agent",
+								agent: agentDisplayName(agents.result?.data?.agents.find((agent) => agent.id === session.agentId)),
 								author:
 									session.speakerUserId === whoami.user.id
 										? whoami.user.displayName

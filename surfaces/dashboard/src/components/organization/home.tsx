@@ -4,6 +4,7 @@ import { HomeSecretsPanel } from "@/components/home/secrets";
 import { OrganizationResource } from "@/views/organization";
 import { useView } from "@/lib/view-context";
 import type { OrganizationAgent } from "@/lib/organization";
+import { agentDisplayName } from "./controls";
 import { OrganizationMemory } from "./memory";
 import { OrganizationSessions } from "./sessions";
 
@@ -69,7 +70,7 @@ export function OrganizationHome() {
 									<SetupRow
 										id="org-system-agents"
 										label="Agents"
-										summary={visible.map((agent) => agent.name).join(", ") || "No available agents"}
+										summary={visible.map(agentDisplayName).join(", ") || "No available agents"}
 										count={visible.length}
 										onOpen={() => openSettings("teams")}
 									/>

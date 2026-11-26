@@ -121,9 +121,9 @@ export function OrganizationDreams() {
 									{data.items.map((tool) => (
 										<li key={tool.id} className="py-3">
 											<p className="text-small font-medium">{displayLabel(tool.toolName)}</p>
-											<p className="whitespace-pre-wrap break-words text-small">
+											<div className="whitespace-pre-wrap break-words text-small">
 												<EvidenceValue value={tool.output ?? tool.input} />
-											</p>
+											</div>
 										</li>
 									))}
 								</ul>

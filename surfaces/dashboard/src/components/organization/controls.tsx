@@ -19,6 +19,13 @@ export function displayLabel(value: string): string {
 	};
 	return labels[value] ?? value.replaceAll(/[_-]/g, " ").replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
 }
+export function agentDisplayName(
+	agent: { readonly id: string; readonly name: string; readonly kind?: string } | undefined,
+): string {
+	if (!agent) return "Agent";
+	if (agent.id === "default") return "Organization memory";
+	return agent.name !== agent.id ? agent.name : `${displayLabel(agent.kind ?? "assistant")} agent`;
+}
 export function OrganizationBlock({
 	title,
 	description,

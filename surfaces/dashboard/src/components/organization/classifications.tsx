@@ -367,46 +367,76 @@ export function ClassificationsContent({
 				title="Classifications"
 				description="A classification audience is the security boundary. Administrative roles do not bypass it."
 			>
-				<OrganizationTable
-					columns={[
-						"Name",
-						"Description",
-						...(classifications.some((item) => item.audience !== undefined) ? ["Audience"] : []),
-						"State",
-						"Actions",
-					]}
-				>
-					{classifications.map((item) => (
-						<tr key={item.id} className={rowClass}>
-							<td className={cellClass}>{item.name}</td>
-							<td className={cellClass}>
-								{item.description || <span className="text-muted-foreground">No description</span>}
-							</td>
-							{classifications.some((definition) => definition.audience !== undefined) && (
+				<div className="hidden sm:block">
+					<OrganizationTable
+						columns={[
+							"Name",
+							"Description",
+							...(classifications.some((item) => item.audience !== undefined) ? ["Audience"] : []),
+							"State",
+							"Actions",
+						]}
+					>
+						{classifications.map((item) => (
+							<tr key={item.id} className={rowClass}>
+								<td className={cellClass}>{item.name}</td>
 								<td className={cellClass}>
-									{item.audience?.map((principal) => (
-										<span key={`${principal.kind}:${principal.id}`} title={principal.id} className="mr-2">
-											{principal.displayName ?? displayLabel(principal.kind)}
-										</span>
-									)) ?? "Unavailable"}
+									{item.description || <span className="text-muted-foreground">No description</span>}
 								</td>
-							)}
-							<td className={cellClass}>{item.archived_at ? "Archived" : "Active"}</td>
-							<td className={cellClass}>
-								<div className="flex gap-2">
-									<Action secondary onClick={() => void listItems(item)}>
-										Items
-									</Action>
-									{canManage && (
-										<Action secondary onClick={() => select(item)}>
-											Edit
+								{classifications.some((definition) => definition.audience !== undefined) && (
+									<td className={cellClass}>
+										{item.audience?.map((principal) => (
+											<span key={`${principal.kind}:${principal.id}`} title={principal.id} className="mr-2">
+												{principal.displayName ?? displayLabel(principal.kind)}
+											</span>
+										)) ?? "Unavailable"}
+									</td>
+								)}
+								<td className={cellClass}>{item.archived_at ? "Archived" : "Active"}</td>
+								<td className={cellClass}>
+									<div className="flex gap-2">
+										<Action secondary onClick={() => void listItems(item)}>
+											Items
 										</Action>
-									)}
-								</div>
-							</td>
-						</tr>
+										{canManage && (
+											<Action secondary onClick={() => select(item)}>
+												Edit
+											</Action>
+										)}
+									</div>
+								</td>
+							</tr>
+						))}
+					</OrganizationTable>
+				</div>
+				<ul className="m-0 list-none divide-y p-0 sm:hidden">
+					{classifications.map((item) => (
+						<li key={item.id} className="space-y-3 py-4">
+							<div className="flex items-center justify-between gap-3">
+								<span className="text-small font-medium">{item.name}</span>
+								<span className="text-xs text-muted-foreground">{item.archived_at ? "Archived" : "Active"}</span>
+							</div>
+							<p className="m-0 text-small text-muted-foreground">{item.description || "No description"}</p>
+							{item.audience && (
+								<p className="text-small">
+									<span className="text-muted-foreground">Audience: </span>
+									{item.audience.map((principal) => principal.displayName ?? displayLabel(principal.kind)).join(", ") ||
+										"No audience"}
+								</p>
+							)}
+							<div className="flex gap-2">
+								<Action secondary onClick={() => void listItems(item)}>
+									Items
+								</Action>
+								{canManage && (
+									<Action secondary onClick={() => select(item)}>
+										Edit
+									</Action>
+								)}
+							</div>
+						</li>
 					))}
-				</OrganizationTable>
+				</ul>
 				{canManage && <Action onClick={() => select(null)}>Create classification</Action>}
 			</OrganizationBlock>
 			{editing && canManage && (

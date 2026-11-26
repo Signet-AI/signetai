@@ -25,6 +25,14 @@ Offboarding and bulk key revocation return tracked jobs. Pending or running is n
 
 **Audit log** filters events by actor, action, target, and UTC time range. Export downloads NDJSON for the selected filters. Administrators can set retention; saving retention does not mean cleanup has already finished. **Instance health** displays daemon-reported signals, including hybrid-proxy warnings when available. Unreported capacity is unavailable, not healthy.
 
+## Reading shared memory
+
+Home and Memory follow the agent switcher. Text, author, and team filters narrow the current page; choosing a classification opens its readable material pages. **Open knowledge graph** keeps the graph available from Memory. Classification item lists have Previous and Next controls and use the same material rows as Memory and Sessions.
+
+Dreams shows passes and logs that the current credential may read. Being an administrator does not bypass a classification audience. Per-pass classification filtering is not available yet.
+
+Home's System section reports readable sources, your own device connectors, and agents you may act as. Secrets are hidden from non-administrators; an instance-local secret store is labeled **Stored on this instance**, never on the browser's device.
+
 ## Classifications
 
 Compliance users can create classifications, edit names and descriptions, and archive definitions. Audience and applier editing requires the daemon to return the current principals; the dashboard never replaces unknown membership with an empty list. Audience members can inspect the items carrying a classification.

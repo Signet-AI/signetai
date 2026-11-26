@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { displayLabel } from "./controls";
+import { displayLabel, agentDisplayName } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import type { OrganizationAgent, OrganizationGroup, OrganizationUser } from "@/lib/organization";
 import {
@@ -74,7 +74,7 @@ export function AgentsContent({
 										setNewOwner("");
 									}}
 								>
-									{agent.name}
+									{agentDisplayName(agent)}
 								</Action>
 							</td>
 							<td className={cellClass}>
@@ -113,7 +113,7 @@ export function AgentsContent({
 			</OrganizationBlock>
 			{selected && (
 				<OrganizationBlock
-					title={selected.name}
+					title={agentDisplayName(selected)}
 					description={`Owner: ${owner(selected)}. ${selected.canActAs ? "You may act as this agent." : "You cannot act as this agent."}`}
 				>
 					<ClassifyAction target={{ kind: "agent", id: selected.id, agentId: selected.id }} />

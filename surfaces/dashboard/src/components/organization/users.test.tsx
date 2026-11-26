@@ -1,6 +1,46 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OffboardingImpact, RolesMatrix, UsersContent } from "./users";
+import { OffboardingImpact, RolesMatrix, UsersContent, AccessContent } from "./users";
+
+test("effective access uses named mobile cards and an explicit classifications empty state", () => {
+	const html = renderToStaticMarkup(
+		<AccessContent
+			access={{
+				user: {
+					id: "usr_alice",
+					username: "alice",
+					displayName: "Alice",
+					email: null,
+					role: "member",
+					compliance: false,
+					status: "active",
+				},
+				role: "member",
+				permissions: ["recall"],
+				groups: ["grp_eng"],
+				actAs: [{ agentId: "agent_eng", kind: "team", why: "group membership" }],
+				readableClassifications: [],
+			}}
+			groups={[{ id: "grp_eng", name: "Engineering", description: null, managed_by: "signet" }]}
+			agents={[
+				{
+					id: "agent_eng",
+					name: "Engineering assistant",
+					kind: "team",
+					ownerUserId: null,
+					ownerGroupId: "grp_eng",
+					archivedAt: null,
+					canActAs: true,
+				},
+			]}
+		/>,
+	);
+	expect(html).toContain("Engineering assistant");
+	expect(html).toContain("Teams: Engineering");
+	expect(html).toContain("Group Membership");
+	expect(html).toContain("sm:hidden");
+	expect(html).toContain("No readable classifications.");
+});
 
 test("people use explicit row actions and stacked mobile cards", () => {
 	const html = renderToStaticMarkup(
