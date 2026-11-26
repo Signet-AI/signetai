@@ -61,8 +61,19 @@ class DesktopCdp {
 			deviceScaleFactor: 1,
 			mobile: false,
 		});
+		await this.evaluate("document.fonts.ready.then(()=>true)");
+		const fit = record(
+			await this.evaluate(
+				"({height:Math.max(document.body.scrollHeight,document.documentElement.scrollHeight),width:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)})",
+			),
+		);
+		expect(fit.height).toBeLessThanOrEqual(900);
+		expect(fit.width).toBeLessThanOrEqual(1440);
 		const result = await this.call("Page.captureScreenshot", { format: "png" });
-		await writeFile(path, Buffer.from(text(result.data), "base64"));
+		const bytes = Buffer.from(text(result.data), "base64");
+		expect(bytes.readUInt32BE(16)).toBe(1440);
+		expect(bytes.readUInt32BE(20)).toBe(900);
+		await writeFile(path, bytes);
 	}
 	close(): void {
 		this.socket.close();
@@ -84,6 +95,27 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 		});
 		let electron: ReturnType<typeof Bun.spawn> | null = null;
 		let cdp: DesktopCdp | null = null;
+		let gateway: ReturnType<typeof Bun.serve> | null = null;
+		let gatewayForbidden = false;
+		const gatewayFetch = async (incoming: Request): Promise<Response> => {
+			const url = new URL(incoming.url);
+			if (gatewayForbidden && url.pathname === "/api/auth/whoami")
+				return Response.json(
+					{
+						error: "Access denied by the instance gateway",
+						reason: "permission",
+						required: "Requires organization access",
+					},
+					{ status: 403 },
+				);
+			return fetch(`${daemon.origin}${url.pathname}${url.search}`, {
+				method: incoming.method,
+				headers: incoming.headers,
+				body: incoming.method === "GET" || incoming.method === "HEAD" ? undefined : await incoming.arrayBuffer(),
+				redirect: "manual",
+				signal: AbortSignal.timeout(30_000),
+			});
+		};
 		try {
 			const claim = await request(daemon.origin, "/api/org/claim", {}, "POST", {
 				setupToken: await daemon.setupToken(),
@@ -91,14 +123,17 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				admin: { username: "alice", displayName: "Alice", password: "disposable electron password" },
 			});
 			success(claim, "Claim Electron fixture");
+			gateway = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: gatewayFetch });
+			const origin = gateway.url.origin;
+			success(
+				await request(daemon.origin, "/api/org/settings", browser(claim), "PATCH", { publicUrl: origin }),
+				"Set desktop gateway public URL",
+			);
 			const home = join(daemon.root, "desktop-home");
 			const profile = join(home, "profile");
 			const local = join(home, "must-not-exist");
 			await mkdir(profile, { recursive: true });
-			await writeFile(
-				join(profile, "workspace-selection.json"),
-				JSON.stringify({ mode: "organization", origin: daemon.origin }),
-			);
+			await writeFile(join(profile, "workspace-selection.json"), JSON.stringify({ mode: "organization", origin }));
 			const opened = join(daemon.root, "browser-url.txt");
 			const bootstrap = join(daemon.root, "desktop-bootstrap.mjs");
 			await writeFile(
@@ -162,7 +197,7 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 			cdp = await DesktopCdp.connect(websocket);
 			expect(await cdp.evaluate("window.signetDesktop.getWorkspace()")).toEqual({
 				mode: "organization",
-				origin: daemon.origin,
+				origin,
 			});
 			expect(await cdp.evaluate("window.signetDesktop.workspaceStatus()")).toMatchObject({ state: "signed-out" });
 			expect(await cdp.evaluate("getComputedStyle(document.body).fontFamily")).toContain("Schibsted Grotesk");
@@ -174,6 +209,9 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 			).toBe("true");
 			expect(await cdp.evaluate("document.getElementById('signout').hidden")).toBe(true);
 			expect(await cdp.evaluate("document.getElementById('signin').hidden")).toBe(false);
+			expect(await cdp.evaluate("document.getElementById('status-title')?.textContent")).toBe(
+				"Sign in to your organization",
+			);
 			const screenDir = process.env.SIGNET_DESKTOP_SCREEN_DIR;
 			if (screenDir) {
 				await mkdir(screenDir, { recursive: true });
@@ -197,7 +235,7 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 
 			expect(await cdp.evaluate("window.signetDesktop.startDaemon().then(()=>false,()=>true)")).toBe(true);
 
-			const cli = new LoginStore(daemon.origin, {
+			const cli = new LoginStore(origin, {
 				env: { HOME: home },
 				keyring: {
 					async get() {
@@ -253,6 +291,67 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				(await request(daemon.origin, "/api/auth/refresh", {}, "POST", { refreshToken: saved.credential.refreshToken }))
 					.status,
 			).toBe(401);
+			const renewedFlow = record(await cdp.evaluate("window.signetDesktop.signIn()"));
+			success(
+				await request(daemon.origin, "/api/auth/device/approve", browser(claim), "POST", {
+					userCode: text(renewedFlow.userCode),
+					decision: "approve",
+				}),
+				"Approve error-state fixture session",
+			);
+			await until(
+				async () => record(await page.evaluate("window.signetDesktop.workspaceStatus()")).state === "signed-in",
+				"Renew desktop fixture",
+			);
+			gatewayForbidden = true;
+			await until(
+				async () => (await page.evaluate("document.getElementById('status').dataset.state")) === "forbidden",
+				"403 workspace rendered",
+			);
+			expect(await page.evaluate("document.getElementById('session-panel').getAttribute('role')")).toBe("alert");
+			expect(await page.evaluate("document.getElementById('status-title').textContent")).toBe(
+				"Access not permitted (403)",
+			);
+			expect(await page.evaluate("document.getElementById('status').textContent")).toBe("Requires organization access");
+			if (screenDir) await cdp.screenshot(join(screenDir, "workspace-forbidden-403.png"));
+			gatewayForbidden = false;
+			await until(
+				async () => record(await page.evaluate("window.signetDesktop.workspaceStatus()")).state === "signed-in",
+				"Gateway access restored",
+			);
+			const gatewayPort = gateway.port;
+			gateway.stop(true);
+			await until(
+				async () => (await page.evaluate("document.getElementById('status').dataset.state")) === "unreachable",
+				"Unreachable instance rendered",
+			);
+			expect(await page.evaluate("document.getElementById('session-panel').getAttribute('role')")).toBe("alert");
+			expect(await page.evaluate("document.getElementById('status-title').textContent")).toBe("Instance unreachable");
+			if (screenDir) await cdp.screenshot(join(screenDir, "workspace-unreachable.png"));
+			gateway = Bun.serve({ hostname: "127.0.0.1", port: gatewayPort, fetch: gatewayFetch });
+			await until(
+				async () => record(await page.evaluate("window.signetDesktop.workspaceStatus()")).state === "signed-in",
+				"Instance reconnected",
+			);
+			const renewed = await cli.load();
+			if (!renewed) throw new Error("Missing renewed desktop credential");
+			const who = success(
+				await request(daemon.origin, "/api/auth/whoami", { bearer: renewed.credential.accessToken }),
+				"Find fixture session",
+			);
+			const sessionId = text(record(who.credential).id);
+			success(
+				await request(daemon.origin, `/api/auth/sessions/${sessionId}`, browser(claim), "DELETE"),
+				"Revoke fixture session for expired UI",
+			);
+			await until(
+				async () => (await page.evaluate("document.getElementById('status').dataset.state")) === "expired",
+				"Expired session rendered",
+			);
+			expect(await page.evaluate("document.getElementById('session-panel').getAttribute('role')")).toBe("alert");
+			expect(await page.evaluate("document.getElementById('status-title').textContent")).toBe("Session expired");
+			if (screenDir) await cdp.screenshot(join(screenDir, "workspace-expired.png"));
+			expect(await page.evaluate("window.signetDesktop.signOut()")).toMatchObject({ state: "signed-out" });
 			const workspace = await stat(local).then(
 				() => true,
 				() => false,
@@ -295,6 +394,7 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				}
 			} finally {
 				try {
+					gateway?.stop(true);
 					await daemon.dispose();
 				} finally {
 					await rm(runtime, { recursive: true, force: true });

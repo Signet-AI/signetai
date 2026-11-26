@@ -20,7 +20,9 @@ The `signet://auth/complete` link only focuses the desktop app. It cannot contai
 
 ## Session status
 
-The workspace screen distinguishes **signed out**, **waiting for approval**, **expired or revoked**, **unreachable instance or credential store**, and **not permitted (403)**. A permission refusal is not an empty result. A network failure does not silently switch to local mode.
+The workspace screen shows your organization name and session expiration time, including the time zone. When you are signed in, **Open organization dashboard** is the primary action and **Sign out** is secondary. Signed-out workspaces show browser sign-in instead.
+
+Signed out, waiting for approval, expired or revoked, unreachable, and not permitted (403) states share the same status panel. A 403 names the missing requirement when the instance provides one; it is not an empty result. Choose **Retry connection** after restoring connectivity or access, or **Sign in again** for an expired session. A remembered expiration time is labeled **Last session expiry** when it is no longer a live session confirmation. A network failure never silently switches to local mode.
 
 Choose **Sign out** to revoke the session and remove the shared CLI/desktop login. If the instance cannot confirm revocation, sign-out reports failure and retains the login so you can retry. If an administrator has already revoked or expired the session, sign in again to establish a new one.
 
