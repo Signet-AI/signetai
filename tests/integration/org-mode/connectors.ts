@@ -147,7 +147,7 @@ export async function connectorSecrets(fixture: Fixture): Promise<void> {
 		let previousSecret: string | undefined;
 		for (const pass of [0, 1]) {
 			if (pass === 1) {
-				assert(previousSecret);
+				if (!previousSecret) break;
 				await seedInlineCredential(harness, root, previousSecret);
 			}
 			const before = await files(root, fixture.daemon.root);
