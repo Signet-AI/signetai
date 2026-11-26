@@ -1715,7 +1715,7 @@ describe("migration framework", () => {
 		expect(colNames).toContain("pinned_at");
 	});
 
-	test("unique partial index on content_hash is agent-, project-, and scope-aware", () => {
+	test("migration 178 permits content hashes across labels and scopes", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
@@ -1731,7 +1731,7 @@ describe("migration framework", () => {
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run("b", "hello again", "hash1", "fact", "default", null, now, now, "test"),
-		).toThrow();
+		).not.toThrow();
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1754,7 +1754,7 @@ describe("migration framework", () => {
 		).run("f", "deleted", "hash1", "fact", "default", null, now, now, "test");
 	});
 
-	test("unique partial index on idempotency_key is agent-, visibility-, and scope-aware", () => {
+	test("migration 178 permits idempotency keys across labels and scopes", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
@@ -1773,7 +1773,7 @@ describe("migration framework", () => {
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run("b", "same tuple import", "import-key", "fact", "default", "global", null, now, now, "test"),
-		).toThrow();
+		).not.toThrow();
 
 		db.prepare(
 			`INSERT INTO memories
