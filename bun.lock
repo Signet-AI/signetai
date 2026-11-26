@@ -546,6 +546,7 @@
       "version": "1.0.1",
       "dependencies": {
         "@signet/core": "workspace:*",
+        "@signet/sdk": "workspace:*",
         "@signet/tray": "workspace:*",
         "electron-updater": "^6.8.9",
       },

@@ -1,4 +1,4 @@
-export type DesktopDeepLinkDestination = "dashboard" | "setup";
+export type DesktopDeepLinkDestination = "dashboard" | "setup" | "auth-complete";
 
 const DESKTOP_DEEP_LINK_SCHEME = "signet:";
 
@@ -14,12 +14,13 @@ export function parseDesktopDeepLink(value: string): DesktopDeepLinkDestination 
 			link.username.length > 0 ||
 			link.password.length > 0 ||
 			link.port.length > 0 ||
-			(link.pathname !== "" && link.pathname !== "/") ||
+			(link.pathname !== "" && link.pathname !== "/" && !(link.hostname === "auth" && link.pathname === "/complete")) ||
 			link.search.length > 0 ||
 			link.hash.length > 0
 		)
 			return null;
 
+		if (link.hostname === "auth" && link.pathname === "/complete") return "auth-complete";
 		if (link.hostname === "dashboard" || link.hostname === "setup") return link.hostname;
 		return null;
 	} catch {
