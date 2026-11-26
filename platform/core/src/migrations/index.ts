@@ -177,6 +177,7 @@ import { up as sessionTranscriptDeletions } from "./174-session-transcript-delet
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
 import { up as organizationIdentity, artifacts as organizationIdentityArtifacts } from "./176-organization-identity";
 import { up as classifications } from "./177-classifications";
+import { up as hookTranscriptUploads, artifacts as hookTranscriptUploadArtifacts } from "./180-hook-transcript-uploads";
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
@@ -1648,6 +1649,12 @@ export const MIGRATIONS: readonly Migration[] = [
 			columns: [{ table: "memories", column: "compartment_id" }],
 		},
 	},
+	{
+		version: 180,
+		name: "hook-transcript-uploads",
+		up: hookTranscriptUploads,
+		artifacts: hookTranscriptUploadArtifacts,
+	},
 ];
 function checksum(m: Migration): string {
 	let h = 0;
@@ -1802,14 +1809,18 @@ export function hasPendingMigrations(db: MigrationDb): boolean {
 	return isBogus || hasNew || phantoms.size > 0;
 }
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+const RESERVED_PARALLEL_MIGRATIONS = new Set([178, 179]);
 function assertMigrationsSequence(): void {
 	for (let i = 1; i < MIGRATIONS.length; i++) {
 		const prev = MIGRATIONS[i - 1];
 		const curr = MIGRATIONS[i];
-		if (prev !== undefined && curr !== undefined && curr.version !== prev.version + 1) {
+		if (prev === undefined || curr === undefined) continue;
+		let expected = prev.version + 1;
+		while (expected < curr.version && RESERVED_PARALLEL_MIGRATIONS.has(expected)) expected++;
+		if (curr.version !== expected) {
 			throw new Error(
 				`MIGRATIONS invariant violated: version ${curr.version} (${curr.name}) ` +
-					`must be exactly ${prev.version + 1} (prev: ${prev.name})`,
+					`must be exactly ${expected} (prev: ${prev.name})`,
 			);
 		}
 	}
