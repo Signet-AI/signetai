@@ -317,13 +317,11 @@ export function recallResultEvidenceInTx(
 }
 
 export function pruneSessionRecallEventsInTx(db: WriteDb, cutoff: string, limit: number): number {
-	return countChanges(
-		db
-			.prepare(
-				"DELETE FROM session_recall_events WHERE rowid IN (SELECT rowid FROM session_recall_events WHERE created_at < ? ORDER BY rowid LIMIT ?)",
-			)
-			.run(cutoff, limit),
-	);
+	return db
+		.prepare(
+			"DELETE FROM session_recall_events WHERE rowid IN (SELECT rowid FROM session_recall_events WHERE created_at < ? ORDER BY rowid LIMIT ?) RETURNING rowid",
+		)
+		.all(cutoff, limit).length;
 }
 
 export function resetCommunityProjectionInTx(db: WriteDb, agentId: string): void {
