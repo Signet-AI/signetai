@@ -73,21 +73,32 @@ export async function resolveCliTarget(
 export function localOnlyMessage(name: string): string {
 	return `This manages a local daemon. Your current target is \`${name}\` (remote). Pass \`--local\`, or run it on the instance host.`;
 }
+function registerTargetFlags(command: Command): void {
+	command.enablePositionalOptions();
+	const inherited = command.parent?.opts<CliTargetOptions>();
+	for (const [key, flags, description] of [
+		["org", "--org", "Use the signed-in organization"],
+		["local", "--local", "Use the local workspace"],
+		["url", "--url <url>", "Override the instance URL"],
+		["agent", "--agent <id>", "Agent for this request"],
+		["nonInteractive", "--non-interactive", "Never open a browser or prompt"],
+	] as const) {
+		if (!command.options.some((option) => option.attributeName() === key)) command.option(flags, description);
+		const value = inherited?.[key];
+		if (value !== undefined) command.setOptionValueWithSource(key, value, "cli");
+	}
+	command.hook("preSubcommand", (_parent, child) => registerTargetFlags(child));
+}
 export function registerOrganizationTarget(program: Command, deps: ResolveTargetOptions = {}): void {
 	selected = undefined;
 	transport = undefined;
 	selectedAgent = undefined;
-	program
-		.option("--org", "Use the signed-in organization")
-		.option("--local", "Use the local workspace")
-		.option("--url <url>", "Override the instance URL")
-		.option("--agent <id>", "Agent for this request")
-		.option("--non-interactive", "Never open a browser or prompt");
+	registerTargetFlags(program);
 	program.hook("preAction", async (_root, command) => {
 		let top = command;
 		while (top.parent && top.parent !== program) top = top.parent;
 		if (["hook", "connect", "disconnect", "connector"].includes(top.name())) return;
-		const options = command.optsWithGlobals<CliTargetOptions>();
+		const options = command.opts<CliTargetOptions>();
 		selected = await resolveCliTarget({ ...options, url: options.join ?? options.url }, deps);
 		selectedAgent = options.agent;
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;

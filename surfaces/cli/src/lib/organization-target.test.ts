@@ -129,6 +129,26 @@ test("existing daemon clients use the resolved organization credential and agent
 	}
 });
 
+test.each([
+	{ args: ["--local", "--agent", "agent-a", "sources", "imports", "upload", "job", "file", "path"] },
+	{ args: ["sources", "--local", "--agent", "agent-a", "imports", "upload", "job", "file", "path"] },
+	{ args: ["sources", "imports", "upload", "job", "file", "path", "--local", "--agent", "agent-a"] },
+])("target flags retain the required nested command agent: %j", async ({ args }: { args: string[] }) => {
+	const program = new Command().exitOverride();
+	registerOrganizationTarget(program, { env: {} });
+	let agent: string | undefined;
+	program
+		.command("sources")
+		.command("imports")
+		.command("upload <job> <file> <path>")
+		.requiredOption("--agent <id>")
+		.action((_job: string, _file: string, _path: string, options: { agent: string }) => {
+			agent = options.agent;
+		});
+	await program.parseAsync(args, { from: "user" });
+	expect(agent).toBe("agent-a");
+});
+
 const keyring = {
 	get: async () => ({ state: "unsupported" as const }),
 	set: async () => ({ state: "unsupported" as const }),
