@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { runMigrations } from "../../../platform/core/src/migrations";
+import { resolveWorkspaceLayout } from "../../../platform/core/src/workspace-layout";
 
 function cookieToken(response: Response): string {
 	return (
@@ -99,9 +100,9 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			await Bun.sleep(100);
 		}
 		if (!ready) throw new Error(`Daemon not ready: ${errors}`);
-		while (!output.includes("Setup token:") && Date.now() < deadline) await Bun.sleep(100);
-		const setup = output.match(/Setup token: ([A-Za-z0-9_-]+)/)?.[1];
-		if (!setup) throw new Error("Setup token was not printed");
+		const setup = (await readFile(join(resolveWorkspaceLayout(workspace).runtime, "setup-token"), "utf8")).trim();
+		expect(setup.length).toBeGreaterThanOrEqual(20);
+		expect(output).not.toContain(setup);
 		const claim = await request(
 			"/api/org/claim",
 			"POST",
