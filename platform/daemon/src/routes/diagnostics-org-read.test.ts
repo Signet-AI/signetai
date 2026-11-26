@@ -273,7 +273,6 @@ test("organization permissions do not bypass unavailable unlabelled diagnostics 
 		"/api/telemetry/stats",
 		"/api/analytics/usage",
 		"/api/analytics/errors",
-		"/api/analytics/continuity",
 		"/api/analytics/memory-safety",
 	]) {
 		const response = await app.request(path);

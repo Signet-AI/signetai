@@ -603,12 +603,19 @@ export function executeContentRead(
 			checkpoint: true,
 			project: "project_normalized",
 		});
+		const session = readScopeSql("checkpoint_session", request.scope, {
+			visibility: null,
+			memory: null,
+			session: "session_key",
+			source: "source_id",
+		});
 		return db
 			.prepare(
-				`SELECT c.id,c.agent_id,c.session_key,c.harness,c.project,c.project_normalized,c.trigger,c.digest,c.prompt_count,c.memory_queries,c.recent_remembers,c.created_at FROM session_checkpoints c WHERE 1=1${predicate.sql}${request.sessionKey ? " AND c.session_key=?" : ""}${request.project ? " AND c.project_normalized=?" : ""} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
+				`SELECT c.id,c.agent_id,c.session_key,c.harness,c.project,c.project_normalized,c.trigger,c.digest,c.prompt_count,c.memory_queries,c.recent_remembers,c.created_at FROM session_checkpoints c WHERE 1=1${predicate.sql} AND NOT EXISTS(SELECT 1 FROM session_transcripts checkpoint_session WHERE checkpoint_session.agent_id=c.agent_id AND checkpoint_session.session_key=c.session_key AND NOT(1=1${session.sql}))${request.sessionKey ? " AND c.session_key=?" : ""}${request.project ? " AND c.project_normalized=?" : ""} ORDER BY c.created_at DESC,c.rowid DESC LIMIT ?`,
 			)
 			.all(
 				...predicate.args,
+				...session.args,
 				...(request.sessionKey ? [request.sessionKey] : []),
 				...(request.project ? [request.project] : []),
 				Math.max(1, Math.min(request.limit, 500)),

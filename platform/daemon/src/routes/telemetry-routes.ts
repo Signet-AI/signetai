@@ -170,7 +170,9 @@ export function registerTelemetryRoutes(app: Hono): void {
 			c.req.path === "/api/checkpoints" ||
 			c.req.path.startsWith("/api/checkpoints/") ||
 			c.req.path === "/api/telemetry/memory-search" ||
-			c.req.path === "/api/telemetry/memory-search/export";
+			c.req.path === "/api/telemetry/memory-search/export" ||
+			c.req.path === "/api/analytics/continuity" ||
+			c.req.path === "/api/analytics/continuity/latest";
 		if (
 			c.get("organization") &&
 			!scoped &&
