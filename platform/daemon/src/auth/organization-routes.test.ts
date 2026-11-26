@@ -65,6 +65,90 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
+		await claim();
+		const agent = await (await call("/api/agents", "POST", { name: "transfer-me", kind: "personal" })).json();
+		const group = await (await call("/api/org/groups", "POST", { name: "eng" })).json();
+		expect((await call(`/api/agents/${agent.agentId}`, "PATCH", { ownerGroupId: group.id })).status).toBe(200);
+		const inventory = await (await call("/api/agents")).json();
+		expect(inventory.agents.find((item: { id: string }) => item.id === agent.agentId)).toMatchObject({
+			kind: "team",
+			ownerUserId: null,
+			ownerGroupId: group.id,
+		});
+		expect((await call("/api/agents/default", "PATCH", { ownerGroupId: group.id })).status).toBe(403);
+	});
+
+	test("agent preference persists a readable default without changing write ownership", async () => {
+		const claimed = await claim();
+		const created = await (await call("/api/agents", "POST", { name: "my-notes", kind: "personal" })).json();
+		const response = await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: created.agentId });
+		expect(response.status).toBe(200);
+		const identity = await (await call("/api/auth/whoami")).json();
+		expect(identity.agents.defaultRead).toBe(created.agentId);
+		expect(identity.agents.defaultWrite).not.toBe(created.agentId);
+		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+		const accepted = await call(
+			"/api/auth/invites/accept",
+			"POST",
+			{
+				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
+				username: "member",
+				displayName: "Member",
+				password: "test password",
+			},
+			"",
+		);
+		const memberToken =
+			accepted.headers
+				.getSetCookie()
+				.find((value) => value.startsWith("signet_session="))
+				?.split(";")[0]
+				?.slice("signet_session=".length) ?? "";
+		expect(
+			(
+				await call(
+					"/api/auth/preferences",
+					"PATCH",
+					{ defaultReadAgentId: "default", userId: claimed.user.id },
+					memberToken,
+				)
+			).status,
+		).toBe(400);
+		expect((await (await call("/api/auth/whoami")).json()).agents.defaultRead).toBe(created.agentId);
+		expect((await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: "missing" })).status).toBe(403);
+		expect(claimed.user.id).toBeTruthy();
+	});
+
+	test("dashboard handoff is single-use, cookie-only and bound to a live session", async () => {
+		await claim();
+		const issued = await call("/api/auth/handoff", "POST", {});
+		expect(issued.status).toBe(200);
+		const handoff = await issued.json();
+		expect(Date.parse(handoff.expiresAt) - Date.now()).toBeLessThanOrEqual(60_000);
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		expect(redeemed.status).toBe(200);
+		expect(
+			redeemed.headers
+				.getSetCookie()
+				.some((value) => value.startsWith("signet_session=") && value.includes("HttpOnly")),
+		).toBe(true);
+		expect(await redeemed.json()).not.toHaveProperty("accessToken");
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "")).status).toBe(401);
+		const device = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "handoff" }, "")
+		).json();
+		await call("/api/auth/device/approve", "POST", { userCode: device.userCode, decision: "approve" });
+		const login = await (await call("/api/auth/device/token", "POST", { deviceCode: device.deviceCode }, "")).json();
+		const key = await (
+			await call("/api/auth/connector-keys", "POST", { harness: "codex", deviceId: login.deviceId }, login.accessToken)
+		).json();
+		expect((await call("/api/auth/handoff", "POST", {}, key.secret)).status).toBe(403);
+		const revoked = await (await call("/api/auth/handoff", "POST", {})).json();
+		await call("/api/auth/logout", "POST", {});
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: revoked.code }, "")).status).toBe(401);
+	});
+
 	test("R6 POST recalls audit the published resolved agent and result count", async () => {
 		await claim();
 		const { registerGlobalMiddleware } = await import("../middleware");

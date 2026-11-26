@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from "react";
 import { dashboardQueryCache } from "@/lib/query-cache";
 import { SignetMark } from "@/components/icons";
+import { AgentContextSwitcher } from "@/components/shell/agent-switcher";
 import { SessionChip } from "@/components/shell/sign-in";
 import { getDesktopBridge } from "@/lib/desktop";
-import { useSession } from "@/lib/session";
+import { useSession, useWhoami } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
 import { ChatToggle, SidebarToggle } from "@/components/shell/navigation";
@@ -18,21 +19,33 @@ export function Topbar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean;
 	const { view, label, chatOpen, setChatOpen } = useView();
 	const chatAvailable = view === "graph";
 	const session = useSession();
+	const organization = useWhoami() !== null;
 
 	return (
 		<header className={cn("relative z-40 flex shrink-0 flex-col bg-background", desktop !== null && "sig-drag")}>
-			<div className="sig-topbar-row relative flex h-[32px] shrink-0 items-center px-4 sm:px-6">
+			<div
+				className={cn(
+					"sig-topbar-row relative flex shrink-0 items-center px-4 sm:px-6",
+					organization ? "h-11" : "h-[32px]",
+				)}
+			>
 				<div className={cn("sig-no-drag relative z-10 ml-auto flex items-center gap-3", chatAvailable && "mr-9")}>
 					{unavailable > 0 && (
 						<span role="status" className="hidden text-[10px] text-muted-foreground sm:block">
 							Updates unavailable
 						</span>
 					)}
+					<AgentContextSwitcher />
 					<SessionChip session={session} />
 				</div>
 				<SignetMark className="sig-topbar-brand" aria-label="Signet" aria-hidden={false} role="img" />
 				<SidebarToggle open={sidebarOpen} onToggle={onToggleSidebar} />
-				<div className="sig-no-drag absolute left-1/2 flex max-w-[calc(100%_-_112px)] min-w-0 -translate-x-1/2 items-center gap-1.5">
+				<div
+					className={cn(
+						"sig-no-drag absolute left-1/2 max-w-[calc(100%_-_112px)] min-w-0 -translate-x-1/2 items-center gap-1.5",
+						organization ? "hidden sm:flex" : "flex",
+					)}
+				>
 					<SignetMark className="sig-topbar-title-mark h-[19px] w-4 shrink-0" aria-hidden="true" />
 					<span className="truncate text-[16px] font-medium tracking-tight">{label(view)}</span>
 				</div>

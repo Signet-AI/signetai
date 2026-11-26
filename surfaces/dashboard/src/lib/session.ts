@@ -11,6 +11,8 @@ export interface SignInProvider {
 	readonly type: string;
 	readonly enabled: boolean;
 	readonly username?: string;
+	readonly label?: string;
+	readonly startPath?: string;
 }
 
 export interface Identity {
@@ -18,6 +20,21 @@ export interface Identity {
 	readonly name: string | null;
 	readonly role: string;
 	readonly expiresAt: number;
+}
+
+export interface Whoami {
+	readonly organization: { readonly name: string; readonly agentModel: string };
+	readonly user: {
+		readonly id: string;
+		readonly username: string;
+		readonly displayName: string;
+		readonly email: string | null;
+		readonly role: string;
+		readonly compliance: boolean;
+		readonly groups: readonly { readonly id: string; readonly name: string; readonly role: string }[];
+	};
+	readonly agents: { readonly defaultRead: string; readonly defaultWrite: string | null };
+	readonly credential: { readonly id: string; readonly kind: string; readonly expiresAt: string | null };
 }
 
 export type Session =
@@ -29,11 +46,14 @@ export type Session =
 			readonly identity: Identity;
 			readonly permissions: readonly string[] | null;
 			readonly expiresSoon: boolean;
+			readonly whoami?: Whoami;
 	  }
 	| {
 			readonly kind: "signed-out";
 			readonly mode: string;
 			readonly providers: readonly SignInProvider[];
+			readonly organizationName?: string;
+			readonly whoami?: Whoami;
 			readonly reason: string | null;
 			readonly expired: boolean;
 			readonly renewal: boolean;
@@ -51,6 +71,7 @@ const demo =
 let current: Session = demo ? { kind: "open", mode: "local", permissions: null } : { kind: "checking" };
 let boot: Promise<void> | null = null;
 let signedInOnce = false;
+let lastWhoami: Whoami | null = null;
 let pendingReason: string | null = null;
 let refreshing: Promise<void> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -59,24 +80,28 @@ let scheduledExpiry = 0;
 let recheck = 0;
 const listeners = new Set<() => void>();
 
+let legacyToken: string | null = null;
+
 export function readToken(): string | null {
-	try {
-		return typeof localStorage === "undefined" ? null : localStorage.getItem(TOKEN_KEY);
-	} catch {
-		return null;
-	}
+	return legacyToken;
 }
 
 function writeToken(token: string | null): void {
-	try {
-		if (token) localStorage.setItem(TOKEN_KEY, token);
-		else localStorage.removeItem(TOKEN_KEY);
-	} catch {}
+	legacyToken = token;
 }
 
 export function authHeaders(): HeadersInit {
 	const token = readToken();
-	return token ? { Authorization: `Bearer ${token}` } : {};
+	if (token) return { Authorization: `Bearer ${token}` };
+	if (typeof document === "undefined") return {};
+	const cookies = new Map(
+		document.cookie.split("; ").map((entry) => {
+			const index = entry.indexOf("=");
+			return [entry.slice(0, index), entry.slice(index + 1)];
+		}),
+	);
+	const csrf = cookies.get("__Host-signet_csrf") ?? cookies.get("signet_csrf");
+	return csrf ? { "x-signet-csrf": csrf } : {};
 }
 
 function publish(next: Session): void {
@@ -98,7 +123,8 @@ function set(next: Session): void {
 	const wait = Math.min(Math.max(expiresAt - Date.now() + 1_000, recheck), MAX_TIMER_MS);
 	expiryTimer = setTimeout(() => void refreshSession(), wait);
 	const warnIn = expiresAt - EXPIRY_WARNING_MS - Date.now();
-	const expiresSoon = current.kind === "signed-in" && current.identity.expiresAt === expiresAt && current.expiresSoon;
+	const expiresSoon =
+		warnIn <= 0 || (current.kind === "signed-in" && current.identity.expiresAt === expiresAt && current.expiresSoon);
 	if (warnIn > 0) {
 		warningTimer = setTimeout(
 			() => {
@@ -118,12 +144,22 @@ function text(value: unknown): string | null {
 	return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+export function sessionFetch(path: string, init: RequestInit = {}): Promise<Response> {
+	if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\"))
+		throw new Error("Dashboard requests must stay on this instance.");
+	const headers = new Headers(authHeaders());
+	new Headers(init.headers).forEach((value, key) => {
+		headers.set(key, value);
+	});
+	return fetch(path, { ...init, credentials: "same-origin", headers });
+}
+
 async function request(
 	path: string,
 	init: RequestInit,
 ): Promise<{ readonly status: number; readonly body: unknown; readonly retryAfter: string | null } | null> {
 	try {
-		const res = await fetch(path, { ...init, signal: AbortSignal.timeout(15_000) });
+		const res = await sessionFetch(path, { ...init, signal: AbortSignal.timeout(15_000) });
 		const body: unknown = await res.json().catch(() => null);
 		return { status: res.status, body, retryAfter: res.headers.get("Retry-After") };
 	} catch {
@@ -136,11 +172,60 @@ function readProviders(value: unknown): SignInProvider[] {
 	return value.flatMap((entry) => {
 		if (!isRecord(entry)) return [];
 		const id = text(entry.id);
-		const type = text(entry.type);
+		const type = text(entry.type) ?? id;
 		if (!id || !type) return [];
 		const username = text(entry.username);
-		return [{ id, type, enabled: entry.enabled === true, ...(username ? { username } : {}) }];
+		return [
+			{
+				id,
+				type,
+				enabled: entry.enabled !== false,
+				...(username ? { username } : {}),
+				...(text(entry.label) ? { label: String(entry.label) } : {}),
+				...(text(entry.startPath) ? { startPath: String(entry.startPath) } : {}),
+			},
+		];
 	});
+}
+
+function readWhoami(value: Record<string, unknown>): Whoami | undefined {
+	const { organization, user, credential, agents } = value;
+	if (!isRecord(organization) || !isRecord(user) || !isRecord(credential) || !isRecord(agents)) return;
+	const name = text(organization.name);
+	const agentModel = text(organization.agentModel);
+	const id = text(user.id);
+	const username = text(user.username);
+	const displayName = text(user.displayName);
+	const role = text(user.role);
+	const credentialId = text(credential.id);
+	const kind = text(credential.kind);
+	const defaultRead = text(agents.defaultRead);
+	if (!name || !agentModel || !id || !username || !displayName || !role || !credentialId || !kind || !defaultRead)
+		return;
+	const groups = Array.isArray(user.groups)
+		? user.groups.flatMap((group: unknown) => {
+				if (!isRecord(group)) return [];
+				const id = text(group.id);
+				const name = text(group.name);
+				const role = text(group.role);
+				return id && name && role ? [{ id, name, role }] : [];
+			})
+		: [];
+	return {
+		organization: { name, agentModel },
+		user: { id, username, displayName, email: text(user.email), role, compliance: user.compliance === true, groups },
+		credential: { id: credentialId, kind, expiresAt: text(credential.expiresAt) },
+		agents: { defaultRead, defaultWrite: text(agents.defaultWrite) },
+	};
+}
+
+export function useWhoami(): Whoami | null {
+	const session = useSession();
+	return session.kind === "unreachable"
+		? lastWhoami
+		: session.kind === "signed-in" || (session.kind === "signed-out" && session.expired)
+			? (session.whoami ?? null)
+			: null;
 }
 
 function readIdentity(value: unknown): Identity | null {
@@ -173,14 +258,32 @@ async function check(retry = true): Promise<void> {
 	}
 	const body = res.body;
 	const mode = text(body.mode) ?? "team";
-	const identity = body.authenticated === true ? readIdentity(body.claims) : null;
+	const whoami = readWhoami(body);
+	if (isRecord(body.organization)) {
+		writeToken(null);
+		if (typeof localStorage !== "undefined") localStorage.removeItem(TOKEN_KEY);
+	}
+	const identity =
+		body.authenticated === true
+			? whoami
+				? {
+						sub: whoami.user.id,
+						name: whoami.user.displayName,
+						role: whoami.user.role,
+						expiresAt: whoami.credential.expiresAt
+							? Date.parse(whoami.credential.expiresAt)
+							: Date.now() + MAX_RECHECK_MS,
+					}
+				: readIdentity(body.claims)
+			: null;
 	const permissions = readPermissions(body.permissions);
 	if (identity) {
+		lastWhoami = whoami ?? null;
 		pendingReason = null;
-		set({ kind: "signed-in", mode, identity, permissions, expiresSoon: false });
+		set({ kind: "signed-in", mode, identity, permissions, expiresSoon: false, ...(whoami ? { whoami } : {}) });
 		return;
 	}
-	if (body.effectiveAccess === true) {
+	if (body.effectiveAccess === true || body.effectiveAccess === "open") {
 		set({ kind: "open", mode, permissions });
 		return;
 	}
@@ -193,10 +296,14 @@ async function check(retry = true): Promise<void> {
 		kind: "signed-out",
 		mode,
 		providers: readProviders(body.providers),
+		...(isRecord(body.organization) && text(body.organization.name)
+			? { organizationName: String(body.organization.name) }
+			: {}),
 		reason,
 		expired: signedInOnce,
 		renewal: false,
 		permissions: knownPermissions(),
+		...(current.kind === "signed-in" && current.whoami ? { whoami: current.whoami } : {}),
 	});
 }
 
@@ -246,7 +353,7 @@ export function noteUnauthorized(): void {
 
 async function adopt(res: Awaited<ReturnType<typeof request>>): Promise<SignInResult> {
 	const token = res?.status === 200 && isRecord(res.body) ? text(res.body.token) : null;
-	if (!token) return { ok: false, error: "Signet did not return a session." };
+	if (res?.status !== 200) return { ok: false, error: "Signet did not return a session." };
 	writeToken(token);
 	await refreshSession();
 	return current.kind === "signed-in"
@@ -262,6 +369,11 @@ function failure(res: Awaited<ReturnType<typeof request>>, rejected: string): Si
 			? { ok: false, error: `Too many attempts. Try again in ${seconds}s.`, retryAfter: seconds }
 			: { ok: false, error: "Too many attempts. Try again shortly." };
 	}
+	const reason = isRecord(res.body) ? text(res.body.reason) : null;
+	if (reason === "user_deactivated")
+		return { ok: false, error: "Your account was deactivated. Contact an organization administrator." };
+	if (reason === "org_policy")
+		return { ok: false, error: "This sign-in method is not allowed by your organization. Use a configured provider." };
 	if (res.status === 401) return { ok: false, error: rejected };
 	const error = isRecord(res.body) ? text(res.body.error) : null;
 	return { ok: false, error: error ?? `Sign-in failed (HTTP ${res.status}).` };
@@ -299,6 +411,7 @@ export function requestRenewal(): void {
 			mode: current.mode,
 			providers,
 			reason: "Sign in again to start a new session.",
+			...(current.whoami ? { whoami: current.whoami, organizationName: current.whoami.organization.name } : {}),
 			expired: true,
 			renewal: true,
 			permissions: current.permissions,
@@ -317,7 +430,8 @@ function knownPermissions(): readonly string[] | null {
 }
 
 export function can(session: Session, permission: string): boolean {
-	if (session.kind === "checking" || session.kind === "unreachable") return true;
+	if (session.kind === "checking" || session.kind === "unreachable") return false;
+	if ("whoami" in session && session.whoami && session.permissions === null) return false;
 	return session.permissions === null || session.permissions.includes(permission);
 }
 
@@ -325,9 +439,18 @@ export function useCan(permission: string): boolean {
 	return can(useSession(), permission);
 }
 
-export function signOut(): Promise<void> {
+export async function signOut(all = false): Promise<void> {
+	if (current.kind === "signed-in" && current.whoami) {
+		const result = await request("/api/auth/logout", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ all }),
+		});
+		if (result?.status !== 200) throw new Error("Sign-out failed. Your session may still be active.");
+	}
 	writeToken(null);
 	signedInOnce = false;
+	lastWhoami = null;
 	return refreshSession();
 }
 
