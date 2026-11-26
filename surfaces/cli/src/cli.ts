@@ -47,7 +47,9 @@ import { registerAccelerateCommands } from "./commands/accelerate.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
-import { registerAuthCommands } from "./commands/auth.js";
+import { registerAuthCommands, reportAuthError } from "./commands/auth.js";
+import { registerOrganizationCommands } from "./commands/organization.js";
+import { registerOrganizationTarget } from "./lib/organization-target.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -844,6 +846,8 @@ Examples:
 `,
 );
 
+registerOrganizationTarget(program, { configUrl: readDaemonUrlConfig(AGENTS_DIR) });
+registerOrganizationCommands(program, { configUrl: readDaemonUrlConfig(AGENTS_DIR) });
 registerCliPreAction(program, {
 	agentsDir: AGENTS_DIR,
 	version: VERSION,
@@ -1186,5 +1190,9 @@ registerDefaultAction(program, {
 if (isDaemonEntrypoint) {
 	await import("../../../platform/daemon/src/daemon.js");
 } else {
-	await program.parseAsync();
+	try {
+		await program.parseAsync();
+	} catch (error) {
+		reportAuthError(error, process.argv.includes("--json"));
+	}
 }
