@@ -40,8 +40,15 @@ export interface StoredStagedChunk {
 interface ReadScope {
 	readonly signal?: AbortSignal;
 }
-export interface StagingStore<Read extends ReadScope, Write extends Read & { readonly generation: number }> {
-	readonly get: (scope: Read) => Promise<TranscriptUpload>;
+export type StagedSealResult<Upload extends TranscriptUpload> =
+	| { readonly kind: "sealed"; readonly upload: Upload }
+	| { readonly kind: "consumed"; readonly upload: Upload };
+export interface StagingStore<
+	Read extends ReadScope,
+	Write extends Read & { readonly generation: number },
+	Upload extends TranscriptUpload = TranscriptUpload,
+> {
+	readonly get: (scope: Read) => Promise<Upload>;
 	readonly databasePath: () => Promise<string>;
 	readonly reservationBytes?: (size: number) => number;
 	readonly declare: (scope: Write, size: number, reservation: number, available: number) => Promise<void>;
@@ -60,9 +67,11 @@ export interface StagingStore<Read extends ReadScope, Write extends Read & { rea
 }
 const checksum = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
-export function createStagingOwner<Read extends ReadScope, Write extends Read & { readonly generation: number }>(
-	store: StagingStore<Read, Write>,
-) {
+export function createStagingOwner<
+	Read extends ReadScope,
+	Write extends Read & { readonly generation: number },
+	Upload extends TranscriptUpload = TranscriptUpload,
+>(store: StagingStore<Read, Write, Upload>) {
 	async function begin(scope: Write, size: number): Promise<void> {
 		if (!Number.isSafeInteger(size) || size < 0 || size > TRANSCRIPT_FILE_BYTES)
 			throw new RangeError("invalid upload size");
@@ -182,10 +191,15 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 		}
 		return offset + bytes.length;
 	}
-	async function seal(scope: Write, active: () => boolean = () => true): Promise<TranscriptUpload> {
+	function sealedResult(upload: Upload): StagedSealResult<Upload> {
+		if (upload.storage_state === "consumed") return { kind: "consumed", upload };
+		if (upload.storage_state === "sealed") return { kind: "sealed", upload };
+		throw new Error("Upload did not seal");
+	}
+	async function seal(scope: Write, active: () => boolean = () => true): Promise<StagedSealResult<Upload>> {
 		const file = await store.get(scope);
 		if (file.upload_generation !== scope.generation) throw new Error("stale upload generation");
-		if (file.storage_state === "sealed" || file.storage_state === "consumed") return file;
+		if (file.storage_state === "sealed" || file.storage_state === "consumed") return sealedResult(file);
 		if (
 			(file.storage_state !== "uploading" && file.storage_state !== "legacy") ||
 			file.upload_size === null ||
@@ -206,7 +220,7 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 		if (file.storage_state === "legacy" && file.content_hash !== null && file.content_hash !== contentHash)
 			throw new Error("legacy source hash mismatch");
 		await store.seal(scope, contentHash);
-		return store.get(scope);
+		return sealedResult(await store.get(scope));
 	}
 	async function upload(scope: Write, size: number, stream: AsyncIterable<Uint8Array>): Promise<void> {
 		await begin(scope, size);

@@ -2046,8 +2046,8 @@ export async function handleSessionEnd(req: SessionEndRequest, upload?: HookUplo
 			generation: upload.upload_generation,
 			signal: AbortSignal.timeout(60_000),
 		});
-		if ("result_json" in sealed) {
-			const replay = hookUploadResult(sealed);
+		if (sealed.kind === "consumed") {
+			const replay = hookUploadResult(sealed.upload);
 			if (replay) return replay;
 		}
 	}

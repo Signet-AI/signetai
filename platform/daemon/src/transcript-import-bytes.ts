@@ -170,7 +170,8 @@ const staging = createStagingOwner<Omit<TranscriptUploadScope, "generation">, Tr
 export const beginTranscriptUpload = staging.begin;
 export const appendTranscriptChunk = staging.append;
 export const readTranscriptBytes = staging.read;
-export const sealTranscriptUpload = staging.seal;
+export const sealTranscriptUpload = async (...args: Parameters<typeof staging.seal>) =>
+	(await staging.seal(...args)).upload;
 export const uploadTranscriptStream = staging.upload;
 export const purgeTranscriptBytes = staging.purge;
 

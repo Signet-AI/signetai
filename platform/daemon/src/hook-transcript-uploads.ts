@@ -236,7 +236,7 @@ async function discardHookUpload(row: HookUploadRow, checksumFailure: boolean): 
 export async function abortHookUpload(principal: Principal, id: string): Promise<void> {
 	await discardHookUpload(await getHookUpload(principal, id), false);
 }
-export const hookUploadStaging = createStagingOwner<HookUploadScope, WriteScope>({
+export const hookUploadStaging = createStagingOwner<HookUploadScope, WriteScope, HookUploadRow>({
 	get: metadata,
 	reservationBytes: (size) => size + Math.ceil(size / TRANSCRIPT_CHUNK_BYTES) * HOOK_TRANSCRIPT_CHUNK_OVERHEAD_BYTES,
 	databasePath,
