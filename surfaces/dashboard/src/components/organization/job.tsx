@@ -38,12 +38,20 @@ export function TrackedJob({ id, onComplete }: { id: string; onComplete?: () => 
 	}, [id, attempt, onComplete]);
 	return (
 		<OrganizationBlock title="Tracked job">
-			<p role="status">{job ? `Job ${id}: ${job.status}` : `Checking job ${id}…`}</p>
-			{job?.progress_json && (
-				<pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-small">
-					{job.progress_json}
-				</pre>
-			)}
+			<p role="status" data-job-status={job?.status ?? "checking"}>
+				{job
+					? job.status === "complete"
+						? "Completed"
+						: job.status === "pending"
+							? "Queued"
+							: job.status === "running"
+								? "In progress…"
+								: job.status === "failed"
+									? "Failed"
+									: "Cancelled"
+					: "Checking progress…"}
+			</p>
+			<p className="m-0 break-all text-xs text-muted-foreground">Job reference: {id}</p>
 			<Message error={error ?? job?.error ?? null} />
 			{error && (
 				<Action secondary onClick={() => setAttempt((value) => value + 1)}>

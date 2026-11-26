@@ -129,40 +129,63 @@ export function PrincipalEditor({
 	values: readonly ClassificationPrincipal[];
 	onChange: (values: readonly ClassificationPrincipal[]) => void;
 }) {
-	const [kind, setKind] = useState("user");
+	const whoami = useWhoami();
+	const [kind, setKind] = useState("group");
 	const [id, setId] = useState("");
+	const groups = usePanelQuery<{ groups: readonly { id: string; name: string }[] }>("/api/org/groups");
+	const users = usePanelQuery<{ users: readonly { id: string; display_name: string }[] }>(
+		whoami?.user.role === "admin" ? "/api/org/users" : null,
+	);
+	const options =
+		kind === "group"
+			? (groups.result?.data?.groups ?? []).map((group) => ({ value: group.id, label: group.name }))
+			: (
+					users.result?.data?.users ?? (whoami ? [{ id: whoami.user.id, display_name: whoami.user.displayName }] : [])
+				).map((user) => ({ value: user.id, label: user.display_name }));
 	return (
 		<OrganizationBlock title={title}>
-			<div className="grid gap-3 sm:grid-cols-2">
-				<Choice
-					label={`${title} principal kind`}
-					value={kind}
-					onChange={setKind}
-					options={[
-						{ value: "user", label: "User" },
-						{ value: "group", label: "Team" },
-					]}
-				/>
-				<TextField label={`${title} principal ID`} value={id} onChange={setId} />
-			</div>
+			<Choice
+				label={`${title} kind`}
+				value={kind}
+				onChange={(value) => {
+					setKind(value);
+					setId("");
+				}}
+				options={[
+					{ value: "group", label: "Team" },
+					{ value: "user", label: "Person" },
+				]}
+			/>
+			<Choice
+				label={`Add to ${title.toLowerCase()}`}
+				value={id}
+				onChange={setId}
+				options={[{ value: "", label: "Choose a person or team" }, ...options]}
+			/>
 			<Action
 				secondary
-				disabled={!id.trim()}
+				disabled={!id}
 				onClick={() => {
-					const value: ClassificationPrincipal = { kind: kind === "group" ? "group" : "user", id: id.trim() };
-					if (!values.some((item) => item.kind === value.kind && item.id === value.id)) onChange([...values, value]);
+					const value: ClassificationPrincipal = {
+						kind: kind === "group" ? "group" : "user",
+						id,
+						displayName: options.find((option) => option.value === id)?.label,
+					};
+					if (!values.some((item) => item.kind === value.kind && item.id === id)) onChange([...values, value]);
 					setId("");
 				}}
 			>
-				Add {title.toLowerCase()} principal
+				Add {title.toLowerCase()}
 			</Action>
 			{values.map((value) => (
 				<div className="settings-row" key={`${value.kind}:${value.id}`}>
-					<span className="text-small">
-						{value.kind}: {value.id}
+					<span className="text-small" title={value.id}>
+						{value.displayName ??
+							options.find((option) => option.value === value.id)?.label ??
+							displayLabel(value.kind)}
 					</span>
 					<Action secondary onClick={() => onChange(values.filter((item) => item !== value))}>
-						Remove {value.id}
+						Remove
 					</Action>
 				</div>
 			))}
@@ -271,7 +294,13 @@ export function ClassificationsContent({
 			body: JSON.stringify(
 				selected
 					? { name, color: color || null, description, ...(archive ? { archived: true } : {}) }
-					: { name, color: color || undefined, description, audience, appliers },
+					: {
+							name,
+							color: color || undefined,
+							description,
+							audience: audience.map(({ kind, id }) => ({ kind, id })),
+							appliers: appliers.map(({ kind, id }) => ({ kind, id })),
+						},
 			),
 		});
 		if (result.data && selected && !archive && selected.audience !== undefined && selected.appliers !== undefined) {
@@ -282,7 +311,7 @@ export function ClassificationsContent({
 				const saved = await getJSONResult(`${path}/${suffix}`, {
 					method: "PUT",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(values),
+					body: JSON.stringify(values.map(({ kind, id }) => ({ kind, id }))),
 				});
 				if (saved.error) {
 					setError(`${suffix} was not saved: ${saved.error}`);
@@ -329,7 +358,7 @@ export function ClassificationsContent({
 								<td className={cellClass}>
 									{item.audience?.map((principal) => (
 										<span key={`${principal.kind}:${principal.id}`} title={principal.id} className="mr-2">
-											{displayLabel(principal.kind)}
+											{principal.displayName ?? displayLabel(principal.kind)}
 										</span>
 									)) ?? "Unavailable"}
 								</td>

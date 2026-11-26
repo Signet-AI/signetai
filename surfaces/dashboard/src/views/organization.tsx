@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AgentsContent } from "@/components/organization/agents";
 import { AuthenticationContent } from "@/components/organization/authentication";
 import { ClassificationsContent } from "@/components/organization/classifications";
-import { Action, Choice, TextField } from "@/components/organization/controls";
+import { Action, Choice, TextField, displayLabel } from "@/components/organization/controls";
 import { type AuditPage, AuditContent, HealthContent, KeysContent } from "@/components/organization/operations";
 import { CreateTeam, TeamContent, TeamDirectory } from "@/components/organization/teams";
 import { AccessContent, type EffectiveAccess, RolesMatrix, UsersContent } from "@/components/organization/users";
@@ -182,7 +182,10 @@ function UsersSection() {
 					label="User role"
 					value={role}
 					onChange={setRole}
-					options={[{ value: "", label: "All roles" }, ...ORGANIZATION_ROLES.map((value) => ({ value, label: value }))]}
+					options={[
+						{ value: "", label: "All roles" },
+						...ORGANIZATION_ROLES.map((value) => ({ value, label: displayLabel(value) })),
+					]}
 				/>
 				<OrganizationResource<{ groups: readonly OrganizationGroup[] }> path="/api/org/groups">
 					{(data) => (

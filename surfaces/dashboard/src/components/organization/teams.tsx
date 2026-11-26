@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { displayLabel } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import type {
 	OrganizationAgent,
@@ -194,7 +195,7 @@ export function TeamContent({
 							<td className={cellClass}>
 								{item.display_name} · {item.username}
 							</td>
-							<td className={cellClass}>{item.role}</td>
+							<td className={cellClass}>{displayLabel(item.role)}</td>
 							<td className={cellClass}>
 								{editable && (
 									<Action secondary disabled={busy} onClick={() => void member(item.id, false)}>

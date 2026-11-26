@@ -96,6 +96,12 @@ export interface OffboardingPlan {
 	readonly mode: "keep" | "transfer" | "purge";
 	readonly transferTo: string | null;
 	readonly counts: Readonly<Record<string, number>>;
+	readonly ownedAgents?: readonly {
+		readonly id: string;
+		readonly name: string;
+		readonly kind: string;
+		readonly transferTo: { readonly userId: string; readonly displayName: string } | null;
+	}[];
 }
 export function offboardingRequest(plan: OffboardingPlan | null, name: string, typed: string) {
 	if (!plan || name !== typed) return null;
@@ -112,6 +118,7 @@ export interface OrganizationJob {
 	readonly error: string | null;
 }
 export interface ClassificationPrincipal {
+	readonly displayName?: string;
 	readonly kind: "user" | "group";
 	readonly id: string;
 }

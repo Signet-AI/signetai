@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { usePanelQuery } from "@/lib/use-panel-query";
+import { displayLabel } from "./controls";
 import { dashboardFetch, getJSONResult } from "@/lib/api";
 import type { OrganizationAgent, OrganizationKey } from "@/lib/organization";
 import {
@@ -23,6 +25,7 @@ export function KeysContent({
 	agents: readonly OrganizationAgent[];
 	permissions: readonly string[];
 }) {
+	const people = usePanelQuery<{ users: readonly { id: string; display_name: string }[] }>("/api/org/users");
 	const [selected, setSelected] = useState<readonly string[]>([]);
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -63,12 +66,16 @@ export function KeysContent({
 								{key.revoked_at && <span>Revoked</span>}
 							</td>
 							<td className={cellClass}>
-								{key.user_id ?? "Unassigned"}
+								{people.result?.data?.users.find((person) => person.id === key.user_id)?.display_name ??
+									(key.user_id ? "Person" : "Unassigned")}
+								<div className="break-all text-xs text-muted-foreground">{key.user_id}</div>
 								<div className="text-muted-foreground">{key.device_id ?? "No device"}</div>
 							</td>
 							<td className={cellClass}>
-								{key.harness ?? "Script"}
-								<div className="text-muted-foreground">{key.agent_id ?? "—"}</div>
+								{key.harness ? displayLabel(key.harness) : "Script"}
+								<div className="text-muted-foreground">
+									{agents.find((agent) => agent.id === key.agent_id)?.name ?? (key.agent_id ? "Agent" : "No agent")}
+								</div>
 							</td>
 							<td className={cellClass}>
 								<DateValue value={key.last_used_at} />
@@ -174,12 +181,16 @@ export function AuditContent({
 							<td className={cellClass}>
 								<DateValue value={event.at} />
 							</td>
-							<td className={cellClass}>{event.actor_user_id ?? "System"}</td>
+							<td className={cellClass}>
+								{event.actor_user_id ? "Person" : "System"}
+								<div className="break-all text-xs text-muted-foreground">{event.actor_user_id}</div>
+							</td>
 							<td className={cellClass}>{event.action}</td>
 							<td className={`${cellClass} break-all`}>
-								{event.target_kind}: {event.target_id}
+								{event.target_kind ? displayLabel(event.target_kind) : "Instance"}
+								<div className="text-xs text-muted-foreground">{event.target_id}</div>
 							</td>
-							<td className={cellClass}>{event.outcome}</td>
+							<td className={cellClass}>{displayLabel(event.outcome)}</td>
 						</tr>
 					))}
 				</OrganizationTable>
@@ -215,17 +226,21 @@ export function HealthContent({ status }: { status: Record<string, unknown> }) {
 	return (
 		<OrganizationBlock
 			title="Instance health"
-			description="Only daemon-reported signals are shown. Missing capacity metrics are unavailable, not healthy."
+			description="Daemon-reported status. Missing capacity metrics are unavailable, not healthy."
 		>
 			{proxy && (
 				<p role="alert" className="text-small text-destructive">
 					Hybrid mode detected behind a proxy. Loopback trust is disabled for forwarded requests.
 				</p>
 			)}
-			<p className="text-small">Capacity: unavailable unless reported below.</p>
-			<pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-small">
-				{JSON.stringify(status, null, 2)}
-			</pre>
+			<dl className="grid grid-cols-2 gap-3 text-small">
+				<dt className="text-muted-foreground">Connection</dt>
+				<dd>Connected</dd>
+				<dt className="text-muted-foreground">Version</dt>
+				<dd>{typeof status.version === "string" ? status.version : "Unavailable"}</dd>
+				<dt className="text-muted-foreground">Capacity</dt>
+				<dd>Unavailable</dd>
+			</dl>
 		</OrganizationBlock>
 	);
 }

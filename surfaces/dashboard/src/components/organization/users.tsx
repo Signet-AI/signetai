@@ -166,6 +166,16 @@ export function OffboardingWizard({
 						{step === 2 && plan && (
 							<div className="flex flex-col gap-4">
 								<OffboardingImpact plan={plan} />
+								{plan.ownedAgents && (
+									<OrganizationTable columns={["Agent", "Ownership after offboarding"]}>
+										{plan.ownedAgents.map((agent) => (
+											<tr key={agent.id} className={rowClass}>
+												<td className={cellClass}>{agent.name}</td>
+												<td className={cellClass}>{agent.transferTo?.displayName ?? "Unchanged"}</td>
+											</tr>
+										))}
+									</OrganizationTable>
+								)}
 								<p className="text-small">
 									{mode === "transfer"
 										? `Personal agents transfer to ${destination}. Authorship stays with ${user.displayName}.`
@@ -435,11 +445,11 @@ export function RolesMatrix() {
 			title="Built-in roles"
 			description="Read-only. Compliance adds classify and audit; it never grants access to content outside an audience."
 		>
-			<OrganizationTable columns={["Permission", ...ORGANIZATION_ROLES]}>
+			<OrganizationTable columns={["Permission", ...ORGANIZATION_ROLES.map(displayLabel)]}>
 				{ORGANIZATION_PERMISSIONS.map((permission) => (
 					<tr key={permission} className={rowClass}>
 						<th scope="row" className={cellClass}>
-							{permission}
+							{displayLabel(permission)}
 						</th>
 						{ORGANIZATION_ROLES.map((role) => (
 							<td key={role} className={cellClass}>

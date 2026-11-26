@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { displayLabel } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import type { OrganizationAgent, OrganizationGroup, OrganizationUser } from "@/lib/organization";
 import {
@@ -58,9 +59,7 @@ export function AgentsContent({
 			? "Organization"
 			: (users.find((user) => user.id === agent.ownerUserId)?.displayName ??
 				groups.find((group) => group.id === agent.ownerGroupId)?.name ??
-				agent.ownerUserId ??
-				agent.ownerGroupId ??
-				"Unassigned");
+				(agent.ownerUserId ? "Person" : agent.ownerGroupId ? "Team" : "Unassigned"));
 	return (
 		<div className="flex flex-col gap-6">
 			<OrganizationBlock title="Organization agents">
@@ -79,7 +78,7 @@ export function AgentsContent({
 								</Action>
 							</td>
 							<td className={cellClass}>
-								{agent.kind}
+								{displayLabel(agent.kind)}
 								{agent.archivedAt ? " · archived" : ""}
 							</td>
 							<td className={cellClass}>{owner(agent)}</td>
