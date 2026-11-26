@@ -1504,14 +1504,17 @@ function stopMemoryImportPoller(): void {
 function startStaleSessionSweeper(): void {
 	if (staleSessionSweepTimer !== null) return;
 	staleSessionSweepTimer = setInterval(() => {
-		void purgeExpiredHookUploads().catch((error) =>
-			logger.warn("daemon", "Hook upload expiry purge failed", {
-				error: error instanceof Error ? error.message : String(error),
-			}),
-		);
-		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }).catch((e) => {
-			logger.error("daemon", "Stale session sweep failed", undefined, {
-				message: e instanceof Error ? e.message : String(e),
+		void Promise.allSettled([
+			sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }),
+			purgeExpiredHookUploads(),
+		]).then((results) => {
+			results.forEach((result, index) => {
+				if (result.status !== "rejected") return;
+				const error: unknown = result.reason;
+				logger.error("daemon", "Session maintenance failed", undefined, {
+					task: index === 0 ? "stale-session-sweep" : "hook-upload-expiry",
+					message: error instanceof Error ? error.message : String(error),
+				});
 			});
 		});
 	}, STALE_SESSION_SWEEP_INTERVAL_MS);
