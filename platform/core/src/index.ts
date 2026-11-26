@@ -23,6 +23,7 @@ export { buildProtectionEvidence, computeProtectionDigests } from "./protection-
 export type { ProtectionEvidence, ProtectionEvidenceOptions } from "./protection-evidence";
 export {
 	execFileHidden,
+	renderExecFileHiddenModule,
 	execFileSyncHidden,
 	execSyncHidden,
 	spawnHidden,

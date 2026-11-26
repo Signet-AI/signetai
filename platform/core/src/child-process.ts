@@ -34,27 +34,39 @@ function isOptions(value: unknown): value is ProcessOptions {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function withWindowsHideArgument(args: readonly unknown[], firstOptionIndex: number): unknown[] {
-	const normalized = [...args];
-	const optionIndex = normalized.findIndex((value, index) => index >= firstOptionIndex && isOptions(value));
-	if (optionIndex >= 0) {
-		normalized[optionIndex] = withWindowsHide(normalized[optionIndex]);
-		return normalized;
-	}
+function createWindowsHideArgumentAdapter(
+	normalizeWindowsHide: typeof withWindowsHide,
+	isProcessOptions: typeof isOptions,
+): (args: readonly unknown[], firstOptionIndex: number) => unknown[] {
+	return (args, firstOptionIndex) => {
+		const normalized = [...args];
+		const optionIndex = normalized.findIndex((value, index) => index >= firstOptionIndex && isProcessOptions(value));
+		if (optionIndex >= 0) {
+			normalized[optionIndex] = normalizeWindowsHide(normalized[optionIndex]);
+			return normalized;
+		}
 
-	const placeholderIndex = normalized.findIndex(
-		(value, index) => index >= firstOptionIndex && (value === undefined || value === null),
-	);
-	if (placeholderIndex >= 0) {
-		normalized[placeholderIndex] = withWindowsHide(undefined);
-		return normalized;
-	}
+		const placeholderIndex = normalized.findIndex(
+			(value, index) => index >= firstOptionIndex && (value === undefined || value === null),
+		);
+		if (placeholderIndex >= 0) {
+			normalized[placeholderIndex] = normalizeWindowsHide(undefined);
+			return normalized;
+		}
 
-	const callbackIndex = normalized.findIndex(
-		(value, index) => index >= firstOptionIndex && typeof value === "function",
-	);
-	normalized.splice(callbackIndex >= 0 ? callbackIndex : normalized.length, 0, { windowsHide: true });
-	return normalized;
+		const callbackIndex = normalized.findIndex(
+			(value, index) => index >= firstOptionIndex && typeof value === "function",
+		);
+		normalized.splice(callbackIndex >= 0 ? callbackIndex : normalized.length, 0, { windowsHide: true });
+		return normalized;
+	};
+}
+const withWindowsHideArgument = createWindowsHideArgumentAdapter(withWindowsHide, isOptions);
+
+export function renderExecFileHiddenModule(): string {
+	return `import { execFile as nodeExecFile } from "node:child_process";
+const normalizeArguments = (${createWindowsHideArgumentAdapter.toString()})(${withWindowsHide.toString()}, ${isOptions.toString()});
+export const execFileHidden = (...args) => Reflect.apply(nodeExecFile, undefined, normalizeArguments(args, 1));`;
 }
 
 function withSpawnDefaults(
