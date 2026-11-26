@@ -49,7 +49,7 @@ export function FilterSearch({
 }) {
 	return (
 		<SearchField
-			className="min-w-0 flex-1 sm:min-w-40"
+			className="min-w-0 shrink-0 sm:min-w-40 sm:flex-1"
 			aria-label={label}
 			value={value}
 			onChange={(event) => onChange(event.target.value)}
