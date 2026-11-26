@@ -48,4 +48,7 @@ test("workspace screen provides local and organization choices without secrets",
 	expect(html).not.toContain("localStorage");
 	expect(html).not.toContain("accessToken");
 	expect(html).not.toContain("refreshToken");
+	expect(html).not.toContain("—");
+	expect(html).toContain("<strong>Local</strong>");
+	expect(html).toContain("<strong>Organization</strong>");
 });

@@ -593,7 +593,7 @@ app.whenReady().then(async () => {
 	registerIpc();
 	if (remoteWorkspace) {
 		remoteTray = new Tray(nativeImage.createFromPath(iconPath("icon.png")));
-		remoteTray.setToolTip("Signet — Organization workspace");
+		remoteTray.setToolTip("Signet: Organization workspace");
 		remoteTray.setContextMenu(
 			Menu.buildFromTemplate([
 				{ label: "Open Dashboard", click: () => showDashboard() },
