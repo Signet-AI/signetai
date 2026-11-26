@@ -151,6 +151,10 @@ export function registerOrganizationRoutes(
 			return c.redirect("/");
 		}),
 	);
+	app.patch(
+		"/api/auth/preferences",
+		active(async (c) => c.json(await operations.updatePreferences(user(c), await body(c)))),
+	);
 	app.post(
 		"/api/auth/logout",
 		active(async (c) => {

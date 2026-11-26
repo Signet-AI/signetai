@@ -25,6 +25,10 @@ The `member` role has core memory and document permissions. Admin adds administr
 
 Authentication failures return `401 { error, reason }` with `WWW-Authenticate: Bearer`. Authorization failures return `403 { error, reason, required? }`. A write to a destination whose classifications you cannot read returns `403` with reason `classified_destination`, even if you can act as its agent. Signet refuses the write before capturing content or looking for duplicates. `whoami.effectiveAccess` is `open`, `authenticated`, or `none`.
 
+## Agent preference
+
+`PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a signed-in user session. It changes only your default read agent, not another user's preference or your default write ownership. The agent must exist and be unarchived; API keys cannot change the account preference. The change is audited and appears in `/api/auth/whoami`.
+
 ## Dashboard handoff
 
 A signed-in user session can call `POST /api/auth/handoff` to receive `{ code, expiresAt }`. The code expires after 60 seconds, is single use, and becomes invalid when its issuing session expires or is revoked. API keys cannot mint browser sessions. Pending handoffs are bounded and are invalidated by a daemon restart.

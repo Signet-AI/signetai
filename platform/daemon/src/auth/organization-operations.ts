@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { DbOwnerStatement } from "../db-owner-protocol";
-import { principalAccess, resolveWriteAgent } from "./agent-access";
+import { principalAccess, resolveReadAgent, resolveWriteAgent } from "./agent-access";
 import {
 	activeUser,
 	auditStatement,
@@ -97,6 +97,24 @@ export function requireAdmin(p: Principal): void {
 export function requireAudit(p: Principal): void {
 	if (!p.permissions.has("audit")) throw new IdentityError(403, "permission", "Requires the audit permission");
 }
+export async function updatePreferences(p: Principal, input: unknown) {
+	const user = requireUser(p);
+	if (p.credential.kind !== "session") throw new IdentityError(403, "permission", "Requires a signed-in user session");
+	const data = z.object({ defaultReadAgentId: text }).strict().parse(input);
+	await bindRequestedReadAgent(p, data.defaultReadAgentId);
+	const target = resolveReadAgent(p, data.defaultReadAgentId);
+	if (!target.ok) throw new IdentityError(target.error.status, target.error.reason);
+	await organizationWrite([
+		statement("UPDATE users SET default_read_agent_id=?,updated_at=? WHERE id=? AND status='active'", [
+			data.defaultReadAgentId,
+			new Date().toISOString(),
+			user.userId,
+		]),
+		auditStatement(p, "user.preferences_updated", "user", user.userId, data),
+	]);
+	return { defaultReadAgentId: data.defaultReadAgentId };
+}
+
 export async function passwordLogin(input: unknown) {
 	const data = z
 		.object({ username: text, password: z.string().min(1).max(1024), client: z.literal("browser").optional() })

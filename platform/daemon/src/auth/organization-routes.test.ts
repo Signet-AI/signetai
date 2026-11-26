@@ -65,6 +65,47 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("agent preference persists a readable default without changing write ownership", async () => {
+		const claimed = await claim();
+		const created = await (await call("/api/agents", "POST", { name: "my-notes", kind: "personal" })).json();
+		const response = await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: created.agentId });
+		expect(response.status).toBe(200);
+		const identity = await (await call("/api/auth/whoami")).json();
+		expect(identity.agents.defaultRead).toBe(created.agentId);
+		expect(identity.agents.defaultWrite).not.toBe(created.agentId);
+		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+		const accepted = await call(
+			"/api/auth/invites/accept",
+			"POST",
+			{
+				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
+				username: "member",
+				displayName: "Member",
+				password: "test password",
+			},
+			"",
+		);
+		const memberToken =
+			accepted.headers
+				.getSetCookie()
+				.find((value) => value.startsWith("signet_session="))
+				?.split(";")[0]
+				?.slice("signet_session=".length) ?? "";
+		expect(
+			(
+				await call(
+					"/api/auth/preferences",
+					"PATCH",
+					{ defaultReadAgentId: "default", userId: claimed.user.id },
+					memberToken,
+				)
+			).status,
+		).toBe(400);
+		expect((await (await call("/api/auth/whoami")).json()).agents.defaultRead).toBe(created.agentId);
+		expect((await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: "missing" })).status).toBe(403);
+		expect(claimed.user.id).toBeTruthy();
+	});
+
 	test("dashboard handoff is single-use, cookie-only and bound to a live session", async () => {
 		await claim();
 		const issued = await call("/api/auth/handoff", "POST", {});
