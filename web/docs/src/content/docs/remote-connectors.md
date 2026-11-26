@@ -143,7 +143,8 @@ file is rejected and its outbox reference stays pending; replacement contents
 are not silently sent as the original evidence. Unconsumed server uploads expire
 after 24 hours without progress. If a saved upload ID returns `404` or `410`,
 replay clears that checkpoint, re-hashes the original file, and declares a new
-upload. A checksum rejection (`422`) gets one re-hash and redeclaration attempt.
+upload. A process exit after clearing the ID does not skip that re-hash on the
+next replay. A checksum rejection (`422`) gets one re-hash and redeclaration attempt.
 Changed files are never substituted, and a repeated rejection leaves the
 original reference pending for inspection rather than discarding evidence.
 Capture failures exit `1` and include a reason with `--json`. A queued capture

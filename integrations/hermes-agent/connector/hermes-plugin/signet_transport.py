@@ -32,7 +32,7 @@ def _upload_state(value):
     return {k:value[k] for k in ("uploadId","receivedBytes","totalBytes","sha256","fingerprint")}
 
 
-def _capture_remote_session_end(body,state,checkpoint,request,end,cancel,rehash=False):
+def _capture_remote_session_end(body,state,checkpoint,request,end,cancel):
     if not isinstance(body,dict) or not isinstance(body.get("transcriptPath"),str) or not body["transcriptPath"]:
         return body
     _check_control(end,cancel)
@@ -83,7 +83,7 @@ def _capture_remote_session_end(body,state,checkpoint,request,end,cancel,rehash=
             current={"uploadId":None,"receivedBytes":0,"totalBytes":before.st_size,"sha256":sha256,"fingerprint":identity}
             checkpoint(current)
             return current
-        if state is None or rehash:
+        if state is None or state["uploadId"] is None:
             state=hash_state(state)
         session=body.get("sessionKey") or body.get("sessionId")
         if not isinstance(session,str) or not isinstance(body.get("harness"),str):
@@ -1713,7 +1713,7 @@ class NodeTransport(SignetTransport):
             upload=state
         for recovering in (False,True):
             try:
-                body=_capture_remote_session_end(entry["body"],upload,checkpoint,lambda method,path,**step:self._send(method,path,captured_headers=entry["headers"],deadline=deadline,cancel=options.get("cancel"),timeout=options.get("timeout"),**step),end,options.get("cancel"),rehash=recovering)
+                body=_capture_remote_session_end(entry["body"],upload,checkpoint,lambda method,path,**step:self._send(method,path,captured_headers=entry["headers"],deadline=deadline,cancel=options.get("cancel"),timeout=options.get("timeout"),**step),end,options.get("cancel"))
                 return self._send(entry["method"],entry["path"],body,captured_headers=entry["headers"],deadline=deadline,**options)
             except SignetApiError as error:
                 if error.status != 422 or upload is None:

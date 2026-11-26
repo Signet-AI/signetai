@@ -49,7 +49,6 @@ export function parseUploadState(value: unknown): UploadState {
 }
 interface RemoteCapture {
 	readonly state?: UploadState;
-	readonly rehash?: boolean;
 	readonly checkpoint: (state: UploadState) => Promise<void>;
 	readonly request: (method: string, path: string, options: RequestOptions) => Promise<unknown>;
 }
@@ -132,7 +131,7 @@ export async function captureRemoteSessionEnd(
 				await remote.checkpoint(next);
 				return next;
 			};
-			if (!state || remote.rehash) state = await rehash(state);
+			if (!state || state.uploadId === null) state = await rehash(state);
 			const sessionKey = "sessionKey" in body ? body.sessionKey : "sessionId" in body ? body.sessionId : undefined;
 			if (typeof sessionKey !== "string" || !("harness" in body) || typeof body.harness !== "string")
 				throw new TypeError("Staged session-end requires harness and session identity");

@@ -154,6 +154,12 @@ export async function runUploadResume(runtime: string, name: string): Promise<vo
 			user.connector,
 		);
 		assert.equal(record(progress.body).receivedBytes, 2 * 1024 * 1024);
+		if (scenario.clearedCheckpoint)
+			await writeFile(
+				join(partition, ".claims", entryPath),
+				JSON.stringify({ ...entry, upload: { ...upload, uploadId: null, receivedBytes: 0 } }),
+				{ mode: 0o600 },
+			);
 		if (scenario.changeAfterKill) await writeFile(source, "changed", { mode: 0o600 });
 		paused = false;
 		release?.();

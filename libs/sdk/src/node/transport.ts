@@ -64,7 +64,7 @@ export class NodeTransport extends SignetTransport {
 			: undefined;
 		for (const recovering of [false, true]) {
 			try {
-				return await this.sendAttempt<T>(method, path, opts, capturedHeaders, current, save, recovering);
+				return await this.sendAttempt<T>(method, path, opts, capturedHeaders, current, save);
 			} catch (error) {
 				if (
 					!(error instanceof SignetApiError) ||
@@ -92,7 +92,6 @@ export class NodeTransport extends SignetTransport {
 		capturedHeaders?: Readonly<Record<string, string>>,
 		upload?: OutboxEntry["upload"],
 		checkpoint?: UploadCheckpoint,
-		rehash = false,
 	): Promise<T> {
 		if (this.target.remote && path === "/api/hooks/session-end") {
 			try {
@@ -104,7 +103,6 @@ export class NodeTransport extends SignetTransport {
 						checkpoint
 							? {
 									state: upload,
-									rehash,
 									checkpoint,
 									request: (method, path, step) =>
 										this.send(

@@ -323,7 +323,8 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": false,
       "recovery": "none",
-      "changeOnFailure": false
+      "changeOnFailure": false,
+      "clearedCheckpoint": false
     },
     {
       "name": "changed-file-after-process-restart",
@@ -331,7 +332,8 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": true,
       "recovery": "none",
-      "changeOnFailure": false
+      "changeOnFailure": false,
+      "clearedCheckpoint": false
     },
     {
       "name": "expired-upload-404",
@@ -339,7 +341,8 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": false,
       "recovery": "missing404",
-      "changeOnFailure": false
+      "changeOnFailure": false,
+      "clearedCheckpoint": false
     },
     {
       "name": "expired-upload-410",
@@ -347,7 +350,8 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": false,
       "recovery": "missing410",
-      "changeOnFailure": false
+      "changeOnFailure": false,
+      "clearedCheckpoint": false
     },
     {
       "name": "checksum-upload-redeclare",
@@ -355,7 +359,8 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": false,
       "recovery": "checksum",
-      "changeOnFailure": false
+      "changeOnFailure": false,
+      "clearedCheckpoint": false
     },
     {
       "name": "checksum-retry-bounded",
@@ -363,7 +368,8 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": false,
       "recovery": "checksum-repeat",
-      "changeOnFailure": false
+      "changeOnFailure": false,
+      "clearedCheckpoint": false
     },
     {
       "name": "checksum-changed-source",
@@ -371,7 +377,17 @@
       "interruptAfterChunks": 2,
       "changeAfterKill": false,
       "recovery": "checksum",
-      "changeOnFailure": true
+      "changeOnFailure": true,
+      "clearedCheckpoint": false
+    },
+    {
+      "name": "cleared-checkpoint-process-restart",
+      "totalBytes": 6291456,
+      "interruptAfterChunks": 2,
+      "changeAfterKill": false,
+      "recovery": "missing404",
+      "changeOnFailure": false,
+      "clearedCheckpoint": true
     }
   ]
 }
