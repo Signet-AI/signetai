@@ -101,7 +101,7 @@ export async function snapshotInstallation(paths: readonly string[]): Promise<()
 			}
 			if (current && !current.isFile()) await rm(path, { recursive: true, force: true });
 			await mkdir(dirname(path), { recursive: true });
-			await writeFile(path, saved.bytes);
+			await writeFile(path, saved.bytes, { mode: saved.mode });
 			await chmod(path, saved.mode);
 		}
 	}
