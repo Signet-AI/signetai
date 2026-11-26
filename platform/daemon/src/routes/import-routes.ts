@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { IdentityError } from "../auth/organization-store";
+import { importActor } from "../classifications";
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import type { Context, Hono } from "hono";
@@ -69,6 +72,14 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 		if (uploadedEntries.length + pathEntries.length > IMPORT_MAX_FILES)
 			return c.json({ error: `Import accepts at most ${IMPORT_MAX_FILES} files` }, 413);
 
+		const classificationValue = form.get("classificationId");
+		if (
+			classificationValue !== null &&
+			(typeof classificationValue !== "string" || !classificationValue || classificationValue.length > 200)
+		)
+			return c.json({ error: "invalid classificationId" }, 400);
+		const classificationId = classificationValue ?? undefined;
+		const actor = importActor(c.get("principal"));
 		const duplicateModeValue = form.get("duplicateMode");
 		const duplicateMode =
 			duplicateModeValue === "replace" || duplicateModeValue === "reimport" ? duplicateModeValue : "skip";
@@ -122,18 +133,37 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 			const fileBytes = new Uint8Array(await file.arrayBuffer());
 			let admission: Awaited<ReturnType<DurableImportAdmission["admit"]>> | undefined;
 			try {
-				admission = await deps.durableImportAdmission.admit({
-					fileName: file.name,
-					bytes: fileBytes,
-					contentType: file.type,
-					idempotencyKey: requestIdempotencyKey ? `${requestIdempotencyKey}:${file.name}` : undefined,
-				});
-				if (admission.status === "imported" || admission.status === "duplicate") {
-					statuses.push({ fileName: file.name, status: admission.status, sourceId: admission.sourceId ?? "" });
-					continue;
-				}
-				await deps.durableImportAdmission.begin(admission.key);
 				const result = await importDocument({
+					classificationId,
+					actor,
+					admitOriginal: async () => {
+						const scopedKey =
+							actor && !actor.local
+								? createHash("sha256")
+										.update(
+											JSON.stringify([
+												resolved.agentId,
+												author.userId,
+												classificationId ?? null,
+												duplicateMode,
+												requestIdempotencyKey ?? null,
+												file.name,
+											]),
+										)
+										.update(requestIdempotencyKey ? "" : fileBytes)
+										.digest("hex")
+								: requestIdempotencyKey
+									? `${requestIdempotencyKey}:${file.name}`
+									: undefined;
+						admission = await deps.durableImportAdmission.admit({
+							fileName: file.name,
+							bytes: fileBytes,
+							contentType: file.type,
+							idempotencyKey: scopedKey,
+						});
+						if (admission.status !== "imported" && admission.status !== "duplicate")
+							await deps.durableImportAdmission.begin(admission.key);
+					},
 					agentId: resolved.agentId,
 					author,
 					fileName: file.name,
@@ -143,16 +173,18 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 					maxPersistedBytes: IMPORT_MAX_BATCH_BYTES - normalizedBatchBytes,
 				});
 				normalizedBatchBytes += result.persistedBytes;
-				await deps.durableImportAdmission.complete({
-					key: admission.key,
-					status: result.status.status,
-					...(result.status.status === "failed"
-						? { error: result.status.error }
-						: { sourceId: result.status.sourceId }),
-				});
+				if (admission && admission.status !== "imported" && admission.status !== "duplicate")
+					await deps.durableImportAdmission.complete({
+						key: admission.key,
+						status: result.status.status,
+						...(result.status.status === "failed"
+							? { error: result.status.error }
+							: { sourceId: result.status.sourceId }),
+					});
 				statuses.push(result.status);
 				if (result.status.status === "imported") imported++;
 			} catch (error) {
+				if (error instanceof IdentityError) return c.json({ error: error.message, reason: error.reason }, error.status);
 				if (error instanceof ImportAdmissionConflictError)
 					return c.json({ error: "Import admission key conflicts with different content" }, 409);
 				const message = error instanceof Error ? error.message : "durable import failed";

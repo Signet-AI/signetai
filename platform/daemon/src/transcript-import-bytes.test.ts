@@ -706,7 +706,7 @@ test("replacement cannot register a Source while its deletion lease is active", 
 	}
 }, 20_000);
 
-test("cancellation reconciles a Source registered before a failed ledger update", async () => {
+test("binding failure cannot publish a Source and legacy cancellation still reconciles", async () => {
 	const content = Buffer.from("retained evidence\n");
 	await beginTranscriptUpload(scope, content.length);
 	await appendTranscriptChunk(scope, 0, content, checksum(content));
@@ -721,8 +721,13 @@ test("cancellation reconciles a Source registered before a failed ledger update"
 	);
 	const app = http();
 	expect((await app.request("/api/sources/imports/job/files/file/finalize", { method: "POST" })).status).toBe(409);
-	const source = loadSourcesConfig(root).sources[0];
-	expect(source).toBeDefined();
+	expect(loadSourcesConfig(root).sources).toHaveLength(0);
+	const legacy = addImportedSource(
+		{ fileName: "test.jsonl", contentHash: checksum(content), format: "jsonl", agentId: "a", importKey: "job:file:0" },
+		root,
+	);
+	if (!legacy.ok) throw new Error(legacy.error);
+	const source = legacy.source;
 	await dbOwnerTransaction([{ sql: "DROP TRIGGER fail_source_binding", result: "run" }], options);
 	await app.request("/api/sources/imports/job/cancel", { method: "POST" });
 	expect(

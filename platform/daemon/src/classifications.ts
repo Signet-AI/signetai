@@ -1,3 +1,6 @@
+import type { WriteAuthor } from "./auth/audit-owner";
+import type { Principal } from "./auth/principal";
+import { IdentityError } from "./auth/organization-store";
 import { z } from "zod";
 import { attemptAsync, type CompartmentWriteScope } from "@signet/core";
 import { logger } from "./logger";
@@ -21,7 +24,75 @@ export interface ClassificationPrincipal {
 	readonly kind: "user" | "group";
 	readonly id: string;
 }
+export function importActor(principal: Principal | undefined): ClassificationActor | undefined {
+	return principal
+		? {
+				userId: principal.userId,
+				groupIds: principal.groupIds,
+				local: principal.kind === "local",
+				compliance: principal.compliance && principal.permissions.has("classify"),
+				boundAgentId: principal.boundAgentId,
+				allowedProjects: principal.allowedProjects,
+				credential: `${principal.credential.kind}:${principal.credential.id}`,
+			}
+		: undefined;
+}
+export interface ImportJobCreation {
+	readonly author: WriteAuthor;
+	readonly jobId: string;
+	readonly agentId: string;
+	readonly schemaId?: string;
+	readonly duplicateMode?: "skip" | "replace" | "reimport";
+	readonly files?: readonly { readonly id: string; readonly name: string }[];
+	readonly classificationId?: string;
+	readonly actor?: ClassificationActor;
+}
+export type ImportClassificationRequest =
+	| { readonly op: "import-create"; readonly input: ImportJobCreation }
+	| {
+			readonly op: "import-bind";
+			readonly scope: {
+				readonly agentId: string;
+				readonly jobId: string;
+				readonly fileId: string;
+				readonly generation: number;
+			};
+			readonly sourceId: string;
+			readonly duplicateSourceId?: string;
+	  }
+	| {
+			readonly op: "import-document";
+			readonly input: {
+				readonly author: WriteAuthor;
+				readonly jobId: string;
+				readonly agentId: string;
+				readonly sourceId: string;
+				readonly duplicateSourceId?: string;
+				readonly classificationId?: string;
+				readonly actor?: ClassificationActor;
+			};
+	  };
+export async function importClassificationRequest<T>(request: ImportClassificationRequest): Promise<T> {
+	try {
+		return await classificationRequest<T>(request);
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			["permission", "not_owner", "agent_binding_conflict", "project_not_permitted", "classified_destination"].includes(
+				error.message,
+			)
+		)
+			throw new IdentityError(403, error.message);
+		if (
+			error instanceof Error &&
+			["import_classification_conflict", "archived_classification", "stale_import_binding"].includes(error.message)
+		)
+			throw new IdentityError(409, error.message);
+		throw error;
+	}
+}
 export type ClassificationRequest =
+	| ImportClassificationRequest
 	| { readonly op: "admit-write"; readonly scopes: readonly CompartmentWriteScope[] }
 	| { readonly op: "record-error"; readonly jobId: string; readonly error: string }
 	| { readonly op: "readable" | "visibility"; readonly subject: AudienceSubject }
@@ -89,14 +160,15 @@ export async function classificationRequest<Result>(
 ): Promise<Result> {
 	const owner = suppliedOwner ?? (await getDbOwnerForAccessor(getDbAccessor()));
 	const readonly = request.op === "readable" || request.op === "visibility" || request.op === "admit-write";
+	const importing = request.op === "import-create" || request.op === "import-bind" || request.op === "import-document";
 	return owner.submit<Result>(
 		{ kind: "classification", request },
 		{
 			operation: `classification.${request.op}`,
-			lane: readonly ? "read" : "maintenance",
-			workloadClass: readonly ? "foreground" : "maintenance",
-			deadlineMs: readonly ? 5000 : 15 * 60_000,
-			estimatedWorkUnits: readonly ? 1 : 10000,
+			lane: readonly ? "read" : importing ? "write" : "maintenance",
+			workloadClass: readonly || importing ? "foreground" : "maintenance",
+			deadlineMs: readonly ? 5000 : importing ? 15_000 : 15 * 60_000,
+			estimatedWorkUnits: readonly ? 1 : importing ? 100 : 10000,
 		},
 	).result;
 }

@@ -30,6 +30,14 @@ The token is consumed once. Claiming marks the existing `default` agent as the o
 
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
+## Classified imports
+
+Choose a classification when creating a transcript import: `POST /api/sources/imports` accepts an optional `classificationId` alongside `files`. Multipart document uploads to `POST /api/sources/import` accept the same optional form field. You must be allowed to apply the classification and read the destination, including its inherited classifications. A denied admission writes no import job or evidence. Project-bound credentials cannot start these imports because the manifest does not establish every record's project.
+
+The job and its labels are committed together, before uploaded evidence can be indexed. Finalizing a transcript upload carries those labels to its source atomically. Imported transcripts, artifacts, and derived rows inherit them when written; there is no public interval followed by background classification. Readers outside the audience do not see staging jobs, filenames, source listings, or exported records.
+
+A duplicate or reimport must have the same labels as the existing destination. Different labels return HTTP 409 with `reason: import_classification_conflict`; Signet never silently merges labels or drops a classification. With the same labels, retrying is idempotent. Use the source's normal deletion operation to purge its imported and derived data.
+
 ## Invite people
 
 An administrator creates an invitation with `POST /api/org/invites`, choosing a role and optional group IDs. Signet returns a one-use link; it does not send email. Invitations expire after seven days and can be revoked.

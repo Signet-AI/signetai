@@ -24,12 +24,42 @@ import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
+import { up as importClassification } from "./182-import-classification";
 import { up as keySessionBinding } from "./181-key-session-binding";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
 }
+test("import labels preserve legacy jobs and enforce bounded admission storage", () => {
+	const db = new Database(":memory:");
+	try {
+		db.exec(
+			"CREATE TABLE source_import_jobs(id TEXT PRIMARY KEY); INSERT INTO source_import_jobs(id) VALUES ('legacy')",
+		);
+		importClassification(db);
+		importClassification(db);
+		expect(db.prepare("SELECT labels_json FROM source_import_jobs WHERE id='legacy'").get()).toEqual({
+			labels_json: null,
+		});
+		expect(() => db.exec("INSERT INTO source_import_jobs(id,labels_json) VALUES ('invalid','{}')")).toThrow();
+		db.exec("INSERT INTO source_import_jobs(id,labels_json) VALUES ('new','[\"hr\"]')");
+		expect(db.prepare("SELECT labels_json FROM source_import_jobs WHERE id='new'").get()).toEqual({
+			labels_json: '["hr"]',
+		});
+		db.exec(
+			"INSERT INTO document_import_jobs(id,agent_id,source_id,author_credential,labels_json,created_at) VALUES ('one','a','s','local','[]','2026-01-01')",
+		);
+		expect(() =>
+			db.exec(
+				"INSERT INTO document_import_jobs(id,agent_id,source_id,author_credential,labels_json,created_at) VALUES ('two','a','s','local','[]','2026-01-01')",
+			),
+		).toThrow();
+	} finally {
+		db.close();
+	}
+});
+
 test("key session binding upgrades legacy rows idempotently and cascades parent deletion", () => {
 	const db = createFreshDb();
 	try {

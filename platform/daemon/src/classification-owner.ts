@@ -7,6 +7,7 @@ import {
 	backfillEvidenceCitations,
 	type MigrationDb,
 } from "@signet/core";
+import type { WriteAuthor } from "./auth/audit-owner";
 import type {
 	ClassificationActor,
 	ClassificationRequest,
@@ -1028,7 +1029,181 @@ function visibility(db: MigrationDb, subject: AudienceSubject) {
 		.get(subject.userId, subject.userId);
 	return { compartments: readable(db, subject), ...(pending ? { inFlightUserId: subject.userId } : {}) };
 }
+function importLabels(
+	db: MigrationDb,
+	agentId: string,
+	author: WriteAuthor,
+	actor: ClassificationActor | undefined,
+	selected: string | undefined,
+): string[] {
+	if (actor && !actor.local) {
+		if (
+			actor.userId !== author.userId ||
+			!actor.userId ||
+			!db.prepare("SELECT 1 FROM users WHERE id=? AND status='active'").get(actor.userId)
+		)
+			throw new Error("permission");
+		if (actor.boundAgentId !== null && actor.boundAgentId !== agentId) throw new Error("agent_binding_conflict");
+		if (actor.allowedProjects !== null) throw new Error("project_not_permitted");
+		const agent = db.prepare("SELECT * FROM agents WHERE id=? AND archived_at IS NULL").get(agentId);
+		if (!agent || !canActAs(db, agent, { ...actor, compliance: false })) throw new Error("permission");
+	}
+	if (selected) {
+		if (!actor || !matches(db, "classification_audience", selected, actor)) throw new Error("permission");
+		const classification = db.prepare("SELECT archived_at FROM classifications WHERE id=?").get(selected);
+		if (!classification) throw new Error("permission");
+		if (classification.archived_at !== null) throw new Error("archived_classification");
+		const user = actor.userId
+			? db.prepare("SELECT compliance FROM users WHERE id=? AND status='active'").get(actor.userId)
+			: null;
+		if (
+			!actor.local &&
+			!(actor.compliance && user?.compliance === 1) &&
+			db.prepare("SELECT 1 FROM classification_appliers WHERE classification_id=? LIMIT 1").get(selected) &&
+			!matches(db, "classification_appliers", selected, actor)
+		)
+			throw new Error("permission");
+	}
+	const labels = [...new Set([...classificationsForWrite(db, { agentId }), ...(selected ? [selected] : [])])].sort();
+	assertImportAudience(db, labels, author.userId);
+	return labels;
+}
+function assertImportAudience(db: MigrationDb, labels: readonly string[], userId: string | null): void {
+	if (labels.length > 1000) throw new Error("import_classification_conflict");
+	if (userId !== null) {
+		if (!db.prepare("SELECT 1 FROM users WHERE id=? AND status='active'").get(userId)) throw new Error("permission");
+		for (const label of labels)
+			if (!matches(db, "classification_audience", label, { local: false, userId, groupIds: [] }))
+				throw new Error("classified_destination");
+	}
+}
+function writeImportLabels(
+	db: MigrationDb,
+	agentId: string,
+	sourceId: string,
+	labels: readonly string[],
+	author: WriteAuthor,
+): void {
+	for (const label of labels)
+		db.prepare(
+			"INSERT OR IGNORE INTO classification_assignments(classification_id,target_kind,target_id,agent_id,applied_by,applied_at) VALUES (?,'source',?,?,?,?)",
+		).run(label, sourceId, agentId, author.userId, new Date().toISOString());
+}
+export function assertImportSourceLabelsInTx(
+	db: MigrationDb,
+	agentId: string,
+	sourceId: string,
+	encoded: string | null,
+	author: WriteAuthor,
+): readonly string[] {
+	const actual = [...classificationsForWrite(db, { agentId, sourceId })].sort();
+	const expected =
+		encoded === null
+			? actual
+			: [
+					...new Set([
+						...z.array(z.string()).max(1000).parse(JSON.parse(encoded)),
+						...classificationsForWrite(db, { agentId }),
+					]),
+				].sort();
+	assertImportAudience(db, [...new Set([...actual, ...expected])], author.userId);
+	const exists = db
+		.prepare(
+			"SELECT 1 FROM source_import_files WHERE source_id=? AND agent_id=? UNION ALL SELECT 1 FROM memory_artifacts WHERE source_id=? AND agent_id=? UNION ALL SELECT 1 FROM session_transcripts WHERE source_id=? AND agent_id=? UNION ALL SELECT 1 FROM document_import_jobs WHERE source_id=? AND agent_id=? UNION ALL SELECT 1 FROM classification_assignments WHERE target_kind='source' AND target_id=? AND agent_id=? LIMIT 1",
+		)
+		.get(sourceId, agentId, sourceId, agentId, sourceId, agentId, sourceId, agentId, sourceId, agentId);
+	if (exists && JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("import_classification_conflict");
+	return expected;
+}
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
+	if (request.op === "import-create")
+		return transaction(db, () => {
+			const input = request.input;
+			if (!input.agentId || (input.files?.length ?? 0) > 25) throw new Error("invalid_import");
+			const labels = importLabels(db, input.agentId, input.author, input.actor, input.classificationId);
+			db.prepare(
+				"INSERT INTO source_import_jobs(id,kind,agent_id,schema_id,adapter_version,state,generation,duplicate_mode,author_user_id,author_credential,labels_json) VALUES (?,'import',?,?,1,'staging',0,?,?,?,?)",
+			).run(
+				input.jobId,
+				input.agentId,
+				input.schemaId ?? "signet-export",
+				input.duplicateMode ?? "skip",
+				input.author.userId,
+				input.author.credential,
+				JSON.stringify(labels),
+			);
+			for (const [ordinal, file] of (input.files ?? []).entries()) {
+				const sourceId = `reserved:${input.jobId}:${file.id}`;
+				db.prepare(
+					"INSERT INTO source_import_files(id,job_id,source_id,agent_id,ordinal,name,managed_path,state,storage_state) VALUES (?,?,?,?,?,?,?,'staging','uploading')",
+				).run(file.id, input.jobId, sourceId, input.agentId, ordinal, file.name, "");
+				writeImportLabels(db, input.agentId, sourceId, labels, input.author);
+			}
+			if (input.actor)
+				audit(
+					db,
+					input.actor,
+					"import.created",
+					{ kind: "agent", id: input.agentId, agentId: input.agentId },
+					input.classificationId ?? "",
+					{ jobId: input.jobId, classifications: labels },
+				);
+			return [];
+		});
+	if (request.op === "import-bind")
+		return transaction(db, () => {
+			const { scope } = request;
+			const job = db
+				.prepare(
+					"SELECT j.labels_json,j.author_user_id,j.author_credential FROM source_import_jobs j JOIN source_import_files f ON f.job_id=j.id AND f.agent_id=j.agent_id WHERE j.id=? AND j.agent_id=? AND f.upload_generation=? AND j.state IN ('staging','cancelled') AND f.id=? AND f.storage_state='sealed' AND f.state IN ('staging','ready')",
+				)
+				.get(scope.jobId, scope.agentId, scope.generation, scope.fileId);
+			if (!job) throw new Error("stale_import_binding");
+			const author = { userId: text(job.author_user_id), credential: z.string().parse(job.author_credential) };
+			const labels = assertImportSourceLabelsInTx(db, scope.agentId, request.sourceId, text(job.labels_json), author);
+			if (request.duplicateSourceId)
+				assertImportSourceLabelsInTx(db, scope.agentId, request.duplicateSourceId, text(job.labels_json), author);
+			writeImportLabels(db, scope.agentId, request.sourceId, labels, author);
+			return db
+				.prepare(
+					"UPDATE source_import_files SET source_id=?,state='ready' WHERE id=? AND job_id=? AND agent_id=? AND storage_state='sealed'",
+				)
+				.run(request.sourceId, scope.fileId, scope.jobId, scope.agentId);
+		});
+	if (request.op === "import-document")
+		return transaction(db, () => {
+			const input = request.input;
+			const labels = importLabels(db, input.agentId, input.author, input.actor, input.classificationId);
+			if (input.duplicateSourceId)
+				assertImportSourceLabelsInTx(db, input.agentId, input.duplicateSourceId, JSON.stringify(labels), input.author);
+			assertImportSourceLabelsInTx(db, input.agentId, input.sourceId, JSON.stringify(labels), input.author);
+			writeImportLabels(db, input.agentId, input.sourceId, labels, input.author);
+			db.prepare(
+				"INSERT OR IGNORE INTO document_import_jobs(id,agent_id,source_id,author_user_id,author_credential,labels_json,created_at) VALUES (?,?,?,?,?,?,?)",
+			).run(
+				input.jobId,
+				input.agentId,
+				input.sourceId,
+				input.author.userId,
+				input.author.credential,
+				JSON.stringify(labels),
+				new Date().toISOString(),
+			);
+			const admitted = db
+				.prepare("SELECT id FROM document_import_jobs WHERE source_id=? AND agent_id=?")
+				.get(input.sourceId, input.agentId);
+			const jobId = z.string().parse(admitted?.id);
+			if (input.actor)
+				audit(
+					db,
+					input.actor,
+					"import.created",
+					{ kind: "source", id: input.sourceId, agentId: input.agentId },
+					input.classificationId ?? "",
+					{ jobId, classifications: labels },
+				);
+			return { id: jobId };
+		});
 	if (request.op === "admit-write") {
 		for (const scope of request.scopes) classificationsForWrite(db, scope);
 		return true;

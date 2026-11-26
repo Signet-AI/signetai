@@ -1,4 +1,5 @@
-import { parseWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
+import { importClassificationRequest, type ImportJobCreation } from "./classifications";
+import { parseWriteAuthor } from "./auth/audit-owner";
 import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
 import { dbOwnerQuery, dbOwnerTransaction, dbOwnerTranscriptBulkCommit } from "./db-owner-runtime";
 import type { CompletedTranscriptCommit } from "./transcript-import-commit";
@@ -233,38 +234,9 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 		},
 	};
 }
-export function createJob(input: {
-	readonly author: WriteAuthor;
-	readonly jobId: string;
-	readonly agentId: string;
-	readonly schemaId?: string;
-	readonly duplicateMode?: "skip" | "replace" | "reimport";
-	readonly files?: readonly { readonly id: string; readonly name: string }[];
-}): Promise<readonly unknown[]> {
+export function createJob(input: ImportJobCreation): Promise<readonly unknown[]> {
 	if (!input.agentId || (input.files?.length ?? 0) > 25) throw new Error("invalid import scope or file count");
-	return dbOwnerTransaction(
-		[
-			{
-				sql: "INSERT INTO source_import_jobs (id,kind,agent_id,schema_id,adapter_version,state,generation,duplicate_mode,author_user_id,author_credential) VALUES (?, 'import', ?, ?, 1, 'staging', 0, ?,?,?)",
-				params: [
-					input.jobId,
-					input.agentId,
-					input.schemaId ?? "signet-export",
-					input.duplicateMode ?? "skip",
-					input.author.userId,
-					input.author.credential,
-				],
-				result: "run",
-			},
-
-			...(input.files ?? []).map((file, ordinal) => ({
-				sql: "INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state,storage_state) VALUES (?,?,?,?,?,?,?,'staging','uploading')",
-				params: [file.id, input.jobId, `reserved:${input.jobId}:${file.id}`, input.agentId, ordinal, file.name, ""],
-				result: "run" as const,
-			})),
-		],
-		{ operation: "sources.import.create", lane: "write" },
-	);
+	return importClassificationRequest({ op: "import-create", input });
 }
 export async function controlImport(
 	store: ImportStore,
