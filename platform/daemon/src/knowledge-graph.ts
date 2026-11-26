@@ -42,6 +42,7 @@ function parseJsonArray(value: unknown): readonly unknown[] {
 
 function rowToEntity(r: Record<string, unknown>): Entity {
 	return {
+		...(typeof r.person_user_id === "string" ? { personUserId: r.person_user_id } : {}),
 		id: r.id as string,
 		name: r.name as string,
 		canonicalName: typeof r.canonical_name === "string" ? r.canonical_name : undefined,

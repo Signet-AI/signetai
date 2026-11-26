@@ -123,13 +123,17 @@ async function attribution(fixture: Fixture): Promise<void> {
 		);
 	}
 	const path = "/api/dream/tools/search_evidence";
-	const evidence = success(
-		await request(fixture.daemon.origin, path, fixture.admin, "POST", {
-			agentId: shared,
-			input: { agentId: shared, query: "split keyboard", limit: 50 },
-		}),
-		`POST ${path}`,
-	);
+	let evidence: Record<string, unknown> = {};
+	await until(async () => {
+		evidence = success(
+			await request(fixture.daemon.origin, path, fixture.admin, "POST", {
+				agentId: shared,
+				input: { agentId: shared, query: "split keyboard", limit: 50 },
+			}),
+			`POST ${path}`,
+		);
+		return [alice, bob].every((user) => JSON.stringify(evidence).includes(user.id));
+	}, "AC7 durable speaker-bound evidence capture");
 	const serialized = JSON.stringify(evidence);
 	for (const user of [alice, bob])
 		assert(
@@ -140,10 +144,11 @@ async function attribution(fixture: Fixture): Promise<void> {
 		const result = await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${shared}`, alice.session);
 		const people = objects(result.body).filter(
 			(row) =>
-				row.person_user_id === alice.id ||
-				row.personUserId === alice.id ||
-				row.person_user_id === bob.id ||
-				row.personUserId === bob.id,
+				(row.agentId ?? row.agent_id) === shared &&
+				(row.person_user_id === alice.id ||
+					row.personUserId === alice.id ||
+					row.person_user_id === bob.id ||
+					row.personUserId === bob.id),
 		);
 		return (
 			new Set(people.map((row) => row.person_user_id ?? row.personUserId)).size === 2 &&

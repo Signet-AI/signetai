@@ -593,6 +593,7 @@ export interface MemoryJob {
 }
 
 export interface Entity {
+	personUserId?: string;
 	id: string;
 	name: string;
 	canonicalName?: string;

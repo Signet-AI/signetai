@@ -1220,7 +1220,9 @@ aggregator and does not Dream; with the single-agent model it Dreams normally.
 
 Connector-bound evidence identifies the human speaker and a person entity in the
 pass's agent. Account and grant management maintain one structural person entity
-per authorized human in that agent, with disambiguated names when needed. Dreaming
+per authorized human in that agent, with disambiguated names when needed. Entity
+responses include `personUserId` for these structural identities; ordinary entities
+omit it. Dreaming
 never creates, renames, merges, or archives these identities. An ordinary entity
 with the same name cannot block account creation, grants, or identity renames.
 A `create_entity` request for an existing person’s name resolves to that person
