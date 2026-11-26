@@ -40,6 +40,7 @@ export function OrganizationSessions() {
 										: session.speakerUserId
 											? "Another person"
 											: undefined,
+								authorUnavailable: !!session.speakerUserId && session.speakerUserId !== whoami.user.id,
 								onOpen: () => setSelected(session),
 							}))}
 						/>
