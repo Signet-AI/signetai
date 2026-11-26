@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import type { CaptureEnqueueInput } from "./transcript-capture-owner";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
@@ -257,6 +258,7 @@ async function executeInlineOwnerRequest(
 		);
 	}
 	switch (request.kind) {
+		case "transcript_capture_enqueue":
 		case "fts_partition":
 		case "classification":
 		case "embedding_projection":
@@ -573,6 +575,17 @@ export async function dbOwnerQuery<Row = unknown>(
 	);
 }
 
+export async function dbOwnerEnqueueTranscriptCapture(
+	owner: DbOwnerClient,
+	input: CaptureEnqueueInput,
+	options: DbOwnerSqlOptions,
+): Promise<string | null> {
+	return submitWithAdmission(
+		owner,
+		{ kind: "transcript_capture_enqueue", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
 export async function dbOwnerTranscriptOperation<Result>(
 	owner: DbOwnerClient,
 	request: Extract<

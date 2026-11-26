@@ -31,6 +31,7 @@ const SQL_OWNERS = [
 	"platform/daemon/src/session-transcripts.ts",
 	"platform/daemon/src/staged-upload-owner.ts",
 	"platform/daemon/src/hook-transcript-uploads.ts",
+	"platform/daemon/src/transcript-capture-owner.ts",
 	"platform/daemon/src/db-helpers.ts",
 	"platform/daemon/src/db-vacuum.ts",
 	"platform/daemon/src/agent-removal.ts",

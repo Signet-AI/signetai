@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import type { SessionEndResponse } from "./hooks";
 import type { Principal } from "./auth/principal";
 import { principalAccess, resolveWriteAgent } from "./auth/agent-access";
 import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
@@ -134,7 +136,7 @@ async function seal(scope: WriteScope, sha256: string): Promise<void> {
 	await dbOwnerTransaction(
 		[
 			{
-				sql: `UPDATE hook_transcript_uploads SET storage_state = 'sealed', content_hash = ?, size_bytes = upload_size WHERE ${filter.sql} AND upload_generation = ? AND upload_offset = upload_size AND storage_state = 'uploading' AND sha256 = ? AND updated_at > datetime('now','-24 hours')`,
+				sql: `UPDATE hook_transcript_uploads SET storage_state = CASE WHEN storage_state = 'consumed' THEN 'consumed' ELSE 'sealed' END, content_hash = ?, size_bytes = upload_size WHERE ${filter.sql} AND upload_generation = ? AND upload_offset = upload_size AND storage_state IN ('uploading','sealed','consumed') AND sha256 = ? AND updated_at > datetime('now','-24 hours')`,
 				params: [sha256, ...filter.params, scope.generation, sha256],
 				result: "run",
 				requireChanges: true,
@@ -200,7 +202,7 @@ export async function purgeExpiredHookUploads(): Promise<void> {
 	const deadline = Date.now() + 5000;
 	const rows = await dbOwnerQuery<HookUploadRow[]>(
 		{
-			sql: "SELECT *, 1 AS expired FROM hook_transcript_uploads WHERE updated_at <= datetime('now','-24 hours') ORDER BY updated_at,id LIMIT 16",
+			sql: "SELECT *, 1 AS expired FROM hook_transcript_uploads WHERE storage_state <> 'consumed' AND updated_at <= datetime('now','-24 hours') ORDER BY updated_at,id LIMIT 16",
 			result: "all",
 			readonly: true,
 		},
@@ -223,7 +225,11 @@ export async function getHookUpload(principal: Principal, id: string): Promise<H
 	);
 	if (!row) throw new HookUploadMissing();
 	requireUploadAgent(principal, row.agent_id);
-	if (row.expired || row.storage_state === "purging" || row.storage_state === "purged") {
+	if (
+		(row.expired && row.storage_state !== "consumed") ||
+		row.storage_state === "purging" ||
+		row.storage_state === "purged"
+	) {
 		const deadline = Date.now() + 5000;
 		await purge(row, () => Date.now() < deadline);
 		throw new HookUploadMissing();
@@ -307,4 +313,51 @@ export async function createHookUpload(
 		throw error;
 	}
 	return getHookUpload(principal, row.id);
+}
+
+export function hookUploadResult(row: { readonly result_json: unknown }): SessionEndResponse | null {
+	if (row.result_json === null) return null;
+	if (typeof row.result_json !== "string") throw new Error("Invalid upload receipt");
+	const result: unknown = JSON.parse(row.result_json);
+	if (
+		typeof result !== "object" ||
+		result === null ||
+		!("memoriesSaved" in result) ||
+		result.memoriesSaved !== 0 ||
+		!("queued" in result) ||
+		typeof result.queued !== "boolean"
+	)
+		throw new Error("Invalid upload receipt");
+	if (!result.queued) return { memoriesSaved: 0, queued: false };
+	if (!("transcriptCaptureJobId" in result) || typeof result.transcriptCaptureJobId !== "string")
+		throw new Error("Invalid upload receipt");
+	return { memoriesSaved: 0, queued: true, transcriptCaptureJobId: result.transcriptCaptureJobId };
+}
+export async function readHookUploadTranscript(
+	agentId: string,
+	jobId: string,
+	uploadId: string,
+): Promise<{ raw: string; sha256: string; sizeBytes: number }> {
+	const row = await dbOwnerQuery<HookUploadRow>(
+		{
+			sql: "SELECT * FROM hook_transcript_uploads WHERE id = ? AND agent_id = ? AND storage_state = 'consumed' AND json_extract(result_json,'$.transcriptCaptureJobId') = ?",
+			params: [uploadId, agentId, jobId],
+			result: "get",
+			readonly: true,
+		},
+		read,
+	);
+	if (!row || row.upload_size === null || row.upload_size > HOOK_TRANSCRIPT_BYTES) throw new HookUploadMissing();
+	const scope = { ...hookUploadScope(row), generation: row.upload_generation, signal: AbortSignal.timeout(60_000) };
+	const parts: Buffer[] = [];
+	const hash = createHash("sha256");
+	for (let offset = 0; offset < row.upload_size; ) {
+		const bytes = await hookUploadStaging.read(scope, offset, Math.min(65536, row.upload_size - offset));
+		parts.push(bytes);
+		hash.update(bytes);
+		offset += bytes.length;
+	}
+	const sha256 = hash.digest("hex");
+	if (sha256 !== row.sha256) throw new Error("Transcript upload checksum mismatch");
+	return { raw: Buffer.concat(parts).toString("utf8"), sha256, sizeBytes: row.upload_size };
 }

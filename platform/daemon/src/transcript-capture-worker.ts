@@ -5,15 +5,14 @@ import { join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
+import { dbOwnerEnqueueTranscriptCapture, getDbOwnerForAccessor } from "./db-owner-runtime";
+import { readHookUploadTranscript, type HookUploadScope } from "./hook-transcript-uploads";
+export { TranscriptCaptureBacklogFullError } from "./transcript-capture-owner";
 import { logger } from "./logger";
 import { indexCanonicalTranscriptJsonl } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
-import {
-	admitSessionTranscriptInDb,
-	getStoredSessionTranscriptInfoAsync,
-	upsertSessionTranscriptAsync,
-} from "./session-transcripts";
+import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
 import { normalizeSessionTranscript } from "./transcript-normalization";
 import { pruneTranscriptAudit } from "./transcript-audit";
 import { captureTranscriptOwned } from "./session-transcript-lifecycle";
@@ -39,6 +38,9 @@ export interface TranscriptCaptureJobInput {
 	readonly capturedAt: string;
 	readonly endedAt: string | null;
 	readonly maxAttempts?: number;
+	readonly upload?: HookUploadScope;
+	readonly expectedSourceSha256?: string;
+	readonly uploadBytes?: number;
 }
 
 interface TranscriptCaptureJobRow {
@@ -105,18 +107,7 @@ export interface TranscriptCaptureJobReceipt {
 	readonly status: TranscriptCaptureJobStatus;
 	readonly error: string | null;
 }
-export class TranscriptCaptureBacklogFullError extends Error {
-	readonly code = "TRANSCRIPT_CAPTURE_BACKLOG_FULL" as const;
-	readonly retryable = true as const;
-	constructor(limitBytes: number) {
-		super(`inline transcript capture budget exceeded (${limitBytes} bytes)`);
-		this.name = "TranscriptCaptureBacklogFullError";
-	}
-}
-
 const DEFAULT_MAX_ATTEMPTS = 5;
-const MAX_INLINE_CAPTURE_BYTES = 4 * 1024 * 1024;
-const MAX_INLINE_CAPTURE_TOTAL_BYTES = 64 * 1024 * 1024;
 const POLL_INTERVAL_MS = 30_000;
 const MAX_JOBS_PER_DRAIN_TICK = 5;
 const SOURCE_GENERATION_MATCH = `
@@ -215,23 +206,6 @@ async function readSource(path: string): Promise<{ readonly raw: string; readonl
 	return { raw: bytes.toString("utf8"), fingerprint };
 }
 
-function inlineBytes(transcript: string, rawTranscript: string | null): number {
-	return Buffer.byteLength(transcript, "utf8") + Buffer.byteLength(rawTranscript ?? "", "utf8");
-}
-
-function existingInlineBytes(db: WriteDb, excludeId: string | null): number {
-	const row = db
-		.prepare(
-			`SELECT COALESCE(SUM(
-				length(CAST(transcript AS BLOB)) + length(CAST(COALESCE(raw_transcript, '') AS BLOB))
-			), 0) AS bytes
-			 FROM transcript_capture_jobs
-			 WHERE (? IS NULL OR id <> ?)`,
-		)
-		.get(excludeId, excludeId) as { bytes?: unknown } | undefined;
-	return scalarNumber(row?.bytes);
-}
-
 export async function enqueueTranscriptCaptureJob(
 	dbAccessor: DbAccessor,
 	input: TranscriptCaptureJobInput,
@@ -239,7 +213,11 @@ export async function enqueueTranscriptCaptureJob(
 ): Promise<string | null> {
 	const rawTranscript = input.rawTranscript ?? null;
 	let source: SourceMetadata | null = null;
-	if (input.transcriptPath?.trim()) {
+	if (input.upload) {
+		if (!input.expectedSourceSha256 || input.uploadBytes === undefined)
+			throw new Error("Missing staged transcript metadata");
+		source = { path: `signet-upload:${input.upload.fileId}`, sizeBytes: input.uploadBytes, mtimeMs: 0 };
+	} else if (input.transcriptPath?.trim()) {
 		try {
 			source = await statSource(input.transcriptPath);
 		} catch (error) {
@@ -257,7 +235,7 @@ export async function enqueueTranscriptCaptureJob(
 				? rawTranscript
 				: (stored?.content ?? "");
 	const sourceIdentity = sourceIdentityFor(input, source?.path ?? null);
-	const sourceSha256 = source ? null : sha256(inlineTranscript);
+	const sourceSha256 = source ? (input.expectedSourceSha256 ?? null) : sha256(inlineTranscript);
 	if (!source && inlineTranscript.trim().length === 0) return null;
 	const id = transcriptCaptureJobId({ ...input, transcriptPath: source?.path ?? null });
 	const createdAt = nowIso();
@@ -265,122 +243,21 @@ export async function enqueueTranscriptCaptureJob(
 	const basePath = basePathFor(input.basePath);
 	const lockPath = sourceLockPath(basePath, input.agentId, sourceIdentity);
 	return await withTranscriptFileLock(lockPath, async () => {
-		let resolvedId: string | null = id;
-		await runWriteTxAsync(
-			dbAccessor,
-			(db) => {
-				if (!admitSessionTranscriptInDb(db, input)) {
-					resolvedId = null;
-					return;
-				}
-				const existing = db
-					.prepare(
-						`SELECT id, status, source_sha256, source_size_bytes, source_mtime_ms, completed_at
-						 FROM transcript_capture_jobs
-						 WHERE agent_id = ? AND source_identity = ?
-						 ORDER BY created_at ASC
-						 LIMIT 1`,
-					)
-					.get(input.agentId, sourceIdentity) as
-					| {
-							id?: unknown;
-							status?: unknown;
-							source_sha256?: unknown;
-							source_size_bytes?: unknown;
-							source_mtime_ms?: unknown;
-							completed_at?: unknown;
-					  }
-					| undefined;
-				resolvedId = scalarString(existing?.id) ?? id;
-				const sameGeneration =
-					Boolean(existing?.id) &&
-					existing?.status !== "dead" &&
-					(source
-						? (existing?.status === "pending" || existing?.status === "processing") &&
-							existing?.source_size_bytes === source.sizeBytes &&
-							existing?.source_mtime_ms === source.mtimeMs
-						: existing?.source_sha256 === sourceSha256);
-				if (sameGeneration) return;
-
-				const canonicalAvailable =
-					!source && input.transcript.trim().length === 0 && !rawTranscript?.trim() && Boolean(stored?.content);
-				const storedTranscript = source || canonicalAvailable ? "" : input.transcript;
-				const storedRaw = source || canonicalAvailable ? null : rawTranscript;
-				const payloadBytes = inlineBytes(storedTranscript, storedRaw);
-				if (payloadBytes > MAX_INLINE_CAPTURE_BYTES) {
-					throw new Error(
-						`inline transcript capture exceeds ${MAX_INLINE_CAPTURE_BYTES} bytes; provide transcriptPath`,
-					);
-				}
-				if (
-					existingInlineBytes(db, existing?.id ? String(existing.id) : null) + payloadBytes >
-					MAX_INLINE_CAPTURE_TOTAL_BYTES
-				) {
-					throw new TranscriptCaptureBacklogFullError(MAX_INLINE_CAPTURE_TOTAL_BYTES);
-				}
-				const preservedCompletedAt = source ? scalarString(existing?.completed_at) : null;
-
-				if (existing?.id) {
-					db.prepare(
-						`UPDATE transcript_capture_jobs
-						 SET harness = ?, session_key = ?, session_id = ?, project = ?,
-						     transcript = ?, raw_transcript = ?, transcript_path = ?,
-						     source_sha256 = ?, source_size_bytes = ?, source_mtime_ms = ?,
-						     source_format = NULL, audit_path = NULL, captured_at = ?, ended_at = ?,
-						     summary_status = 'not_requested', status = 'pending', attempts = 0,
-						     max_attempts = ?, completed_at = ?, error = NULL, updated_at = ?
-						 WHERE id = ?`,
-					).run(
-						input.harness,
-						input.sessionKey,
-						input.sessionId,
-						input.project,
-						storedTranscript,
-						storedRaw,
-						source?.path ?? null,
-						sourceSha256,
-						source?.sizeBytes ?? null,
-						source?.mtimeMs ?? null,
-						input.capturedAt,
-						input.endedAt,
-						maxAttempts,
-						preservedCompletedAt,
-						createdAt,
-						resolvedId,
-					);
-					return;
-				}
-				db.prepare(
-					`INSERT INTO transcript_capture_jobs (
-						id, agent_id, harness, session_key, session_id, project, transcript, raw_transcript,
-						transcript_path, source_identity, source_sha256, source_size_bytes, source_mtime_ms,
-						source_format, audit_path, captured_at, ended_at, summary_status, status, attempts,
-						max_attempts, created_at, updated_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, 'not_requested', 'pending', 0, ?, ?, ?)`,
-				).run(
-					id,
-					input.agentId,
-					input.harness,
-					input.sessionKey,
-					input.sessionId,
-					input.project,
-					storedTranscript,
-					storedRaw,
-					source?.path ?? null,
-					sourceIdentity,
-					sourceSha256,
-					source?.sizeBytes ?? null,
-					source?.mtimeMs ?? null,
-					input.capturedAt,
-					input.endedAt,
-					maxAttempts,
-					createdAt,
-					createdAt,
-				);
+		const owner = await getDbOwnerForAccessor(dbAccessor);
+		return dbOwnerEnqueueTranscriptCapture(
+			owner,
+			{
+				input,
+				source,
+				stored: stored ?? null,
+				sourceIdentity,
+				sourceSha256,
+				id,
+				createdAt,
+				maxAttempts,
 			},
 			{ operation: "transcript-capture.enqueue", signal },
 		);
-		return resolvedId;
 	});
 }
 
@@ -470,8 +347,17 @@ async function sessionTranscript(
 async function resolveJobTranscript(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow): Promise<ResolvedTranscript> {
 	const stored = await sessionTranscript(dbAccessor, job);
 	if (job.transcriptPath) {
-		const source = await readSource(job.transcriptPath);
+		const upload = job.transcriptPath.startsWith("signet-upload:")
+			? await readHookUploadTranscript(job.agentId, job.id, job.transcriptPath.slice("signet-upload:".length))
+			: null;
+		const source = upload
+			? {
+					raw: upload.raw,
+					fingerprint: { path: job.transcriptPath, sizeBytes: upload.sizeBytes, mtimeMs: 0, sha256: upload.sha256 },
+				}
+			: await readSource(job.transcriptPath);
 		if (
+			(job.sourceSha256 !== null && source.fingerprint.sha256 !== job.sourceSha256) ||
 			(job.sourceSizeBytes !== null && source.fingerprint.sizeBytes !== job.sourceSizeBytes) ||
 			(job.sourceMtimeMs !== null && source.fingerprint.mtimeMs !== job.sourceMtimeMs)
 		) {

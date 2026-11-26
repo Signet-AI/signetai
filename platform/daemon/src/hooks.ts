@@ -1,3 +1,4 @@
+import { hookUploadScope, hookUploadStaging, hookUploadResult, type HookUploadRow } from "./hook-transcript-uploads";
 import { requestMemoryHead } from "./memory-head";
 import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { budgetIdentityContent } from "./identity-context";
@@ -362,6 +363,7 @@ export function formatPromptClockContext(date: Date, requestedTimeZone?: string)
 }
 
 export interface SessionEndRequest {
+	transcriptUpload?: { uploadId: string };
 	harness: string;
 	transcriptPath?: string;
 	transcript?: string;
@@ -2031,7 +2033,23 @@ async function appendSessionEndAssistantTurn(
 	}
 }
 
-export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionEndResponse> {
+export async function handleSessionEnd(req: SessionEndRequest, upload?: HookUploadRow): Promise<SessionEndResponse> {
+	if (upload) {
+		const cached = hookUploadResult(upload);
+		if (cached) return cached;
+		const boundary = normalizeSessionBoundaryReason(req.reason);
+		if (boundary === null || boundary === "clear")
+			throw new RangeError("transcriptUpload requires a session capture boundary");
+		const sealed = await hookUploadStaging.seal({
+			...hookUploadScope(upload),
+			generation: upload.upload_generation,
+			signal: AbortSignal.timeout(60_000),
+		});
+		if ("result_json" in sealed) {
+			const replay = hookUploadResult(sealed);
+			if (replay) return replay;
+		}
+	}
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
 	await ensureAgentRegistered(agentId);
@@ -2128,10 +2146,13 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	const sessionId = deriveSessionEndFallbackId(req.sessionId?.trim() || sessionKey, req.transcriptPath, transcript);
 
 	let transcriptCaptureJobId: string | null = null;
-	if (req.transcriptPath || transcript.trim().length > 0 || sessionKey !== null) {
+	if (upload || req.transcriptPath || transcript.trim().length > 0 || sessionKey !== null) {
 		try {
 			transcriptCaptureJobId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 				agentId,
+				upload: upload ? hookUploadScope(upload) : undefined,
+				expectedSourceSha256: upload?.sha256,
+				uploadBytes: upload?.upload_size ?? undefined,
 				harness: req.harness,
 				sessionKey: sessionKey ?? null,
 				sessionId,
@@ -2143,7 +2164,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				endedAt,
 			});
 		} catch (error) {
-			if (isRetryableWritePressure(error)) throw error;
+			if (upload || isRetryableWritePressure(error)) throw error;
 			logger.warn("hooks", "Transcript capture enqueue failed", {
 				error: error instanceof Error ? error.message : String(error),
 				sessionKey,

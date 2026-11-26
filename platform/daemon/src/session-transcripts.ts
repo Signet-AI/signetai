@@ -1,3 +1,4 @@
+import { purgeHookUploadSessionBatchInTx } from "./transcript-capture-owner";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { compartmentForWrite } from "@signet/core";
@@ -700,6 +701,11 @@ export function deleteSessionTranscriptInTx(
 	}
 	if (Date.now() >= deadlineAt - 100) budget = 0;
 	if (phase === "cleanup" && budget > 0) {
+		const hookRows = purgeHookUploadSessionBatchInTx(db, input.agentId, input.sessionKey);
+		if (hookRows > 0) {
+			add("hookUploadRows", hookRows);
+			budget = 0;
+		}
 		const redacted = redactSessionTranscriptUploadBatchInTx(db, input.agentId, input.sessionKey);
 		if (redacted !== 0) {
 			add("uploadedBytes", Math.max(0, redacted));

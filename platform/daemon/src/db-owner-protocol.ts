@@ -1,3 +1,4 @@
+import type { CaptureEnqueueInput } from "./transcript-capture-owner";
 import type { AgentRemovalInput } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
 import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
@@ -361,6 +362,7 @@ export interface DbOwnerTranscriptBulkCommit {
 	};
 }
 export type DbOwnerRequest =
+	| { readonly kind: "transcript_capture_enqueue"; readonly input: CaptureEnqueueInput }
 	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
 	| {
 			readonly kind: "embedding_projection";

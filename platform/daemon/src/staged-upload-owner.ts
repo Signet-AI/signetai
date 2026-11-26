@@ -167,7 +167,7 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 	async function seal(scope: Write, active: () => boolean = () => true): Promise<TranscriptUpload> {
 		const file = await store.get(scope);
 		if (file.upload_generation !== scope.generation) throw new Error("stale upload generation");
-		if (file.storage_state === "sealed") return file;
+		if (file.storage_state === "sealed" || file.storage_state === "consumed") return file;
 		if (
 			(file.storage_state !== "uploading" && file.storage_state !== "legacy") ||
 			file.upload_size === null ||
@@ -291,7 +291,7 @@ export async function readStagedChunks(
 		filter = stagedScopeFilter(scope, "f.");
 	return dbOwnerQuery<StoredStagedChunk[]>(
 		{
-			sql: `SELECT c.byte_offset,hex(c.content) AS content,c.checksum FROM ${tables.chunks} c JOIN ${tables.files} f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE c.generation = ? AND c.byte_offset >= ? AND c.byte_offset < ? AND ${filter.sql} AND f.upload_generation = c.generation AND f.storage_state IN ('uploading','sealed','legacy') ORDER BY c.byte_offset LIMIT 7`,
+			sql: `SELECT c.byte_offset,hex(c.content) AS content,c.checksum FROM ${tables.chunks} c JOIN ${tables.files} f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE c.generation = ? AND c.byte_offset >= ? AND c.byte_offset < ? AND ${filter.sql} AND f.upload_generation = c.generation AND f.storage_state IN ('uploading','sealed','legacy','consumed') ORDER BY c.byte_offset LIMIT 7`,
 			params: [generation, start, end, ...filter.params],
 			result: "all",
 			readonly: true,
