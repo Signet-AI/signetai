@@ -56,7 +56,7 @@ function registrations() {
 	registerMiscRoutes(app);
 	return app.routes;
 }
-test("every read-lane route retains its frozen base permission table", async () => {
+test("read-lane permissions retain the base table with admin-only organization logs", async () => {
 	const registered = registrations();
 	const leaves = new Map<string, number>();
 	registered.forEach((route, index) => {
@@ -129,6 +129,11 @@ test("every read-lane route retains its frozen base permission table", async () 
 			JSON.parse(readFileSync(join(import.meta.dir, "fixtures/read-permissions.6730d3dc7.json"), "utf8")),
 		);
 		expect(keys).toEqual(Object.keys(expected.entries).sort());
+		for (const key of ["GET /api/logs", "GET /api/logs/stream"]) {
+			const entry = expected.entries[key];
+			if (!entry) throw new Error("operational_log_route_missing");
+			entry.organization = variants.map(() => "permission");
+		}
 		expect(observed).toEqual(expected);
 	}
 }, 30000);

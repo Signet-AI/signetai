@@ -106,13 +106,11 @@ test("real daemon diagnostics preserve hidden-row isolation across restarts", as
 		}
 		await daemon.start();
 		expect(await snapshot()).toEqual(before);
-		for (const path of [
-			"/api/logs",
-			"/api/logs/stream",
-			"/api/telemetry/events",
-			"/api/analytics/usage",
-			"/api/config",
-		]) {
+		const logs = success(await request(daemon.origin, "/api/logs", admin), "redacted organization logs");
+		expect(logs.redacted).toBe(true);
+		expect(JSON.stringify(logs)).not.toContain("hidden edited");
+		expect(JSON.stringify(logs)).not.toContain("hidden error");
+		for (const path of ["/api/telemetry/events", "/api/analytics/usage", "/api/config"]) {
 			const response = await request(daemon.origin, path, admin);
 			expect(response.status).toBe(403);
 			expect(response.body).toMatchObject({ reason: "org_policy" });
