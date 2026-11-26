@@ -2,6 +2,9 @@ import type { SetupDetection } from "../lib/setup-detection.js";
 import type { OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
+	host?: boolean;
+	bootstrapUrl?: string;
+	publicUrl?: string;
 	path?: string;
 	nonInteractive?: boolean;
 	name?: string;

@@ -12,6 +12,7 @@ import * as admin from "../auth/organization-admin";
 import * as operations from "../auth/organization-operations";
 import {
 	claimOrganization,
+	prepareOrganizationBootstrap,
 	claimSchema,
 	IdentityError,
 	type OrganizationRow,
@@ -81,7 +82,7 @@ export function registerOrganizationRoutes(
 	const getConfig = typeof config === "function" ? config : () => config;
 	app.use("/api/*", async (c, next) => {
 		const isOrg = c.get("organization");
-		if (!isOrg && c.req.path !== "/api/org/claim") return next();
+		if (!isOrg && !["/api/org/claim", "/api/org/bootstrap"].includes(c.req.path)) return next();
 		if (getConfig().mode !== "team")
 			return c.json({ error: "Organization mode requires team mode", reason: "org_policy" }, 403);
 		return next();
@@ -96,21 +97,25 @@ export function registerOrganizationRoutes(
 		"/api/org/claim",
 		endpoint(async (c) => {
 			if (getConfig().mode !== "team") throw new IdentityError(403, "org_policy");
-			const result = await claimOrganization(claimSchema.parse(await body(c)));
+			const result = await claimOrganization(claimSchema.parse(await body(c)), workspaceRoot);
 			sessionCookies(c, result, await readOrganization());
 			return c.json(browserResult(result));
 		}),
 	);
-	app.get(
-		"/api/auth/methods",
-		active(async (c) => {
+	app.get("/api/auth/methods", async (c, next) => {
+		if (getConfig().mode !== "team") return next();
+		return endpoint(async (c) => {
 			const org = await readOrganization();
 			return c.json({
-				mode: getConfig().mode,
-				organization: { name: org.name, claimed: true },
+				mode: "team",
+				organization: { name: org.name, claimed: org.claimed_at !== null },
 				providers: operations.authProviders(org),
 			});
-		}),
+		})(c, next);
+	});
+	app.post(
+		"/api/org/bootstrap",
+		endpoint(async (c) => c.json(await prepareOrganizationBootstrap(await body(c)))),
 	);
 	app.get(
 		"/api/auth/whoami",

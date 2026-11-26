@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
+import { resolveWorkspaceLayout } from "../../../platform/core/src/workspace-layout";
 import { record, request, until } from "./http";
 
 export const repo = resolve(import.meta.dir, "../../..");
@@ -213,13 +214,15 @@ export class OrgDaemon {
 		let token: string | undefined;
 		await until(
 			async () => {
-				token =
-					/(?:setupToken|setup[_ -]token)[\s"':=]+([A-Za-z0-9_-]{16,})/i.exec(this.stdout)?.[1] ??
-					/[?&](?:setupToken|token)=([A-Za-z0-9_-]{16,})/.exec(this.stdout)?.[1];
-				return token !== undefined;
+				try {
+					token = (await readFile(join(resolveWorkspaceLayout(this.workspace).runtime, "setup-token"), "utf8")).trim();
+					return token.length >= 20;
+				} catch {
+					return false;
+				}
 			},
-			"POST /api/org/claim prerequisite: daemon stdout must contain its one-time setup token",
-			3_000,
+			"private one-time setup token",
+			3000,
 		);
 		assert(token);
 		return token;

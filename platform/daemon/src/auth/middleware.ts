@@ -36,6 +36,7 @@ export function isAuthOpenPath(path: string): boolean {
 			"/api/auth/device/token",
 			"/api/auth/refresh",
 			"/api/org/claim",
+			"/api/org/bootstrap",
 			"/api/auth/invites/accept",
 		].includes(path)
 	)

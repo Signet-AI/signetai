@@ -3,6 +3,10 @@ import type { Command } from "commander";
 import { withJson, withPath } from "./shared.js";
 
 interface SetupOptions {
+	join?: string;
+	host?: boolean;
+	publicUrl?: string;
+	deviceCode?: boolean;
 	path?: string;
 	nonInteractive?: boolean;
 	name?: string;
@@ -86,6 +90,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 	program
 		.command("setup")
 		.description("Initialize Signet and open setup in the dashboard")
+		.option("--join <url>", "Join an organization without creating a local workspace")
+		.option("--host", "Create an organization instance on this machine")
+		.option("--public-url <url>", "Checked public URL for --host")
+		.option("--device-code", "Print the sign-in URL without opening a browser")
 		.option("-p, --path <path>", "Base path for agent files")
 		.option("--non-interactive", "Run setup without prompts")
 		.option("--name <name>", "Agent name (non-interactive mode)")
@@ -162,7 +170,25 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",
 		)
 		.option("--identity-mode <mode>", "Identity management mode in non-interactive mode (managed, off)")
-		.action(deps.setupWizard);
+		.action(async (options: SetupOptions) => {
+			if (options.join && options.host) throw new Error("Choose --join or --host, not both");
+			if (options.join) {
+				if (options.path || options.harness?.length)
+					throw new Error("Join does not create local workspace files; connect harnesses after signing in");
+				await program.parseAsync(
+					[
+						"login",
+						"--url",
+						options.join,
+						...(options.deviceCode ? ["--device-code"] : []),
+						...(options.nonInteractive ? ["--non-interactive"] : []),
+					],
+					{ from: "user" },
+				);
+				return;
+			}
+			await deps.setupWizard(options);
+		});
 
 	const dashboard = program
 		.command("dashboard")

@@ -1,3 +1,6 @@
+import { attemptAsync } from "@signet/core";
+import { logger } from "../logger";
+import { publishSetupToken, removeSetupToken } from "./setup-token-file";
 import { createHash, pbkdf2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { DbOwnerStatement } from "../db-owner-protocol";
@@ -161,7 +164,7 @@ export function auditStatement(
 		],
 	);
 }
-export async function ensureSetupToken(): Promise<string | null> {
+export async function ensureSetupToken(agentsDir?: string): Promise<string | null> {
 	const token = secret();
 	const results = await organizationWrite([
 		statement(
@@ -170,6 +173,7 @@ export async function ensureSetupToken(): Promise<string | null> {
 			"get",
 		),
 	]);
+	if (results[0] && agentsDir) await publishSetupToken(agentsDir, token);
 	return results[0] ? token : null;
 }
 function passwordDigest(password: string, salt: Buffer, iterations: number): Promise<Buffer> {
@@ -430,6 +434,37 @@ export async function issueSession(userId: string, kind: SessionRow["kind"], dev
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
 }
+export async function prepareOrganizationBootstrap(raw: unknown) {
+	const data = z
+		.object({ setupToken: z.string().min(20).max(256), publicUrl: z.url() })
+		.strict()
+		.parse(raw);
+	const url = new URL(data.publicUrl);
+	if (
+		url.username ||
+		url.password ||
+		url.search ||
+		url.hash ||
+		url.pathname !== "/" ||
+		(url.protocol !== "https:" &&
+			!(url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)))
+	)
+		throw new IdentityError(400, "invalid_public_url");
+	const org = await readOrganization();
+	if (org.claimed_at) throw new IdentityError(409, "org_policy");
+	if (!matchesHash(data.setupToken, org.setup_token_hash)) throw new IdentityError(401, "invalid_credential");
+	await organizationWrite([
+		{
+			...statement(
+				"UPDATE organization SET public_url=?,updated_at=? WHERE id=1 AND claimed_at IS NULL AND setup_token_hash=?",
+				[url.origin, new Date().toISOString(), org.setup_token_hash],
+			),
+			requireChanges: true,
+		},
+		auditStatement(null, "organization.bootstrap", "instance", null),
+	]);
+	return { prepared: true, publicUrl: url.origin };
+}
 export const claimSchema = z.object({
 	setupToken: z.string().min(20).max(256),
 	organizationName: z.string().trim().min(1).max(128),
@@ -440,7 +475,7 @@ export const claimSchema = z.object({
 		password: z.string().min(1).max(1024),
 	}),
 });
-export async function claimOrganization(input: z.infer<typeof claimSchema>) {
+export async function claimOrganization(input: z.infer<typeof claimSchema>, agentsDir?: string) {
 	const org = await readOrganization();
 	if (org.claimed_at) throw new IdentityError(409, "org_policy");
 	if (!matchesHash(input.setupToken, org.setup_token_hash)) throw new IdentityError(401, "invalid_credential");
@@ -485,6 +520,14 @@ export async function claimOrganization(input: z.infer<typeof claimSchema>) {
 	);
 	const user = await readUser(userId);
 	if (!user) throw new Error("Claim did not persist its user");
+	if (
+		agentsDir &&
+		!(await attemptAsync(async () => {
+			await removeSetupToken(agentsDir);
+			return true;
+		}))
+	)
+		logger.warn("auth", "Claim completed, but the revoked setup-token file could not be removed");
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
 }

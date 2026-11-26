@@ -429,6 +429,8 @@ without hiding setup affordances).
 
 ### Supervised organization operations
 
+- `POST /api/org/bootstrap`: unclaimed team instance only; setup nonce and validated public URL.
+
 - `GET /api/org/operator/doctor`: audited identity, clock, and DB-owner diagnostics.
 
 - `GET /api/org/operator/capabilities`: verified supervisor availability, admin only.

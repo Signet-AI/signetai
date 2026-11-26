@@ -1003,7 +1003,8 @@ registerAppCommands(program, {
 	},
 	launchDashboard: (options) => showTargetDashboard(options),
 	migrateSchema: (options) => migrateSchema(options, daemonDeps),
-	setupWizard: (options) => setupWizard(options, setupDeps),
+	setupWizard: (options) =>
+		setupWizard({ ...options, bootstrapUrl: cliTarget()?.remote ? undefined : cliTarget()?.url }, setupDeps),
 	showDoctor: (options) => {
 		const transport = cliTransport();
 		const target = cliTarget();

@@ -2640,7 +2640,7 @@ async function main() {
 
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	if (authConfig.mode === "team" && !migrationIntegrityWritesBlocked)
-		await startOrganizationRuntime(`http://127.0.0.1:${PORT}`);
+		await startOrganizationRuntime(`http://127.0.0.1:${PORT}`, AGENTS_DIR);
 	if (!migrationIntegrityWritesBlocked) {
 		runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
 		void startClassificationRecovery(dbOwnerClient);

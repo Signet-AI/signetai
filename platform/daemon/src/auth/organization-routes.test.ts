@@ -88,6 +88,23 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("host bootstrap requires the setup nonce and preserves the checked public URL", async () => {
+		expect((await (await call("/api/auth/methods")).json()).organization.claimed).toBe(false);
+		const bad = await call(
+			"/api/org/bootstrap",
+			"POST",
+			{ setupToken: "invalid-fixture-token-123456", publicUrl: "https://org.example" },
+			"",
+		);
+		expect(bad.status).toBe(401);
+		const good = await call("/api/org/bootstrap", "POST", { setupToken: setup, publicUrl: "https://org.example" }, "");
+		expect(good.status).toBe(200);
+		await claim();
+		expect((await (await call("/api/org/settings")).json()).publicUrl).toBe("https://org.example");
+		expect(
+			(await call("/api/org/bootstrap", "POST", { setupToken: setup, publicUrl: "https://other.example" }, "")).status,
+		).toBe(409);
+	});
 	test("organization doctor requires diagnostics and reports an explicit server clock", async () => {
 		await claim();
 		const bob = await member("doctor-member");
@@ -1213,7 +1230,7 @@ describe("organization HTTP flows", () => {
 		]);
 		const { startOrganizationRuntime, stopOrganizationRuntime } = await import("./organization-runtime");
 		try {
-			await startOrganizationRuntime("http://127.0.0.1");
+			await startOrganizationRuntime("http://127.0.0.1", dir);
 			expect(await organizationQuery(statement("SELECT id,status FROM org_jobs ORDER BY id", [], "all"))).toEqual([
 				{ id: "class-job", status: "running" },
 				{ id: "keys-job", status: "failed" },

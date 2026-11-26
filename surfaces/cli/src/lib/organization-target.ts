@@ -13,6 +13,7 @@ export interface CliTargetOptions {
 	readonly url?: string;
 	readonly agent?: string;
 	readonly nonInteractive?: boolean;
+	readonly join?: string;
 }
 let selected: ResolvedTarget | undefined;
 let transport: NodeTransport | undefined;
@@ -87,7 +88,7 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		while (top.parent && top.parent !== program) top = top.parent;
 		if (["hook", "connect", "disconnect", "connector"].includes(top.name())) return;
 		const options = command.optsWithGlobals<CliTargetOptions>();
-		selected = await resolveCliTarget(options, deps);
+		selected = await resolveCliTarget({ ...options, url: options.join ?? options.url }, deps);
 		selectedAgent = options.agent;
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;
 		if (selected.remote && top.name() === "import" && !selectedAgent)

@@ -284,3 +284,27 @@ Legacy local bundle imports remain refused against an organization. They can
 otherwise overwrite author identity and restore derived rows without source
 provenance. Use the classified document/transcript import API for source evidence;
 do not stop the organization instance or open its database from a client.
+
+## Hosting and joining
+
+On the instance host, run `signet setup --host --local --public-url https://memory.example.com`.
+Use `--path` for a separate workspace and an unused `SIGNET_PORT` if another
+instance is running. Host setup creates a team-mode workspace without installing
+harnesses, starts that workspace's daemon, and checks the public URL with its
+setup nonce. A mismatch or unreachable URL fails rather than silently configuring
+SSO and device-approval links for the wrong host. Rerun against the same unclaimed
+team workspace after fixing connectivity; existing personal workspaces are not
+converted. Configure providers, embeddings, and shared sources after claiming.
+
+The command prints a setup URL and the one-time setup token separately; the token
+is never put in the URL. A service-started daemon stores it in its private runtime
+`setup-token` file instead of printing it into service logs. Claiming revokes the
+token and removes that file. Keep team mode behind reverse proxies; do not expose
+hybrid mode through an untrusted proxy.
+
+Developers run `signet setup --join https://memory.example.com`. This invokes the
+same device sign-in flow as `signet login`, without creating a local workspace,
+configuring local inference providers, or starting a local daemon. `--device-code`
+prints the approval URL instead of opening a browser. `--non-interactive` refuses
+human approval and keychain prompts; use an already provisioned credential for
+unattended commands instead. Connect local harnesses after signing in.
