@@ -75,12 +75,12 @@ function getBuildCommands(source: string): string[] {
 describe("Docker build pipeline regression guard", () => {
 	it.each([200, 503])("probes public health without legacy credentials for HTTP %i", async (status) => {
 		const home = mkdtempSync(join(tmpdir(), "signet-docker-health-"));
-		const requests: Request[] = [];
+		const requests: { readonly url: string; readonly authorization: string | null }[] = [];
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			fetch(request) {
-				requests.push(request);
+				requests.push({ url: request.url, authorization: request.headers.get("authorization") });
 				return Response.json({}, { status: request.headers.has("authorization") ? 401 : status });
 			},
 		});
@@ -96,7 +96,7 @@ describe("Docker build pipeline regression guard", () => {
 			const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
 			expect(exit, stderr).toBe(status === 200 ? 0 : 1);
 			expect(requests).toHaveLength(1);
-			expect(requests[0]?.headers.get("authorization")).toBeNull();
+			expect(requests[0]?.authorization).toBeNull();
 			expect(new URL(requests[0]?.url ?? "http://invalid").pathname).toBe("/health");
 		} finally {
 			server.stop(true);
