@@ -63,6 +63,92 @@ if (!process.env.SIGNET_SIGN_IN_FORM_CHILD) {
 		expect(container.querySelector('a[href="/api/auth/sso/start"]')?.textContent).toBe("Company SSO");
 	});
 
+	test("expiry warnings require an authenticated organization session within five minutes", async () => {
+		const { sessionExpiryWarning } = await import("./sign-in");
+		const now = Date.now();
+		const session = {
+			kind: "signed-in",
+			mode: "team",
+			identity: { sub: "usr_alice", name: "Alice", role: "member", expiresAt: now + 60_000 },
+			permissions: ["recall"],
+			expiresSoon: true,
+			whoami: {
+				organization: { name: "Acme", agentModel: "personal" },
+				user: {
+					id: "usr_alice",
+					username: "alice",
+					displayName: "Alice",
+					email: null,
+					role: "member",
+					compliance: false,
+					groups: [],
+				},
+				agents: { defaultRead: "default", defaultWrite: "alice" },
+				credential: { kind: "session", id: "ses_browser", expiresAt: new Date(now + 60_000).toISOString() },
+			},
+		} as const;
+		expect(sessionExpiryWarning(session, "/", now)).toBe(now + 60_000);
+		for (const path of ["/auth/login", "/auth/device", "/auth/invite", "/auth/setup", "/auth/claim"])
+			expect(sessionExpiryWarning(session, path, now)).toBeNull();
+		expect(sessionExpiryWarning({ ...session, whoami: undefined }, "/", now)).toBeNull();
+		expect(sessionExpiryWarning({ ...session, mode: "local" }, "/", now)).toBeNull();
+		expect(sessionExpiryWarning(session, "/", now + 60_000)).toBeNull();
+		expect(sessionExpiryWarning(session, "/", now - 300_000)).toBeNull();
+		expect(sessionExpiryWarning({ kind: "open", mode: "local", permissions: null }, "/", now)).toBeNull();
+	});
+
+	test("unmounting a session warning removes the toast before sign-in renders", async () => {
+		const { createRoot } = await import("react-dom/client");
+		const { SessionExpiryToast } = await import("./sign-in");
+		const { Toaster } = await import("@/components/ui/sonner");
+		const expiry = Date.now() + 60_000;
+		const session = {
+			kind: "signed-in",
+			mode: "team",
+			identity: { sub: "usr_alice", name: "Alice", role: "member", expiresAt: expiry },
+			permissions: ["recall"],
+			expiresSoon: true,
+			whoami: {
+				organization: { name: "Acme", agentModel: "personal" },
+				user: {
+					id: "usr_alice",
+					username: "alice",
+					displayName: "Alice",
+					email: null,
+					role: "member",
+					compliance: false,
+					groups: [],
+				},
+				agents: { defaultRead: "default", defaultWrite: "alice" },
+				credential: { kind: "session", id: "ses_browser", expiresAt: new Date(expiry).toISOString() },
+			},
+		} as const;
+		await act(async () => root?.unmount());
+		const container = document.createElement("div");
+		document.body.replaceChildren(container);
+		root = createRoot(container);
+		await act(async () =>
+			root?.render(
+				<>
+					<Toaster />
+					<SessionExpiryToast session={session} />
+				</>,
+			),
+		);
+		await wait(50);
+		expect(document.body.textContent).toContain("Your session ends at");
+		await act(async () =>
+			root?.render(
+				<>
+					<Toaster />
+				</>,
+			),
+		);
+		await wait(50);
+		await wait(500);
+		expect(document.body.textContent).not.toContain("Your session ends at");
+	});
+
 	const wait = (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
 	const submit = () => document.querySelector<HTMLButtonElement>("button[type=submit]");
 	const alertText = () => document.querySelector("[role=alert]")?.textContent ?? null;

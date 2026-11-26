@@ -342,8 +342,22 @@ export function SessionChip({ session }: { session: Session }) {
 	);
 }
 
+export function sessionExpiryWarning(session: Session, path: string, now = Date.now()): number | null {
+	if (
+		path.startsWith("/auth/") ||
+		session.kind !== "signed-in" ||
+		session.mode !== "team" ||
+		session.whoami?.credential.kind !== "session" ||
+		!session.whoami.credential.expiresAt
+	)
+		return null;
+	const expiresAt = Date.parse(session.whoami.credential.expiresAt);
+	const remaining = expiresAt - now;
+	return remaining > 0 && remaining <= 300_000 ? expiresAt : null;
+}
+
 export function SessionExpiryToast({ session }: { session: Session }) {
-	const expiresAt = session.kind === "signed-in" && session.expiresSoon ? session.identity.expiresAt : null;
+	const expiresAt = sessionExpiryWarning(session, location.pathname);
 	useEffect(() => {
 		if (expiresAt === null) {
 			toast.dismiss("session-expiry");
@@ -355,6 +369,9 @@ export function SessionExpiryToast({ session }: { session: Session }) {
 			duration: Number.POSITIVE_INFINITY,
 			action: { label: "Sign in again", onClick: requestRenewal },
 		});
+		return () => {
+			toast.dismiss("session-expiry");
+		};
 	}, [expiresAt]);
 	return null;
 }
