@@ -13,6 +13,7 @@ import {
 	deleteCompartmentVectors,
 	activeVectorProjectionTable,
 	findSqliteVecExtension,
+	requireReadScope,
 	resolveWorkspaceLayout,
 	vectorSearchWithMetadata,
 } from "@signet/core";
@@ -1131,7 +1132,11 @@ export function runDbOwnerWorker(): void {
 		}
 		const { getDbAccessor } = await import("./db-accessor");
 		return await getDbAccessor().withReadDbAsync(
-			(db) => vectorSearchWithMetadata(db, new Float32Array(payload.queryEmbedding), payload.options),
+			(db) =>
+				vectorSearchWithMetadata(db, new Float32Array(payload.queryEmbedding), {
+					...payload.options,
+					readScope: requireReadScope(payload.options.readScope),
+				}),
 			{ siteToken: "db:recall.vector.search.read", operation: "recall.vector-search" },
 		);
 	}

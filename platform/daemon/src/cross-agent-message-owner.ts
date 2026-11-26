@@ -76,7 +76,7 @@ export async function persistAgentMessage(row: CrossAgentMessageRow, author: Wri
 	}
 }
 
-export function agentMessageReadPredicate(scope: ReadScope, alias = "m"): { sql: string; args: (string | number)[] } {
+export function agentMessageReadPredicate(scope: ReadScope, alias = "m"): { sql: string; args: unknown[] } {
 	const clause = readScopeSql(
 		alias,
 		{

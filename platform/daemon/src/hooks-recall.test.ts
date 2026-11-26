@@ -15,6 +15,7 @@ import {
 	preferHookRecallCause,
 } from "./routes/hooks-routes";
 import { claimRecallItemsAsync } from "./session-recall-dedupe";
+import { localTestReadScope } from "./test-support/local-read-scope";
 import {
 	clearSessionStartDedupe,
 	hasSessionStartDedupe,
@@ -146,6 +147,7 @@ memory:
 			const first = await claimRecallItemsAsync({
 				sessionKey: sessionRecallKey,
 				agentId: "default",
+				readScope: localTestReadScope("default"),
 				surface: "test",
 				mode: "automatic",
 				items: [{ id: "compaction-recall-memory" }],
@@ -167,6 +169,7 @@ memory:
 			const second = await claimRecallItemsAsync({
 				sessionKey: sessionRecallKey,
 				agentId: "default",
+				readScope: localTestReadScope("default"),
 				surface: "test",
 				mode: "automatic",
 				items: [{ id: "compaction-recall-memory" }],
@@ -185,8 +188,8 @@ memory:
 		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
 		await getDbAccessor?.().withWriteTxAsync((db) => {
 			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('entity-kestrel', 'Kestrel', 'kestrel', 'project', 'default', 10, ?, ?)`,
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('entity-kestrel', 'Kestrel', 'kestrel', 'project', 'default', 10, 1, ?, ?)`,
 			).run(now, now);
 			db.prepare(
 				`INSERT INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
@@ -231,8 +234,8 @@ memory:
 		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
 		await getDbAccessor?.().withWriteTxAsync((db) => {
 			db.prepare(
-				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('entity-osprey', 'Osprey', 'osprey', 'project', 'default', 10, ?, ?)`,
+				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('entity-osprey', 'Osprey', 'osprey', 'project', 'default', 10, 1, ?, ?)`,
 			).run(now, now);
 			db.prepare(
 				`INSERT OR IGNORE INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
@@ -274,8 +277,8 @@ memory:
 		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
 		await getDbAccessor?.().withWriteTxAsync((db) => {
 			db.prepare(
-				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('entity-falcon', 'Falcon', 'falcon', 'project', 'default', 10, ?, ?)`,
+				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('entity-falcon', 'Falcon', 'falcon', 'project', 'default', 10, 1, ?, ?)`,
 			).run(now, now);
 			const memory = db.prepare(
 				`INSERT OR IGNORE INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)

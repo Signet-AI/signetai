@@ -1,48 +1,63 @@
-import { cosineSimilarity } from "@signet/core";
+import { cosineSimilarity, type ReadScope, readScopeSql, requireReadScope } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
+import { ownerBytesFromHex, ownerReadAll } from "../db-owner-sql";
+import { derivedScopeSql } from "../read-scope-tables";
 import type { RerankCandidate, RerankConfig, RerankProvider } from "./reranker";
 
 interface CachedEmbedding {
 	readonly source_id: string;
-	readonly vector: Buffer;
+	readonly vector_hex: string;
 }
 
-function bufferToF32(buf: Buffer): Float32Array {
-	return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
-}
-export function createEmbeddingReranker(accessor: DbAccessor, queryVector: Float32Array): RerankProvider {
-	return async (_query: string, candidates: RerankCandidate[], _cfg: RerankConfig): Promise<RerankCandidate[]> => {
+export function createEmbeddingReranker(
+	accessor: DbAccessor,
+	queryVector: Float32Array,
+	readScope: ReadScope,
+): RerankProvider {
+	const scope = requireReadScope(readScope);
+	return async (_query: string, candidates: RerankCandidate[], cfg: RerankConfig): Promise<RerankCandidate[]> => {
 		if (candidates.length === 0) return candidates;
-		const ids = candidates.map((c) => c.id);
-		const placeholders = ids.map(() => "?").join(", ");
-
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const embMap = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-			const rows = db
-				.prepare(
-					`SELECT source_id, vector FROM embeddings
-					 WHERE source_type = 'memory' AND source_id IN (${placeholders})`,
-				)
-				.all(...ids) as CachedEmbedding[];
-
-			const map = new Map<string, Float32Array>();
-			for (const row of rows) {
-				map.set(row.source_id, bufferToF32(row.vector));
-			}
-			return map;
-		}, "pipeline/reranker-embedding.ts:20");
+		const ids = candidates.map((candidate) => candidate.id);
+		const memory = readScopeSql("m", scope);
+		const embedding = derivedScopeSql(
+			"e",
+			{ ...scope, reach: { kind: "all" }, projects: null },
+			{ memory: "source_id", session: null, source: "source_id" },
+		);
+		const rows = await ownerReadAll<CachedEmbedding>(
+			await getDbOwnerForAccessor(accessor),
+			`SELECT e.source_id, hex(e.vector) AS vector_hex FROM embeddings e
+			 JOIN memories m ON m.id=e.source_id
+			 WHERE e.source_type='memory' AND e.source_id IN (${ids.map(() => "?").join(",")})${memory.sql}${embedding.sql}`,
+			[...ids, ...memory.args, ...embedding.args],
+			{
+				operation: "recall.reranker.embeddings",
+				lane: "read",
+				workloadClass: "foreground",
+				deadlineMs: cfg.timeoutMs,
+				estimatedWorkUnits: ids.length,
+			},
+		);
+		const embeddings = new Map<string, Float32Array>();
+		for (const row of rows) {
+			const bytes = ownerBytesFromHex(row.vector_hex);
+			if (bytes.byteLength !== queryVector.byteLength) continue;
+			embeddings.set(
+				row.source_id,
+				new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Float32Array.BYTES_PER_ELEMENT),
+			);
+		}
 		const blendWeight = 0.3;
-
-		const reranked = candidates.map((c) => {
-			const cachedVec = embMap.get(c.id);
-			if (!cachedVec) return c;
-
-			const sim = cosineSimilarity(queryVector, cachedVec);
-			const blended = (1 - blendWeight) * c.score + blendWeight * sim;
-
-			return { ...c, score: blended };
-		});
-		reranked.sort((a, b) => b.score - a.score);
-		return reranked;
+		return candidates
+			.map((candidate) => {
+				const cached = embeddings.get(candidate.id);
+				if (!cached) return candidate;
+				return {
+					...candidate,
+					score: (1 - blendWeight) * candidate.score + blendWeight * cosineSimilarity(queryVector, cached),
+				};
+			})
+			.sort((a, b) => b.score - a.score);
 	};
 }

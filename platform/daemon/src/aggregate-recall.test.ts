@@ -5,13 +5,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compartmentForWrite } from "../../core/src/compartment-shards";
 import type { RouteRequest } from "@signet/core";
-import { type AggregateInferenceRouter, aggregateRecall, InvalidAggregateRecallBudgetError } from "./aggregate-recall";
+import {
+	type AggregateInferenceRouter,
+	aggregateRecall as scopedAggregateRecall,
+	InvalidAggregateRecallBudgetError,
+} from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
 import { loadMemoryConfig } from "./memory-config";
 import type { RecallParams, RecallResponse, RecallResult } from "./memory-search";
 import { txIngestEnvelope } from "./transactions";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+
+type ScopedAggregateRecallRest =
+	Parameters<typeof scopedAggregateRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function aggregateRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedAggregateRecallRest
+): ReturnType<typeof scopedAggregateRecall> {
+	return scopedAggregateRecall(withLocalReadScope(params), ...rest);
+}
 
 const originalFetch = globalThis.fetch;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
@@ -1485,6 +1499,77 @@ memory:
 			links: db.prepare("SELECT count(*) n FROM derived_memory_sources WHERE derived_memory_id=?").get(winner)?.n,
 		}));
 		expect(counts).toEqual({ memories: 1, links: 1 });
+	});
+
+	describe("read scope", () => {
+		const readScope = { reach: { kind: "own" as const, agentId: "agent-a" }, compartments: [], projects: null };
+		const params: RecallParams = { query: "what happened", aggregate: true, agentId: "agent-a", readScope };
+		const key = aggregateKeyForTest({
+			agentId: "agent-a",
+			project: null,
+			query: "what happened",
+			budget: "small",
+			sourceMemoryIds: ["mem-1"],
+		});
+		function seedHiddenAggregate(content: string, staleAt: string | null): void {
+			const normalized = normalizeAndHashContent(content);
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, normalized_content, content_hash, who, type, source_type, source_id,
+						idempotency_key, agent_id, visibility, compartment_id, stale_at, created_at, updated_at, updated_by
+					) VALUES ('hidden-aggregate', ?, ?, ?, 'signet', 'semantic', 'aggregate-recall', ?, ?, 'agent-a', 'global', 7, ?, ?, ?, 'test')`,
+				).run(
+					content,
+					normalized.normalizedContent || normalized.hashBasis,
+					normalized.contentHash,
+					key,
+					key,
+					staleAt,
+					"2026-05-20T12:00:00.000Z",
+					"2026-05-20T12:00:00.000Z",
+				);
+			});
+		}
+		function deps(seen: RecallParams[] = []) {
+			return {
+				author: { userId: null, credential: "system" },
+				router: new StaticRouter("Visible aggregate answer for the reader."),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				now: () => new Date("2026-05-20T12:00:00.000Z"),
+				idFactory: () => "visible-aggregate",
+				hybridRecall: async (input: RecallParams) => {
+					seen.push(input);
+					return response(input.query, [row("mem-1", "First evidence")]);
+				},
+			};
+		}
+
+		it("does not return a hidden aggregate that shares the reader's idempotency key", async () => {
+			seedHiddenAggregate("Classified aggregate content.", null);
+			const result = await aggregateRecall(params, loadMemoryConfig(dir), deps());
+			expect(result.results.map((entry) => entry.content)).toEqual(["Visible aggregate answer for the reader."]);
+			expect(result.results[0]?.id).not.toBe("hidden-aggregate");
+			expect(result.aggregate?.savedMemoryId).not.toBe("hidden-aggregate");
+		});
+
+		it("does not rederive a hidden stale aggregate", async () => {
+			seedHiddenAggregate("Classified stale aggregate.", "2026-05-21T00:00:00.000Z");
+			const result = await aggregateRecall(params, loadMemoryConfig(dir), deps());
+			expect(result.results[0]?.id).not.toBe("hidden-aggregate");
+			const stored = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT content, stale_at FROM memories WHERE id = 'hidden-aggregate'").get(),
+			);
+			expect(stored).toEqual({ content: "Classified stale aggregate.", stale_at: "2026-05-21T00:00:00.000Z" });
+		});
+
+		it("carries the ReadScope into the initial and every follow-up recall", async () => {
+			const seen: RecallParams[] = [];
+			await aggregateRecall({ ...params, saveAggregate: false }, loadMemoryConfig(dir), deps(seen));
+			expect(seen.map((input) => input.query)).toEqual(["what happened", "follow up one", "follow up two"]);
+			for (const input of seen) expect(input.readScope).toEqual(readScope);
+		});
 	});
 
 	it("returns structured no-hit metadata when aggregate recall has no evidence", async () => {

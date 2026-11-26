@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { ftsShardTables, readScopeSql, requireReadScope, type ReadScope } from "@signet/core";
 
 const TYPE_HINTS: ReadonlyArray<readonly [string, string]> = [
 	["prefer", "preference"],
@@ -30,7 +31,8 @@ export function effectiveScore(importance: number, createdAt: string, pinned: bo
 	const ageDays = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
 	return importance * 0.95 ** ageDays;
 }
-export function isDuplicate(db: Database, content: string, agentId: string): boolean {
+export function isDuplicate(db: Database, content: string, _agentId: string, readScope: ReadScope): boolean {
+	const scope = requireReadScope(readScope);
 	const words = content
 		.toLowerCase()
 		.split(/\W+/)
@@ -39,17 +41,36 @@ export function isDuplicate(db: Database, content: string, agentId: string): boo
 
 	try {
 		const ftsQuery = words.slice(0, 10).join(" OR ");
-		const rows = db
-			.prepare(
-				`SELECT m.content
-				 FROM memories_fts
-				 JOIN memories m ON memories_fts.rowid = m.rowid
-				 WHERE memories_fts MATCH ?
-				   AND m.is_deleted = 0
-				   AND m.agent_id = ?
-				 LIMIT 10`,
+		const filter = readScopeSql("m", scope);
+		const args = filter.args.map((value) => {
+			if (typeof value === "string" || typeof value === "number") return value;
+			throw new Error("Invalid duplicate search scope");
+		});
+		const tables =
+			scope.compartments !== "all" && scope.compartments.length === 0
+				? ["memories_fts"]
+				: ftsShardTables("memories_fts", scope.compartments, db);
+		const rows = tables
+			.flatMap((table) =>
+				db
+					.prepare(`SELECT m.content,bm25(${table}) AS raw_score FROM ${table}
+				JOIN memories m ON ${table}.rowid=m.rowid
+				WHERE ${table} MATCH ? AND m.is_deleted=0${filter.sql}
+				ORDER BY raw_score LIMIT 10`)
+					.all(ftsQuery, ...args)
+					.flatMap((row) =>
+						typeof row === "object" &&
+						row !== null &&
+						"content" in row &&
+						typeof row.content === "string" &&
+						"raw_score" in row &&
+						typeof row.raw_score === "number"
+							? [{ content: row.content, raw_score: row.raw_score }]
+							: [],
+					),
 			)
-			.all(ftsQuery, agentId) as Array<{ content: string }>;
+			.sort((left, right) => left.raw_score - right.raw_score)
+			.slice(0, 10);
 
 		const inputWords = new Set(words);
 		for (const row of rows) {

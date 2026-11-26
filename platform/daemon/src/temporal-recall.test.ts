@@ -2,8 +2,21 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ensureCompartmentShards } from "../../core/src/compartment-shards";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { parseTemporalRecallIntent, resolveTemporalRecall } from "./temporal-recall";
+import type { ReadScope } from "./read-scope";
+import { parseTemporalRecallIntent, resolveTemporalRecall as scopedResolveTemporalRecall } from "./temporal-recall";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+import type { TemporalRecallParams } from "./temporal-recall";
+
+type ScopedResolveTemporalRecallRest =
+	Parameters<typeof scopedResolveTemporalRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function resolveTemporalRecall(
+	params: Omit<TemporalRecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedResolveTemporalRecallRest
+): ReturnType<typeof scopedResolveTemporalRecall> {
+	return scopedResolveTemporalRecall(withLocalReadScope(params), ...rest);
+}
 
 describe("temporal recall parser", () => {
 	it("parses abbreviated numeric ranges without leaving the end day in the content query", () => {
@@ -182,5 +195,93 @@ describe("temporal recall", () => {
 		expect(unfiltered.candidateIds).toBeUndefined();
 		expect(unfiltered.adjustedQuery).toBe(unfiltered.meta?.contentQuery);
 		expect(unfiltered.meta?.window).toBe("unfiltered");
+	});
+
+	describe("read scope", () => {
+		const org: ReadScope = { reach: { kind: "all" }, compartments: [], projects: null };
+		const at = "2026-06-01T12:00:00.000Z";
+		const time = {
+			start: "2026-06-01T00:00:00.000Z",
+			end: "2026-06-02T00:00:00.000Z",
+			mode: "timeline" as const,
+		};
+
+		function seed(prefix: string, agent: string, compartment: number | null, project: string | null): void {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("INSERT OR IGNORE INTO agents (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+					agent,
+					agent,
+					at,
+					at,
+				);
+				db.prepare("INSERT OR IGNORE INTO compartments (id, key, created_at) VALUES (1, 'cls_hr', ?)").run(at);
+				ensureCompartmentShards(db as unknown as Parameters<typeof ensureCompartmentShards>[0], 1, 0);
+				db.prepare(
+					`INSERT INTO session_summaries (id, project, depth, kind, content, earliest_at, latest_at, session_key, agent_id, compartment_id, created_at)
+					 VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?)`,
+				).run(`s-${prefix}`, project, `summary ${prefix}`, at, at, `session-${prefix}`, agent, compartment, at);
+				db.prepare(
+					`INSERT INTO memories (id, content, type, agent_id, project, compartment_id, updated_by, created_at, updated_at)
+					 VALUES (?, ?, 'fact', ?, ?, ?, 'test', ?, ?)`,
+				).run(`m-${prefix}`, `memory ${prefix}`, agent, project, compartment, at, at);
+				db.prepare(
+					`INSERT INTO memory_artifacts (agent_id, source_path, source_sha256, source_kind, session_id, session_key, session_token,
+					  project, captured_at, content, updated_at, is_deleted, compartment_id)
+					 VALUES (?, ?, ?, 'source_obsidian_markdown', ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+				).run(
+					agent,
+					`notes/${prefix}.md`,
+					`sha-${prefix}`,
+					prefix,
+					prefix,
+					prefix,
+					project,
+					at,
+					`artifact ${prefix}`,
+					at,
+					compartment,
+				);
+				const edge = db.prepare(
+					`INSERT INTO temporal_edges (id, agent_id, subject_type, subject_id, facet, start_at, end_at, confidence, compartment_id, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, 'occurred', ?, ?, 1.0, ?, ?, ?)`,
+				);
+				edge.run(`te-doc-${prefix}`, agent, "source_document", `doc-${prefix}`, at, at, compartment, at, at);
+				edge.run(`te-mem-${prefix}`, agent, "memory", "m-visible", at, at, compartment, at, at);
+			});
+		}
+
+		function observe(scope: ReadScope): readonly string[] {
+			return (
+				resolveTemporalRecall({ query: "", time, limit: 50, agentId: "alice", readScope: scope }).response?.results ??
+				[]
+			).map((row) => `${row.subject_type}:${row.subject_id}:${row.temporal_facet}`);
+		}
+
+		it("returns identical timelines whether hidden temporal rows exist", () => {
+			seed("visible", "alice", null, null);
+			const before = observe(org);
+			expect(before).toContain("session_summary:s-visible:session");
+			expect(before).toContain("memory:m-visible:captured");
+			expect(before).toContain("source_document:doc-visible:occurred");
+			seed("hidden", "alice", 1, null);
+			expect(observe(org)).toEqual(before);
+		});
+
+		it("lets organization reach read every active agent without agent equality", () => {
+			seed("visible", "bob", null, null);
+			const observed = observe(org);
+			expect(observed).toContain("session_summary:s-visible:session");
+			expect(observed).toContain("source_document:doc-visible:occurred");
+		});
+
+		it("fails closed for project-restricted reads of project-less temporal edges", () => {
+			seed("visible", "alice", null, "atlas");
+			seed("other", "alice", null, null);
+			const observed = observe({ ...org, projects: ["atlas"] });
+			expect(observed).toContain("session_summary:s-visible:session");
+			expect(observed).toContain("memory:m-visible:captured");
+			expect(observed.some((row) => row.includes("other"))).toBe(false);
+			expect(observed.some((row) => row.endsWith(":occurred"))).toBe(false);
+		});
 	});
 });

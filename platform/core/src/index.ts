@@ -283,6 +283,7 @@ export {
 	vectorSearch,
 	vectorSearchWithMetadata,
 	keywordSearch,
+	promptEntityPageSql,
 	hybridSearch,
 	cosineSimilarity,
 	activeVectorProjectionTable,
@@ -356,6 +357,14 @@ export type {
 	MigrationResult,
 } from "./migration";
 export * from "./constants";
+export {
+	readScopeSql,
+	inFlightClassificationSql,
+	isReadScope,
+	localAllReadScope,
+	requireReadScope,
+} from "./read-scope";
+export type { ReadScope, AgentReach } from "./read-scope";
 export {
 	PROMPT_CONTEXT_CLOSE,
 	PROMPT_CONTEXT_OPEN,
@@ -730,6 +739,7 @@ export {
 	type CompartmentWriteScope,
 	ensureCompartmentShards,
 	ftsShardTables,
+	selectShardTables,
 	vecShardTables,
 	vectorShardSwapStatements,
 	syncEmbeddingCompartment,

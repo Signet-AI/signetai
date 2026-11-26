@@ -78,6 +78,34 @@ Overlapping classifications require membership in every audience. Access and
 membership changes invalidate the owner-side readable-compartment cache in the
 same database transaction.
 
+### Recall and prompt context
+
+`POST /api/memory/recall`, `GET /api/memory/search`, and MCP recall use the same
+retrieval operation. The daemon resolves read access from the authenticated
+principal; a request body cannot supply or widen its `readScope`. Organization
+agent reads cover non-archived agents, while personal and team agent reads stay
+within the selected agent. Classification audiences and credential project
+bindings apply before candidate ranking and result limits. Unreadable
+compartments do not contribute to the reader's full-text or vector ranking.
+
+Session-start and prompt-submit context use that same read access, independently
+of a redirected personal write agent. Generated `MEMORY.md` context is rendered
+from readable, still-supported entries rather than injecting the shared disk
+projection. It does not report omitted entries.
+
+Recall responses never include read provenance or compartment ids. The daemon
+keeps that provenance internally so recall telemetry and the session recall
+ledger still carry the labels of copied inputs, including inputs omitted from a
+model summary's final result list.
+
+Native artifact results use ids of the form `native-artifact:<digest>`. The
+digest comes from the artifact's agent and source path, so the id stays the same
+across re-indexing and does not change when other rows are inserted. Earlier
+releases returned `native-artifact:<number>` ids. Feedback still accepts an
+older id that was recorded for the session, but new responses never return
+them. Recall dedupe treats the new id as a different item, so an artifact already
+shown in the current context can appear once more after an upgrade.
+
 ## Authentication
 
 The daemon supports three [Auth](/auth/) modes, set in `agent.yaml`:

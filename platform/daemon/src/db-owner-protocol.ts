@@ -1,3 +1,4 @@
+import type { ReadScope } from "@signet/core";
 import type { AgentRemovalInput } from "./agent-removal";
 import type { WriteAuthor } from "./auth/audit-owner";
 import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
@@ -474,11 +475,13 @@ export interface DbOwnerRecallPayload {
 
 export interface DbOwnerVectorSearchPayload {
 	readonly queryEmbedding: readonly number[];
-	readonly options?: {
+	readonly options: {
 		readonly limit?: number;
 		readonly type?: string;
 		readonly excludeAggregateRecall?: boolean;
 		readonly maxScanRows?: number;
+		readonly readScope: ReadScope;
+		readonly shardNames?: readonly string[];
 	};
 }
 

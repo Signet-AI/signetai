@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ReadScope } from "@signet/core";
 import { runMigrations } from "../../core/src/migrations/index";
 import type { ContinuityState } from "./continuity-state";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -25,6 +26,15 @@ import {
 	writeCheckpointAsync as writeCheckpoint,
 	writeCheckpointAsync,
 } from "./session-checkpoints";
+
+const local: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null };
+
+function owned(dbAcc: DbAccessor): DbAccessor {
+	dbAcc.withWriteTx((db) => {
+		db.prepare("UPDATE session_checkpoints SET agent_id = 'default' WHERE agent_id IS NULL").run();
+	});
+	return dbAcc;
+}
 
 function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
 	return {
@@ -180,16 +190,16 @@ describe("session-checkpoints", () => {
 		await writeCheckpoint(dbAcc, makeParams({ projectNormalized: "/tmp/project" }), 50);
 		await writeCheckpoint(dbAcc, makeParams({ projectNormalized: "/tmp/other" }), 50);
 
-		const result = getLatestCheckpoint(dbAcc, "/tmp/project", 60_000);
+		const result = getLatestCheckpoint(owned(dbAcc), "/tmp/project", 60_000, local);
 		expect(result).toBeDefined();
 		expect(result?.project_normalized).toBe("/tmp/project");
-		const noMatch = getLatestCheckpoint(dbAcc, "/tmp/missing", 60_000);
+		const noMatch = getLatestCheckpoint(owned(dbAcc), "/tmp/missing", 60_000, local);
 		expect(noMatch).toBeUndefined();
 	});
 
 	test("getLatestCheckpoint returns undefined for expired checkpoints", async () => {
 		await writeCheckpoint(dbAcc, makeParams(), 50);
-		const result = getLatestCheckpoint(dbAcc, "/tmp/project", 0);
+		const result = getLatestCheckpoint(owned(dbAcc), "/tmp/project", 0, local);
 		expect(result).toBeUndefined();
 	});
 
@@ -197,8 +207,33 @@ describe("session-checkpoints", () => {
 		await writeCheckpoint(dbAcc, makeParams({ digest: "first" }), 50);
 		await writeCheckpoint(dbAcc, makeParams({ digest: "second" }), 50);
 
-		const result = getLatestCheckpointBySession(dbAcc, "sess-1");
+		const result = getLatestCheckpointBySession(owned(dbAcc), "sess-1", local);
 		expect(result?.digest).toBe("second");
+	});
+
+	test("latest checkpoint reads apply the reader scope before LIMIT", () => {
+		const now = Date.now();
+		dbAcc.withWriteTx((db) => {
+			db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (4, 'cls_hr', 'now')").run();
+			const insert = db.prepare(
+				`INSERT INTO session_checkpoints
+					(id, session_key, harness, project, project_normalized, trigger, digest, prompt_count, agent_id, compartment_id, created_at)
+				 VALUES (?, ?, 'codex', '/tmp/project', '/tmp/project', 'periodic', ?, 1, ?, ?, ?)`,
+			);
+			insert.run("cp-visible", "sess-1", "visible", "default", null, new Date(now - 3000).toISOString());
+			insert.run("cp-hidden", "sess-1", "HRSECRET newer", "default", 4, new Date(now - 2000).toISOString());
+			insert.run("cp-foreign", "foreign", "foreign agent", "other", null, new Date(now - 1000).toISOString());
+		});
+		const outside: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null };
+		expect(getLatestCheckpointBySession(dbAcc, "sess-1", outside)?.digest).toBe("visible");
+		expect(getLatestCheckpointBySession(dbAcc, "sess-1", { ...outside, compartments: [4] })?.digest).toBe(
+			"HRSECRET newer",
+		);
+		expect(getLatestCheckpointBySession(dbAcc, "foreign", outside)).toBeUndefined();
+		expect(getLatestCheckpoint(dbAcc, "/tmp/project", 60_000, outside)?.digest).toBe("visible");
+		expect(
+			getLatestCheckpoint(dbAcc, "/tmp/project", 60_000, { ...outside, projects: ["/tmp/other"] }),
+		).toBeUndefined();
 	});
 
 	test("getCheckpointsByProject returns rows for project", async () => {
@@ -235,7 +270,7 @@ describe("session-checkpoints", () => {
 		);
 
 		await flushPendingCheckpoints();
-		const row = getLatestCheckpointBySession(dbAcc, "structural-merge");
+		const row = getLatestCheckpointBySession(owned(dbAcc), "structural-merge", local);
 		if (!row?.focal_entity_ids || !row.focal_entity_names || !row.active_aspect_ids) {
 			throw new Error("merged checkpoint fields missing");
 		}

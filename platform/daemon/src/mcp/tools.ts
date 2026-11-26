@@ -116,8 +116,6 @@ export async function daemonFetch<T>(
 		headers: {
 			"Content-Type": "application/json",
 			"x-signet-runtime-path": "plugin",
-			"x-signet-actor": "mcp-server",
-			"x-signet-actor-type": "harness",
 			...(authorizationHeader ? { Authorization: authorizationHeader } : {}),
 			...extraHeaders,
 		},

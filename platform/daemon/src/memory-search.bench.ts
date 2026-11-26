@@ -1,4 +1,4 @@
-import { findExistingWorkspaceDatabase, resolveWorkspaceLayout } from "@signet/core";
+import { findExistingWorkspaceDatabase, localAllReadScope, resolveWorkspaceLayout } from "@signet/core";
 import { copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -187,6 +187,7 @@ const params = {
 	limit: 10,
 	agentId: "default",
 	readPolicy: "isolated",
+	readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 } as const;
 const embed = EMBED_MODE === "real" ? fetchEmbedding : fakeEmbedding;
 

@@ -20,28 +20,42 @@ function compartment(c: number): number {
 	if (!Number.isSafeInteger(c) || c < 1) throw new Error("Invalid compartment");
 	return c;
 }
-function physicalShardTables(db: MigrationDb, base: string, readable: readonly number[] | "all"): string[] {
+export function selectShardTables(names: readonly string[], readable: readonly number[] | "all"): string[] {
 	const allowed = readable === "all" ? null : new Set(readable.map(compartment));
-	return db
+	const bases = new Set<string>([...FTS_BASES, "vec_embeddings", "vec_embeddings_staging"]);
+	return [...new Set(names)]
+		.filter((name) => {
+			if (bases.has(name)) return true;
+			const match = /^(.*)__c([1-9][0-9]*)$/.exec(name);
+			if (!match || !bases.has(match[1] ?? "")) return false;
+			const value = Number(match[2]);
+			return Number.isSafeInteger(value) && (allowed === null || allowed.has(value));
+		})
+		.sort((left, right) => {
+			const l = left.split("__c"),
+				r = right.split("__c");
+			return (l[0] ?? "").localeCompare(r[0] ?? "") || Number(l[1] ?? 0) - Number(r[1] ?? 0);
+		});
+}
+
+interface ShardCatalogueDb {
+	prepare(sql: string): { all(...args: unknown[]): readonly Record<string, unknown>[] };
+}
+
+function physicalShardTables(db: ShardCatalogueDb, base: string, readable: readonly number[] | "all"): string[] {
+	const names = db
 		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name=? OR name GLOB ?) ORDER BY name")
 		.all(base, `${base}__c[0-9]*`)
-		.flatMap((row) => {
-			if (typeof row.name !== "string") return [];
-			if (row.name === base) return [row.name];
-			const suffix = row.name.slice(base.length);
-			if (!/^__c[1-9][0-9]*$/.test(suffix)) return [];
-			const c = Number(suffix.slice(3));
-			return Number.isSafeInteger(c) && (allowed === null || allowed.has(c)) ? [row.name] : [];
-		})
-		.sort((a, b) => (a === base ? -1 : b === base ? 1 : Number(a.split("__c")[1]) - Number(b.split("__c")[1])));
+		.flatMap((row) => (typeof row.name === "string" ? [row.name] : []));
+	return selectShardTables(names, readable);
 }
-export function ftsShardTables(base: FtsBase, compartments: readonly number[] | "all", db: MigrationDb): string[] {
+export function ftsShardTables(base: FtsBase, compartments: readonly number[] | "all", db: ShardCatalogueDb): string[] {
 	if (!FTS_BASES.includes(base)) throw new Error("Invalid FTS base");
 	return physicalShardTables(db, base, compartments);
 }
 export function vecShardTables(
 	compartments: readonly number[] | "all",
-	db: MigrationDb,
+	db: ShardCatalogueDb,
 	base: "vec_embeddings" | "vec_embeddings_staging" = "vec_embeddings",
 ): string[] {
 	return physicalShardTables(db, base, compartments);

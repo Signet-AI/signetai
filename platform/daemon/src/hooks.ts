@@ -4,16 +4,18 @@ import { budgetIdentityContent } from "./identity-context";
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import {
-	type AgentRosterReadPolicy,
 	type PROMPT_CONTEXT_VERSION,
+	type ReadScope,
 	createPromptContext,
 	identityModeManagesFiles,
 	identityModeReadsFiles,
 	loadIdentityMode,
+	requireReadScope,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
 	redactCredentials,
 	resolveStartupIdentityFiles,
+	readScopeSql,
 } from "@signet/core";
 import { emitLifecycleProvider } from "@signet/lifecycle-proof";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
@@ -52,7 +54,7 @@ import {
 } from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
-import { buildAgentScopeClause } from "./memory-access-scope";
+import { evidenceScopeSql } from "./read-scope-tables";
 import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
@@ -491,10 +493,12 @@ function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log:
 		return "";
 	}
 }
-async function getSessionGapSummary(): Promise<string | undefined> {
+async function getSessionGapSummary(scope: ReadScope): Promise<string | undefined> {
 	if (!existsSync(getMemoryDbPath())) return undefined;
 
 	try {
+		const sessions = evidenceScopeSql("st", scope, { memory: null, session: "session_key", source: "source_id" });
+		const memories = readScopeSql("m", scope);
 		const row = await ownerReadOne<{
 			readonly last_end: string | null;
 			readonly memory_count: number;
@@ -502,14 +506,14 @@ async function getSessionGapSummary(): Promise<string | undefined> {
 		}>(
 			await getDbOwner(),
 			`WITH last_session AS (
-				SELECT MAX(completed_at) AS last_end FROM session_transcripts
+				SELECT MAX(st.completed_at) AS last_end FROM session_transcripts st WHERE 1 = 1${sessions.sql}
 			)
 			SELECT
 				last_end,
-				(SELECT COUNT(*) FROM memories WHERE created_at > last_end AND is_deleted = 0) AS memory_count,
-				(SELECT COUNT(*) FROM session_transcripts WHERE completed_at > last_end) AS session_count
+				(SELECT COUNT(*) FROM memories m WHERE m.created_at > last_end AND m.is_deleted = 0${memories.sql}) AS memory_count,
+				(SELECT COUNT(*) FROM session_transcripts st WHERE st.completed_at > last_end${sessions.sql}) AS session_count
 			FROM last_session`,
-			[],
+			[...sessions.args, ...memories.args, ...sessions.args],
 			{
 				operation: "session-start.session-gap-summary",
 				lane: "read",
@@ -525,17 +529,15 @@ async function getSessionGapSummary(): Promise<string | undefined> {
 	}
 }
 
-async function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): Promise<ScoredMemory[]> {
-	return memoryCandidates.fetchTraversalCandidates(getMemoryDbPath(), memoryIds, agentId);
+async function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, scope: ReadScope): Promise<ScoredMemory[]> {
+	return memoryCandidates.fetchTraversalCandidates(getMemoryDbPath(), memoryIds, scope);
 }
 export async function getAllScoredCandidates(
 	project: string | undefined,
 	limit: number,
-	agentId = "default",
-	readPolicy: AgentRosterReadPolicy = "isolated",
-	policyGroup: string | null = null,
+	scope: ReadScope,
 ): Promise<ScoredMemory[]> {
-	return memoryCandidates.getAllScoredCandidates(getMemoryDbPath(), project, limit, agentId, readPolicy, policyGroup);
+	return memoryCandidates.getAllScoredCandidates(getMemoryDbPath(), project, limit, scope);
 }
 
 async function getPredictedContextMemories(
@@ -543,20 +545,9 @@ async function getPredictedContextMemories(
 	limit: number,
 	charBudget: number,
 	excludeIds: ReadonlySet<string>,
-	agentId: string,
-	readPolicy: AgentRosterReadPolicy = "isolated",
-	policyGroup: string | null = null,
+	scope: ReadScope,
 ): Promise<ScoredMemory[]> {
-	return memoryCandidates.getPredictedContextMemories(
-		getMemoryDbPath(),
-		project,
-		limit,
-		charBudget,
-		excludeIds,
-		agentId,
-		readPolicy,
-		policyGroup,
-	);
+	return memoryCandidates.getPredictedContextMemories(getMemoryDbPath(), project, limit, charBudget, excludeIds, scope);
 }
 
 function loadHooksConfig(): HooksConfig {
@@ -569,8 +560,8 @@ function loadHooksConfigForHarness(harness: string) {
 
 async function getRecentMemories(
 	limit: number,
-	recencyBias = 0.7,
-	agentScope?: { agentId: string; readPolicy: AgentRosterReadPolicy; policyGroup: string | null },
+	recencyBias: number,
+	readScope: ReadScope,
 ): Promise<
 	Array<{
 		id: string;
@@ -584,9 +575,7 @@ async function getRecentMemories(
 
 	try {
 		const owner = await getDbOwner(getMemoryDbPath());
-		const scope = agentScope
-			? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
-			: { sql: " AND m.visibility != 'archived'", args: [] };
+		const scope = readScopeSql("m", readScope);
 		const query = `
         SELECT
           m.id, m.content, m.type, m.importance, m.created_at,
@@ -631,7 +620,11 @@ function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: strin
 	return "";
 }
 
-export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {
+export async function handleSessionStart(
+	req: SessionStartRequest,
+	readScope: ReadScope,
+): Promise<SessionStartResponse> {
+	const scope = requireReadScope(readScope);
 	requireWriteAuthor(req.author);
 	const start = Date.now();
 	const agentId = resolveAgentId(req);
@@ -766,6 +759,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				action: "inspect",
 				agentId,
 				content: readIdentityFile(agentsDir, path, 262144, identityFiles) ?? "",
+				readScope: scope,
 			});
 			return inspected.content ? budgetIdentityContent(redactCredentials(inspected.content), budget) : undefined;
 		} catch (error) {
@@ -794,25 +788,28 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
 	const traversalAgentId = agentId;
-	const agentScope = await getAgentScope(traversalAgentId);
 	let inheritedSection = "";
 	if (req.sessionKey && existsSync(getMemoryDbPath())) {
 		try {
 			const subagentCfg = memoryCfg.pipelineV2.subagents ?? { inheritContext: true, tailChars: 3000 };
 			const block = await getDbAccessor().withReadDbAsync(
 				async (db) => {
-					const parent = resolveParentSession(db, {
-						harness: req.harness,
-						project: req.project,
-						sessionKey: req.sessionKey,
-						agentId: traversalAgentId,
-						harnessAgentId: req.harnessAgentId,
-						parentSessionKey: req.parentSessionKey,
-						parentKey: req.parentKey,
-						parentId: req.parentId,
-						parentID: req.parentID,
-					});
-					return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
+					const parent = resolveParentSession(
+						db,
+						{
+							harness: req.harness,
+							project: req.project,
+							sessionKey: req.sessionKey,
+							agentId: traversalAgentId,
+							harnessAgentId: req.harnessAgentId,
+							parentSessionKey: req.parentSessionKey,
+							parentKey: req.parentKey,
+							parentId: req.parentId,
+							parentID: req.parentID,
+						},
+						scope,
+					);
+					return parent ? assembleInheritedContextBlock(db, parent, subagentCfg, scope) : null;
 				},
 				{ siteToken: "db:hooks.session-start.inheritance" },
 			);
@@ -840,13 +837,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const recallLimit = Math.max(1, config.recallLimit ?? 50);
 	const candidatePoolLimit = Math.max(recallLimit, config.candidatePoolLimit ?? 100);
 	const _candidatesStart = Date.now();
-	const allCandidates = await getAllScoredCandidates(
-		req.project,
-		candidatePoolLimit,
-		traversalAgentId,
-		agentScope.readPolicy,
-		agentScope.policyGroup,
-	);
+	const allCandidates = await getAllScoredCandidates(req.project, candidatePoolLimit, scope);
 	const candidatesMs = Date.now() - _candidatesStart;
 	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
 	const candidateSourceById = new Map<string, SessionMemoryCandidate["source"]>(
@@ -879,18 +870,17 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			const focal = await resolveFocalEntitiesViaOwner(owner, traversalAgentId, {
 				project: req.project,
 				sessionKey: req.sessionKey,
+				readScope: scope,
 			});
 			traversalFocalSource = focal.source;
 			traversalEntities = focal.entityIds.length;
 			traversalEntityNames = focal.entityNames;
 
 			if (focal.entityIds.length > 0) {
-				const traversalResult = await traverseKnowledgeGraphViaOwner(
-					focal.entityIds,
-					owner,
-					traversalAgentId,
-					traversalRuntimeCfg,
-				);
+				const traversalResult = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, traversalAgentId, {
+					...traversalRuntimeCfg,
+					readScope: scope,
+				});
 				traversalTimedOut = traversalResult.timedOut;
 				traversalTraversedEntities = traversalResult.entityCount;
 				traversalMemories = traversalResult.memoryIds.size;
@@ -908,7 +898,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					}
 				}
 
-				const traversalRows = await fetchTraversalCandidates([...traversalResult.memoryIds], traversalAgentId);
+				const traversalRows = await fetchTraversalCandidates([...traversalResult.memoryIds], scope);
 				for (const row of traversalRows) {
 					const existing = candidateById.get(row.id);
 					if (existing) {
@@ -977,15 +967,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	);
 	let memories = selectWithEstimatedTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
 	const existingIds = new Set(memories.map((m) => m.id));
-	const predictedMemories = await getPredictedContextMemories(
-		req.project,
-		10,
-		600,
-		existingIds,
-		agentId,
-		agentScope.readPolicy,
-		agentScope.policyGroup,
-	);
+	const predictedMemories = await getPredictedContextMemories(req.project, 10, 600, existingIds, scope);
 	if (predictedMemories.length > 0) {
 		memories = [...predictedMemories, ...memories];
 	}
@@ -994,6 +976,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const sessionStartDedupe = await applyRecallDedupeAsync({
 		sessionKey: sessionStartRecallSessionKey,
 		agentId,
+		readScope: scope,
 		surface: "api.hooks.session-start",
 		mode: "automatic",
 		includeRecalled: false,
@@ -1071,7 +1054,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		dynamicParts.push(systemPluginContext);
 	}
 	dynamicParts.push("[memory active]");
-	const gapSummary = await getSessionGapSummary();
+	const gapSummary = await getSessionGapSummary(scope);
 	if (gapSummary) {
 		dynamicParts.push(gapSummary);
 	}
@@ -1149,7 +1132,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		try {
 			const dbAcc = getDbAccessor();
 			const withinMs = 4 * 60 * 60 * 1000;
-			let checkpoint = req.sessionKey ? getLatestCheckpointBySession(dbAcc, req.sessionKey) : undefined;
+			let checkpoint = req.sessionKey ? getLatestCheckpointBySession(dbAcc, req.sessionKey, scope) : undefined;
 			if (!checkpoint) {
 				let projNorm: string | undefined;
 				if (req.project) {
@@ -1159,7 +1142,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 						projNorm = req.project;
 					}
 				}
-				checkpoint = getLatestCheckpoint(dbAcc, projNorm, withinMs);
+				checkpoint = getLatestCheckpoint(dbAcc, projNorm, withinMs, scope);
 			}
 
 			if (checkpoint) {
@@ -1246,6 +1229,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const claimedMemories = await claimRecallItemsAsync({
 		sessionKey: sessionStartRecallSessionKey,
 		agentId,
+		readScope: scope,
 		surface: "api.hooks.session-start",
 		mode: "automatic",
 		items: sessionContinuity.included,
@@ -1320,7 +1304,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 }
 
-export async function handlePreCompaction(req: PreCompactionRequest): Promise<PreCompactionResponse> {
+export async function handlePreCompaction(
+	req: PreCompactionRequest,
+	readScope: ReadScope,
+): Promise<PreCompactionResponse> {
+	const scope = requireReadScope(readScope);
 	requireWriteAuthor(req.author);
 	const config = loadHooksConfig().preCompaction || {};
 
@@ -1338,12 +1326,10 @@ ${guidelines}
 `;
 
 	if (config.includeRecentMemories !== false) {
-		const agentId = resolveAgentId(req);
-		const agentScope = await getAgentScope(agentId);
 		const configuredLimit =
 			typeof config.memoryLimit === "number" && Number.isFinite(config.memoryLimit) ? config.memoryLimit : 5;
 		const memoryLimit = Math.max(0, Math.min(50, Math.trunc(configuredLimit)));
-		const recentMemories = await getRecentMemories(memoryLimit, 0.9, { agentId, ...agentScope });
+		const recentMemories = await getRecentMemories(memoryLimit, 0.9, scope);
 		if (recentMemories.length > 0) {
 			summaryPrompt += "\nRecent memories for reference:\n";
 			for (const mem of recentMemories) {
@@ -1549,9 +1535,10 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 
 export async function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
-	overrides?: Partial<UserPromptSubmitDeps>,
-	scope: { readonly project?: string } = {},
+	overrides: Partial<UserPromptSubmitDeps> | undefined,
+	scope: { readonly project?: string; readonly readScope: ReadScope },
 ): Promise<UserPromptSubmitResponse> {
+	const promptScope = requireReadScope(scope.readScope);
 	requireWriteAuthor(req.author);
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = deps.now();
@@ -1714,9 +1701,11 @@ export async function handleUserPromptSubmit(
 			() => controller.abort(new Error("Prompt-submit recall exceeded its deadline")),
 			timeoutMs,
 		);
+		const readScope = promptScope;
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
+			readScope,
 			sessionKey: recallSessionKey(req),
 			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
@@ -1782,6 +1771,7 @@ export async function handleUserPromptSubmit(
 				? await claimRecallItemsAsync({
 						sessionKey: recallSessionKey(req),
 						agentId,
+						readScope: promptScope,
 						surface: PROMPT_RECALL_SURFACE,
 						mode: "automatic",
 						items: recall.results,
@@ -1916,6 +1906,7 @@ async function recallPromptEntityContext(
 	input: {
 		readonly userMessage: string;
 		readonly agentId: string;
+		readonly readScope: ReadScope;
 		readonly sessionKey: string | null;
 		readonly project: string | undefined;
 		readonly limit: number;
@@ -1924,18 +1915,22 @@ async function recallPromptEntityContext(
 		readonly signal: AbortSignal;
 	},
 ): Promise<PromptEntityRecall> {
-	const entities = await deps.matchPromptEntities(getMemoryDbPath(), input.agentId, input.userMessage, input.signal);
+	const entities = await deps.matchPromptEntities(
+		getMemoryDbPath(),
+		input.agentId,
+		input.userMessage,
+		input.signal,
+		input.readScope,
+	);
 	if (entities.length === 0) return { entities, results: [], engine: "no-entity" };
 	const query = stripProvenanceBlocks(input.userMessage);
 	if (!query) return { entities, results: [], engine: "no-recall-hit" };
-	const scope = await deps.getAgentScope(input.agentId);
 	const recall = await deps.hybridRecall(
 		{
 			query,
 			limit: input.limit,
 			agentId: input.agentId,
-			readPolicy: scope.readPolicy,
-			policyGroup: scope.policyGroup,
+			readScope: input.readScope,
 			...(input.project ? { project: input.project } : {}),
 			...(input.sessionKey ? { skipDeliveredIn: input.sessionKey } : {}),
 			recallSurface: PROMPT_RECALL_SURFACE,

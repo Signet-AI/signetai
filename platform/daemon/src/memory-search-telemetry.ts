@@ -1,17 +1,20 @@
-import type { SQLQueryBindings } from "bun:sqlite";
-import { type DbAccessor, type WriteDb, prepareTypedStatement } from "./db-accessor";
-import { compartmentForWrite } from "@signet/core";
-import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx } from "./db-helpers";
-import { recallResultEvidenceInTx } from "./db-helpers";
+import { type ReadScope, readScopeSql } from "@signet/core";
+import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { RecallParams, RecallResponse, RecallResult, RecallTimings } from "./memory-search";
+import {
+	citeTelemetryInTx,
+	pruneTelemetryCitationsInTx,
+	telemetryCompartment,
+	telemetryEvidenceInTx,
+} from "./session-recall-dedupe";
 
 export interface MemorySearchTelemetryRecordInput {
 	readonly route: string;
 	readonly agentId: string;
 	readonly sessionKey: string | null;
 	readonly project: string | null;
-	readonly params: RecallParams;
+	readonly params: Omit<RecallParams, "readScope">;
 	readonly response: RecallResponse;
 	readonly retentionDays: number;
 }
@@ -26,6 +29,7 @@ export interface MemorySearchTelemetryQuery {
 	readonly noHits?: boolean;
 	readonly limit?: number;
 	readonly offset?: number;
+	readonly readScope?: ReadScope;
 }
 
 export interface MemorySearchTelemetryResultSnapshot {
@@ -166,7 +170,7 @@ function parseTimings(raw: string): RecallTimings {
 	}
 }
 
-function buildFilters(params: RecallParams): Readonly<Record<string, unknown>> {
+function buildFilters(params: Omit<RecallParams, "readScope">): Readonly<Record<string, unknown>> {
 	return {
 		limit: params.limit ?? null,
 		type: params.type ?? null,
@@ -249,13 +253,13 @@ export async function recordMemorySearchTelemetry(
 	try {
 		await withWriteTxAsync((w) => {
 			const id = crypto.randomUUID();
-			const evidence = input.response.results.flatMap((result) => recallResultEvidenceInTx(w, input.agentId, result));
-			const compartment = evidenceCompartmentInTx(
-				w,
-				input.agentId,
-				evidence,
-				compartmentForWrite(w, { agentId: input.agentId, sessionKey: input.sessionKey }),
-			);
+			const resultIds = input.response.results.map((row) => row.id);
+			const evidence = telemetryEvidenceInTx(w, {
+				agentId: input.agentId,
+				sessionKey: input.sessionKey,
+				resultIds,
+				items: input.response.results,
+			});
 			w.prepare(
 				`INSERT INTO memory_search_telemetry
 				 (id, created_at, route, agent_id, session_key, project, query,
@@ -280,9 +284,14 @@ export async function recordMemorySearchTelemetry(
 				stringifyJson(input.response.meta.timings, '{"totalMs":0,"stages":[]}'),
 				stringifyJson(results, "[]"),
 				null,
-				compartment,
+				telemetryCompartment(w, evidence, resultIds),
 			);
-			recordEvidenceCitationsInTx(w, { agentId: input.agentId, derivedKind: "telemetry", derivedId: id, evidence });
+			citeTelemetryInTx(w, {
+				derivedId: id,
+				agentId: input.agentId,
+				citations: resultIds.flatMap((resultId) => evidence.citations.get(resultId) ?? []),
+			});
+			pruneTelemetryCitationsInTx(w, cutoff);
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});
 	} catch (err) {
@@ -298,7 +307,7 @@ export async function listMemorySearchTelemetry(
 	query: MemorySearchTelemetryQuery = {},
 ): Promise<readonly MemorySearchTelemetryItem[]> {
 	const conditions: string[] = [];
-	const args: SQLQueryBindings[] = [];
+	const args: unknown[] = [];
 
 	if (query.agentId) {
 		conditions.push("agent_id = ?");
@@ -329,6 +338,17 @@ export async function listMemorySearchTelemetry(
 		args.push(query.noHits ? 1 : 0);
 	}
 
+	if (query.readScope) {
+		const scope = readScopeSql("t", query.readScope, {
+			visibility: null,
+			memory: null,
+			session: "session_key",
+			source: null,
+		});
+		conditions.push(`1 = 1${scope.sql}`);
+		args.push(...scope.args);
+	}
+
 	const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 	const limit = query.limit ?? 100;
 	const offset = query.offset ?? 0;
@@ -340,7 +360,7 @@ export async function listMemorySearchTelemetry(
 					`SELECT id, created_at, route, agent_id, session_key, project, query,
 				        keyword_query, filters_json, method, result_count, top_score,
 				        no_hits, duration_ms, timings_json, results_json, sources_json
-				 FROM memory_search_telemetry
+				 FROM memory_search_telemetry t
 				 ${where}
 				 ORDER BY created_at DESC
 				 LIMIT ? OFFSET ?`,
@@ -348,6 +368,6 @@ export async function listMemorySearchTelemetry(
 				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
 			return rows.map(rowToItem);
 		},
-		{ siteToken: "db:memory-search-telemetry.site.321" },
+		{ siteToken: "db:recall.telemetry.list" },
 	);
 }

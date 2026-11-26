@@ -8,6 +8,7 @@ import { formatPromptClockContext, handleSessionEnd, handleUserPromptSubmit } fr
 import { hybridRecall } from "./memory-search";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 import { setActiveTelemetry } from "./telemetry";
+import { localTestReadScope } from "./test-support/local-read-scope";
 
 type PromptDeps = Required<NonNullable<Parameters<typeof handleUserPromptSubmit>[1]>>;
 
@@ -113,6 +114,7 @@ function seedEntity(id: string, name: string, canonical: string, type: string, m
 
 function seedEntityContext(): void {
 	seedEntity("entity-signet", "Signet", "signet", "project");
+	getSyncDbAccessor().withWriteTx((db) => db.prepare("UPDATE entities SET pinned=1 WHERE id='entity-signet'").run());
 	getSyncDbAccessor().withWriteTx((db) => {
 		const now = "2026-05-27T00:00:00.000Z";
 		db.prepare(
@@ -132,6 +134,9 @@ async function submit(userMessage: string, sessionKey: string, deps = makeDeps()
 	return await handleUserPromptSubmit(
 		{ author: { userId: null, credential: "local" }, harness: "codex", userMessage, sessionKey },
 		deps,
+		{
+			readScope: localTestReadScope("default"),
+		},
 	);
 }
 
@@ -251,6 +256,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 				transcript: "User: hi",
 			},
 			makeDeps({ recordPrompt, appendSessionTranscriptAsync }),
+			{ readScope: localTestReadScope("default") },
 		);
 
 		expect(recordPrompt).toHaveBeenCalledWith("session-bookkeeping", undefined, "hi");
@@ -287,7 +293,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			query: "How should Signet architecture handle prompt context?",
 			limit: 10,
 			agentId: "default",
-			readPolicy: "isolated",
+			readScope: { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null },
 			recallSurface: "api.hooks.user-prompt-submit",
 			recallMode: "automatic",
 			claimRecallResults: false,

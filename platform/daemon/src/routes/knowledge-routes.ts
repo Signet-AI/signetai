@@ -5,6 +5,7 @@ import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
 import { getDbAccessor, getDbAccessorPath } from "../db-accessor";
 import { getDbOwner } from "../db-owner-runtime";
+import { resolveHookReadScope } from "../hook-read-scope";
 import { walkImpact } from "../graph-impact";
 import { expandKnowledgeGraphViaOwner } from "../knowledge-expansion";
 import {
@@ -371,7 +372,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:356" },
+			{ siteToken: "routes/knowledge-routes.ts:357" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -443,6 +444,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		};
 		const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
 		const agentId = scopedAgent.agentId;
+		const readScope = await resolveHookReadScope(c, agentId);
 
 		try {
 			const owner = await getDbOwner(getDbAccessorPath());
@@ -462,6 +464,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					: await resolveFocalEntitiesViaOwner(owner, agentId, {
 							queryTokens: entityName.split(/\s+/),
 							deadlineAt: traversalDeadlineAt,
+							readScope,
 						});
 
 			if (focal.error) {
@@ -493,6 +496,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				timeoutMs: traversalCfg.timeoutMs,
 				deadlineAt: traversalDeadlineAt,
 				aspectFilter: aspectFilter || undefined,
+				readScope,
 			});
 
 			return c.json(
@@ -501,7 +505,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					agentId,
 					maxTokens,
 					aspectFilter,
-					traversalConfig: traversalCfg,
+					traversalConfig: { ...traversalCfg, readScope },
 					traversal,
 				}),
 			);
@@ -546,7 +550,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:542" },
+			{ siteToken: "routes/knowledge-routes.ts:546" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -635,7 +639,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: rows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:559" },
+			{ siteToken: "routes/knowledge-routes.ts:563" },
 		);
 	});
 
@@ -660,7 +664,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:661" },
+			{ siteToken: "routes/knowledge-routes.ts:665" },
 		);
 		return c.json(result);
 	});

@@ -1,9 +1,10 @@
-import { redactCredentials } from "@signet/core";
+import { type ReadScope, redactCredentials } from "@signet/core";
 import type { ContinuityState, StructuralSnapshot } from "./continuity-state";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { dbOwnerCheckpoint } from "./db-owner-runtime";
+import { evidenceScopeSql } from "./read-scope-tables";
 
 export type CheckpointTrigger =
 	| "periodic"
@@ -113,35 +114,42 @@ export function getLatestCheckpoint(
 	db: DbAccessor,
 	projectNormalized: string | undefined,
 	withinMs: number,
+	scope: ReadScope,
 ): CheckpointRow | undefined {
 	if (!projectNormalized) return undefined;
 	const cutoff = new Date(Date.now() - withinMs).toISOString();
+	const readable = evidenceScopeSql("cp", scope, { checkpoint: true });
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
-				`SELECT * FROM session_checkpoints
-				 WHERE project_normalized = ?
-				   AND created_at > ?
-				 ORDER BY created_at DESC, rowid DESC
+				`SELECT cp.* FROM session_checkpoints cp
+				 WHERE cp.project_normalized = ?
+				   AND cp.created_at > ?${readable.sql}
+				 ORDER BY cp.created_at DESC, cp.rowid DESC
 				 LIMIT 1`,
 			)
-			.get(projectNormalized, cutoff) as unknown as CheckpointRow | null;
+			.get(projectNormalized, cutoff, ...readable.args) as unknown as CheckpointRow | null;
 		return row ?? undefined;
 	}, "db:session-checkpoints.site.247");
 }
-export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string): CheckpointRow | undefined {
+export function getLatestCheckpointBySession(
+	db: DbAccessor,
+	sessionKey: string,
+	scope: ReadScope,
+): CheckpointRow | undefined {
+	const readable = evidenceScopeSql("cp", scope, { checkpoint: true });
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
-				`SELECT * FROM session_checkpoints
-				 WHERE session_key = ?
-				 ORDER BY created_at DESC, rowid DESC
+				`SELECT cp.* FROM session_checkpoints cp
+				 WHERE cp.session_key = ?${readable.sql}
+				 ORDER BY cp.created_at DESC, cp.rowid DESC
 				 LIMIT 1`,
 			)
-			.get(sessionKey) as unknown as CheckpointRow | null;
+			.get(sessionKey, ...readable.args) as unknown as CheckpointRow | null;
 		return row ?? undefined;
 	}, "db:session-checkpoints.site.262");
 }

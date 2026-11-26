@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import type { Permission, TokenRole, TokenScope } from "../auth";
 import { legacyPrincipal } from "../auth/principal";
+import { localTestReadScope } from "../test-support/local-read-scope";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 let agentsDir: string;
@@ -220,7 +221,13 @@ describe("session control permissions in team mode", () => {
 		const { loadMemoryConfig } = await import("../memory-config");
 		const cfg = loadMemoryConfig(agentsDir);
 		const recalled = await hybridRecall(
-			{ query: "delete-pinned", agentId: "agent-a", pinned: true, limit: 10 },
+			{
+				query: "delete-pinned",
+				agentId: "agent-a",
+				readScope: localTestReadScope("agent-a"),
+				pinned: true,
+				limit: 10,
+			},
 			{ ...cfg, search: { ...cfg.search, min_score: 0 } },
 			async () => null,
 		);
@@ -312,7 +319,12 @@ describe("session control permissions in team mode", () => {
 		});
 		const cfg = loadMemoryConfig(agentsDir);
 		const recalled = await hybridRecall(
-			{ query: "quokka telescope", agentId: identity.agentId, limit: 20 },
+			{
+				query: "quokka telescope",
+				agentId: identity.agentId,
+				readScope: localTestReadScope(identity.agentId),
+				limit: 20,
+			},
 			{ ...cfg, search: { ...cfg.search, min_score: 0 } },
 			async () => null,
 		);
@@ -1110,7 +1122,7 @@ describe("session control permissions in team mode", () => {
 		expect(allowed.status).toBe(200);
 	});
 
-	it("limits prompt recall to the credential's project", async () => {
+	it("fails closed on project-bound entity context and scopes explicit recall", async () => {
 		const now = new Date().toISOString();
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
@@ -1146,9 +1158,18 @@ describe("session control permissions in team mode", () => {
 			);
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { readonly inject: string; readonly engine?: string };
-			expect(body.engine).toBe("entity-recall");
-			expect(body.inject).toContain("alpha pipeline");
-			expect(body.inject).not.toContain("beta pipeline");
+			expect(body.engine).toBe("no-entity");
+			expect(body.inject).toBe("");
+			const direct = await hook(
+				teamApp(),
+				"recall",
+				{ harness: "codex", query: "Heron pipeline", agentId: "agent-a", project: "proj-a" },
+				bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } }),
+			);
+			expect(direct.status).toBe(200);
+			const recalled = await direct.text();
+			expect(recalled).toContain("alpha pipeline");
+			expect(recalled).not.toContain("beta pipeline");
 		} finally {
 			writeAuthConfig("team");
 		}

@@ -6,7 +6,14 @@ import {
 } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-import { buildMemorySearchFilterClause, currentMemorySql, type MemorySearchFilterInput } from "./memory-search-filters";
+import {
+	buildMemorySearchFilterClause,
+	currentMemorySql,
+	type MemorySearchFilterInput,
+	memorySearchReadScope,
+} from "./memory-search-filters";
+import { derivedReadScopeSql } from "./pipeline/graph-traversal";
+import type { ReadScope } from "./read-scope";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
 	"session",
@@ -90,6 +97,7 @@ export interface TemporalRecallParams extends MemorySearchFilterInput {
 	readonly sessionKey?: string;
 	readonly transcriptEvidence?: boolean;
 	readonly skip?: (id: string) => boolean;
+	readonly readScope: ReadScope;
 }
 
 export interface TemporalRecallResult {
@@ -392,15 +400,16 @@ function temporalRowLimit(intent: ParsedTemporalIntent, resultLimit: number): nu
 	return resultLimit;
 }
 
-function temporalOwnerSql(column: string, params: TemporalRecallParams): { sql: string; args: unknown[] } {
-	const agentId = params.agentId ?? "default";
-	if (params.readPolicy === "group" && params.policyGroup) {
-		return {
-			sql: ` AND (${column} = ? OR ${column} IN (SELECT id FROM agents WHERE policy_group = ?))`,
-			args: [agentId, params.policyGroup],
-		};
-	}
-	return { sql: ` AND ${column} = ?`, args: [agentId] };
+function temporalOwnerSql(
+	alias: string,
+	params: TemporalRecallParams,
+	cols: { readonly project?: string; readonly session?: string; readonly source?: string } = {},
+): { sql: string; args: readonly unknown[] } {
+	return derivedReadScopeSql(alias, memorySearchReadScope(params), { ...cols, group: "keep" });
+}
+
+function temporalMemoryFilter(params: TemporalRecallParams): { sql: string; args: readonly unknown[] } {
+	return buildMemorySearchFilterClause(params);
 }
 
 function shorten(content: string, maxChars: number): { content: string; truncated: boolean; length: number } {
@@ -455,7 +464,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			nonMemoryTemporalSelectorsSupported(params) &&
 			tableExists(db, "session_summaries")
 		) {
-			const owner = temporalOwnerSql("agent_id", params);
+			const owner = temporalOwnerSql("", params, { project: "project", session: "session_key" });
 			const project = projectSql(params.project, "project");
 			const sessionRows = db
 				.prepare(
@@ -500,7 +509,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		if (temporalFacetAllowed(intent.facets, "captured") && tableExists(db, "memories")) {
-			const memoryFilter = buildMemorySearchFilterClause(params);
+			const memoryFilter = temporalMemoryFilter(params);
 			const memoryRows = db
 				.prepare(
 					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project,
@@ -551,7 +560,11 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		if (nonMemoryTemporalSelectorsSupported(params) && tableExists(db, "memory_artifacts")) {
-			const owner = temporalOwnerSql("agent_id", params);
+			const owner = temporalOwnerSql("", params, {
+				project: "project",
+				session: "session_key",
+				source: "source_id",
+			});
 			const project = projectSql(params.project, "project");
 			const kinds = params.transcriptEvidence === false ? " AND source_kind != 'transcript'" : "";
 			if (temporalFacetAllowed(intent.facets, "captured")) {
@@ -650,8 +663,11 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		if (tableExists(db, "temporal_edges")) {
-			const memoryFilter = buildMemorySearchFilterClause(params);
-			const nonMemoryOwner = temporalOwnerSql("te.agent_id", params);
+			const memoryFilter = temporalMemoryFilter(params);
+			const edgeScope = params.readScope
+				? derivedReadScopeSql("te", params.readScope, { group: "keep" })
+				: { sql: "", args: [] };
+			const nonMemoryOwner = params.readScope ? { sql: "", args: [] } : temporalOwnerSql("te", params);
 			const includeNonMemoryEdges = nonMemoryTemporalSelectorsSupported(params) && !params.project;
 			const nonMemoryEligibility = includeNonMemoryEdges
 				? ` OR (te.subject_type != 'memory'${nonMemoryOwner.sql})`
@@ -666,7 +682,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					   ON te.subject_type = 'memory'
 					  AND m.id = te.subject_id
 					  ${currentMemorySql("m")}
-					 WHERE te.facet IN (${intent.facets.map(() => "?").join(", ")})
+					 WHERE te.facet IN (${intent.facets.map(() => "?").join(", ")})${edgeScope.sql}
 					   AND ${overlapClause("te.start_at", "te.end_at")}
 					   AND ((te.subject_type = 'memory' AND m.id IS NOT NULL${memoryFilter.sql})${nonMemoryEligibility})
 					 ORDER BY te.start_at DESC
@@ -674,6 +690,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				)
 				.all(
 					...intent.facets,
+					...edgeScope.args,
 					intent.end,
 					intent.start,
 					...memoryFilter.args,
@@ -725,10 +742,11 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		return rows;
-	}, "temporal-recall.ts:452");
+	}, "temporal-recall.ts:461");
 }
 
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {
+	memorySearchReadScope(params);
 	const intent = parseTemporalRecallIntent({ query: params.query, time: params.time });
 	if (!intent) return {};
 	const rowLimit = temporalRowLimit(intent, params.limit);

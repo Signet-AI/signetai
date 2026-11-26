@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMigrations } from "@signet/core";
+import { localAllReadScope, runMigrations } from "@signet/core";
 
 const TEST_DIR = join(tmpdir(), `signet-bench-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
@@ -10,6 +10,7 @@ process.env.SIGNET_PATH = TEST_DIR;
 const { initDbAccessor, closeDbAccessor } = await import("./db-accessor");
 const { recordSessionCandidates, trackFtsHits } = await import("./session-memories");
 const { handleSessionStart } = await import("./hooks");
+const BENCH_SCOPE = localAllReadScope({ kind: "own", agentId: "default" });
 
 function setupDb(memoryCount: number): void {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
@@ -176,7 +177,7 @@ writeFileSync(join(TEST_DIR, "agent.yaml"), "version: 1\n");
 const rBaseline = await bench(
 	"handleSessionStart (no sessionKey -- baseline)",
 	async () => {
-		await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "bench" });
+		await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "bench" }, BENCH_SCOPE);
 	},
 	ITERS,
 );
@@ -186,11 +187,14 @@ sessionCounter = 0;
 const rWithRecording = await bench(
 	"handleSessionStart (with sessionKey -- recording active)",
 	async () => {
-		await handleSessionStart({
-			author: { userId: null, credential: "local" },
-			harness: "bench",
-			sessionKey: `bench-full-${sessionCounter++}`,
-		});
+		await handleSessionStart(
+			{
+				author: { userId: null, credential: "local" },
+				harness: "bench",
+				sessionKey: `bench-full-${sessionCounter++}`,
+			},
+			BENCH_SCOPE,
+		);
 	},
 	ITERS,
 );
@@ -206,15 +210,18 @@ sessionCounter = 0;
 
 for (let i = 0; i < 100; i++) {
 	const t0 = performance.now();
-	await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "bench" });
+	await handleSessionStart({ author: { userId: null, credential: "local" }, harness: "bench" }, BENCH_SCOPE);
 	baselineTimes.push(performance.now() - t0);
 
 	const t1 = performance.now();
-	await handleSessionStart({
-		author: { userId: null, credential: "local" },
-		harness: "bench",
-		sessionKey: `bench-overhead-${sessionCounter++}`,
-	});
+	await handleSessionStart(
+		{
+			author: { userId: null, credential: "local" },
+			harness: "bench",
+			sessionKey: `bench-overhead-${sessionCounter++}`,
+		},
+		BENCH_SCOPE,
+	);
 	recordingTimes.push(performance.now() - t1);
 }
 

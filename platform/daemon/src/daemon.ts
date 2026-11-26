@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { localAllReadScope } from "@signet/core";
 import type { Server } from "node:net";
 import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { startClassificationRecovery } from "./classifications";
@@ -813,6 +814,7 @@ ${fileList}
 						name === "MEMORY.md" &&
 						(
 							await requestMemoryHead<{ generated: boolean }>({
+								readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 								action: "inspect",
 								agentId: "default",
 								content: fileContent,

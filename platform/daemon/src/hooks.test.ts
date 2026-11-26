@@ -35,16 +35,16 @@ const { countTokens, resetTokenizerStats, tokenizerStats } = await import("./pip
 const { resetSessionEndTelemetry } = await import("./session-end-state");
 const { createTelemetryCollector, setActiveTelemetry } = await import("./telemetry");
 const {
-	handleSessionStart,
-	handlePreCompaction,
+	handleSessionStart: scopedHandleSessionStart,
+	handlePreCompaction: scopedHandlePreCompaction,
 	handleSynthesisRequest,
-	handleUserPromptSubmit,
+	handleUserPromptSubmit: scopedHandleUserPromptSubmit,
 	handleSessionEnd,
 	handleStop,
 	handleCheckpointExtract,
 	effectiveScore,
 	selectWithBudget,
-	isDuplicate,
+	isDuplicate: scopedIsDuplicate,
 	inferType,
 	getAllScoredCandidates,
 	writeMemoryMd: synthWriteMemoryMd,
@@ -55,6 +55,32 @@ const {
 	queryAnchorsMissingFromRecall,
 	selectWithTokenBudget,
 } = hooks;
+const { getAgentScope, resolveAgentId } = await import("./agent-id");
+const { internalHookReadScope, reachForPolicy } = await import("./hook-read-scope");
+const { localAllReadScope } = await import("./read-scope");
+const { localTestReadScope } = await import("./test-support/local-read-scope");
+type PromptSubmitArgs = Parameters<typeof scopedHandleUserPromptSubmit>;
+async function handleSessionStart(req: Parameters<typeof scopedHandleSessionStart>[0]) {
+	return await scopedHandleSessionStart(req, await internalHookReadScope(resolveAgentId(req)));
+}
+async function handlePreCompaction(req: Parameters<typeof scopedHandlePreCompaction>[0]) {
+	return await scopedHandlePreCompaction(req, await internalHookReadScope(resolveAgentId(req)));
+}
+async function handleUserPromptSubmit(
+	req: PromptSubmitArgs[0],
+	overrides?: PromptSubmitArgs[1],
+	scope: { readonly project?: string } = {},
+) {
+	const agentId = (overrides?.resolveAgentId ?? resolveAgentId)(req);
+	const policy = await (overrides?.getAgentScope ?? getAgentScope)(agentId);
+	return await scopedHandleUserPromptSubmit(req, overrides, {
+		...scope,
+		readScope: localAllReadScope(reachForPolicy(agentId, policy)),
+	});
+}
+function isDuplicate(db: Parameters<typeof scopedIsDuplicate>[0], content: string, agentId: string) {
+	return scopedIsDuplicate(db, content, agentId, localTestReadScope(agentId));
+}
 
 test("rejects missing hook authors before doing work", async () => {
 	const request = { harness: "hermes", sessionKey: "missing-author", agentId: "default" };
@@ -4248,6 +4274,8 @@ describe("selectWithBudget type preservation", () => {
 	});
 });
 
+const defaultScope = { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null } as const;
+
 describe("getAllScoredCandidates", () => {
 	test.serial("returns scored memories without budget truncation", async () => {
 		createMemoryDb([
@@ -4256,7 +4284,7 @@ describe("getAllScoredCandidates", () => {
 			{ content: "Memory C", importance: 0.7 },
 		]);
 
-		const candidates = await getAllScoredCandidates(undefined, 30);
+		const candidates = await getAllScoredCandidates(undefined, 30, defaultScope);
 		expect(candidates.length).toBe(3);
 		for (const c of candidates) {
 			expect(c.effScore).toBeGreaterThan(0);
@@ -4276,7 +4304,7 @@ describe("getAllScoredCandidates", () => {
 			{ content: "Recent important fact", importance: 0.9 },
 		]);
 
-		const candidates = await getAllScoredCandidates(undefined, 30);
+		const candidates = await getAllScoredCandidates(undefined, 30, defaultScope);
 		expect(candidates.length).toBe(1);
 		expect(candidates[0].content).toBe("Recent important fact");
 	});
@@ -4295,7 +4323,7 @@ describe("getAllScoredCandidates", () => {
 			},
 		]);
 
-		const candidates = await getAllScoredCandidates("/home/user/myproject", 30);
+		const candidates = await getAllScoredCandidates("/home/user/myproject", 30, defaultScope);
 
 		if (candidates.length >= 2) {
 			expect(candidates[0].content).toBe("Project-specific memory");
@@ -4303,7 +4331,7 @@ describe("getAllScoredCandidates", () => {
 	});
 
 	test.serial("returns empty for missing database", async () => {
-		const candidates = await getAllScoredCandidates(undefined, 30);
+		const candidates = await getAllScoredCandidates(undefined, 30, defaultScope);
 		expect(candidates).toEqual([]);
 	});
 });
