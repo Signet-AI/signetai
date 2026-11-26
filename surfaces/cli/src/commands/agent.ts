@@ -12,6 +12,51 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
 import type { DaemonFetch } from "../lib/daemon.js";
+import { cliTransport } from "../lib/organization-target.js";
+
+async function organizationAgent(action: string, name?: string, input?: unknown): Promise<boolean> {
+	const transport = cliTransport();
+	if (!transport) return false;
+	if (action === "add") {
+		console.log(JSON.stringify(await transport.post("/api/agents", input)));
+		return true;
+	}
+	const inventory = await transport.get<{
+		agents: {
+			id: string;
+			name: string;
+			kind: string;
+			ownerUserId: string | null;
+			ownerGroupId: string | null;
+			canActAs: boolean;
+		}[];
+	}>("/api/agents");
+	if (action === "list") {
+		console.log(JSON.stringify(inventory, null, 2));
+		return true;
+	}
+	const agent = inventory.agents.find((item) => item.id === name || item.name === name);
+	if (!agent) throw new Error("Agent not found");
+	if (action === "use")
+		console.log(
+			JSON.stringify(
+				await transport.request("PATCH", "/api/auth/preferences", { body: { defaultReadAgentId: agent.id } }),
+			),
+		);
+	else if (action === "remove")
+		console.log(
+			JSON.stringify(
+				await transport.request("PATCH", `/api/agents/${encodeURIComponent(agent.id)}`, { body: { archived: true } }),
+			),
+		);
+	else if (action === "transfer" || action === "set")
+		console.log(
+			JSON.stringify(await transport.request("PATCH", `/api/agents/${encodeURIComponent(agent.id)}`, { body: input })),
+		);
+	else if (action === "purge") throw new Error("Organization agent purge is unavailable; no local files were changed");
+	else console.log(JSON.stringify(agent, null, 2));
+	return true;
+}
 
 interface AgentDeps {
 	readonly AGENTS_DIR: string;
@@ -62,12 +107,28 @@ export function validateName(name: string): string | null {
 }
 
 export function registerAgentCommands(program: Command, deps: AgentDeps): void {
-	const agentCmd = program.command("agent").description("Manage named agents in the roster");
+	const agentCmd = program
+		.command("agent")
+		.description("Manage named agents in the roster")
+		.option("--json", "Machine-readable output");
+	agentCmd.command("use <name>").action(async (name: string) => {
+		if (!(await organizationAgent("use", name))) throw new Error("Agent use requires an organization login");
+	});
+	agentCmd
+		.command("transfer <name>")
+		.option("--user <id>", "New owning user")
+		.option("--team <id>", "New owning team")
+		.action(async (name: string, opts: { user?: string; team?: string }) => {
+			if (Boolean(opts.user) === Boolean(opts.team)) throw new Error("Choose exactly one of --user or --team");
+			if (!(await organizationAgent("transfer", name, { ownerUserId: opts.user, ownerGroupId: opts.team })))
+				throw new Error("Agent transfer requires an organization login");
+		});
 
 	agentCmd
 		.command("list")
 		.description("List all agents in the roster")
 		.action(async () => {
+			if (await organizationAgent("list")) return;
 			type Row = {
 				id?: string;
 				name: string;
@@ -123,7 +184,16 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.description("Add a named agent to the roster")
 		.option("--memory <policy>", "Memory read policy: isolated|shared|group", "isolated")
 		.option("--group <group>", "Policy group name (required when --memory=group)")
-		.action(async (name: string, options: { memory: string; group?: string }) => {
+		.option("--team <id>", "Owning organization team")
+		.action(async (name: string, options: { memory: string; group?: string; team?: string }) => {
+			if (
+				await organizationAgent("add", name, {
+					name,
+					kind: options.team ? "team" : "personal",
+					ownerGroupId: options.team,
+				})
+			)
+				return;
 			const err = validateName(name);
 			if (err) {
 				console.log(chalk.red(`  ${err}`));
@@ -169,6 +239,7 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.command("remove <name>")
 		.description("Remove an agent (archives memories, keeps files)")
 		.action(async (name: string) => {
+			if (await organizationAgent("remove", name)) return;
 			if (name === "default") {
 				console.log(chalk.red("  Cannot remove the default agent"));
 				process.exit(1);
@@ -200,6 +271,7 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.description("Permanently delete an agent and all their memories")
 		.option("--force", "Skip confirmation prompt")
 		.action(async (name: string, options: { force?: boolean }) => {
+			if (await organizationAgent("purge", name)) return;
 			if (name === "default") {
 				console.log(chalk.red("  Cannot purge the default agent"));
 				process.exit(1);
@@ -263,6 +335,7 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.command("info <name>")
 		.description("Show details for a named agent")
 		.action(async (name: string) => {
+			if (await organizationAgent("show", name)) return;
 			const spinner = ora(`Loading agent ${chalk.cyan(name)}...`).start();
 
 			type AgentDetail = {
@@ -313,6 +386,7 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.command("show <name>")
 		.description("Show daemon-backed agent policy and scope")
 		.action(async (name: string) => {
+			if (await organizationAgent("show", name)) return;
 			const data = await deps.fetchFromDaemon<Record<string, unknown>>(`/api/agents/${encodeURIComponent(name)}`);
 			if (!data) {
 				console.log(chalk.red("  Daemon unavailable"));
@@ -332,9 +406,17 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 	agentCmd
 		.command("set <name>")
 		.description("Set an agent's daemon-backed memory policy")
-		.requiredOption("--memory <policy>", "Memory read policy: isolated|shared|group")
+		.option("--memory <policy>", "Memory read policy: isolated|shared|group")
 		.option("--group <group>", "Policy group name (required when --memory=group)")
-		.action(async (name: string, options: { memory: string; group?: string }) => {
+		.option("--name <name>", "Rename an organization agent")
+		.action(async (name: string, options: { memory?: string; group?: string; name?: string }) => {
+			if (cliTransport()) {
+				if (options.memory || options.group || !options.name)
+					throw new Error("Organization agents use classifications, not local read policies. Use --name to rename.");
+				await organizationAgent("set", name, { name: options.name });
+				return;
+			}
+			if (!options.memory) throw new Error("--memory is required for a local agent");
 			const err = validateName(name);
 			if (err) {
 				console.log(chalk.red(`  ${err}`));

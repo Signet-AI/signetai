@@ -2,6 +2,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall } from "../lib/daemon.js";
 import { withJson } from "./shared.js";
+import { cliAgent, cliTransport } from "../lib/organization-target.js";
 
 interface ApiKeyDeps {
 	readonly ensureDaemonRunning: () => Promise<boolean>;
@@ -13,12 +14,15 @@ interface ApiKeyCreateOptions {
 	connector?: string;
 	role?: string;
 	agentId?: string;
+	agent?: string;
+	permission?: string[];
 	expiresAt?: string;
 	json?: boolean;
 }
 
 interface ApiKeyListOptions {
 	json?: boolean;
+	all?: boolean;
 }
 
 interface ApiKeyRevokeOptions {
@@ -48,8 +52,25 @@ export function registerApiKeyCommands(program: Command, deps: ApiKeyDeps): void
 		.option("--connector <connector>", "Connector/harness this key is for, e.g. pi, codex, opencode")
 		.option("--role <role>", "Role for this key (admin, operator, agent, readonly)", "agent")
 		.option("--agent-id <id>", "Optional Signet agent scope")
+		.option("--agent <id>", "Shared-agent key (requires its team owner or admin)")
+		.option("--permission <permissions...>", "Limit personal key permissions")
 		.option("--expires-at <iso>", "Optional ISO expiration timestamp")
 		.action(async (options: ApiKeyCreateOptions) => {
+			const remote = cliTransport();
+			if (remote) {
+				const identity = await remote.get<{ permissions: string[] }>("/api/auth/whoami");
+				const agentId = options.agent ?? options.agentId ?? cliAgent();
+				const result = await remote.post("/api/auth/api-keys", {
+					name: options.name,
+					kind: agentId ? "shared" : "personal",
+					agentId,
+					permissions: options.permission ?? identity.permissions,
+					expiresAt: options.expiresAt ?? new Date(Date.now() + 30 * 86400_000).toISOString(),
+				});
+				process.stderr.write("Save this secret now. It is shown only once.\n");
+				console.log(JSON.stringify(result, null, options.json ? undefined : 2));
+				return;
+			}
 			if (!(await deps.ensureDaemonRunning())) process.exit(1);
 			const payload = {
 				name: options.name,
@@ -89,7 +110,19 @@ export function registerApiKeyCommands(program: Command, deps: ApiKeyDeps): void
 	const list = apiKey
 		.command("list")
 		.description("List API keys without revealing secrets")
+		.option("--all", "List all users' keys (admin only)")
 		.action(async (options: ApiKeyListOptions) => {
+			const remote = cliTransport();
+			if (remote) {
+				console.log(
+					JSON.stringify(
+						await remote.get(`/api/auth/api-keys${options.all ? "?all=1" : ""}`),
+						null,
+						options.json ? undefined : 2,
+					),
+				);
+				return;
+			}
 			if (!(await deps.ensureDaemonRunning())) process.exit(1);
 			const res = await deps.apiCall("GET", "/api/auth/api-keys");
 			if (!res.ok) {
@@ -124,6 +157,13 @@ export function registerApiKeyCommands(program: Command, deps: ApiKeyDeps): void
 		.command("revoke <id-or-prefix>")
 		.description("Revoke an API key by id or prefix")
 		.action(async (idOrPrefix: string, options: ApiKeyRevokeOptions) => {
+			const remote = cliTransport();
+			if (remote) {
+				console.log(
+					JSON.stringify(await remote.request("DELETE", `/api/auth/api-keys/${encodeURIComponent(idOrPrefix)}`)),
+				);
+				return;
+			}
 			if (!(await deps.ensureDaemonRunning())) process.exit(1);
 			const res = await deps.apiCall("DELETE", `/api/auth/api-keys/${encodeURIComponent(idOrPrefix)}`);
 			if (!res.ok) {

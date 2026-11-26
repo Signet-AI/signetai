@@ -86,6 +86,14 @@ Signet rejects disabling password login until an OIDC provider is configured. Ne
 
 Keep password login enabled until SSO is working. `requireSso` prevents password sign-in. Changing authentication policy does not revoke existing sessions; use session or device revocation when needed.
 
+## Agents and API keys from the CLI
+
+Against an organization, `signet agent list` shows each agent's owner IDs and `canActAs` result. `signet agent add notes` creates a personal agent without scaffolding local files; `signet agent add payments --team <group-id>` creates a team agent. `signet agent use <name-or-id>` changes your default read agent. Writes still default to your personal agent.
+
+Administrators can rename with `signet agent set <name-or-id> --name <new-name>`, archive with `signet agent remove <name-or-id>`, and transfer with `signet agent transfer <name-or-id> --user <user-id>` or `--team <group-id>`. Transfer changes ownership, not evidence authorship. Local read policies do not apply in organization mode. Organization agent purge is not yet available through the CLI; it refuses without changing local files.
+
+`signet api-key create --name CI` creates a personal key using your permissions and a 30-day expiry. Restrict it with `--permission recall remember`, or set `--expires-at <ISO timestamp>`. `--agent <id>` requests a shared-agent key, which the daemon allows only for administrators or the owning team's owner. `signet api-key list` lists your keys; `--all` requires admin. Revoke by ID with `signet api-key revoke <id>`. The secret is printed once; JSON creation also prints a warning on stderr. List responses never include secrets.
+
 ## Organization commands
 
 The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL` and credentials, then the stored `daemon.url` from login. `--org` requires an organization target. `--local` ignores organization credentials and selects the loopback daemon. Switching targets does not rebind connected harnesses.
