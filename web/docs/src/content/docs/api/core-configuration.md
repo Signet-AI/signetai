@@ -58,6 +58,14 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
 }
 ```
 
+### PATCH /api/auth/preferences
+
+In a claimed organization, a signed-in user session can send
+`{ "defaultReadAgentId": "<agent-id>" }` to change its default read agent.
+The target must exist and be unarchived. This changes neither write ownership
+nor another person's preferences. API keys cannot change account preferences.
+The daemon audits the change and returns it in the next identity response.
+
 ### GET /api/auth/methods
 
 Open route returning configured dashboard login providers. Password login is
