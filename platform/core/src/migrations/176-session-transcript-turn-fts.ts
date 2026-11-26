@@ -50,7 +50,7 @@ export function up(db: MigrationDb): void {
 			end_rowid INTEGER NOT NULL
 		);
 		INSERT INTO session_transcript_turns_backfill (id, cursor, end_rowid)
-		VALUES (1, 0, COALESCE((SELECT MAX(rowid) FROM session_transcripts), 0));
+		SELECT 1, COALESCE(MIN(rowid) - 1, 0), COALESCE(MAX(rowid), 0) FROM session_transcripts;
 
 		CREATE TRIGGER session_transcript_turns_fts_ai AFTER INSERT ON session_transcript_turns BEGIN
 			INSERT INTO session_transcript_turns_fts(rowid, text) VALUES (new.id, new.text);

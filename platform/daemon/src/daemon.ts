@@ -3131,26 +3131,20 @@ async function main() {
 			});
 			deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
 				const integrityHealthy = await deferredRuntimeGate.waitForVerifiedIntegrity();
+				const migrationBackupRemoved = integrityHealthy && (await deferredRuntimeGate.waitForMigrationBackupSettled());
 				let indexed = 0;
 				let failures = 0;
 				for (;;) {
 					const owner = dbOwnerClient;
-					const migrationBackupPending = pendingMigrationBackupPath(MEMORY_DB) !== null;
-					if (
-						!integrityHealthy ||
-						migrationIntegrityWritesBlocked ||
-						shuttingDown ||
-						migrationBackupPending ||
-						owner === null
-					) {
+					if (!migrationBackupRemoved || migrationIntegrityWritesBlocked || shuttingDown || owner === null) {
 						logger.warn(
 							"startup-recovery",
 							"Transcript turn index backfill stopped; search uses the scan fallback until restart",
 							{
 								indexed,
 								integrityHealthy,
+								migrationBackupRemoved,
 								migrationIntegrityWritesBlocked,
-								migrationBackupPending,
 								shuttingDown,
 								ownerAvailable: owner !== null,
 							},
@@ -3211,6 +3205,7 @@ async function main() {
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
 			const owner = dbOwnerClient;
 			const migrationBackupPath = pendingMigrationBackupPath(MEMORY_DB);
+			if (migrationBackupPath === null) deferredRuntimeGate.completeMigrationBackup(true);
 			let currentDatabaseSizeBytes = 0;
 			try {
 				currentDatabaseSizeBytes = (await statAsync(MEMORY_DB)).size;
@@ -3351,6 +3346,7 @@ async function main() {
 							},
 						});
 						if (result.phase === "pass") {
+							deferredRuntimeGate.completeMigrationBackup(true);
 							if (deferredMigrationVerification || migrationWritesDeferred) {
 								logger.info(
 									"startup-recovery",
@@ -3361,6 +3357,7 @@ async function main() {
 								}, 0);
 							}
 						} else if (result.phase === "parked" || result.phase === "failed" || result.phase === "terminal") {
+							deferredRuntimeGate.completeMigrationBackup(false);
 							logger.warn("startup-recovery", "Migration verification retained the rollback backup; VACUUM deferred", {
 								phase: result.phase,
 							});

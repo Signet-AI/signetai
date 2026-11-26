@@ -1864,25 +1864,20 @@ export function searchTranscriptTurns(
 	const parsed = ftsQueryTerms(params.query);
 	const terms = parsed.terms.slice(0, TRANSCRIPT_TURN_MAX_TERMS);
 	if (terms.length === 0 || !transcriptTurnIndexReady(db)) return [];
+	const sessionKey = params.sessionKey || params.excludeSessionKey;
+	const sessionFilter = sessionKey ? `AND turn.session_key ${params.sessionKey ? "=" : "!="} ?` : "";
 	const sql = [
 		"WITH hits AS MATERIALIZED (SELECT turn.session_key AS session_key, bm25(session_transcript_turns_fts) AS rank",
 		"FROM session_transcript_turns_fts JOIN session_transcript_turns turn ON turn.id = session_transcript_turns_fts.rowid",
-		"WHERE session_transcript_turns_fts MATCH ? AND turn.agent_id = ?)",
+		`WHERE session_transcript_turns_fts MATCH ? AND turn.agent_id = ? ${sessionFilter})`,
 		"SELECT st.session_key, st.project, COALESCE(st.updated_at, st.created_at) AS updated_at, st.content, MIN(hits.rank) AS rank",
 		"FROM hits JOIN session_transcripts st ON st.session_key = hits.session_key",
 		"WHERE st.agent_id = ?",
 	];
-	const args: unknown[] = [terms.join(" OR "), params.agentId, params.agentId];
+	const args: unknown[] = [terms.join(" OR "), params.agentId, ...(sessionKey ? [sessionKey] : []), params.agentId];
 	if (parsed.requireAll && terms.length > 1) {
 		sql.push(`AND st.session_key IN (${terms.map(() => TRANSCRIPT_TURN_MATCH).join(" INTERSECT ")})`);
 		for (const term of terms) args.push(term, params.agentId);
-	}
-	if (params.sessionKey) {
-		sql.push("AND st.session_key = ?");
-		args.push(params.sessionKey);
-	} else if (params.excludeSessionKey) {
-		sql.push("AND st.session_key != ?");
-		args.push(params.excludeSessionKey);
 	}
 	if (params.project) {
 		sql.push("AND st.project = ?");
@@ -1918,10 +1913,14 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 	if (!state) throw new Error("Transcript turn backfill state is missing");
 	if (state.cursor >= state.end_rowid) return { complete: true, indexed: 0 };
 	const maxRows = Math.max(1, Math.floor(options.maxRows ?? TRANSCRIPT_TURN_BACKFILL_ROWS));
-	const candidates = prepareTypedStatement<{ readonly rowid: number; readonly bytes: number }>(
+	const candidates = prepareTypedStatement<{ readonly rowid: number }>(
 		db,
-		"SELECT rowid, length(CAST(content AS BLOB)) AS bytes FROM session_transcripts WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?",
+		"SELECT rowid FROM session_transcripts WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?",
 	).all(state.cursor, state.end_rowid, maxRows);
+	const rowBytes = prepareTypedStatement<{ readonly bytes: number }>(
+		db,
+		"SELECT length(CAST(content AS BLOB)) AS bytes FROM session_transcripts WHERE rowid = ?",
+	);
 	const insert = db.prepare(
 		`INSERT INTO session_transcript_turns(agent_id, session_key, text)
 		 SELECT st.agent_id, st.session_key, st.content FROM session_transcripts st
@@ -1935,7 +1934,7 @@ export function backfillTranscriptTurnsFtsChunkInDb(
 	let indexed = 0;
 	let consumedAll = true;
 	for (const row of candidates) {
-		bytes += row.bytes;
+		bytes += rowBytes.get(row.rowid)?.bytes ?? 0;
 		if (last !== state.cursor && bytes > TRANSCRIPT_TURN_BACKFILL_BYTES) {
 			consumedAll = false;
 			break;

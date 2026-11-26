@@ -465,6 +465,38 @@ describe("migration framework", () => {
 		expect(db.query("SELECT text FROM session_transcript_turns").all()).toEqual([{ text: "User: redacted again" }]);
 	});
 
+	test("176 queues a transcript stored at a negative rowid and marks an empty table ready", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP TRIGGER session_transcript_turns_ai");
+		db.prepare(
+			"INSERT INTO session_transcripts (rowid, session_key, content, harness, agent_id, created_at) VALUES (-5, 'sess-a', 'User: alpha', 'codex', 'agent-a', '2026-11-25T00:00:00Z')",
+		).run();
+		runMigrations(db);
+		expect(db.query("SELECT cursor < end_rowid AS pending FROM session_transcript_turns_backfill").get()).toEqual({
+			pending: 1,
+		});
+
+		db = createFreshDb();
+		runMigrations(db);
+		expect(db.query("SELECT cursor >= end_rowid AS ready FROM session_transcript_turns_backfill").get()).toEqual({
+			ready: 1,
+		});
+	});
+
+	test("a missing transcript turn lookup index re-runs 176", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP INDEX idx_session_transcript_turns_session");
+		expect(hasPendingMigrations(db)).toBe(true);
+		runMigrations(db);
+		expect(
+			db
+				.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_transcript_turns_session'")
+				.get(),
+		).toEqual({ name: "idx_session_transcript_turns_session" });
+	});
+
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {
 		for (const version of [138, 139] as const) {
 			db = createFreshDb();

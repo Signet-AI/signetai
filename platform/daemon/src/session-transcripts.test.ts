@@ -137,7 +137,8 @@ describe("session transcript turn index", () => {
 	it("matches a session when the query terms sit in different turns", async () => {
 		init();
 		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
-		await append("sess-a", "Assistant: alpha bravo answer");
+		await append("sess-a", "Assistant: bravo answer");
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question", "\nAssistant: bravo answer"]);
 		upsertSessionTranscript("sess-b", "User: alpha only", "codex", "/repo", "noam");
 		upsertSessionTranscript("sess-c", "User: bravo only", "codex", "/repo", "noam");
 
@@ -160,7 +161,9 @@ describe("session transcript turn index", () => {
 
 		expect(await indexedTurns("sess-a")).toEqual(["User: charlie legacy"]);
 		expect(await indexedTurns("sess-b")).toEqual(["User: charlie second\nAssistant: echo reply"]);
-		expect((await searchHits("charlie")).every((hit) => hit.rank < 0)).toBe(true);
+		const hits = await searchHits("charlie");
+		expect(hits.map((hit) => hit.sessionKey).sort()).toEqual(["sess-a", "sess-b"]);
+		expect(hits.every((hit) => hit.rank < 0)).toBe(true);
 	});
 
 	it("never returns another agent's session and honors the project and current-session scope", async () => {
@@ -223,7 +226,17 @@ describe("session transcript turn index", () => {
 
 	it("reindexes the whole session when the old content was empty", async () => {
 		init();
-		upsertSessionTranscript("sess-a", "", "codex", "/repo", "noam");
+		await write(
+			"INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			"sess-a",
+			"",
+			"codex",
+			"/repo",
+			"noam",
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
+		);
+		expect(await indexedTurns("sess-a")).toEqual([""]);
 		upsertSessionTranscript("sess-a", "whiskey first", "codex", "/repo", "noam");
 
 		expect(await indexedTurns("sess-a")).toEqual(["whiskey first"]);
