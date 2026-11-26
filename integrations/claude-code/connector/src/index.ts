@@ -1,5 +1,5 @@
 import { NodeTransport, resolveTarget } from "@signet/sdk/node";
-import { spawn } from "node:child_process";
+import { spawnHidden } from "@signet/core";
 import { SignetUnauthorizedError } from "@signet/sdk";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -162,19 +162,36 @@ export async function dispatchSessionEndFireAndForget(
 		const launcher = resolveSignetCliCommand();
 		const env = { ...process.env };
 		if (!env.SIGNET_DAEMON_URL && !env.SIGNET_HOST && !env.SIGNET_PORT) env.SIGNET_DAEMON_URL = daemonUrl;
-		const child = spawn(launcher.command, [...launcher.args, "hook", "session-end", "--harness", "claude-code"], {
+		const child = spawnHidden(launcher.command, [...launcher.args, "hook", "session-end", "--harness", "claude-code"], {
 			detached: true,
 			stdio: ["pipe", "ignore", "ignore"],
 			env,
 		});
-		child.stdin.on("error", () => console.warn("[signet] session-end dispatch input failed"));
-		child.stdin.end(JSON.stringify(payload));
-		child.unref();
 		return await new Promise<boolean>((resolve) => {
-			child.once("spawn", () => resolve(true));
+			let spawned = false;
+			let written = false;
+			let settled = false;
+			const finish = (success: boolean): void => {
+				if (settled || (success && (!spawned || !written))) return;
+				settled = true;
+				child.unref();
+				resolve(success);
+			};
+			child.once("spawn", () => {
+				spawned = true;
+				finish(true);
+			});
 			child.once("error", () => {
 				console.warn("[signet] session-end dispatch startup failed");
-				resolve(false);
+				finish(false);
+			});
+			child.stdin.once("error", () => {
+				console.warn("[signet] session-end dispatch input failed");
+				finish(false);
+			});
+			child.stdin.end(JSON.stringify(payload), () => {
+				written = true;
+				finish(true);
 			});
 		});
 	} catch {
