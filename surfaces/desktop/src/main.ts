@@ -1,9 +1,9 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DesktopWorkspace, RemoteWorkspace } from "./remote-workspace.js";
 import { loadWorkspaceSelection, saveWorkspaceSelection } from "./workspace-selection.js";
-import { workspaceHtml } from "./workspace-view.js";
+import { dashboardStylesheet, workspaceHtml } from "./workspace-view.js";
 import {
 	net,
 	BrowserWindow,
@@ -178,13 +178,16 @@ async function registerDashboardProtocol(): Promise<void> {
 	protocol.handle("app", async (request) => {
 		if (new URL(request.url).host !== "signet") return new Response("Unknown application origin", { status: 403 });
 		if (new URL(request.url).pathname === "/desktop/workspaces")
-			return new Response(workspaceHtml(), {
-				headers: {
-					"content-type": "text/html; charset=utf-8",
-					"content-security-policy":
-						"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'",
+			return new Response(
+				workspaceHtml(dashboardStylesheet(await readFile(resolve(dashboardRoot(), "index.html"), "utf8"))),
+				{
+					headers: {
+						"content-type": "text/html; charset=utf-8",
+						"content-security-policy":
+							"default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'",
+					},
 				},
-			});
+			);
 		if (isDaemonRouteUrl(request.url)) return proxyDaemonRoute(request);
 
 		let file = dashboardFile(request.url);

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadWorkspaceSelection, saveWorkspaceSelection } from "./workspace-selection.js";
-import { workspaceHtml } from "./workspace-view.js";
+import { dashboardStylesheet, workspaceHtml } from "./workspace-view.js";
 
 test("workspace choice persists only mode and origin and corruption fails closed", async () => {
 	const root = await mkdtemp(join(tmpdir(), "desktop-selection-"));
@@ -20,8 +20,28 @@ test("workspace choice persists only mode and origin and corruption fails closed
 	}
 });
 
+test("workspace chrome reuses compiled dashboard CSS, selectable cards and tokenized controls", () => {
+	expect(dashboardStylesheet('<link crossorigin rel="stylesheet" href="/assets/index-123.css">')).toBe(
+		"/assets/index-123.css",
+	);
+	for (const index of [
+		"",
+		'<link rel="stylesheet" href="https://other.example/style.css">',
+		'<link rel="stylesheet" href="/assets/../secret.css">',
+	])
+		expect(() => dashboardStylesheet(index)).toThrow();
+	const html = workspaceHtml("/assets/index-123.css");
+	expect(html).toContain('href="/assets/index-123.css"');
+	expect(html).toContain('role="radiogroup"');
+	expect(html).toContain('data-slot="card"');
+	expect(html).toContain('data-variant="outline"');
+	expect(html).toContain("var(--font-sans)");
+	expect(html).not.toContain("<fieldset");
+	expect(html).not.toContain('type="radio"');
+});
+
 test("workspace screen provides local and organization choices without secrets", () => {
-	const html = workspaceHtml();
+	const html = workspaceHtml("/assets/index-123.css");
 	expect(html).toContain("Local");
 	expect(html).toContain("Organization");
 	expect(html).toContain("Sign in through your browser");

@@ -165,6 +165,13 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				origin: daemon.origin,
 			});
 			expect(await cdp.evaluate("window.signetDesktop.workspaceStatus()")).toMatchObject({ state: "signed-out" });
+			expect(await cdp.evaluate("getComputedStyle(document.body).fontFamily")).toContain("Schibsted Grotesk");
+			expect(
+				await cdp.evaluate("Array.from(document.styleSheets).some(sheet=>sheet.href && sheet.cssRules.length>0)"),
+			).toBe(true);
+			expect(
+				await cdp.evaluate("document.querySelector('[data-mode=organization]').getAttribute('aria-checked')"),
+			).toBe("true");
 			const screenDir = process.env.SIGNET_DESKTOP_SCREEN_DIR;
 			if (screenDir) {
 				await mkdir(screenDir, { recursive: true });
