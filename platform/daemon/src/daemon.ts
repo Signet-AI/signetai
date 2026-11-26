@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { purgeExpiredHookUploads } from "./hook-transcript-uploads";
 import type { Server } from "node:net";
 import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { startClassificationRecovery } from "./classifications";
@@ -1503,6 +1504,11 @@ function stopMemoryImportPoller(): void {
 function startStaleSessionSweeper(): void {
 	if (staleSessionSweepTimer !== null) return;
 	staleSessionSweepTimer = setInterval(() => {
+		void purgeExpiredHookUploads().catch((error) =>
+			logger.warn("daemon", "Hook upload expiry purge failed", {
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		);
 		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }).catch((e) => {
 			logger.error("daemon", "Stale session sweep failed", undefined, {
 				message: e instanceof Error ? e.message : String(e),

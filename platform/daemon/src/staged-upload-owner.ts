@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { DbOwnerStatement, DbOwnerParameter } from "./db-owner-protocol";
+import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
 
 export const TRANSCRIPT_CHUNK_BYTES = 64 * 1024;
 export const TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
@@ -218,4 +220,100 @@ export function createStagingOwner<Read extends ReadScope, Write extends Read & 
 		await store.finishPurge(scope);
 	}
 	return { get: store.get, begin, append, read, seal, upload, purge };
+}
+
+export type StagedChunkScope = {
+	readonly agentId: string;
+	readonly fileId: string;
+	readonly signal?: AbortSignal;
+} & (
+	| { readonly kind: "source"; readonly jobId: string }
+	| {
+			readonly kind: "hook";
+			readonly principalId: string;
+			readonly credentialKind: string;
+			readonly credentialId: string;
+			readonly harness: string;
+			readonly sessionKey: string;
+	  }
+);
+export function stagedScopeFilter(
+	scope: StagedChunkScope,
+	prefix: string,
+): { sql: string; params: readonly DbOwnerParameter[] } {
+	const base = `${prefix}id = ? AND ${prefix}agent_id = ?`;
+	if (scope.kind === "source")
+		return { sql: `${base} AND ${prefix}job_id = ?`, params: [scope.fileId, scope.agentId, scope.jobId] };
+	return {
+		sql: `${base} AND ${prefix}principal_id = ? AND ${prefix}credential_kind = ? AND ${prefix}credential_id = ? AND ${prefix}harness = ? AND ${prefix}session_key = ?`,
+		params: [
+			scope.fileId,
+			scope.agentId,
+			scope.principalId,
+			scope.credentialKind,
+			scope.credentialId,
+			scope.harness,
+			scope.sessionKey,
+		],
+	};
+}
+function stagedTables(scope: StagedChunkScope) {
+	return scope.kind === "source"
+		? { files: "source_import_files", chunks: "source_import_chunks" }
+		: { files: "hook_transcript_uploads", chunks: "hook_transcript_chunks" };
+}
+export function stagedChunkStatements(
+	scope: StagedChunkScope,
+	generation: number,
+	chunks: readonly StagedChunk[],
+): readonly DbOwnerStatement[] {
+	const table = stagedTables(scope).chunks;
+	return chunks.map((chunk) => ({
+		sql: `INSERT INTO ${table} (agent_id,file_id,generation,byte_offset,checksum,content) VALUES (?,?,?,?,?,?)`,
+		params: [
+			scope.agentId,
+			scope.fileId,
+			generation,
+			chunk.offset,
+			chunk.checksum,
+			{ type: "bytes", base64: Buffer.from(chunk.bytes).toString("base64") },
+		],
+		result: "run",
+	}));
+}
+export async function readStagedChunks(
+	scope: StagedChunkScope,
+	generation: number,
+	start: number,
+	end: number,
+): Promise<readonly StoredStagedChunk[]> {
+	const tables = stagedTables(scope),
+		filter = stagedScopeFilter(scope, "f.");
+	return dbOwnerQuery<StoredStagedChunk[]>(
+		{
+			sql: `SELECT c.byte_offset,hex(c.content) AS content,c.checksum FROM ${tables.chunks} c JOIN ${tables.files} f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE c.generation = ? AND c.byte_offset >= ? AND c.byte_offset < ? AND ${filter.sql} AND f.upload_generation = c.generation AND f.storage_state IN ('uploading','sealed','legacy') ORDER BY c.byte_offset LIMIT 7`,
+			params: [generation, start, end, ...filter.params],
+			result: "all",
+			readonly: true,
+		},
+		{ operation: "transcripts.staging.read", lane: "read" },
+	);
+}
+export async function purgeStagedChunkBatch(scope: StagedChunkScope): Promise<number> {
+	const tables = stagedTables(scope),
+		filter = stagedScopeFilter(scope, "f.");
+	const result = await dbOwnerTransaction(
+		[
+			{
+				sql: `DELETE FROM ${tables.chunks} WHERE (agent_id,file_id,generation,byte_offset) IN (SELECT agent_id,file_id,generation,byte_offset FROM ${tables.chunks} WHERE agent_id = ? AND file_id = ? AND EXISTS (SELECT 1 FROM ${tables.files} f WHERE ${filter.sql} AND f.storage_state = 'purging') LIMIT 16)`,
+				params: [scope.agentId, scope.fileId, ...filter.params],
+				result: "run",
+			},
+		],
+		{ operation: "transcripts.staging.purge", lane: "write" },
+	);
+	const row = result[0];
+	if (row === null || typeof row !== "object" || !("changes" in row) || typeof row.changes !== "number")
+		throw new Error("Invalid staging purge result");
+	return row.changes;
 }

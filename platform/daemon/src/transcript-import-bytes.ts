@@ -2,6 +2,9 @@ import { loadSourcesConfig, resolveDefaultBasePath } from "@signet/core";
 import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
 import {
 	createStagingOwner,
+	stagedChunkStatements,
+	readStagedChunks,
+	purgeStagedChunkBatch,
 	type StagedChunk,
 	type StoredStagedChunk,
 	type TranscriptUpload,
@@ -82,18 +85,7 @@ async function appendChunks(
 	digest: string,
 	chunks: readonly StagedChunk[],
 ): Promise<void> {
-	const statements = chunks.map((chunk) => ({
-		sql: "INSERT INTO source_import_chunks (agent_id,file_id,generation,byte_offset,checksum,content) VALUES (?,?,?,?,?,?)",
-		params: [
-			scope.agentId,
-			scope.fileId,
-			scope.generation,
-			chunk.offset,
-			chunk.checksum,
-			{ type: "bytes" as const, base64: Buffer.from(chunk.bytes).toString("base64") },
-		],
-		result: "run" as const,
-	}));
+	const statements = stagedChunkStatements({ ...scope, kind: "source" }, scope.generation, chunks);
 	await dbOwnerTransaction(
 		[
 			{
@@ -122,15 +114,7 @@ async function readChunks(
 	start: number,
 	end: number,
 ): Promise<readonly StoredStagedChunk[]> {
-	return await dbOwnerQuery<Array<{ byte_offset: number; content: string; checksum: string }>>(
-		{
-			sql: "SELECT c.byte_offset,hex(c.content) AS content,c.checksum FROM source_import_chunks c JOIN source_import_files f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE c.agent_id = ? AND c.file_id = ? AND c.generation = ? AND c.byte_offset >= ? AND c.byte_offset < ? AND f.job_id = ? AND f.upload_generation = c.generation AND f.storage_state IN ('uploading','sealed','legacy') ORDER BY c.byte_offset LIMIT 7",
-			params: [scope.agentId, scope.fileId, scope.generation, start, end, scope.jobId],
-			result: "all",
-			readonly: true,
-		},
-		read,
-	);
+	return readStagedChunks({ ...scope, kind: "source" }, scope.generation, start, end);
 }
 async function sealUpload(scope: TranscriptUploadScope, contentHash: string): Promise<void> {
 	await dbOwnerTransaction(
@@ -158,25 +142,7 @@ async function beginPurge(scope: Omit<TranscriptUploadScope, "generation">): Pro
 	);
 }
 async function purgeBatch(scope: Omit<TranscriptUploadScope, "generation">): Promise<number> {
-	const result = await dbOwnerTransaction(
-		[
-			{
-				sql: "DELETE FROM source_import_chunks WHERE (agent_id,file_id,generation,byte_offset) IN (SELECT agent_id,file_id,generation,byte_offset FROM source_import_chunks WHERE agent_id = ? AND file_id = ? AND EXISTS (SELECT 1 FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ? AND storage_state = 'purging') LIMIT 16)",
-				params: [scope.agentId, scope.fileId, scope.fileId, scope.jobId, scope.agentId],
-				result: "run",
-			},
-		],
-		write,
-	);
-	const resultRow = result[0];
-	if (
-		resultRow === null ||
-		typeof resultRow !== "object" ||
-		!("changes" in resultRow) ||
-		typeof resultRow.changes !== "number"
-	)
-		throw new Error("Invalid staging purge result");
-	return resultRow.changes;
+	return purgeStagedChunkBatch({ ...scope, kind: "source" });
 }
 async function finishPurge(scope: Omit<TranscriptUploadScope, "generation">): Promise<void> {
 	await dbOwnerTransaction(

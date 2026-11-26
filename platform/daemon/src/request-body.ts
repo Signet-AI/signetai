@@ -15,6 +15,7 @@ export class JsonBodyError extends Error {
 	}
 }
 export const RAW_BODY_ROUTES = [
+	{ method: "PATCH", path: "/api/hooks/session-end/uploads/:id" },
 	{ method: "PUT", path: "/api/sources/imports/:jobId/files/:fileId" },
 	{ method: "PATCH", path: "/api/sources/imports/:jobId/files/:fileId" },
 	{ method: "POST", path: "/api/sources/import", contentType: "multipart/form-data" },

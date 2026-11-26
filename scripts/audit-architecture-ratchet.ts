@@ -29,6 +29,8 @@ const SQL_OWNERS = [
 	"platform/daemon/src/memory-search.ts",
 	"platform/daemon/src/query-planner-statistics.ts",
 	"platform/daemon/src/session-transcripts.ts",
+	"platform/daemon/src/staged-upload-owner.ts",
+	"platform/daemon/src/hook-transcript-uploads.ts",
 	"platform/daemon/src/db-helpers.ts",
 	"platform/daemon/src/db-vacuum.ts",
 	"platform/daemon/src/agent-removal.ts",
@@ -421,12 +423,12 @@ function main(): void {
 					group.length > 1
 						? ` [${group.map((member) => `${member.path}=${member.head.counts[category]}`).join(", ")}]`
 						: "";
-				failures.push(`${single?.path ?? source}\t${category}\t${previous[category]} -> ${head}${detail}${members}`);
+				failures.push(`${single?.path ?? source}	${category}	${previous[category]} -> ${head}${detail}${members}`);
 			}
 		}
 	}
 	if (failures.length) {
-		console.error(`Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${failures.join("\n")}`);
+		console.error(`Architecture ratchet failed against ${base}:\nfile	category	base -> head\n${failures.join("\n")}`);
 		process.exitCode = 1;
 		return;
 	}

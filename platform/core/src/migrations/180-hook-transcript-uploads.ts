@@ -2,7 +2,7 @@ import type { MigrationDb } from "./contract";
 
 export const artifacts = {
 	tables: ["hook_transcript_uploads", "hook_transcript_chunks"],
-	indexes: ["idx_hook_transcript_upload_expiry"],
+	indexes: ["idx_hook_transcript_upload_expiry", "idx_hook_transcript_upload_state"],
 	columns: [
 		"agent_id",
 		"principal_id",
@@ -61,6 +61,7 @@ export function up(db: MigrationDb): void {
 			FOREIGN KEY(agent_id,file_id) REFERENCES hook_transcript_uploads(agent_id,id) ON DELETE CASCADE
 		) WITHOUT ROWID;
 		CREATE INDEX IF NOT EXISTS idx_hook_transcript_upload_expiry ON hook_transcript_uploads(updated_at,id);
+		CREATE INDEX IF NOT EXISTS idx_hook_transcript_upload_state ON hook_transcript_uploads(storage_state,principal_id,id);
 		CREATE TRIGGER IF NOT EXISTS hook_transcript_capacity_update AFTER UPDATE OF reserved_bytes ON hook_transcript_uploads
 		BEGIN UPDATE source_import_capacity SET reserved_bytes = reserved_bytes - OLD.reserved_bytes + NEW.reserved_bytes WHERE id = 1; END;
 		CREATE TRIGGER IF NOT EXISTS hook_transcript_capacity_delete AFTER DELETE ON hook_transcript_uploads

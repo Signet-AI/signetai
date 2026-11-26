@@ -1,3 +1,4 @@
+import { registerHookUploadRoutes } from "./hook-upload-routes";
 import { withStopAdmission } from "../stop-admission";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
@@ -2341,6 +2342,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerNotifications(app);
 	registerDirectMessageWake(app);
 	registerDirectMessageWakeRelease(app);
+	registerHookUploadRoutes(app);
 	registerSessionEnd(app);
 	registerStop(app);
 	registerSkillInvocation(app);
