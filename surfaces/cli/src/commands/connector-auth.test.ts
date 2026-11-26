@@ -453,3 +453,25 @@ test("a retained outbox can be purged after disconnect using its explicit origin
 		f.cleanup();
 	}
 });
+
+test("failed installation restores evidence behind a home-relative workspace path", async () => {
+	const f = await lifecycleFixture();
+	const home = process.env.HOME;
+	if (!home || home === "/home/nicholai") throw new Error("A disposable HOME is required");
+	const workspace = join(home, "rollback-home-workspace");
+	await mkdir(workspace, { recursive: true });
+	const source = join(workspace, "AGENTS.md");
+	await writeFile(source, "original evidence");
+	const install = spyOn(CodexConnector.prototype, "install").mockImplementation(async () => {
+		await writeFile(source, "partial install");
+		return { success: false, message: "fixture failure", filesWritten: [source] };
+	});
+	try {
+		expect(await f.run(["connector", "rotate", "codex", "--path", "~/rollback-home-workspace"])).toBe(1);
+		expect(await readFile(source, "utf8")).toBe("original evidence");
+	} finally {
+		install.mockRestore();
+		await rm(workspace, { recursive: true, force: true });
+		f.cleanup();
+	}
+});

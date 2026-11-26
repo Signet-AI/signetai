@@ -9,7 +9,7 @@ import {
 	withFileLock,
 } from "../../../../libs/sdk/src/node/storage.js";
 import { connectorRegistryKey } from "../lib/connector-registry.js";
-import { attemptAsync } from "@signet/core";
+import { attemptAsync, expandHome } from "@signet/core";
 import type { Command } from "commander";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
@@ -185,7 +185,8 @@ async function installConnector(raw: string, options: ConnectorInstallOptions, d
 		throw new Error("The connector key is bound to a different agent");
 	if (provision && !manual && (identity.credential?.kind !== "session" || !identity.credential.deviceId))
 		throw new SignetUnauthorizedError("missing_credential");
-	const path = options.path ?? deps.agentsDir;
+	const path = expandHome(options.path ?? deps.agentsDir);
+	if (!path.trim()) throw new Error("A non-empty workspace path is required");
 	const restoreInstallation = await snapshotInstallation([...installer.getInstallPaths(), join(path, "AGENTS.md")]);
 	const previousSecret = previous?.keyFile ? await readKeyFile(previous.keyFile) : undefined;
 	let issued: IssuedKey | undefined;
