@@ -16,13 +16,18 @@ export async function dreamOperation(
 	evidence: Evidence[],
 ): Promise<Record<string, unknown>> {
 	const endpoint = "/api/dream/tools/apply_ontology_ops";
-	const owner = [...(fixture.users?.values() ?? [])].find((user) => user.agentId === agentId);
-	const credential = agentId === "default" ? fixture.admin : (owner?.session ?? fixture.admin);
-	const reply = await request(fixture.daemon.origin, endpoint, credential, "POST", {
+	const user =
+		[...(fixture.users?.values() ?? [])].find((user) => user.agentId === agentId) ??
+		(agentId === fixture.engAgent ? fixture.users?.get("alice") : undefined);
+	assert(
+		fixture.users === undefined || user,
+		"Dreaming fixture must use an actor permitted to act as the target agent",
+	);
+	const reply = await request(fixture.daemon.origin, endpoint, user?.session ?? fixture.admin, "POST", {
 		agentId,
 		input: { agentId, operations: [{ operation, payload, evidence, reason: record(payload).reason }] },
 	});
-	assert.equal(reply.status, 200, `POST ${endpoint}: ${operation}: ${JSON.stringify(reply.body)}`);
+	assert(reply.status >= 200 && reply.status < 300, `${operation}: ${JSON.stringify(reply.body)}`);
 	const body = success(reply, `POST ${endpoint}: ${operation}`);
 	assert.equal(body.ok, true, `${endpoint}: ${operation} failed`);
 	assert(Array.isArray(body.items) && body.items.length === 1, `${endpoint}: expected exactly one operation result`);

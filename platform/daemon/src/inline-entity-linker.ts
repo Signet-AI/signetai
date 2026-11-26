@@ -1,4 +1,6 @@
-import type { ReadDb, WriteDb } from "./db-accessor";
+import { dreamingEvidenceRecordInDb, dreamingReadScopeInDb } from "./classification-owner";
+import { readScopeSql } from "./read-scope";
+import { prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 const SKIP_WORDS = new Set([
 	"the",
@@ -202,25 +204,34 @@ export function extractCandidateNames(text: string): string[] {
 	return [...new Set(names)];
 }
 
-function findKnownEntityId(db: ReadDb, name: string, agentId: string): string {
+function findKnownEntityId(db: ReadDb, name: string, agentId: string, compartmentId: number | null): string {
+	const scope = readScopeSql("entities", dreamingReadScopeInDb(db, agentId, compartmentId), { visibility: null });
 	const canonical = name.trim().toLowerCase().replace(/\s+/g, " ");
 	if (canonical.length < 3) return "";
 
-	const existing = db
-		.prepare(
-			`SELECT id FROM entities
-			 WHERE (canonical_name = ? OR name = ?) AND agent_id = ?
-			 LIMIT 1`,
-		)
-		.get(canonical, name, agentId) as { id: string } | undefined;
+	const existing = prepareTypedStatement<{ id: string }>(
+		db,
+		`SELECT id FROM entities
+		 WHERE (canonical_name = ? OR name = ?) AND agent_id = ? ${scope.sql}
+		 ORDER BY (compartment_id IS ?) DESC, (compartment_id IS NULL) DESC, id
+		 LIMIT 1`,
+	).get(canonical, name, agentId, ...scope.args, compartmentId);
 
 	return existing?.id ?? "";
 }
 
-function resolveKnownEntity(db: WriteDb, name: string, agentId: string, now: string): string {
-	const entityId = findKnownEntityId(db, name, agentId);
+function resolveKnownEntity(
+	db: WriteDb,
+	name: string,
+	agentId: string,
+	now: string,
+	compartmentId: number | null,
+): string {
+	const entityId = findKnownEntityId(db, name, agentId, compartmentId);
 	if (!entityId) return "";
-	db.prepare("UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?").run(now, entityId);
+	db.prepare(
+		"UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ? AND compartment_id IS ? AND person_user_id IS NULL",
+	).run(now, entityId, compartmentId);
 	return entityId;
 }
 
@@ -231,24 +242,32 @@ export interface LinkResult {
 	readonly attributes: number;
 }
 export function previewMemoryEntityLinks(db: ReadDb, memoryId: string, content: string, agentId: string): LinkResult {
+	const memory = dreamingEvidenceRecordInDb(db, agentId, { kind: "memory", id: memoryId });
+	if (!memory) throw new Error("memory_scope_missing");
+	const compartmentId = memory.compartment_id;
 	const names = extractCandidateNames(content);
 	if (names.length === 0) return { linked: 0, entityIds: [], aspects: 0, attributes: 0 };
 
 	let linked = 0;
 	const entityIds: string[] = [];
 	for (const name of names) {
-		const entityId = findKnownEntityId(db, name, agentId);
+		const entityId = findKnownEntityId(db, name, agentId, compartmentId);
 		if (!entityId) continue;
 		entityIds.push(entityId);
 		const existingMention = db
-			.prepare("SELECT 1 FROM memory_entity_mentions WHERE memory_id = ? AND entity_id = ? LIMIT 1")
-			.get(memoryId, entityId);
+			.prepare(
+				"SELECT 1 FROM memory_entity_mentions WHERE memory_id = ? AND entity_id = ? AND compartment_id IS ? LIMIT 1",
+			)
+			.get(memoryId, entityId, compartmentId);
 		if (!existingMention) linked++;
 	}
 
 	return { linked, entityIds, aspects: 0, attributes: 0 };
 }
 export function linkMemoryToEntities(db: WriteDb, memoryId: string, content: string, agentId: string): LinkResult {
+	const memory = dreamingEvidenceRecordInDb(db, agentId, { kind: "memory", id: memoryId });
+	if (!memory) throw new Error("memory_scope_missing");
+	const compartmentId = memory.compartment_id;
 	const names = extractCandidateNames(content);
 	if (names.length === 0) return { linked: 0, entityIds: [], aspects: 0, attributes: 0 };
 
@@ -257,17 +276,17 @@ export function linkMemoryToEntities(db: WriteDb, memoryId: string, content: str
 	const entityIds: string[] = [];
 
 	for (const name of names) {
-		const entityId = resolveKnownEntity(db, name, agentId, now);
+		const entityId = resolveKnownEntity(db, name, agentId, now, compartmentId);
 		if (!entityId) continue;
 		entityIds.push(entityId);
 
 		const ins = db
 			.prepare(
 				`INSERT OR IGNORE INTO memory_entity_mentions
-			 (memory_id, entity_id, mention_text, confidence, created_at)
-			 VALUES (?, ?, ?, 0.8, ?)`,
+			 (memory_id, entity_id, mention_text, confidence, created_at, agent_id, compartment_id)
+			 VALUES (?, ?, ?, 0.8, ?, ?, ?)`,
 			)
-			.run(memoryId, entityId, name, now);
+			.run(memoryId, entityId, name, now, agentId, compartmentId);
 		if (countChanges(ins) > 0) linked++;
 	}
 

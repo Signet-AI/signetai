@@ -1,13 +1,39 @@
 import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import { completeDerivedMemoryCitationsInTx } from "./db-helpers";
+import { readScopeSql } from "./read-scope";
+import {
+	assertDreamingMutationLabelInDb,
+	dreamingEvidenceRecordInDb,
+	evidenceCitationInDb,
+	recordSemanticCitationsInTx,
+	type SemanticEvidenceCitation,
+	dreamingReadScopeInDb,
+	dreamingPassPartitionInDb,
+	type DreamingPartition,
+} from "./classification-owner";
 
 const SEMANTIC_PREMISE_KIND = "ontology_claim";
 const EPISODIC_SOURCE_KINDS = new Set(["memory", "artifact", "transcript", "summary"]);
 
 function validateSemanticPremise(db: WriteDb, agentId: string, sourceId: string): void {
-	const row = db
-		.prepare(
-			`SELECT attr.agent_id AS attribute_agent_id,
+	const row = prepareTypedStatement<{
+		attribute_agent_id: string | null;
+		attribute_status: string | null;
+		attribute_superseded_by: string | null;
+		attribute_archived_at: string | null;
+		aspect_agent_id: string | null;
+		aspect_status: string | null;
+		aspect_archived_at: string | null;
+		entity_agent_id: string | null;
+		entity_status: string | null;
+		entity_archived_at: string | null;
+		memory_agent_id: string | null;
+		memory_is_deleted: number | null;
+		memory_stale_at: string | null;
+		memory_superseded_by: string | null;
+	}>(
+		db,
+		`SELECT attr.agent_id AS attribute_agent_id,
 			        attr.status AS attribute_status,
 			        attr.superseded_by AS attribute_superseded_by,
 			        attr.archived_at AS attribute_archived_at,
@@ -26,26 +52,7 @@ function validateSemanticPremise(db: WriteDb, agentId: string, sourceId: string)
 			 JOIN entities entity ON entity.id = aspect.entity_id
 			 LEFT JOIN memories memory ON memory.id = attr.memory_id
 			 WHERE attr.id = ?`,
-		)
-		.get(sourceId) as
-		| {
-				attribute_agent_id: string | null;
-				attribute_status: string | null;
-				attribute_superseded_by: string | null;
-				attribute_archived_at: string | null;
-				aspect_agent_id: string | null;
-				aspect_status: string | null;
-				aspect_archived_at: string | null;
-				entity_agent_id: string | null;
-				entity_status: string | null;
-				entity_archived_at: string | null;
-				memory_agent_id: string | null;
-				memory_is_deleted: number | null;
-				memory_stale_at: string | null;
-				memory_superseded_by: string | null;
-		  }
-		| null
-		| undefined;
+	).get(sourceId);
 	if (
 		row == null ||
 		row.attribute_agent_id !== agentId ||
@@ -75,12 +82,27 @@ function validateSource(db: WriteDb, agentId: string, sourceKind: string, source
 	if (!EPISODIC_SOURCE_KINDS.has(sourceKind)) {
 		throw new Error(`Derived memory provenance source kind is not supported: ${sourceKind}`);
 	}
+	if (!dreamingEvidenceRecordInDb(db, agentId, derivedSourceCitation(sourceKind, sourceId)))
+		throw new Error(`Derived memory provenance source is not in the authorized agent scope: ${sourceId}`);
 }
+function derivedSourceCitation(sourceKind: string, sourceId: string): SemanticEvidenceCitation {
+	const kind = sourceKind === SEMANTIC_PREMISE_KIND ? "attribute" : sourceKind;
+	if (kind !== "memory" && kind !== "artifact" && kind !== "transcript" && kind !== "summary" && kind !== "attribute")
+		throw new Error("Unsupported citation kind");
+	return { kind, id: sourceId };
+}
+
 export function validateDerivedMemorySourceInTx(
 	db: WriteDb,
-	input: { readonly agentId: string; readonly sourceKind: string; readonly sourceId: string },
+	input: { readonly agentId: string; readonly sourceKind: string; readonly sourceId: string; readonly passId?: string },
 ): void {
 	validateSource(db, input.agentId, input.sourceKind, input.sourceId);
+	if (input.passId !== undefined)
+		evidenceCitationInDb(
+			db,
+			dreamingPassPartitionInDb(db, input.passId, input.agentId),
+			derivedSourceCitation(input.sourceKind, input.sourceId),
+		);
 }
 export interface DerivedMemorySource {
 	readonly sourceKind: string;
@@ -97,6 +119,7 @@ export function linkDerivedMemorySourcesInTx(
 	db: WriteDb,
 	input: {
 		readonly derivedMemoryId: string;
+		readonly passId?: string;
 		readonly agentId: string;
 		readonly sources: readonly DerivedMemorySource[];
 		readonly createdAt: string;
@@ -105,22 +128,51 @@ export function linkDerivedMemorySourcesInTx(
 	const derivedMemoryId = required(input.derivedMemoryId, "derivedMemoryId");
 	const agentId = required(input.agentId, "agentId");
 	const createdAt = required(input.createdAt, "createdAt");
+	const sources = input.sources.map((source) => ({
+		...source,
+		sourceKind: required(source.sourceKind, "sourceKind"),
+		sourceId: required(source.sourceId, "sourceId"),
+	}));
+	const target = dreamingEvidenceRecordInDb(db, agentId, { kind: "memory", id: derivedMemoryId });
+	if (!target) throw new Error("Derived memory provenance target is not in the authorized agent scope");
+	const partition =
+		input.passId !== undefined
+			? dreamingPassPartitionInDb(db, input.passId, agentId)
+			: { agentId, compartmentId: target.compartment_id };
+	assertDreamingMutationLabelInDb(db, "memories", derivedMemoryId, partition);
+	const citations: SemanticEvidenceCitation[] = [];
+	for (const source of sources) {
+		validateDerivedMemorySourceInTx(db, { agentId, sourceKind: source.sourceKind, sourceId: source.sourceId });
+		const evidence = derivedSourceCitation(source.sourceKind, source.sourceId);
+		evidenceCitationInDb(db, partition, evidence);
+		citations.push(evidence);
+	}
 	const seen = new Set<string>();
 	const insert = db.prepare(
 		`INSERT OR IGNORE INTO derived_memory_sources
-		 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at, compartment_id, dreaming_pass_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
-	for (const source of input.sources) {
-		const sourceKind = required(source.sourceKind, "sourceKind");
-		const sourceId = required(source.sourceId, "sourceId");
+	for (const source of sources) {
+		const sourceKind = source.sourceKind;
+		const sourceId = source.sourceId;
 		const key = `${sourceKind}\u0000${sourceId}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
 		validateDerivedMemorySourceInTx(db, { agentId, sourceKind, sourceId });
-		insert.run(derivedMemoryId, sourceKind, sourceId, source.sourcePath?.trim() || null, agentId, createdAt);
+		insert.run(
+			derivedMemoryId,
+			sourceKind,
+			sourceId,
+			source.sourcePath?.trim() || null,
+			agentId,
+			createdAt,
+			partition.compartmentId,
+			input.passId ?? null,
+		);
 	}
 	completeDerivedMemoryCitationsInTx(db, derivedMemoryId, agentId);
+	recordSemanticCitationsInTx(db, { kind: "memory", id: derivedMemoryId, partition, evidence: citations });
 }
 export { citationKind } from "./db-helpers";
 export function markDerivedMemoriesStaleForSourceInTx(
@@ -132,15 +184,21 @@ export function markDerivedMemoriesStaleForSourceInTx(
 		readonly staleAt: string;
 		readonly derivedMemoryId?: string;
 		readonly preservePinned?: boolean;
+		readonly partition?: DreamingPartition;
+		readonly passId?: string;
 	},
 ): readonly string[] {
 	const sourceKind = required(input.sourceKind, "sourceKind");
 	const sourceId = required(input.sourceId, "sourceId");
 	const agentId = required(input.agentId, "agentId");
 	const staleAt = required(input.staleAt, "staleAt");
-	const ids = db
-		.prepare(
-			`SELECT dms.derived_memory_id AS id
+	const partition = input.passId !== undefined ? dreamingPassPartitionInDb(db, input.passId, agentId) : input.partition;
+	const sourceScope = partition
+		? readScopeSql("dms", dreamingReadScopeInDb(db, agentId, partition.compartmentId), { visibility: null })
+		: { sql: "", args: [] };
+	const ids = prepareTypedStatement<{ id: string }>(
+		db,
+		`SELECT dms.derived_memory_id AS id
 			 FROM derived_memory_sources dms
 			 JOIN memories derived ON derived.id = dms.derived_memory_id
 			 WHERE dms.agent_id = ?
@@ -148,14 +206,19 @@ export function markDerivedMemoriesStaleForSourceInTx(
 			   AND dms.source_id = ?
 			   AND derived.agent_id = ?
 			   AND derived.is_deleted = 0
-			   AND derived.stale_at IS NULL
+			   AND derived.stale_at IS NULL ${sourceScope.sql}
 			   ${input.derivedMemoryId ? "AND derived.id = ?" : ""}
 			   ${input.preservePinned ? "AND derived.pinned = 0" : ""}`,
-		)
-		.all(agentId, sourceKind, sourceId, agentId, ...(input.derivedMemoryId ? [input.derivedMemoryId] : [])) as Array<{
-		id: string;
-	}>;
+	).all(
+		agentId,
+		sourceKind,
+		sourceId,
+		agentId,
+		...sourceScope.args,
+		...(input.derivedMemoryId ? [input.derivedMemoryId] : []),
+	);
 	if (ids.length === 0) return [];
+	if (partition) for (const row of ids) assertDreamingMutationLabelInDb(db, "memories", row.id, partition);
 	db.prepare(
 		`UPDATE memories
 		 SET stale_at = ?

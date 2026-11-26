@@ -1172,6 +1172,10 @@ pass sees fewer scope sets: compaction does not merge for a share.
 ### POST /api/dream/trigger
 
 Manually trigger a dreaming pass. Requires `admin` permission.
+An optional `compartmentId` selects its classification partition; omitting it or
+passing `null` selects unclassified evidence. A classified trigger requires the
+caller to belong to the entire partition audience and to have unrestricted project
+access. A partition outside the caller's audience is rejected before a pass is admitted.
 Returns `202 Accepted` immediately and runs the pass in the background
 (passes can take up to several minutes on large graphs).
 The daemon keeps the worker available for manual triggers when automatic
@@ -1196,8 +1200,42 @@ and leave out agents with no backlog.
 It never starts more passes than `worker.maxLlmConcurrency` allows, because a
 pass waiting for a shared LLM permit would spend its own timeout waiting. The
 daemon allows that many Pi agent workers plus three for retained dashboard chats.
-Each pass may read and write only its own group's agents, and an agent is in at
-most one running pass. The first pass starts immediately; the other groups start
+Each pass may read and write only its own group's agents. Admission is partitioned
+by agent and classification compartment. By default, one pass runs per partition;
+`memory.dreaming.maxPassesPerScope` (1–16, default 1) allows extra incremental
+passes when a deep backlog and spare global inference slots permit them. Concurrent
+passes lease whole evidence sources through the database owner, receive disjoint
+queue pages, and cannot settle evidence held by a peer. Expired leases and leases
+from failed passes become available again. One shared pass handles a partition's
+attention queue; its peers focus on evidence.
+
+A pass has one classification label. Its queue contains only that exact label;
+historical evidence and graph reads can also use unclassified material and labels
+that are subsets of its own. New derivations inherit the pass label. Renaming,
+archiving, merging, superseding, or deleting another label's rows is rejected with
+`compartment_mismatch` before the operation changes anything. Classification changes
+invalidate running pass authority, so stale model context cannot authorize a later
+write. In an organization using personal agents, the organization agent is a read
+aggregator and does not Dream; with the single-agent model it Dreams normally.
+
+Connector-bound evidence identifies the human speaker and a person entity in the
+pass's agent. Account and grant management maintain one structural person entity
+per authorized human in that agent, with disambiguated names when needed. Dreaming
+never creates, renames, merges, or archives these identities. An ordinary entity
+with the same name cannot block account creation, grants, or identity renames.
+A `create_entity` request for an existing person’s name resolves to that person
+without changing either entity; new claims attach to the person. Renaming an ordinary entity to a
+person’s name is rejected with `person_identity_immutable`. Self-disclosures are
+filed under the same person across classification partitions, even when a person
+never says their name. The identity remains unclassified; its claims, aliases, and
+other derived children retain their own pass label and audience. Missing identity
+state defers processing with `person_identity_missing`, rather than inventing a
+replacement person. Imported documents and conversations retain their external authors.
+History, tool traces, runbooks, and curated head streams retain their pass label.
+Only the unclassified curated head is projected to public `MEMORY.md`; a classified
+head remains in its scoped database stream.
+
+The first pass starts immediately; the other groups start
 only after it completes a tool call, so an unavailable provider is not called once
 per group. The response's `passId` is the first pass. `worker.activePasses` in
 `GET /api/dream/status` lists every running pass that includes the requested

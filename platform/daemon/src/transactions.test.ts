@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
 import type { WriteDb } from "./db-accessor";
 import { beginEmbeddingIndexBuild, ensureEmbeddingIndexState } from "./embedding-index-state";
-import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "./transactions";
+import { insertHistoryEvent, txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "./transactions";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -136,6 +136,28 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 				)
 				.get("authored"),
 		).toEqual({ actor_user_id: "usr_editor", actor_credential: "session:ses_editor" });
+	});
+
+	it("requires explicit workspace audit scope and never substitutes it for pass history", () => {
+		const input = {
+			memoryId: "system",
+			event: "none",
+			oldContent: null,
+			newContent: null,
+			changedBy: "daemon",
+			reason: "Repair",
+			metadata: null,
+			createdAt: "now",
+		};
+		expect(() => insertHistoryEvent(asWriteDb(db), input)).toThrow("history_memory_scope_missing");
+		insertHistoryEvent(asWriteDb(db), { ...input, workspaceAudit: true });
+		expect(db.query("SELECT memory_id,agent_id,compartment_id FROM memory_history").all()).toEqual([
+			{ memory_id: "system", agent_id: null, compartment_id: null },
+		]);
+		expect(() =>
+			insertHistoryEvent(asWriteDb(db), { ...input, workspaceAudit: true, passId: "pass", agentId: "default" }),
+		).toThrow("invalid_workspace_audit_scope");
+		expect(db.query("SELECT count(*) AS n FROM memory_history").get()).toEqual({ n: 1 });
 	});
 
 	it("updates content + embedding and writes history in one transaction closure", () => {

@@ -1,3 +1,4 @@
+import { localPrincipal } from "./auth/principal";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, test } from "bun:test";
@@ -75,6 +76,7 @@ async function handleUserPromptSubmit(
 	const policy = await (overrides?.getAgentScope ?? getAgentScope)(agentId);
 	return await scopedHandleUserPromptSubmit(req, overrides, {
 		...scope,
+		principal: localPrincipal(),
 		readScope: localAllReadScope(reachForPolicy(agentId, policy)),
 	});
 }

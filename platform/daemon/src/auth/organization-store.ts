@@ -1,12 +1,34 @@
 import { createHash, pbkdf2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { DbOwnerStatement } from "../db-owner-protocol";
+import { prepareTypedStatement, type ReadDb } from "../db-accessor";
 import { dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "../db-owner-runtime";
 import { type AgentRecord, bindPrincipalAccess, principalAccess } from "./agent-access";
 import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 import { appendRefreshRetry, replayRefreshRetry } from "./refresh-retry";
 import type { Permission, TokenRole } from "./types";
+
+export function organizationClaimedInDb(db: ReadDb): boolean {
+	return (
+		prepareTypedStatement<{ claimed_at: string | null }>(db, "SELECT claimed_at FROM organization WHERE id=1").get()
+			?.claimed_at != null
+	);
+}
+
+export function structuralPersonIdentityInDb(db: ReadDb, agentId: string, userId: string) {
+	return prepareTypedStatement<{
+		id: string;
+		display_name: string;
+		person_id: string | null;
+		person_name: string | null;
+	}>(
+		db,
+		`SELECT u.id,u.display_name,p.id AS person_id,p.name AS person_name FROM users u
+   LEFT JOIN entities p ON p.person_user_id=u.id AND p.agent_id=? AND p.compartment_id IS NULL
+   WHERE u.id=?`,
+	).get(agentId, userId);
+}
 
 export const statement = ownerStatement;
 export function organizationQuery<T>(s: DbOwnerStatement): Promise<T> {

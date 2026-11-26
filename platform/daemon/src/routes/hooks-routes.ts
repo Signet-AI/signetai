@@ -687,6 +687,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
 			try {
 				result = await handleUserPromptSubmit({ ...body, author: c.get("author") }, undefined, {
+					principal: c.get("principal"),
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
 					readScope: await resolveHookReadScope(c, agentId, { useDefaultReadAgent: true }),
 				});

@@ -1,7 +1,9 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runMigrations } from "../../core/src/migrations";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	ZERO_ACTIVE_ATTRIBUTE_ENTITIES_SQL,
@@ -216,5 +218,115 @@ describe("knowledge graph hygiene report", () => {
 		);
 		expect(candidates.some((candidate) => candidate.details.reason === "attribute_over_cap")).toBe(false);
 		expect(candidates.some((candidate) => candidate.details.reason === "aspect_over_cap")).toBe(false);
+	});
+});
+
+describe("Dreaming hygiene exact compartments", () => {
+	test("preserves structural people while ordinary external people remain hygiene candidates", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			db.exec(
+				"INSERT INTO entities(id, agent_id, name, canonical_name, entity_type, person_user_id, mentions, created_at, updated_at) VALUES ('structural', 'default', 'Alice', 'alice', 'person', 'usr_alice', 0, datetime('now'), datetime('now')), ('external', 'default', 'External Author', 'external author', 'person', NULL, 0, datetime('now'), datetime('now'))",
+			);
+			const candidates = getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 100 });
+			expect(candidates.some((candidate) => candidate.subjectRef === "entity:structural")).toBe(false);
+			expect(candidates.some((candidate) => candidate.subjectRef === "entity:external")).toBe(true);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("hidden rows cannot change candidates, caps, duplicate membership or bounded selection", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			db.exec(
+				"INSERT INTO compartments (id, key, created_at) VALUES (1, 'private', datetime('now')), (2, 'other', datetime('now'))",
+			);
+			const seed = (prefix: string, compartmentId: number | null): void => {
+				for (const suffix of ["first", "second", "husk"]) {
+					db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at, compartment_id)
+					 VALUES (?, ?, ?, 'project', 'default', 5, '2026-01-01', '2026-01-01', ?)`).run(
+						`${prefix}${suffix}`,
+						`${prefix}${suffix}`,
+						suffix === "husk" ? "husk" : "duplicate",
+						compartmentId,
+					);
+				}
+				for (const suffix of ["general", "extra"]) {
+					db.prepare(`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, created_at, updated_at, compartment_id)
+					 VALUES (?, ?, 'default', ?, ?, '2026-01-01', '2026-01-01', ?)`).run(
+						`${prefix}${suffix}`,
+						`${prefix}first`,
+						suffix,
+						suffix,
+						compartmentId,
+					);
+				}
+				for (let index = 0; index < 2; index++) {
+					db.prepare(`INSERT INTO entity_attributes (id, aspect_id, agent_id, kind, content, normalized_content, status, claim_key, created_at, updated_at, compartment_id)
+					 VALUES (?, ?, 'default', 'attribute', 'claim', 'claim', 'active', '', '2026-01-01', '2026-01-01', ?)`).run(
+						`${prefix}claim${index}`,
+						`${prefix}general`,
+						compartmentId,
+					);
+				}
+				db.prepare(`INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, reason, status, created_at, updated_at, compartment_id)
+				 VALUES (?, ?, ?, 'default', 'related_to', 0.2, 'generic', 'active', '2026-01-01', '2026-01-01', ?)`).run(
+					`${prefix}link`,
+					`${prefix}first`,
+					`${prefix}second`,
+					compartmentId,
+				);
+			};
+			const caps = { maxAspectsPerEntity: 1, maxAttributesPerAspect: 1 };
+			seed("visible-", null);
+			const baseline = getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 100, caps });
+			const bounded = getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 1, caps });
+			expect(baseline.map((candidate) => candidate.details.reason)).toEqual(
+				expect.arrayContaining([
+					"attribute_over_cap",
+					"aspect_over_cap",
+					"zero_active_attributes",
+					"missing_claim_key",
+					"duplicate_canonical_name",
+					"generic_related_to",
+				]),
+			);
+			seed("hidden-", 1);
+			const classified = getDreamingHygieneCandidatesInDb(db, {
+				agentId: "default",
+				limit: 100,
+				caps,
+				compartmentId: 1,
+			});
+			expect(classified).toEqual(
+				baseline.map((candidate) => ({
+					...candidate,
+					subjectRef: candidate.subjectRef.replaceAll("visible-", "hidden-"),
+					details:
+						candidate.details.reason === "duplicate_canonical_name"
+							? expect.objectContaining({ count: "2", reason: "duplicate_canonical_name" })
+							: Object.fromEntries(
+									Object.entries(candidate.details).map(([key, value]) => [
+										key,
+										value.replaceAll("visible-", "hidden-"),
+									]),
+								),
+				})),
+			);
+			seed("other-", 2);
+			db.exec(
+				"UPDATE entity_aspects SET entity_id = 'visible-husk' WHERE id = 'other-general'; UPDATE entity_attributes SET aspect_id = 'visible-general' WHERE id = 'other-claim1'; UPDATE entity_dependencies SET target_entity_id = 'visible-first' WHERE id = 'other-link'",
+			);
+			expect(getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 100, caps })).toEqual(baseline);
+			expect(getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 1, caps })).toEqual(bounded);
+			expect(getDreamingHygieneCandidatesInDb(db, { agentId: "default", limit: 100, caps, compartmentId: 1 })).toEqual(
+				classified,
+			);
+		} finally {
+			db.close();
+		}
 	});
 });

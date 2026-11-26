@@ -63,5 +63,15 @@
 		"path": "platform/daemon/src/test-support/projection-query.test.ts",
 		"reason": "Retire the L3 projection-only helper after projection ownership transferred to L2.",
 		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/pipeline/dreaming-scope.ts",
+		"reason": "Classification scope, pass fences and derivation labels belong to the existing classification owner.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/pipeline/dreaming-graph-owner.ts",
+		"reason": "Keep Dreaming graph SQL in its existing capability owner, not a separate ownership exception.",
+		"retiredIn": "2026-11-25"
 	}
 ]

@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ReadDb, WriteDb } from "../db-accessor";
+import { compartmentFor, compartmentForWrite } from "@signet/core";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "../classification-owner";
+import { prepareTypedStatement, type ReadDb, type WriteDb } from "../db-accessor";
 import { type EpisodicSourceKind, type EpisodicSourceRecord, readEpisodicSource } from "../episodic-sources";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import { DREAMING_ATTENTION_OPERATIONS } from "./dreaming-operation-contract";
 
 export interface DreamingEvidenceDelivery {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly kind: EpisodicSourceKind;
 	readonly id: string;
 	readonly capturedAt: string;
@@ -65,6 +68,11 @@ function sourceRef(value: string): { readonly kind: EpisodicSourceKind; readonly
 }
 export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonly DreamingEvidenceDelivery[] {
 	if (!tableExists(db, "dreaming_tool_calls")) return [];
+	const pass = prepareTypedStatement<{ compartment_id: number | null; agent_id: string; scope_key: string | null }>(
+		db,
+		"SELECT agent_id,scope_key,compartment_id FROM dreaming_passes WHERE id=?",
+	).get(passId);
+	if (!pass) return [];
 	const rows = db
 		.prepare(
 			`SELECT input_json AS inputJson, output_json AS outputJson
@@ -84,7 +92,13 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 		const request = record(input);
 		const agentId = text(request?.agentId);
 		const data = record(output);
-		if (!agentId || data?.ok !== true || !Array.isArray(data.items)) return [];
+		if (
+			!agentId ||
+			!(pass.scope_key || pass.agent_id).split(",").includes(agentId) ||
+			data?.ok !== true ||
+			!Array.isArray(data.items)
+		)
+			return [];
 		const queue =
 			(typeof request?.query !== "string" || request.query.trim() === "") &&
 			request?.since === undefined &&
@@ -127,6 +141,7 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 			return [
 				{
 					agentId,
+					compartmentId: pass.compartment_id,
 					kind: parsed.kind,
 					id: parsed.id,
 					capturedAt,
@@ -278,7 +293,14 @@ export function verifiedDreamingEvidenceDelivery(
 	db: ReadDb,
 	delivery: DreamingEvidenceDelivery,
 ): EpisodicSourceRecord | null {
-	const source = readEpisodicSource(db, { agentId: delivery.agentId, from: `${delivery.kind}:${delivery.id}` });
+	const label = delivery.compartmentId ?? null;
+	const source = readEpisodicSource(db, {
+		agentId: delivery.agentId,
+		from: `${delivery.kind}:${delivery.id}`,
+		readScope: dreamingReadScopeInDb(db, delivery.agentId, label),
+		preferredCompartment: label,
+		...(delivery.queue ? { exactCompartment: label } : {}),
+	});
 	if (
 		source === null ||
 		source.kind !== delivery.kind ||
@@ -422,6 +444,11 @@ function persistedEvidenceReviews(
 	deliveries: readonly DreamingEvidenceDelivery[],
 ): readonly ReviewedRange[] {
 	if (!tableExists(db, "dreaming_tool_calls")) return [];
+	const pass = prepareTypedStatement<{ agent_id: string; scope_key: string | null }>(
+		db,
+		"SELECT agent_id,scope_key FROM dreaming_passes WHERE id=?",
+	).get(passId);
+	if (!pass) return [];
 	const rows = db
 		.prepare(
 			`SELECT input_json AS inputJson, output_json AS outputJson
@@ -442,7 +469,13 @@ function persistedEvidenceReviews(
 		}
 		const agentId = text(record(input)?.agentId);
 		const data = record(output);
-		if (!agentId || data?.ok !== true || !Array.isArray(data.items)) return [];
+		if (
+			!agentId ||
+			!(pass.scope_key || pass.agent_id).split(",").includes(agentId) ||
+			data?.ok !== true ||
+			!Array.isArray(data.items)
+		)
+			return [];
 		return data.items.flatMap((item): ReviewedRange[] => {
 			const row = record(item);
 			const ref = text(row?.sourceRef);
@@ -526,12 +559,15 @@ export function recordDreamingEvidenceConsumptionInTx(
 	},
 ): void {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return;
+	const partition = dreamingPassPartitionInDb(db, params.passId);
+	const label = partition.compartmentId;
 	const deliveries = persistedEvidenceDeliveries(db, params.passId);
 	const revisions = new Map<
 		string,
 		{ readonly delivery: DreamingEvidenceDelivery; readonly ranges: Array<readonly [number, number]>; queued: boolean }
 	>();
 	for (const delivery of deliveries) {
+		dreamingPassPartitionInDb(db, params.passId, delivery.agentId);
 		const key = revisionKey(delivery);
 		const entry = revisions.get(key) ?? { delivery, ranges: [], queued: false };
 		entry.queued ||= delivery.queue;
@@ -551,15 +587,16 @@ export function recordDreamingEvidenceConsumptionInTx(
 		if (verifiedDreamingEvidenceDelivery(db, delivery) === null) continue;
 		revisions.get(revisionKey(delivery))?.ranges.push([delivery.start, end] as const);
 	}
-	const select = db.prepare(
+	const select = prepareTypedStatement<{ deliveredOffset: number; stalledPasses: number }>(
+		db,
 		`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses FROM dreaming_evidence_consumption
-		 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+		 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ? AND compartment_id IS ?`,
 	);
 	const advance = db.prepare(
 		`INSERT INTO dreaming_evidence_consumption
-		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'review', 0)
-		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision) DO UPDATE SET
+		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'review', 0, ?)
+		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, COALESCE(compartment_id,0)) DO UPDATE SET
 		   delivered_offset = excluded.delivered_offset,
 		   source_length = excluded.source_length,
 		   pass_id = excluded.pass_id,
@@ -569,17 +606,19 @@ export function recordDreamingEvidenceConsumptionInTx(
 	);
 	const stall = db.prepare(
 		`INSERT INTO dreaming_evidence_consumption
-		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
-		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now'), 'review', 1)
-		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision) DO UPDATE SET
-		   stalled_passes = dreaming_evidence_consumption.stalled_passes + 1`,
+		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now'), 'review', 1, ?)
+		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, COALESCE(compartment_id,0)) DO UPDATE SET
+		   stalled_passes = dreaming_evidence_consumption.stalled_passes + 1,
+ updated_at = excluded.updated_at`,
 	);
 	const attention = tableExists(db, "dreaming_attention");
 	const raiseStall = db.prepare(
-		`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
-		 VALUES (?, ?, 'evidence_requeue', ?, ?, 60)
-		 ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
+		`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority, compartment_id, dreaming_pass_id)
+		 VALUES (?, ?, 'evidence_requeue', ?, ?, 60, ?, ?)
+		 ON CONFLICT(agent_id, kind, subject_ref, COALESCE(compartment_id,0)) DO UPDATE SET
 		   details_json = excluded.details_json,
+		   dreaming_pass_id = excluded.dreaming_pass_id,
 		   priority = MAX(dreaming_attention.priority, excluded.priority),
 		   generation = dreaming_attention.generation + 1,
 		   resolved_at = NULL,
@@ -605,7 +644,7 @@ export function recordDreamingEvidenceConsumptionInTx(
 			sourceIdentity(source),
 			sourceRevision(source),
 		] as const;
-		const row = select.get(...identity) as { deliveredOffset: number; stalledPasses: number } | null;
+		const row = select.get(...identity, label);
 		const current = Math.max(0, row?.deliveredOffset ?? 0);
 		const reviewedEnd = Math.min(extendDeliveredOffset(current, ranges), delivery.length);
 		const next =
@@ -616,12 +655,12 @@ export function recordDreamingEvidenceConsumptionInTx(
 				: reviewedEnd;
 		const ref = `${delivery.kind}:${delivery.id}`;
 		if (next > current) {
-			advance.run(...identity, next, delivery.length, params.passId);
+			advance.run(...identity, next, delivery.length, params.passId, label);
 			if (attention) resolveStalledEvidenceAttentionInTx(db, params.passId, delivery.agentId, ref);
 			continue;
 		}
 		if (!queued || current >= delivery.length || progressSuppressed(delivery)) continue;
-		stall.run(...identity, delivery.length, params.passId);
+		stall.run(...identity, delivery.length, params.passId, label);
 		const stalledPasses = (row?.stalledPasses ?? 0) + 1;
 		if (!attention || stalledPasses < DREAMING_EVIDENCE_STALL_PASSES) continue;
 		raiseStall.run(
@@ -636,7 +675,17 @@ export function recordDreamingEvidenceConsumptionInTx(
 				sourceLength: String(delivery.length),
 				stalledPasses: String(stalledPasses),
 			}),
+			label,
+			params.passId,
 		);
+		const item = prepareTypedStatement<{ id: string }>(
+			db,
+			"SELECT id FROM dreaming_attention WHERE agent_id=? AND kind='evidence_requeue' AND subject_ref=? AND compartment_id IS ?",
+		).get(delivery.agentId, ref, label);
+		if (item)
+			db.prepare(
+				"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('attention',?,?,?,?) ON CONFLICT DO NOTHING",
+			).run(item.id, delivery.agentId, source.kind, source.id);
 	}
 }
 
@@ -651,14 +700,15 @@ export function hasDreamingEvidenceReviewRow(
 	capturedAt: string,
 	entryId: string,
 	revision: string,
+	compartmentId: number | null = null,
 ): boolean {
 	return (
 		db
 			.prepare(
 				`SELECT 1 FROM dreaming_evidence_reviews
-	 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+	 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ? AND compartment_id IS ?`,
 			)
-			.get(agentId, kind, id, capturedAt, entryId, revision) != null
+			.get(agentId, kind, id, capturedAt, entryId, revision, compartmentId) != null
 	);
 }
 
@@ -673,14 +723,15 @@ export function readDreamingEvidencePassesPage(
 	afterCreatedAt: string,
 	afterPassId: string,
 	limit: number,
+	compartmentId: number | null = null,
 ): readonly DreamingEvidencePassRow[] {
 	const rows: unknown[] = db
 		.prepare(
 			`SELECT id, created_at AS createdAt FROM dreaming_passes
-	 WHERE agent_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+	 WHERE agent_id = ? AND compartment_id IS ? AND (created_at > ? OR (created_at = ? AND id > ?))
 	 ORDER BY created_at ASC, id ASC LIMIT ?`,
 		)
-		.all(agentId, afterCreatedAt, afterCreatedAt, afterPassId, limit);
+		.all(agentId, compartmentId, afterCreatedAt, afterCreatedAt, afterPassId, limit);
 	const passes: DreamingEvidencePassRow[] = [];
 	for (const row of rows) {
 		if (typeof row !== "object" || row === null) continue;
@@ -696,14 +747,15 @@ export function readStalledEvidenceAttentionIds(
 	agentId: string,
 	afterAttentionId: string,
 	limit: number,
+	compartmentId: number | null = null,
 ): readonly string[] {
 	const rows: unknown[] = db
 		.prepare(
 			`SELECT id FROM dreaming_attention
-	 WHERE agent_id = ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL} AND id > ?
+	 WHERE agent_id = ? AND compartment_id IS ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL} AND id > ?
 	 ORDER BY id ASC LIMIT ?`,
 		)
-		.all(agentId, afterAttentionId, limit);
+		.all(agentId, compartmentId, afterAttentionId, limit);
 	const ids: string[] = [];
 	for (const row of rows) {
 		if (typeof row !== "object" || row === null) continue;
@@ -719,36 +771,102 @@ const IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL =
 export const SEEN_IMPORTED_SOURCE_ATTENTION_SQL = `(kind = 'evidence_requeue' AND subject_ref LIKE 'source:%' AND COALESCE(
 	julianday(${IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL}) < (
 		SELECT MAX(julianday(dp.started_at)) FROM dreaming_passes dp
-		WHERE dp.agent_id = dreaming_attention.agent_id AND dp.mode <> 'incremental-hygiene'
+		WHERE dp.agent_id = dreaming_attention.agent_id AND dp.compartment_id IS dreaming_attention.compartment_id AND dp.mode <> 'incremental-hygiene'
 	), 0))`;
 
-export function importedSourceAttentionUpsert(
+function importedSourceAttentionStatement(
 	agentId: string,
 	sourceId: string,
-): { readonly sql: string; readonly params: readonly string[] } {
+	compartmentId: number | null,
+): { readonly sql: string; readonly params: readonly (string | number | null)[] } {
+	if (compartmentId !== null && (!Number.isSafeInteger(compartmentId) || compartmentId < 1))
+		throw new Error("Invalid compartment");
 	return {
-		sql: `INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
-			VALUES (?, ?, 'evidence_requeue', ?, json_set(?, '$.raisedAt', strftime('%Y-%m-%d %H:%M:%f', 'now')), 50)
-			ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
-			  details_json = excluded.details_json,
-			  priority = MAX(dreaming_attention.priority, excluded.priority),
-			  generation = dreaming_attention.generation + 1,
-			  resolved_at = NULL,
-			  resolved_by_pass_id = NULL`,
+		sql: `INSERT INTO dreaming_attention (id,agent_id,kind,subject_ref,details_json,priority,compartment_id)
+ VALUES (?,?,'evidence_requeue',?,json_set(?,'$.raisedAt',strftime('%Y-%m-%d %H:%M:%f','now')),50,?)
+ ON CONFLICT(agent_id,kind,subject_ref,COALESCE(compartment_id,0)) DO UPDATE SET
+ details_json=excluded.details_json,priority=MAX(dreaming_attention.priority,excluded.priority),
+ generation=dreaming_attention.generation+1,resolved_at=NULL,resolved_by_pass_id=NULL`,
 		params: [
 			randomUUID(),
 			agentId,
 			`source:${sourceId}`,
 			JSON.stringify({ sourceId, reason: "transcript-import-committed" }),
+			compartmentId,
 		],
 	};
+}
+
+export function importedSourceAttentionUpsert(
+	db: WriteDb,
+	agentId: string,
+	sourceId: string,
+	compartmentId?: number | null,
+): void {
+	let label = compartmentForWrite(db, { agentId, sourceId, parentCompartment: compartmentId });
+	const sources = prepareTypedStatement<{
+		kind: "artifact" | "transcript";
+		id: string;
+		compartment_id: number | null;
+		session_key: string | null;
+	}>(
+		db,
+		`SELECT 'artifact' AS kind,source_path AS id,compartment_id,session_key FROM (
+ SELECT source_path,compartment_id,session_key FROM memory_artifacts
+ WHERE agent_id=? AND source_id=? AND COALESCE(is_deleted,0)=0
+ ${compartmentId === undefined ? "" : "AND compartment_id IS ?"}
+ ORDER BY updated_at DESC,source_path ASC LIMIT 1)
+ UNION ALL SELECT 'transcript',session_key,compartment_id,session_key FROM (
+ SELECT session_key,compartment_id FROM session_transcripts WHERE agent_id=? AND source_id=?
+ ${compartmentId === undefined ? "" : "AND compartment_id IS ?"}
+ ORDER BY updated_at DESC,session_key ASC LIMIT 1)`,
+	).all(
+		agentId,
+		sourceId,
+		...(compartmentId === undefined ? [] : [compartmentId]),
+		agentId,
+		sourceId,
+		...(compartmentId === undefined ? [] : [compartmentId]),
+	);
+	for (const source of sources) {
+		label = compartmentForWrite(db, { agentId, sourceId, sessionKey: source.session_key, parentCompartment: label });
+		const inherited = compartmentForWrite(db, {
+			agentId,
+			sourceId,
+			sessionKey: source.session_key,
+			parentCompartment: source.compartment_id,
+		});
+		const members = prepareTypedStatement<{ classification_id: string }>(
+			db,
+			"SELECT classification_id FROM compartment_members WHERE compartment_id IN (?,?)",
+		).all(label, inherited);
+		label = compartmentFor(
+			db,
+			members.map((row) => row.classification_id),
+		);
+	}
+	const upsert = importedSourceAttentionStatement(agentId, sourceId, label);
+	db.prepare(upsert.sql).run(...upsert.params);
+	const attention = prepareTypedStatement<{ id: string }>(
+		db,
+		"SELECT id FROM dreaming_attention WHERE agent_id=? AND kind='evidence_requeue' AND subject_ref=? AND compartment_id IS ?",
+	).get(agentId, `source:${sourceId}`, label);
+	if (!attention) throw new Error("Imported source attention was not persisted");
+	db.prepare("DELETE FROM evidence_citations WHERE derived_kind='attention' AND derived_id=? AND agent_id=?").run(
+		attention.id,
+		agentId,
+	);
+	for (const source of sources)
+		db.prepare(
+			"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('attention',?,?,?,?) ON CONFLICT DO NOTHING",
+		).run(attention.id, agentId, source.kind, source.id);
 }
 
 export function resolveStalledEvidenceAttentionInTx(db: WriteDb, passId: string, agentId: string, ref: string): void {
 	db.prepare(
 		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
-		 WHERE agent_id = ? AND subject_ref = ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL}`,
-	).run(passId, agentId, ref);
+		 WHERE agent_id = ? AND subject_ref = ? AND compartment_id IS ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL}`,
+	).run(passId, agentId, ref, dreamingPassPartitionInDb(db, passId, agentId).compartmentId);
 }
 
 export interface DreamingEvidenceCursor {
@@ -761,18 +879,22 @@ export function evidenceCursorForSource(
 	db: ReadDb,
 	agentId: string,
 	source: EpisodicSourceRecord,
+	compartmentId: number | null = source.compartmentId ?? null,
 ): DreamingEvidenceCursor {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return { offset: 0, stalledPasses: 0, cursorBasis: null };
-	const row = db
-		.prepare(
-			`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses, cursor_basis AS cursorBasis FROM dreaming_evidence_consumption
-	 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
-		)
-		.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) as {
-		deliveredOffset: number;
-		stalledPasses: number;
-		cursorBasis: string | null;
-	} | null;
+	const row = prepareTypedStatement<{ deliveredOffset: number; stalledPasses: number; cursorBasis: string | null }>(
+		db,
+		`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses, cursor_basis AS cursorBasis FROM dreaming_evidence_consumption
+	 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ? AND compartment_id IS ?`,
+	).get(
+		agentId,
+		source.kind,
+		source.id,
+		source.capturedAt,
+		sourceIdentity(source),
+		sourceRevision(source),
+		compartmentId,
+	);
 	return {
 		offset: Math.max(0, row?.deliveredOffset ?? 0),
 		stalledPasses: row?.stalledPasses ?? 0,
@@ -780,8 +902,13 @@ export function evidenceCursorForSource(
 	};
 }
 
-export function deliveredOffsetForSource(db: ReadDb, agentId: string, source: EpisodicSourceRecord): number {
-	return evidenceCursorForSource(db, agentId, source).offset;
+export function deliveredOffsetForSource(
+	db: ReadDb,
+	agentId: string,
+	source: EpisodicSourceRecord,
+	compartmentId: number | null = source.compartmentId ?? null,
+): number {
+	return evidenceCursorForSource(db, agentId, source, compartmentId).offset;
 }
 export function hasDreamingEvidenceContinuation(db: ReadDb, agentId: string, passId: string | null): boolean {
 	if (!passId || !tableExists(db, "dreaming_evidence_consumption")) return false;
@@ -794,18 +921,19 @@ export function hasDreamingEvidenceContinuation(db: ReadDb, agentId: string, pas
 		         AND der.source_captured_at = dreaming_evidence_consumption.source_captured_at
 		         AND der.source_entry_id = dreaming_evidence_consumption.source_entry_id
 		         AND der.source_revision = dreaming_evidence_consumption.source_revision
+ AND der.compartment_id IS dreaming_evidence_consumption.compartment_id
 		   )`
 		: "";
 	return (
 		db
 			.prepare(
 				`SELECT 1 FROM dreaming_evidence_consumption
-				 WHERE agent_id = ? AND pass_id = ?
+				 WHERE agent_id = ? AND pass_id = ? AND compartment_id IS (SELECT compartment_id FROM dreaming_passes WHERE id = ?)
 				   AND delivered_offset > 0 AND delivered_offset < source_length
 				   ${reviewedPredicate}
 				 LIMIT 1`,
 			)
-			.get(agentId, passId) != null
+			.get(agentId, passId, passId) != null
 	);
 }
 export function pendingDreamingEvidenceContinuations(
@@ -813,6 +941,8 @@ export function pendingDreamingEvidenceContinuations(
 	agentId: string,
 	limit: number,
 	kind?: EpisodicSourceKind,
+	compartmentId: number | null = null,
+	excludeSourceRefs: readonly string[] = [],
 ): readonly EpisodicSourceRecord[] {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return [];
 	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
@@ -830,6 +960,7 @@ export function pendingDreamingEvidenceContinuations(
 		         AND der.source_captured_at = dec.source_captured_at
 		         AND der.source_entry_id = dec.source_entry_id
 		         AND der.source_revision = dec.source_revision
+ AND der.compartment_id IS dec.compartment_id
 		   )`
 		: "";
 	const rows = db
@@ -838,15 +969,16 @@ export function pendingDreamingEvidenceContinuations(
 			        dec.source_entry_id AS sourceEntryId, dec.source_revision AS sourceRevision
 			 FROM dreaming_evidence_consumption dec
 			 INNER JOIN dreaming_passes pass ON pass.id = dec.pass_id
-			 WHERE dec.agent_id = ?
+			 WHERE dec.agent_id = ? AND dec.compartment_id IS ?
 			   AND dec.delivered_offset > 0 AND dec.delivered_offset < dec.source_length
 			   AND dec.stalled_passes < ?
 			   ${reviewedPredicate}
 			   AND (? IS NULL OR dec.source_kind = ?)
+			   ${excludeSourceRefs.length ? `AND dec.source_kind || ':' || dec.source_id NOT IN (${excludeSourceRefs.map(() => "?").join(",")})` : ""}
 			   AND (
 			     (dec.source_kind = 'memory' AND EXISTS (
 			       SELECT 1 FROM memories m
-			       WHERE m.agent_id = dec.agent_id AND m.id = dec.source_id
+			       WHERE m.agent_id = dec.agent_id AND m.id = dec.source_id AND m.compartment_id IS ?
 			         AND m.memory_kind = 'episodic' AND COALESCE(m.is_deleted, 0) = 0
 			         AND m.visibility != 'archived' AND m.scope IS NULL
 			         AND COALESCE(m.type, '') != 'session_summary'
@@ -855,7 +987,7 @@ export function pendingDreamingEvidenceContinuations(
 			     ))
 			     OR (dec.source_kind = 'artifact' AND EXISTS (
 			       SELECT 1 FROM memory_artifacts ma
-			       WHERE ma.agent_id = dec.agent_id AND ma.source_path = dec.source_id
+			       WHERE ma.agent_id = dec.agent_id AND ma.source_path = dec.source_id AND ma.compartment_id IS ?
 			         AND COALESCE(ma.is_deleted, 0) = 0 AND length(ma.content) > 0
 			         AND dec.source_captured_at = ma.captured_at
 			         AND dec.source_entry_id = COALESCE(ma.source_id, '')
@@ -866,14 +998,14 @@ export function pendingDreamingEvidenceContinuations(
 			     ))
 			     OR (dec.source_kind = 'transcript' AND EXISTS (
 			       SELECT 1 FROM session_transcripts st
-			       WHERE st.agent_id = dec.agent_id AND st.session_key = dec.source_id
+			       WHERE st.agent_id = dec.agent_id AND st.session_key = dec.source_id AND st.compartment_id IS ?
 			         AND dec.source_captured_at = ${transcriptRevision}
 			         AND dec.source_entry_id = COALESCE(${transcriptSourceId}, '')
 			         AND dec.source_revision = CASE WHEN ${transcriptSourceId} IS NULL OR ${transcriptSourceId} = '' THEN ${transcriptRevision} ELSE COALESCE(${transcriptContentHash}, ${transcriptRevision}) END
 			     ))
 			     OR (dec.source_kind = 'summary' AND EXISTS (
 			       SELECT 1 FROM session_summaries ss
-			       WHERE ss.agent_id = dec.agent_id AND ss.id = dec.source_id
+			       WHERE ss.agent_id = dec.agent_id AND ss.id = dec.source_id AND ss.compartment_id IS ?
 			         AND ss.depth = 0
 			         AND COALESCE(ss.source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			         AND dec.source_captured_at = ss.latest_at
@@ -883,7 +1015,19 @@ export function pendingDreamingEvidenceContinuations(
 			 ORDER BY pass.rowid ASC, dec.source_kind ASC, dec.source_id ASC, dec.source_captured_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, DREAMING_EVIDENCE_STALL_PASSES, kind ?? null, kind ?? null, boundedLimit) as Array<{
+		.all(
+			agentId,
+			compartmentId,
+			DREAMING_EVIDENCE_STALL_PASSES,
+			kind ?? null,
+			kind ?? null,
+			...excludeSourceRefs,
+			compartmentId,
+			compartmentId,
+			compartmentId,
+			compartmentId,
+			boundedLimit,
+		) as Array<{
 		kind: EpisodicSourceKind;
 		id: string;
 		capturedAt: string;
@@ -891,7 +1035,7 @@ export function pendingDreamingEvidenceContinuations(
 		sourceRevision: string;
 	}>;
 	return rows.flatMap((row) => {
-		const source = readEpisodicSource(db, { agentId, from: `${row.kind}:${row.id}` });
+		const source = readEpisodicSource(db, { agentId, from: `${row.kind}:${row.id}`, exactCompartment: compartmentId });
 		if (
 			source === null ||
 			source.capturedAt !== row.capturedAt ||
@@ -902,16 +1046,30 @@ export function pendingDreamingEvidenceContinuations(
 		return [source];
 	});
 }
-function candidateHasUnconsumedEvidence(db: ReadDb, agentId: string, kind: EpisodicSourceKind, id: string): boolean {
-	const source = readEpisodicSource(db, { agentId, from: `${kind}:${id}` });
+function candidateHasUnconsumedEvidence(
+	db: ReadDb,
+	agentId: string,
+	kind: EpisodicSourceKind,
+	id: string,
+	compartmentId: number | null,
+): boolean {
+	const source = readEpisodicSource(db, { agentId, from: `${kind}:${id}`, exactCompartment: compartmentId });
 	if (source === null) return false;
 	const reviewed =
 		tableExists(db, "dreaming_evidence_reviews") &&
 		db
 			.prepare(
-				`SELECT 1 FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+				`SELECT 1 FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ? AND compartment_id IS ?`,
 			)
-			.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) != null;
+			.get(
+				agentId,
+				source.kind,
+				source.id,
+				source.capturedAt,
+				sourceIdentity(source),
+				sourceRevision(source),
+				compartmentId,
+			) != null;
 	return !reviewed && deliveredOffsetForSource(db, agentId, source) < renderDreamingEvidence(source).length;
 }
 
@@ -928,6 +1086,7 @@ function sourceCandidateBranches(
 	agentId: string,
 	sourceEntryId: string,
 	legacyObsidianRoot: string | undefined,
+	compartmentId: number | null,
 ): readonly SourceCandidateBranch[] {
 	const legacyRootPrefix = legacyObsidianRoot?.replace(/\\/g, "/").replace(/\/$/, "") ?? null;
 	const identity = (
@@ -938,15 +1097,22 @@ function sourceCandidateBranches(
 		entryId: string,
 		revision: string,
 	): string =>
-		`e.agent_id = ${alias}.agent_id AND e.source_kind = '${kind}' AND e.source_id = ${id}
+		`e.compartment_id IS ${alias}.compartment_id AND e.agent_id = ${alias}.agent_id AND e.source_kind = '${kind}' AND e.source_id = ${id}
 		 AND e.source_captured_at = ${capturedAt} AND e.source_entry_id = ${entryId} AND e.source_revision = ${revision}`;
 	const branches: SourceCandidateBranch[] = [
 		{
 			kind: "artifact",
 			select: `SELECT ma.source_path AS id FROM memory_artifacts ma
-			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0 AND length(ma.content) > 0
+			 WHERE ma.agent_id = ? AND ma.compartment_id IS ? AND COALESCE(ma.is_deleted, 0) = 0 AND length(ma.content) > 0
 			   AND (ma.source_id = ? OR (? IS NOT NULL AND ma.harness = 'obsidian' AND ma.source_id IS NULL AND ma.source_path >= ? AND ma.source_path < ?))`,
-			args: [agentId, sourceEntryId, legacyRootPrefix, legacyRootPrefix ?? "", `${legacyRootPrefix ?? ""}/\uffff`],
+			args: [
+				agentId,
+				compartmentId,
+				sourceEntryId,
+				legacyRootPrefix,
+				legacyRootPrefix ?? "",
+				`${legacyRootPrefix ?? ""}/\uffff`,
+			],
 			id: "ma.source_path",
 			identity: identity(
 				"artifact",
@@ -968,8 +1134,8 @@ function sourceCandidateBranches(
 		branches.push({
 			kind: "transcript",
 			select: `SELECT st.session_key AS id FROM session_transcripts st
-			 WHERE st.agent_id = ? AND st.source_id = ? AND st.completed_at IS NOT NULL`,
-			args: [agentId, sourceEntryId],
+			 WHERE st.agent_id = ? AND st.compartment_id IS ? AND st.source_id = ? AND st.completed_at IS NOT NULL`,
+			args: [agentId, compartmentId, sourceEntryId],
 			id: "st.session_key",
 			identity: identity(
 				"transcript",
@@ -999,12 +1165,19 @@ export function probeSourceEvidenceDrain(
 	options: {
 		readonly legacyObsidianRoot?: string;
 		readonly maxRenders: number;
+		readonly compartmentId?: number | null;
 		readonly resumeAfter?: string | null;
 	},
 ): SourceEvidenceDrainProbe {
 	let resumeAfter = options.resumeAfter ?? null;
 	if (!tableExists(db, "dreaming_evidence_consumption")) return { status: "pending", resumeAfter, rendered: 0 };
-	const branches = sourceCandidateBranches(db, agentId, sourceEntryId, options.legacyObsidianRoot);
+	const branches = sourceCandidateBranches(
+		db,
+		agentId,
+		sourceEntryId,
+		options.legacyObsidianRoot,
+		options.compartmentId ?? null,
+	);
 	const notReviewed = (branch: SourceCandidateBranch): string =>
 		tableExists(db, "dreaming_evidence_reviews")
 			? `AND NOT EXISTS (SELECT 1 FROM dreaming_evidence_reviews e WHERE ${branch.identity})`
@@ -1038,7 +1211,7 @@ export function probeSourceEvidenceDrain(
 			for (const row of rows) {
 				if (rendered >= options.maxRenders) return { status: "undetermined", resumeAfter, rendered };
 				rendered += 1;
-				if (candidateHasUnconsumedEvidence(db, agentId, branch.kind, row.id)) {
+				if (candidateHasUnconsumedEvidence(db, agentId, branch.kind, row.id, options.compartmentId ?? null)) {
 					return { status: "pending", resumeAfter, rendered };
 				}
 				after = row.id;
@@ -1055,10 +1228,12 @@ export function sourceHasEligibleUnconsumedEvidence(
 	agentId: string,
 	sourceEntryId: string,
 	legacyObsidianRoot?: string,
+	compartmentId: number | null = null,
 ): boolean {
 	return (
 		probeSourceEvidenceDrain(db, agentId, sourceEntryId, {
 			legacyObsidianRoot,
+			compartmentId,
 			maxRenders: Number.POSITIVE_INFINITY,
 		}).status !== "drained"
 	);
@@ -1069,10 +1244,12 @@ export const IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET = 8;
 
 export function resolveImportedSourceAttentionInTx(db: WriteDb, passId: string, scopes: readonly string[]): number {
 	if (!tableExists(db, "dreaming_attention")) return 0;
+	const label = dreamingPassPartitionInDb(db, passId).compartmentId;
 	const checkSeq = "(CASE WHEN json_valid(details_json) THEN json_extract(details_json, '$.drainCheckSeq') END)";
 	const pendingSource =
-		"agent_id = ? AND kind = 'evidence_requeue' AND resolved_at IS NULL AND subject_ref LIKE 'source:%'";
-	const pending = db.prepare(
+		"agent_id = ? AND compartment_id IS ? AND kind = 'evidence_requeue' AND resolved_at IS NULL AND subject_ref LIKE 'source:%'";
+	const pending = prepareTypedStatement<{ id: string; subjectRef: string; resumeAfter: unknown }>(
+		db,
 		`SELECT id, subject_ref AS subjectRef,
 		        CASE WHEN json_valid(details_json) THEN json_extract(details_json, '$.drainResumeAfter') END AS resumeAfter
 		 FROM dreaming_attention
@@ -1080,7 +1257,8 @@ export function resolveImportedSourceAttentionInTx(db: WriteDb, passId: string, 
 		 ORDER BY COALESCE(${checkSeq}, 0) ASC, created_at ASC, id ASC
 		 LIMIT ?`,
 	);
-	const nextCheckSeq = db.prepare(
+	const nextCheckSeq = prepareTypedStatement<{ seq: number }>(
+		db,
 		`SELECT COALESCE(MAX(${checkSeq}), 0) + 1 AS seq FROM dreaming_attention WHERE ${pendingSource}`,
 	);
 	const stamp = db.prepare(
@@ -1096,16 +1274,16 @@ export function resolveImportedSourceAttentionInTx(db: WriteDb, passId: string, 
 	let resolved = 0;
 	let renderBudget = IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET;
 	for (const agentId of new Set(scopes)) {
-		const rows = pending.all(agentId, IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE) as Array<{
-			id: string;
-			subjectRef: string;
-			resumeAfter: unknown;
-		}>;
-		const seq = (nextCheckSeq.get(agentId) as { seq: number }).seq;
+		dreamingPassPartitionInDb(db, passId, agentId);
+		const rows = pending.all(agentId, label, IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE);
+		const check = nextCheckSeq.get(agentId, label);
+		if (!check) throw new Error("Imported source attention sequence is missing");
+		const seq = check.seq;
 		for (const row of rows) {
 			const sourceEntryId = row.subjectRef.slice("source:".length);
 			const probe = sourceEntryId
 				? probeSourceEvidenceDrain(db, agentId, sourceEntryId, {
+						compartmentId: label,
 						maxRenders: renderBudget,
 						resumeAfter: typeof row.resumeAfter === "string" ? row.resumeAfter : null,
 					})

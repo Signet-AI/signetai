@@ -1719,6 +1719,13 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
+		expect(
+			db
+				.query<{ name: string; unique: number }, []>("PRAGMA index_list(memories)")
+				.all()
+				.find((row) => row.name === "idx_memories_dedupe_scope")?.unique,
+		).toBe(0);
+
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
@@ -1757,6 +1764,13 @@ describe("migration framework", () => {
 	test("migration 178 permits idempotency keys across labels and scopes", () => {
 		db = createFreshDb();
 		runMigrations(db);
+
+		expect(
+			db
+				.query<{ name: string; unique: number }, []>("PRAGMA index_list(memories)")
+				.all()
+				.find((row) => row.name === "idx_memories_idempotency_scope")?.unique,
+		).toBe(0);
 
 		const now = new Date().toISOString();
 		db.prepare(

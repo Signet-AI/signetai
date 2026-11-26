@@ -9,6 +9,7 @@ export type MemoryHeadWriteResult =
 
 export type MemoryHeadRequest =
 	| { readonly action: "read"; readonly agentId: string; readonly passId?: string }
+	| { readonly action: "publish"; readonly agentId: string }
 	| {
 			readonly action: "inspect";
 			readonly agentId: string;
@@ -33,7 +34,12 @@ export async function requestMemoryHead<Result>(request: MemoryHeadRequest): Pro
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
 	return owner.submit<Result>(
 		{ kind: "memory_head", request },
-		{ operation: `memory-head.${request.action}`, lane: "write", deadlineMs: 5000, estimatedWorkUnits: 1000 },
+		{
+			operation: `memory-head.${request.action}`,
+			lane: request.action === "read" || request.action === "inspect" ? "read" : "write",
+			deadlineMs: 5000,
+			estimatedWorkUnits: 1000,
+		},
 	).result;
 }
 export function writeMemoryHead(
@@ -57,11 +63,25 @@ export type MemoryHeadResult = {
 };
 export type MemoryHeadCommitInput = Extract<MemoryHeadRequest, { action: "commit" }>["input"];
 export interface MemoryHeadCommitter {
-	read(agentId: string): Promise<Record<string, unknown>>;
+	read(agentId: string, passId?: string): Promise<Record<string, unknown>>;
 	commit(input: MemoryHeadCommitInput): Promise<MemoryHeadResult>;
 }
-export function readCuratedMemoryHead(agentId: string, passId?: string): Promise<Record<string, unknown>> {
-	return requestMemoryHead(passId === undefined ? { action: "read", agentId } : { action: "read", agentId, passId });
+export async function readCuratedMemoryHead(agentId: string, passId?: string): Promise<Record<string, unknown>> {
+	const request =
+		passId === undefined ? ({ action: "read", agentId } as const) : ({ action: "read", agentId, passId } as const);
+	const head = await requestMemoryHead<Record<string, unknown>>(request);
+	if (head.publication !== "pending") return head;
+	let publicationError: unknown;
+	try {
+		const publication = await requestMemoryHead<Record<string, unknown>>({ action: "publish", agentId });
+		publicationError = publication.publicationError;
+	} catch (error) {
+		publicationError = error instanceof Error ? error.message : String(error);
+	}
+	const refreshed = await requestMemoryHead<Record<string, unknown>>(request);
+	return publicationError === undefined || refreshed.publication !== "pending"
+		? refreshed
+		: { ...refreshed, publicationError };
 }
 export function commitCuratedMemoryHead(input: MemoryHeadCommitInput): Promise<MemoryHeadResult> {
 	return requestMemoryHead({ action: "commit", input });

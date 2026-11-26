@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	addObsidianSource,
@@ -69,6 +69,8 @@ export function seedDerived(input: DerivedSeed) {
 		},
 		input.workspace,
 	);
+	const sourcePath = join(sourceRoot, "read-fixture.md");
+	writeFileSync(sourcePath, content);
 	db.transaction(() => {
 		db.query(
 			"INSERT OR REPLACE INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,source_id,source_external_id,session_id,session_token,content,captured_at,updated_at,project,author_user_id,compartment_id) VALUES (?,?,?,'obsidian',?,'fixture.md','org-hr-source','org-hr-source',?,?,?,'atlas',?,?)",

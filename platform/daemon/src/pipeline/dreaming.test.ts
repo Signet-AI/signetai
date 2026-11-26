@@ -398,6 +398,26 @@ describe("Dreaming", () => {
 		rmSync(memoryHeadRoot, { recursive: true, force: true });
 	});
 
+	it("rejects a personal-mode aggregator before direct passes and state exist", async () => {
+		db.exec("UPDATE organization SET claimed_at='now',agent_model='personal' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
+		let calls = 0;
+		const executor: DreamingAgentExecutor = {
+			async run() {
+				calls++;
+				return { text: "Done", inputTokens: 1, outputTokens: 1 };
+			},
+		};
+		for (const mode of ["incremental", "compact", "incremental-content", "incremental-hygiene"] as const) {
+			await expect(
+				runDreamingAgentPassImpl(accessor, executor, defaultCfg(), memoryHeadRoot, "default", ["default"], mode),
+			).rejects.toThrow();
+		}
+		expect(calls).toBe(0);
+		expect(db.query("SELECT id FROM dreaming_passes").all()).toEqual([]);
+		expect(db.query("SELECT agent_id FROM dreaming_state").all()).toEqual([]);
+	});
+
 	async function runDreamingAgentPass(...args: Parameters<typeof runDreamingAgentPassImpl>) {
 		if (args[6] !== "incremental-content") return await runDreamingAgentPassImpl(...args);
 		const [
@@ -1112,6 +1132,13 @@ describe("Dreaming", () => {
 		});
 	});
 
+	it("isolates failure backoff between compartments of one agent", async () => {
+		await recordDreamingFailure(accessor, AGENT, 7);
+		expect((await getDreamingState(accessor, AGENT)).consecutiveFailures).toBe(0);
+		expect((await getDreamingState(accessor, AGENT, 7)).consecutiveFailures).toBe(1);
+		expect((await getDreamingState(accessor, AGENT, 8)).consecutiveFailures).toBe(0);
+	});
+
 	it("uses wall-clock backoff independently of later evidence volume", async () => {
 		seedSummary(db, "first", "episodic source", 10);
 		await recordDreamingFailure(accessor, AGENT);
@@ -1465,7 +1492,7 @@ describe("Dreaming", () => {
 		const first = pendingDreamingEvidenceContinuations(tracedDb, AGENT, 20);
 		expect(continuationQueries).toHaveLength(1);
 		expect(continuationQueries[0]).toContain("LIMIT ?");
-		expect(continuationArgs).toEqual([[AGENT, 3, null, null, 20]]);
+		expect(continuationArgs).toEqual([[AGENT, null, 3, null, null, null, null, null, null, 20]]);
 		expect(first.map((source) => source.id)).toEqual(
 			Array.from({ length: 20 }, (_, index) => `prior-partial-${index.toString().padStart(2, "0")}`),
 		);
@@ -1899,7 +1926,7 @@ describe("Dreaming", () => {
 		const plan = explainSqliteQueryPlan(db, query);
 
 		expect(query.parameters[query.parameters.length - 1]).toBe(51);
-		expect(plan.some((row) => row.detail.includes("idx_memories_agent_kind"))).toBe(true);
+		expect(plan.some((row) => /SEARCH memories .*USING INDEX/.test(row.detail))).toBe(true);
 		expect(plan.some((row) => /SEARCH (memory_artifacts|ma) /.test(row.detail))).toBe(true);
 		expect(plan.some((row) => /SCAN (dec|der)\b/.test(row.detail))).toBe(false);
 		expect(plan.some((row) => row.detail.includes("SEARCH session_transcripts"))).toBe(true);
@@ -1909,8 +1936,12 @@ describe("Dreaming", () => {
 		);
 		if (filteredSearch === undefined) throw new Error("expected the candidate-filtered source search");
 		const filteredPlan = explainSqliteQueryPlan(db, filteredSearch);
-		expect(filteredPlan.some((row) => row.detail.includes("sqlite_autoindex_memory_artifacts_1"))).toBe(true);
-		expect(filteredPlan.some((row) => row.detail.includes("idx_memory_artifacts_agent_sha"))).toBe(true);
+		expect(
+			filteredPlan.some((row) =>
+				/SEARCH ma .*\(agent_id=\? AND compartment_id=\? AND source_path=\?\)/.test(row.detail),
+			),
+		).toBe(true);
+		expect(filteredPlan.some((row) => row.detail.includes("idx_memory_artifacts_dreaming_partition_sha"))).toBe(true);
 		expect(filteredPlan.some((row) => row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(false);
 	});
 
@@ -2111,9 +2142,9 @@ describe("Dreaming", () => {
 		const owner = await probeDreamingEpisodicBacklog(accessor, agentId, 100_000, ownerMaintenance);
 
 		expect(owner).toEqual(inline);
-		expect(ownerInputs).toEqual([{ agentId, tokenThreshold: 100_000, maxSources: 50 }]);
+		expect(ownerInputs).toEqual([{ agentId, compartmentId: null, tokenThreshold: 100_000, maxSources: 50 }]);
 		expect(await hasDreamingEpisodicBacklog(accessor, agentId, ownerMaintenance)).toBe(true);
-		expect(existenceInputs).toEqual([{ agentId }]);
+		expect(existenceInputs).toEqual([{ agentId, compartmentId: null }]);
 	});
 
 	it("uses an unknown backlog state from an indeterminate probe for max-interval liveness", async () => {
@@ -2498,19 +2529,20 @@ describe("Dreaming", () => {
 	});
 
 	it("turns an explicit evidence requeue into scoped semantic attention", async () => {
+		seedTranscript(db, "retry-transcript", "Evidence ready for another review.");
 		db.prepare(
 			`INSERT INTO dreaming_evidence_exclusions
 			 (agent_id, source_kind, source_id, reason, pass_id, excluded_at, requeue_requested_at, resolved_at)
-			 VALUES (?, 'summary', 'retry-summary', 'semantic_operation_rejected', 'failed-pass', datetime('now'), NULL, NULL)`,
+			 VALUES (?, 'transcript', 'retry-transcript', 'semantic_operation_rejected', 'failed-pass', datetime('now'), NULL, NULL)`,
 		).run(AGENT);
 
-		expect(await requestDreamingEvidenceRequeue(accessor, AGENT, "summary", "retry-summary")).toBe(true);
+		expect(await requestDreamingEvidenceRequeue(accessor, AGENT, "transcript", "retry-transcript")).toBe(true);
 		const attention = getDreamingAttention(accessor, AGENT);
 		expect(attention).toEqual([
 			expect.objectContaining({
 				kind: "evidence_requeue",
-				subjectRef: "summary:retry-summary",
-				details: { sourceKind: "summary", sourceId: "retry-summary" },
+				subjectRef: "transcript:retry-transcript",
+				details: { sourceKind: "transcript", sourceId: "retry-transcript" },
 			}),
 		]);
 		expect(Object.keys(attention[0] ?? {})).not.toContain("detailsJson");
@@ -2551,7 +2583,7 @@ describe("Dreaming", () => {
 				expect.objectContaining({ sourceId: "incomplete", failureClass: "incomplete_transcript" }),
 				expect.objectContaining({ sourceId: "quote-changed", failureClass: "quote_mismatch" }),
 				expect.objectContaining({ sourceId: "missing", failureClass: "source_projection" }),
-				expect.objectContaining({ sourceId: "other-scope", failureClass: "scope_mismatch" }),
+				expect.objectContaining({ sourceId: "other-scope", failureClass: "source_projection" }),
 			]),
 		);
 		expect(rejected).toHaveLength(4);
@@ -2629,7 +2661,11 @@ describe("Dreaming", () => {
 		expect(rows.every((row) => row.retryCount === 1 && row.requestedAt !== null && row.resolvedAt === null)).toBe(true);
 		expect(getDreamingAttention(accessor, AGENT).filter((item) => item.kind === "evidence_requeue")).toHaveLength(4);
 
-		accessor.withWriteTx((tx) =>
+		db.prepare("INSERT INTO dreaming_passes(id,agent_id,mode,status) VALUES(?, ?, 'incremental', 'running')").run(
+			"repair-pass",
+			AGENT,
+		);
+		await accessor.withWriteTxAsync((tx) =>
 			resolveRequeuedDreamingEvidenceInTx(tx, AGENT, "repair-pass", { ok: true, items: [{ index: 0, ok: true }] }, [
 				{ evidence: [{ source_ref: "transcript:incomplete", quote: "now complete" }] },
 			]),
@@ -3650,8 +3686,7 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		);
 		const raise = async (): Promise<void> => {
 			await new Promise((resolve) => setTimeout(resolve, 5));
-			const nudge = importedSourceAttentionUpsert(AGENT, importId);
-			db.prepare(nudge.sql).run(...nudge.params);
+			await accessor.withWriteTxAsync((tx) => importedSourceAttentionUpsert(tx, AGENT, importId));
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		};
 		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
@@ -3693,8 +3728,7 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 
 	it("does not let a hygiene pass mark an import nudge as seen (#2094)", async () => {
 		const importId = "import:hygiene-2094";
-		const nudge = importedSourceAttentionUpsert(AGENT, importId);
-		db.prepare(nudge.sql).run(...nudge.params);
+		await accessor.withWriteTxAsync((tx) => importedSourceAttentionUpsert(tx, AGENT, importId));
 		await new Promise((resolve) => setTimeout(resolve, 5));
 		db.prepare(
 			"INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at) VALUES ('hygiene-after-nudge', ?, 'incremental-hygiene', 'completed', ?)",
@@ -3812,8 +3846,14 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 					.prepare("SELECT resolved_at AS resolvedAt FROM dreaming_attention WHERE subject_ref = ?")
 					.get(`source:${sourceId}`) as { resolvedAt: string | null }
 			).resolvedAt;
-		const finalize = (passId: string): number =>
-			accessor.withWriteTx((tx) => resolveImportedSourceAttentionInTx(tx, passId, [AGENT]));
+		const finalize = async (passId: string): Promise<number> =>
+			await accessor.withWriteTxAsync((tx) => {
+				tx.prepare("INSERT INTO dreaming_passes(id,agent_id,mode,status) VALUES(?, ?, 'incremental', 'running')").run(
+					passId,
+					AGENT,
+				);
+				return resolveImportedSourceAttentionInTx(tx, passId, [AGENT]);
+			});
 
 		it("stops at the first unconsumed member instead of rendering the whole source", () => {
 			for (let index = 0; index < 40; index += 1) {
@@ -3834,7 +3874,7 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			});
 		});
 
-		it("resolves drained rows queued behind sources that still have evidence", () => {
+		it("resolves drained rows queued behind sources that still have evidence", async () => {
 			const busy = Array.from(
 				{ length: IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE },
 				(_, index) => `import:busy-${index}`,
@@ -3848,14 +3888,14 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			recordConsumption("import:drained", "drained-a", 30, 30);
 			raise("import:drained", "2026-10-08 00:01:00");
 
-			expect(finalize("pass-1")).toBe(0);
+			expect(await finalize("pass-1")).toBe(0);
 			expect(resolvedAt("import:drained")).toBeNull();
-			expect(finalize("pass-2")).toBe(1);
+			expect(await finalize("pass-2")).toBe(1);
 			expect(resolvedAt("import:drained")).not.toBeNull();
 			expect(busy.every((sourceId) => resolvedAt(sourceId) === null)).toBe(true);
 		});
 
-		it("bounds renders per finalization and resumes where the last one stopped", () => {
+		it("bounds renders per finalization and resumes where the last one stopped", async () => {
 			const members = IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET * 3 + 2;
 			for (let index = 0; index < members; index += 1) {
 				seedImported("import:blank", `blank-${String(index).padStart(2, "0")}`, "   ");
@@ -3870,14 +3910,14 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 					).details,
 				).drainResumeAfter;
 
-			expect(finalize("pass-1")).toBe(0);
+			expect(await finalize("pass-1")).toBe(0);
 			expect(resumeAfter()).toBe(
 				`transcript:blank-${String(IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET - 1).padStart(2, "0")}`,
 			);
-			expect(finalize("pass-2")).toBe(0);
-			expect(finalize("pass-3")).toBe(0);
+			expect(await finalize("pass-2")).toBe(0);
+			expect(await finalize("pass-3")).toBe(0);
 			expect(resolvedAt("import:blank")).toBeNull();
-			expect(finalize("pass-4")).toBe(1);
+			expect(await finalize("pass-4")).toBe(1);
 			expect(resolvedAt("import:blank")).not.toBeNull();
 		});
 	});

@@ -14,6 +14,7 @@ import type {
 	ClassificationPrincipal,
 } from "./classifications";
 import { z } from "zod";
+import { prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
 import { inFlightClassificationSql, readScopeSql, type AudienceSubject, type ReadScope } from "./read-scope";
 
 type Row = Record<string, unknown>;
@@ -24,6 +25,7 @@ interface ContentRow {
 	kind: string | null;
 }
 const DERIVED: Readonly<Record<string, string>> = {
+	alias: "entity_aliases",
 	attribute: "entity_attributes",
 	memory: "memories",
 	dependency: "entity_dependencies",
@@ -32,6 +34,8 @@ const DERIVED: Readonly<Record<string, string>> = {
 	assertion: "epistemic_assertions",
 	head_entry: "memory_head_entries",
 	reflection: "daily_reflections",
+	temporal_edge: "temporal_edges",
+	attention: "dreaming_attention",
 	contradiction: "ontology_contradictions",
 	head_revision: "memory_head_revision_entries",
 	proposal: "ontology_proposals",
@@ -171,7 +175,7 @@ function tableInfo(db: MigrationDb, table: string): TableInfo | undefined {
 			: table === "memory_artifacts"
 				? "source_path"
 				: table === "memory_head_revision_entries"
-					? "json_array(revision,entry_id)"
+					? "json_array(revision_id,entry_id)"
 					: table === "session_recall_events"
 						? "json_array(session_key,context_epoch,item_kind,item_id)"
 						: columns.has("id")
@@ -197,7 +201,13 @@ function tableInfo(db: MigrationDb, table: string): TableInfo | undefined {
 		"compartment_id",
 		"pass_id",
 		"dreaming_pass_id",
+		"proposal_id",
 		"memory_id",
+		"entity_id",
+		"derived_memory_id",
+		"source_kind",
+		"source_entity_id",
+		"target_entity_id",
 		"project",
 		"visibility",
 	].filter((c) => columns.has(c));
@@ -231,7 +241,7 @@ function contentRows(
 	if (!info) return [];
 	return db
 		.prepare(
-			`SELECT ${info.select} FROM ${table} WHERE ${table === "cross_agent_messages" ? where.replace(/\bagent_id\b/g, "from_agent_id").replace(/\bsession_key\b/g, "from_session_key") : where}${limit === undefined ? "" : " ORDER BY rowid LIMIT ?"}`,
+			`SELECT ${info.select} FROM ${table} WHERE (${table === "cross_agent_messages" ? where.replace(/\bagent_id\b/g, "from_agent_id").replace(/\bsession_key\b/g, "from_session_key") : where})${table === "entities" ? " AND person_user_id IS NULL" : ""}${limit === undefined ? "" : " ORDER BY rowid LIMIT ?"}`,
 		)
 		.all(...args, ...(limit === undefined ? [] : [limit]))
 		.map((row) => ({ table, row, key: String(row._classification_key), kind: info.kind }));
@@ -244,9 +254,53 @@ function checkpointOwners(db: MigrationDb, key: unknown): string[] {
 		.all(key, key)
 		.flatMap((r) => (typeof r.agent_id === "string" ? [r.agent_id] : []));
 }
+function childParentRefs(item: ContentRow): readonly (readonly [string, string, unknown])[] {
+	if (item.table === "memory_entity_mentions")
+		return [
+			["memories", "id", item.row.memory_id],
+			["entities", "id", item.row.entity_id],
+		];
+	if (item.table === "memory_history") return [["memories", "id", item.row.memory_id]];
+	if (item.table === "relations")
+		return [
+			["entities", "id", item.row.source_entity_id],
+			["entities", "id", item.row.target_entity_id],
+		];
+	if (item.table === "derived_memory_sources") {
+		const sourceTable =
+			item.row.source_kind === "ontology_claim"
+				? "entity_attributes"
+				: item.row.source_kind === "memory"
+					? "memories"
+					: item.row.source_kind === "transcript"
+						? "session_transcripts"
+						: item.row.source_kind === "artifact"
+							? "memory_artifacts"
+							: item.row.source_kind === "summary"
+								? "session_summaries"
+								: null;
+		return [
+			["memories", "id", item.row.derived_memory_id],
+			...(sourceTable
+				? [
+						[
+							sourceTable,
+							sourceTable === "session_transcripts"
+								? "session_key"
+								: sourceTable === "memory_artifacts"
+									? "source_path"
+									: "id",
+							item.row.source_id,
+						] as const,
+					]
+				: []),
+		];
+	}
+	return [];
+}
 function contextFor(db: MigrationDb, initial: readonly ContentRow[]): ContentRow[] {
 	const result = new Map(initial.map((r) => [`${r.table}:${r.row._classification_rowid}`, r]));
-	for (const item of initial) {
+	for (const item of result.values()) {
 		const agent = item.row.agent_id;
 		const memory =
 			item.table === "memory_hints"
@@ -255,6 +309,7 @@ function contextFor(db: MigrationDb, initial: readonly ContentRow[]): ContentRow
 					? item.row.source_id
 					: null;
 		const lookups: readonly (readonly [string, string, unknown])[] = [
+			...childParentRefs(item),
 			["memories", "id", memory],
 			["memory_artifacts", "source_path", item.row.source_id],
 			["session_transcripts", "session_key", item.row.source_id],
@@ -318,13 +373,20 @@ function covers(db: MigrationDb, target: ClassificationTarget, item: ContentRow,
 	);
 }
 function passLabels(db: MigrationDb, item: ContentRow): string[] {
-	const pass = text(item.row.pass_id ?? item.row.dreaming_pass_id);
+	let pass = item.table === "dreaming_passes" ? item.key : text(item.row.pass_id ?? item.row.dreaming_pass_id);
+	const proposalId = text(item.row.proposal_id);
+	if (!pass && proposalId && tableInfo(db, "ontology_proposals")?.columns.has("dreaming_pass_id")) {
+		const proposal = db
+			.prepare("SELECT dreaming_pass_id FROM ontology_proposals WHERE id=? AND agent_id=?")
+			.get(proposalId, item.row.agent_id);
+		pass = text(proposal?.dreaming_pass_id);
+	}
 	if (!pass) return [];
 	return db
 		.prepare(
-			"SELECT cm.classification_id FROM dreaming_passes p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.id=? AND p.agent_id=?",
+			"SELECT cm.classification_id FROM dreaming_passes p JOIN compartment_members cm ON cm.compartment_id=p.compartment_id WHERE p.id=? AND (p.agent_id=? OR instr(','||COALESCE(NULLIF(p.scope_key,''),p.agent_id)||',',','||?||',')>0)",
 		)
-		.all(pass, item.row.agent_id)
+		.all(pass, item.row.agent_id, item.row.agent_id)
 		.flatMap((r) => (typeof r.classification_id === "string" ? [r.classification_id] : []));
 }
 function members(db: MigrationDb, c: unknown): string[] {
@@ -492,7 +554,15 @@ function authorize(
 	)
 		throw new Error("permission");
 }
-const COPY_KINDS = new Set(["contradiction", "head_revision", "proposal", "telemetry", "community"]);
+const COPY_KINDS = new Set([
+	"contradiction",
+	"head_revision",
+	"proposal",
+	"telemetry",
+	"community",
+	"temporal_edge",
+	"attention",
+]);
 function referencedRows(db: MigrationDb, kind: unknown, key: unknown, agent: unknown): ContentRow[] {
 	if (typeof kind !== "string" || typeof key !== "string" || typeof agent !== "string") return [];
 	const tables =
@@ -541,10 +611,44 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 			if (item.kind)
 				for (const link of db
 					.prepare(
-						"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_id=? AND derived_kind IN ('contradiction','head_revision','proposal','telemetry')",
+						"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_id=? AND derived_kind IN ('contradiction','head_revision','proposal','telemetry','temporal_edge','attention')",
 					)
 					.all(item.row.agent_id, item.key))
 					add(referencedRows(db, link.derived_kind, link.derived_id, item.row.agent_id), true);
+			if (item.table === "memories") {
+				for (const table of ["memory_entity_mentions", "memory_history"])
+					add(contentRows(db, table, "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
+				add(
+					contentRows(db, "derived_memory_sources", "agent_id=? AND derived_memory_id=?", [
+						item.row.agent_id,
+						item.key,
+					]),
+					true,
+				);
+			}
+			if (item.table === "entities") {
+				add(
+					contentRows(db, "memory_entity_mentions", "agent_id=? AND entity_id=?", [item.row.agent_id, item.key]),
+					true,
+				);
+				add(
+					contentRows(db, "relations", "agent_id=? AND (source_entity_id=? OR target_entity_id=?)", [
+						item.row.agent_id,
+						item.key,
+						item.key,
+					]),
+					true,
+				);
+			}
+			if (["memory", "transcript", "artifact", "summary", "attribute"].includes(item.kind ?? ""))
+				add(
+					contentRows(db, "derived_memory_sources", "agent_id=? AND source_kind=? AND source_id=?", [
+						item.row.agent_id,
+						item.kind === "attribute" ? "ontology_claim" : item.kind,
+						item.key,
+					]),
+					true,
+				);
 			if (item.kind === "memory") {
 				add(contentRows(db, "memory_hints", "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
 				for (const store of ["embeddings", "embeddings_staging"])
@@ -637,6 +741,11 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 						).filter((p) => ["memory", "artifact", "transcript"].includes(p.kind ?? ""))
 					: [];
 		for (const p of inherited) for (const label of parent(p)) result.add(label);
+		for (const [table, column, value] of childParentRefs(item))
+			for (const p of rows.filter(
+				(row) => row.table === table && row.row.agent_id === item.row.agent_id && row.row[column] === value,
+			))
+				for (const label of parent(p)) result.add(label);
 		labels.set(key, result);
 		return result;
 	};
@@ -1131,4 +1240,246 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 		}
 	}
 	throw new Error("unsupported_classification_operation");
+}
+
+export interface DreamingPartition {
+	readonly agentId: string;
+	readonly compartmentId: number | null;
+}
+
+export type DreamingMutationTable =
+	| "entity_aliases"
+	| "entities"
+	| "entity_aspects"
+	| "entity_attributes"
+	| "entity_dependencies"
+	| "memories"
+	| "epistemic_assertions"
+	| "ontology_contradictions"
+	| "ontology_proposals"
+	| "dreaming_attention"
+	| "memory_head_entries"
+	| "temporal_edges";
+
+export function graphReadTablesInScope(agentId: string, scope: ReadScope) {
+	if (scope.projects !== null) throw new Error("project_scope_unsupported");
+	const predicates = ["e", "asp", "attr", "dep"].map((alias) =>
+		readScopeSql(alias, scope, {
+			memory: null,
+			session: null,
+			source: "source_id",
+			visibility: null,
+		}),
+	);
+	const [entity, aspect, attribute, dependency] = predicates;
+	if (!entity || !aspect || !attribute || !dependency) throw new Error("invalid_read_scope");
+	const params = predicates
+		.flatMap((predicate) => [agentId, ...predicate.args])
+		.map((value) => {
+			if (typeof value === "string" || typeof value === "number" || value === null) return value;
+			throw new Error("invalid_read_scope");
+		});
+	return {
+		params,
+		sql: `WITH visible_entities AS NOT MATERIALIZED (
+			SELECT e.* FROM entities e WHERE e.agent_id=? ${entity.sql}
+		), visible_aspects AS NOT MATERIALIZED (
+			SELECT asp.* FROM entity_aspects asp JOIN visible_entities e ON e.id=asp.entity_id AND e.agent_id=asp.agent_id
+			WHERE asp.agent_id=? ${aspect.sql}
+		), visible_attributes AS NOT MATERIALIZED (
+			SELECT attr.* FROM entity_attributes attr JOIN visible_aspects asp ON asp.id=attr.aspect_id AND asp.agent_id=attr.agent_id
+			WHERE attr.agent_id=? ${attribute.sql}
+		), visible_dependencies AS NOT MATERIALIZED (
+			SELECT dep.* FROM entity_dependencies dep
+			JOIN visible_entities src ON src.id=dep.source_entity_id AND src.agent_id=dep.agent_id
+			JOIN visible_entities dst ON dst.id=dep.target_entity_id AND dst.agent_id=dep.agent_id
+			WHERE dep.agent_id=? ${dependency.sql}
+		)`,
+	};
+}
+
+export function dreamingReadScopeInDb(db: ReadDb, agentId: string, compartmentId: number | null): ReadScope {
+	if (!agentId.trim()) throw new Error("agent_required");
+	if (compartmentId !== null && (!Number.isSafeInteger(compartmentId) || compartmentId < 1))
+		throw new Error("compartment_mismatch");
+	const compartments =
+		compartmentId === null
+			? []
+			: prepareTypedStatement<{ id: number }>(
+					db,
+					`
+		SELECT c.id FROM compartments c
+		WHERE EXISTS (SELECT 1 FROM compartment_members own WHERE own.compartment_id = c.id)
+		AND NOT EXISTS (
+			SELECT 1 FROM compartment_members member WHERE member.compartment_id = c.id
+			AND NOT EXISTS (SELECT 1 FROM compartment_members allowed
+				WHERE allowed.compartment_id = ? AND allowed.classification_id = member.classification_id)
+		) ORDER BY c.id
+	`,
+				)
+					.all(compartmentId)
+					.map((row) => row.id);
+	if (compartmentId !== null && !compartments.includes(compartmentId)) throw new Error("compartment_mismatch");
+	return { reach: { kind: "own", agentId }, compartments, projects: null };
+}
+
+export function assertDreamingAgentInDb(db: ReadDb, agentId: string): void {
+	const excluded = prepareTypedStatement<{ id: string }>(
+		db,
+		`
+		SELECT a.id FROM agents a WHERE a.id = ? AND (
+			a.archived_at IS NOT NULL OR (a.kind = 'organization' AND EXISTS (
+				SELECT 1 FROM organization o WHERE o.id = 1 AND o.claimed_at IS NOT NULL AND o.agent_model = 'personal'
+			))
+		) LIMIT 1
+	`,
+	).get(agentId);
+	if (excluded) throw new Error("org_policy");
+}
+
+export function dreamingPassPartitionInDb(db: ReadDb, passId: string, agentId?: string): DreamingPartition {
+	const pass = prepareTypedStatement<{
+		agent_id: string;
+		compartment_id: number | null;
+		scope_key: string | null;
+	}>(db, `SELECT agent_id, compartment_id, scope_key FROM dreaming_passes WHERE id = ? AND status = 'running'`).get(
+		passId,
+	);
+	if (!pass) throw new Error("Dreaming pass is not running");
+	const target = agentId ?? pass.agent_id;
+	const scopes = (pass.scope_key || pass.agent_id).split(",");
+	if (!scopes.includes(target)) throw new Error("agent_not_permitted");
+	assertDreamingAgentInDb(db, target);
+	const fence = prepareTypedStatement<{ valid: number }>(
+		db,
+		"SELECT valid FROM dreaming_pass_fences WHERE pass_id = ?",
+	).get(passId);
+	if (!fence?.valid) throw new Error("compartment_mismatch");
+	return { agentId: target, compartmentId: pass.compartment_id };
+}
+
+export function assertDreamingMutationLabelInDb(
+	db: ReadDb,
+	table: DreamingMutationTable,
+	id: string,
+	partition: DreamingPartition,
+): void {
+	const row = prepareTypedStatement<{ id: string; person_user_id: string | null }>(
+		db,
+		`SELECT id,${table === "entities" ? "person_user_id" : "NULL AS person_user_id"} FROM ${table} WHERE id = ? AND agent_id = ? AND compartment_id IS ?`,
+	).get(id, partition.agentId, partition.compartmentId);
+	if (!row) throw new Error("compartment_mismatch");
+	if (row.person_user_id !== null) throw new Error("person_identity_immutable");
+}
+export type SemanticCitationKind =
+	| "alias"
+	| "attribute"
+	| "memory"
+	| "dependency"
+	| "entity"
+	| "aspect"
+	| "assertion"
+	| "proposal"
+	| "contradiction"
+	| "temporal_edge";
+export type CitationEvidenceKind = "memory" | "artifact" | "transcript" | "summary" | "attribute";
+export interface SemanticEvidenceCitation {
+	readonly kind: CitationEvidenceKind;
+	readonly id: string;
+}
+
+export function dreamingEvidenceRecordInDb(
+	db: ReadDb,
+	agentId: string,
+	evidence: SemanticEvidenceCitation,
+): { readonly compartment_id: number | null; readonly author_user_id: string | null } | undefined {
+	const tables = {
+		memory: "memories",
+		artifact: "memory_artifacts",
+		transcript: "session_transcripts",
+		summary: "session_summaries",
+		attribute: "entity_attributes",
+	} as const;
+	const author =
+		evidence.kind === "transcript"
+			? "speaker_user_id"
+			: evidence.kind === "memory" || evidence.kind === "artifact" || evidence.kind === "summary"
+				? "author_user_id"
+				: evidence.kind === "attribute"
+					? "(SELECT author_user_id FROM memories WHERE memories.id = entity_attributes.memory_id AND memories.agent_id = entity_attributes.agent_id AND memories.compartment_id IS entity_attributes.compartment_id)"
+					: "NULL";
+	return prepareTypedStatement<{ compartment_id: number | null; author_user_id: string | null }>(
+		db,
+		`SELECT compartment_id, ${author} AS author_user_id FROM ${tables[evidence.kind]} WHERE ${evidence.kind === "transcript" ? "session_key" : evidence.kind === "artifact" ? "source_path" : "id"} = ? AND agent_id = ?`,
+	).get(evidence.id, agentId);
+}
+
+export function evidenceCitationInDb(
+	db: ReadDb,
+	partition: DreamingPartition,
+	evidence: SemanticEvidenceCitation,
+): { readonly authorUserId: string | null } {
+	const row = dreamingEvidenceRecordInDb(db, partition.agentId, evidence);
+	if (!row) throw new Error(`Derived memory provenance source is not in the authorized agent scope: ${evidence.id}`);
+	const scope = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+	if (row.compartment_id !== null && scope.compartments !== "all" && !scope.compartments.includes(row.compartment_id))
+		throw new Error("compartment_mismatch");
+	return { authorUserId: row.author_user_id };
+}
+
+export function recordSemanticCitationsInTx(
+	db: WriteDb,
+	input: {
+		readonly kind: SemanticCitationKind;
+		readonly id: string;
+		readonly partition: DreamingPartition;
+		readonly evidence: readonly SemanticEvidenceCitation[];
+	},
+): void {
+	for (const evidence of input.evidence) evidenceCitationInDb(db, input.partition, evidence);
+	for (const evidence of input.evidence)
+		db.prepare(
+			"INSERT INTO evidence_citations (derived_kind, derived_id, agent_id, evidence_kind, evidence_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT (derived_kind, derived_id, evidence_kind, evidence_id) DO NOTHING",
+		).run(input.kind, input.id, input.partition.agentId, evidence.kind, evidence.id);
+}
+
+export function assertDreamingAttentionSubjectInDb(
+	db: ReadDb,
+	partition: DreamingPartition,
+	subject: string | null,
+): void {
+	const separator = subject?.indexOf(":") ?? -1;
+	const kind = subject?.slice(0, separator) ?? "";
+	const sourceId = subject?.slice(separator + 1) ?? "";
+	const definitions: Readonly<Record<string, readonly [string, string]>> = {
+		entity: ["entities", "id"],
+		aspect: ["entity_aspects", "id"],
+		attribute: ["entity_attributes", "id"],
+		claim: ["entity_attributes", "id"],
+		link: ["entity_dependencies", "id"],
+		memory: ["memories", "id"],
+		artifact: ["memory_artifacts", "source_path"],
+		transcript: ["session_transcripts", "session_key"],
+		summary: ["session_summaries", "id"],
+	};
+	const definition = Object.hasOwn(definitions, kind) ? definitions[kind] : undefined;
+	if (separator > 0 && definition) {
+		const [table, key] = definition;
+		const source = prepareTypedStatement<{ compartment_id: number | null }>(
+			db,
+			`SELECT compartment_id FROM ${table} WHERE ${key} = ? AND agent_id = ?`,
+		).get(sourceId, partition.agentId);
+		const readable = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+		if (
+			source?.compartment_id != null &&
+			readable.compartments !== "all" &&
+			!readable.compartments.includes(source.compartment_id)
+		)
+			throw new Error("compartment_mismatch");
+	}
+	for (const row of prepareTypedStatement<{ id: string }>(
+		db,
+		"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = 'hygiene' AND subject_ref = ? AND compartment_id IS ?",
+	).all(partition.agentId, subject, partition.compartmentId))
+		assertDreamingMutationLabelInDb(db, "dreaming_attention", row.id, partition);
 }

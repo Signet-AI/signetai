@@ -9,9 +9,11 @@ import {
 	readScopeSql,
 	redactCredentials,
 } from "@signet/core";
-import type { WriteDb } from "./db-accessor";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadRequest } from "./memory-head";
-import { readEpisodicSource } from "./episodic-sources";
+import { readEpisodicSource, type EpisodicSourceRecord } from "./episodic-sources";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb, type DreamingPartition } from "./classification-owner";
+
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { countTokens } from "./pipeline/tokenizer";
 import { derivedScopeSql, evidenceScopeSql } from "./read-scope-tables";
@@ -47,64 +49,93 @@ export function memoryHeadInputError(input: MemoryHeadCommitInput): {
 	};
 }
 
-function currentSource(db: WriteDb, agentId: string, from: string, readScope: ReadScope) {
-	from = from.replace(/^source:/, "artifact:").replace(/^session:/, "transcript:");
-	if (!/^(memory|artifact|transcript|summary):.+$/.test(from)) return null;
-	const memoryScope = readScopeSql("m", readScope);
+function currentSource(
+	db: WriteDb,
+	partition: DreamingPartition,
+	from: string,
+	callerScope?: ReadScope,
+): EpisodicSourceRecord | null {
+	const scope = callerScope ?? dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+	const source = readEpisodicSource(db, { agentId: partition.agentId, from, readScope: scope });
+	if (source?.completed !== true) return null;
 	if (
-		from.startsWith("memory:") &&
+		source.kind === "memory" &&
 		!db
 			.prepare(
-				`SELECT 1 FROM memories m WHERE m.id=? AND m.agent_id=? AND m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL AND m.visibility != 'archived'${memoryScope.sql}`,
+				"SELECT 1 FROM memories WHERE id=? AND agent_id=? AND is_deleted=0 AND superseded_by IS NULL AND stale_at IS NULL AND visibility!='archived'",
 			)
-			.get(from.slice(7), agentId, ...memoryScope.args)
+			.get(source.id, partition.agentId)
 	)
 		return null;
-	if (!from.startsWith("memory:")) {
-		const separator = from.indexOf(":");
-		const kind = from.slice(0, separator);
-		const id = from.slice(separator + 1);
-		const target =
-			kind === "memory"
-				? { table: "memories", key: "id" }
-				: kind === "artifact"
-					? { table: "memory_artifacts", key: "source_path" }
-					: kind === "transcript"
-						? { table: "session_transcripts", key: "session_key" }
-						: { table: "session_summaries", key: "id" };
-		const predicate =
-			kind === "memory"
-				? readScopeSql("r", readScope)
-				: evidenceScopeSql("r", readScope, {
-						memory: null,
-						session: kind === "transcript" || kind === "artifact" ? "session_key" : null,
-						source: kind === "summary" ? null : "source_id",
-					});
-		if (
-			!db
-				.prepare(`SELECT 1 FROM ${target.table} r WHERE r.${target.key}=? AND r.agent_id=?${predicate.sql}`)
-				.get(id, agentId, ...predicate.args)
-		)
-			return null;
-	}
-	const source = readEpisodicSource(db, { agentId, from });
-	return source?.completed === true ? source : null;
+	return source;
+}
+
+function currentHead(db: WriteDb, partition: DreamingPartition): Head | undefined {
+	const head =
+		partition.compartmentId === null
+			? prepareTypedStatement<Head>(
+					db,
+					"SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?",
+				).get(partition.agentId)
+			: prepareTypedStatement<Head>(
+					db,
+					"SELECT revision, content, content_hash, id AS revision_id, is_current FROM memory_head_revisions WHERE agent_id=? AND compartment_id IS ? ORDER BY revision DESC LIMIT 1",
+				).get(partition.agentId, partition.compartmentId);
+	if (
+		head?.revision_id &&
+		db
+			.prepare(
+				"SELECT 1 FROM memory_head_revision_entries WHERE agent_id=? AND revision_id=? AND compartment_id IS NOT ? LIMIT 1",
+			)
+			.get(partition.agentId, head.revision_id, partition.compartmentId)
+	)
+		return { ...head, is_current: 0 };
+	return head ?? undefined;
+}
+
+type ReadableHeadEntry = {
+	readonly entry_id: string;
+	readonly canonical_text: string;
+	readonly compartment_id: number | null;
+};
+
+function readableHeadEntries(db: WriteDb, partition: DreamingPartition): readonly ReadableHeadEntry[] {
+	const clause = readScopeSql("e", dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId), {
+		visibility: null,
+	});
+	return prepareTypedStatement<ReadableHeadEntry>(
+		db,
+		`SELECT e.entry_id, e.canonical_text, e.compartment_id FROM memory_head_entries e
+		WHERE e.status='active' AND e.compartment_id IS NOT ? ${clause.sql}
+		AND (e.compartment_id IS NULL AND EXISTS (
+			SELECT 1 FROM memory_md_heads h WHERE h.agent_id=e.agent_id AND h.is_current=1 AND h.revision=e.last_revision
+		) OR e.compartment_id IS NOT NULL AND EXISTS (
+			SELECT 1 FROM memory_head_revisions r WHERE r.agent_id=e.agent_id AND r.compartment_id IS e.compartment_id
+			AND r.revision=e.last_revision AND r.is_current=1 AND NOT EXISTS (
+				SELECT 1 FROM memory_head_revisions newer WHERE newer.agent_id=r.agent_id AND newer.compartment_id IS r.compartment_id AND newer.revision>r.revision
+			)
+		)) ORDER BY e.compartment_id, e.entry_id LIMIT 200`,
+	).all(partition.compartmentId, ...clause.args);
 }
 
 function knownProjection(db: WriteDb, content: string): boolean {
 	const digest = hash(content.trim().replace(generatedMarker, "").trim());
 	const marker = revisionMarker.exec(content.trim());
 	if (marker) {
-		const revision = db
-			.prepare("SELECT content, content_hash FROM memory_head_revisions WHERE agent_id=? AND revision=? LIMIT 1")
-			.get(marker[1], Number(marker[2])) as { content: string; content_hash: string } | null | undefined;
+		const revision = prepareTypedStatement<{ content: string; content_hash: string }>(
+			db,
+			"SELECT content, content_hash FROM memory_head_revisions WHERE agent_id=? AND revision=? AND compartment_id IS NULL LIMIT 1",
+		).get(marker[1], Number(marker[2]));
 		return (
 			revision != null && (revision.content_hash === digest || hash(redactCredentials(revision.content)) === digest)
 		);
 	}
 	return (
-		Boolean(db.prepare("SELECT 1 FROM memory_head_revisions WHERE content_hash=? LIMIT 1").get(digest)) ||
-		Boolean(db.prepare("SELECT 1 FROM memory_md_heads WHERE content_hash=? LIMIT 1").get(digest))
+		Boolean(
+			db
+				.prepare("SELECT 1 FROM memory_head_revisions WHERE content_hash=? AND compartment_id IS NULL LIMIT 1")
+				.get(digest),
+		) || Boolean(db.prepare("SELECT 1 FROM memory_md_heads WHERE content_hash=? LIMIT 1").get(digest))
 	);
 }
 function isGenerated(db: WriteDb, content: string): boolean {
@@ -113,7 +144,7 @@ function isGenerated(db: WriteDb, content: string): boolean {
 	if (
 		marker &&
 		db
-			.prepare("SELECT 1 FROM memory_head_revisions WHERE agent_id=? AND revision=? LIMIT 1")
+			.prepare("SELECT 1 FROM memory_head_revisions WHERE agent_id=? AND revision=? AND compartment_id IS NULL LIMIT 1")
 			.get(marker[1], Number(marker[2]))
 	)
 		return false;
@@ -143,7 +174,7 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 	}
 
 	db.prepare(
-		"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
+		"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=? AND compartment_id IS NULL",
 	).run(new Date().toISOString(), agentId, head.revision);
 }
 
@@ -176,7 +207,14 @@ function readableHeadBody(db: WriteDb, agentId: string, revision: number, scope:
 							typeof item === "object" &&
 							item !== null &&
 							!Array.isArray(item) &&
-							supportError(db, agentId, entryId, Object.fromEntries(Object.entries(item)), evidence, scope) === null,
+							supportError(
+								db,
+								{ agentId, compartmentId: null },
+								entryId,
+								Object.fromEntries(Object.entries(item)),
+								evidence,
+								scope,
+							) === null,
 					)
 				)
 					return [];
@@ -208,26 +246,16 @@ function authoredHeadReadable(db: WriteDb, agentId: string, scope: ReadScope): b
 }
 
 export function withContentPassWrites<T>(db: WriteDb, passId: string | undefined, write: () => T): T {
-	const pass =
-		passId === undefined
-			? null
-			: (db
-					.prepare(
-						"SELECT agent_id, head_base_revision FROM dreaming_passes WHERE id=? AND status='running' AND mode='incremental-content'",
-					)
-					.get(passId) as { agent_id: string; head_base_revision: number | null } | null | undefined);
-	if (pass == null) return write();
-	const revision = (): number =>
-		(
-			db.prepare("SELECT revision FROM memory_md_heads WHERE agent_id=?").get(pass.agent_id) as
-				| { revision: number }
-				| null
-				| undefined
-		)?.revision ?? 0;
-	const before = revision();
+	if (passId === undefined) return write();
+	const partition = dreamingPassPartitionInDb(db, passId);
+	const pass = prepareTypedStatement<{ mode: string; head_base_revision: number | null }>(
+		db,
+		"SELECT mode, head_base_revision FROM dreaming_passes WHERE id=?",
+	).get(passId);
+	const before = currentHead(db, partition)?.revision ?? 0;
 	const result = write();
-	const after = revision();
-	if (after !== before && pass.head_base_revision === before)
+	const after = currentHead(db, partition)?.revision ?? 0;
+	if (pass?.mode === "incremental-content" && pass.head_base_revision === before)
 		db.prepare("UPDATE dreaming_passes SET head_base_revision=? WHERE id=?").run(after, passId);
 	return result;
 }
@@ -235,20 +263,18 @@ export function withContentPassWrites<T>(db: WriteDb, passId: string | undefined
 export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
 	const agentId = input.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
-	const head = db
-		.prepare("SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?")
-		.get(agentId) as Head | undefined;
-	const pass = db
-		.prepare("SELECT status, mode, agent_id, head_base_revision FROM dreaming_passes WHERE id=?")
-		.get(input.passId) as
-		| { status: string; mode: string; agent_id: string; head_base_revision: number | null }
-		| undefined;
-	if (pass?.status !== "running" || pass.mode !== "incremental-content" || pass.agent_id !== agentId)
+	const partition = dreamingPassPartitionInDb(db, input.passId, agentId);
+	const pass = prepareTypedStatement<{ mode: string; head_base_revision: number | null }>(
+		db,
+		"SELECT mode, head_base_revision FROM dreaming_passes WHERE id=?",
+	).get(input.passId);
+	if (pass?.mode !== "incremental-content")
 		return {
 			ok: false,
 			code: "PASS_NOT_AUTHORIZED",
 			error: "only a running scoped content pass may commit the memory head",
 		};
+	const head = currentHead(db, partition);
 	const revision = head?.revision ?? 0;
 	const currentHash = head?.content_hash ?? "";
 	if (pass.head_base_revision !== revision)
@@ -261,11 +287,13 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 		};
 	const invalid = memoryHeadInputError(input);
 	if (invalid !== null) return { ok: false, ...invalid };
+	const validated = validateEntries(db, input, partition);
+	if (validated.error !== undefined) return validated.error;
 	const body = renderMemoryHeadBody(input.entries);
 	if (input.entries.length === 0 && (head?.content ?? "") === "")
 		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
 	if (input.entries.length === 0) {
-		const carried = committedEntries(db, agentId, head?.revision_id ?? null);
+		const carried = committedEntries(db, partition, head?.revision_id ?? null);
 		if (carried.entries.length > 0 || carried.unverifiable)
 			return {
 				ok: false,
@@ -277,13 +305,14 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	const contentHash = hash(body);
 	if (head?.is_current === 1 && currentHash === contentHash)
 		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };
-	const result = commitEntries(db, input, body, contentHash, revision, currentHash);
+	const result = commitEntries(db, input, partition, validated.evidence, body, contentHash, revision, currentHash);
 	if (result.ok) {
 		const now = new Date().toISOString();
 		const revisionId = String(result.revisionId);
-		db.prepare(
-			"UPDATE memory_md_heads SET content=?, content_hash=?, revision=?, revision_id=?, pass_id=?, updated_at=?, is_current=1, lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL WHERE agent_id=?",
-		).run(body, contentHash, revision + 1, revisionId, input.passId, now, agentId);
+		if (partition.compartmentId === null)
+			db.prepare(
+				"UPDATE memory_md_heads SET content=?, content_hash=?, revision=?, revision_id=?, pass_id=?, updated_at=?, is_current=1, lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL WHERE agent_id=?",
+			).run(body, contentHash, revision + 1, revisionId, input.passId, now, agentId);
 		db.prepare("UPDATE dreaming_passes SET head_revision=?, head_hash=? WHERE id=? AND agent_id=?").run(
 			revision + 1,
 			contentHash,
@@ -291,24 +320,34 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 			agentId,
 		);
 		db.prepare(
-			"INSERT INTO memory_head_publications (agent_id, revision, revision_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
-		).run(agentId, revision + 1, revisionId, now);
+			"INSERT INTO memory_head_publications (agent_id, compartment_id, revision, revision_id, status, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		).run(
+			agentId,
+			partition.compartmentId,
+			revision + 1,
+			revisionId,
+			partition.compartmentId === null ? "pending" : "completed",
+			now,
+			partition.compartmentId === null ? null : now,
+		);
 	}
 	return result;
 }
 
 export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
-	if (!["read", "inspect", "commit"].includes(request.action)) throw new Error("Unsupported memory head action");
+	if (!["read", "inspect", "commit", "publish"].includes(request.action))
+		throw new Error("Unsupported memory head action");
 	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
+	const passId =
+		request.action === "commit" ? request.input.passId : request.action === "read" ? request.passId : undefined;
+	const partition =
+		passId === undefined ? { agentId, compartmentId: null } : dreamingPassPartitionInDb(db, passId, agentId);
 	if (request.action === "commit") {
 		const result = commitCuratedMemoryHeadInDb(db, request.input);
-		if (result.ok === true && result.code === "COMMITTED") {
-			const next = db
-				.prepare(
-					"SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?",
-				)
-				.get(agentId) as Head;
+		if (result.ok === true && result.code === "COMMITTED" && partition.compartmentId === null) {
+			const next = currentHead(db, partition);
+			if (next == null) throw new Error("Committed head missing");
 			try {
 				publish(db, root, agentId, next);
 			} catch (error) {
@@ -323,11 +362,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 		return result;
 	}
 	const restrictedInspect = request.action === "inspect" && requireReadScope(request.readScope).compartments !== "all";
-	const head = db
-		.prepare(
-			`SELECT revision, ${restrictedInspect ? "'' AS content, '' AS content_hash" : "content, content_hash"}, revision_id, is_current FROM memory_md_heads WHERE agent_id=?`,
-		)
-		.get(agentId) as Head | undefined;
+	const head = currentHead(db, partition);
 	if (request.action === "inspect") {
 		if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
 		const generated =
@@ -350,26 +385,35 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			content: readableHeadBody(db, agentId, head.revision, scope),
 		};
 	}
-	const pass =
-		request.passId === undefined
-			? null
-			: db
-					.prepare(
-						"SELECT 1 FROM dreaming_passes WHERE id=? AND agent_id=? AND status='running' AND mode='incremental-content'",
-					)
-					.get(request.passId, agentId);
-	let publicationError: string | undefined;
-	if (head?.is_current === 1) {
-		try {
-			publish(db, root, agentId, head);
-		} catch (error) {
-			publicationError = String(error);
+	const publicationPending =
+		head?.is_current === 1 &&
+		partition.compartmentId === null &&
+		Boolean(
+			db
+				.prepare(
+					"SELECT 1 FROM memory_head_publications WHERE agent_id=? AND revision=? AND compartment_id IS NULL AND status='pending' LIMIT 1",
+				)
+				.get(agentId, head.revision),
+		);
+	if (request.action === "publish") {
+		if (publicationPending && head !== undefined) {
+			try {
+				publish(db, root, agentId, head);
+			} catch (error) {
+				return {
+					ok: false,
+					publication: "pending",
+					publicationError: error instanceof Error ? error.message : String(error),
+				};
+			}
 		}
+		return { ok: true, publication: head?.is_current === 1 ? "completed" : "stale" };
 	}
-	const committed = pass == null ? null : committedEntries(db, agentId, head?.revision_id ?? null).entries;
+	const committed = passId === undefined ? null : committedEntries(db, partition, head?.revision_id ?? null).entries;
 	return {
 		agentId,
-		...(publicationError ? { publication: "pending", publicationError } : {}),
+		compartmentId: partition.compartmentId,
+		...(publicationPending ? { publication: "pending" } : {}),
 		revision: head?.revision ?? 0,
 		hash: head?.content_hash ?? "",
 		revisionId: head?.revision_id ?? null,
@@ -379,10 +423,11 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			head?.is_current === 1
 				? db
 						.prepare(
-							"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id=? AND status='active' AND last_revision=? ORDER BY entry_id",
+							"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id=? AND compartment_id IS ? AND status='active' AND last_revision=? ORDER BY entry_id",
 						)
-						.all(agentId, head.revision)
+						.all(agentId, partition.compartmentId, head.revision)
 				: [],
+		readableEntries: passId === undefined ? [] : readableHeadEntries(db, partition),
 		maxTokens: MEMORY_HEAD_MAX_TOKENS,
 		tokens: head?.is_current === 1 ? countTokens(head.content) : 0,
 		...(committed === null
@@ -391,42 +436,36 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 	};
 }
 
-type Evidence = Map<string, string | null>;
+type Evidence = Map<string, { readonly source: EpisodicSourceRecord; readonly rendered: string } | null>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function committedEntries(
 	db: WriteDb,
-	agentId: string,
+	partition: DreamingPartition,
 	revisionId: string | null,
 	evidence: Evidence = new Map(),
 ): { entries: MemoryHeadCommitInput["entries"]; unverifiable: boolean } {
 	if (revisionId === null) return { entries: [], unverifiable: false };
-	const rows = db
-		.prepare(
-			`SELECT e.entry_id AS entryId, h.canonical_text AS text, e.provenance_json AS support
+	const rows = prepareTypedStatement<{ entryId: string; text: string; support: string }>(
+		db,
+		`SELECT e.entry_id AS entryId, h.canonical_text AS text, e.provenance_json AS support
 			 FROM memory_head_revisions r
-			 JOIN memory_head_revision_entries e ON e.agent_id = r.agent_id AND e.revision = r.revision AND e.operation = 'add'
+			 JOIN memory_head_revision_entries e ON e.agent_id = r.agent_id AND e.revision_id = r.id AND e.compartment_id IS r.compartment_id AND e.operation = 'add'
 			 JOIN memory_head_entries h ON h.agent_id = e.agent_id AND h.entry_id = e.entry_id
-			 WHERE r.id = ? AND r.agent_id = ? ORDER BY e.ordinal`,
-		)
-		.all(revisionId, agentId) as Array<{ entryId: string; text: string; support: string }>;
+			 WHERE r.id = ? AND r.agent_id = ? AND r.compartment_id IS ? AND h.compartment_id IS ? ORDER BY e.ordinal`,
+	).all(revisionId, partition.agentId, partition.compartmentId, partition.compartmentId);
 	const entries: MemoryHeadCommitInput["entries"][number][] = [];
 	let unverifiable = false;
 	for (const row of rows) {
-		let parsed: unknown = null;
-		try {
-			parsed = JSON.parse(row.support);
-		} catch {}
-		if (
-			!Array.isArray(parsed) ||
-			!parsed.every((item) => typeof item === "object" && item !== null && !Array.isArray(item))
-		) {
+		const parsed: unknown = attempt(() => JSON.parse(row.support));
+		if (!Array.isArray(parsed) || !parsed.every(isRecord)) {
 			unverifiable = true;
 			continue;
 		}
-		const support = (parsed as Record<string, unknown>[]).filter(
-			(item) =>
-				supportError(db, agentId, row.entryId, item, evidence, localAllReadScope({ kind: "own", agentId })) === null,
-		);
+		const support = parsed.filter((item) => supportError(db, partition, row.entryId, item, evidence) === null);
 		if (support.length > 0) entries.push({ entryId: row.entryId, text: row.text, support });
 	}
 	return { entries, unverifiable };
@@ -434,11 +473,11 @@ function committedEntries(
 
 function supportError(
 	db: WriteDb,
-	agentId: string,
+	partition: DreamingPartition,
 	entryId: string,
 	support: Record<string, unknown>,
 	evidence: Evidence,
-	readScope: ReadScope,
+	readScope?: ReadScope,
 ): { code: string; error: string } | null {
 	const sourceRef =
 		typeof support.source_ref === "string"
@@ -451,44 +490,50 @@ function supportError(
 		return { code: "INVALID_PROVENANCE", error: `entry ${entryId} requires scoped exact evidence` };
 	let rendered = evidence.get(sourceRef);
 	if (rendered === undefined) {
-		const source = currentSource(db, agentId, sourceRef, readScope);
-		rendered = source === null ? null : renderDreamingEvidence(source);
+		const source = currentSource(db, partition, sourceRef, readScope);
+		rendered = source === null ? null : { source, rendered: renderDreamingEvidence(source) };
 		evidence.set(sourceRef, rendered);
 	}
-	if (rendered === null || !rendered.includes(quote))
+	if (rendered === null || !rendered.rendered.includes(quote))
 		return { code: "INVALID_PROVENANCE", error: `entry ${entryId} quote is not exact scoped evidence` };
 	return null;
 }
 
+function validateEntries(
+	db: WriteDb,
+	input: MemoryHeadCommitInput,
+	partition: DreamingPartition,
+): { evidence: Evidence; error?: undefined } | { error: Record<string, unknown> } {
+	const evidence: Evidence = new Map();
+	const ids = new Set<string>();
+	for (const entry of input.entries) {
+		if (ids.has(entry.entryId)) return { error: { ok: false, code: "INVALID_HEAD", error: "duplicate entry id" } };
+		ids.add(entry.entryId);
+		if (entry.support.length === 0)
+			return { error: { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` } };
+		for (const support of entry.support) {
+			const invalid = supportError(db, partition, entry.entryId, support, evidence);
+			if (invalid !== null) return { error: { ok: false, ...invalid } };
+		}
+	}
+	return { evidence };
+}
+
 function commitEntries(
 	db: WriteDb,
-	input: Extract<MemoryHeadRequest, { action: "commit" }>["input"],
+	input: MemoryHeadCommitInput,
+	partition: DreamingPartition,
+	evidence: Evidence,
 	body: string,
 	contentHash: string,
 	revision: number,
 	currentHash: string,
 ): Record<string, unknown> {
-	const evidence: Evidence = new Map();
-	for (const entry of input.entries) {
-		if (entry.support.length === 0)
-			return { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
-		for (const support of entry.support) {
-			const invalid = supportError(
-				db,
-				input.agentId,
-				entry.entryId,
-				support,
-				evidence,
-				localAllReadScope({ kind: "own", agentId: input.agentId }),
-			);
-			if (invalid !== null) return { ok: false, ...invalid };
-		}
-	}
 	const nextRevision = revision + 1;
 	const revisionId = randomUUID();
 	const now = new Date().toISOString();
 	db.prepare(
-		"INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at, compartment_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	).run(
 		revisionId,
 		input.agentId,
@@ -500,29 +545,88 @@ function commitEntries(
 		revision,
 		currentHash,
 		now,
+		partition.compartmentId,
+	);
+	db.prepare("UPDATE memory_head_revisions SET is_current=0 WHERE agent_id=? AND compartment_id IS ? AND id!=?").run(
+		input.agentId,
+		partition.compartmentId,
+		revisionId,
 	);
 	for (const [ordinal, entry] of input.entries.entries()) {
+		const revisionCitationId = JSON.stringify([revisionId, entry.entryId]);
 		const entryHash = hash(entry.text.trim());
 		db.prepare(
-			"INSERT INTO memory_head_entries (entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?) ON CONFLICT(agent_id, entry_id) DO UPDATE SET canonical_text=excluded.canonical_text, entry_hash=excluded.entry_hash, status='active', last_revision=excluded.last_revision, updated_at=excluded.updated_at",
-		).run(entry.entryId, input.agentId, entry.text.trim(), entryHash, nextRevision, nextRevision, now, now);
+			"INSERT INTO memory_head_entries (id, entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, created_at, updated_at, compartment_id, pass_id) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, entry_id, COALESCE(compartment_id,0)) DO UPDATE SET canonical_text=excluded.canonical_text, entry_hash=excluded.entry_hash, status='active', last_revision=excluded.last_revision, updated_at=excluded.updated_at, pass_id=excluded.pass_id",
+		).run(
+			randomUUID(),
+			entry.entryId,
+			input.agentId,
+			entry.text.trim(),
+			entryHash,
+			nextRevision,
+			nextRevision,
+			now,
+			now,
+			partition.compartmentId,
+			input.passId,
+		);
+		const storedEntry = prepareTypedStatement<{ id: string }>(
+			db,
+			"SELECT id FROM memory_head_entries WHERE agent_id=? AND entry_id=? AND compartment_id IS ?",
+		).get(input.agentId, entry.entryId, partition.compartmentId);
+		if (!storedEntry) throw new Error("Committed head entry missing");
+		const entryCitationId = storedEntry.id;
 		db.prepare(
-			"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json) VALUES (?, ?, ?, ?, 'add', ?)",
-		).run(input.agentId, nextRevision, entry.entryId, ordinal, JSON.stringify(entry.support));
+			"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json, compartment_id, pass_id, revision_id) VALUES (?, ?, ?, ?, 'add', ?, ?, ?, ?)",
+		).run(
+			input.agentId,
+			nextRevision,
+			entry.entryId,
+			ordinal,
+			JSON.stringify(entry.support),
+			partition.compartmentId,
+			input.passId,
+			revisionId,
+		);
+		db.prepare(
+			"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('head_revision',?,?,'attribute',?)",
+		).run(revisionCitationId, input.agentId, entryCitationId);
+		db.prepare("DELETE FROM evidence_citations WHERE derived_kind='head_entry' AND derived_id=? AND agent_id=?").run(
+			entryCitationId,
+			input.agentId,
+		);
+		for (const support of entry.support) {
+			const ref =
+				typeof support.source_ref === "string"
+					? support.source_ref
+					: typeof support.sourceRef === "string"
+						? support.sourceRef
+						: "";
+			const citation = evidence.get(ref);
+			if (citation === undefined || citation === null) throw new Error("Validated evidence missing");
+			for (const [kind, id] of [
+				["head_entry", entryCitationId],
+				["head_revision", revisionCitationId],
+			])
+				db.prepare(
+					"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES(?,?,?,?,?)",
+				).run(kind, id, input.agentId, citation.source.kind, citation.source.id);
+		}
 	}
-	const activeEntries = db
-		.prepare("SELECT entry_id FROM memory_head_entries WHERE agent_id = ? AND status = 'active'")
-		.all(input.agentId) as Array<{ entry_id: string }>;
+	const activeEntries = prepareTypedStatement<{ entry_id: string }>(
+		db,
+		"SELECT entry_id FROM memory_head_entries WHERE agent_id = ? AND compartment_id IS ? AND status = 'active'",
+	).all(input.agentId, partition.compartmentId);
 	const retained = new Set(input.entries.map((entry) => entry.entryId));
 	let ordinal = input.entries.length;
 	for (const old of activeEntries) {
 		if (retained.has(old.entry_id)) continue;
 		db.prepare(
-			"UPDATE memory_head_entries SET status='removed', last_revision=?, updated_at=? WHERE agent_id=? AND entry_id=?",
-		).run(nextRevision, now, input.agentId, old.entry_id);
+			"UPDATE memory_head_entries SET status='removed', last_revision=?, updated_at=? WHERE agent_id=? AND entry_id=? AND compartment_id IS ?",
+		).run(nextRevision, now, input.agentId, old.entry_id, partition.compartmentId);
 		db.prepare(
-			"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json) VALUES (?, ?, ?, ?, 'remove', '[]')",
-		).run(input.agentId, nextRevision, old.entry_id, ordinal++);
+			"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json, compartment_id, pass_id, revision_id) VALUES (?, ?, ?, ?, 'remove', '[]', ?, ?, ?)",
+		).run(input.agentId, nextRevision, old.entry_id, ordinal++, partition.compartmentId, input.passId, revisionId);
 	}
 
 	return {

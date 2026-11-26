@@ -4,7 +4,6 @@ import { Buffer } from "node:buffer";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb } from "../db-accessor";
-import { enqueueDreamingSurprisalAttention } from "./dreaming";
 import {
 	type DreamingSurprisalObservation,
 	rankDreamingSurprisal,
@@ -190,7 +189,48 @@ describe("dreaming surprisal attention", () => {
 		expect(selection.candidates.some((candidate) => candidate.id === "other-outlier")).toBe(false);
 	});
 
+	it("partitions sampling and latest embedding selection before ranking", () => {
+		db.exec(
+			"INSERT INTO compartments (id, key, created_at) VALUES (1, 'private', datetime('now')), (2, 'other', datetime('now'))",
+		);
+		const config = { ...CONFIG, sampleSize: 20 };
+		for (const observation of makeObservations()) {
+			seedMemory(db, "default", observation.id, [...observation.vector], observation.capturedAt);
+		}
+		const baseline = selectDreamingSurprisalInDb(db, "default", config, null);
+		expect(baseline.candidates[0]?.id).toBe("semantic-outlier");
+		for (const compartmentId of [1, 2]) {
+			for (const observation of makeObservations()) {
+				const id = `private-${compartmentId}-${observation.id}`;
+				seedMemory(db, "default", id, [...observation.vector], observation.capturedAt.replace("2026-01", "2026-02"));
+				db.prepare("UPDATE memories SET compartment_id = ? WHERE id = ?").run(compartmentId, id);
+				db.prepare("UPDATE embeddings SET compartment_id = ? WHERE source_id = ?").run(compartmentId, id);
+			}
+		}
+		db.prepare(`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+		 VALUES ('hidden-replacement', 'hidden-replacement', ?, 3, 'memory', 'semantic-outlier', 'hidden', '2026-03-01', 'default', 1)`).run(
+			vectorBlob([1, 0, 0]),
+		);
+		const visible = selectDreamingSurprisalInDb(db, "default", config, null);
+		expect(visible.candidates).toEqual(baseline.candidates);
+		expect(visible.sampled).toBe(20);
+		expect(visible.valid).toBe(20);
+		for (const compartmentId of [1, 2]) {
+			const classified = selectDreamingSurprisalInDb(db, "default", config, null, compartmentId);
+			expect(classified.sampled).toBe(20);
+			expect(classified.valid).toBe(20);
+			expect(classified.candidates).toEqual(
+				baseline.candidates.map((candidate) => ({
+					...candidate,
+					id: `private-${compartmentId}-${candidate.id}`,
+					capturedAt: candidate.capturedAt.replace("2026-01", "2026-02"),
+				})),
+			);
+		}
+	});
+
 	it("queues hints without advancing the evidence cursor", async () => {
+		const { enqueueDreamingSurprisalAttention } = await import("./dreaming");
 		for (const observation of makeObservations()) {
 			seedMemory(db, "default", observation.id, [...observation.vector], observation.capturedAt);
 		}

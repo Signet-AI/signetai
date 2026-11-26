@@ -1,3 +1,4 @@
+import type { Principal } from "./auth/principal";
 import { requestMemoryHead } from "./memory-head";
 import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { budgetIdentityContent } from "./identity-context";
@@ -1536,7 +1537,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 export async function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
 	overrides: Partial<UserPromptSubmitDeps> | undefined,
-	scope: { readonly project?: string; readonly readScope: ReadScope },
+	scope: { readonly project?: string; readonly principal?: Principal; readonly readScope: ReadScope },
 ): Promise<UserPromptSubmitResponse> {
 	const promptScope = requireReadScope(scope.readScope);
 	requireWriteAuthor(req.author);
@@ -1706,6 +1707,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			agentId,
 			readScope,
+			principal: scope.principal,
 			sessionKey: recallSessionKey(req),
 			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
@@ -1887,7 +1889,8 @@ export async function handleUserPromptSubmit(
 			clockContext,
 			inject: "",
 			memoryCount: 0,
-			warnings,
+			engine: "provider-error",
+			warnings: [...(warnings ?? []), "Prompt recall unavailable"],
 		};
 	}
 }
@@ -1913,6 +1916,7 @@ async function recallPromptEntityContext(
 		readonly minScore: number;
 		readonly cfg: ReturnType<typeof loadMemoryConfig>;
 		readonly signal: AbortSignal;
+		readonly principal: Principal | undefined;
 	},
 ): Promise<PromptEntityRecall> {
 	const entities = await deps.matchPromptEntities(

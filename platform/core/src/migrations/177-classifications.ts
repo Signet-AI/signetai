@@ -333,7 +333,7 @@ export function up(db: MigrationDb): void {
 	if (exists(db, "memories_fts")) createMemoriesFts(db);
 }
 
-export function configureEvidencePurgeConnection(db: Pick<MigrationDb, "exec">): void {
+export function configureEvidencePurgeConnection(db: MigrationDb): void {
 	db.exec("PRAGMA recursive_triggers=ON");
 }
 

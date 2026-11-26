@@ -3,6 +3,8 @@ import { resolveKnowledgeReadScope } from "./read-scope";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
+import { audienceSubjectFromPrincipal, resolveReadScope } from "../read-scope";
+import type { Principal } from "../auth/principal";
 import { listEntityAliases } from "../knowledge-graph";
 import { getInferenceProviderOrNull } from "../llm";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config";

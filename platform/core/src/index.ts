@@ -757,8 +757,13 @@ export {
 	recordClassifiedDestination,
 	type WritePrincipal,
 } from "./write-principal";
-export {
-	COMPARTMENT_TABLES,
-	backfillEvidenceCitations,
-	configureEvidencePurgeConnection,
-} from "./migrations/177-classifications";
+import { COMPARTMENT_TABLES as HISTORICAL_COMPARTMENT_TABLES } from "./migrations/177-classifications";
+export { backfillEvidenceCitations, configureEvidencePurgeConnection } from "./migrations/177-classifications";
+export const COMPARTMENT_TABLES = [
+	...HISTORICAL_COMPARTMENT_TABLES,
+	"entity_aliases",
+	"memory_entity_mentions",
+	"derived_memory_sources",
+	"memory_history",
+	"relations",
+] as const;

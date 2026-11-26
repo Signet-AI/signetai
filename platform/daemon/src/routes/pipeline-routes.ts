@@ -9,6 +9,8 @@ import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@sig
 import type { Context, Hono } from "hono";
 import { isAgentRegistered, resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
+import type { Principal } from "../auth/principal";
+import { principalAccess, reconcileAgentSources, resolveReadAgent } from "../auth/agent-access";
 import { hybridProxyDetected } from "../auth/middleware";
 import { auditRuntimeStatus } from "../auth/organization-runtime";
 import type { ReadDb } from "../db-accessor";
@@ -28,9 +30,9 @@ import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
 import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
+import { audienceSubjectFromPrincipal, readableCompartments, resolveReadScope } from "../read-scope";
 import {
 	getActiveDreamingPasses,
-	getDreamingAttention,
 	getDreamingEvidenceExclusions,
 	getDreamingPass,
 	getDreamingPasses,
@@ -43,8 +45,8 @@ import {
 	getDreamingWorkloadDiagnostics,
 	getPipelineWorkerStatus,
 	requestDreamingEvidenceRequeue,
-	requestDreamingReviewedEvidenceRequeue,
 } from "../pipeline";
+import { getDreamingAttention, getDreamingAttentionScoped } from "../pipeline/dreaming-attention";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
@@ -1044,7 +1046,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 		const sourceId = readString(body, "sourceId");
 		if (!sourceId) return c.json({ error: "Missing episodic source id" }, 400);
-		const scopedAgent = resolveScopedDreamAgent(c, body);
+		const scopedAgent = await resolveDreamRead(c, body);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
 		if (sourceKind === "summary") {
@@ -1072,23 +1074,34 @@ export function registerPipelineRoutes(app: Hono): void {
 			if (ownerPresent) {
 				return c.json({ error: "Summary evidence requeue is retired; requeue the completed transcript instead" }, 410);
 			}
-			const reviewedSummaryRequeued = await requestDreamingReviewedEvidenceRequeue(
+			const reviewedSummaryRequeued = await requestDreamingEvidenceRequeue(
 				accessor,
 				agentId,
 				sourceKind,
 				sourceId,
+				scopedAgent.readScope,
+				{ reviewed: true, signal: c.req.raw.signal },
 			);
 			if (!reviewedSummaryRequeued) {
 				return c.json({ error: "Summary evidence requeue is retired; requeue the completed transcript instead" }, 410);
 			}
 			return c.json({ requeued: true, reviewedExcluded: true, agentId, sourceKind, sourceId });
 		}
-		const requeued = await requestDreamingEvidenceRequeue(getDbAccessor(), agentId, sourceKind, sourceId);
-		const reviewedRequeued = await requestDreamingReviewedEvidenceRequeue(
+		const requeued = await requestDreamingEvidenceRequeue(
 			getDbAccessor(),
 			agentId,
 			sourceKind,
 			sourceId,
+			scopedAgent.readScope,
+			{ signal: c.req.raw.signal },
+		);
+		const reviewedRequeued = await requestDreamingEvidenceRequeue(
+			getDbAccessor(),
+			agentId,
+			sourceKind,
+			sourceId,
+			scopedAgent.readScope,
+			{ reviewed: true, signal: c.req.raw.signal },
 		);
 		if (!requeued && !reviewedRequeued) return c.json({ error: "Dreaming evidence exclusion not found" }, 404);
 		return c.json({
@@ -1216,6 +1229,18 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "No inference provider is connected" }, 503);
 		}
 
+		let compartmentId: number | null = null;
+		if (body.compartmentId !== undefined && body.compartmentId !== null) {
+			if (typeof body.compartmentId !== "number" || !Number.isSafeInteger(body.compartmentId) || body.compartmentId < 1)
+				return c.json({ error: "compartmentId must be a positive integer or null" }, 400);
+			const principal = c.get("principal");
+			if (!principal) return c.json({ error: "unauthorized" }, 403);
+			if (principal.allowedProjects !== null) return c.json({ error: "project_not_permitted" }, 403);
+			const readable = await readableCompartments(audienceSubjectFromPrincipal(principal));
+			if (readable !== "all" && !readable.includes(body.compartmentId))
+				return c.json({ error: "classification_not_permitted" }, 403);
+			compartmentId = body.compartmentId;
+		}
 		let userRequest: { sourceRef: string; content: string } | undefined;
 		if (body.instructionSourceRef !== undefined) {
 			if (typeof body.instructionSourceRef !== "string" || body.instructionSourceRef.length > 200)
@@ -1248,7 +1273,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 		let passId: string;
 		try {
-			passId = await worker.triggerAsync(mode, agentId, userRequest, c.get("author"));
+			passId = await worker.triggerAsync(mode, agentId, userRequest, c.get("author"), compartmentId);
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 			const msg = e instanceof Error ? e.message : String(e);

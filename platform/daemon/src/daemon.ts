@@ -106,7 +106,14 @@ import {
 	registerDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import type { DbOwnerParameter } from "./db-owner-protocol";
-import { closeDbOwner, dbOwnerBatch, dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "./db-owner-runtime";
+import {
+	closeDbOwner,
+	dbOwnerBatch,
+	dbOwnerQuery,
+	dbOwnerTransaction,
+	getDbOwnerForAccessor,
+	ownerStatement,
+} from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import { startVacuumConversionWorker, type VacuumConversionHandle } from "./db-vacuum-worker";
 import {
@@ -192,7 +199,6 @@ import {
 	stopPipeline,
 } from "./pipeline";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
-import { importedSourceAttentionUpsert } from "./pipeline/dreaming-evidence-consumption";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -2918,11 +2924,16 @@ async function main() {
 				nextAgentId: nextTranscriptImportAgent,
 				workspaceRoot: AGENTS_DIR,
 				onBatch: async (_jobId, sourceId, agentId) => {
-					const nudge = importedSourceAttentionUpsert(agentId, sourceId);
-					await dbOwnerTransaction([{ sql: nudge.sql, params: nudge.params, result: "run" }], {
-						operation: "sources.import.dreaming-attention",
-						lane: "write",
-					});
+					const owner = await getDbOwnerForAccessor(getDbAccessor());
+					await owner.submit(
+						{ kind: "dreaming_imported_source_attention", agentId, sourceId },
+						{
+							operation: "sources.import.dreaming-attention",
+							lane: "write",
+							deadlineMs: 5000,
+							estimatedWorkUnits: 200,
+						},
+					).result;
 				},
 			});
 		}

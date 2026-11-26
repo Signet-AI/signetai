@@ -264,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `178-write-inheritance.ts`.
+`schema_migrations_audit`. The latest migration is `179-dreaming-evidence-leases.ts`.
 
 New evidence inherits its agent, session, and source classifications before
 indexing. A principal must be able to read the destination compartment to write

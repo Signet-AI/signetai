@@ -95,4 +95,30 @@ describe("inline entity linker", () => {
 		);
 		expect(mentions.count).toBe(0);
 	});
+	test("labels a classified mention on a public structural parent without changing the parent", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedMemory("private-link", "Nicholai prefers tea.");
+		seedEntity("public-parent", "Nicholai");
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				`INSERT INTO classifications(id,name) VALUES('cls_inline','Inline'); INSERT INTO compartments(id,key) VALUES(41,'cls_inline'); INSERT INTO compartment_members VALUES(41,'cls_inline'); UPDATE memories SET compartment_id=41 WHERE id='private-link'; UPDATE entities SET person_user_id='inline-person' WHERE id='public-parent'`,
+			),
+		);
+		const parent = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT * FROM entities WHERE id='public-parent'").get(),
+		);
+		const result = getDbAccessor().withWriteTx((db) =>
+			linkMemoryToEntities(db, "private-link", "Nicholai prefers tea.", "default"),
+		);
+		expect(result.entityIds).toEqual(["public-parent"]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT agent_id,compartment_id FROM memory_entity_mentions").all(),
+			),
+		).toEqual([{ agent_id: "default", compartment_id: 41 }]);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities WHERE id='public-parent'").get()),
+		).toEqual(parent);
+	});
 });

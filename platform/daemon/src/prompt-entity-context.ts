@@ -285,6 +285,7 @@ export async function matchPromptEntities(
 			candidates.push(row);
 	};
 	const scope = derivedScopeSql("e", scopeInput, { memory: null, session: null, source: "source_id" });
+	const aliasScope = derivedScopeSql("a", scopeInput, { memory: null, session: null, source: null });
 	const global = usesGlobalMentionCounter(scopeInput);
 	await readPromptEntityPages(
 		owner,
@@ -296,9 +297,9 @@ export async function matchPromptEntities(
 	);
 	await readPromptEntityPages(
 		owner,
-		promptEntityPageSql("aliases", scopeInput, scope.sql),
+		promptEntityPageSql("aliases", scopeInput, scope.sql + aliasScope.sql),
 		"user-prompt-submit.entity-aliases",
-		scope.args,
+		[...scope.args, ...aliasScope.args],
 		"",
 		visit,
 	);

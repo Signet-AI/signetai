@@ -1,9 +1,10 @@
 import type { ReadScope } from "../read-scope";
 import { dreamingReadPredicate } from "./dreaming-read-scope";
 import { randomUUID } from "node:crypto";
-import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
 import { ownerQueryAll } from "../db-owner-maintenance";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
+import { readScopeSql } from "../read-scope";
 import { timestampMillis } from "../episodic-sources";
 
 export const DREAMING_ATTENTION_KINDS = [
@@ -80,56 +81,73 @@ function promptJson(value: unknown): string {
 	return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
 }
 
+function attentionScope(readScope?: ReadScope): { sql: string; args: (string | number)[] } {
+	if (!readScope) return { sql: "", args: [] };
+	if (readScope.projects !== null) return { sql: " AND 0", args: [] };
+	const scope = readScopeSql("", readScope, { visibility: null, memory: null, session: null, source: null });
+	return {
+		...scope,
+		args: scope.args.map((value) => {
+			if (typeof value === "string" || typeof value === "number") return value;
+			throw new Error("Invalid read scope parameter");
+		}),
+	};
+}
+
 function getDreamingAttentionSnapshotsInDb(
 	db: ReadDb,
 	agentId: string,
 	limit = 20,
+	readScope?: ReadScope,
 ): readonly DreamingAttentionSnapshot[] {
 	const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
-	return db
-		.prepare(
-			`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson,
-			        priority, created_at AS createdAt, generation
-			 FROM dreaming_attention
-			 WHERE agent_id = ? AND resolved_at IS NULL
-			 ORDER BY priority DESC, created_at ASC, id ASC
-			 LIMIT ?`,
-		)
-		.all(agentId, boundedLimit)
-		.map((row) => {
-			const typed = row as {
-				id: string;
-				kind: DreamingAttentionKind;
-				subjectRef: string;
-				detailsJson: string;
-				priority: number;
-				createdAt: string;
-				generation: number;
-			};
-			const { detailsJson, ...attention } = typed;
-			return { ...attention, details: parseDetails(detailsJson) };
-		}) as DreamingAttentionSnapshot[];
+	const scope = attentionScope(readScope);
+	const rows = prepareTypedStatement<{
+		id: string;
+		kind: DreamingAttentionKind;
+		subjectRef: string;
+		detailsJson: string;
+		priority: number;
+		createdAt: string;
+		generation: number;
+	}>(
+		db,
+		`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson,
+		priority, created_at AS createdAt, generation FROM dreaming_attention
+		WHERE agent_id = ? AND resolved_at IS NULL ${scope.sql}
+		ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?`,
+	).all(agentId, ...scope.args, boundedLimit);
+	return rows.map(({ detailsJson, ...attention }) => ({ ...attention, details: parseDetails(detailsJson) }));
 }
 
-export function getDreamingAttentionInDb(db: ReadDb, agentId: string, limit = 20): readonly DreamingAttention[] {
-	return getDreamingAttentionSnapshotsInDb(db, agentId, limit).map(({ generation: _, ...attention }) => attention);
+export function getDreamingAttentionInDb(
+	db: ReadDb,
+	agentId: string,
+	limit = 20,
+	readScope?: ReadScope,
+): readonly DreamingAttention[] {
+	return getDreamingAttentionSnapshotsInDb(db, agentId, limit, readScope).map(
+		({ generation: _, ...attention }) => attention,
+	);
 }
 
 export function hasDreamingAttentionKindInDb(
 	db: ReadDb,
 	agentId: string,
 	kinds: readonly DreamingAttentionKind[],
+	readScope?: ReadScope,
 ): boolean {
 	if (kinds.length === 0) return false;
+	const scope = attentionScope(readScope);
 	const placeholders = kinds.map(() => "?").join(", ");
 	return (
 		db
 			.prepare(
 				`SELECT 1 FROM dreaming_attention
-				 WHERE agent_id = ? AND resolved_at IS NULL AND kind IN (${placeholders})
+				 WHERE agent_id = ? AND resolved_at IS NULL AND kind IN (${placeholders}) ${scope.sql}
 				 LIMIT 1`,
 			)
-			.get(agentId, ...kinds) != null
+			.get(agentId, ...kinds, ...scope.args) != null
 	);
 }
 
@@ -137,10 +155,11 @@ export function getDreamingAttention(
 	accessor: DbAccessor,
 	agentId: string,
 	limit?: number,
+	readScope?: ReadScope,
 ): readonly DreamingAttention[] {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, agentId, limit),
+		(db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, agentId, limit, readScope),
 		"db:dreaming.attention.read",
 	);
 }
@@ -149,16 +168,17 @@ export function getDreamingAttentionWorkloadDiagnostics(
 	accessor: DbAccessor,
 	agentId: string,
 	nowMs = Date.now(),
+	readScope?: ReadScope,
 ): DreamingAttentionWorkloadDiagnostics {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const row = db
-			.prepare(
-				`SELECT COUNT(*) AS pending, MIN(created_at) AS oldestCreatedAt
+		const scope = attentionScope(readScope);
+		const row = prepareTypedStatement<{ pending: number; oldestCreatedAt: string | null }>(
+			db,
+			`SELECT COUNT(*) AS pending, MIN(created_at) AS oldestCreatedAt
 				 FROM dreaming_attention
-				 WHERE agent_id = ? AND resolved_at IS NULL`,
-			)
-			.get(agentId) as { pending: number; oldestCreatedAt: string | null } | undefined;
+				 WHERE agent_id = ? AND resolved_at IS NULL ${scope.sql}`,
+		).get(agentId, ...scope.args);
 		if (!row || row.pending === 0 || row.oldestCreatedAt === null) {
 			return { pending: 0, oldestAgeMs: null };
 		}
@@ -185,8 +205,9 @@ export async function getDreamingAttentionScoped(
 	const kindFilter = typeof options.kind === "string" && options.kind.length > 0 ? "AND kind = ?" : "";
 	const statusFilter = options.status === "resolved" ? "AND resolved_at IS NOT NULL" : "AND resolved_at IS NULL";
 	const audienceFilter = options.agentFacing === true ? AGENT_FACING_ATTENTION_FILTER : "";
-	const params: string[] = [agentId];
+	const params: (string | number)[] = [agentId];
 	if (kindFilter && options.kind !== undefined) params.push(options.kind);
+	params.push(...predicate.args);
 	const rows = await ownerQueryAll<{
 		id: string;
 		kind: DreamingAttentionKind;
@@ -254,25 +275,23 @@ export async function getDreamingAttentionAcrossScopes(
 
 export function getDreamingAttentionById(
 	accessor: DbAccessor,
-	input: { readonly agentId: string; readonly id: string },
+	input: { readonly agentId: string; readonly id: string; readonly readScope?: ReadScope },
 ): DreamingAttention | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const row = db
-			.prepare(
-				`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
-				 FROM dreaming_attention WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
-			)
-			.get(input.id, input.agentId) as
-			| {
-					id: string;
-					kind: DreamingAttentionKind;
-					subjectRef: string;
-					detailsJson: string;
-					priority: number;
-					createdAt: string;
-			  }
-			| undefined;
+		const scope = attentionScope(input.readScope);
+		const row = prepareTypedStatement<{
+			id: string;
+			kind: DreamingAttentionKind;
+			subjectRef: string;
+			detailsJson: string;
+			priority: number;
+			createdAt: string;
+		}>(
+			db,
+			`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
+			FROM dreaming_attention WHERE id = ? AND agent_id = ? AND resolved_at IS NULL ${scope.sql}`,
+		).get(input.id, input.agentId, ...scope.args);
 		if (!row) return null;
 		return {
 			id: row.id,
@@ -289,12 +308,38 @@ export function getDreamingAttentionSnapshots(
 	accessor: DbAccessor,
 	agentId: string,
 	limit?: number,
+	readScope?: ReadScope,
 ): readonly DreamingAttentionSnapshot[] {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) => getDreamingAttentionSnapshotsInDb(db, agentId, limit),
+		(db: import("../db-accessor").ReadDb) => getDreamingAttentionSnapshotsInDb(db, agentId, limit, readScope),
 		"db:dreaming.attention.snapshots",
 	);
+}
+
+function attentionSourceInDb(db: WriteDb, agentId: string, subjectRef: string) {
+	const colon = subjectRef.indexOf(":");
+	const kind = subjectRef.slice(0, colon);
+	const sourceId = subjectRef.slice(colon + 1);
+	const definitions: Readonly<Record<string, readonly [string, string, string]>> = {
+		memory: ["memories", "id", "memory"],
+		transcript: ["session_transcripts", "session_key", "transcript"],
+		artifact: ["memory_artifacts", "source_path", "artifact"],
+		summary: ["session_summaries", "id", "summary"],
+		entity: ["entities", "id", "attribute"],
+		aspect: ["entity_aspects", "id", "attribute"],
+		attribute: ["entity_attributes", "id", "attribute"],
+		claim: ["entity_attributes", "id", "attribute"],
+		link: ["entity_dependencies", "id", "attribute"],
+	};
+	const definition = definitions[kind];
+	if (colon < 1 || !sourceId || !definition) return null;
+	const [table, key, evidenceKind] = definition;
+	const row = prepareTypedStatement<{ compartment_id: number | null }>(
+		db,
+		`SELECT compartment_id FROM ${table} WHERE ${key}=? AND agent_id=?`,
+	).get(sourceId, agentId);
+	return row ? { evidenceKind, sourceId, compartmentId: row.compartment_id } : null;
 }
 
 export function enqueueDreamingAttentionInTx(
@@ -306,21 +351,26 @@ export function enqueueDreamingAttentionInTx(
 		readonly details?: Readonly<Record<string, string>>;
 		readonly priority?: number;
 		readonly reopen?: boolean;
+		readonly compartmentId?: number | null;
+		readonly passId?: string;
 	},
 ): string {
 	if (!DREAMING_ATTENTION_KINDS.includes(input.kind)) {
 		throw new Error(`Unsupported Dreaming attention kind: ${input.kind}`);
 	}
 	const subjectRef = normalizedSubjectRef(input.subjectRef);
+	const source = attentionSourceInDb(db, input.agentId, subjectRef);
+	const compartmentId = input.compartmentId === undefined ? (source?.compartmentId ?? null) : input.compartmentId;
 	const details = JSON.stringify(normalizedDetails(input.details));
 	const reopen = input.reopen !== false ? 1 : 0;
 	const attentionId = randomUUID();
 	db.prepare(
 		`INSERT INTO dreaming_attention
-		 (id, agent_id, kind, subject_ref, details_json, priority)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
+		 (id, agent_id, kind, subject_ref, details_json, priority, compartment_id, dreaming_pass_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(agent_id, kind, subject_ref, COALESCE(compartment_id,0)) DO UPDATE SET
 		   details_json = excluded.details_json,
+		   dreaming_pass_id = COALESCE(excluded.dreaming_pass_id, dreaming_attention.dreaming_pass_id),
 		   priority = MAX(dreaming_attention.priority, excluded.priority),
 		   generation = CASE WHEN ? = 1 OR dreaming_attention.details_json <> excluded.details_json THEN dreaming_attention.generation + 1 ELSE dreaming_attention.generation END,
 		   resolved_at = CASE WHEN ? = 1 OR dreaming_attention.details_json <> excluded.details_json THEN NULL ELSE dreaming_attention.resolved_at END,
@@ -332,14 +382,22 @@ export function enqueueDreamingAttentionInTx(
 		subjectRef,
 		details,
 		boundedPriority(input.priority),
+		compartmentId,
+		input.passId ?? null,
 		reopen,
 		reopen,
 		reopen,
 	);
-	const stored = db
-		.prepare("SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = ? AND subject_ref = ?")
-		.get(input.agentId, input.kind, subjectRef) as { id: string } | null;
-	return stored?.id ?? attentionId;
+	const stored = prepareTypedStatement<{ id: string }>(
+		db,
+		"SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = ? AND subject_ref = ? AND compartment_id IS ?",
+	).get(input.agentId, input.kind, subjectRef, compartmentId);
+	const id = stored?.id ?? attentionId;
+	if (source)
+		db.prepare(
+			"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('attention',?,?,?,?) ON CONFLICT DO NOTHING",
+		).run(id, input.agentId, source.evidenceKind, source.sourceId);
+	return id;
 }
 
 export function resolveDreamingAttentionInTx(

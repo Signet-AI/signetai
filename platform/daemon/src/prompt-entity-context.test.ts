@@ -1,12 +1,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { type ReadScope, compartmentFor } from "@signet/core";
+import { compartmentFor } from "@signet/core";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, initDbAccessorAsync } from "./db-accessor";
 import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
 import { getDbOwner } from "./db-owner-runtime";
-import { matchPromptEntities, promptPhraseSpan } from "./prompt-entity-context";
+import { matchPromptEntities as providerMatchPromptEntities, promptPhraseSpan } from "./prompt-entity-context";
+
+async function matchPromptEntities(path: string, agentId: string, prompt: string) {
+	return providerMatchPromptEntities(path, agentId, prompt, undefined, {
+		reach: { kind: "own", agentId },
+		compartments: "all",
+		projects: null,
+	});
+}
 
 let dir = "";
 let prev: string | undefined;
