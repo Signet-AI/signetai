@@ -22,6 +22,7 @@ export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
 const TAIL_HASH_BYTES = 64 * 1024;
 const PURGE_RUN_DEADLINE_MS = 30_000;
 const PURGE_CONTINUE_DELAY_MS = 1_000;
+const PURGE_RETRY_LIMIT = 5;
 
 export interface TranscriptUploadRequest {
 	readonly basePath: string;
@@ -66,7 +67,9 @@ export async function uploadTranscriptRange(
 	const invalid = validate(input);
 	if (invalid) return invalid;
 	return await withTranscriptImportOperationLock(`upload\0${input.agentId}\0${input.sessionKey}`, () =>
-		withTranscriptUploadAgentLock(input.agentId, "shared", () => writeAndCommitRange(accessor, input)),
+		withTranscriptUploadAgentLock(input.agentId, "shared", (purged) =>
+			purged ? Promise.resolve({ status: "purge_pending" }) : writeAndCommitRange(accessor, input),
+		),
 	);
 }
 
@@ -91,38 +94,48 @@ async function writeAndCommitRange(
 		input.sessionKey,
 		input.generation,
 	);
-	if (input.offset === 0) await mkdir(dirname(path), { recursive: true });
-	const handle = await openContainedTranscriptFile(root, path, constants.O_RDWR | constants.O_CREAT, 0o600);
 	const end = input.offset + input.body.byteLength;
 	let mtimeMs: number;
 	let tailSha256: string;
 	try {
-		const size = (await handle.stat()).size;
-		if (size < input.offset) throw new Error("Transcript upload file is shorter than its committed offset");
-		if (size > input.offset) await handle.truncate(input.offset);
-		let written = 0;
-		while (written < input.body.byteLength) {
-			const { bytesWritten } = await handle.write(
-				input.body,
-				written,
-				input.body.byteLength - written,
-				input.offset + written,
-			);
-			written += bytesWritten;
+		if (input.offset === 0) await mkdir(dirname(path), { recursive: true });
+		const handle = await openContainedTranscriptFile(
+			root,
+			path,
+			input.offset === 0 ? constants.O_RDWR | constants.O_CREAT : constants.O_RDWR,
+			0o600,
+		);
+		try {
+			const size = (await handle.stat()).size;
+			if (size < input.offset) throw new Error("Transcript upload file is shorter than its committed offset");
+			if (size > input.offset) await handle.truncate(input.offset);
+			let written = 0;
+			while (written < input.body.byteLength) {
+				const { bytesWritten } = await handle.write(
+					input.body,
+					written,
+					input.body.byteLength - written,
+					input.offset + written,
+				);
+				written += bytesWritten;
+			}
+			await handle.datasync();
+			mtimeMs = (await handle.stat()).mtimeMs;
+			const tailStart = Math.max(0, end - TAIL_HASH_BYTES);
+			tailSha256 =
+				tailStart >= input.offset
+					? sha256(input.body.subarray(tailStart - input.offset))
+					: sha256(
+							Buffer.concat([await readTranscriptUploadRange(handle, tailStart, input.offset - tailStart), input.body]),
+						);
+		} finally {
+			await handle.close();
 		}
-		await handle.datasync();
-		mtimeMs = (await handle.stat()).mtimeMs;
-		const tailStart = Math.max(0, end - TAIL_HASH_BYTES);
-		tailSha256 =
-			tailStart >= input.offset
-				? sha256(input.body.subarray(tailStart - input.offset))
-				: sha256(
-						Buffer.concat([await readTranscriptUploadRange(handle, tailStart, input.offset - tailStart), input.body]),
-					);
-	} finally {
-		await handle.close();
+		if (input.offset === 0) await syncDirectory(root, dirname(path));
+	} catch (error) {
+		await attemptAsync(() => discardUncommittedRange(root, path, input.offset));
+		throw error;
 	}
-	if (input.offset === 0) await syncDirectory(root, dirname(path));
 	let result: TranscriptUploadCommitResult;
 	try {
 		result = await dbOwnerCommitTranscriptUpload(
@@ -145,7 +158,7 @@ async function writeAndCommitRange(
 		);
 	} catch (error) {
 		if (await rangeAbsent(owner, input, scope.purgeEpoch, end)) {
-			await discardUncommittedRange(root, path, input.offset);
+			await attemptAsync(() => discardUncommittedRange(root, path, input.offset));
 		}
 		throw error;
 	}
@@ -179,7 +192,7 @@ async function discardUncommittedRange(root: string, path: string, offset: numbe
 	const handle = await attemptAsync(() => openContainedTranscriptFile(root, path, constants.O_RDWR));
 	if (!handle) return;
 	try {
-		await handle.truncate(offset);
+		if ((await handle.stat()).size > offset) await handle.truncate(offset);
 	} finally {
 		await handle.close();
 	}
@@ -198,6 +211,7 @@ interface PurgeState {
 	done: Promise<TranscriptUploadPurgeResult> | null;
 	abort: AbortController | null;
 	requested: boolean;
+	failures: number;
 	timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -206,7 +220,7 @@ const purges = new Map<string, PurgeState>();
 function purgeState(basePath: string): PurgeState {
 	let state = purges.get(basePath);
 	if (!state) {
-		state = { done: null, abort: null, requested: false, timer: null };
+		state = { done: null, abort: null, requested: false, failures: 0, timer: null };
 		purges.set(basePath, state);
 	}
 	return state;
@@ -217,15 +231,8 @@ export async function drainTranscriptUploadPurges(
 	options: TranscriptUploadPurgeOptions = {},
 ): Promise<TranscriptUploadPurgeResult> {
 	const state = purgeState(basePath);
-	clearTimeout(state.timer ?? undefined);
-	state.timer = null;
-	state.requested = true;
-	if (!state.done) {
-		const abort = new AbortController();
-		state.abort = abort;
-		state.done = runTranscriptUploadPurges(basePath, state, abort.signal, options.deadlineMs ?? PURGE_RUN_DEADLINE_MS);
-	}
-	const done = state.done;
+	state.failures = 0;
+	const done = startPurgeRun(basePath, state, options.deadlineMs ?? PURGE_RUN_DEADLINE_MS);
 	const waitMs = options.waitMs;
 	if (waitMs === undefined) return await done;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -239,11 +246,25 @@ export async function drainTranscriptUploadPurges(
 	}
 }
 
+function clearPurgeTimer(state: PurgeState): void {
+	clearTimeout(state.timer ?? undefined);
+	state.timer = null;
+}
+
+function startPurgeRun(basePath: string, state: PurgeState, deadlineMs: number): Promise<TranscriptUploadPurgeResult> {
+	clearPurgeTimer(state);
+	state.requested = true;
+	if (state.done) return state.done;
+	const abort = new AbortController();
+	state.abort = abort;
+	state.done = runTranscriptUploadPurges(basePath, state, abort.signal, deadlineMs);
+	return state.done;
+}
+
 export async function stopTranscriptUploadPurges(): Promise<void> {
 	const running: Promise<TranscriptUploadPurgeResult>[] = [];
 	for (const state of purges.values()) {
-		clearTimeout(state.timer ?? undefined);
-		state.timer = null;
+		clearPurgeTimer(state);
 		state.abort?.abort();
 		if (state.done) running.push(state.done);
 	}
@@ -258,7 +279,7 @@ async function runTranscriptUploadPurges(
 	deadlineMs: number,
 ): Promise<TranscriptUploadPurgeResult> {
 	const deadline = Date.now() + deadlineMs;
-	let continuePending = false;
+	let delayMs: number | null = null;
 	try {
 		const owner = await getDbOwner();
 		for (;;) {
@@ -270,7 +291,7 @@ async function runTranscriptUploadPurges(
 			);
 			const more = state.requested || (pending > 0 && progressed);
 			if (more && Date.now() >= deadline) {
-				continuePending = true;
+				delayMs = PURGE_CONTINUE_DELAY_MS;
 				return { status: "pending" };
 			}
 			if (state.requested) continue;
@@ -282,17 +303,19 @@ async function runTranscriptUploadPurges(
 		}
 	} catch (error) {
 		if (signal.aborted) return { status: "pending" };
+		state.failures += 1;
+		if (state.failures <= PURGE_RETRY_LIMIT) delayMs = PURGE_CONTINUE_DELAY_MS * 2 ** (state.failures - 1);
 		const message = error instanceof Error ? error.message : String(error);
-		logger.warn("transcripts", "Transcript upload purge failed", { error: message });
+		logger.warn("transcripts", "Transcript upload purge failed", { error: message, failures: state.failures });
 		return { status: "failed", error: message };
 	} finally {
 		state.done = null;
 		state.abort = null;
-		if (continuePending && !signal.aborted) {
+		if (delayMs !== null && !signal.aborted) {
 			state.timer = setTimeout(() => {
 				state.timer = null;
-				void drainTranscriptUploadPurges(basePath);
-			}, PURGE_CONTINUE_DELAY_MS);
+				void startPurgeRun(basePath, state, PURGE_RUN_DEADLINE_MS);
+			}, delayMs);
 			state.timer.unref?.();
 		}
 	}

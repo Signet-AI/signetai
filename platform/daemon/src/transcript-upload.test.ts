@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,12 +14,14 @@ import {
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { getTranscriptCaptureStatus, runTranscriptCaptureOnce } from "./transcript-capture-worker";
+import * as safeFs from "./transcript-import-safe-fs";
 import {
 	type TranscriptUploadRequest,
 	drainTranscriptUploadPurges,
 	stopTranscriptUploadPurges,
 	uploadTranscriptRange,
 } from "./transcript-upload";
+import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import {
 	readTranscriptUploadPrefix,
 	transcriptUploadAgentDirectory,
@@ -149,6 +152,89 @@ describe("transcript upload ranges", () => {
 			status: "project_mismatch",
 		});
 		expect(readFileSync(file(), "utf8")).toBe('{"a":1}\n');
+	});
+
+	it("refuses a range when the stored transcript belongs to another harness", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		await upsertSessionTranscriptAsync("sess-1", "User: hello", "pi", "/repo", "noam");
+		expect(await uploadTranscriptRange(accessor, request('{"b":2}\n', { offset: 8 }))).toEqual({
+			status: "harness_mismatch",
+		});
+		expect(readFileSync(file(), "utf8")).toBe('{"a":1}\n');
+	});
+
+	it("keeps the stored project when a projectless range continues the session", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		expect(await uploadTranscriptRange(accessor, request('{"b":2}\n', { offset: 8, project: null }))).toMatchObject({
+			status: "committed",
+			state: { project: "/repo" },
+		});
+		const job = await accessor.withReadDbAsync((db) =>
+			prepareTypedStatement<{ project: string | null }>(
+				db,
+				"SELECT project FROM transcript_capture_jobs WHERE agent_id = ? AND session_key = ?",
+			).get("noam", "sess-1"),
+		);
+		expect(job?.project).toBe("/repo");
+	});
+
+	it("refuses a range that waited for its agent lock while a purge held it", async () => {
+		init();
+		const accessor = getDbAccessor();
+		let upload: Promise<unknown> = Promise.resolve();
+		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {
+			upload = uploadTranscriptRange(accessor, request('{"a":1}\n'));
+			await Bun.sleep(20);
+		});
+		expect(await upload).toEqual({ status: "purge_pending" });
+		expect(existsSync(file())).toBe(false);
+	});
+
+	it("removes the first range when the directory sync fails before the commit", async () => {
+		init();
+		const open = safeFs.openContainedTranscriptFile;
+		const failing = spyOn(safeFs, "openContainedTranscriptFile").mockImplementation(
+			async (root, path, flags, mode, beforeOpen) => {
+				if ((flags & constants.O_DIRECTORY) !== 0) throw new Error("sync failed");
+				return await open(root, path, flags, mode, beforeOpen);
+			},
+		);
+		try {
+			await expect(uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'))).rejects.toThrow("sync failed");
+		} finally {
+			failing.mockRestore();
+		}
+		expect(existsSync(file())).toBe(false);
+	});
+
+	it("creates no file for a continuation whose file is missing", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		rmSync(file());
+		await expect(uploadTranscriptRange(accessor, request('{"b":2}\n', { offset: 8 }))).rejects.toThrow();
+		expect(existsSync(file())).toBe(false);
+	});
+
+	it("removes upload files of a deleted session that has no upload row", async () => {
+		init();
+		await upsertSessionTranscriptAsync("sess-1", "User: hello", "codex", "/repo", "noam");
+		mkdirSync(transcriptUploadSessionDirectory(dir, "noam", 0, "sess-1"), { recursive: true });
+		writeFileSync(file(), '{"a":1}\n');
+		let result = await deleteSessionTranscript({
+			agentId: "noam",
+			sessionKey: "sess-1",
+			hard: false,
+			changedBy: "test",
+		});
+		for (let i = 0; result.status === "pending" && i < 20; i++)
+			result = await deleteSessionTranscript({ agentId: "noam", sessionKey: "sess-1", hard: false, changedBy: "test" });
+		expect(result.status).toBe("complete");
+		expect(existsSync(transcriptUploadSessionDirectory(dir, "noam", 0, "sess-1"))).toBe(false);
 	});
 
 	it("writes a new generation to its own file and keeps the old bytes", async () => {
@@ -358,22 +444,41 @@ describe("transcript upload ranges", () => {
 			);
 		});
 		const drain = runtime.dbOwnerDrainTranscriptUploadPurges;
-		let overlapped = false;
+		let passes = 0;
 		const spy = spyOn(runtime, "dbOwnerDrainTranscriptUploadPurges").mockImplementation(
 			async (owner, input, options) => {
-				if (!overlapped) {
-					overlapped = true;
-					void drainTranscriptUploadPurges(dir);
-				}
+				passes += 1;
+				if (passes === 1) void drainTranscriptUploadPurges(dir);
 				return await drain(owner, input, options);
 			},
 		);
 		try {
 			expect(await drainTranscriptUploadPurges(dir, { deadlineMs: 0 })).toEqual({ status: "pending" });
-			for (let i = 0; i < 100 && existsSync(transcriptUploadEpochDirectory(dir, "noam", 0)); i++) await Bun.sleep(100);
+			expect(passes).toBe(1);
+			for (let i = 0; i < 100 && passes < 2; i++) await Bun.sleep(100);
 		} finally {
 			spy.mockRestore();
 		}
+		expect(passes).toBe(2);
+		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
+	});
+
+	it("retries a drain whose owner pass failed", async () => {
+		init();
+		await uploadTranscriptRange(getDbAccessor(), request('{"a":1}\n'));
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("INSERT INTO session_transcript_upload_purges (path, epoch, requested_at) VALUES (?, 1, 'now')").run(
+				transcriptUploadAgentRelativePath("noam"),
+			);
+		});
+		const failing = spyOn(runtime, "dbOwnerDrainTranscriptUploadPurges").mockRejectedValueOnce(new Error("owner down"));
+		try {
+			expect(await drainTranscriptUploadPurges(dir)).toEqual({ status: "failed", error: "owner down" });
+			for (let i = 0; i < 100 && (await uploadPurges()).length > 0; i++) await Bun.sleep(100);
+		} finally {
+			failing.mockRestore();
+		}
+		expect(await uploadPurges()).toEqual([]);
 		expect(existsSync(transcriptUploadEpochDirectory(dir, "noam", 0))).toBe(false);
 	});
 

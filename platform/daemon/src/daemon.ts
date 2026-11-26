@@ -1751,7 +1751,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		transcriptCaptureWorkerHandle = null;
 	}
-	await stopTranscriptUploadPurges();
 
 	try {
 		await stopPipeline();
@@ -1789,6 +1788,7 @@ function restartAfterEmbeddingPromotion(telemetry?: TelemetryCollector): void {
 }
 
 export async function stopDaemonRuntimeForTests(): Promise<void> {
+	await stopTranscriptUploadPurges();
 	await stopPipelineRuntime();
 }
 
@@ -2227,6 +2227,7 @@ async function cleanup() {
 		} catch {}
 		transcriptRecoveryWorkerHandle = null;
 	}
+	await stopTranscriptUploadPurges();
 	await stopPipelineRuntime();
 
 	const maintenanceHandle = dbOwnerMaintenanceHandle;
@@ -2884,7 +2885,7 @@ async function main() {
 		logFdSnapshot("post-pipeline");
 
 		initCheckpointFlush(getDbAccessor());
-		void drainTranscriptUploadPurges(AGENTS_DIR);
+		if (!shuttingDown) void drainTranscriptUploadPurges(AGENTS_DIR);
 
 		if (!transcriptCaptureWorkerHandle) {
 			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);

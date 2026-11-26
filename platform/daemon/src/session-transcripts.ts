@@ -725,27 +725,25 @@ export function deleteSessionTranscriptInTx(
 			budget -= items.length;
 		}
 		if (budget > 0) {
-			db.prepare(
+			const queueFile = db.prepare(
 				"INSERT OR IGNORE INTO session_transcript_delete_files (agent_id,session_key,generation,path) VALUES (?,?,?,?)",
-			).run(...scope, canonicalTranscriptPath(basePath, row.harness ?? "unknown"));
-			if (
+			);
+			queueFile.run(...scope, canonicalTranscriptPath(basePath, row.harness ?? "unknown"));
+			add(
+				"uploads",
 				db
 					.prepare("DELETE FROM session_transcript_uploads WHERE agent_id = ? AND session_key = ?")
-					.run(input.agentId, input.sessionKey).changes > 0
-			) {
-				add("uploads", 1);
-				db.prepare(
-					"INSERT OR IGNORE INTO session_transcript_delete_files (agent_id,session_key,generation,path) VALUES (?,?,?,?)",
-				).run(
-					...scope,
-					transcriptUploadSessionDirectory(
-						basePath,
-						input.agentId,
-						readTranscriptUploadPurgeInDb(db, input.agentId)?.epoch ?? 0,
-						input.sessionKey,
-					),
-				);
-			}
+					.run(input.agentId, input.sessionKey).changes,
+			);
+			queueFile.run(
+				...scope,
+				transcriptUploadSessionDirectory(
+					basePath,
+					input.agentId,
+					readTranscriptUploadPurgeInDb(db, input.agentId)?.epoch ?? 0,
+					input.sessionKey,
+				),
+			);
 			phase = "files";
 		}
 	}
@@ -841,7 +839,7 @@ export async function deleteSessionTranscriptOwned(
 			deleteSessionTranscriptInTx(db, input, basePath, deadlineAt);
 		});
 	}
-	for (let batch = 0; batch < 4; batch++) {
+	for (let batch = 0; batch <= 4; batch++) {
 		const row = transcriptDeletion(db, input.agentId, input.sessionKey);
 		if (!row) throw new Error("Deletion state disappeared");
 		if (row.phase !== "files") return deletionResult(row);
@@ -859,6 +857,7 @@ export async function deleteSessionTranscriptOwned(
 			if (!completed) throw new Error("Completed deletion disappeared");
 			return deletionResult(completed);
 		}
+		if (batch === 4) break;
 		if (Date.now() >= deadlineAt - 350) return { ...deletionResult(row), pendingReason: "Owner job budget exhausted" };
 		try {
 			const result = await redactTranscriptFileBatch({
@@ -2082,12 +2081,11 @@ export function transcriptUploadScopeConflict(
 	scope: TranscriptUploadScope,
 	request: { readonly harness: string; readonly project: string | null; readonly projectScoped: boolean },
 ): TranscriptUploadCommitResult | null {
-	const harness = scope.state?.harness ?? scope.stored?.harness;
-	if (harness != null && harness !== request.harness) return { status: "harness_mismatch" };
-	const projects = [scope.state, scope.stored].flatMap((row) => (row ? [row.project] : []));
+	const rows = [scope.state, scope.stored].flatMap((row) => (row ? [row] : []));
+	if (rows.some((row) => row.harness != null && row.harness !== request.harness)) return { status: "harness_mismatch" };
 	const outside = request.projectScoped
-		? projects.some((project) => project !== request.project)
-		: request.project !== null && projects.some((project) => project !== null && project !== request.project);
+		? rows.some((row) => row.project !== request.project)
+		: request.project !== null && rows.some((row) => row.project !== null && row.project !== request.project);
 	return outside ? { status: "project_mismatch" } : null;
 }
 
@@ -2118,16 +2116,17 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 	if (scope.purgeEpoch !== input.purgeEpoch) return { status: "purge_pending" };
 	const conflict = transcriptUploadConflict(scope, { ...input, offset: input.expectedOffset });
 	if (conflict) return conflict;
+	const project = input.project ?? scope.state?.project ?? scope.stored?.project ?? null;
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(agent_id, session_key) DO UPDATE SET project = COALESCE(session_transcript_uploads.project, excluded.project), generation = excluded.generation, committed_offset = excluded.committed_offset, tail_sha256 = excluded.tail_sha256, updated_at = excluded.updated_at`,
+		 ON CONFLICT(agent_id, session_key) DO UPDATE SET project = excluded.project, generation = excluded.generation, committed_offset = excluded.committed_offset, tail_sha256 = excluded.tail_sha256, updated_at = excluded.updated_at`,
 	).run(
 		input.agentId,
 		input.sessionKey,
 		input.harness,
-		input.project,
+		project,
 		input.generation,
 		input.source.sizeBytes,
 		input.tailSha256,
@@ -2140,7 +2139,7 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 			harness: input.harness,
 			sessionKey: input.sessionKey,
 			sessionId: input.sessionId,
-			project: input.project,
+			project,
 			transcript: "",
 			capturedAt: input.capturedAt,
 			endedAt: null,
@@ -2154,7 +2153,7 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 		status: "committed",
 		state: {
 			harness: input.harness,
-			project: input.project,
+			project,
 			generation: input.generation,
 			committedOffset: input.source.sizeBytes,
 			tailSha256: input.tailSha256,

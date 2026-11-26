@@ -76,6 +76,21 @@ describe("transcript upload agent lock", () => {
 		expect(events).toEqual(["ada purge", "noam upload"]);
 	});
 
+	it("tells a shared holder whether an exclusive holder ran while it waited", async () => {
+		const seen: boolean[] = [];
+		const purge = gate();
+		const exclusive = withTranscriptUploadAgentLock("noam", "exclusive", () => purge.opened);
+		const waited = withTranscriptUploadAgentLock("noam", "shared", async (preempted) => {
+			seen.push(preempted);
+		});
+		purge.open();
+		await Promise.all([exclusive, waited]);
+		await withTranscriptUploadAgentLock("noam", "shared", async (preempted) => {
+			seen.push(preempted);
+		});
+		expect(seen).toEqual([true, false]);
+	});
+
 	it("releases the lock when the holder throws", async () => {
 		await expect(
 			withTranscriptUploadAgentLock("noam", "exclusive", async () => {
