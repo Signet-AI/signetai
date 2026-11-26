@@ -1,3 +1,4 @@
+import { OrganizationSessions } from "@/components/organization/sessions";
 import { PageHeading, SectionAction, SectionHeading, type StatusTone } from "@/components/dashboard/heading";
 import { DailyBrief } from "@/components/home/daily-brief";
 import { HomeAgentsPanel } from "@/components/home/agents";
@@ -58,6 +59,7 @@ export function HomeView() {
 					<PageHeading id="today-title" title="Today" description={today} />
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
 					<HomeRecentMemories />
+					<OrganizationSessions />
 					<div className="home-activity">
 						<ActivityHeatmap days={days} heading={<SectionHeading title="Activity" />} />
 					</div>

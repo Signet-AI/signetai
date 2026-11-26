@@ -1,10 +1,12 @@
+import { ClassifyAction } from "@/components/organization/classifications";
+import { Attribution } from "@/components/shell/attribution";
 import { LoadingRows } from "@/components/ui/skeleton";
 import { SectionHeading } from "@/components/dashboard/heading";
 import { SearchField } from "@/components/ui/field";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { api, type Memory, viewsAllAgents } from "@/lib/api";
-import { useSession } from "@/lib/session";
+import { useSession, useWhoami } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { useMemo, useState } from "react";
@@ -132,7 +134,10 @@ export function HomeRecentMemories() {
 }
 
 function RecentMemoryRow({ memory }: { memory: Memory }) {
+	const whoami = useWhoami();
 	const kind = memory.source_type ?? "agent";
+	const agentId = "agent_id" in memory && typeof memory.agent_id === "string" ? memory.agent_id : null;
+	const author = "author_user_id" in memory && typeof memory.author_user_id === "string" ? memory.author_user_id : null;
 	const title = memory.content.trim().split(/(?<=[.!?])\s+/)[0] || memory.content;
 	return (
 		<Dialog>
@@ -141,6 +146,7 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 					<div className="min-w-0 flex-1">
 						<p className="m-0 line-clamp-1 text-body leading-[1.35] text-foreground">{title}</p>
 						<div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-meta tabular-nums text-muted-foreground">
+							{whoami && <Attribution author={author} agent={agentId} />}
 							<span className="shrink-0">{timeAgo(memory.created_at)}</span>
 							<span aria-hidden="true">·</span>
 							<span className={cn("shrink-0", TYPE_TINTS[memory.type] ?? "text-muted-foreground")}>
@@ -166,6 +172,7 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 						Saved {new Date(memory.created_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}
 					</time>
 				</DialogDescription>
+				{agentId && <ClassifyAction target={{ kind: "memory", id: memory.id, agentId }} />}
 				<div className="min-h-0 overflow-y-auto whitespace-pre-wrap break-words text-title leading-relaxed">
 					{memory.content}
 				</div>

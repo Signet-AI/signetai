@@ -1,3 +1,4 @@
+import { useWhoami } from "@/lib/session";
 import { useEffect, useState } from "react";
 import { getJSONResult } from "@/lib/api";
 import type { ClassificationPrincipal, ClassificationTarget, OrganizationClassification } from "@/lib/organization";
@@ -15,6 +16,8 @@ import { TrackedJob } from "./job";
 
 export function ClassifyAction({ target }: { target: ClassificationTarget }) {
 	const [open, setOpen] = useState(false);
+	const whoami = useWhoami();
+	if (!whoami) return null;
 	return open ? (
 		<ClassifyForm
 			key={`${target.kind}:${target.agentId}:${target.id}`}
