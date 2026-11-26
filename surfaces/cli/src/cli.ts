@@ -50,7 +50,7 @@ import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
 import { registerAuthCommands, reportAuthError } from "./commands/auth.js";
 import { registerOrganizationCommands } from "./commands/organization.js";
 import { cliTarget, cliTransport, registerOrganizationTarget } from "./lib/organization-target.js";
-import { organizationDashboard, organizationStatus } from "./commands/organization-client.js";
+import { organizationDashboard, organizationPause, organizationStatus } from "./commands/organization-client.js";
 import { registerConnectorCommands } from "./commands/connector.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
@@ -882,6 +882,11 @@ const showTargetStatus = async (options: { path?: string; json?: boolean }): Pro
 	if (remote) return organizationStatus(remote, options.json);
 	return showStatus(options, healthDeps);
 };
+const setTargetPause = async (paused: boolean, options?: { path?: string; json?: boolean }): Promise<void> => {
+	const remote = cliTransport();
+	if (remote) return organizationPause(remote, paused, options?.json);
+	return (paused ? doPause : doResume)(options ?? {}, daemonDeps);
+};
 const showTargetDashboard = async (options: { path?: string }): Promise<void> => {
 	const remote = cliTransport();
 	const target = cliTarget();
@@ -1005,9 +1010,9 @@ registerDesktopCommands(program, {
 });
 
 registerDaemonCommands(program, {
-	doPause: (options) => doPause(options, daemonDeps),
+	doPause: (options) => setTargetPause(true, options),
 	doRestart: (options) => doRestart(options, daemonDeps),
-	doResume: (options) => doResume(options, daemonDeps),
+	doResume: (options) => setTargetPause(false, options),
 	doStart: (options) => doStart(options, daemonDeps),
 	doStop: (options) => doStop(options, daemonDeps),
 	showLogs: (options) => showLogs(options, daemonDeps),

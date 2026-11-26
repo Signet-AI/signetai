@@ -58,12 +58,9 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 			success(await request(daemon.origin, "/api/pipeline/pause", admin.credential, "POST", {}), "verify durable pause")
 				.changed,
 		).toBe(false);
-		expect(
-			success(
-				await request(daemon.origin, "/api/pipeline/resume", admin.credential, "POST", {}),
-				"resume organization workers",
-			).paused,
-		).toBe(false);
+		expect((await cli(["resume", "--json"])).paused).toBe(false);
+		expect((await cli(["daemon", "pause", "--json"])).paused).toBe(true);
+		expect((await cli(["daemon", "resume", "--json"])).paused).toBe(false);
 		const browserKey = success(
 			await request(daemon.origin, "/api/auth/api-keys", admin.credential, "POST", {
 				name: "browser-ceiling-proof",

@@ -48,3 +48,18 @@ export async function organizationDashboard(
 	destination.search = "";
 	await open(destination.href);
 }
+
+export async function organizationPause(
+	transport: NodeTransport,
+	paused: boolean,
+	json = false,
+	print: (value: string) => void = console.log,
+): Promise<void> {
+	const result = await transport.post<{ success: boolean; paused: boolean }>(
+		`/api/pipeline/${paused ? "pause" : "resume"}`,
+		{},
+	);
+	if (result.success !== true || result.paused !== paused)
+		throw new Error("The instance did not confirm the pipeline transition");
+	print(json ? JSON.stringify(result) : `Organization workers ${paused ? "paused" : "resumed"}.`);
+}
