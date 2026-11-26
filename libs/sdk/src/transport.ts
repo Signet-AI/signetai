@@ -225,6 +225,8 @@ export class SignetTransport {
 
 async function parseResponseBody(response: Response) {
 	if (response.status === 204 || response.status === 205) return undefined;
+	const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+	const json = contentType.includes("application/json") || contentType.includes("+json");
 	let text: string;
 	try {
 		if (response.ok) text = await response.text();
@@ -232,15 +234,18 @@ async function parseResponseBody(response: Response) {
 			const reader = response.body?.getReader();
 			const chunks: Uint8Array[] = [];
 			let bytes = 0;
+			const limit = json ? 1024 * 1024 : 4096;
 			if (reader) {
 				try {
-					while (bytes < 4096) {
+					while (true) {
 						const chunk = await reader.read();
 						if (chunk.done) break;
-						const bounded = chunk.value.subarray(0, 4096 - bytes);
+						if (json && bytes + chunk.value.byteLength > limit)
+							throw new RangeError("Error JSON response exceeds 1 MiB");
+						const bounded = chunk.value.subarray(0, limit - bytes);
 						chunks.push(bounded);
 						bytes += bounded.byteLength;
-						if (!(response.headers.get("content-type") ?? "").includes("json")) break;
+						if (!json) break;
 					}
 				} finally {
 					await reader.cancel();
@@ -263,8 +268,7 @@ async function parseResponseBody(response: Response) {
 		);
 	}
 	if (!text) return undefined;
-	const contentType = response.headers.get("content-type") ?? "";
-	if (contentType.includes("application/json") || contentType.includes("+json")) {
+	if (json) {
 		try {
 			return JSON.parse(text);
 		} catch {

@@ -1,7 +1,13 @@
 import "../../../../tests/support/connector-safety.js";
 import { afterEach, expect, test } from "bun:test";
 import { SignetTransport, type RequestControl } from "../transport.js";
-import { SignetForbiddenError, SignetTimeoutError, SignetUnauthorizedError } from "../errors.js";
+import {
+	SignetApiError,
+	SignetForbiddenError,
+	SignetResponseError,
+	SignetTimeoutError,
+	SignetUnauthorizedError,
+} from "../errors.js";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
 function server(fetch: (req: Request) => Response | Promise<Response>) {
@@ -31,6 +37,27 @@ test.each([
 	});
 	await expect(client.get("/health", undefined, control)).rejects.toBeInstanceOf(RangeError);
 	expect(lookups).toBe(0);
+});
+
+for (const status of [401, 403] as const) {
+	test(`long JSON error preserves machine fields before human-message truncation; status=${status}`, async () => {
+		const reason = status === 401 ? "expired" : "permission";
+		const baseUrl = server(() => Response.json({ error: "x".repeat(8192), reason, required: "audit" }, { status }));
+		try {
+			await new SignetTransport({ baseUrl }).get("/rejected");
+			expect.unreachable();
+		} catch (error) {
+			expect(error).toMatchObject({ status, reason });
+			if (!(error instanceof SignetApiError)) throw error;
+			expect(error.body).toMatchObject({ reason, required: "audit" });
+			expect(error.message.length).toBeLessThanOrEqual(4096);
+		}
+	});
+}
+
+test("oversized error JSON is rejected rather than parsed from a truncated prefix", async () => {
+	const baseUrl = server(() => Response.json({ error: "x".repeat(1024 * 1024), reason: "expired" }, { status: 401 }));
+	await expect(new SignetTransport({ baseUrl }).get("/oversized")).rejects.toBeInstanceOf(SignetResponseError);
 });
 
 test("auth rejection retains status, reason and required permission", async () => {

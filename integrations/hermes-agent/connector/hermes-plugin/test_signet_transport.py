@@ -15,6 +15,13 @@ import signet_transport as transport
 
 
 class TransportTests(unittest.TestCase):
+    def test_long_error_message_preserves_structured_reason(self):
+        for status, reason in ((401, "expired"), (403, "permission")):
+            error = transport._api_error(status, {"error": "x" * 8192, "reason": reason, "required": "audit"})
+            self.assertEqual(getattr(error, "reason", None), reason)
+            self.assertEqual(error.body["required"], "audit")
+            self.assertLessEqual(len(str(error)), 4096)
+
     def test_shared_node_conformance_fixture(self):
         import client
         fixture = json.loads((Path(__file__).resolve().parents[4] / "tests/fixtures/connector-conformance.json").read_text())

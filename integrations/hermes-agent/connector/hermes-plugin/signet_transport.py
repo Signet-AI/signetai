@@ -42,7 +42,8 @@ class SignetApiError(Exception):
     def __init__(self, status, body):
         self.status = status
         self.body = body
-        super().__init__(body.get("error", "API error %s" % status) if isinstance(body, dict) else "API error %s" % status)
+        message = body.get("error") if isinstance(body, dict) else None
+        super().__init__(message[:4096] if isinstance(message, str) else "API error %s" % status)
 
 
 class SignetUnauthorizedError(SignetApiError):
