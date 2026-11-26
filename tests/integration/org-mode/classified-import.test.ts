@@ -125,6 +125,14 @@ test("classified imports stay hidden from admission through worker completion", 
 			45_000,
 		);
 		expect(polls).toBeGreaterThan(0);
+		const material = success(
+			await request(daemon.origin, `/api/classifications/${fixture.hrId}/items`, author.session),
+			"enumerate imported classified material",
+		);
+		expect(material.items).toContainEqual({ target_kind: "source", target_id: sourceId, agent_id: author.agentId });
+		expect((await request(daemon.origin, `/api/classifications/${fixture.hrId}/items`, outsider.session)).status).toBe(
+			404,
+		);
 		expect(
 			snapshot
 				.query("SELECT COUNT(*) AS n FROM session_transcripts WHERE source_id=? AND agent_id=?")

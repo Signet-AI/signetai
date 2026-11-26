@@ -88,6 +88,62 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("classified transcript material includes source IDs only inside read scope", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("import-reviewer");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin", compliance: true });
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "Imported HR", audience: [{ kind: "user", id: bob.userId }] },
+				bob.token,
+			)
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement("INSERT INTO compartments(key) VALUES(?)", [label.id]),
+			statement(
+				"INSERT INTO compartment_members(compartment_id,classification_id) SELECT id,? FROM compartments WHERE key=?",
+				[label.id, label.id],
+			),
+			statement(
+				"INSERT INTO session_transcripts(agent_id,session_key,source_id,content,harness,project,compartment_id,created_at) SELECT ?,'imported-session','imported-source','classified transcript','codex','review',id,'2026-11-26' FROM compartments WHERE key=?",
+				[bob.agentId, label.id],
+			),
+			statement(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('source','imported-source',?,?,?,'2026-11-26')",
+				[bob.agentId, label.id, bob.userId],
+			),
+		]);
+		const path = `/api/classifications/${label.id}/items`;
+		const result = await (await call(path, "GET", undefined, bob.token)).json();
+		expect(result.items).toContainEqual({ target_kind: "source", target_id: "imported-source", agent_id: bob.agentId });
+		expect((await call(path)).status).toBe(404);
+		const otherAgent = await (
+			await call("/api/agents", "POST", { name: "Outside import scope", kind: "personal" }, bob.token)
+		).json();
+		for (const limits of [{ agentId: otherAgent.agentId }, { allowedProjects: ["unrelated"] }]) {
+			const key = await (
+				await call(
+					"/api/auth/api-keys",
+					"POST",
+					{
+						name: "restricted-import-review",
+						permissions: ["recall"],
+						expiresAt: new Date(Date.now() + 60_000).toISOString(),
+						...limits,
+					},
+					bob.token,
+				)
+			).json();
+			const denied = await call(path, "GET", undefined, key.secret);
+			expect(denied.status).toBe(200);
+			expect((await denied.json()).items).toEqual([]);
+		}
+	});
 	test("Dreaming review metadata follows pass audience and agent scope", async () => {
 		const { registerPipelineRoutes } = await import("../routes/pipeline-routes");
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
