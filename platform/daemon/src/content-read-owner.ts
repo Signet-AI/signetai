@@ -168,6 +168,53 @@ export function executeContentRead(
 	check: () => void = () => {},
 ): unknown {
 	check();
+	if (request.op === "memory_list") {
+		const predicate = readScopeSql("m", request.scope, { current: true });
+		const args: unknown[] = [...predicate.args];
+		let where = `COALESCE(m.is_deleted,0)=0${predicate.sql}`;
+		for (const [column, value] of [
+			["m.type", request.type],
+			["m.author_user_id", request.author],
+		] as const) {
+			if (value !== undefined) {
+				where += ` AND ${column}=?`;
+				args.push(value);
+			}
+		}
+		if (request.team !== undefined) {
+			where += " AND EXISTS(SELECT 1 FROM agents a WHERE a.id=m.agent_id AND a.owner_group_id=?)";
+			args.push(request.team);
+		}
+		if (request.classification !== undefined) {
+			where +=
+				" AND EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=m.compartment_id AND cm.classification_id=?)";
+			args.push(request.classification);
+		}
+		const rows = db
+			.prepare(
+				`SELECT m.id,m.content,m.author_user_id AS authorUserId,m.created_at,m.who,m.importance,m.tags,m.source_type,m.pinned,m.type,m.agent_id,m.project,m.compartment_id AS labelCompartment FROM memories m WHERE ${where} ORDER BY m.created_at DESC,m.id LIMIT ? OFFSET ?`,
+			)
+			.all(...args, request.limit, request.offset);
+		check();
+		const stats = db
+			.prepare(
+				`SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN m.importance>=0.9 THEN 1 ELSE 0 END),0) AS critical,COALESCE(SUM(CASE WHEN EXISTS(SELECT 1 FROM embeddings e WHERE e.source_type='memory' AND e.source_id=m.id AND e.agent_id=m.agent_id) THEN 1 ELSE 0 END),0) AS withEmbeddings FROM memories m WHERE ${where}`,
+			)
+			.get(...args);
+		const memories = rows.map(({ labelCompartment, ...row }) => {
+			check();
+			const labels =
+				request.scope.organizationMode === true
+					? db
+							.prepare(
+								"SELECT c.id,c.name FROM classifications c JOIN compartment_members cm ON cm.classification_id=c.id WHERE cm.compartment_id=? ORDER BY c.id",
+							)
+							.all(labelCompartment)
+					: [];
+			return { ...row, ...(labels.length ? { classifications: labels } : {}) };
+		});
+		return { memories, stats };
+	}
 	if (request.op === "readable_pointers") {
 		if (request.references.length > 2000) throw new Error("Pointer admission limit exceeded");
 		return request.references.flatMap((ref) => {

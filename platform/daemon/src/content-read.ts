@@ -9,6 +9,16 @@ type FtsBase = Parameters<typeof ftsShardTables>[0];
 export type AuthoredExportTable = "memories" | "session_transcripts" | "memory_artifacts";
 export type ContentReadRequest =
 	| {
+			readonly op: "memory_list";
+			readonly scope: ReadScope;
+			readonly limit: number;
+			readonly offset: number;
+			readonly type?: string;
+			readonly author?: string;
+			readonly team?: string;
+			readonly classification?: string;
+	  }
+	| {
 			readonly op: "export_content";
 			readonly table: AuthoredExportTable;
 			readonly author: string;

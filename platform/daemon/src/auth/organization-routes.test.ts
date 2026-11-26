@@ -88,6 +88,77 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("memory review filters and totals stay inside audience and agent scope", async () => {
+		const { registerMemoryRoutes } = await import("../routes/memory-routes");
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerMemoryRoutes(app);
+		registerClassificationRoutes(app);
+		await claim();
+		const bob = await member("bob");
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
+		const team = await (await call("/api/org/groups", "POST", { name: "Review" })).json();
+		await call(`/api/org/groups/${team.id}/members/${bob.userId}`, "PUT", { role: "member" });
+		const agent = await (
+			await call("/api/agents", "POST", { name: "Review agent", kind: "team", ownerGroupId: team.id })
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		for (const id of ["review-public", "review-hr"])
+			await organizationWrite([
+				statement(
+					"INSERT INTO memories(id,content,agent_id,author_user_id,memory_kind,type,created_at,updated_at) VALUES (?, 'review evidence',?,?,'episodic','fact',datetime('now'),datetime('now'))",
+					[id, agent.agentId, bob.userId],
+				),
+			]);
+		const label = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{
+					name: "HR review",
+					audience: [{ kind: "user", id: bob.userId }],
+					appliers: [{ kind: "user", id: bob.userId }],
+				},
+				bob.token,
+			)
+		).json();
+		expect(
+			(
+				await call(
+					`/api/classifications/${label.id}/apply?wait=1`,
+					"POST",
+					{ target: { kind: "memory", id: "review-hr", agentId: agent.agentId } },
+					bob.token,
+				)
+			).status,
+		).toBe(202);
+		const path = `/api/memories?agentId=${agent.agentId}&author=${bob.userId}&team=${team.id}`;
+		const publicView = await (await call(path)).json();
+		expect(publicView.stats.total).toBe(1);
+		expect(publicView.memories.map((m: { id: string }) => m.id)).toEqual(["review-public"]);
+		expect(publicView.memories[0]).not.toHaveProperty("classifications");
+		expect((await (await call(`${path}&classification=${label.id}`)).json()).stats.total).toBe(0);
+		const audience = await (await call(`${path}&classification=${label.id}`, "GET", undefined, bob.token)).json();
+		expect(audience.stats.total).toBe(1);
+		expect(audience.memories[0].id).toBe("review-hr");
+		expect(audience.memories[0].classifications).toEqual([{ id: label.id, name: "HR review" }]);
+		expect((await (await call(`${path}&limit=1&offset=1`, "GET", undefined, bob.token)).json()).stats.total).toBe(2);
+		expect((await (await call(`/api/memories?agentId=${agent.agentId}&author=unknown`)).json()).stats.total).toBe(0);
+		expect((await (await call(`/api/memories?agentId=${agent.agentId}&team=unknown`)).json()).stats.total).toBe(0);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{
+					name: "bound-review",
+					agentId: bob.agentId,
+					permissions: ["recall"],
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				bob.token,
+			)
+		).json();
+		expect((await call(path, "GET", undefined, key.secret)).status).toBe(403);
+	});
 	test("bounded user lookup serves compliance without widening the directory", async () => {
 		await claim();
 		const alice = await member("alice");

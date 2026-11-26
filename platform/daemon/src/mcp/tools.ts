@@ -977,6 +977,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				limit: z.number().optional().describe("Max results (default 100)"),
 				offset: z.number().optional().describe("Pagination offset"),
 				type: z.string().optional().describe("Filter by memory type"),
+				author: z.string().min(1).max(200).optional().describe("Author user ID"),
+				team: z.string().min(1).max(200).optional().describe("Owning team ID"),
+				classification: z.string().min(1).max(200).optional().describe("Classification ID within your audience"),
 				agent_id: z
 					.string()
 					.refine((value) => value.trim() !== "all", "agent_id must name one agent")
@@ -984,11 +987,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.describe("Agent ID whose read scope applies"),
 			}),
 		},
-		async ({ limit, offset, type, agent_id }) => {
+		async ({ limit, offset, type, agent_id, author, team, classification }) => {
 			const params = new URLSearchParams();
 			if (limit !== undefined) params.set("limit", String(limit));
 			if (offset !== undefined) params.set("offset", String(offset));
 			if (type !== undefined) params.set("type", type);
+			for (const [key, value] of Object.entries({ author, team, classification }))
+				if (value !== undefined) params.set(key, value);
 			const agentId = agentFor(agent_id);
 			if (agentId === "all") return errorResult("List failed: agent_id must name one agent");
 			if (agentId) params.set("agentId", agentId);

@@ -3277,7 +3277,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3618,
+      "line": 3602,
       "api": "withReadDbAsync",
       "source": "const index = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -3285,7 +3285,7 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3635,
+      "line": 3619,
       "api": "withReadDbAsync",
       "source": "const report = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",

@@ -1279,9 +1279,18 @@ describe("createMcpServer", () => {
 			const cap: { url?: string } = {};
 			mockFetch(200, { memories: [], total: 0 }, cap);
 
-			await callTool(server, "memory_list", { limit: 10, type: "fact" });
+			await callTool(server, "memory_list", {
+				limit: 10,
+				type: "fact",
+				author: "usr_alice",
+				team: "grp_review",
+				classification: "cls_hr",
+			});
 			expect(cap.url).toContain("limit=10");
 			expect(cap.url).toContain("type=fact");
+			expect(cap.url).toContain("author=usr_alice");
+			expect(cap.url).toContain("team=grp_review");
+			expect(cap.url).toContain("classification=cls_hr");
 		});
 	});
 

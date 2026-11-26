@@ -149,6 +149,10 @@ Organization log feeds require both `admin` and `diagnostics`, without an agent 
 
 A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
 
+## Memory review filters
+
+`GET /api/memories` accepts `author` (user ID), `team` (owning team ID), and `classification` (classification ID), together with the existing type, agent, and pagination options. Filters are combined before pagination in the read owner. `stats.total`, `stats.critical`, and `stats.withEmbeddings` describe only matching readable memories, not hidden material. Unknown and unreadable classifications both return no matches. Classified rows include `classifications: [{ id, name }]` only for audience members; unclassified rows and existing local responses do not gain that key. The MCP `memory_list` tool accepts the same filters.
+
 ## User lookup for compliance
 
 `GET /api/org/users/lookup?q=<name-or-email>` lets administrators and compliance officers find active people without granting the full user directory. Results contain only `id`, `displayName`, and `email`. Search is literal, case-insensitive, and bounded to 128 characters. Pages default to 20 people with a maximum `limit` of 50; pass the returned `nextCursor` as `cursor` for the next page. Agent- or project-restricted credentials cannot search this organization-wide directory. Queries are audited without recording the search text. `GET /api/org/users` remains admin-only. Agents can use the same operation through `signet_org_user_lookup`.
