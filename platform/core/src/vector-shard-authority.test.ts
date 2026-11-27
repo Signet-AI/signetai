@@ -1,13 +1,26 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { compartmentFor, deleteCompartmentVectors, syncEmbeddingCompartment } from "./compartment-shards";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	compartmentFor,
+	deleteCompartmentVectors,
+	syncEmbeddingCompartment,
+	admittedVectorPartitions,
+	beginVectorAdmissionRepairInTx,
+	stepVectorAdmissionRepairInTx,
+	publishVectorAdmissionRepairInTx,
+	repairVectorAdmissionStepInTx,
+} from "./compartment-shards";
 import { findSqliteVecExtension } from "./database";
 import { runMigrations } from "./migrations";
-import type { ReadScope } from "./read-scope";
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { vectorSearchWithMetadata } from "./search";
 
-function fixture(): Database {
-	const db = new Database(":memory:");
+function fixture(path = ":memory:"): Database {
+	const db = new Database(path);
+	if (path !== ":memory:") db.exec("PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL");
 	const extension = findSqliteVecExtension();
 	if (!extension) throw new Error("sqlite-vec required");
 	db.loadExtension(extension);
@@ -17,6 +30,7 @@ function fixture(): Database {
 		CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine);
 		INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('other','Other','legacy','2020','2020'),('third','Third','legacy','2020','2020');
 		INSERT INTO classifications(id,name) VALUES('cls_hidden_a','Hidden A'),('cls_hidden_b','Hidden B')`);
+	repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings");
 	return db;
 }
 function add(db: Database, id: string, agent: string, offset: number, kind = "memory"): void {
@@ -185,5 +199,207 @@ test("project and pending-target restrictions distinguish otherwise identical ad
 		expect(recall(db).response.results.map((row) => row.id)).toEqual(["visible-b"]);
 	} finally {
 		db.close();
+	}
+});
+
+test("randomized row predicates and physical shard admission agree for every reader", () => {
+	const db = fixture();
+	try {
+		db.exec(
+			"UPDATE agents SET policy_group='team' WHERE id='other';INSERT INTO classification_audience VALUES('cls_hidden_a','user','reader-a'),('cls_hidden_b','user','reader-b')",
+		);
+		const jobs = [
+			{ id: "cls_hidden_a", target: { kind: "agent", id: "third", agentId: "third" } },
+			{ id: "cls_hidden_b", target: { kind: "session", id: "run-1", agentId: "other" } },
+			{ id: "cls_hidden_a", target: { kind: "source", id: "vault", agentId: "default" } },
+			{ id: "cls_hidden_b", target: { kind: "memory", id: "row-0", agentId: "default" } },
+		];
+		for (const [i, job] of jobs.entries())
+			db.prepare(
+				"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES(?,'classify','pending',?,'2020')",
+			).run(`job-${i}`, JSON.stringify(job));
+		const compartments = [
+			null,
+			compartmentFor(db, ["cls_hidden_a"]),
+			compartmentFor(db, ["cls_hidden_b"]),
+			compartmentFor(db, ["cls_hidden_a", "cls_hidden_b"]),
+		];
+		let seed = 271828;
+		const random = () => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+			return seed >>> 8;
+		};
+		for (let i = 0; i < 72; i++) {
+			const agent = i === 0 ? "default" : (["default", "other", "third"][random() % 3] ?? "default");
+			add(db, `row-${i}`, agent, (i + 1) / 100);
+			db.prepare("UPDATE memories SET project=?,visibility=?,compartment_id=?,source_id=? WHERE id=?").run(
+				[null, "alpha", "beta"][random() % 3] ?? null,
+				[null, "private", "global", "archived"][random() % 4] ?? null,
+				compartments[random() % 4] ?? null,
+				i % 2 ? `session:run-${i % 3}` : `vault:doc-${i}`,
+				`row-${i}`,
+			);
+			syncEmbeddingCompartment(db, "embeddings", `row-${i}`);
+		}
+		const scopes: ReadScope[] = [];
+		for (const user of ["reader-a", "reader-b", "reader-none"])
+			for (const reach of [
+				{ kind: "own", agentId: "default" },
+				{ kind: "own", agentId: "other" },
+				{ kind: "all" },
+				{ kind: "shared", agentId: "default" },
+				{ kind: "group", agentId: "default", group: "team" },
+			] as const)
+				for (const projects of [null, ["alpha"], ["beta"]])
+					for (const allowed of ["all", [], compartments.flatMap((c) => (c === null ? [] : [c]))] as const)
+						scopes.push({ reach, projects, compartments: allowed, inFlightUserId: user });
+		let members = db
+			.query<{ embedding_id: string; partition_id: number }, []>(
+				"SELECT embedding_id,partition_id FROM vector_shard_members WHERE projection='vec_embeddings'",
+			)
+			.all();
+		expect(members.length).toBe(72);
+		const check = () => {
+			for (const scope of scopes) {
+				const parent = readScopeSql("m", scope);
+				const child = readScopeSql(
+					"e",
+					{ ...scope, projects: null, reach: scope.reach.kind === "own" ? scope.reach : { kind: "all" } },
+					{ visibility: null, memory: "source_id", source: "source_id", session: null },
+				);
+				const predicate = new Set(
+					db
+						.prepare<{ id: string }, SQLQueryBindings[]>(
+							`SELECT e.id FROM embeddings e JOIN memories m ON m.id=e.source_id WHERE 1=1${parent.sql}${child.sql}`,
+						)
+						.all(...bindings([...parent.args, ...child.args]))
+						.map((r) => r.id),
+				);
+				const admitted = admittedVectorPartitions(db, "vec_embeddings", scope);
+				if (!admitted) throw new Error("physical projection missing");
+				const ids = new Set(admitted.ids);
+				for (const row of members) expect(ids.has(row.partition_id)).toBe(predicate.has(row.embedding_id));
+			}
+		};
+		check();
+		for (const status of ["running", "complete", "failed"]) {
+			db.prepare("UPDATE org_jobs SET status=? WHERE ?!='running' OR id='job-0'").run(status, status);
+			check();
+		}
+		add(db, "late-failed-row", "third", 0.9);
+		members = db
+			.query<{ embedding_id: string; partition_id: number }, []>(
+				"SELECT embedding_id,partition_id FROM vector_shard_members WHERE projection='vec_embeddings'",
+			)
+			.all();
+		expect(members.length).toBe(73);
+		check();
+		db.exec("INSERT INTO classification_assignments VALUES('agent','third','third','cls_hidden_a',NULL,'2020')");
+		check();
+	} finally {
+		db.close();
+	}
+});
+
+test("classification preparation preserves old admission until verified atomic publication", () => {
+	const db = fixture();
+	try {
+		add(db, "visible-a", "default", 0.2);
+		add(db, "visible-b", "default", 0.3);
+		const before = recall(db);
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('prepare','classify-preparing','pending',?,'2020')",
+		).run(JSON.stringify({ id: "cls_hidden_a", target: { kind: "memory", id: "visible-a", agentId: "default" } }));
+		db.exec("BEGIN IMMEDIATE");
+		beginVectorAdmissionRepairInTx(db, "vec_embeddings", "embeddings", "prepare");
+		db.exec("COMMIT");
+		expect(recall(db)).toEqual(before);
+		let phase = "copying";
+		for (let i = 0; i < 20 && phase !== "prepared"; i++) {
+			db.exec("BEGIN IMMEDIATE");
+			phase = stepVectorAdmissionRepairInTx(db, "vec_embeddings", 1).phase;
+			db.exec("COMMIT");
+			expect(recall(db)).toEqual(before);
+		}
+		expect(phase).toBe("prepared");
+		db.exec("BEGIN IMMEDIATE");
+		publishVectorAdmissionRepairInTx(db, "vec_embeddings", "prepare");
+		db.exec("ROLLBACK");
+		expect(recall(db)).toEqual(before);
+		expect(db.query("SELECT kind FROM org_jobs WHERE id='prepare'").get()).toEqual({ kind: "classify-preparing" });
+		db.exec("BEGIN IMMEDIATE");
+		publishVectorAdmissionRepairInTx(db, "vec_embeddings", "prepare");
+		db.exec("COMMIT");
+		expect(recall(db).response.results.map((r) => r.id)).toEqual(["visible-b"]);
+		expect(db.query("SELECT kind FROM org_jobs WHERE id='prepare'").get()).toEqual({ kind: "classify" });
+	} finally {
+		db.close();
+	}
+});
+
+test("restarted connections preserve admission across preparation and publication crashes", () => {
+	const directory = mkdtempSync(join(tmpdir(), "signet-vector-crash-"));
+	const path = join(directory, "fixture.db");
+	const extension = findSqliteVecExtension();
+	if (!extension) throw new Error("sqlite-vec required");
+	try {
+		const db = fixture(path);
+		db.exec("BEGIN IMMEDIATE");
+		for (const [id, agent, offset] of [
+			["a", "default", 0.1],
+			["b", "default", 0.2],
+			["c", "default", 0.3],
+			["other-row", "other", 0.05],
+		] as const) {
+			add(db, id, agent, offset);
+			db.prepare("UPDATE memories SET project='alpha' WHERE id=?").run(id);
+		}
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('restart-job','classify-preparing','pending',?,'2020')",
+		).run(JSON.stringify({ id: "cls_hidden_a", target: { kind: "memory", id: "a", agentId: "default" } }));
+		db.exec("COMMIT");
+		db.close();
+		const crash = (action: string, commit = true) => {
+			const script = `import{Database}from'bun:sqlite';import{bindVectorAdmissionWriters,beginVectorAdmissionRepairInTx,stepVectorAdmissionRepairInTx,publishVectorAdmissionRepairInTx}from${JSON.stringify(import.meta.resolve("./compartment-shards"))};const db=new Database(${JSON.stringify(path)});db.loadExtension(${JSON.stringify(extension)});db.exec('PRAGMA synchronous=FULL');bindVectorAdmissionWriters(db);db.exec('BEGIN IMMEDIATE');${action};${commit ? "db.exec('COMMIT');" : ""}process.kill(process.pid,'SIGKILL');`;
+			const result = Bun.spawnSync([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+			expect({ signal: result.signalCode, error: new TextDecoder().decode(result.stderr) }).toEqual({
+				signal: "SIGKILL",
+				error: "",
+			});
+		};
+		const inspect = (expected: readonly string[]) => {
+			const reader = new Database(path, { readonly: true });
+			reader.loadExtension(extension);
+			try {
+				expect(recall(reader, { ...own, projects: ["alpha"] }).response.results.map((r) => r.id)).toEqual([
+					...expected,
+				]);
+				expect(
+					recall(reader, { ...own, reach: { kind: "own", agentId: "other" } }).response.results.map((r) => r.id),
+				).toEqual(["other-row"]);
+				return reader
+					.query<{ phase: string }, []>("SELECT phase FROM vector_shard_repairs WHERE projection='vec_embeddings'")
+					.get()?.phase;
+			} finally {
+				reader.close();
+			}
+		};
+		crash("beginVectorAdmissionRepairInTx(db,'vec_embeddings','embeddings','restart-job')");
+		expect(inspect(["a", "b"])).toBe("copying");
+		crash("stepVectorAdmissionRepairInTx(db,'vec_embeddings',1)");
+		expect(inspect(["a", "b"])).toBe("copying");
+		crash("db.prepare(\"UPDATE memories SET project='beta' WHERE id='b'\").run()");
+		let phase = inspect(["a", "c"]);
+		for (let i = 0; i < 10 && phase !== "prepared"; i++) {
+			crash("stepVectorAdmissionRepairInTx(db,'vec_embeddings')");
+			phase = inspect(["a", "c"]);
+		}
+		expect(phase).toBe("prepared");
+		crash("publishVectorAdmissionRepairInTx(db,'vec_embeddings','restart-job')", false);
+		expect(inspect(["a", "c"])).toBe("prepared");
+		crash("publishVectorAdmissionRepairInTx(db,'vec_embeddings','restart-job')");
+		expect(inspect(["c"])).toBe("ready");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
 	}
 });

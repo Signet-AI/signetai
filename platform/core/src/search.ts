@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
-import { selectShardTables } from "./compartment-shards";
+import { selectShardTables, admittedVectorPartitions, VectorAdmissionLimitError } from "./compartment-shards";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { redactCredentials } from "./credential-detection";
 import type { Memory } from "./types";
@@ -144,34 +144,35 @@ function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
 export function activeVectorProjectionTable(db: {
 	prepare(sql: string): { get(...args: unknown[]): unknown };
 }): "vec_embeddings" | "vec_embeddings_staging" {
-	try {
-		const row = db.prepare("SELECT active_profile_json FROM embedding_index_state WHERE id = 1").get() as
-			| { active_profile_json?: unknown }
-			| undefined;
-		if (typeof row?.active_profile_json !== "string") return "vec_embeddings";
-		const active = JSON.parse(row.active_profile_json) as { projectionSlot?: unknown };
-		return active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
-	} catch {
-		return "vec_embeddings";
-	}
+	return activeVectorSearchTables(db).projection;
 }
-
-function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
-	try {
-		const row = db
-			.prepare("SELECT active_profile_json, state, staging_profile_json FROM embedding_index_state WHERE id = 1")
-			.get() as { active_profile_json?: unknown; state?: unknown; staging_profile_json?: unknown } | undefined;
-		if (!row) return { projection: "vec_embeddings", embeddings: "embeddings" };
-		const activeProjection = activeVectorProjectionTable(db);
-		if (row.state !== "building" || typeof row.staging_profile_json !== "string") {
-			return { projection: activeProjection, embeddings: "embeddings" };
-		}
-		const staging = JSON.parse(row.staging_profile_json) as { projectionRebuild?: unknown };
-		if (staging.projectionRebuild === true) return { projection: activeProjection, embeddings: "embeddings_staging" };
-		return { projection: activeProjection, embeddings: "embeddings" };
-	} catch {
+export function activeVectorSearchTables(db: {
+	prepare(sql: string): { get(...args: unknown[]): unknown };
+}): VectorSearchTables {
+	if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedding_index_state'").get())
 		return { projection: "vec_embeddings", embeddings: "embeddings" };
-	}
+	const row = db
+		.prepare("SELECT active_profile_json,state,staging_profile_json FROM embedding_index_state WHERE id=1")
+		.get();
+	if (row == null) return { projection: "vec_embeddings", embeddings: "embeddings" };
+	if (typeof row !== "object") throw new Error("invalid_embedding_index_state");
+	const encoded: unknown = Reflect.get(row, "active_profile_json");
+	if (typeof encoded !== "string") throw new Error("invalid_embedding_index_profile");
+	const active: unknown = JSON.parse(encoded);
+	if (typeof active !== "object" || active === null || Array.isArray(active))
+		throw new Error("invalid_embedding_index_profile");
+	const slot: unknown = Reflect.get(active, "projectionSlot");
+	if (slot !== undefined && slot !== "active" && slot !== "staging") throw new Error("invalid_vector_projection_slot");
+	const projection = slot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+	if (Reflect.get(row, "state") !== "building") return { projection, embeddings: "embeddings" };
+	const building: unknown = Reflect.get(row, "staging_profile_json");
+	if (typeof building !== "string") throw new Error("invalid_embedding_index_profile");
+	const staged: unknown = JSON.parse(building);
+	if (typeof staged !== "object" || staged === null || Array.isArray(staged))
+		throw new Error("invalid_embedding_index_profile");
+	const rebuild: unknown = Reflect.get(staged, "projectionRebuild");
+	if (rebuild !== undefined && typeof rebuild !== "boolean") throw new Error("invalid_embedding_index_profile");
+	return { projection, embeddings: rebuild === true ? "embeddings_staging" : "embeddings" };
 }
 
 function embeddingReadPredicate(scope: ReadScope): { sql: string; args: unknown[] } {
@@ -272,6 +273,50 @@ export function vectorSearchWithMetadata(
 	try {
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
+			const partitioned = admittedVectorPartitions(
+				db,
+				searchTables.projection,
+				options.readScope,
+				searchTables.embeddings,
+			);
+			if (partitioned) {
+				const clauses: string[] = [];
+				const args: unknown[] = [];
+				if (options.type) {
+					clauses.push("m.type=?");
+					args.push(options.type);
+				}
+				if (options.excludeAggregateRecall) clauses.push("COALESCE(m.source_type,'')!='aggregate-recall'");
+				if (options.currentOnly) clauses.push("m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL");
+				if (options.memoryScope === null) clauses.push("m.scope IS NULL");
+				else if (options.memoryScope !== undefined) {
+					clauses.push("m.scope=?");
+					args.push(options.memoryScope);
+				}
+				const eligible = clauses.length ? clauses.join(" AND ") : "1";
+				const maximum = Math.min(4096, Math.max(limit, Math.min(limit * 8, 1000)));
+				for (const ids of partitioned.groups) {
+					let window = limit;
+					while (true) {
+						const rows = db
+							.prepare(
+								`WITH neighbors AS MATERIALIZED(SELECT json_extract(id,'$[0]') id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission IN(SELECT value FROM json_each(?))),hits AS MATERIALIZED(SELECT id,distance FROM neighbors ORDER BY distance LIMIT ?) SELECT e.source_id,hits.distance,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON m.id=e.source_id ORDER BY hits.distance`,
+							)
+							.all(queryVector, window, JSON.stringify(ids), window, ...args);
+						const kept = rows.filter((row) => row.eligible === 1);
+						if (kept.length >= limit || kept.length === rows.length || window >= maximum) {
+							for (const row of kept)
+								if (typeof row.source_id === "string" && typeof row.distance === "number")
+									results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
+							break;
+						}
+						window = Math.min(maximum, window * 2);
+					}
+				}
+				results.sort((a, b) => b.score - a.score);
+				results.splice(limit);
+				return;
+			}
 			const scope = vectorMemoryPredicate(options);
 			const embeddingScope = embeddingReadPredicate(options.readScope);
 			const names = options.shardNames ?? searchShardNames(db, options.readScope);
@@ -329,6 +374,7 @@ export function vectorSearchWithMetadata(
 			results.splice(limit);
 		});
 	} catch (error) {
+		if (error instanceof VectorAdmissionLimitError) return { results: [], completeness: "unavailable" };
 		try {
 			let fallback: VectorSearchResponse | undefined;
 			withReadTransaction(db, () => {
