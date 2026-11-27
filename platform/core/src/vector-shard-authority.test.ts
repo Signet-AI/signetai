@@ -110,6 +110,81 @@ test("fully admitted public shard preserves main's plain KNN candidate window", 
 	}
 });
 
+test("admitted fan-out batches 192 physical shards without losing the nearest hits", () => {
+	const db = fixture();
+	try {
+		db.exec("BEGIN IMMEDIATE");
+		for (let i = 0; i < 192; i++) {
+			const agent = `fanout-${i}`;
+			db.prepare("INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES(?,?,'legacy','2020','2020')").run(
+				agent,
+				agent,
+			);
+			add(db, `admitted-${i}`, agent, i / 1000);
+		}
+		db.exec("COMMIT");
+		const result = recall(db, { ...own, reach: { kind: "all" }, compartments: "all" });
+		expect(result.response.results.map((r) => r.id)).toEqual(["admitted-0", "admitted-1"]);
+		expect(result.windows.length).toBeLessThanOrEqual(2);
+	} finally {
+		db.close();
+	}
+});
+
+test("a single admitted cohort cannot exceed the native candidate budget", () => {
+	const db = fixture();
+	try {
+		for (const row of db
+			.query<{ name: string }, []>(
+				"SELECT name FROM temp.sqlite_master WHERE type='trigger' AND name GLOB 'vec_embeddings_admission_*'",
+			)
+			.all())
+			db.exec(`DROP TRIGGER temp.${row.name}`);
+		const memory = db.prepare(
+			"INSERT INTO memories(id,content,agent_id,visibility,type,created_at,updated_at) VALUES(?,'fixture','default','global','fact','2020','2020')",
+		);
+		const embedding = db.prepare(
+			"INSERT INTO embeddings(id,content_hash,source_id,source_type,agent_id,vector,dimensions,chunk_text,created_at) VALUES(?,?,?,'memory','default',?,3,'','2020')",
+		);
+		const key = db.prepare(
+			"INSERT INTO vector_shard_keys(id,projection,generation,fingerprint,agent_id,visibility,in_flight_jobs) VALUES(?,'vec_embeddings',?,?,'default','global','[]')",
+		);
+		const vector = db.prepare("INSERT INTO vec_embeddings__admission_0(id,admission,embedding) VALUES(?,?,?)");
+		const member = db.prepare("INSERT INTO vector_shard_members VALUES('vec_embeddings',?,?,?)");
+		db.exec("BEGIN IMMEDIATE");
+		for (let i = 0; i < 2050; i++) {
+			const generation = i + 2,
+				partition = i + 1;
+			key.run(partition, generation, JSON.stringify(["default", "global", null, null, null, []]));
+			for (let j = 0; j < 2; j++) {
+				const id = `budget-${i}-${j}`;
+				memory.run(id);
+				embedding.run(id, id, id, new Float32Array([1, 0, 0]));
+				vector.run(JSON.stringify([id, generation]), partition, new Float32Array([1, 0, 0]));
+				member.run(generation, id, partition);
+			}
+		}
+		db.prepare(
+			"UPDATE vector_shard_repairs SET active_generation=2051,last_generation=2051 WHERE projection='vec_embeddings'",
+		).run();
+		db.exec("COMMIT");
+		expect(recall(db)).toEqual({ response: { results: [], completeness: "unavailable" }, windows: [] });
+		const tracked = observed(db, []);
+		const indexed = {
+			...tracked,
+			prepare(sql: string) {
+				if (sql.includes("e.vector")) throw new Error("unexpected_cosine_fallback");
+				return tracked.prepare(sql);
+			},
+		};
+		expect(
+			vectorSearchWithMetadata(indexed, new Float32Array([1, 0, 0]), { limit: 1, readScope: own }).results,
+		).toHaveLength(1);
+	} finally {
+		db.close();
+	}
+});
+
 test("hidden memory id collisions cannot turn source chunks into candidate work", () => {
 	const db = fixture();
 	try {

@@ -295,23 +295,57 @@ export function vectorSearchWithMetadata(
 				}
 				const eligible = clauses.length ? clauses.join(" AND ") : "1";
 				const maximum = Math.min(4096, Math.max(limit, Math.min(limit * 8, 1000)));
-				for (const ids of partitioned.groups) {
-					let window = limit;
-					while (true) {
+				let pending = partitioned.groups.map((_, group) => group);
+				let window = limit;
+				while (pending.length) {
+					const next: number[] = [];
+					for (let offset = 0; offset < pending.length; ) {
+						const batch: number[] = [];
+						const admissions: Array<readonly [number, number]> = [];
+						let budget = 0;
+						while (offset < pending.length && batch.length < 128) {
+							const group = pending[offset];
+							if (group === undefined) throw new Error("invalid_vector_admission_group");
+							const ids = partitioned.groups[group];
+							if (ids === undefined) throw new Error("invalid_vector_admission_group");
+							let work = 0;
+							for (const id of ids) {
+								const size = partitioned.sizes.get(id);
+								if (size === undefined) throw new Error("invalid_vector_admission_key");
+								work += Math.min(size, window);
+							}
+							if (work > 4096) throw new VectorAdmissionLimitError("vector_shard_candidate_limit");
+							if (batch.length && budget + work > 4096) break;
+							budget += work;
+							batch.push(group);
+							for (const id of ids) admissions.push([id, group]);
+							offset++;
+						}
 						const rows = db
 							.prepare(
-								`WITH neighbors AS MATERIALIZED(SELECT json_extract(id,'$[0]') id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission IN(SELECT value FROM json_each(?))),hits AS MATERIALIZED(SELECT id,distance FROM neighbors ORDER BY distance LIMIT ?) SELECT e.source_id,hits.distance,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id ORDER BY hits.distance`,
+								`WITH neighbors AS MATERIALIZED(SELECT id,admission,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission IN(SELECT partition_id FROM admitted)),admitted AS MATERIALIZED(SELECT json_extract(value,'$[0]') partition_id,json_extract(value,'$[1]') shard_group FROM json_each(?)),ranked AS MATERIALIZED(SELECT json_extract(n.id,'$[0]') id,n.distance,a.shard_group,row_number() OVER(PARTITION BY a.shard_group ORDER BY n.distance) position FROM neighbors n CROSS JOIN admitted a ON a.partition_id=n.admission),hits AS MATERIALIZED(SELECT id,distance,shard_group FROM ranked WHERE position<=?) SELECT e.source_id,hits.distance,hits.shard_group,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id ORDER BY hits.shard_group,hits.distance`,
 							)
-							.all(queryVector, window, JSON.stringify(ids), window, ...args);
-						const kept = rows.filter((row) => row.eligible === 1);
-						if (kept.length >= limit || kept.length === rows.length || window >= maximum) {
-							for (const row of kept)
-								if (typeof row.source_id === "string" && typeof row.distance === "number")
-									results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
-							break;
+							.all(queryVector, window, JSON.stringify(admissions), window, ...args);
+						const grouped = new Map<number, Record<string, unknown>[]>();
+						for (const row of rows) {
+							if (typeof row.shard_group !== "number" || !batch.includes(row.shard_group))
+								throw new Error("invalid_vector_admission_group");
+							const values = grouped.get(row.shard_group) ?? [];
+							values.push(row);
+							grouped.set(row.shard_group, values);
 						}
-						window = Math.min(maximum, window * 2);
+						for (const group of batch) {
+							const candidates = grouped.get(group) ?? [];
+							const kept = candidates.filter((row) => row.eligible === 1);
+							if (kept.length >= limit || kept.length === candidates.length || window >= maximum) {
+								for (const row of kept)
+									if (typeof row.source_id === "string" && typeof row.distance === "number")
+										results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
+							} else next.push(group);
+						}
 					}
+					pending = next;
+					window = Math.min(maximum, window * 2);
 				}
 				results.sort((a, b) => b.score - a.score);
 				results.splice(limit);
