@@ -392,6 +392,26 @@ export type DbOwnerRequest =
 			readonly kind: "session_compaction_summary";
 			readonly input: import("./session-transcripts").CompactionSummaryInput;
 	  }
+	| {
+			readonly kind: "session_transcript_upload_state";
+			readonly input: { readonly agentId: string; readonly sessionKey: string };
+	  }
+	| {
+			readonly kind: "session_transcript_upload_purge";
+			readonly input: { readonly basePath: string };
+	  }
+	| {
+			readonly kind: "session_transcript_upload_commit";
+			readonly input: import("./session-transcripts").TranscriptUploadCommit;
+	  }
+	| {
+			readonly kind: "session_transcript_upload_end";
+			readonly input: import("./session-transcripts").TranscriptUploadEndCommit;
+	  }
+	| {
+			readonly kind: "session_transcript_turn_backfill";
+			readonly input: import("./session-transcripts").TranscriptTurnBackfillOptions;
+	  }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }

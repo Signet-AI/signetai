@@ -2,20 +2,26 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor, prepareTypedStatement } from "./db-accessor";
 import {
 	appendSessionTranscriptAsync,
+	type TranscriptUploadCommit,
+	type TranscriptUploadCommitResult,
+	type TranscriptUploadState,
+	backfillTranscriptTurnsFtsChunkInDb,
+	commitTranscriptUploadInTx,
 	ensureCanonicalTranscriptHistory,
 	getStoredSessionTranscriptInfoAsync,
-	searchTranscriptFallback,
+	readTranscriptUploadStateInDb,
 	upsertSessionTranscript,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
+import { searchSessionTranscripts } from "./subagent-context";
 import { canonicalTranscriptPath } from "./transcript-jsonl";
 
 let dir = "";
 
-describe("session transcript lookup", () => {
+describe("session transcript turn index", () => {
 	afterEach(async () => {
 		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
@@ -28,45 +34,390 @@ describe("session transcript lookup", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	}
 
-	it("exact query with colon alias returns hyphen stored session key", () => {
-		init();
-		upsertSessionTranscript(
-			"019f3a7a-218f-7000-b6a3-0dcc8801a625",
-			"User: asked about mesh PR 9147 and 9146. Assistant: gave answer.",
-			"oh-my-pi",
-			"/repo-a",
-			"noam",
+	async function indexedTurns(sessionKey: string): Promise<string[]> {
+		return (await turnRows(sessionKey)).map((row) => row.text);
+	}
+
+	async function turnRows(
+		sessionKey: string,
+	): Promise<Array<{ id: number; seq: number; byte_offset: number; text: string }>> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ id: number; seq: number; byte_offset: number; text: string }>(
+				db,
+				"SELECT id, seq, byte_offset, text FROM session_transcript_turns WHERE session_key = ? AND agent_id = ? ORDER BY seq",
+			).all(sessionKey, "noam"),
 		);
+	}
 
-		const hits = searchTranscriptFallback({
-			query: "019f3a7a-218f:7000:b6a3-0dcc8801a625",
-			agentId: "noam",
-			limit: 5,
+	async function indexedMatches(term: string): Promise<number> {
+		const row = await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ count: number }>(
+				db,
+				"SELECT COUNT(*) AS count FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH ?",
+			).get(term),
+		);
+		return row?.count ?? 0;
+	}
+
+	async function searchHits(
+		query: string,
+		scope: { project?: string; currentSessionKey?: string } = {},
+	): Promise<Array<{ sessionKey: string; rank: number }>> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			searchSessionTranscripts({ db, query, agentId: "noam", limit: 10, ...scope }),
+		);
+	}
+
+	async function search(
+		query: string,
+		scope: { project?: string; currentSessionKey?: string } = {},
+	): Promise<string[]> {
+		return (await searchHits(query, scope)).map((hit) => hit.sessionKey).sort();
+	}
+
+	async function backfillChunk(maxRows?: number): Promise<{ complete: boolean; indexed: number }> {
+		return await getDbAccessor().withWriteTxAsync((db) =>
+			backfillTranscriptTurnsFtsChunkInDb(db, maxRows === undefined ? {} : { maxRows }),
+		);
+	}
+
+	async function resetTurnIndex(): Promise<void> {
+		await write("DELETE FROM session_transcript_turns");
+		await write(
+			"UPDATE session_transcript_turns_backfill SET cursor = NULL, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+		);
+	}
+
+	async function insertAt(rowid: "-9223372036854775808" | "1", sessionKey: string, content: string): Promise<void> {
+		await write(
+			`INSERT INTO session_transcripts (rowid, session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (${rowid}, ?, ?, 'codex', '/repo', 'noam', ?, ?)`,
+			sessionKey,
+			content,
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
+		);
+	}
+
+	async function write(sql: string, ...params: Array<string | number>): Promise<void> {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(sql).run(...params);
 		});
+	}
 
-		expect(hits).toHaveLength(1);
-		expect(hits[0]?.sessionKey).toBe("019f3a7a-218f-7000-b6a3-0dcc8801a625");
+	async function append(sessionKey: string, transcript: string): Promise<void> {
+		await appendSessionTranscriptAsync({ sessionKey, agentId: "noam", harness: "codex", project: "/repo", transcript });
+	}
+
+	it("indexes only the new text when a live turn is appended", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question", "\nAssistant: bravo answer"]);
 	});
 
-	it("exact query returns row when params sessionKey equals query", () => {
+	it("keeps the indexed turns when only the row metadata changes", async () => {
 		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		await write(
+			"UPDATE session_transcripts SET completed_at = ? WHERE session_key = ?",
+			"2026-11-25T10:00:00.000Z",
+			"sess-a",
+		);
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question", "\nAssistant: bravo answer"]);
+	});
+
+	it("reindexes the whole session when its content is rewritten", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		upsertSessionTranscript("sess-a", "User: charlie rewrite", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: charlie rewrite"]);
+		expect(await indexedMatches("alpha")).toBe(0);
+		expect(await search("charlie")).toEqual(["sess-a"]);
+	});
+
+	it("drops the indexed turns of a deleted transcript row", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		upsertSessionTranscript("sess-b", "User: alpha other", "codex", "/repo", "noam");
+		await write("DELETE FROM session_transcripts WHERE agent_id = ?", "noam");
+		upsertSessionTranscript("sess-c", "User: delta fresh", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-c")).toEqual(["User: delta fresh"]);
+		expect(await indexedMatches("alpha OR bravo")).toBe(0);
+		expect(await indexedMatches("delta")).toBe(1);
+	});
+
+	it("matches a session when the query terms sit in different turns", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question", "\nAssistant: bravo answer"]);
+		upsertSessionTranscript("sess-b", "User: alpha only", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-c", "User: bravo only", "codex", "/repo", "noam");
+
+		expect(await search("alpha bravo")).toEqual(["sess-a"]);
+		expect(await search("alpha")).toEqual(["sess-a", "sess-b"]);
+	});
+
+	it("searches with LIKE until the backfill indexes rows written before the index", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: charlie legacy", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: charlie second", "codex", "/repo", "noam");
+		await resetTurnIndex();
+		await append("sess-b", "Assistant: echo reply");
+
+		expect((await searchHits("charlie")).map((hit) => hit.rank)).toEqual([1, 1]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: charlie second\nAssistant: echo reply"]);
+
+		expect((await backfillChunk(1)).complete).toBe(false);
+		expect((await backfillChunk(1)).complete).toBe(true);
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: charlie legacy"]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: charlie second\nAssistant: echo reply"]);
+		const hits = await searchHits("charlie");
+		expect(hits.map((hit) => hit.sessionKey).sort()).toEqual(["sess-a", "sess-b"]);
+		expect(hits.every((hit) => hit.rank < 0)).toBe(true);
+	});
+
+	it("indexes transcripts from the minimum rowid one row per chunk when the backfill has not started", async () => {
+		init();
+		await insertAt("-9223372036854775808", "sess-a", "User: kilo boundary");
+		await insertAt("1", "sess-b", "User: lima second");
+		await resetTurnIndex();
+
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
+		expect(await backfillChunk(1)).toEqual({ complete: true, indexed: 1 });
+		expect(await turnRows("sess-a")).toEqual([
+			expect.objectContaining({ seq: 1, byte_offset: 0, text: "User: kilo boundary" }),
+		]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: lima second"]);
+	});
+
+	it("never returns another agent's session and honors the project and current-session scope", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: foxtrot plan", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: foxtrot other", "codex", "/other", "noam");
+		upsertSessionTranscript("sess-x", "User: foxtrot plan", "codex", "/repo", "intruder");
+		upsertSessionTranscript("sess-a", "User: foxtrot secretword", "codex", "/repo", "intruder");
+
+		expect(await search("secretword")).toEqual([]);
+		expect((await searchHits("foxtrot secretword")).filter((hit) => hit.rank < 0)).toEqual([]);
+		expect(await search("foxtrot plan")).toEqual(["sess-a"]);
+		expect(await search("foxtrot")).toEqual(["sess-a", "sess-b"]);
+		expect(await search("foxtrot", { project: "/other" })).toEqual(["sess-b"]);
+		expect(await search("foxtrot", { currentSessionKey: "sess-a" })).toEqual(["sess-b"]);
+		await write("DELETE FROM session_transcripts WHERE agent_id = ?", "intruder");
+		expect(await indexedMatches("foxtrot")).toBe(2);
+	});
+
+	it("replaces the indexed turns when a row is replaced or moves to another session key", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: quartz original", "codex", "/repo", "noam");
+		await write(
+			"INSERT OR REPLACE INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			"sess-a",
+			"User: romeo replaced",
+			"codex",
+			"/repo",
+			"noam",
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
+		);
+		expect(await indexedTurns("sess-a")).toEqual(["User: romeo replaced"]);
+
+		await write("UPDATE session_transcripts SET session_key = ? WHERE session_key = ?", "sess-b", "sess-a");
+		expect(await indexedTurns("sess-a")).toEqual([]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: romeo replaced"]);
+		expect(await search("romeo")).toEqual(["sess-b"]);
+	});
+
+	it("keeps the indexed turns when the same content is stored again", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: sierra question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: tango answer");
+		const stored = "User: sierra question\nAssistant: tango answer";
+		upsertSessionTranscript("sess-a", stored, "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: sierra question", "\nAssistant: tango answer"]);
+	});
+
+	it("splits on whitespace at the end of the old text and reindexes a word continued with a multibyte letter", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: uniform ", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-a", "User: uniform victor", "codex", "/repo", "noam");
+		expect(await indexedTurns("sess-a")).toEqual(["User: uniform ", "victor"]);
+
+		upsertSessionTranscript("sess-a", "User: uniform victoré", "codex", "/repo", "noam");
+		expect(await indexedTurns("sess-a")).toEqual(["User: uniform ", "victoré"]);
+	});
+
+	it("reindexes the whole session when the old content was empty", async () => {
+		init();
+		await write(
+			"INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			"sess-a",
+			"",
+			"codex",
+			"/repo",
+			"noam",
+			"2026-11-25T10:00:00.000Z",
+			"2026-11-25T10:00:00.000Z",
+		);
+		expect(await indexedTurns("sess-a")).toEqual([""]);
+		upsertSessionTranscript("sess-a", "whiskey first", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["whiskey first"]);
+	});
+
+	it("returns the stored session for an exact session key, including its colon alias", async () => {
+		init();
+		const key = "019f3a7a-218f-7000-b6a3-0dcc8801a625";
+		upsertSessionTranscript(key, "User: asked about mesh PR 9147. Assistant: answer.", "oh-my-pi", "/repo-a", "noam");
+
+		expect(await searchHits("019f3a7a-218f:7000:b6a3-0dcc8801a625")).toMatchObject([{ sessionKey: key, rank: 0 }]);
+		expect(await searchHits(key)).toMatchObject([{ sessionKey: key, rank: 0 }]);
+	});
+
+	it("matches any word when the query has more than three words", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: golf only", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: hotel only", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-c", "User: unrelated", "codex", "/repo", "noam");
+
+		expect(await search("golf hotel india juliet")).toEqual(["sess-a", "sess-b"]);
+		expect((await searchHits("golf hotel india juliet")).every((hit) => hit.rank < 0)).toBe(true);
+	});
+
+	it("keeps turns attached to their session when transcript rowids change", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: kilo question", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: lima question", "codex", "/repo", "noam");
+		await write("UPDATE session_transcripts SET rowid = rowid + 1000");
+		await write("UPDATE session_transcripts SET rowid = 1 WHERE session_key = ?", "sess-b");
+
+		expect(await search("kilo")).toEqual(["sess-a"]);
+		expect(await search("lima")).toEqual(["sess-b"]);
+		await append("sess-b", "Assistant: mike reply");
+		expect(await indexedTurns("sess-b")).toEqual(["User: lima question", "\nAssistant: mike reply"]);
+	});
+
+	it("indexes a session that moved below the backfill cursor before reporting completion", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: november first", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", "User: november second", "codex", "/repo", "noam");
+		await resetTurnIndex();
+
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
+		await write("UPDATE session_transcripts SET rowid = -5 WHERE session_key = ?", "sess-b");
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 0 });
+		expect(await backfillChunk(1)).toEqual({ complete: false, indexed: 1 });
+		expect(await backfillChunk(1)).toEqual({ complete: true, indexed: 0 });
+		expect(await indexedTurns("sess-b")).toEqual(["User: november second"]);
+	});
+
+	it("stops a backfill chunk at the byte budget and finishes on the next chunk", async () => {
+		init();
+		const large = `User: oscar ${"x".repeat(5 * 1024 * 1024)}`;
+		upsertSessionTranscript("sess-a", large, "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-b", large, "codex", "/repo", "noam");
+		await resetTurnIndex();
+
+		expect(await backfillChunk()).toEqual({ complete: false, indexed: 1 });
+		expect(await backfillChunk()).toEqual({ complete: true, indexed: 1 });
+	});
+
+	it("reindexes from the last turn when new text continues its last word", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "Assistant: deploy the kuber", "codex", "/repo", "noam");
+		upsertSessionTranscript("sess-a", "Assistant: deploy the kubernetes cluster", "codex", "/repo", "noam");
+		expect(await indexedTurns("sess-a")).toEqual(["Assistant: deploy the kubernetes cluster"]);
+
+		upsertSessionTranscript("sess-b", "User: alpha", "codex", "/repo", "noam");
+		await append("sess-b", "Assistant: deploy the kuber");
+		const [first] = await turnRows("sess-b");
+		upsertSessionTranscript("sess-b", "User: alpha\nAssistant: deploy the kubernetes", "codex", "/repo", "noam");
+
+		expect(await turnRows("sess-b")).toEqual([
+			{ id: first?.id, seq: 1, byte_offset: 0, text: "User: alpha" },
+			expect.objectContaining({ seq: 2, byte_offset: 11, text: "\nAssistant: deploy the kubernetes" }),
+		]);
+		expect(await indexedMatches("kubernetes")).toBe(2);
+		expect(await indexedMatches("kuber")).toBe(0);
+	});
+
+	it("reindexes only from the first changed turn when a later turn is rewritten", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		await append("sess-a", "User: charlie next");
+		const [first] = await turnRows("sess-a");
 		upsertSessionTranscript(
-			"same-session",
-			"User: exact same session lookup should return stored content. Assistant: yes.",
-			"oh-my-pi",
-			"/repo-a",
+			"sess-a",
+			"User: alpha question\nAssistant: delta answer\nUser: charlie next",
+			"codex",
+			"/repo",
 			"noam",
 		);
 
-		const hits = searchTranscriptFallback({
-			query: "same-session",
-			agentId: "noam",
-			sessionKey: "same-session",
-			limit: 5,
-		});
+		expect(await turnRows("sess-a")).toEqual([
+			{ id: first?.id, seq: 1, byte_offset: 0, text: "User: alpha question" },
+			expect.objectContaining({ seq: 2, byte_offset: 20, text: "\nAssistant: delta answer\nUser: charlie next" }),
+		]);
+		expect(await indexedMatches("bravo")).toBe(0);
+		expect(await search("delta charlie")).toEqual(["sess-a"]);
+	});
 
-		expect(hits).toHaveLength(1);
-		expect(hits[0]?.sessionKey).toBe("same-session");
+	it("drops the trailing turns when the content shrinks to a turn boundary", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+		await append("sess-a", "Assistant: bravo answer");
+		upsertSessionTranscript("sess-a", "User: alpha question", "codex", "/repo", "noam");
+
+		expect(await indexedTurns("sess-a")).toEqual(["User: alpha question"]);
+		expect(await indexedMatches("bravo")).toBe(0);
+	});
+
+	it("keeps turn rows that rebuild the stored content through appends, rewrites and renames", async () => {
+		init();
+		const steps = [
+			"User: one",
+			"User: one\nAssistant: two",
+			"User: one\nAssistant: two\nUser: thrée",
+			"User: one\nAssistant: twofold\nUser: thrée",
+			"User: one\nAssistant: twofold",
+			"User: oné",
+			"",
+			"User: five six",
+		];
+		upsertSessionTranscript("sess-a", steps[0] ?? "", "codex", "/repo", "noam");
+		for (const content of steps) {
+			await write("UPDATE session_transcripts SET content = ? WHERE session_key = ?", content, "sess-a");
+			const rows = await turnRows("sess-a");
+			expect(rows.map((row) => row.text).join("")).toBe(content);
+			expect(rows.map((row) => row.seq)).toEqual(rows.map((_, index) => index + 1));
+			let offset = 0;
+			for (const row of rows) {
+				expect(row.byte_offset).toBe(offset);
+				offset += Buffer.byteLength(row.text);
+			}
+		}
+		await write("UPDATE session_transcripts SET session_key = ? WHERE session_key = ?", "sess-b", "sess-a");
+		expect(await turnRows("sess-a")).toEqual([]);
+		expect(await indexedTurns("sess-b")).toEqual(["User: five six"]);
+	});
+
+	it("ignores punctuation-only and control characters in the query", async () => {
+		init();
+		upsertSessionTranscript("sess-a", "User: papa then quebec", "codex", "/repo", "noam");
+
+		expect((await searchHits("papa -> quebec")).map((hit) => hit.rank < 0)).toEqual([true]);
+		expect((await searchHits("papa\u0000quebec")).map((hit) => hit.rank < 0)).toEqual([true]);
 	});
 });
 
@@ -228,6 +579,51 @@ describe("session transcript live append", () => {
 		return getDbAccessor();
 	}
 
+	it("backfills the turn index through the database owner without a local write", async () => {
+		const accessor = init();
+		const { dbOwnerBackfillTranscriptTurns, dbOwnerBatch, dbOwnerQuery, getDbOwner, ownerStatement } = await import(
+			"./db-owner-runtime"
+		);
+		await upsertSessionTranscriptAsync("owner-a", "User: echo first", "claude-code", "/repo", "agent-a");
+		await upsertSessionTranscriptAsync("owner-b", "User: echo second", "claude-code", "/repo", "agent-a");
+		await dbOwnerBatch(
+			[
+				ownerStatement("DELETE FROM session_transcript_turns", [], "run"),
+				ownerStatement(
+					"UPDATE session_transcript_turns_backfill SET cursor = 0, end_rowid = (SELECT MAX(rowid) FROM session_transcripts)",
+					[],
+					"run",
+				),
+			],
+			{ operation: "test.transcript.turns.reset" },
+		);
+		const owner = await getDbOwner();
+		const local = spyOn(accessor, "withWriteTxAsync").mockImplementation(() => {
+			throw new Error("request-thread backfill write");
+		});
+		try {
+			const chunk = () => dbOwnerBackfillTranscriptTurns(owner, { maxRows: 1 }, { operation: "test.transcript.turns" });
+			const first = await chunk();
+			const second = await chunk();
+			expect([first, second]).toEqual([
+				{ complete: false, indexed: 1 },
+				{ complete: true, indexed: 1 },
+			]);
+			expect(local).not.toHaveBeenCalled();
+		} finally {
+			local.mockRestore();
+		}
+		const indexed = await dbOwnerQuery<{ count: number }>(
+			ownerStatement(
+				"SELECT COUNT(*) AS count FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH 'echo'",
+				[],
+				"get",
+			),
+			{ operation: "test.transcript.turns.readback" },
+		);
+		expect(indexed.count).toBe(2);
+	});
+
 	it("appends to the stored row inside one write transaction", async () => {
 		const accessor = init();
 		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
@@ -362,5 +758,161 @@ describe("session transcript live append", () => {
 			{ session_key: hyphenKey, content: "User: first" },
 			{ session_key: colonKey, content: "Assistant: second" },
 		]);
+	});
+});
+
+describe("transcript upload state", () => {
+	afterEach(async () => {
+		await closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	function init(): void {
+		dir = mkdtempSync(join(tmpdir(), "signet-transcript-upload-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+	}
+
+	function upload(
+		overrides: Partial<TranscriptUploadCommit> & { readonly committedOffset: number },
+	): TranscriptUploadCommit {
+		const { committedOffset, ...rest } = overrides;
+		return {
+			agentId: "noam",
+			sessionKey: "sess-1",
+			sessionId: "sess-1",
+			harness: "codex",
+			project: "/repo",
+			projectScoped: false,
+			purgeEpoch: 0,
+			generation: 0,
+			expectedOffset: 0,
+			tailSha256: `tail-${committedOffset}`,
+			source: {
+				path: join(dir, "transcripts", "uploads", "a", "b.jsonl"),
+				sizeBytes: committedOffset,
+				mtimeMs: committedOffset,
+			},
+			endsRecord: true,
+			capturedAt: "2026-11-26T10:00:00.000Z",
+			...rest,
+		};
+	}
+
+	async function commit(input: TranscriptUploadCommit): Promise<TranscriptUploadCommitResult> {
+		return await getDbAccessor().withWriteTxAsync((db) => commitTranscriptUploadInTx(db, input));
+	}
+
+	async function state(agentId = "noam", sessionKey = "sess-1"): Promise<TranscriptUploadState | null> {
+		return await getDbAccessor().withReadDbAsync((db) => readTranscriptUploadStateInDb(db, agentId, sessionKey));
+	}
+
+	async function jobs(): Promise<Array<{ agent_id: string; source_size_bytes: number; status: string }>> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ agent_id: string; source_size_bytes: number; status: string }>(
+				db,
+				"SELECT agent_id, source_size_bytes, status FROM transcript_capture_jobs ORDER BY agent_id",
+			).all(),
+		);
+	}
+
+	it("commits the first range and queues a capture job for the upload file in the same transaction", async () => {
+		init();
+		const result = await commit(upload({ committedOffset: 120 }));
+		expect(result.status).toBe("committed");
+		expect(await state()).toEqual({
+			harness: "codex",
+			project: "/repo",
+			generation: 0,
+			committedOffset: 120,
+			tailSha256: "tail-120",
+		});
+		expect(await jobs()).toEqual([{ agent_id: "noam", source_size_bytes: 120, status: "pending" }]);
+	});
+
+	it("advances only from the committed offset and reports the current state otherwise", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect((await commit(upload({ expectedOffset: 120, committedOffset: 300 }))).status).toBe("committed");
+		const stale = await commit(upload({ expectedOffset: 120, committedOffset: 400 }));
+		expect(stale).toEqual({ status: "offset_mismatch", state: await state() });
+		expect((await state())?.committedOffset).toBe(300);
+		expect(await jobs()).toEqual([{ agent_id: "noam", source_size_bytes: 300, status: "pending" }]);
+	});
+
+	it("starts a new generation only from offset zero", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect((await commit(upload({ generation: 0, committedOffset: 50 }))).status).toBe("offset_mismatch");
+		expect((await commit(upload({ generation: 1, expectedOffset: 120, committedOffset: 200 }))).status).toBe(
+			"offset_mismatch",
+		);
+		expect((await commit(upload({ generation: 1, committedOffset: 50 }))).status).toBe("committed");
+		expect(await state()).toMatchObject({ generation: 1, committedOffset: 50 });
+		expect((await commit(upload({ generation: 0, committedOffset: 10 }))).status).toBe("offset_mismatch");
+	});
+
+	it("rejects another harness and another project for the same session", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect(await commit(upload({ harness: "claude-code", expectedOffset: 120, committedOffset: 200 }))).toEqual({
+			status: "harness_mismatch",
+		});
+		expect(await commit(upload({ project: "/other", expectedOffset: 120, committedOffset: 200 }))).toEqual({
+			status: "project_mismatch",
+		});
+		expect((await state())?.committedOffset).toBe(120);
+	});
+
+	it("rejects a first upload from another harness than the stored transcript", async () => {
+		init();
+		await upsertSessionTranscriptAsync("sess-1", "User: hello", "codex", "/repo", "noam");
+		expect(await commit(upload({ committedOffset: 120, harness: "claude-code" }))).toEqual({
+			status: "harness_mismatch",
+		});
+		expect(await state()).toBeNull();
+	});
+
+	it("keeps the first project an upload commits", async () => {
+		init();
+		await commit(upload({ committedOffset: 120, project: null }));
+		expect((await commit(upload({ expectedOffset: 120, committedOffset: 200 }))).status).toBe("committed");
+		expect((await state())?.project).toBe("/repo");
+		expect(await commit(upload({ expectedOffset: 200, committedOffset: 300, project: "/other" }))).toEqual({
+			status: "project_mismatch",
+		});
+	});
+
+	it("rejects a session whose stored transcript belongs to another project", async () => {
+		init();
+		await upsertSessionTranscriptAsync("sess-1", "User: hello", "codex", "/other", "noam");
+		expect(await commit(upload({ committedOffset: 120 }))).toEqual({ status: "project_mismatch" });
+		expect(await state()).toBeNull();
+		expect(await jobs()).toEqual([]);
+	});
+
+	it("keeps upload state per agent", async () => {
+		init();
+		await commit(upload({ committedOffset: 120 }));
+		expect(await state("other")).toBeNull();
+		expect((await commit(upload({ agentId: "other", expectedOffset: 120, committedOffset: 200 }))).status).toBe(
+			"offset_mismatch",
+		);
+		expect((await commit(upload({ agentId: "other", committedOffset: 80 }))).status).toBe("committed");
+		expect((await state())?.committedOffset).toBe(120);
+		expect((await state("other"))?.committedOffset).toBe(80);
+	});
+
+	it("drops the range of a session that is being deleted", async () => {
+		init();
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO session_transcript_deletions (agent_id, session_key, watermark, blocked) VALUES ('noam', 'sess-1', '2026-11-26T09:00:00.000Z', 1)",
+			).run();
+		});
+		expect(await commit(upload({ committedOffset: 120 }))).toEqual({ status: "bypassed" });
+		expect(await state()).toBeNull();
+		expect(await jobs()).toEqual([]);
 	});
 });

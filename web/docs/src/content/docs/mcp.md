@@ -382,7 +382,7 @@ query the parent transcript on demand.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `query` | string | yes | Transcript search query |
+| `query` | string | yes | Transcript search query, at most 2000 characters |
 | `session_key` | string | no | Specific transcript session key to search |
 | `current_session_key` | string | no | Current session key; OpenClaw lineage can resolve this to the parent |
 | `agent_id` | string | no | Agent scope (default `default`) |
@@ -390,7 +390,12 @@ query the parent transcript on demand.
 | `limit` | number | no | Max hits to return (default 10, max 20) |
 
 **Returns:** Object with `query`, `hits`, and `count`. Each hit includes
-`sessionKey`, `project`, `updatedAt`, `excerpt`, and `rank`.
+`sessionKey`, `project`, `updatedAt`, `excerpt`, and `rank`. The meaning of
+`rank` depends on how Signet found the session. An exact session key match
+has `rank` 0. A full-text hit has a negative score, where lower is better. A
+hit from the text scan fallback counts the matched words, where higher is
+better. See [`POST /api/sessions/search`](/api/sessions-hooks/#post-apisessionssearch) for the
+search rules.
 
 **Example:**
 

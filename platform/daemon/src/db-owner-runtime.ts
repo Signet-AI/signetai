@@ -20,7 +20,16 @@ import {
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
-import type { CompactionSummaryInput } from "./session-transcripts";
+import type {
+	CompactionSummaryInput,
+	TranscriptTurnBackfillChunk,
+	TranscriptTurnBackfillOptions,
+	TranscriptUploadCommit,
+	TranscriptUploadCommitResult,
+	TranscriptUploadEndCommit,
+	TranscriptUploadEndCommitResult,
+	TranscriptUploadScope,
+} from "./session-transcripts";
 import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
@@ -43,6 +52,7 @@ import type {
 	DbOwnerWorkloadClass,
 	DbOwnerDreamingEvidenceCoverageResult,
 } from "./db-owner-protocol";
+import { withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -208,6 +218,43 @@ async function executeInlineOwnerRequest(
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			writeSessionTranscriptRow(db as WriteDb, request.input),
+		);
+	}
+	if (request.kind === "session_transcript_upload_state") {
+		const { readTranscriptUploadScopeInDb } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readTranscriptUploadScopeInDb(db, request.input.agentId, request.input.sessionKey),
+		);
+	}
+	if (request.kind === "session_transcript_upload_purge") {
+		const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");
+		const db = await invokeAccessorAsync(accessor, "withWriteDbAsync", (db) => db);
+		if (!("exec" in db)) throw new Error("Transcript upload purge requires owner write access");
+		return drainTranscriptUploadPurgesOwned(db, request.input, (operation) =>
+			invokeAccessorAsync(accessor, "withWriteTxAsync", (tx) => {
+				if (tx !== db) throw new Error("Transcript upload purge write handle changed");
+				operation();
+			}),
+		);
+	}
+	if (request.kind === "session_transcript_upload_commit") {
+		const { commitTranscriptUploadInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Transcript upload commit requires owner write access");
+			return commitTranscriptUploadInTx(db, request.input);
+		});
+	}
+	if (request.kind === "session_transcript_upload_end") {
+		const { endTranscriptUploadInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Transcript upload end requires owner write access");
+			return endTranscriptUploadInTx(db, request.input);
+		});
+	}
+	if (request.kind === "session_transcript_turn_backfill") {
+		const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			backfillTranscriptTurnsFtsChunkInDb(db as WriteDb, request.input),
 		);
 	}
 	if (request.kind === "session_compaction_summary") {
@@ -586,6 +633,72 @@ export async function dbOwnerWriteSessionTranscript(
 	);
 }
 
+export async function dbOwnerReadTranscriptUploadScope(
+	owner: DbOwnerClient,
+	input: { readonly agentId: string; readonly sessionKey: string },
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptUploadScope> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_state", input },
+		{ ...options, lane: "read", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerCommitTranscriptUpload(
+	owner: DbOwnerClient,
+	input: TranscriptUploadCommit,
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptUploadCommitResult> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_commit", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerEndTranscriptUpload(
+	owner: DbOwnerClient,
+	input: TranscriptUploadEndCommit,
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptUploadEndCommitResult> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_end", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerDrainTranscriptUploadPurges(
+	owner: DbOwnerClient,
+	input: { readonly basePath: string },
+	options: DbOwnerSqlOptions,
+): Promise<{ readonly pending: number; readonly progressed: boolean }> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_purge", input },
+		{ ...options, lane: "write", workloadClass: "maintenance", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerBackfillTranscriptTurns(
+	owner: DbOwnerClient,
+	input: TranscriptTurnBackfillOptions,
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptTurnBackfillChunk> {
+	const { transcriptTurnBackfillWorkUnits } = await import("./session-transcripts");
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_turn_backfill", input },
+		{
+			...options,
+			lane: "write",
+			workloadClass: "maintenance",
+			estimatedWorkUnits: transcriptTurnBackfillWorkUnits(input),
+		},
+	);
+}
+
 export async function dbOwnerBatch(
 	statements: readonly DbOwnerStatement[],
 	options: DbOwnerSqlOptions,
@@ -686,11 +799,13 @@ export async function dbOwnerAgentRemove(
 	options: DbOwnerSqlOptions,
 ): Promise<AgentRemovalResult> {
 	const owner = await getDbOwner();
-	return await submitWithAdmission<AgentRemovalResult>(
-		owner,
-		{ kind: "agent_remove", input },
-		{ ...options, lane: options.lane ?? "write" },
-	);
+	const remove = () =>
+		submitWithAdmission<AgentRemovalResult>(
+			owner,
+			{ kind: "agent_remove", input },
+			{ ...options, lane: options.lane ?? "write" },
+		);
+	return input.mode === "purge" ? withTranscriptUploadAgentLock(input.agentId, "exclusive", remove) : remove();
 }
 
 export async function dbOwnerSourceArtifactUpsert(

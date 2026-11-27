@@ -19,6 +19,7 @@ import { createPromptContext } from "@signet/core";
 
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
 const PREV_SIGNET_AGENT_ID_FOR_HOOKS = process.env.SIGNET_AGENT_ID;
+const UNSCOPED_CHECKPOINT = { project: null, projectScoped: false };
 process.env.SIGNET_AGENT_ID = "default";
 process.env.SIGNET_PATH = TEST_DIR;
 
@@ -28,6 +29,8 @@ const hooks = await import("./hooks");
 const { setLifecycleObservers, assertSlowProviderInvariant } = await import("@signet/lifecycle-proof");
 const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
+const { uploadTranscriptRange } = await import("./transcript-upload");
+const { TranscriptUploadAdmission } = await import("./transcript-upload-agent-lock");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
 const { upsertSessionTranscript } = await import("./session-transcripts");
 const { buildSignetSystemPrompt } = await import("./session-start-format");
@@ -284,40 +287,6 @@ function createMemoryDb(
 	`);
 
 	db.exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS session_transcripts_fts USING fts5(
-			content,
-			content='session_transcripts',
-			content_rowid='rowid'
-		)
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS session_transcripts_fts_ai AFTER INSERT ON session_transcripts
-		BEGIN
-			INSERT INTO session_transcripts_fts(rowid, content)
-			VALUES (new.rowid, new.content);
-		END
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS session_transcripts_fts_ad AFTER DELETE ON session_transcripts
-		BEGIN
-			INSERT INTO session_transcripts_fts(session_transcripts_fts, rowid, content)
-			VALUES('delete', old.rowid, old.content);
-		END
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS session_transcripts_fts_au AFTER UPDATE ON session_transcripts
-		BEGIN
-			INSERT INTO session_transcripts_fts(session_transcripts_fts, rowid, content)
-			VALUES('delete', old.rowid, old.content);
-			INSERT INTO session_transcripts_fts(rowid, content)
-			VALUES (new.rowid, new.content);
-		END
-	`);
-
-	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summaries (
 			id TEXT PRIMARY KEY,
 			project TEXT,
@@ -487,6 +456,30 @@ function canonicalSessionRecords(harness: string, sessionKey: string): Record<st
 		.split("\n")
 		.map((line) => JSON.parse(line) as Record<string, unknown>)
 		.filter((record) => record.session_key === sessionKey);
+}
+
+async function uploadTranscript(
+	sessionKey: string,
+	harness: string,
+	text: string,
+	project: string | null = null,
+): Promise<Awaited<ReturnType<typeof uploadTranscriptRange>>> {
+	const body = Buffer.from(text);
+	return await uploadTranscriptRange(getDbAccessor(), {
+		admission: TranscriptUploadAdmission.admit("default"),
+		basePath: TEST_DIR,
+		agentId: "default",
+		sessionKey,
+		sessionId: sessionKey,
+		harness,
+		project,
+		projectScoped: false,
+		generation: 0,
+		offset: 0,
+		checksum: createHash("sha256").update(body).digest("hex"),
+		body,
+		capturedAt: "2026-11-26T10:00:00.000Z",
+	});
 }
 
 function insertCompletedTranscript(
@@ -1738,6 +1731,37 @@ describe("direct transcript regressions", () => {
 		try {
 			expect(
 				db.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?").get("codex-stop-session"),
+			).toEqual({ count: 0 });
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("leaves the assistant reply to the upload when the session uploaded", async () => {
+		createMemoryDb([]);
+		expect(
+			await uploadTranscript(
+				"codex-upload-session",
+				"codex",
+				"User: hi\nAssistant: from the upload\n",
+				"/home/user/signetai",
+			),
+		).toMatchObject({ status: "committed" });
+
+		await handleSessionEnd({
+			harness: "codex",
+			sessionKey: "codex-upload-session",
+			sessionId: "codex-upload-session",
+			cwd: "/home/user/signetai",
+			lastAssistantMessage: "from the hook payload",
+		});
+
+		const db = openTestDb();
+		try {
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?")
+					.get("codex-upload-session"),
 			).toEqual({ count: 0 });
 		} finally {
 			db.close();
@@ -4143,10 +4167,13 @@ describe("handleCheckpointExtract", () => {
 	test.serial("returns skipped when no transcript available", async () => {
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-no-transcript",
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-no-transcript",
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
@@ -4155,11 +4182,14 @@ describe("handleCheckpointExtract", () => {
 	test.serial("returns skipped when delta is below 500 chars", async () => {
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-short",
-			transcript: "x".repeat(400),
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-short",
+				transcript: "x".repeat(400),
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
@@ -4168,17 +4198,23 @@ describe("handleCheckpointExtract", () => {
 	test.serial("truncated inline transcript does not overwrite stored lossless transcript", async () => {
 		createMemoryDb([]);
 		const full = "x".repeat(600);
-		await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-truncation",
-			transcript: full,
-		});
+		await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-truncation",
+				transcript: full,
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		const truncated = "x".repeat(200);
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-truncation",
-			transcript: truncated,
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-truncation",
+				transcript: truncated,
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		expect(result.skipped).toBe(true);
 		const db = openTestDb();
 		const row = db
@@ -4191,11 +4227,14 @@ describe("handleCheckpointExtract", () => {
 	test.serial("skips when transcriptPath does not exist", async () => {
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-nopath",
-			transcriptPath: "/nonexistent/path/transcript.jsonl",
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-nopath",
+				transcriptPath: "/nonexistent/path/transcript.jsonl",
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
 	});
@@ -4207,13 +4246,32 @@ describe("handleCheckpointExtract", () => {
 `);
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-both-disabled",
-			transcript: "x".repeat(600),
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-both-disabled",
+				transcript: "x".repeat(600),
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 
 		expect(result.skipped).toBe(true);
+	});
+
+	test.serial("reads the uploaded transcript when the request has none", async () => {
+		createMemoryDb([]);
+		expect(await uploadTranscript("ckpt-upload", "test", `${"checkpoint upload words ".repeat(30)}\n`)).toMatchObject({
+			status: "committed",
+		});
+
+		await handleCheckpointExtract({ harness: "test", sessionKey: "ckpt-upload" }, UNSCOPED_CHECKPOINT);
+
+		const db = openTestDb();
+		const row = db
+			.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+			.get("ckpt-upload", "default");
+		db.close();
+		expect(row).toMatchObject({ content: expect.stringContaining("checkpoint upload words") });
 	});
 });
 

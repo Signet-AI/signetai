@@ -632,6 +632,7 @@ for (const key of Reflect.ownKeys(SignetClientP2.prototype)) {
 export const SignetSDK = SignetClient;
 export const Signet = SignetClient;
 export type { SignetTransport } from "./transport.js";
+export type { TranscriptUploadOutcome } from "@signet/core/transcript-upload";
 export {
 	SignetApiError,
 	SignetError,

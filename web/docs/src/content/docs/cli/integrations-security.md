@@ -220,8 +220,19 @@ When hook payloads are provided over stdin, the CLI now prefers canonical
 `session_key` / `sessionKey` fields before legacy `session_id` aliases.
 `signet hook user-prompt-submit` forwards preferred `userMessage` when it is
 provided, while still carrying legacy `userPrompt` compatibility fields.
-`signet hook session-end` forwards both stdin `transcript_path` /
-`transcriptPath` and inline `transcript` content for lossless capture.
+`signet hook session-end` uploads the file named by stdin `transcript_path` /
+`transcriptPath` through `PATCH /api/hooks/transcript-upload` (8-second budget),
+then ends the session; it still forwards inline `transcript` content.
+`pre-compaction` uploads the same way first (3-second budget), and
+`user-prompt-submit` uploads while it asks for context. The hooks send
+`transcriptPath` only to an older daemon that answers `404` on the upload
+route. When an upload fails, the hook writes a warning to stderr and goes on;
+the daemon keeps the lines it already has. The hooks name an agent only when
+the `--agent-id` option (pre-compaction only) or the hook payload gives one.
+Otherwise the daemon picks the upload's agent: the agent in a session key of
+the form `agent:<id>:...`, then the agent of a scoped token, then the daemon's
+own `SIGNET_AGENT_ID`, then `default`. A `SIGNET_AGENT_ID` set only in the hook's
+environment does not choose the agent.
 `signet hook stop` writes no stdout, because Claude Code reads Stop hook output
 as a decision. Failures are reported on stderr. It reads `last_assistant_message`
 and `cwd` from stdin, skips the daemon call when the payload has no session or

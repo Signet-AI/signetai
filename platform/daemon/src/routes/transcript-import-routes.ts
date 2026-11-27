@@ -30,6 +30,7 @@ import {
 	TRANSCRIPT_FILE_BYTES,
 	type TranscriptUploadScope,
 } from "../transcript-import-bytes";
+import { readBoundedBody } from "./request-body";
 
 const MAX_FILES_PER_IMPORT = 25;
 const IMPORT_DUPLICATE_MODES = ["skip", "replace", "reimport"] as const;
@@ -101,14 +102,9 @@ function bodyStream(request: Request): AsyncIterable<Uint8Array> {
 	})();
 }
 async function boundedBody(request: Request, limit: number): Promise<Buffer> {
-	const parts: Uint8Array[] = [];
-	let length = 0;
-	for await (const part of bodyStream(request)) {
-		length += part.length;
-		if (length > limit) throw new RangeError("import request exceeds its byte limit");
-		parts.push(part);
-	}
-	return Buffer.concat(parts);
+	const body = await readBoundedBody(request, limit);
+	if (!body.ok) throw new RangeError("import request exceeds its byte limit");
+	return body.bytes;
 }
 
 function permission(name: "modify" | "recall" | "admin") {

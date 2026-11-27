@@ -112,6 +112,24 @@ export class SignetTransport {
 		return this.request<T>("DELETE", path, { query });
 	}
 
+	get baseUrl(): string {
+		return this.config.baseUrl;
+	}
+
+	async fetch(url: string, init: RequestInit): Promise<Response> {
+		const headers = new Headers(this.config.headers);
+		for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
+		try {
+			return await fetch(url, {
+				...init,
+				headers,
+				signal: buildRequestSignal(init.signal ?? undefined, this.config.timeoutMs),
+			});
+		} catch (error) {
+			throw toNetworkError(error, this.config.timeoutMs);
+		}
+	}
+
 	private buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {
 		const base = trimTrailingSlashes(this.config.baseUrl);
 		const url = new URL(`${base}${path}`);

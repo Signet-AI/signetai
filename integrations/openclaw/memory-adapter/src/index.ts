@@ -30,6 +30,10 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 const COMPACTION_HOOK_DEDUPE_MS = 1000;
 const SESSION_START_TIMEOUT = resolveSessionStartTimeoutFromEnv();
 
+function uploadFailureWarning(error: unknown): string {
+	return `signet-memory: transcript upload failed (${error instanceof Error ? error.message : String(error)}); the daemon keeps the lines it already has`;
+}
+
 type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 type DaemonFetchResult<T> =
@@ -507,6 +511,24 @@ export async function onCompactionComplete(
 	return result?.success === true;
 }
 
+function writeClient(daemonUrl: string): SignetClient {
+	return new SignetClient({ daemonUrl, retries: 0, timeoutMs: WRITE_TIMEOUT });
+}
+
+async function uploadSessionFile(
+	daemonUrl: string,
+	target: { harness: string; sessionKey: string; agentId?: string; cwd?: string },
+	sessionFile: string,
+): Promise<string | undefined> {
+	const outcome = await writeClient(daemonUrl).uploadTranscript({
+		...target,
+		transcriptPath: sessionFile,
+		runtimePath: RUNTIME_PATH,
+		signal: AbortSignal.timeout(WRITE_TIMEOUT),
+	});
+	return outcome.status === "unsupported" ? sessionFile : undefined;
+}
+
 export async function onSessionEnd(
 	harness: string,
 	options: {
@@ -520,22 +542,30 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	new SignetClient({
-		daemonUrl: options.daemonUrl || DEFAULT_DAEMON_URL,
-		retries: 0,
-		timeoutMs: WRITE_TIMEOUT,
-	}).sessionEndFireAndForget({
-		harness,
-		agentId: options.agentId,
-		transcriptPath: options.transcriptPath,
-		...(options.transcript && { transcript: options.transcript }),
-		sessionKey: options.sessionKey,
-		sessionId: options.sessionId,
-		cwd: options.cwd,
-		reason: options.reason,
-		runtimePath: RUNTIME_PATH,
-	});
-
+	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
+	const sessionKey = options.sessionKey ?? options.sessionId;
+	let transcriptPath: string | undefined;
+	try {
+		if (options.transcriptPath && sessionKey) {
+			transcriptPath = await uploadSessionFile(
+				daemonUrl,
+				{ harness, sessionKey, agentId: options.agentId, cwd: options.cwd },
+				options.transcriptPath,
+			);
+		}
+	} finally {
+		writeClient(daemonUrl).sessionEndFireAndForget({
+			harness,
+			agentId: options.agentId,
+			...(transcriptPath && { transcriptPath }),
+			...(options.transcript && { transcript: options.transcript }),
+			sessionKey: options.sessionKey,
+			sessionId: options.sessionId,
+			cwd: options.cwd,
+			reason: options.reason,
+			runtimePath: RUNTIME_PATH,
+		});
+	}
 	return null;
 }
 
@@ -1732,19 +1762,30 @@ const signetPlugin = {
 					!sessionFile && Array.isArray(messages) && messages.length > 0
 						? messages.map((m) => JSON.stringify(m)).join("\n")
 						: undefined;
-				void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
-					method: "POST",
-					body: {
-						harness: "openclaw",
-						sessionKey,
-						agentId,
-						project,
-						transcriptPath: sessionFile,
-						...(inlineTranscript && { transcript: inlineTranscript }),
-						runtimePath: RUNTIME_PATH,
-					},
-					timeout: WRITE_TIMEOUT,
-				})
+				const uploading = sessionFile
+					? uploadSessionFile(daemonUrl, { harness: "openclaw", sessionKey, agentId, cwd: project }, sessionFile).catch(
+							(error: unknown) => {
+								api.logger.warn(uploadFailureWarning(error));
+								return undefined;
+							},
+						)
+					: Promise.resolve(undefined);
+				void uploading
+					.then((transcriptPath) =>
+						daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
+							method: "POST",
+							body: {
+								harness: "openclaw",
+								sessionKey,
+								agentId,
+								project,
+								...(transcriptPath && { transcriptPath }),
+								...(inlineTranscript && { transcript: inlineTranscript }),
+								runtimePath: RUNTIME_PATH,
+							},
+							timeout: WRITE_TIMEOUT,
+						}),
+					)
 					.then((resp) => {
 						if (isRecord(resp) && resp.skipped === true) {
 							const cur = checkpointTurns.get(scopedKey);
@@ -2095,7 +2136,7 @@ const signetPlugin = {
 					sessionKey: resolved.sessionKey,
 					transcriptPath: resolved.sessionFile,
 					...(endTranscript && { transcript: endTranscript }),
-				});
+				}).catch((error) => api.logger.warn(uploadFailureWarning(error)));
 				if (scopedKey) {
 					claimedSessions.delete(scopedKey);
 					sessionStartContexts.delete(scopedKey);

@@ -2,12 +2,17 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { commitCompactionSummary } from "../session-transcripts";
+import { commitCompactionSummary, transcriptUploadScopeConflict } from "../session-transcripts";
 import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
 
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
+import {
+	dbOwnerQuery,
+	dbOwnerReadTranscriptUploadScope,
+	getDbOwnerForAccessor,
+	ownerStatement,
+} from "../db-owner-runtime";
 import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
@@ -101,9 +106,14 @@ import {
 	renewSession,
 } from "../session-tracker.js";
 import { recordSkillInvocation } from "../skill-invocations";
-import { recordSkillsFromTranscript } from "../skill-transcript-scan";
+import { scheduleSessionSkillScan } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
+import { MAX_TRANSCRIPT_UPLOAD_BYTES, type TranscriptUploadStatus } from "@signet/core/transcript-upload";
+import { type TranscriptUploadResult, uploadTranscriptRange } from "../transcript-upload";
+import { TranscriptUploadAdmission } from "../transcript-upload-agent-lock";
+import { readBoundedBody } from "./request-body";
+import type { TranscriptUploadState } from "../session-transcripts";
 import { claimBoardActivityNotices } from "../board";
 import {
 	MAX_WAKE_RELEASE_IDS,
@@ -961,6 +971,160 @@ function registerStop(app: Hono): void {
 	);
 }
 
+const TRANSCRIPT_UPLOAD_MAX_IN_FLIGHT = 8;
+const transcriptUploadAdmission: ConcurrencyAdmission = createConcurrencyAdmission(TRANSCRIPT_UPLOAD_MAX_IN_FLIGHT);
+const UPLOAD_CHECKSUM = /^[0-9a-f]{64}$/i;
+
+interface TranscriptUploadScope {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly sessionId: string;
+	readonly harness: string;
+	readonly project: string | null;
+	readonly projectScoped: boolean;
+}
+
+async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploadScope | Response> {
+	const harness = parseOptionalString(c.req.query("harness"));
+	if (!harness) return c.json({ error: "harness is required" }, 400);
+	const sessionId = parseOptionalString(c.req.query("sessionKey"));
+	if (!sessionId) return c.json({ error: "sessionKey is required" }, 400);
+	const scope = resolveCrossAgentScope(c, parseOptionalString(c.req.query("agentId")), sessionId);
+	if (scope.error) return c.json({ error: scope.error }, 403);
+	const bindingError = validateSessionAgentBinding(c, sessionId, scope.agentId, {
+		requireExisting: false,
+		context: "sessionKey",
+	});
+	if (bindingError) return c.json({ error: bindingError }, 403);
+	const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+	if (denied) return denied;
+	const project = resolveProjectAccess(c, parseOptionalString(c.req.query("cwd")));
+	if ("error" in project) return c.json({ error: project.error }, 403);
+	const conflict = checkSessionClaim(c, sessionId, resolveRuntimePath(c), scope.agentId);
+	if (conflict) return conflict;
+	return {
+		agentId: scope.agentId,
+		sessionKey: normalizeSessionKey(sessionId),
+		sessionId,
+		harness,
+		...project,
+	};
+}
+
+function resolveProjectAccess(
+	c: Context,
+	requested: string | undefined,
+): { readonly error: string } | { readonly project: string | null; readonly projectScoped: boolean } {
+	const resolved = resolveScopedProject(c, requested);
+	if (resolved.error) return { error: resolved.error };
+	return {
+		project: resolved.project ?? null,
+		projectScoped: shouldEnforceAuthScope(c) && Boolean(c.get("auth")?.claims?.scope?.project),
+	};
+}
+
+function uploadStateBody(state: TranscriptUploadState | null): TranscriptUploadStatus {
+	return {
+		committedOffset: state?.committedOffset ?? 0,
+		generation: state?.generation ?? null,
+		tailSha256: state?.tailSha256 ?? null,
+	};
+}
+
+function transcriptUploadResponse(c: Context, result: TranscriptUploadResult): Response {
+	switch (result.status) {
+		case "committed":
+			return c.json({ ...uploadStateBody(result.state), jobId: result.jobId });
+		case "invalid":
+			return c.json({ error: `invalid upload body: ${result.reason}` }, 400);
+		case "offset_mismatch":
+			return c.json({ error: "offset_mismatch", ...uploadStateBody(result.state) }, 409);
+		case "harness_mismatch":
+			return c.json({ error: "harness_mismatch" }, 409);
+		case "project_mismatch":
+			return c.json({ error: "session transcript is outside the project scope" }, 403);
+		case "purge_pending":
+			c.header("Retry-After", "1");
+			return c.json({ error: "purge_pending", retryable: true }, 503);
+		case "bypassed":
+			return c.json({ bypassed: true });
+	}
+}
+
+function registerTranscriptUpload(app: Hono): void {
+	app.get("/api/hooks/transcript-upload", async (c) => {
+		const scope = await resolveTranscriptUploadScope(c);
+		if (scope instanceof Response) return scope;
+		const upload = await dbOwnerReadTranscriptUploadScope(
+			await getDbOwnerForAccessor(getDbAccessor()),
+			{ agentId: scope.agentId, sessionKey: scope.sessionKey },
+			{ operation: "transcript-upload.state" },
+		);
+		const conflict = transcriptUploadScopeConflict(upload, scope);
+		return conflict ? transcriptUploadResponse(c, conflict) : c.json(uploadStateBody(upload.state));
+	});
+	app.patch(
+		"/api/hooks/transcript-upload",
+		async (c, next) => {
+			if (!transcriptUploadAdmission.acquire()) {
+				c.header("Retry-After", "1");
+				return c.json({ error: "Too many concurrent transcript uploads; retry shortly" }, 503);
+			}
+			try {
+				await next();
+			} finally {
+				transcriptUploadAdmission.release();
+			}
+		},
+		async (c, next) => {
+			if (Number(c.req.header("content-length")) > MAX_TRANSCRIPT_UPLOAD_BYTES) {
+				return c.json({ error: "payload too large" }, 413);
+			}
+			await next();
+		},
+		async (c) => {
+			if (isInternalCall(c)) return c.json({ bypassed: true });
+			try {
+				const scope = await resolveTranscriptUploadScope(c);
+				if (scope instanceof Response) return scope;
+				const admission = TranscriptUploadAdmission.admit(scope.agentId);
+				const generation = parseOptionalNonNegativeInt(c.req.header("upload-generation"));
+				const offset = parseOptionalNonNegativeInt(c.req.header("upload-offset"));
+				const checksum = c.req.header("upload-checksum")?.trim() ?? "";
+				if (generation === undefined || offset === undefined || !UPLOAD_CHECKSUM.test(checksum)) {
+					return c.json(
+						{ error: "Upload-Generation, Upload-Offset and a sha256 Upload-Checksum header are required" },
+						400,
+					);
+				}
+				if (isSessionBypassed(scope.sessionKey, scope.agentId)) return c.json({ bypassed: true });
+				stampHarness(scope.harness);
+				const body = await readBoundedBody(c.req.raw, MAX_TRANSCRIPT_UPLOAD_BYTES);
+				if (!body.ok) return c.json({ error: "payload too large" }, 413);
+				const result = await uploadTranscriptRange(getDbAccessor(), {
+					basePath: AGENTS_DIR,
+					...scope,
+					generation,
+					offset,
+					checksum,
+					admission,
+					body: body.bytes,
+					capturedAt: new Date().toISOString(),
+					signal: c.req.raw.signal,
+				});
+				return transcriptUploadResponse(c, result);
+			} catch (e) {
+				if (isRetryableWritePressure(e)) {
+					c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+					return c.json({ error: "Write pressure; retry the transcript upload", retryable: true }, 503);
+				}
+				logger.error("hooks", "Transcript upload failed", e instanceof Error ? e : new Error(String(e)));
+				return c.json({ error: "Transcript upload failed" }, 500);
+			}
+		},
+	);
+}
+
 const SESSION_END_WAKE_GRACE_MS = 2_000;
 
 function registerSessionEnd(app: Hono): void {
@@ -1028,17 +1192,7 @@ function registerSessionEnd(app: Hono): void {
 						removeAgentPresence(sessionKey);
 					}
 				}
-				if (transcriptPath) {
-					setImmediate(() =>
-						recordSkillsFromTranscript({
-							transcriptPath,
-							harness: body.harness,
-							agentId,
-							origin: "scan",
-							expectedSessionId: sessionKey,
-						}),
-					);
-				}
+				scheduleSessionSkillScan({ basePath: AGENTS_DIR, transcriptPath, sessionKey, harness: body.harness, agentId });
 				return c.json(result);
 			} catch (e) {
 				if (sessionKey) {
@@ -1162,6 +1316,9 @@ function registerCheckpointExtract(app: Hono): void {
 				context: "sessionKey",
 			});
 			if (checkpointBinding) return c.json({ error: checkpointBinding }, 403);
+			const checkpointProject = resolveProjectAccess(c, parseOptionalString(body.project));
+			if ("error" in checkpointProject) return c.json({ error: checkpointProject.error }, 403);
+			body.project = checkpointProject.project ?? undefined;
 
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
@@ -1183,7 +1340,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			renewSession(body.sessionKey, agentId);
 
-			const result = await handleCheckpointExtract(body);
+			const result = await handleCheckpointExtract(body, checkpointProject);
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Checkpoint extract hook failed", e as Error);
@@ -1436,17 +1593,13 @@ function registerPreCompaction(app: Hono): void {
 			}
 
 			const result = handlePreCompaction(body);
-			if (transcriptPath) {
-				setImmediate(() =>
-					recordSkillsFromTranscript({
-						transcriptPath,
-						harness: body.harness,
-						agentId,
-						origin: "scan",
-						expectedSessionId: body.sessionKey,
-					}),
-				);
-			}
+			scheduleSessionSkillScan({
+				basePath: AGENTS_DIR,
+				transcriptPath,
+				sessionKey: body.sessionKey,
+				harness: body.harness,
+				agentId,
+			});
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Pre-compaction hook failed", e as Error);
@@ -2334,6 +2487,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerDirectMessageWake(app);
 	registerDirectMessageWakeRelease(app);
 	registerSessionEnd(app);
+	registerTranscriptUpload(app);
 	registerStop(app);
 	registerSkillInvocation(app);
 	registerCheckpointExtract(app);

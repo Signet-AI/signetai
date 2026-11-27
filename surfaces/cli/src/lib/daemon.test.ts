@@ -30,6 +30,51 @@ describe("createDaemonClient", () => {
 		}
 	});
 
+	test("uploadTranscriptFile sends the transcript file with bearer auth and a deadline", async () => {
+		const previous = process.env.SIGNET_API_KEY;
+		process.env.SIGNET_API_KEY = "sig_sk_test_secret";
+		const dir = join(tmpdir(), `signet-upload-${process.pid}-${Date.now()}`);
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "session.jsonl");
+		writeFileSync(file, '{"a":1}\n');
+		const seen: Array<{
+			method: string;
+			url: string;
+			authorization: string | null;
+			runtimePath: string | null;
+			signal: unknown;
+		}> = [];
+		globalThis.fetch = async (input, init) => {
+			const method = init?.method ?? "GET";
+			const headers = new Headers(init?.headers);
+			seen.push({
+				method,
+				url: String(input),
+				authorization: headers.get("authorization"),
+				runtimePath: headers.get("x-signet-runtime-path"),
+				signal: init?.signal,
+			});
+			if (method === "PATCH") return Response.json({ committedOffset: 8, generation: 0, tailSha256: "x", jobId: "j" });
+			return Response.json({ committedOffset: 0, generation: null, tailSha256: null });
+		};
+		try {
+			const client = createDaemonClient(3850);
+			const outcome = await client.uploadTranscriptFile({ harness: "codex", sessionKey: "s1" }, file, 1000, "legacy");
+			expect(outcome).toEqual({ status: "uploaded", committedOffset: 8, generation: 0 });
+			expect(seen.map((request) => [request.method, request.runtimePath])).toEqual([
+				["GET", "legacy"],
+				["PATCH", "legacy"],
+			]);
+			expect(seen[0]?.url).toContain("/api/hooks/transcript-upload?harness=codex&sessionKey=s1");
+			expect(seen.every((request) => request.authorization === "Bearer sig_sk_test_secret")).toBe(true);
+			expect(seen.every((request) => request.signal instanceof AbortSignal)).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+			else process.env.SIGNET_API_KEY = previous;
+		}
+	});
+
 	test("fetchDaemonResult uses SIGNET_DAEMON_URL when configured", async () => {
 		const previous = process.env.SIGNET_DAEMON_URL;
 		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850/";

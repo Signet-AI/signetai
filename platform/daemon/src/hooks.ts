@@ -106,6 +106,7 @@ import {
 	hashSessionKey,
 	markSessionEndTelemetry,
 	normalizeSessionBoundaryReason,
+	normalizeSessionKey,
 	pruneSessionEndTelemetry,
 } from "./session-end-state";
 import {
@@ -137,6 +138,7 @@ import {
 	appendSessionTranscriptAsync,
 	findStaleLiveSessions,
 	getStoredSessionTranscriptInfoAsync,
+	type TranscriptUploadAccess,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
@@ -154,6 +156,13 @@ import {
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript as normalizeSessionTranscriptBase,
 } from "./transcript-normalization";
+import {
+	type TranscriptUploadContent,
+	endTranscriptUpload,
+	hasTranscriptUpload,
+	readTranscriptUploadContent,
+} from "./transcript-upload";
+import { MAX_TRANSCRIPT_SCAN_BYTES } from "./skill-transcript-scan";
 import { getUpdateSummary } from "./update-system";
 import { isRetryableWritePressure } from "./write-pressure";
 
@@ -2015,6 +2024,7 @@ async function appendSessionEndAssistantTurn(
 ): Promise<void> {
 	if (!sessionKey || req.transcriptPath || req.transcript?.trim()) return;
 	try {
+		if (await hasTranscriptUpload(getDbAccessor(), agentId, normalizeSessionKey(sessionKey))) return;
 		await appendLiveAssistantTurn({
 			harness: req.harness,
 			sessionKey,
@@ -2130,18 +2140,30 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	let transcriptCaptureJobId: string | null = null;
 	if (req.transcriptPath || transcript.trim().length > 0 || sessionKey !== null) {
 		try {
-			transcriptCaptureJobId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
-				agentId,
-				harness: req.harness,
-				sessionKey: sessionKey ?? null,
-				sessionId,
-				project: req.cwd ?? null,
-				transcript: req.transcriptPath ? "" : transcript,
-				transcriptPath: req.transcriptPath ?? null,
-				basePath: getAgentsDir(),
-				capturedAt: endedAt,
-				endedAt,
-			});
+			const upload =
+				!req.transcriptPath && transcript.trim().length === 0 && sessionKey
+					? await endTranscriptUpload(getDbAccessor(), {
+							basePath: getAgentsDir(),
+							agentId,
+							sessionKey: normalizeSessionKey(sessionKey),
+							endedAt,
+						})
+					: null;
+			transcriptCaptureJobId =
+				upload?.status === "ended"
+					? upload.jobId
+					: await enqueueTranscriptCaptureJob(getDbAccessor(), {
+							agentId,
+							harness: req.harness,
+							sessionKey: sessionKey ?? null,
+							sessionId,
+							project: req.cwd ?? null,
+							transcript: req.transcriptPath ? "" : transcript,
+							transcriptPath: req.transcriptPath ?? null,
+							basePath: getAgentsDir(),
+							capturedAt: endedAt,
+							endedAt,
+						});
 		} catch (error) {
 			if (isRetryableWritePressure(error)) throw error;
 			logger.warn("hooks", "Transcript capture enqueue failed", {
@@ -2286,7 +2308,31 @@ async function deferSessionEndWork(params: {
 	}
 }
 
-export async function handleCheckpointExtract(req: CheckpointExtractRequest): Promise<CheckpointExtractResponse> {
+export type CheckpointProjectScope = Omit<TranscriptUploadAccess, "harness">;
+
+async function readCheckpointSource(
+	req: CheckpointExtractRequest,
+	agentId: string,
+	scope: CheckpointProjectScope,
+): Promise<TranscriptUploadContent | null> {
+	if (req.transcriptPath) {
+		return existsSync(req.transcriptPath)
+			? { content: readFileSync(req.transcriptPath, "utf-8"), project: null }
+			: null;
+	}
+	return await readTranscriptUploadContent(getDbAccessor(), {
+		basePath: getAgentsDir(),
+		agentId,
+		sessionKey: normalizeSessionKey(req.sessionKey),
+		maxBytes: MAX_TRANSCRIPT_SCAN_BYTES,
+		access: { harness: req.harness, ...scope },
+	});
+}
+
+export async function handleCheckpointExtract(
+	req: CheckpointExtractRequest,
+	scope: CheckpointProjectScope,
+): Promise<CheckpointExtractResponse> {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	await ensureAgentRegistered(agentId);
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
@@ -2297,15 +2343,22 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 	let transcript = "";
 	let rawTranscript = req.transcript;
 	let fromStore = false;
+	let sourceProject: string | null = null;
 	if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
-	} else if (req.transcriptPath && existsSync(req.transcriptPath)) {
+	} else {
 		try {
-			rawTranscript = readFileSync(req.transcriptPath, "utf-8");
-			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
-		} catch {
+			const source = await readCheckpointSource(req, agentId, scope);
+			if (source) {
+				rawTranscript = source.content;
+				transcript = normalizeSessionTranscript(req.harness, source.content);
+				sourceProject = source.project;
+			}
+		} catch (err) {
 			logger.warn("hooks", "Could not read checkpoint transcript", {
 				path: req.transcriptPath,
+				sessionKey: req.sessionKey,
+				error: err instanceof Error ? err.message : String(err),
 			});
 		}
 	}
@@ -2328,7 +2381,7 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 					req.sessionKey,
 					transcript,
 					req.harness,
-					req.project ?? null,
+					req.project ?? sourceProject,
 					agentId,
 					new Date().toISOString(),
 					getDbAccessor(),

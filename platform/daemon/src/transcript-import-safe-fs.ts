@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { lstat, open, opendir, rename, rm } from "node:fs/promises";
+import { lstat, open, opendir, rename, rm, rmdir } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { createRequire } from "node:module";
@@ -14,11 +14,14 @@ const DIRECTORY_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0) | 
 const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const DARWIN_DIRECTORY_BUFFER_BYTES = 64 * 1024;
 const DARWIN_DIRENT_HEADER_BYTES = 8;
+const DARWIN_AT_REMOVEDIR = 0x80;
+const CREATED_FILE_MODE = 0o600;
 
 type DarwinFileSystem = {
 	readonly symbols: {
 		readonly __error: () => ReturnType<typeof ptr>;
 		readonly close: (fd: number) => number;
+		readonly fchmod: (fd: number, mode: number) => number;
 		readonly getdirentries: (
 			fd: number,
 			buffer: ReturnType<typeof ptr>,
@@ -45,6 +48,7 @@ function loadDarwinFileSystem(): DarwinFileSystem | null {
 		darwinFileSystem = requireFfi("bun:ffi").dlopen("/usr/lib/libSystem.B.dylib", {
 			__error: { args: [], returns: "ptr" },
 			close: { args: ["i32"], returns: "i32" },
+			fchmod: { args: ["i32", "u16"], returns: "i32" },
 			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
 			openat: { args: ["i32", "cstring", "i32", "i32"], returns: "i32" },
 			unlinkat: { args: ["i32", "cstring", "i32"], returns: "i32" },
@@ -62,10 +66,28 @@ function darwinError(operation: string, api: DarwinFileSystem): NodeJS.ErrnoExce
 	return Object.assign(new Error(`${operation} failed: ${code}`), { code, errno });
 }
 
-function openAt(dirfd: number, path: string, flags: number, mode = 0): number {
+function openAt(dirfd: number, path: string, flags: number, mode = CREATED_FILE_MODE): number {
 	const api = loadDarwinFileSystem();
 	if (!api) throw new Error("Darwin descriptor filesystem unavailable");
-	const fd = api.symbols.openat(dirfd, requireFfi("bun:ffi").ptr(Buffer.from(`${path}\0`)), flags, mode);
+	const name = Buffer.from(`${path}\0`);
+	const pointer = requireFfi("bun:ffi").ptr(name);
+	if ((flags & fsConstants.O_CREAT) === 0) {
+		const fd = api.symbols.openat(dirfd, pointer, flags, 0);
+		if (fd < 0) throw darwinError("openat", api);
+		return fd;
+	}
+	const created = api.symbols.openat(dirfd, pointer, flags | fsConstants.O_EXCL, 0);
+	if (created >= 0) {
+		if (api.symbols.fchmod(created, mode) < 0) {
+			const error = darwinError("fchmod", api);
+			api.symbols.close(created);
+			throw error;
+		}
+		return created;
+	}
+	const error = darwinError("openat", api);
+	if (error.code !== "EEXIST" || (flags & fsConstants.O_EXCL) !== 0) throw error;
+	const fd = api.symbols.openat(dirfd, pointer, flags & ~fsConstants.O_CREAT, 0);
 	if (fd < 0) throw darwinError("openat", api);
 	return fd;
 }
@@ -249,7 +271,7 @@ export async function replaceContainedTranscriptFile(root: string, from: string,
 export async function removeContainedTranscriptPath(
 	root: string,
 	candidate: string,
-	options: { readonly force?: boolean; readonly recursive?: boolean } = {},
+	options: { readonly force?: boolean; readonly directory?: boolean } = {},
 ): Promise<void> {
 	const parts = containedParts(root, candidate);
 	const name = parts.pop();
@@ -260,7 +282,7 @@ export async function removeContainedTranscriptPath(
 			const api = loadDarwinFileSystem();
 			if (!api) throw new Error("Darwin descriptor filesystem unavailable");
 			const { ptr } = requireFfi("bun:ffi");
-			const flags = options.recursive ? 0x800 : 0;
+			const flags = options.directory ? DARWIN_AT_REMOVEDIR : 0;
 			if (api.symbols.unlinkat(parent.fd, ptr(Buffer.from(`${name}\0`)), flags) < 0) {
 				const error = darwinError("unlinkat", api);
 				if (!(options.force && error.code === "ENOENT")) throw error;
@@ -268,7 +290,11 @@ export async function removeContainedTranscriptPath(
 		} else {
 			const target = descriptorPath(parent.fd, name);
 			await assertFinalComponentIsNotSymlink(target);
-			await rm(target, options);
+			if (options.directory)
+				await rmdir(target).catch((error: unknown) => {
+					if (!(options.force && error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+				});
+			else await rm(target, { force: options.force });
 		}
 	} catch (error) {
 		throw normalizePathError(error);

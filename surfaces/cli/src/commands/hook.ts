@@ -9,7 +9,7 @@ import {
 } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
-import type { DaemonFetchResult } from "../lib/daemon.js";
+import type { DaemonFetchResult, TranscriptFileUploader } from "../lib/daemon.js";
 
 interface HookDeps {
 	readonly AGENTS_DIR: string;
@@ -18,6 +18,7 @@ interface HookDeps {
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
 	readonly readStaticIdentity: (basePath: string, status?: string) => string | null;
+	readonly uploadTranscriptFile: TranscriptFileUploader;
 	readonly sleep?: (ms: number) => Promise<void>;
 	readonly now?: () => number;
 	readonly stdin?: Readable;
@@ -263,7 +264,7 @@ export async function buildPeerContext(
 		pickString(input?.session_name, input?.sessionName, input?.thread_name, input?.session_title, input?.title),
 		PEER_LIMITS.title,
 	);
-	const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
+	const transcriptPath = pickTranscriptPath(input);
 	const signals = transcriptPath ? await readTranscriptSignals(transcriptPath) : { modifiedFiles: [] as string[] };
 	if (!title && signals.title) title = clipText(signals.title, PEER_LIMITS.title);
 	if (title) context.title = title;
@@ -283,6 +284,8 @@ export async function buildPeerContext(
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeoutFromEnv();
 const PROMPT_SUBMIT_TIMEOUT_MS = resolvePromptSubmitTimeout();
 const STOP_TIMEOUT_MS = 10_000;
+const SESSION_END_UPLOAD_TIMEOUT_MS = 8_000;
+const PRE_COMPACTION_UPLOAD_TIMEOUT_MS = 3_000;
 const STOP_MAX_ATTEMPTS = 3;
 const STOP_RETRY_SLEEP_MS = 1_000;
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -366,6 +369,33 @@ function formatHookFailure(
 		return `[signet] daemon ${name} timed out, hook skipped\n`;
 	}
 	return "[signet] daemon not running, hook skipped\n";
+}
+
+async function uploadHookTranscript(
+	deps: HookDeps,
+	input: Record<string, unknown> | null,
+	harness: string,
+	agentId: string,
+	timeoutMs: number,
+	project?: string,
+): Promise<string | undefined> {
+	const transcriptPath = pickTranscriptPath(input);
+	const sessionKey = pickSessionKey(input);
+	if (!transcriptPath || !sessionKey) return undefined;
+	const cwd = pickString(input?.cwd, project);
+	try {
+		const outcome = await deps.uploadTranscriptFile(
+			{ harness, sessionKey, ...(agentId ? { agentId } : {}), ...(cwd ? { cwd } : {}) },
+			transcriptPath,
+			timeoutMs,
+			LEGACY_RUNTIME_PATH,
+		);
+		return outcome.status === "unsupported" ? transcriptPath : undefined;
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`[signet] transcript upload failed (${reason}); the daemon keeps the lines it already has\n`);
+		return undefined;
+	}
 }
 
 async function fetchHookData<T>(
@@ -488,6 +518,15 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson(deps.stdin);
 			const stdinProject = pickString(input?.cwd);
+			const agentId = pickHookAgentId(input, options.harness);
+			const uploading = uploadHookTranscript(
+				deps,
+				input,
+				options.harness,
+				agentId,
+				PROMPT_SUBMIT_TIMEOUT_MS,
+				options.project,
+			);
 			const data = await fetchHookData<{
 				inject?: string;
 				dynamicContext?: string;
@@ -505,6 +544,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				),
 				timeout: PROMPT_SUBMIT_TIMEOUT_MS,
 			});
+			await uploading;
 			if (!data) {
 				if (options.codexJson) printCodexHookOutput("UserPromptSubmit");
 				process.exit(0);
@@ -615,11 +655,20 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.description("Extract and save memories from session transcript")
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.action(async (options) => {
-			const body = (await readJson()) ?? {};
+			const input = await readJson(deps.stdin);
+			const body = buildSessionEndBody(input, options.harness);
+			const agentId = pickHookAgentId(input, options.harness);
+			const transcriptPath = await uploadHookTranscript(
+				deps,
+				input,
+				options.harness,
+				agentId,
+				SESSION_END_UPLOAD_TIMEOUT_MS,
+			);
 			const data = await fetchHookData<{ memoriesSaved?: number }>(deps, "session-end", "/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(buildSessionEndBody(body, options.harness)),
+				body: JSON.stringify({ ...body, transcriptPath }),
 				timeout: 60_000,
 			});
 			if (!data) {
@@ -671,8 +720,15 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const input = await readJson(deps.stdin);
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
-			const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
 			const agentId = pickString(options.agentId, pickHookAgentId(input, options.harness));
+			const transcriptPath = await uploadHookTranscript(
+				deps,
+				input,
+				options.harness,
+				agentId,
+				PRE_COMPACTION_UPLOAD_TIMEOUT_MS,
+				options.project,
+			);
 			const data = await fetchHookData<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
 				deps,
 				"pre-compaction",
@@ -849,6 +905,10 @@ function hasParentReference(input: Record<string, unknown> | null): boolean {
 	);
 }
 
+function pickTranscriptPath(input: Record<string, unknown> | null): string {
+	return pickString(input?.transcript_path, input?.transcriptPath);
+}
+
 export function pickSessionKey(input: Record<string, unknown> | null): string {
 	if (!input) return "";
 	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
@@ -915,7 +975,6 @@ export function buildUserPromptSubmitBody(
 	userMessage: string;
 	userPrompt: string;
 	sessionKey: string;
-	transcriptPath: string;
 	transcript: string;
 	agentId?: string;
 	harnessAgentId?: string;
@@ -934,7 +993,6 @@ export function buildUserPromptSubmitBody(
 		userMessage,
 		userPrompt,
 		sessionKey: pickSessionKey(body),
-		transcriptPath: pickString(body?.transcript_path, body?.transcriptPath),
 		transcript: pickString(body?.transcript),
 		...(agentId ? { agentId } : {}),
 		...(harnessAgentId ? { harnessAgentId } : {}),
@@ -986,7 +1044,6 @@ export function buildSessionEndBody(
 	harness: string,
 ): {
 	harness: string;
-	transcriptPath: string;
 	transcript: string;
 	sessionId: string;
 	sessionKey: string;
@@ -1003,7 +1060,6 @@ export function buildSessionEndBody(
 	const agentId = pickHookAgentId(body, harness);
 	return {
 		harness,
-		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
 		transcript: pickString(body.transcript),
 		sessionId,
 		sessionKey,

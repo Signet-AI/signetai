@@ -1002,10 +1002,8 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
 
-const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, fetchDaemonRaw, secretApiCall } = createDaemonClient(
-	DEFAULT_PORT,
-	AGENTS_DIR,
-);
+const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, fetchDaemonRaw, secretApiCall, uploadTranscriptFile } =
+	createDaemonClient(DEFAULT_PORT, AGENTS_DIR);
 const offlineSecretApiCall = createOfflineSecretApiCall();
 const secretCommandApiCall = createSecretCommandApiCall({
 	daemonApiCall: secretApiCall,
@@ -1089,6 +1087,7 @@ registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,
 	readStaticIdentity,
+	uploadTranscriptFile,
 });
 
 const MIN_AUTO_UPDATE_INTERVAL = 300;

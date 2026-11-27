@@ -27,6 +27,7 @@ const SQL_OWNERS = [
 	"platform/daemon/src/source-snapshots.ts",
 	"platform/daemon/src/source-claim-review.ts",
 	"platform/daemon/src/transcript-import-commit.ts",
+	"platform/daemon/src/transcript-capture-jobs.ts",
 	"platform/daemon/src/ontology-contradictions.ts",
 	"platform/daemon/src/semantic-memory-projection.ts",
 	"platform/daemon/src/knowledge-graph-hygiene.ts",

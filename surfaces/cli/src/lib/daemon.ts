@@ -1,9 +1,21 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
+import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl, withTranscriptFileSource } from "@signet/core";
+import {
+	type TranscriptUploadOutcome,
+	type TranscriptUploadTarget,
+	uploadTranscript,
+} from "@signet/core/transcript-upload";
 import chalk from "chalk";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
+
+export type TranscriptFileUploader = (
+	target: TranscriptUploadTarget,
+	path: string,
+	timeoutMs: number,
+	runtimePath: string,
+) => Promise<TranscriptUploadOutcome>;
 
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
 
@@ -110,6 +122,7 @@ export function createDaemonClient(
 	readonly fetchDaemonStream: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly fetchDaemonRaw: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly secretApiCall: DaemonApiCall;
+	readonly uploadTranscriptFile: TranscriptFileUploader;
 } {
 	const configUrl = agentsDir ? readDaemonUrlConfig(agentsDir) : undefined;
 	const url = resolveSignetDaemonUrl({ defaultHost: LOOPBACK_HOST, defaultPort: port, configUrl });
@@ -217,6 +230,20 @@ export function createDaemonClient(
 		}
 	};
 
+	const uploadTranscriptFile: TranscriptFileUploader = (target, path, timeoutMs, runtimePath) =>
+		withTranscriptFileSource(path, (source) =>
+			uploadTranscript(
+				{
+					baseUrl: url,
+					runtimePath,
+					signal: AbortSignal.timeout(timeoutMs),
+					fetch: (input, init) => fetch(input, { ...init, headers: withAuthHeaders(init.headers) }),
+				},
+				target,
+				source,
+			),
+		);
+
 	return {
 		url,
 		localWorkspace,
@@ -226,6 +253,7 @@ export function createDaemonClient(
 		fetchDaemonStream,
 		fetchDaemonRaw: fetchDaemonStream,
 		secretApiCall,
+		uploadTranscriptFile,
 	};
 }
 function readDaemonUrlConfig(agentsDir: string): string | undefined {

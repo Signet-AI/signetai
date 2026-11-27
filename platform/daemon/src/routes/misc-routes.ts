@@ -29,9 +29,11 @@ import {
 } from "../update-system.js";
 import { loadDashboardIdentity } from "./dashboard-identity.js";
 import { AGENTS_DIR, authConfig } from "./state.js";
+import { drainTranscriptUploadPurges } from "../transcript-upload";
 import { parseOptionalString, resolveScopedAgentId, toRecord } from "./utils.js";
 import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
+const TRANSCRIPT_UPLOAD_PURGE_WAIT_MS = 10_000;
 const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
 
 const MAX_CONFIG_BYTES = 1_048_576;
@@ -394,7 +396,16 @@ export function registerMiscRoutes(app: Hono): void {
 			invalidateAgentScopeCache(agent.id);
 		}
 		if (result.status === "not_found") return c.json({ error: "Agent not found" }, 404);
-		return c.json({ success: true, purged: purge, mode: result.mode, rows: result.rows });
+		const uploads = purge
+			? (await drainTranscriptUploadPurges(AGENTS_DIR, { waitMs: TRANSCRIPT_UPLOAD_PURGE_WAIT_MS })).status
+			: "removed";
+		return c.json({
+			success: true,
+			purged: purge,
+			mode: result.mode,
+			rows: result.rows,
+			...(uploads === "removed" ? {} : { uploadFiles: uploads }),
+		});
 	});
 
 	app.get("/api/update/check", async (c) => {
