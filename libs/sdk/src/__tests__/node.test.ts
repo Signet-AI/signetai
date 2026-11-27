@@ -48,6 +48,20 @@ for (const fixture of conformance.targets) {
 	});
 }
 
+test("remote HTTP targets refuse credentials before any request", async () => {
+	await expect(
+		resolveTarget({ env, flagUrl: "http://10.0.0.10:4000", flagKey: "fixture", keyring: absentKeyring }),
+	).rejects.toThrow("HTTPS");
+});
+test("an unbound environment key never follows an explicit URL", async () => {
+	const target = await resolveTarget({
+		env: { ...env, SIGNET_API_KEY: "fixture" },
+		flagUrl: "https://other.example",
+		keyring: absentKeyring,
+	});
+	expect(await target.credential.get()).toBeNull();
+});
+
 test("shared outbox record conformance", async () => {
 	const box = new DurableOutbox(conformance.outbox.origin, { env, harness: conformance.harness });
 	await box.enqueue(conformance.outbox.request);
@@ -182,8 +196,13 @@ test("Python and TypeScript share protected registry, origin hashes and outbox r
 	] as const;
 	const keyFile = await writeKeyFile("https://faß.example", "hermes", "shared", { env });
 	await new ConnectorRegistry({ env }).set("hermes", { url: "https://faß.example", keyFile });
-	for (const [raw, canonical] of variants)
-		expect((await resolveTarget({ flagUrl: raw, flagKey: "fixture", env })).origin).toBe(canonical);
+	for (const [raw, canonical] of variants) {
+		if (canonical.startsWith("http:") && !canonical.startsWith("http://127.")) {
+			const { resolveSignetDaemonUrl } = await import("@signet/core/daemon-url");
+			expect(new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: raw } })).origin).toBe(canonical);
+			await expect(resolveTarget({ flagUrl: raw, flagKey: "fixture", env })).rejects.toThrow("HTTPS");
+		} else expect((await resolveTarget({ flagUrl: raw, flagKey: "fixture", env })).origin).toBe(canonical);
+	}
 	const plugin = new URL("../../../../integrations/hermes-agent/connector/hermes-plugin", import.meta.url).pathname;
 	const script = `import sys,json; sys.path.insert(0,${JSON.stringify(plugin)}); import signet_transport as s; t=s.resolve_target(harness='hermes'); assert t.credential.get()=='shared'; s.DurableOutbox('https://faß.example').enqueue('POST','/api/hooks/session-end',{'from':'python'}); print(json.dumps([[s.resolve_target(flag_url=raw,flag_key='fixture').origin, s.origin_hash(raw)==s.origin_hash(canonical)] for raw,canonical in ${JSON.stringify(variants)}]))`;
 	const child = Bun.spawn(["python3", "-c", script], {
