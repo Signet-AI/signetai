@@ -31,21 +31,24 @@
       "line": 215,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:auth.key.create"
     },
     {
       "path": "auth/api-keys.ts",
       "line": 259,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:auth.key.list"
     },
     {
       "path": "auth/api-keys.ts",
       "line": 278,
       "api": "withWriteTx",
       "source": "return accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:auth.key.revoke"
     },
     {
       "path": "auth/tokens.ts",

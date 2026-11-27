@@ -235,7 +235,7 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 			now,
 			expiresAt,
 		);
-	}, "auth/api-keys.ts:215");
+	}, "db:auth.key.create");
 
 	return {
 		id,
@@ -270,7 +270,7 @@ export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
 					)
 					.all() as unknown as ApiKeyRow[]
 			).map(rowToRecord),
-		"auth/api-keys.ts:259",
+		"db:auth.key.list",
 	);
 }
 
@@ -282,7 +282,7 @@ export function revokeApiKey(accessor: DbAccessor, idOrPrefix: string): ApiKeyRe
 		if (!row) return null;
 		db.prepare("UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?").run(now, row.id);
 		return rowToRecord({ ...row, revoked_at: row.revoked_at ?? now });
-	}, "auth/api-keys.ts:278");
+	}, "db:auth.key.revoke");
 }
 
 function readApiKey(prefix: string): Promise<ApiKeyRow | null> {
