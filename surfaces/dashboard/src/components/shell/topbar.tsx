@@ -14,7 +14,7 @@ export function TopbarTitle({ label, organization }: { readonly label: string; r
 		<div
 			className={cn(
 				"sig-no-drag absolute left-1/2 flex min-w-0 -translate-x-1/2 items-center gap-1.5",
-				organization ? "max-w-12 sm:max-w-[calc(100%_-_560px)]" : "max-w-[calc(100%_-_112px)]",
+				organization ? "max-w-[calc(100%_-_208px)] sm:max-w-[calc(100%_-_560px)]" : "max-w-[calc(100%_-_112px)]",
 			)}
 		>
 			<SignetMark className="sig-topbar-title-mark h-[19px] w-4 shrink-0" aria-hidden="true" />

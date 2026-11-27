@@ -25,4 +25,8 @@ test("agent context uses the existing source-filter Select trigger", () => {
 	expect(html).toContain("home-source-filter");
 	expect(html).toContain('aria-label="Agent context"');
 	expect(html).not.toContain("(default)");
+	expect(html).toContain('title="Acme"');
+	expect(html).toContain('aria-hidden="true" class="sm:hidden">A</span>');
+	expect(html).toContain("max-sm:size-9");
+	expect(html).toContain("max-sm:[&amp;&gt;[data-slot=select-value]]:hidden");
 });
