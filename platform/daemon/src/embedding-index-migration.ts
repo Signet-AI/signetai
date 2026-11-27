@@ -1282,6 +1282,7 @@ export async function promoteStagingIndex(
 	return true;
 }
 export async function startEmbeddingIndexMigration(input: {
+	readonly paused?: boolean;
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
 	readonly readConfigured?: () => EmbeddingConfig;
@@ -1298,7 +1299,7 @@ export async function startEmbeddingIndexMigration(input: {
 	readonly owner?: DbOwnerClient;
 }): Promise<EmbeddingIndexMigrationHandle | null> {
 	if (input.owner) await repairVectorAdmissionThroughOwner(input.owner);
-	if (input.configured.provider === "none") return null;
+	if (input.paused || input.configured.provider === "none") return null;
 	const migrationOwner = input.owner;
 	if (!migrationOwner) throw new Error("Embedding migration requires owner");
 

@@ -2114,26 +2114,25 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		);
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
-	if (!pipelinePaused) {
-		try {
-			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
-				accessor: getDbAccessor(),
-				configured: memoryCfg.embedding,
-				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
-				fetchEmbedding,
-				checkProvider: checkEmbeddingProvider,
-				owner: dbOwnerClient ?? undefined,
-				pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
-				batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
-				onPromoted: () => {
-					restartAfterEmbeddingPromotion(telemetry);
-				},
-			});
-		} catch (error) {
-			logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+	try {
+		embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
+			accessor: getDbAccessor(),
+			paused: pipelinePaused,
+			configured: memoryCfg.embedding,
+			readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
+			fetchEmbedding,
+			checkProvider: checkEmbeddingProvider,
+			owner: dbOwnerClient ?? undefined,
+			pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
+			batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
+			onPromoted: () => {
+				restartAfterEmbeddingPromotion(telemetry);
+			},
+		});
+	} catch (error) {
+		logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 
 	if (memoryCfg.pipelineV2.reflections.enabled && !pipelinePaused) {
