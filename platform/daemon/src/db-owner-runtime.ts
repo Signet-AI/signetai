@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { ownerAdmittedScan } from "./db-owner-native";
 import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { requireReadScope, resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { CaptureEnqueueInput } from "./transcript-capture-owner";
@@ -335,10 +336,15 @@ async function executeInlineOwnerRequest(
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
 	if (request.kind === "vector_search") {
 		return invokeAccessor(accessor, "withReadDb", (db) =>
-			vectorSearchWithMetadata(db, new Float32Array(request.payload.queryEmbedding), {
-				...request.payload.options,
-				readScope: requireReadScope(request.payload.options.readScope),
-			}),
+			vectorSearchWithMetadata(
+				db,
+				new Float32Array(request.payload.queryEmbedding),
+				{
+					...request.payload.options,
+					readScope: requireReadScope(request.payload.options.readScope),
+				},
+				ownerAdmittedScan(),
+			),
 		);
 	}
 	switch (request.kind) {

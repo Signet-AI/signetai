@@ -3,8 +3,8 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { attempt } from "@signet/core";
-import { materializeEmbeddedNativeAddon } from "./native-runtime-assets";
+import { ownerAdmittedScan } from "./db-owner-native";
+
 import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { dirname, resolve } from "node:path";
 import {
@@ -104,18 +104,7 @@ class DbOwnerCancellationRequested extends Error {
 }
 
 const require = createRequire(import.meta.url);
-let admittedScan: typeof import("@signet/native").scanAdmittedVectors | null | undefined;
-function ownerAdmittedScan(): typeof import("@signet/native").scanAdmittedVectors | undefined {
-	if (admittedScan === undefined) {
-		admittedScan =
-			attempt(() => {
-				const path = materializeEmbeddedNativeAddon("signet-native");
-				const addon: typeof import("@signet/native") = require(path ?? "@signet/native");
-				return typeof addon.scanAdmittedVectors === "function" ? addon.scanAdmittedVectors : null;
-			}) ?? null;
-	}
-	return admittedScan ?? undefined;
-}
+
 const Database = (
 	typeof (globalThis as Record<string, unknown>).Bun !== "undefined"
 		? require("bun:sqlite").Database
