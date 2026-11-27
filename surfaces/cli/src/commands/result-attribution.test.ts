@@ -47,7 +47,15 @@ test("registered text surfaces share canonical names and hidden-author redaction
 				});
 			if (path === "/api/org/audit")
 				return Response.json({
-					events: [{ ...row, actor_user_id: "person-id", action: "memory.remember", at: row.created_at }],
+					events: [
+						{ ...row, actor_user_id: "person-id", action: "memory.remember", at: row.created_at },
+						{
+							id: "system-event",
+							actor_credential: "system",
+							action: "operator.restart_completed",
+							at: row.created_at,
+						},
+					],
 				});
 			return Response.json({ error: "unexpected fixture endpoint" }, { status: 404 });
 		},
@@ -87,6 +95,7 @@ test("registered text surfaces share canonical names and hidden-author redaction
 					hide ? "author: Another person" : "author: Alice Smith (@alice)",
 				);
 				expect(out).toContain("agent: Engineering");
+				if (args[0] === "audit") expect(out).toContain("author: Signet");
 				expect(out).not.toContain("person-id");
 				expect(out).not.toContain("agent-id");
 				expect(out).not.toContain("spoofed harness");

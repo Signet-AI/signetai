@@ -271,6 +271,13 @@ test("interactive setup entry dispatches personal, host and join without changin
 			expect(select).not.toHaveBeenCalled();
 			expect(calls).toEqual([expect.objectContaining({ [key]: value })]);
 		}
+
+		select.mockClear();
+		const global = create();
+		global.program.option("--agent <id>");
+		await global.program.parseAsync(["--agent", "selected-agent", "setup"], { from: "user" });
+		expect(select).not.toHaveBeenCalled();
+		expect(global.calls).toHaveLength(1);
 		select.mockClear();
 		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 		const headless = create();

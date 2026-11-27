@@ -275,7 +275,10 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 			}
 			const sources = loadSourcesConfig(deps.agentsDir).sources;
 			if (options.json) {
-				console.log(JSON.stringify({ sources }, null, 2));
+				if (!deps.secretApiCall) throw new Error("Source JSON requires the daemon public view");
+				const result = await deps.secretApiCall("GET", "/api/sources");
+				if (!result.ok) throw new Error("Source read failed");
+				console.log(JSON.stringify(result.data, null, 2));
 				return;
 			}
 			if (!sources.some((source) => source.writeIdentity) || !deps.secretApiCall) {

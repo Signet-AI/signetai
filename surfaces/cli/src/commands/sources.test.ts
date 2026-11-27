@@ -521,3 +521,27 @@ describe("sources CLI commands", () => {
 		expect(process.exitCode).not.toBe(1);
 	});
 });
+
+it("local source JSON uses the daemon public view instead of serializing private source configuration", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "source-public-json-")),
+		output: string[] = [],
+		original = console.log;
+	console.log = (value: unknown) => output.push(String(value));
+	try {
+		const program = new Command();
+		registerSourcesCommands(program, {
+			agentsDir: dir,
+			secretApiCall: async () => ({
+				ok: true,
+				data: { sources: [{ id: "canonical-source", authorUserId: "author-id", agentId: "agent-id" }] },
+			}),
+		});
+		await program.parseAsync(["sources", "list", "--json"], { from: "user" });
+		expect(JSON.parse(output.join(""))).toEqual({
+			sources: [{ id: "canonical-source", authorUserId: "author-id", agentId: "agent-id" }],
+		});
+	} finally {
+		console.log = original;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

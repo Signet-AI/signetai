@@ -90,7 +90,9 @@ export async function attributeResults<T extends object>(
 					? "Dreaming"
 					: typeof system === "object" && system !== null && Reflect.get(system, "kind") === "system"
 						? resultField(system, "name")
-						: undefined;
+						: resultField(row, "actor_credential") === "system"
+							? "Signet"
+							: undefined;
 			const attribution: ResultAttribution = {
 				...(author
 					? { author: person ? { name: person.name, handle: person.handle } : { name: "Another person" } }
