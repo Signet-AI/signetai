@@ -54,10 +54,10 @@ class DesktopCdp {
 		if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
 		return record(result.result).value;
 	}
-	async screenshot(path: string): Promise<void> {
+	async screenshot(path: string, width = 1440, height = 900): Promise<void> {
 		await this.call("Emulation.setDeviceMetricsOverride", {
-			width: 1440,
-			height: 900,
+			width,
+			height,
 			deviceScaleFactor: 1,
 			mobile: false,
 		});
@@ -67,12 +67,12 @@ class DesktopCdp {
 				"({height:Math.max(document.body.scrollHeight,document.documentElement.scrollHeight),width:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)})",
 			),
 		);
-		expect(fit.height).toBeLessThanOrEqual(900);
-		expect(fit.width).toBeLessThanOrEqual(1440);
+		expect(fit.height).toBeLessThanOrEqual(height);
+		expect(fit.width).toBeLessThanOrEqual(width);
 		const result = await this.call("Page.captureScreenshot", { format: "png" });
 		const bytes = Buffer.from(text(result.data), "base64");
-		expect(bytes.readUInt32BE(16)).toBe(1440);
-		expect(bytes.readUInt32BE(20)).toBe(900);
+		expect(bytes.readUInt32BE(16)).toBe(width);
+		expect(bytes.readUInt32BE(20)).toBe(height);
 		await writeFile(path, bytes);
 	}
 	close(): void {
@@ -123,6 +123,10 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				admin: { username: "alice", displayName: "Alice", password: "disposable electron password" },
 			});
 			success(claim, "Claim Electron fixture");
+			success(
+				await request(daemon.origin, "/api/org/groups", browser(claim), "POST", { name: "desktop-team" }),
+				"Create desktop team fixture",
+			);
 			gateway = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: gatewayFetch });
 			const origin = gateway.url.origin;
 			success(
@@ -294,6 +298,78 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 			);
 			expect(await page.evaluate("document.querySelector('form[aria-label=\"Sign in to Signet\"]')===null")).toBe(true);
 			if (screenDir) await cdp.screenshot(join(screenDir, "signed-in-remote-dashboard.png"));
+			for (const path of [
+				"/api/auth/api-keys",
+				"/api/auth/connector-keys",
+				"/api/auth/device/approve",
+				"/api/org/invites",
+			])
+				expect(await cdp.evaluate(`fetch(${JSON.stringify(path)},{method:'POST'}).then(r=>r.status)`)).toBe(403);
+			await cdp.evaluate("location.hash='#account'; true");
+			await until(
+				async () =>
+					(await page.evaluate(
+						"Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Personal API keys')",
+					)) === true,
+				"Account key section",
+			);
+			await cdp.evaluate(
+				"Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Personal API keys').click(); true",
+			);
+			await until(
+				async () =>
+					(await page.evaluate(
+						"document.body.innerText.includes('Create keys from the browser dashboard or the CLI')",
+					)) === true,
+				"Desktop personal-key notice",
+			);
+			expect(
+				await cdp.evaluate("Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Create key')"),
+			).toBe(false);
+			if (screenDir)
+				for (const width of [1440, 390])
+					await cdp.screenshot(join(screenDir, `desktop-personal-keys-${width}.png`), width, width === 390 ? 844 : 900);
+			await cdp.evaluate("location.hash='#settings/org-teams'; true");
+			await until(
+				async () =>
+					(await page.evaluate(
+						"Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='desktop-team')",
+					)) === true,
+				"Desktop team directory",
+			);
+			await cdp.evaluate(
+				"Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='desktop-team').click(); true",
+			);
+			await until(
+				async () =>
+					(await page.evaluate(
+						"document.body.innerText.includes('Create keys from the browser dashboard or the CLI')",
+					)) === true,
+				"Desktop shared-key notice",
+			);
+			expect(
+				await cdp.evaluate("Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Issue key')"),
+			).toBe(false);
+			if (screenDir)
+				for (const width of [1440, 390])
+					await cdp.screenshot(join(screenDir, `desktop-shared-key-${width}.png`), width, width === 390 ? 844 : 900);
+			await cdp.evaluate("location.hash='#settings/users'; true");
+			await until(
+				async () =>
+					(await page.evaluate(
+						"document.body.innerText.includes('Create invitations from the browser dashboard or the CLI')",
+					)) === true,
+				"Desktop invitation notice",
+			);
+			expect(
+				await cdp.evaluate(
+					"Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Create invitation')",
+				),
+			).toBe(false);
+			if (screenDir)
+				for (const width of [1440, 390])
+					await cdp.screenshot(join(screenDir, `desktop-invitations-${width}.png`), width, width === 390 ? 844 : 900);
+
 			await cdp.evaluate(
 				"void fetch('/api/auth/logout',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}); true",
 			);

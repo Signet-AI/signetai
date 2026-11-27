@@ -11,7 +11,7 @@ test("184 backfills audited key parents and bounds existing descendants", () => 
 		INSERT INTO api_keys(id,prefix,name,key_hash,role,scope_json,permissions_json,created_at,expires_at,user_id,kind) VALUES
 		('parent','parent','Parent','hash','member','{}','["recall"]','now','2090-01-01','u','personal'),
 		('child','child','Child','hash','member','{}','["recall"]','now','2099-01-01','u','personal');
-		INSERT INTO audit_events(id,at,actor_credential,action,target_kind,target_id,outcome) VALUES('created','now','api_key:parent','key.created','key','child','success');`);
+		INSERT INTO audit_events(id,at,actor_credential,action,target_kind,target_id,outcome) VALUES('created','now','api_key:parent','key.created','key','child','ok');`);
 		up(db);
 		up(db);
 		expect(db.query("SELECT parent_key_id,expires_at,revoked_at FROM api_keys WHERE id='child'").get()).toEqual({
