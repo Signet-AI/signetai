@@ -184,6 +184,32 @@ test("admitted eligibility keeps nearest memory hits beyond non-memory vectors",
 	}
 });
 
+test("shard sync keeps recall eligibility counts through parent and vector mutations", () => {
+	const db = fixture();
+	try {
+		add(db, "count-a", "default", 0);
+		add(db, "count-b", "default", 0.1);
+		add(db, "count-chunk", "default", 0.2, "source_chunk");
+		const counts = () =>
+			db
+				.query(
+					"SELECT SUM(row_count) rows,SUM(recall_indexed_count) indexed_rows,SUM(recall_eligible_count) eligible FROM vector_shard_keys WHERE row_count>0",
+				)
+				.get();
+		expect(counts()).toEqual({ rows: 3, indexed_rows: 3, eligible: 2 });
+		db.exec("UPDATE memories SET stale_at='2020' WHERE id='count-a'");
+		expect(counts()).toEqual({ rows: 3, indexed_rows: 3, eligible: 1 });
+		db.exec("UPDATE memories SET scope='session' WHERE id='count-b'");
+		expect(counts()).toEqual({ rows: 3, indexed_rows: 3, eligible: 0 });
+		db.exec("UPDATE memories SET stale_at=NULL,scope=NULL");
+		expect(counts()).toEqual({ rows: 3, indexed_rows: 3, eligible: 2 });
+		db.exec("DELETE FROM embeddings WHERE id='count-a'");
+		expect(counts()).toEqual({ rows: 2, indexed_rows: 2, eligible: 1 });
+	} finally {
+		db.close();
+	}
+});
+
 test("dense admitted shards stay inside SQLite through hidden mutations", () => {
 	const db = fixture();
 	try {

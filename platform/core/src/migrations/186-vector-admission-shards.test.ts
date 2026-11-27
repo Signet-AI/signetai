@@ -17,6 +17,29 @@ test("vector admission migration declares only metadata on fresh and repeated ru
 	}
 });
 
+test("legacy admission metadata schedules bounded recall-flag repair", () => {
+	const db = new Database(":memory:");
+	try {
+		db.exec(
+			"CREATE TABLE embeddings(id TEXT PRIMARY KEY,vector BLOB);INSERT INTO embeddings VALUES('legacy',X'01020304')",
+		);
+		up(db);
+		db.exec(
+			"INSERT INTO vector_shard_keys(id,projection,generation,fingerprint,agent_id,visibility,in_flight_jobs) VALUES(1,'vec_embeddings',1,'legacy','default','global','[]');INSERT INTO vector_shard_members VALUES('vec_embeddings',1,'legacy',1);UPDATE vector_shard_repairs SET phase='ready',cursor='checkpoint';DROP TABLE vector_shard_recall_rows",
+		);
+		up(db);
+		up(db);
+		expect(db.query("SELECT phase,cursor FROM vector_shard_repairs WHERE projection='vec_embeddings'").get()).toEqual({
+			phase: "pending",
+			cursor: "checkpoint",
+		});
+		expect(db.query("SELECT COUNT(*) n FROM vector_shard_recall_rows").get()).toEqual({ n: 0 });
+		expect(db.query("SELECT hex(vector) payload FROM embeddings").get()).toEqual({ payload: "01020304" });
+	} finally {
+		db.close();
+	}
+});
+
 test("legacy vector payloads remain untouched with a resumable repair marker", () => {
 	const db = new Database(":memory:");
 	try {

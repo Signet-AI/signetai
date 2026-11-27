@@ -563,6 +563,15 @@ function vectorAdmissionRowsSql(
 function vectorAdmissionFingerprint(alias: string): string {
 	return `json_array(${alias}.agent_id,${alias}.visibility,${alias}.project,${alias}.compartment_id,${alias}.embedding_compartment_id,json(${alias}.in_flight_jobs))`;
 }
+function vectorRecallRowsSql(
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+	condition: string,
+): string {
+	const members = `SELECT s.partition_id,e.id FROM ${store} e CROSS JOIN vector_shard_members s ON s.projection='${base}' AND s.embedding_id=e.id WHERE ${condition}`;
+	return `DELETE FROM vector_shard_recall_rows WHERE (partition_id,embedding_id) IN (${members});
+	INSERT INTO vector_shard_recall_rows(partition_id,embedding_id,memory_id,memory_scope,is_current,is_aggregate) SELECT s.partition_id,e.id,m.id,m.scope,CASE WHEN m.id IS NOT NULL AND m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL THEN 1 ELSE 0 END,CASE WHEN m.source_type='aggregate-recall' THEN 1 ELSE 0 END FROM ${store} e CROSS JOIN vector_shard_members s ON s.projection='${base}' AND s.embedding_id=e.id LEFT JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id WHERE ${condition};`;
+}
 function vectorAdmissionMoveSql(
 	base: VectorProjectionBase,
 	store: "embeddings" | "embeddings_staging",
@@ -588,6 +597,7 @@ function vectorAdmissionMoveSql(
 	INSERT INTO ${table}(id,admission,embedding) SELECT json_array(r.id,${generation}),k.id,t.vector FROM (${rows}) r JOIN vector_shard_keys k ON k.projection='${base}' AND k.generation=${generation} AND k.fingerprint=${fingerprint} JOIN _vector_admission_transfer t ON t.id=r.id WHERE t.vector IS NOT NULL${vectorBytes === undefined ? "" : ` AND length(t.vector)=${vectorBytes}`};
 	INSERT INTO vector_shard_members(projection,generation,embedding_id,partition_id) SELECT '${base}',${generation},json_extract(v.id,'$[0]'),v.admission FROM ${table} v WHERE v.id=json_array(${wanted},${generation});
 	INSERT OR REPLACE INTO vector_shard_singletons(partition_id,vector) SELECT k.id,t.vector FROM vector_shard_members m CROSS JOIN vector_shard_keys k ON k.id=m.partition_id CROSS JOIN _vector_admission_transfer t ON t.id=m.embedding_id WHERE m.projection='${base}' AND m.generation=${generation} AND m.embedding_id=${wanted} AND k.row_count=1;
+	${vectorRecallRowsSql(base, store, `e.id=${wanted}`)}
 	DELETE FROM _vector_admission_transfer;`;
 }
 const vectorAdmissionWriters = new WeakMap<MigrationDb, Map<string, unknown>>();
@@ -666,7 +676,7 @@ export function prepareVectorAdmissionWriter(
 	db.exec(
 		"CREATE TEMP TABLE IF NOT EXISTS _vector_admission_transfer(id TEXT PRIMARY KEY,vector BLOB);CREATE TEMP TABLE IF NOT EXISTS _vector_admission_override(id TEXT PRIMARY KEY,vector BLOB)",
 	);
-	for (const event of ["ai", "au", "ad", "parent_au", "parent_ad", "job_ai"] as const)
+	for (const event of ["ai", "au", "ad", "parent_au", "parent_ad", "job_ai", "recall_au"] as const)
 		db.exec(`DROP TRIGGER IF EXISTS temp.${base}_admission_${event}`);
 	const journal = (wanted: string) => {
 		const rows = vectorAdmissionRowsSql(store, wanted, base);
@@ -694,6 +704,9 @@ export function prepareVectorAdmissionWriter(
 		`CREATE TEMP TRIGGER ${base}_admission_au AFTER UPDATE OF id,vector,agent_id,compartment_id,source_id,source_type,dimensions ON ${store} BEGIN ${journal("old.id")} ${move} ${journal("new.id")} END`,
 	);
 	db.exec(`CREATE TEMP TRIGGER ${base}_admission_ad AFTER DELETE ON ${store} BEGIN ${journal("old.id")} ${remove} END`);
+	db.exec(
+		`CREATE TEMP TRIGGER ${base}_admission_recall_au AFTER UPDATE OF is_deleted,superseded_by,stale_at,scope,source_type ON memories BEGIN ${vectorRecallRowsSql(base, store, "e.source_type='memory' AND e.source_id=new.id")} END`,
+	);
 	for (const event of ["UPDATE OF id,agent_id,visibility,project,compartment_id,source_id", "DELETE"] as const) {
 		const suffix = event === "DELETE" ? "parent_ad" : "parent_au";
 		db.exec(

@@ -341,17 +341,47 @@ function admittedVectorSearch(
 	if (partitioned.ids.some((id) => (partitioned.sizes.get(id) ?? 0) > 64)) {
 		const results = new Map<string, number>();
 		for (const partition of partitioned.ids) {
-			const eligible = `SELECT r.id native_id,e.source_id FROM vector_shard_members s CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) WHERE s.partition_id=? AND s.projection=? AND e.source_type='memory' AND ${predicate}`;
+			const standard =
+				options.currentOnly === true &&
+				options.memoryScope === null &&
+				!options.type &&
+				!options.tags &&
+				options.who === undefined &&
+				!options.pinned &&
+				options.importanceMin === undefined &&
+				options.since === undefined &&
+				options.until === undefined &&
+				options.project === undefined;
+			const statistics = db
+				.prepare("SELECT row_count,recall_indexed_count,recall_eligible_count FROM vector_shard_keys WHERE id=?")
+				.get(partition);
+			if (statistics?.recall_indexed_count !== partitioned.sizes.get(partition))
+				throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+			const eligible = standard
+				? `SELECT json_array(f.embedding_id,s.generation) native_id,f.memory_id source_id FROM vector_shard_recall_rows f CROSS JOIN vector_shard_members s ON s.partition_id=f.partition_id AND s.embedding_id=f.embedding_id WHERE f.partition_id=? AND s.projection=? AND f.is_current=1 AND f.memory_scope IS NULL${options.excludeAggregateRecall ? " AND f.is_aggregate=0" : ""}`
+				: `SELECT r.id native_id,e.source_id FROM vector_shard_members s CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) WHERE s.partition_id=? AND s.projection=? AND e.source_type='memory' AND ${predicate}`;
+			const eligibleArgs = standard ? [] : args;
 			const headroom = db
 				.prepare(`SELECT COUNT(*)-COUNT(DISTINCT source_id) n FROM (${eligible})`)
-				.get(partition, projection, ...args)?.n;
+				.get(partition, projection, ...eligibleArgs)?.n;
 			if (typeof headroom !== "number" || headroom + limit > 4096)
 				throw new VectorAdmissionLimitError("vector_shard_candidate_limit");
-			const hits = db
-				.prepare(
-					`WITH eligible AS MATERIALIZED(${eligible}),hits AS MATERIALIZED(SELECT id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission=? AND id IN(SELECT native_id FROM eligible)) SELECT e.source_id,MIN(h.distance) distance FROM hits h CROSS JOIN ${store} e ON e.id=json_extract(h.id,'$[0]') GROUP BY e.source_id ORDER BY distance,e.source_id LIMIT ?`,
-				)
-				.all(partition, projection, ...args, new Float32Array(query), limit + headroom, partition, limit);
+			const padded =
+				standard && typeof statistics.row_count === "number" && typeof statistics.recall_eligible_count === "number"
+					? Math.min(statistics.row_count, limit + headroom + statistics.row_count - statistics.recall_eligible_count)
+					: 4097;
+			const hits =
+				padded <= 4096
+					? db
+							.prepare(
+								`WITH hits AS MATERIALIZED(SELECT id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission=?) SELECT e.source_id,MIN(h.distance) distance FROM hits h CROSS JOIN ${store} e ON e.id=json_extract(h.id,'$[0]') CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id WHERE e.source_type='memory' AND ${predicate} GROUP BY e.source_id ORDER BY distance,e.source_id LIMIT ?`,
+							)
+							.all(new Float32Array(query), padded, partition, ...args, limit)
+					: db
+							.prepare(
+								`WITH eligible AS MATERIALIZED(${eligible}),hits AS MATERIALIZED(SELECT id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission=? AND id IN(SELECT native_id FROM eligible)) SELECT e.source_id,MIN(h.distance) distance FROM hits h CROSS JOIN ${store} e ON e.id=json_extract(h.id,'$[0]') GROUP BY e.source_id ORDER BY distance,e.source_id LIMIT ?`,
+							)
+							.all(partition, projection, ...eligibleArgs, new Float32Array(query), limit + headroom, partition, limit);
 			for (const hit of hits) {
 				if (typeof hit.source_id !== "string" || typeof hit.distance !== "number")
 					throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
