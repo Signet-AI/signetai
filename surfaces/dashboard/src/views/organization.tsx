@@ -226,10 +226,7 @@ function TeamsSection({
 }) {
 	const [selected, setSelected] = useState<string | null>(null);
 	return (
-		<OrganizationResource<{ groups: readonly OrganizationGroup[] }>
-			path="/api/org/groups"
-			empty={(data) => !data.groups.some((group) => admin || groupIds.includes(group.id))}
-		>
+		<OrganizationResource<{ groups: readonly OrganizationGroup[] }> path="/api/org/groups">
 			{(data, refresh) => (
 				<div className="flex flex-col gap-6">
 					{selected ? (

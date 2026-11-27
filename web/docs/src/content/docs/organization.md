@@ -64,7 +64,9 @@ Run the displayed `signet login` and `signet connect` commands on your own compu
 - **Readonly** can recall.
 - **Compliance** is an additional flag, not a role. It adds `classify` and `audit`; it does not bypass classification audiences.
 
-Groups are teams. Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
+Groups are teams. The Teams page's empty state walks new owners through creating a team, adding members, and creating a team agent. An organization administrator creates the team; its owners manage membership and shared agents. SSO-synced teams can appear automatically.
+
+Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
 
 ## Agents and attribution
 

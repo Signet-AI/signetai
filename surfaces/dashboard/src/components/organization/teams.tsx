@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Panel } from "@/components/shell/panel";
 import { displayLabel } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import type {
@@ -118,6 +119,18 @@ export function TeamDirectory({
 	groups: readonly OrganizationGroup[];
 	onSelect: (id: string) => void;
 }) {
+	if (groups.length === 0)
+		return (
+			<OrganizationBlock title="Get your team started">
+				<Panel
+					result={{ data: groups, status: 200, error: null }}
+					empty
+					emptyMessage="Create a team, add members, then create a team agent. Your organization administrator can create the team and name its owners. Team owners can then manage membership and create a shared agent. If your organization uses SSO group sync, your teams may appear here automatically."
+				>
+					{() => null}
+				</Panel>
+			</OrganizationBlock>
+		);
 	return (
 		<OrganizationBlock title="Team directory">
 			<OrganizationTable columns={["Team", "Description", "Membership"]}>
