@@ -47,7 +47,9 @@ The summary is backed by durable audit records and survives daemon restarts. It 
 
 `POST /api/auth/session` exchanges a personal API key supplied as a bearer credential for HttpOnly browser-session and CSRF cookies. The JSON response contains only `{ user, expiresAt, csrf }`. Shared, connector, and legacy keys cannot use this exchange. Do not persist the pasted key in browser storage.
 
-The daemon stores the parent-key binding and issuance permission, agent, project, and expiry ceilings in the session. Every request checks the live parent key and user; revocation, expiration, and permission narrowing take effect on the next request. Extending or widening the key does not widen an existing browser session. Sliding expiry and dashboard handoff preserve these ceilings, including across daemon restarts. Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations.
+The daemon stores the parent-key binding and issuance permission, agent, project, and expiry ceilings in the session. Every request checks the live parent key and user; revocation, expiration, and permission narrowing take effect on the next request. Extending or widening the key does not widen an existing browser session. Sliding expiry and dashboard handoff preserve these ceilings, including across daemon restarts. Device approval requires a direct user session, not an API key or a key-derived cookie. The approved device session keeps the approver's permission ceiling through token exchange, refresh, and dashboard handoff; later role promotions do not widen it.
+
+Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations.
 
 ## Dashboard handoff
 

@@ -88,6 +88,44 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("B1 bearer keys cannot approve device authorizations", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "recall only",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		const flow = await (await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "evil" }, "")).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, key.secret))
+				.status,
+		).toBe(403);
+		expect((await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).status).toBe(428);
+	});
+	test("B1 device sessions retain the approving session permission ceiling through refresh", async () => {
+		await claim();
+		const bob = await member("ceiling-bob");
+		const before = await (await call("/api/auth/whoami", "GET", undefined, bob.token)).json();
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Laptop" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, bob.token))
+				.status,
+		).toBe(200);
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin" });
+		const login = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+		expect((await (await call("/api/auth/whoami", "GET", undefined, login.accessToken)).json()).permissions).toEqual(
+			before.permissions,
+		);
+		const refreshed = await (await call("/api/auth/refresh", "POST", { refreshToken: login.refreshToken }, "")).json();
+		expect(
+			(await (await call("/api/auth/whoami", "GET", undefined, refreshed.accessToken)).json()).permissions,
+		).toEqual(before.permissions);
+	});
+
 	test("SSO configuration refuses narrowed authority before secret access and never publishes missing secrets", async () => {
 		await claim();
 		const alice = await member("sso-alice");

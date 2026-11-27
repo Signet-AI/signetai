@@ -354,14 +354,28 @@ export async function deviceInfo(userCode: string) {
 	return row;
 }
 export async function deviceApprove(p: Principal, input: unknown) {
-	if (p.sourceKeyId) throw new IdentityError(403, "org_policy", "Key-derived browser sessions cannot approve devices");
+	if (p.credential.kind !== "session" || p.sourceKeyId)
+		throw new IdentityError(403, "org_policy", "Requires an interactive user session");
 	const data = z.object({ userCode: text, decision: z.enum(["approve", "deny"]) }).parse(input);
 	const row = await deviceInfo(data.userCode);
 	if (row.status !== "pending") throw new IdentityError(409, "already_decided");
 	const now = new Date().toISOString();
 	const deviceId = id("dev");
 	const org = await readOrganization();
-	const session = sessionMaterial(p.userId ?? "", row.client, deviceId, org);
+	const approver = await organizationQuery<SessionRow | null>(
+		statement("SELECT * FROM auth_sessions WHERE id=?", [p.sessionId], "get"),
+	);
+	if (!approver) throw new IdentityError(401, "invalid_credential");
+	await resolveSessionPrincipal(approver, org);
+	const session = sessionMaterial(requireUser(p).userId, row.client, deviceId, org, {
+		sourceKeyId: null,
+		ceiling: {
+			permissions: [...p.permissions],
+			agentId: p.boundAgentId,
+			projects: p.allowedProjects ? [...p.allowedProjects] : null,
+			expiresAt: approver.refresh_expires_at ?? approver.access_expires_at,
+		},
+	});
 	const writes: DbOwnerStatement[] = [
 		{
 			...statement(
@@ -417,7 +431,7 @@ export async function deviceToken(input: unknown) {
 	if (!session || session.revoked_at) throw new IdentityError(401, "revoked");
 	const user = await activeUser(row.user_id, session.device_id);
 	const org = await readOrganization();
-	const material = sessionMaterial(user.id, row.client, session.device_id, org);
+	const material = sessionMaterial(user.id, row.client, session.device_id, org, sourceSessionBinding(session));
 	await organizationWrite(
 		[
 			{
