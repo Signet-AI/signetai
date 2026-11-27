@@ -9,6 +9,7 @@ import {
 } from "../../../../libs/sdk/src/node.js";
 
 export interface CliTargetOptions {
+	readonly json?: boolean;
 	readonly local?: boolean;
 	readonly org?: boolean;
 	readonly url?: string;
@@ -80,6 +81,7 @@ function registerTargetFlags(command: Command): void {
 	command.enablePositionalOptions();
 	const inherited = command.parent?.opts<CliTargetOptions>();
 	for (const [key, flags, description] of [
+		["json", "--json", "Use JSON where supported and structure command errors"],
 		["org", "--org", "Use the signed-in organization"],
 		["local", "--local", "Use the local workspace"],
 		["url", "--url <url>", "Override the instance URL"],
@@ -96,8 +98,6 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 	selected = undefined;
 	transport = undefined;
 	selectedAgent = undefined;
-	if (!program.options.some((option) => option.long === "--json"))
-		program.option("--json", "Use JSON where supported and structure command errors");
 	registerTargetFlags(program);
 	program.hook("preAction", async (_root, command) => {
 		for (const name of ["json", "nonInteractive"]) {
