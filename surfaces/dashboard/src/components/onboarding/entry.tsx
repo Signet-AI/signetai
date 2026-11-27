@@ -3,11 +3,12 @@ import { type ReactNode, useState } from "react";
 import { AuthField, AuthPage } from "@/components/shell/auth-entry";
 import { Button } from "@/components/ui/button";
 
-function instanceOrigin(input: string): string | null {
+export function instanceOrigin(input: string): string | null {
 	const url = attempt(() => new URL(input));
 	if (
 		!url ||
 		!["https:", "http:"].includes(url.protocol) ||
+		!/^[a-z\d.:[\]-]+$/i.test(url.hostname) ||
 		url.username ||
 		url.password ||
 		url.search ||
