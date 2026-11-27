@@ -5,6 +5,63 @@ import { OrgDaemon } from "./daemon";
 import { Fixture } from "./fixture";
 import { record, request, success, text, until } from "./http";
 
+test("same import bytes do not probe another author's hidden label set", async () => {
+	const daemon = await OrgDaemon.create();
+	try {
+		const fixture = await Fixture.create(daemon, "single", false);
+		const carol = fixture.user("carol");
+		const alice = fixture.user("alice");
+		const transcript = async (bearer: string, classificationId?: string) => {
+			const created = success(
+				await request(daemon.origin, "/api/sources/imports", { bearer }, "POST", {
+					classificationId,
+					files: [{ name: "oracle.jsonl" }],
+				}),
+				"create oracle import",
+			);
+			if (!Array.isArray(created.files)) throw new Error("missing files");
+			const response = await fetch(
+				`${daemon.origin}/api/sources/imports/${text(created.id)}/files/${text(record(created.files[0]).id)}`,
+				{
+					method: "PUT",
+					headers: { authorization: `Bearer ${bearer}`, "content-type": "application/octet-stream" },
+					body: `${JSON.stringify({ source: "signet", id: "oracle", harness: "codex", session_key: "oracle", messages: [{ role: "user", content: "confidential oracle" }] })}\n`,
+					signal: AbortSignal.timeout(30_000),
+				},
+			);
+			return { status: response.status, body: record(await response.json()) };
+		};
+		const document = async (bearer: string, classificationId?: string) => {
+			const form = new FormData();
+			form.set("files", new File(["confidential oracle document"], "oracle.md", { type: "text/markdown" }));
+			if (classificationId) form.set("classificationId", classificationId);
+			const response = await fetch(`${daemon.origin}/api/sources/import`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${bearer}` },
+				body: form,
+				signal: AbortSignal.timeout(30_000),
+			});
+			return { status: response.status, body: record(await response.json()) };
+		};
+		for (const upload of [transcript, document]) {
+			const hidden = await upload(text(carol.session.bearer), fixture.hrId);
+			expect(hidden.status, JSON.stringify(hidden.body)).toBe(201);
+			const ownConflict = await upload(text(carol.session.bearer));
+			expect(ownConflict.status).toBe(409);
+			const outsider = await upload(text(alice.session.bearer));
+			expect(outsider.status, JSON.stringify(outsider.body)).toBe(201);
+			const repeat = await upload(text(alice.session.bearer));
+			expect(repeat.status).toBe(201);
+			const source = (body: Record<string, unknown>) =>
+				Array.isArray(body.files) ? record(body.files[0]).sourceId : body.sourceId;
+			expect(source(repeat.body)).toBe(source(outsider.body));
+			expect(source(outsider.body)).not.toBe(source(hidden.body));
+		}
+	} finally {
+		await daemon.dispose();
+	}
+}, 120_000);
+
 test("classified imports stay hidden from admission through worker completion", async () => {
 	const daemon = await OrgDaemon.create();
 	let snapshot: Database | undefined;

@@ -53,6 +53,15 @@ export interface ImportJobCreation {
 	readonly actor?: ClassificationActor;
 }
 export type ImportClassificationRequest =
+	| {
+			readonly op: "import-identity";
+			readonly agentId: string;
+			readonly author: WriteAuthor;
+			readonly actor?: ClassificationActor;
+			readonly classificationId?: string;
+			readonly jobId?: string;
+			readonly ownSourceIds: readonly string[];
+	  }
 	| { readonly op: "import-create"; readonly input: ImportJobCreation }
 	| {
 			readonly op: "import-bind";

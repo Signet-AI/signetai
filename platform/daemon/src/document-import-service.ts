@@ -1,12 +1,7 @@
+import { resolveImportSourceIdentity } from "./import-source-identity";
 import { randomUUID } from "node:crypto";
 import { importClassificationRequest, type ClassificationActor } from "./classifications";
-import {
-	addImportedSource,
-	deterministicImportedSourceId,
-	loadSourcesConfig,
-	markSourceIndexed,
-	removeSourceIfGeneration,
-} from "@signet/core";
+import { addImportedSource, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
@@ -100,17 +95,15 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 	const agentsDir = input.workspaceRoot ?? process.env.SIGNET_PATH;
 	const agentId = input.agentId ?? resolveDaemonAgentId();
 	const duplicateMode = input.duplicateMode ?? "skip";
-	const duplicateSource = loadSourcesConfig(agentsDir).sources.find(
-		(source) =>
-			source.kind === "import" &&
-			source.providerSettings?.contentHash === normalized.value.contentHash &&
-			source.providerSettings?.agentId === agentId,
-	);
+	const identity = await resolveImportSourceIdentity({
+		...input,
+		agentId,
+		contentHash: normalized.value.contentHash,
+		workspaceRoot: agentsDir,
+	});
+	const duplicateSource = identity.duplicate;
 	const replacedSource = duplicateMode === "replace" ? duplicateSource : undefined;
-	const sourceId =
-		duplicateMode === "reimport" || replacedSource
-			? `imp_${randomUUID()}`
-			: (duplicateSource?.id ?? deterministicImportedSourceId(normalized.value.contentHash, agentId));
+	const sourceId = duplicateMode === "reimport" || replacedSource ? `imp_${randomUUID()}` : identity.sourceId;
 	await importClassificationRequest({
 		op: "import-document",
 		input: {
@@ -130,6 +123,7 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 				? { agentId, authorUserId: input.author.userId, authorCredential: input.author.credential }
 				: undefined,
 			fileName: normalized.value.fileName,
+			classificationKey: identity.classificationKey,
 			contentHash: normalized.value.contentHash,
 			format: normalized.value.format,
 			agentId,

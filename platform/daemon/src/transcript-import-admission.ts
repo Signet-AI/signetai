@@ -1,10 +1,6 @@
+import { resolveImportSourceIdentity } from "./import-source-identity";
 import { createHash, randomUUID } from "node:crypto";
-import {
-	addImportedSource,
-	deterministicImportedSourceId,
-	loadSourcesConfig,
-	resolveDefaultBasePath,
-} from "@signet/core";
+import { addImportedSource, resolveDefaultBasePath } from "@signet/core";
 import type { ClassificationActor } from "./classifications";
 import type { WriteAuthor } from "./auth/audit-owner";
 import {
@@ -64,16 +60,14 @@ export async function stageTranscriptImport(
 		}
 		const sealed = await sealTranscriptUpload(scope);
 		if (!sealed.content_hash) throw new Error("transcript import did not seal");
-		const duplicate = loadSourcesConfig(input.workspaceRoot ?? resolveDefaultBasePath()).sources.find(
-			(source) =>
-				source.kind === "import" &&
-				source.providerSettings?.agentId === input.agentId &&
-				source.providerSettings?.contentHash === sealed.content_hash,
-		);
-		const sourceId =
-			input.duplicateMode === "reimport"
-				? `imp_${randomUUID()}`
-				: (duplicate?.id ?? deterministicImportedSourceId(sealed.content_hash, input.agentId));
+		const identity = await resolveImportSourceIdentity({
+			...input,
+			jobId,
+			contentHash: sealed.content_hash,
+			workspaceRoot: input.workspaceRoot ?? resolveDefaultBasePath(),
+		});
+		const duplicate = identity.duplicate;
+		const sourceId = input.duplicateMode === "reimport" ? `imp_${randomUUID()}` : identity.sourceId;
 		await bindTranscriptSource(scope, sourceId, duplicate?.id);
 		const added = addImportedSource(
 			{
@@ -83,6 +77,7 @@ export async function stageTranscriptImport(
 					authorUserId: input.author.userId,
 					authorCredential: input.author.credential,
 				},
+				classificationKey: identity.classificationKey,
 				contentHash: sealed.content_hash,
 				format: "jsonl",
 				agentId: input.agentId,

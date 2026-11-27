@@ -1,3 +1,4 @@
+import { resolveImportSourceIdentity } from "../import-source-identity";
 import { encodeTranscriptExport } from "../projection-worker-client";
 import { namedReadOperation } from "../named-content-reads";
 import { readPointerMiddleware } from "../read-pointers";
@@ -10,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
 	type buildExportTranscriptRecord,
-	deterministicImportedSourceId,
 	loadSourcesConfig,
 	resolveDefaultBasePath,
 } from "@signet/core";
@@ -406,19 +406,21 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 					source.providerSettings?.agentId === upload.agentId &&
 					source.providerSettings?.importKey === importKey,
 			);
-			const duplicate = sources.find(
-				(source) =>
-					source.kind === "import" &&
-					source.providerSettings?.agentId === upload.agentId &&
-					source.providerSettings?.contentHash === file.content_hash,
-			);
+			const identity = await resolveImportSourceIdentity({
+				agentId: upload.agentId,
+				jobId: upload.jobId,
+				author: c.get("author"),
+				contentHash: file.content_hash,
+				workspaceRoot: resolveDefaultBasePath(),
+			});
+			const duplicate = identity.duplicate;
 			const sourceId =
 				file.state === "ready"
 					? file.source_id
 					: (replay?.id ??
 						(file.duplicate_mode === "reimport"
 							? `import:${file.content_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
-							: (duplicate?.id ?? deterministicImportedSourceId(file.content_hash, upload.agentId))));
+							: identity.sourceId));
 			const releaseSourceMutation = beginSourceMutation(sourceId);
 			if (releaseSourceMutation === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
 			try {
@@ -433,6 +435,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 									authorCredential: c.get("author").credential,
 								}
 							: undefined,
+						classificationKey: identity.classificationKey,
 						contentHash: file.content_hash,
 						format: "jsonl",
 						agentId: upload.agentId,

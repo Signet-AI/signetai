@@ -1124,6 +1124,30 @@ export function assertImportSourceLabelsInTx(
 	return expected;
 }
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
+	if (request.op === "import-identity") {
+		if (request.ownSourceIds.length > 1000) throw new Error("invalid_import");
+		const job = request.jobId
+			? db
+					.prepare("SELECT labels_json,author_user_id FROM source_import_jobs WHERE id=? AND agent_id=?")
+					.get(request.jobId, request.agentId)
+			: null;
+		if (request.jobId && (!job || job.author_user_id !== request.author.userId)) throw new Error("permission");
+		const labels = job
+			? z.array(z.string()).parse(JSON.parse(z.string().parse(job.labels_json)))
+			: importLabels(db, request.agentId, request.author, request.actor, request.classificationId);
+		assertImportAudience(db, labels, request.author.userId);
+		for (const sourceId of request.ownSourceIds) {
+			const actual = [...classificationsForWrite(db, { agentId: request.agentId, sourceId })].sort();
+			const readable =
+				request.author.userId === null ||
+				actual.every((label) =>
+					matches(db, "classification_audience", label, { local: false, userId: request.author.userId, groupIds: [] }),
+				);
+			if (readable && JSON.stringify(actual) !== JSON.stringify(labels))
+				throw new Error("import_classification_conflict");
+		}
+		return JSON.stringify([...labels].sort());
+	}
 	if (request.op === "import-create")
 		return transaction(db, () => {
 			const input = request.input;

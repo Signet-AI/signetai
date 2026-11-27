@@ -160,6 +160,7 @@ export interface AddNotionSourceInput extends SourceWriteIdentityInput {
 export type ImportedSourceDuplicateMode = "skip" | "replace" | "reimport";
 
 export interface AddImportedSourceInput extends SourceWriteIdentityInput {
+	readonly classificationKey?: string;
 	readonly importKey?: string;
 	readonly fileName: string;
 	readonly contentHash: string;
@@ -353,6 +354,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 			(source) =>
 				source.kind === "import" &&
 				source.providerSettings?.contentHash === contentHash &&
+				source.providerSettings?.classificationKey === input.classificationKey &&
 				(agentId === undefined || source.providerSettings?.agentId === agentId),
 		);
 		if (duplicate && mode === "skip") {
@@ -381,6 +383,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				fileName: basename(fileName),
 				contentHash,
 				format,
+				...(input.classificationKey === undefined ? {} : { classificationKey: input.classificationKey }),
 				...(input.importKey === undefined ? {} : { importKey: input.importKey }),
 				...(agentId === undefined ? {} : { agentId }),
 			},
