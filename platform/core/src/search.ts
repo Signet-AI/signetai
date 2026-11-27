@@ -338,20 +338,20 @@ function admittedVectorSearch(
 		args.push(options.project);
 	}
 	const predicate = clauses.length ? clauses.join(" AND ") : "1";
+	const standard =
+		options.currentOnly === true &&
+		options.memoryScope === null &&
+		!options.type &&
+		!options.tags &&
+		options.who === undefined &&
+		!options.pinned &&
+		options.importanceMin === undefined &&
+		options.since === undefined &&
+		options.until === undefined &&
+		options.project === undefined;
 	if (partitioned.ids.some((id) => (partitioned.sizes.get(id) ?? 0) > 64)) {
 		const results = new Map<string, number>();
 		for (const partition of partitioned.ids) {
-			const standard =
-				options.currentOnly === true &&
-				options.memoryScope === null &&
-				!options.type &&
-				!options.tags &&
-				options.who === undefined &&
-				!options.pinned &&
-				options.importanceMin === undefined &&
-				options.since === undefined &&
-				options.until === undefined &&
-				options.project === undefined;
 			const statistics = db
 				.prepare(
 					"SELECT row_count,recall_indexed_count,recall_eligible_count,recall_kind FROM vector_shard_keys WHERE id=?",
@@ -398,11 +398,17 @@ function admittedVectorSearch(
 			.slice(0, limit);
 	}
 	if (!scan) throw new VectorAdmissionLimitError("vector_shard_native_unavailable");
-	const rows = db
-		.prepare(
-			`WITH admitted AS MATERIALIZED(SELECT value id FROM json_each(?)),members AS MATERIALIZED(SELECT r.rowid native_rowid,r.chunk_id,r.chunk_offset,s.partition_id,k.row_count,e.source_id,e.source_type,e.agent_id FROM admitted a CROSS JOIN vector_shard_members s ON s.partition_id=a.id AND s.projection=? CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN vector_shard_keys k ON k.id=s.partition_id),memory_rows AS MATERIALIZED(SELECT * FROM members WHERE source_type='memory'),eligible AS MATERIALIZED(SELECT p.native_rowid FROM memory_rows p CROSS JOIN memories m ON m.id=p.source_id AND m.agent_id=p.agent_id WHERE ${predicate}) SELECT CAST(p.native_rowid AS TEXT) native_rowid,p.chunk_id,p.chunk_offset,p.source_id,CASE WHEN eligible.native_rowid IS NULL THEN 0 ELSE 1 END eligible,c.vector singleton FROM members p LEFT JOIN eligible ON eligible.native_rowid=p.native_rowid LEFT JOIN vector_shard_singletons c ON p.row_count=1 AND c.partition_id=p.partition_id`,
-		)
-		.all(JSON.stringify(partitioned.ids), projection, ...args);
+	const rows = standard
+		? db
+				.prepare(
+					`WITH admitted AS MATERIALIZED(SELECT value id FROM json_each(?)) SELECT CAST(r.rowid AS TEXT) native_rowid,r.chunk_id,r.chunk_offset,f.memory_id source_id,CASE WHEN f.is_current=1 AND f.memory_scope IS NULL${options.excludeAggregateRecall ? " AND f.is_aggregate=0" : ""} THEN 1 ELSE 0 END eligible,c.vector singleton FROM admitted a CROSS JOIN vector_shard_members s ON s.partition_id=a.id AND s.projection=? CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) CROSS JOIN vector_shard_keys k ON k.id=s.partition_id CROSS JOIN vector_shard_recall_rows f ON f.partition_id=s.partition_id AND f.embedding_id=s.embedding_id LEFT JOIN vector_shard_singletons c ON k.row_count=1 AND c.partition_id=k.id`,
+				)
+				.all(JSON.stringify(partitioned.ids), projection)
+		: db
+				.prepare(
+					`WITH admitted AS MATERIALIZED(SELECT value id FROM json_each(?)),members AS MATERIALIZED(SELECT r.rowid native_rowid,r.chunk_id,r.chunk_offset,s.partition_id,k.row_count,e.source_id,e.source_type,e.agent_id FROM admitted a CROSS JOIN vector_shard_members s ON s.partition_id=a.id AND s.projection=? CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN vector_shard_keys k ON k.id=s.partition_id),memory_rows AS MATERIALIZED(SELECT * FROM members WHERE source_type='memory'),eligible AS MATERIALIZED(SELECT p.native_rowid FROM memory_rows p CROSS JOIN memories m ON m.id=p.source_id AND m.agent_id=p.agent_id WHERE ${predicate}) SELECT CAST(p.native_rowid AS TEXT) native_rowid,p.chunk_id,p.chunk_offset,p.source_id,CASE WHEN eligible.native_rowid IS NULL THEN 0 ELSE 1 END eligible,c.vector singleton FROM members p LEFT JOIN eligible ON eligible.native_rowid=p.native_rowid LEFT JOIN vector_shard_singletons c ON p.row_count=1 AND c.partition_id=p.partition_id`,
+				)
+				.all(JSON.stringify(partitioned.ids), projection, ...args);
 	if (rows.length !== rowCount) throw new VectorAdmissionLimitError("vector_shard_repair_pending");
 	const buffer = (value: unknown): Buffer => {
 		if (!(value instanceof Uint8Array)) throw new VectorAdmissionLimitError("vector_shard_invalid_payload");
