@@ -428,13 +428,15 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
-				if (new URL(req.url).pathname === "/health") return new Response(null, { status: 200 });
+				if (new URL(req.url).pathname === "/health" || (req.method === "HEAD" && new URL(req.url).pathname === "/"))
+					return new Response(null, { status: 200 });
 				bodies.push(await req.json());
 				return Response.json({ id: "memory" });
 			},
 		});
 		servers.push(server);
 		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+		expect((await fetch(process.env.SIGNET_DAEMON_URL, { method: "HEAD" })).status).toBe(200);
 		const commands = new Map<string, import("./src/types").PiCommandHandler>();
 		const tools = new Map<string, import("./src/types").PiToolDefinition>();
 		const ui = {
