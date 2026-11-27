@@ -28,6 +28,8 @@ Submit the token to `POST /api/org/claim` with an organization name and the firs
 
 The token is consumed once. Claiming marks the existing `default` agent as the organization agent, creates the administrator's personal agent, and starts a browser session. Existing evidence stays in place.
 
+Upgrading also repairs legacy child ownership, including memory embeddings, from each unambiguous parent in bounded batches. This restores vectors that previously had no recorded agent without assigning them to `default`. Missing or conflicting parents remain unresolved; the local database records repair counts in `legacy_child_scope_repairs`. Unknown historical authors stay unknown. A NULL compartment is still public, not an indication that an author or classification should be guessed.
+
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
 ## Classified imports

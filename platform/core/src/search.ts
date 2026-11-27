@@ -286,8 +286,9 @@ export function vectorSearchWithMetadata(
 					CROSS JOIN memories m ON m.id=e.source_id
 					WHERE 1=1${filter}${scope.sql}${embeddingScope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
 						.all(...params);
-					const selectiveAtBackendLimit = rows.length < limit && requested === maxKnnWindow && requested < size;
-					if (selectiveAtBackendLimit) {
+					const selectiveAdmission =
+						rows.length < limit && requested < size && requested >= Math.min(maxKnnWindow, limit * 8);
+					if (selectiveAdmission) {
 						params[1] = limit;
 						rows = db
 							.prepare(`SELECT e.source_id,v.distance FROM ${table} v
@@ -299,7 +300,7 @@ export function vectorSearchWithMetadata(
 							) ORDER BY v.distance,e.source_id LIMIT ?`)
 							.all(...params);
 					}
-					if (selectiveAtBackendLimit || rows.length >= limit || requested >= size) {
+					if (selectiveAdmission || rows.length >= limit || requested >= size) {
 						for (const row of rows)
 							if (typeof row.source_id === "string" && typeof row.distance === "number")
 								results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });

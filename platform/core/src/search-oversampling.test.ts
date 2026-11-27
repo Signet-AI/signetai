@@ -20,7 +20,7 @@ import { expect, test } from "bun:test";
 import { findSqliteVecExtension } from "./database";
 import { vectorSearchWithMetadata } from "./search";
 
-test("exact scoped KNN starts at four times k and doubles only until eligible hits or exhaustion", () => {
+test("exact scoped KNN bounds oversampling before selective admission", () => {
 	const db = new Database(":memory:");
 	try {
 		const extension = findSqliteVecExtension();
@@ -62,7 +62,7 @@ test("exact scoped KNN starts at four times k and doubles only until eligible hi
 			readScope: { reach: { kind: "own", agentId: "alice" }, compartments: [], projects: null },
 		});
 		expect(result.results.map((row) => row.id)).toEqual(["v40", "v41"]);
-		expect(probes).toEqual([8, 16, 32, 50]);
+		expect(probes).toEqual([8, 16, 2]);
 		expect(countedTables).toEqual(["vec_embeddings_rowids"]);
 		expect(result.completeness).toBe("complete");
 	} finally {
