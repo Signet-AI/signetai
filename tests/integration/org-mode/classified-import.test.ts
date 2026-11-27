@@ -5,6 +5,52 @@ import { OrgDaemon } from "./daemon";
 import { Fixture } from "./fixture";
 import { record, request, success, text, until } from "./http";
 
+test("different destination labels do not share truncated source identities", async () => {
+	const daemon = await OrgDaemon.create();
+	try {
+		const fixture = await Fixture.create(daemon, "single", false);
+		const author = fixture.user("carol"),
+			outsider = fixture.user("alice");
+		await daemon.stop();
+		const db = new Database(join(daemon.workspace, "data/signet.db"));
+		try {
+			for (const [classificationId, userId] of [
+				["cls_collision_27213", author.id],
+				["cls_collision_48862", outsider.id],
+			]) {
+				db.query("INSERT INTO classifications(id,name,created_at) VALUES(?,?,?)").run(
+					classificationId,
+					classificationId,
+					"2026",
+				);
+				db.query(
+					"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES(?,'user',?)",
+				).run(classificationId, userId);
+			}
+		} finally {
+			db.close();
+		}
+		await daemon.start();
+		for (const [classificationId, bearer] of [
+			["cls_collision_27213", text(author.session.bearer)],
+			["cls_collision_48862", text(outsider.session.bearer)],
+		]) {
+			const form = new FormData();
+			form.set("files", new File(["source identity collision probe"], "collision.md", { type: "text/markdown" }));
+			form.set("classificationId", classificationId);
+			const response = await fetch(`${daemon.origin}/api/sources/import`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${bearer}` },
+				body: form,
+				signal: AbortSignal.timeout(30_000),
+			});
+			expect(response.status, await response.text()).toBe(201);
+		}
+	} finally {
+		await daemon.dispose();
+	}
+}, 120_000);
+
 test("same import bytes do not probe another author's hidden label set", async () => {
 	const daemon = await OrgDaemon.create();
 	try {

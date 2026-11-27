@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { deterministicImportedSourceId, loadSourcesConfig } from "@signet/core";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { importClassificationRequest, type ClassificationActor } from "./classifications";
@@ -39,9 +40,10 @@ export async function resolveImportSourceIdentity(input: {
 		duplicate,
 		sourceId:
 			duplicate?.id ??
-			deterministicImportedSourceId(
-				input.contentHash,
-				classificationKey === undefined ? input.agentId : JSON.stringify([input.agentId, classificationKey]),
-			),
+			(classificationKey === undefined
+				? deterministicImportedSourceId(input.contentHash, input.agentId)
+				: `import:${createHash("sha256")
+						.update(JSON.stringify([input.contentHash, input.agentId, classificationKey]))
+						.digest("hex")}`),
 	};
 }
