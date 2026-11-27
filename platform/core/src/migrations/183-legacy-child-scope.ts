@@ -14,6 +14,7 @@ interface Parent {
 	readonly key: string;
 	readonly reference: string;
 	readonly when?: string;
+	readonly alternative?: boolean;
 }
 interface Child {
 	readonly table: string;
@@ -25,6 +26,13 @@ const children: readonly Child[] = [
 		{ table, when: "child.source_type='memory'", parents: [{ table: "memories", key: "id", reference: "source_id" }] },
 		{ table, when: "child.source_type='skill'", parents: [{ table: "entities", key: "id", reference: "source_id" }] },
 	]),
+	{
+		table: "session_checkpoints",
+		parents: [
+			{ table: "session_transcripts", key: "session_key", reference: "session_key", alternative: true },
+			{ table: "session_claims", key: "session_key", reference: "session_key", alternative: true },
+		],
+	},
 	{ table: "memory_hints", parents: [{ table: "memories", key: "id", reference: "memory_id" }] },
 	{ table: "memory_history", parents: [{ table: "memories", key: "id", reference: "memory_id" }] },
 	{
@@ -83,7 +91,11 @@ export function up(db: MigrationDb): void {
 		const present = fields(child.table);
 		if (!present.has("agent_id") || !present.has("compartment_id")) continue;
 		if (child.when && [...child.when.matchAll(/child\.(\w+)/g)].some((match) => !present.has(match[1] ?? ""))) continue;
-		if (child.parents.some((parent) => !present.has(parent.reference) || !fields(parent.table).has(parent.key)))
+		if (
+			child.parents.some(
+				(parent) => !present.has(parent.reference) || (!parent.alternative && !fields(parent.table).has(parent.key)),
+			)
+		)
 			continue;
 		let cursor = 0;
 		let examined = 0;
@@ -101,6 +113,7 @@ export function up(db: MigrationDb): void {
 				cursor = row.cursor;
 				examined++;
 				const parents = child.parents.flatMap((parent) => {
+					if (parent.alternative && !fields(parent.table).has(parent.key)) return [];
 					if (parent.when && !db.prepare(`SELECT 1 FROM ${child.table} WHERE rowid=? AND ${parent.when}`).get(cursor))
 						return [];
 					const label = fields(parent.table).has("compartment_id") ? "compartment_id" : "NULL AS compartment_id";
@@ -108,6 +121,7 @@ export function up(db: MigrationDb): void {
 					const matches = db
 						.prepare(`SELECT ${owner},${label} FROM ${parent.table} WHERE ${parent.key}=? LIMIT 2`)
 						.all(row[parent.reference]);
+					if (matches.length === 0 && parent.alternative) return [];
 					return matches.length === 1 ? matches : [{ agent_id: null, compartment_id: null }];
 				});
 				const agents = new Set(parents.map((parent) => parent.agent_id));
