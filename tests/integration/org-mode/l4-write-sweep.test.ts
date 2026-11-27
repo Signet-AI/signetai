@@ -124,7 +124,11 @@ test("A16 actual HTTP writes reject classified destinations without persisted si
 				"x-signet-session-key": common.sessionKey,
 			});
 			assert.equal(reply.status, 403, `${path}: ${JSON.stringify(reply.body)}`);
-			assert.deepEqual(reply.body, { error: "classified destination", reason: "classified_destination" });
+			assert.deepEqual(reply.body, {
+				error: "classified destination",
+				reason: "classified_destination",
+				required: "classified destination",
+			});
 			assert.deepEqual(snapshot(), before, `${path} wrote persisted state`);
 		}
 		const form = new FormData();
