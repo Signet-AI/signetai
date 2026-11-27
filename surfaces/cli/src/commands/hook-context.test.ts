@@ -30,12 +30,15 @@ function transcript(lines: unknown[]): string {
 	return path;
 }
 
+const noUpload = async () => ({ status: "unchanged" as const });
+
 async function run(args: string[], stdin: Record<string, unknown>) {
 	const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
 	console.log = () => undefined;
 	const program = new Command();
 	registerHookCommands(program, {
 		AGENTS_DIR: "/tmp/agents",
+		uploadTranscriptFile: noUpload,
 		fetchDaemonResult: async (path, opts) => {
 			seen.push({ path, body: JSON.parse(String(opts?.body ?? "{}")) });
 			return { ok: true, data: { wake: false, reason: "timeout", inject: "" } } as never;

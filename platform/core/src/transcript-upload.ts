@@ -26,6 +26,7 @@ export interface TranscriptUploadClient {
 	readonly fetch: (url: string, init: RequestInit) => Promise<Response>;
 	readonly headers?: Readonly<Record<string, string>>;
 	readonly retryDelayMs?: number;
+	readonly signal?: AbortSignal;
 }
 
 export type TranscriptUploadOutcome =
@@ -172,12 +173,26 @@ async function sendRange(
 
 async function fetchWithRetry(client: TranscriptUploadClient, url: string, init: RequestInit): Promise<Response> {
 	for (let tries = 1; ; tries++) {
-		const response = await client.fetch(url, init);
+		const response = await client.fetch(url, { ...init, signal: client.signal });
 		if (response.status !== 503 || tries >= MAX_UPLOAD_ATTEMPTS) return response;
 		await response.body?.cancel();
-		const delay = retryAfterMs(response) ?? client.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-		await new Promise((resolve) => setTimeout(resolve, delay));
+		await wait(retryAfterMs(response) ?? client.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS, client.signal);
 	}
+}
+
+function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve, reject) => {
+		signal?.throwIfAborted();
+		const abort = (): void => {
+			clearTimeout(timer);
+			reject(signal?.reason);
+		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", abort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", abort, { once: true });
+	});
 }
 
 function retryAfterMs(response: Response): number | undefined {

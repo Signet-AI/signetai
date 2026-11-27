@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Readable } from "node:stream";
 import { Command } from "commander";
+import type { TranscriptUploadOutcome, TranscriptUploadTarget } from "@signet/core/transcript-upload";
 import {
 	buildCodexHookOutput,
 	buildCompactionCompleteBody,
@@ -17,6 +18,7 @@ import {
 
 const prevLog = console.log;
 const hookExitCodes: number[] = [];
+const noUpload = async () => ({ status: "unchanged" as const });
 const originalExit = process.exit;
 
 beforeAll(() => {
@@ -143,7 +145,6 @@ describe("buildSessionEndBody", () => {
 			),
 		).toEqual({
 			harness: "claude-code",
-			transcriptPath: "/tmp/session.txt",
 			transcript: "user: hi\nassistant: hello",
 			sessionId: "sess-1",
 			sessionKey: "sess-1",
@@ -164,7 +165,7 @@ describe("buildSessionEndBody", () => {
 			"muse-code",
 		);
 		expect(body.lastAssistantMessage).toBe("Ultramarine noted.");
-		expect(body.transcriptPath).toBe("");
+		expect(body).not.toHaveProperty("transcriptPath");
 	});
 
 	test("preserves a distinct legacy sessionId alongside canonical sessionKey", () => {
@@ -184,7 +185,6 @@ describe("buildSessionEndBody", () => {
 			sessionId: "sess-legacy-id",
 			sessionKey: "sess-canonical-key",
 			transcript: "",
-			transcriptPath: "/tmp/session.txt",
 			runtimePath: "legacy",
 		});
 	});
@@ -381,7 +381,6 @@ describe("buildUserPromptSubmitBody", () => {
 			userMessage: "clean prompt",
 			userPrompt: "raw prompt",
 			sessionKey: "sess-2",
-			transcriptPath: "",
 			transcript: "user: hi",
 			runtimePath: "legacy",
 			lastAssistantMessage: "prior answer",
@@ -406,7 +405,6 @@ describe("buildUserPromptSubmitBody", () => {
 			userMessage: "inspect this",
 			userPrompt: "",
 			sessionKey: "child-session",
-			transcriptPath: "",
 			transcript: "",
 			agentId: "research-agent",
 			harnessAgentId: "claude-subagent",
@@ -431,7 +429,6 @@ describe("buildUserPromptSubmitBody", () => {
 			userMessage: "inspect this",
 			userPrompt: "",
 			sessionKey: "child-session",
-			transcriptPath: "",
 			transcript: "",
 			agentId: "research-agent",
 			runtimePath: "legacy",
@@ -455,7 +452,6 @@ describe("buildUserPromptSubmitBody", () => {
 			userMessage: "inspect this",
 			userPrompt: "",
 			sessionKey: "child-session",
-			transcriptPath: "",
 			transcript: "",
 			agentId: "research-agent",
 			runtimePath: "legacy",
@@ -479,7 +475,6 @@ describe("buildUserPromptSubmitBody", () => {
 			userMessage: "inspect this",
 			userPrompt: "",
 			sessionKey: "child-session",
-			transcriptPath: "",
 			transcript: "",
 			harnessAgentId: "claude-subagent",
 			runtimePath: "legacy",
@@ -496,6 +491,7 @@ describe("buildUserPromptSubmitBody", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async (path, opts) => {
 				seen.push({
 					path,
@@ -534,6 +530,7 @@ describe("buildUserPromptSubmitBody", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async () => ({
 				ok: true,
 				data: { stableSystemPrompt: "stable prefix", dynamicContext: "initial context" },
@@ -556,6 +553,7 @@ describe("buildUserPromptSubmitBody", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async (path, opts) => {
 				seen.push({ path, body: typeof opts?.body === "string" ? opts.body : "" });
 				return { ok: true, data: { inject: "peer context" } };
@@ -596,6 +594,7 @@ describe("buildUserPromptSubmitBody", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async () => ({
 				ok: true,
 				data: { inject: "recalled context" },
@@ -742,6 +741,7 @@ describe("postAction exit behavior", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async () => ({ ok: true, data: {} }),
 			readStaticIdentity: () => null,
 		});
@@ -761,6 +761,7 @@ describe("postAction exit behavior", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async () => ({
 				ok: true,
 				data: { inject: "recalled context" },
@@ -783,6 +784,7 @@ describe("postAction exit behavior", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async () => ({ ok: true, data: { memoriesSaved: 0 } }),
 			readStaticIdentity: () => null,
 		});
@@ -801,6 +803,7 @@ describe("postAction exit behavior", () => {
 		const program = new Command();
 		registerHookCommands(program, {
 			AGENTS_DIR: "/tmp/agents",
+			uploadTranscriptFile: noUpload,
 			fetchDaemonResult: async () => ({
 				ok: true,
 				data: { error: "something went wrong" },
@@ -853,6 +856,7 @@ describe("hook wake", () => {
 					const program = new Command();
 					registerHookCommands(program, {
 						AGENTS_DIR: "/tmp/agents",
+						uploadTranscriptFile: noUpload,
 						fetchDaemonResult: (async (_path: string, opts?: RequestInit & { timeout?: number }) => {
 							bodies.push(JSON.parse(typeof opts?.body === "string" ? opts.body : "{}"));
 							timeouts.push(opts?.timeout);
@@ -995,6 +999,7 @@ describe("hook stop", () => {
 			const program = new Command();
 			registerHookCommands(program, {
 				AGENTS_DIR: "/tmp/agents",
+				uploadTranscriptFile: noUpload,
 				fetchDaemonResult: (async (path: string, opts?: RequestInit & { timeout?: number }) => {
 					calls.push({
 						path,
@@ -1157,5 +1162,122 @@ describe("hook stop", () => {
 
 		expect(run.calls).toHaveLength(1);
 		expect(run.stderr.join("")).not.toBe("");
+	});
+});
+
+describe("hook transcript upload", () => {
+	interface Upload {
+		readonly target: TranscriptUploadTarget;
+		readonly path: string;
+		readonly timeoutMs: number;
+	}
+
+	type Uploader = (events: readonly string[]) => Promise<TranscriptUploadOutcome>;
+
+	const uploaded: Uploader = async () => ({ status: "uploaded", committedOffset: 2, generation: 0 });
+	const unsupported: Uploader = async () => ({ status: "unsupported" });
+
+	async function runHook(args: string[], stdin: Record<string, unknown>, upload: Uploader) {
+		const events: string[] = [];
+		const uploads: Upload[] = [];
+		const bodies: Record<string, unknown>[] = [];
+		const stderr: string[] = [];
+		console.log = () => undefined;
+		const origWrite = process.stderr.write;
+		process.stderr.write = ((chunk: unknown) => {
+			stderr.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			const program = new Command();
+			registerHookCommands(program, {
+				AGENTS_DIR: "/tmp/agents",
+				fetchDaemonResult: (async (path: string, opts?: RequestInit & { timeout?: number }) => {
+					events.push(`request ${path}`);
+					bodies.push(JSON.parse(typeof opts?.body === "string" ? opts.body : "{}"));
+					return { ok: true, data: {} };
+				}) as never,
+				uploadTranscriptFile: async (target, path, timeoutMs) => {
+					events.push("upload");
+					uploads.push({ target, path, timeoutMs });
+					return await upload(events);
+				},
+				readStaticIdentity: () => null,
+				stdin: Readable.from([Buffer.from(JSON.stringify(stdin))]),
+			});
+			await program.parseAsync(["node", "test", "hook", ...args]);
+		} finally {
+			process.stderr.write = origWrite;
+		}
+		return { events, uploads, bodies, stderr };
+	}
+
+	const ending = {
+		session_id: "sess-1",
+		transcript_path: "/tmp/session.jsonl",
+		cwd: "/repo",
+		reason: "exit",
+		signet_agent_id: "agent-7",
+	};
+
+	test("session-end uploads the transcript before it ends the session and sends no path", async () => {
+		const run = await runHook(["session-end", "-H", "claude-code"], ending, uploaded);
+		expect(run.events).toEqual(["upload", "request /api/hooks/session-end"]);
+		expect(run.uploads).toEqual([
+			{
+				target: { harness: "claude-code", sessionKey: "sess-1", agentId: "agent-7", cwd: "/repo" },
+				path: "/tmp/session.jsonl",
+				timeoutMs: 8000,
+			},
+		]);
+		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
+	});
+
+	test("session-end sends the path to a daemon without the upload route", async () => {
+		const run = await runHook(["session-end", "-H", "claude-code"], ending, unsupported);
+		expect(run.bodies[0]?.transcriptPath).toBe("/tmp/session.jsonl");
+	});
+
+	test("session-end warns and still ends the session when the upload fails", async () => {
+		const run = await runHook(["session-end", "-H", "claude-code"], ending, async () => {
+			throw new Error("daemon busy");
+		});
+		expect(run.events).toEqual(["upload", "request /api/hooks/session-end"]);
+		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
+		expect(run.stderr.join("")).toContain(
+			"[signet] transcript upload failed (daemon busy); the daemon keeps the lines it already has",
+		);
+	});
+
+	test("session-end skips the upload when the harness gives no transcript file", async () => {
+		const run = await runHook(["session-end", "-H", "codex"], { session_id: "sess-1", cwd: "/repo" }, uploaded);
+		expect(run.events).toEqual(["request /api/hooks/session-end"]);
+	});
+
+	test("user-prompt-submit uploads the transcript while it asks for context", async () => {
+		let during: string[] = [];
+		const run = await runHook(
+			["user-prompt-submit", "-H", "claude-code", "--project", "/repo"],
+			{ session_id: "sess-1", transcript_path: "/tmp/session.jsonl", cwd: "/repo", prompt: "hi" },
+			async (events) => {
+				await Bun.sleep(50);
+				during = [...events];
+				return { status: "uploaded", committedOffset: 2, generation: 0 };
+			},
+		);
+		expect(during).toContain("request /api/hooks/user-prompt-submit");
+		expect(run.uploads[0]?.timeoutMs).toBe(5000);
+		expect(run.uploads[0]?.target).toEqual({ harness: "claude-code", sessionKey: "sess-1", cwd: "/repo" });
+		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
+	});
+
+	test("pre-compaction uploads the transcript before it asks for the summary prompt", async () => {
+		const stdin = { session_id: "sess-1", transcript_path: "/tmp/session.jsonl", cwd: "/repo" };
+		const run = await runHook(["pre-compaction", "-H", "claude-code", "--project", "/repo"], stdin, uploaded);
+		expect(run.events).toEqual(["upload", "request /api/hooks/pre-compaction"]);
+		expect(run.uploads[0]?.timeoutMs).toBe(3000);
+		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
+		const old = await runHook(["pre-compaction", "-H", "claude-code", "--project", "/repo"], stdin, unsupported);
+		expect(old.bodies[0]?.transcriptPath).toBe("/tmp/session.jsonl");
 	});
 });

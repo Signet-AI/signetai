@@ -156,6 +156,7 @@ interface Sent {
 	readonly url: URL;
 	readonly headers: Headers;
 	readonly body: Uint8Array<ArrayBuffer> | null;
+	readonly signal: AbortSignal | null;
 }
 
 class FakeDaemon {
@@ -191,7 +192,7 @@ class FakeDaemon {
 		const method = init.method ?? "GET";
 		const headers = new Headers(init.headers);
 		const body = init.body instanceof Uint8Array ? new Uint8Array(init.body) : null;
-		this.sent.push({ method, url: new URL(input), headers, body });
+		this.sent.push({ method, url: new URL(input), headers, body, signal: init.signal ?? null });
 		if (method === "GET") return this.getAnswers.shift() ?? Response.json(await this.status());
 		const answer = this.patchAnswers.shift();
 		if (answer) return answer;
@@ -354,6 +355,31 @@ test("waits as long as the daemon asks before retrying", async () => {
 	const outcome = await uploadTranscript({ ...daemon.client(), retryDelayMs: 600000 }, target, source("x\n"));
 	expect(outcome).toEqual({ status: "uploaded", committedOffset: 2, generation: 0 });
 	expect(daemon.patches().length).toBe(2);
+});
+
+test("sends the client signal with every request", async () => {
+	const daemon = new FakeDaemon();
+	const signal = new AbortController().signal;
+	await uploadTranscript({ ...daemon.client(), signal }, target, source("x\n"));
+	expect(daemon.sent.map((request) => request.signal)).toEqual([signal, signal]);
+});
+
+test("stops waiting to retry when the client signal aborts", async () => {
+	const daemon = new FakeDaemon();
+	daemon.patchAnswers.push(Response.json({ error: "busy" }, { status: 503, headers: { "Retry-After": "5" } }));
+	const started = Date.now();
+	const error = await uploadTranscript(
+		{ ...daemon.client(), signal: AbortSignal.timeout(50) },
+		target,
+		source("x\n"),
+	).then(
+		() => undefined,
+		(err: unknown) => err,
+	);
+	expect(error).toBeInstanceOf(DOMException);
+	expect(error instanceof DOMException ? error.name : "").toBe("TimeoutError");
+	expect(Date.now() - started).toBeLessThan(2000);
+	expect(daemon.patches().length).toBe(1);
 });
 
 test("fails after three busy answers", async () => {
