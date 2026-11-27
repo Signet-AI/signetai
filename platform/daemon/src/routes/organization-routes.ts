@@ -1,3 +1,4 @@
+import { registerOrganizationUpgradeRoutes } from "./organization-upgrade-routes";
 import { setOrganizationSso } from "../organization-sso";
 import { contentRead } from "../content-read";
 import { resolveRouteReadScope } from "./read-scope";
@@ -141,6 +142,7 @@ export function registerOrganizationRoutes(
 			if (!c.get("organization")) return next();
 			return endpoint(fn)(c, next);
 		};
+	registerOrganizationUpgradeRoutes(app, active);
 	app.post(
 		"/api/org/claim",
 		endpoint(async (c) => {
@@ -221,6 +223,17 @@ export function registerOrganizationRoutes(
 	app.get(
 		"/api/auth/profile",
 		active(async (c) => c.json(await operations.profile(user(c)))),
+	);
+	app.get(
+		"/api/auth/onboarding",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length) throw new IdentityError(400, "invalid_input");
+			return c.json(await operations.onboardingStatus(user(c)));
+		}),
+	);
+	app.post(
+		"/api/auth/onboarding",
+		active(async (c) => c.json(await operations.updateOnboarding(user(c), await body(c)))),
 	);
 	app.patch(
 		"/api/auth/profile",

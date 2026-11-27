@@ -346,7 +346,72 @@ describe("organization HTTP flows", () => {
 			(await (await call("/api/auth/whoami", "GET", undefined, refreshed.accessToken)).json()).permissions,
 		).toEqual(before.permissions);
 	});
-
+	test("member onboarding acknowledgement is durable and isolated to its signed-in user", async () => {
+		await claim();
+		const alice = await member("onboarding-alice");
+		const bob = await member("onboarding-bob");
+		const status = await call("/api/auth/onboarding", "GET", undefined, alice.token);
+		expect(status.status).toBe(200);
+		expect(await status.json()).toEqual({
+			version: "organization-visibility-v1",
+			acknowledged: false,
+			complete: false,
+		});
+		expect((await call("/api/auth/onboarding", "POST", { action: "complete" }, alice.token)).status).toBe(409);
+		expect(
+			(await call("/api/auth/onboarding", "POST", { action: "acknowledge", version: "old" }, alice.token)).status,
+		).toBe(400);
+		expect(
+			(
+				await call(
+					"/api/auth/onboarding",
+					"POST",
+					{ action: "acknowledge", version: "organization-visibility-v1", userId: bob.userId },
+					alice.token,
+				)
+			).status,
+		).toBe(400);
+		const accepted = await call(
+			"/api/auth/onboarding",
+			"POST",
+			{ action: "acknowledge", version: "organization-visibility-v1" },
+			alice.token,
+		);
+		expect(accepted.status).toBe(200);
+		expect(await accepted.json()).toEqual({
+			version: "organization-visibility-v1",
+			acknowledged: true,
+			complete: false,
+		});
+		expect((await (await call("/api/auth/onboarding", "GET", undefined, bob.token)).json()).acknowledged).toBe(false);
+		const key = await (
+			await call(
+				"/api/auth/api-keys",
+				"POST",
+				{ name: "onboarding key", permissions: ["recall"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+				alice.token,
+			)
+		).json();
+		expect(
+			(
+				await call(
+					"/api/auth/onboarding",
+					"POST",
+					{ action: "acknowledge", version: "organization-visibility-v1" },
+					key.secret,
+				)
+			).status,
+		).toBe(403);
+		expect((await call("/api/auth/onboarding", "GET", undefined, "")).status).toBe(401);
+		expect((await call("/api/auth/onboarding?userId=" + bob.userId, "GET", undefined, alice.token)).status).toBe(400);
+		expect((await call("/api/auth/onboarding", "POST", { action: "complete" }, alice.token)).status).toBe(200);
+		await (await import("../db-owner-runtime")).closeDbOwner();
+		expect((await (await call("/api/auth/onboarding", "GET", undefined, alice.token)).json()).complete).toBe(true);
+		const audit = await (await call("/api/org/audit?action=user.visibility_acknowledged")).json();
+		expect(
+			audit.events.filter((event: { actor_user_id: string }) => event.actor_user_id === alice.userId),
+		).toHaveLength(1);
+	});
 	test("SSO configuration refuses narrowed authority before secret access and never publishes missing secrets", async () => {
 		await claim();
 		const alice = await member("sso-alice");

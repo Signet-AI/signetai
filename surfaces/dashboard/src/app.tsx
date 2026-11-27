@@ -24,6 +24,8 @@ import { GraphView } from "@/views/graph";
 
 import { TelemetryConsentDialog } from "@/components/telemetry-consent";
 import { OnboardingPage } from "@/components/onboarding/page";
+import { OnboardingEntry } from "@/components/onboarding/entry";
+import { MemberSetup, OrganizationOnboardingGate } from "@/components/onboarding/member";
 
 export function App() {
 	const session = useSession();
@@ -42,7 +44,13 @@ export function App() {
 				<SignInScreen session={session} />
 			) : (
 				<>
-					{entry === "device" ? <DeviceApprovalPage /> : <Shell key={whoami?.user.id} />}
+					{entry === "device" ? (
+						<DeviceApprovalPage />
+					) : (
+						<OrganizationOnboardingGate whoami={whoami}>
+							<Shell key={whoami?.user.id} />
+						</OrganizationOnboardingGate>
+					)}
 					{session.kind === "signed-out" && <SignInDialog session={session} />}
 					<SessionExpiryToast session={session} />
 				</>
@@ -53,6 +61,7 @@ export function App() {
 }
 
 function Shell() {
+	const whoami = useWhoami();
 	useSettingsHotkey();
 	useAgentContext();
 	const { view, setView, setSetupComplete } = useView();
@@ -76,7 +85,19 @@ function Shell() {
 						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "board" || view === "settings" || view === "account" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
 					>
 						{view === "setup" ? (
-							<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
+							whoami ? (
+								<MemberSetup
+									whoami={whoami}
+									onComplete={() => {
+										setSetupComplete(true);
+										setView("home");
+									}}
+								/>
+							) : (
+								<OnboardingEntry
+									personal={<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />}
+								/>
+							)
 						) : (
 							<>
 								<Activity mode={view === "home" ? "visible" : "hidden"}>

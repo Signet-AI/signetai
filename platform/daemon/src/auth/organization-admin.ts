@@ -170,7 +170,7 @@ export async function agents(p: Principal) {
 	return {
 		agents: rows.map((a) => ({
 			id: a.id,
-			name: a.name,
+			name: a.kind === "organization" && a.id !== "default" ? `${a.name} (imported)` : a.name,
 			kind: a.kind,
 			ownerUserId: a.owner_user_id,
 			ownerGroupId: a.owner_group_id,
@@ -277,28 +277,16 @@ export async function mapAgent(p: Principal, agentId: string, input: unknown) {
 			ownerUserId: text.optional(),
 			ownerGroupId: text.optional(),
 		})
+		.strict()
 		.parse(input);
-	if (data.kind === "personal" && (!data.ownerUserId || !(await readUser(data.ownerUserId))))
-		throw new IdentityError(400, "owner_required");
-	if (data.kind === "team") {
-		if (!data.ownerGroupId) throw new IdentityError(400, "owner_required");
-		await group(p, data.ownerGroupId);
-	}
 	if (data.kind === "organization" && agentId !== "default") throw new IdentityError(403, "org_policy");
-	await organizationWrite([
-		{
-			...statement("UPDATE agents SET kind = ?,owner_user_id = ?,owner_group_id = ?,updated_at = ? WHERE id = ?", [
-				data.kind,
-				data.ownerUserId ?? null,
-				data.ownerGroupId ?? null,
-				new Date().toISOString(),
-				agentId,
-			]),
-			requireChanges: true,
-		},
-		auditStatement(p, "agent.mapped", "agent", agentId),
-	]);
-	return { ok: true };
+	const { upgradeMappingSchema } = await import("../organization-upgrade-contract");
+	const mapping = upgradeMappingSchema.parse({ ...data, agentId });
+	return operatorRequest<{ ok: boolean }>({
+		op: "organization-upgrade",
+		actor: operatorActor(p),
+		command: { action: "map-agent", agentId, mapping },
+	});
 }
 export async function effectiveAccess(p: Principal, userId: string) {
 	if (p.role !== "admin" && !p.compliance) throw new IdentityError(403, "permission");
@@ -389,16 +377,12 @@ export async function keys(p: Principal, filters: Record<string, string | undefi
 }
 export async function assignKey(p: Principal, keyId: string, input: unknown) {
 	requireAdmin(p);
-	const data = z.object({ userId: text }).parse(input);
-	await activeTarget(data.userId);
-	await organizationWrite([
-		{
-			...statement("UPDATE api_keys SET user_id = ?,legacy = 0 WHERE id = ? AND kind = 'legacy'", [data.userId, keyId]),
-			requireChanges: true,
-		},
-		auditStatement(p, "key.assigned", "key", keyId, { userId: data.userId }),
-	]);
-	return { ok: true };
+	const data = z.object({ userId: text }).strict().parse(input);
+	return operatorRequest<{ ok: boolean }>({
+		op: "organization-upgrade",
+		actor: operatorActor(p),
+		command: { action: "assign-key", keyId, userId: data.userId },
+	});
 }
 export async function settleOffboardPurge(work: Promise<void>, jobId: string): Promise<void> {
 	const [result] = await Promise.allSettled([work]);
@@ -512,6 +496,13 @@ export async function jobs(p: Principal, kind?: string) {
 	requireAdmin(p);
 	return {
 		jobs: [
+			...(p.boundAgentId === null && p.allowedProjects === null && (!kind || kind === "organization_upgrade")
+				? await operatorRequest<readonly import("../organization-upgrade-contract").UpgradeView[]>({
+						op: "organization-upgrade",
+						actor: operatorActor(p),
+						command: { action: "list" },
+					})
+				: []),
 			...(
 				await operatorRequest<readonly import("../operator-job-contract").OperatorJobRow[]>({
 					op: "list",
@@ -520,7 +511,7 @@ export async function jobs(p: Principal, kind?: string) {
 			).filter(() => !kind || kind === "operator"),
 			...(await organizationQuery<readonly import("../operator-job-contract").OperatorJobRow[]>(
 				statement(
-					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
+					"SELECT * FROM org_jobs WHERE kind NOT IN ('operator','organization_upgrade') AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
 					[p.boundAgentId, p.allowedProjects === null ? null : "restricted", kind ?? null, kind ?? null],
 					"all",
 				),
@@ -535,6 +526,15 @@ export async function job(p: Principal, jobId: string) {
 		statement("SELECT * FROM org_jobs WHERE id = ?", [jobId], "get"),
 	);
 	if (!result) throw new IdentityError(404, "not_found");
+	if (result.kind === "organization_upgrade") {
+		if (p.role !== "admin" || !p.permissions.has("admin") || p.boundAgentId !== null || p.allowedProjects !== null)
+			throw new IdentityError(404, "not_found");
+		return operatorRequest<import("../organization-upgrade-contract").UpgradeView>({
+			op: "organization-upgrade",
+			actor: operatorActor(p),
+			command: { action: "read", jobId },
+		});
+	}
 	if (["restart", "agent_purge"].includes(result.kind) && (p.boundAgentId !== null || p.allowedProjects !== null))
 		throw new IdentityError(404, "not_found");
 	if (result.kind === "agent_purge")

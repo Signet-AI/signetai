@@ -71,6 +71,8 @@ export function canActAs(
 ): boolean {
 	if (agent.archived_at) return false;
 	if (p.kind === "local") return true;
+	if (agent.kind === "organization" && agent.id !== "default") return p.kind === "user" && p.role === "admin";
+	if (p.kind === "legacy" && p.credential.kind === "api_key" && p.boundAgentId === agent.id) return true;
 	if (agent.kind === "legacy")
 		return p.role === "admin" || (p.credential.kind === "api_key" && p.boundAgentId === agent.id);
 	if (p.kind !== "user") return agent.kind === "organization" && p.credential.kind === "api_key";
@@ -100,11 +102,15 @@ export function resolveWriteAgent(
 	if (!id) return denied("org_policy");
 	const agent = org.agents.find((a) => a.id === id);
 	if (!agent || !canActAs(p, agent)) return denied("agent_not_permitted");
+	if (agent.kind === "organization" && agent.id !== org.organizationAgentId) {
+		if (p.role !== "admin" || requested !== agent.id) return denied("agent_not_permitted");
+		return { ok: true, value: agent.id };
+	}
 	if (org.agentModel === "personal" && agent.kind === "organization" && p.kind === "user") {
 		if (!org.personalAgentId) return denied("org_policy");
 		id = org.personalAgentId;
 		const personal = org.agents.find((a) => a.id === id);
-		if (!personal || !canActAs(p, personal)) return denied("agent_not_permitted");
+		if (!personal || personal.kind !== "personal" || !canActAs(p, personal)) return denied("agent_not_permitted");
 	}
 	return { ok: true, value: id };
 }

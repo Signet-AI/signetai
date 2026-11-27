@@ -1,3 +1,4 @@
+import { registerOrganizationUpgradeTools } from "./organization-upgrade-tools";
 import { operatorInputSchema } from "../operator-job-contract";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -51,7 +52,7 @@ export interface DaemonError {
 }
 
 export type FetchResult<T> = DaemonResponse<T> | DaemonError;
-function registerMcpTool<TSchema extends z.ZodType>(
+export function registerMcpTool<TSchema extends z.ZodType>(
 	server: McpServer,
 	name: string,
 	config: { readonly inputSchema: TSchema } & Record<string, unknown>,
@@ -412,6 +413,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		const result = await fetchDaemon<unknown>(baseUrl, path, { method, body });
 		return result.ok ? textResult(result.data) : errorResult(result.error);
 	};
+	registerOrganizationUpgradeTools(server, registerMcpTool, organizationResult);
 	registerMcpTool(
 		server,
 		"signet_result_attribution",

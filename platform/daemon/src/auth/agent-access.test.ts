@@ -40,6 +40,44 @@ const org = {
 } as const;
 
 describe("organization act-as boundary", () => {
+	test("retained organization stores require explicit administrator writes and are never default or personal targets", () => {
+		const retained = {
+			id: "retained",
+			kind: "organization",
+			owner_user_id: null,
+			owner_group_id: null,
+			archived_at: null,
+		} as const;
+		const migrated = { ...org, agents: [...agents, retained] };
+		const admin: Principal = { ...user, role: "admin" };
+		expect(canActAs(user, retained)).toBe(false);
+		expect(canActAs(admin, retained)).toBe(true);
+		expect(resolveWriteAgent(user, retained.id, migrated)).toMatchObject({ ok: false });
+		expect(resolveWriteAgent(admin, retained.id, migrated)).toEqual({ ok: true, value: retained.id });
+		expect(resolveWriteAgent(admin, undefined, { ...migrated, agentModel: "single" })).toEqual({
+			ok: true,
+			value: "default",
+		});
+		expect(resolveWriteAgent(admin, undefined, migrated)).toEqual({ ok: true, value: "alice" });
+		expect(resolveWriteAgent({ ...admin, boundAgentId: retained.id }, undefined, migrated)).toMatchObject({
+			ok: false,
+		});
+		expect(resolveWriteAgent(admin, undefined, { ...migrated, personalAgentId: retained.id })).toMatchObject({
+			ok: false,
+		});
+		expect(
+			canActAs(
+				{
+					...user,
+					kind: "legacy",
+					userId: null,
+					boundAgentId: retained.id,
+					credential: { kind: "api_key", id: "old-key" },
+				},
+				retained,
+			),
+		).toBe(false);
+	});
 	test("read-only POST transports resolve read reach without requiring peer write ownership", () => {
 		for (const path of [
 			"/api/assistant/chat",
@@ -74,6 +112,26 @@ describe("organization act-as boundary", () => {
 		expect(canActAs({ ...user, boundAgentId: "old", credential: { kind: "api_key", id: "key_a" } }, legacy)).toBe(true);
 		expect(canActAs(user, { ...legacy, archived_at: "now" })).toBe(false);
 		expect(canActAs(localPrincipal(), legacy)).toBe(true);
+	});
+	test("unassigned legacy key bindings survive ownership mapping without granting another agent", () => {
+		const transitional: Principal = {
+			...user,
+			kind: "legacy",
+			userId: null,
+			groupIds: [],
+			boundAgentId: "bob",
+			credential: { kind: "api_key", id: "legacy-key" },
+		};
+		expect(resolveWriteAgent(transitional, undefined, org)).toEqual({ ok: true, value: "bob" });
+		expect(resolveWriteAgent(transitional, "alice", org)).toMatchObject({
+			ok: false,
+			error: { reason: "agent_binding_conflict" },
+		});
+		const bob = agents[2];
+		if (!bob) throw new Error("Missing fixture agent");
+		expect(canActAs({ ...transitional, credential: { kind: "token", id: "token" } }, bob)).toBe(false);
+		expect(canActAs({ ...transitional, kind: "user", userId: "usr_alice" }, bob)).toBe(false);
+		expect(canActAs(transitional, { ...bob, archived_at: "archived" })).toBe(false);
 	});
 	test("organization writes redirect to personal while reads default to organization", () => {
 		bindPrincipalAccess(user, org);

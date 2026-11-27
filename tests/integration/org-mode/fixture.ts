@@ -144,11 +144,21 @@ export class Fixture {
 		await fixture.setupIdentity();
 		return fixture;
 	}
+	#bootstrapPassword = randomBytes(24).toString("base64url");
+	async loginBootstrap(): Promise<Credential> {
+		const reply = await request(this.daemon.origin, "/api/auth/login", {}, "POST", {
+			username: "admin",
+			password: this.#bootstrapPassword,
+			client: "browser",
+		});
+		success(reply, "bootstrap password login");
+		return browser(reply);
+	}
 	async setupIdentity(): Promise<void> {
 		const claim = await request(this.daemon.origin, "/api/org/claim", {}, "POST", {
 			setupToken: await this.daemon.setupToken(),
 			organizationName: "Org acceptance",
-			admin: { username: "admin", displayName: "Admin", password: randomBytes(24).toString("base64url") },
+			admin: { username: "admin", displayName: "Admin", password: this.#bootstrapPassword },
 		});
 		success(claim, "POST /api/org/claim");
 		this.admin = browser(claim);

@@ -7,6 +7,10 @@ Organization mode adds individual identities to a daemon running in `team` mode.
 
 **Your personal agent is yours to organize. The organization can read it unless it's hidden.** Agents organize work. Classifications control who can read sensitive material; an administrator does not automatically gain access to classified material.
 
+## Choose a workspace
+
+Open Setup in the dashboard or desktop app to choose **Personal workspace**, **Join an organization**, or **Host an organization instance**. Personal workspace opens the existing nine-step personal flow. Joining shows `signet setup --join` for your own computer and an explicit link to your organization's instance. Hosting shows `signet setup --host` for the server, including the reverse-proxy warning. Neither option changes the local workspace from the browser.
+
 ## Claim a new organization
 
 Set `auth.mode: team` in the server workspace's `agent.yaml` and start the daemon. An unclaimed team daemon prints a setup URL and a setup token. Keep the token private. Restarting an unclaimed daemon replaces its setup token.
@@ -48,6 +52,16 @@ Clients inspect an invitation with `POST /api/auth/invites/lookup` and a JSON `{
 
 Password accounts accept through `POST /api/auth/invites/accept`. An SSO-required organization sends invitees to its SSO flow instead. The invitation's email, when specified, must match the verified SSO identity.
 
+## Join from the dashboard
+
+Members see **What's shared** before the dashboard opens. Read the visibility explanation, check the acknowledgement, and continue. Signet records the acknowledgement through the daemon under your signed-in identity; a failed request leaves you on that screen. API keys and narrowed sessions cannot acknowledge it for you. The versioned audit record survives daemon restarts. If audit retention removes it, Signet asks again rather than assuming consent.
+
+Next, review your personal and team agents and your default reading agent. **About you** saves your name through your own profile and optional preferences as evidence in your own write agent, never in a workspace-wide `USER.md`. SSO-managed names remain read-only.
+
+Run the displayed `signet login` and `signet connect` commands on your own computer, then send a prompt from your harness. The connector step updates automatically when your first active connector key is used. Joining does not replace your local workspace or automatically copy personal memories. Choose the destination for each harness in the CLI; a harness connects to one daemon at a time.
+
+**First memory** is optional. Ask your connected harness to remember something and watch the new memory appear in the dashboard. This screen only reads your write agent; it does not create a sample memory for you. Continue to **Summary**, then open the dashboard. Members are not asked to configure organization providers or embeddings. Personal-mode onboarding is unchanged.
+
 ## Roles and teams
 
 - **Admin** manages people, policy, agents, credentials, and audit. Admin does not include the `classify` permission.
@@ -56,7 +70,9 @@ Password accounts accept through `POST /api/auth/invites/accept`. An SSO-require
 - **Readonly** can recall.
 - **Compliance** is an additional flag, not a role. It adds `classify` and `audit`; it does not bypass classification audiences.
 
-Groups are teams. Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
+Groups are teams. The Teams page's empty state walks new owners through creating a team, adding members, and creating a team agent. An organization administrator creates the team; its owners manage membership and shared agents. Team owners can add members and use **Create team agent** directly on their team's page. SSO-synced teams can appear automatically.
+
+Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
 
 ## Agents and attribution
 
@@ -199,9 +215,13 @@ Open authentication endpoints are rate-limited by client address. Login allows f
 
 ## Upgrade an existing team workspace
 
-Claiming does not delete or remap old data. Existing agents are marked `legacy`; administrators can inspect and map them through `/api/org/agents/legacy` and `/api/org/agents/:id/map`.
+Claiming does not delete or remap old data. In **Organization → Agents**, choose **Review upgrade**. Map existing agents to people, teams, or organization memory, assign or revoke unowned API keys, then set the legacy-key deadline. The daemon saves a dry run before anything changes. You can edit every mapping or cancel the draft until you confirm its exact revision. If the inventory changes, review a fresh revision rather than applying a stale plan.
 
-Existing API keys receive a migration grace period of fourteen days after claim. Inspect them with `/api/org/keys?legacy=1`, assign them to active users, or revoke them before the deadline. Administrators can adjust `legacyKeyDeadline`. Legacy signed tokens do not authenticate after claim; replace them with user sessions or owned API keys.
+Organization mappings, including unmapped agents, become retained organization stores. Their IDs, evidence, provenance, classifications, citations, and indexes stay in place; nothing is merged or rewritten. Organization reads include their readable material at query time, without bypassing classification audiences. Dashboard and CLI agent lists label them **(imported)** and show organization ownership. New organization writes use `default`; a retained store accepts only an administrator's explicitly targeted writes. It cannot become a default or personal write destination. Existing personal-mode write routing is unchanged. The older one-agent map API still restricts organization mappings to `default`.
+
+Confirmation starts an audited, bounded daemon-owner job. The progress counter counts ownership, key, and deadline steps, not memories. Closing the wizard does not cancel confirmed work. Committed progress resumes after a daemon restart; a stopped job retains its completed steps and can continue with **Retry continuation** after its reported conflict is resolved. Completion reports the exact saved preview as the applied plan. Upgrades admit up to 256 legacy agents and 1,000 unowned keys, with one confirmed upgrade running at a time.
+
+Existing API keys receive a migration grace period of fourteen days after claim. Assigning a key retains its permissions and bindings, bounded by its new owner's access; it cannot grant that owner write access to someone else's agent. You can revoke keys on confirmation or leave them unassigned until the displayed deadline. After the deadline, remaining unassigned legacy keys are rejected on their next request. A past deadline is shown as an immediate-expiry warning. The bootstrap administrator password remains usable. Legacy signed tokens do not authenticate after claim; replace them with user sessions or owned API keys.
 
 ## Tracked operator jobs
 

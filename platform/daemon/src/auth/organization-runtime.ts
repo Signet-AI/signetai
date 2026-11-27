@@ -1,3 +1,8 @@
+import {
+	startOrganizationUpgradeRuntime,
+	pauseOrganizationUpgradeRuntime,
+	stopOrganizationUpgradeRuntime,
+} from "../organization-upgrade";
 import { setupTokenPath } from "./setup-token-file";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
@@ -139,6 +144,7 @@ export async function startOrganizationRuntime(baseUrl: string, agentsDir: strin
 		),
 	]);
 	if (timer) return;
+	startOrganizationUpgradeRuntime();
 	paused = false;
 	stopping = null;
 	timer = setInterval(() => {
@@ -155,6 +161,7 @@ export async function startOrganizationRuntime(baseUrl: string, agentsDir: strin
 	pruneTimer.unref();
 }
 export function pauseOrganizationRuntime(): void {
+	pauseOrganizationUpgradeRuntime();
 	paused = true;
 	if (timer) clearInterval(timer);
 	if (pruneTimer) clearInterval(pruneTimer);
@@ -166,7 +173,7 @@ export function stopOrganizationRuntime(): Promise<void> {
 	if (stopping) return stopping;
 	pauseOrganizationRuntime();
 	stopping = (async () => {
-		await Promise.allSettled([flushing, pruning]);
+		await Promise.allSettled([flushing, pruning, stopOrganizationUpgradeRuntime()]);
 		try {
 			await flushReadAudit(2000);
 		} catch (error) {

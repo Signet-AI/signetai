@@ -3,7 +3,19 @@ import type { OrganizationRow } from "./auth/organization-store";
 import { removeAgentInTx } from "./agent-removal";
 import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { canActAs, type AgentRecord } from "./auth/agent-access";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import {
+	ORGANIZATION_RETAINED_STORE_POLICY,
+	upgradePlanSchema,
+	upgradePreviewSchema,
+	UPGRADE_AGENT_LIMIT,
+	UPGRADE_KEY_LIMIT,
+	UPGRADE_BATCH_SIZE,
+	type UpgradePlanInput,
+	type UpgradePreview,
+	type UpgradeView,
+	type UpgradeRequest,
+} from "./organization-upgrade-contract";
 import { z } from "zod";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { executeClassification } from "./classification-owner";
@@ -253,6 +265,410 @@ function finish(db: WriteDb, row: OperatorJobRow, actor: OperatorActor, reason: 
 		{ action: plan.input.action, reason },
 	);
 }
+interface UpgradeLegacyAgent {
+	readonly id: string;
+	readonly name: string;
+	readonly kind: "legacy";
+	readonly owner_user_id: string | null;
+	readonly owner_group_id: string | null;
+}
+interface UpgradeLegacyKey {
+	readonly id: string;
+	readonly name: string;
+	readonly prefix: string;
+	readonly agent_id: string | null;
+	readonly permissions_json: string;
+	readonly scope_json: string;
+	readonly allowed_projects_json: string | null;
+}
+const upgradeSavedSchema = z.object({
+	version: z.literal(1),
+	revision: z.string(),
+	input: upgradePlanSchema,
+	preview: upgradePreviewSchema,
+	fingerprint: z.string(),
+	previousDeadline: z.string().nullable(),
+	actor: actorSchema,
+	deadlineAt: z.string().nullable(),
+});
+const upgradeProgressSchema = z.object({
+	phase: z.enum(["draft", "applying", "complete", "cancelled"]),
+	cursor: z.number().int().min(0),
+});
+function upgradeInventory(db: WriteDb) {
+	const agents = db
+		.prepare(
+			"SELECT id,name,kind,owner_user_id,owner_group_id FROM agents WHERE kind='legacy' AND archived_at IS NULL ORDER BY id LIMIT ?",
+		)
+		.all<UpgradeLegacyAgent>(UPGRADE_AGENT_LIMIT + 1);
+	const keys = db
+		.prepare(
+			"SELECT id,name,prefix,agent_id,permissions_json,scope_json,allowed_projects_json FROM api_keys WHERE legacy=1 AND user_id IS NULL AND revoked_at IS NULL ORDER BY id LIMIT ?",
+		)
+		.all<UpgradeLegacyKey>(UPGRADE_KEY_LIMIT + 1);
+	if (agents.length > UPGRADE_AGENT_LIMIT || keys.length > UPGRADE_KEY_LIMIT) deny("upgrade_inventory_limit");
+	const settings = prepareTypedStatement<{ legacy_key_deadline: string | null }>(
+		db,
+		"SELECT legacy_key_deadline FROM organization WHERE id=1",
+	).get();
+	if (!settings) deny("not_found");
+	return { agents, keys, legacyKeyDeadline: settings.legacy_key_deadline };
+}
+function upgradePlan(db: WriteDb, input: UpgradePlanInput) {
+	const inventory = upgradeInventory(db);
+	const mappings = new Map(input.mappings.map((row) => [row.agentId, row]));
+	const keys = new Map(input.keys.map((row) => [row.id, row]));
+	if (
+		input.mappings.some((row) => !inventory.agents.some((agent) => agent.id === row.agentId)) ||
+		input.keys.some((row) => !inventory.keys.some((key) => key.id === row.id))
+	)
+		deny("upgrade_inventory_changed");
+	const activeUser = (id: string) => {
+		if (!db.prepare("SELECT id FROM users WHERE id=? AND status='active'").get(id)) deny("upgrade_owner_unavailable");
+	};
+	for (const row of input.mappings) {
+		if (row.kind === "personal") activeUser(row.ownerUserId);
+		if (row.kind === "team" && !db.prepare("SELECT id FROM groups WHERE id=?").get(row.ownerGroupId))
+			deny("upgrade_owner_unavailable");
+	}
+	for (const row of input.keys) if (row.action === "assign") activeUser(row.userId);
+	const preview: UpgradePreview = {
+		agents: inventory.agents.map((agent) => {
+			const mapping = mappings.get(agent.id);
+			return {
+				agentId: agent.id,
+				name: agent.name,
+				kind: mapping?.kind ?? "organization",
+				ownerUserId: mapping?.kind === "personal" ? mapping.ownerUserId : null,
+				ownerGroupId: mapping?.kind === "team" ? mapping.ownerGroupId : null,
+				fallback: mapping === undefined,
+			};
+		}),
+		keys: inventory.keys.map((key) => {
+			const action = keys.get(key.id);
+			return {
+				id: key.id,
+				name: key.name,
+				prefix: key.prefix,
+				agentId: key.agent_id,
+				action: action?.action ?? "keep-unassigned",
+				userId: action?.action === "assign" ? action.userId : null,
+			};
+		}),
+		legacyKeyDeadline: input.legacyKeyDeadline,
+		organizationAgentId: "default",
+		evidencePolicy: "preserve-agent-ids-and-evidence",
+		retainedStorePolicy: ORGANIZATION_RETAINED_STORE_POLICY,
+	};
+	return {
+		preview,
+		previousDeadline: inventory.legacyKeyDeadline,
+		fingerprint: createHash("sha256").update(JSON.stringify(inventory)).digest("hex"),
+	};
+}
+function upgradeJob(db: WriteDb, jobId: string) {
+	const row = prepareTypedStatement<OperatorJobRow>(
+		db,
+		"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE id=? AND kind='organization_upgrade'",
+	).get(jobId);
+	if (!row) deny("not_found");
+	return row;
+}
+function upgradeView(row: OperatorJobRow): UpgradeView {
+	const saved = upgradeSavedSchema.parse(JSON.parse(row.params_json));
+	const progress = upgradeProgressSchema.parse(JSON.parse(row.progress_json ?? "{}"));
+	return {
+		id: row.id,
+		kind: "organization_upgrade",
+		created_at: row.created_at,
+		revision: saved.revision,
+		status: row.status,
+		phase: progress.phase,
+		preview: saved.preview,
+		appliedPlan: progress.phase === "complete" ? saved.preview : null,
+		completedSteps: progress.cursor,
+		totalSteps:
+			saved.preview.agents.length + saved.preview.keys.filter((key) => key.action !== "keep-unassigned").length + 1,
+		error: row.error,
+	};
+}
+function applyLegacyAgentMapping(db: WriteDb, actor: OperatorActor, change: UpgradePreview["agents"][number]) {
+	if (
+		change.kind === "personal" &&
+		!db.prepare("SELECT id FROM users WHERE id=? AND status='active'").get(change.ownerUserId)
+	)
+		deny("upgrade_owner_unavailable");
+	if (change.kind === "team" && !db.prepare("SELECT id FROM groups WHERE id=?").get(change.ownerGroupId))
+		deny("upgrade_owner_unavailable");
+	const result = db
+		.prepare(
+			"UPDATE agents SET kind=?,owner_user_id=?,owner_group_id=?,updated_at=? WHERE id=? AND (kind='legacy' OR id='default') AND archived_at IS NULL",
+		)
+		.run(change.kind, change.ownerUserId, change.ownerGroupId, new Date().toISOString(), change.agentId);
+	if (result.changes < 1) deny("upgrade_inventory_changed");
+	auditAuthoredWriteInTx(
+		db,
+		{ userId: actor.userId, credential: `${actor.credentialKind}:${actor.credentialId}` },
+		"agent.mapped",
+		"agent",
+		change.agentId,
+		change.agentId,
+		{ kind: change.kind },
+	);
+}
+function applyLegacyKeyAssignment(db: WriteDb, actor: OperatorActor, keyId: string, userId: string) {
+	const user = prepareTypedStatement<{ role: string }>(db, "SELECT role FROM users WHERE id=? AND status='active'").get(
+		userId,
+	);
+	if (!user) deny("upgrade_owner_unavailable");
+	const key = prepareTypedStatement<{ agent_id: string | null; scope_json: string }>(
+		db,
+		"SELECT agent_id,scope_json FROM api_keys WHERE id=? AND kind='legacy' AND user_id IS NULL AND revoked_at IS NULL",
+	).get(keyId);
+	if (!key) deny("upgrade_inventory_changed");
+	const scope = z.object({ user: z.string().optional() }).passthrough().parse(JSON.parse(key.scope_json));
+	if (scope.user && scope.user !== userId) deny("upgrade_owner_unavailable");
+	if (key.agent_id) {
+		const agent = prepareTypedStatement<AgentRecord>(
+			db,
+			"SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE id=?",
+		).get(key.agent_id);
+		const groups = db
+			.prepare("SELECT group_id FROM group_members WHERE user_id=?")
+			.all<{ group_id: string }>(userId)
+			.map((row) => row.group_id);
+		const role = z.enum(["admin", "operator", "member", "readonly", "agent"]).parse(user.role);
+		if (
+			!agent ||
+			!canActAs(
+				{
+					kind: "user",
+					role,
+					userId,
+					groupIds: groups,
+					credential: { kind: "api_key", id: keyId },
+					boundAgentId: key.agent_id,
+				},
+				agent,
+			)
+		)
+			deny("upgrade_owner_unavailable");
+	}
+	db.prepare("UPDATE api_keys SET user_id=?,legacy=0 WHERE id=?").run(userId, keyId);
+	auditAuthoredWriteInTx(
+		db,
+		{ userId: actor.userId, credential: `${actor.credentialKind}:${actor.credentialId}` },
+		"key.assigned",
+		"key",
+		keyId,
+		key.agent_id,
+		{ userId },
+	);
+}
+function advanceUpgrade(db: WriteDb, jobId: string): UpgradeView {
+	const row = upgradeJob(db, jobId);
+	const saved = upgradeSavedSchema.parse(JSON.parse(row.params_json));
+	const progress = upgradeProgressSchema.parse(JSON.parse(row.progress_json ?? "{}"));
+	if (row.status !== "running" || progress.phase !== "applying") return upgradeView(row);
+	const actor = saved.actor;
+	db.exec("SAVEPOINT organization_upgrade_batch");
+	try {
+		if (!db.prepare("SELECT id FROM users WHERE id=? AND status='active' AND role='admin'").get(actor.userId))
+			deny("upgrade_approval_revoked");
+		if (!saved.deadlineAt || saved.deadlineAt <= new Date().toISOString()) deny("upgrade_deadline");
+		const changes = [
+			...saved.preview.agents.map((agent) => ({ kind: "agent" as const, agent })),
+			...saved.preview.keys
+				.filter((key) => key.action !== "keep-unassigned")
+				.map((key) => ({ kind: "key" as const, key })),
+		];
+		const end = Math.min(progress.cursor + UPGRADE_BATCH_SIZE, changes.length);
+		for (const change of changes.slice(progress.cursor, end)) {
+			if (change.kind === "agent") applyLegacyAgentMapping(db, actor, change.agent);
+			else if (change.key.action === "assign" && change.key.userId)
+				applyLegacyKeyAssignment(db, actor, change.key.id, change.key.userId);
+			else {
+				const revoked = db
+					.prepare(
+						"UPDATE api_keys SET revoked_at=? WHERE id=? AND legacy=1 AND user_id IS NULL AND revoked_at IS NULL",
+					)
+					.run(new Date().toISOString(), change.key.id);
+				if (revoked.changes < 1) deny("upgrade_inventory_changed");
+				auditAuthoredWriteInTx(
+					db,
+					{ userId: actor.userId, credential: `${actor.credentialKind}:${actor.credentialId}` },
+					"key.revoked",
+					"key",
+					change.key.id,
+					change.key.agentId,
+				);
+			}
+		}
+		const done = end === changes.length;
+		if (done) {
+			const updated = db
+				.prepare("UPDATE organization SET legacy_key_deadline=?,updated_at=? WHERE id=1 AND legacy_key_deadline IS ?")
+				.run(saved.preview.legacyKeyDeadline, new Date().toISOString(), saved.previousDeadline);
+			if (updated.changes < 1) deny("upgrade_inventory_changed");
+		}
+		db.prepare("UPDATE org_jobs SET status=?,progress_json=?,finished_at=?,error=NULL WHERE id=?").run(
+			done ? "complete" : "running",
+			JSON.stringify({ phase: done ? "complete" : "applying", cursor: done ? end + 1 : end }),
+			done ? new Date().toISOString() : null,
+			row.id,
+		);
+		audit(db, actor, row.id, done ? "organization.upgrade_completed" : "organization.upgrade_batch", null, {
+			completedSteps: done ? end + 1 : end,
+		});
+		db.exec("RELEASE organization_upgrade_batch");
+	} catch (error) {
+		db.exec("ROLLBACK TO organization_upgrade_batch");
+		db.exec("RELEASE organization_upgrade_batch");
+		const reason =
+			error instanceof Error && error.message.startsWith("operator:")
+				? error.message.slice("operator:".length)
+				: "upgrade_batch_failed";
+		db.prepare("UPDATE org_jobs SET status='failed',error=?,finished_at=? WHERE id=?").run(
+			reason,
+			new Date().toISOString(),
+			row.id,
+		);
+		audit(db, actor, row.id, "organization.upgrade_failed", null, { reason });
+	}
+	return upgradeView(upgradeJob(db, row.id));
+}
+
+function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
+	const command = request.command;
+	if (command.action === "recover")
+		return db
+			.prepare(
+				"SELECT id FROM org_jobs WHERE kind='organization_upgrade' AND status='running' ORDER BY created_at LIMIT 1",
+			)
+			.all<{ id: string }>();
+	if (command.action === "next") return advanceUpgrade(db, command.jobId);
+	if (!request.actor) deny("permission");
+	operation(db, { op: "authorize-global", actor: request.actor });
+	const actor = request.actor;
+	if (command.action === "map-agent") {
+		const mapping = command.mapping;
+		if (mapping.kind === "organization" && command.agentId !== "default") deny("org_policy");
+		applyLegacyAgentMapping(db, actor, {
+			agentId: command.agentId,
+			name: "",
+			kind: mapping.kind,
+			ownerUserId: mapping.kind === "personal" ? mapping.ownerUserId : null,
+			ownerGroupId: mapping.kind === "team" ? mapping.ownerGroupId : null,
+			fallback: false,
+		});
+		return { ok: true };
+	}
+	if (command.action === "assign-key") {
+		applyLegacyKeyAssignment(db, actor, command.keyId, command.userId);
+		return { ok: true };
+	}
+	if (command.action === "list")
+		return db
+			.prepare(
+				"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE kind='organization_upgrade' ORDER BY created_at DESC LIMIT 100",
+			)
+			.all<OperatorJobRow>()
+			.map(upgradeView);
+	if (command.action === "inventory") {
+		const inventory = upgradeInventory(db);
+		return {
+			agents: inventory.agents,
+			keys: inventory.keys.map((key) => ({ id: key.id, name: key.name, prefix: key.prefix, agentId: key.agent_id })),
+			legacyKeyDeadline: inventory.legacyKeyDeadline,
+			users: db.prepare("SELECT id,display_name AS name FROM users WHERE status='active' ORDER BY id LIMIT 1000").all(),
+			groups: db.prepare("SELECT id,name FROM groups ORDER BY id LIMIT 1000").all(),
+			jobs: db
+				.prepare(
+					"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE kind='organization_upgrade' ORDER BY created_at DESC LIMIT 8",
+				)
+				.all<OperatorJobRow>()
+				.map(upgradeView),
+		};
+	}
+	if (command.action === "preview") {
+		const pending = db
+			.prepare("SELECT id FROM org_jobs WHERE kind='organization_upgrade' AND status='pending' LIMIT 8")
+			.all();
+		if (pending.length >= 8) deny("capacity");
+		const plan = upgradePlan(db, command.plan);
+		const id = `job_${randomUUID().replaceAll("-", "")}`;
+		const saved = { version: 1, revision: randomUUID(), input: command.plan, ...plan, actor, deadlineAt: null };
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,params_json,progress_json,created_by,created_at) VALUES(?,'organization_upgrade','pending',?,?,?,?)",
+		).run(
+			id,
+			JSON.stringify(saved),
+			JSON.stringify({ phase: "draft", cursor: 0 }),
+			actor.userId,
+			new Date().toISOString(),
+		);
+		audit(db, actor, id, "organization.upgrade_previewed", null);
+		return upgradeView(upgradeJob(db, id));
+	}
+	const row = upgradeJob(db, command.jobId);
+	if (command.action === "read") return upgradeView(row);
+	const saved = upgradeSavedSchema.parse(JSON.parse(row.params_json));
+	const progress = upgradeProgressSchema.parse(JSON.parse(row.progress_json ?? "{}"));
+	if (command.action === "resume") {
+		if (saved.revision !== command.revision || progress.phase !== "applying" || row.status !== "failed")
+			deny("upgrade_revision_conflict");
+		const blocker = db
+			.prepare("SELECT id FROM org_jobs WHERE kind='organization_upgrade' AND status='running' AND id<>? LIMIT 1")
+			.get(row.id);
+		if (blocker) deny("capacity");
+		db.prepare("UPDATE org_jobs SET status='running',params_json=?,error=NULL,finished_at=NULL WHERE id=?").run(
+			JSON.stringify({ ...saved, actor, deadlineAt: new Date(Date.now() + 86400_000).toISOString() }),
+			row.id,
+		);
+		audit(db, actor, row.id, "organization.upgrade_resumed", null);
+		return upgradeView(upgradeJob(db, row.id));
+	}
+	if (saved.revision !== command.revision || progress.phase !== "draft" || row.status !== "pending")
+		deny("upgrade_revision_conflict");
+	if (command.action === "confirm") {
+		const current = upgradePlan(db, saved.input);
+		if (current.fingerprint !== saved.fingerprint || JSON.stringify(current.preview) !== JSON.stringify(saved.preview))
+			deny("upgrade_inventory_changed");
+		if (
+			db
+				.prepare(
+					"SELECT id FROM org_jobs WHERE kind='organization_upgrade' AND json_extract(progress_json,'$.phase')='applying' AND id<>? LIMIT 1",
+				)
+				.get(row.id)
+		)
+			deny("capacity");
+		db.prepare("UPDATE org_jobs SET status='running',params_json=?,progress_json=?,started_at=? WHERE id=?").run(
+			JSON.stringify({ ...saved, actor, deadlineAt: new Date(Date.now() + 86400_000).toISOString() }),
+			JSON.stringify({ phase: "applying", cursor: 0 }),
+			new Date().toISOString(),
+			row.id,
+		);
+		audit(db, actor, row.id, "organization.upgrade_confirmed", null, { revision: saved.revision });
+		return upgradeView(upgradeJob(db, row.id));
+	}
+	if (command.action === "revise") {
+		const next = { ...saved, ...upgradePlan(db, command.plan), input: command.plan, revision: randomUUID(), actor };
+		db.prepare("UPDATE org_jobs SET params_json=? WHERE id=?").run(JSON.stringify(next), row.id);
+		audit(db, actor, row.id, "organization.upgrade_revised", null);
+		return upgradeView(upgradeJob(db, row.id));
+	}
+	if (command.action === "cancel") {
+		db.prepare("UPDATE org_jobs SET status='cancelled',progress_json=?,finished_at=? WHERE id=?").run(
+			JSON.stringify({ phase: "cancelled", cursor: 0 }),
+			new Date().toISOString(),
+			row.id,
+		);
+		audit(db, actor, row.id, "organization.upgrade_cancelled", null);
+		return upgradeView(upgradeJob(db, row.id));
+	}
+	deny("upgrade_not_confirmed");
+}
+
 export function executeOperatorJob(db: WriteDb, request: OperatorRequest): unknown {
 	db.exec("BEGIN IMMEDIATE");
 	try {
@@ -292,6 +708,7 @@ function sweepOperatorJobs(db: WriteDb, runtimeId: string | undefined): void {
 function operation(db: WriteDb, request: OperatorRequest): unknown {
 	if (request.op === "list" || request.op === "create" || (request.op === "logs-access" && request.audit))
 		sweepOperatorJobs(db, request.runtimeId);
+	if (request.op === "organization-upgrade") return upgradeOperation(db, request);
 	if (request.op === "settings") {
 		operation(db, { op: "authorize-global", actor: request.actor });
 		const data = settingsSchema.parse(request.input);

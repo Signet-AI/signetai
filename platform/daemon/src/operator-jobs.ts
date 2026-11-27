@@ -22,20 +22,20 @@ import type { UnembeddedRow } from "./embedding-coverage";
 import { operatorInputSchema, type OperatorActor, type OperatorRequest } from "./operator-job-contract";
 const runtimeId = randomUUID();
 const active = new Set<string>();
-const admitted = new Map<string, number>();
+const admitted = new Map<string | null, number>();
 let admittedTotal = 0;
 export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
-	const principal = request.actor.userId;
-	if (admittedTotal >= 8 || (admitted.get(principal) ?? 0) >= 2) throw new IdentityError(503, "busy");
+	const admissionKey = request.actor?.userId ?? null;
+	if (admittedTotal >= 8 || (admitted.get(admissionKey) ?? 0) >= 2) throw new IdentityError(503, "busy");
 	admittedTotal++;
-	admitted.set(principal, (admitted.get(principal) ?? 0) + 1);
+	admitted.set(admissionKey, (admitted.get(admissionKey) ?? 0) + 1);
 	try {
 		return await submitOperatorRequest<T>(request);
 	} finally {
 		admittedTotal--;
-		const remaining = (admitted.get(principal) ?? 1) - 1;
-		if (remaining) admitted.set(principal, remaining);
-		else admitted.delete(principal);
+		const remaining = (admitted.get(admissionKey) ?? 1) - 1;
+		if (remaining) admitted.set(admissionKey, remaining);
+		else admitted.delete(admissionKey);
 	}
 }
 async function submitOperatorRequest<T>(request: OperatorRequest): Promise<T> {
@@ -62,9 +62,18 @@ async function submitOperatorRequest<T>(request: OperatorRequest): Promise<T> {
 					? 404
 					: reason === "capacity"
 						? 429
-						: ["purge_requires_archive", "purge_limit", "protected_agent", "purge_blocked", "org_policy"].includes(
-									reason,
-								)
+						: [
+									"purge_requires_archive",
+									"purge_limit",
+									"protected_agent",
+									"purge_blocked",
+									"org_policy",
+									"upgrade_revision_conflict",
+									"upgrade_inventory_changed",
+									"upgrade_owner_unavailable",
+									"upgrade_not_confirmed",
+									"upgrade_inventory_limit",
+								].includes(reason)
 							? 409
 							: 403,
 				reason,
