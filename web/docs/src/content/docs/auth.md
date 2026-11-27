@@ -27,7 +27,7 @@ Authentication failures return `401 { error, reason }` with `WWW-Authenticate: B
 
 ## Your profile and personal agent
 
-`GET /api/auth/profile` returns your user, identity-provider ownership, and editable fields. Signed-in user sessions can send `PATCH /api/auth/profile` with `displayName` and `email`; neither endpoint accepts another user's identity. OIDC-managed names and email addresses are read-only. `whoami.user.ssoManaged` identifies an OIDC-managed profile, and each `whoami.user.groups` membership includes `managedBy` (`idp` or `signet`).
+`GET /api/auth/profile` returns your user, identity-provider ownership, and editable fields. Signed-in user sessions can send `PATCH /api/auth/profile` with `displayName` only. Any `email` field returns 403 `email_change_requires_admin`; administrators change email through `PATCH /api/org/users/:id`; neither endpoint accepts another user's identity. OIDC-managed names and email addresses are read-only. `whoami.user.ssoManaged` identifies an OIDC-managed profile, and each `whoami.user.groups` membership includes `managedBy` (`idp` or `signet`).
 
 A member can rename their own active personal agent through `PATCH /api/agents/:id` with `{ name }`. This does not allow renaming another person's agent, transferring ownership, or archiving it. Agent-bound credentials cannot update a different agent. Profile and agent changes are audited.
 

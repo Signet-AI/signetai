@@ -821,20 +821,31 @@ describe("organization HTTP flows", () => {
 			),
 		).toEqual({ n: 1 });
 	});
+	test("self-service email fields are uniformly forbidden without changing identity", async () => {
+		await claim();
+		const alice = await member("email-alice");
+		const bob = await member("email-bob");
+		expect((await call(`/api/org/users/${bob.userId}`, "PATCH", { email: "taken@example.com" })).status).toBe(200);
+		for (const email of ["taken@example.com", "free@example.com", null, "invalid"]) {
+			const response = await call("/api/auth/profile", "PATCH", { email }, alice.token);
+			expect(response.status).toBe(403);
+			expect(await response.json()).toMatchObject({ reason: "email_change_requires_admin" });
+		}
+		expect((await (await call("/api/auth/profile", "GET", undefined, alice.token)).json()).user.email).toBeNull();
+		expect((await (await call("/api/auth/profile", "GET", undefined, bob.token)).json()).user.email).toBe(
+			"taken@example.com",
+		);
+	});
+
 	test("own profile updates are scoped and SSO identity fields are read-only", async () => {
 		await claim();
 		const alice = await member("alice");
 		const bob = await member("bob");
-		const updated = await call(
-			"/api/auth/profile",
-			"PATCH",
-			{ displayName: "Alice Changed", email: "alice@example.com" },
-			alice.token,
-		);
+		const updated = await call("/api/auth/profile", "PATCH", { displayName: "Alice Changed" }, alice.token);
 		expect(updated.status).toBe(200);
 		expect(await updated.json()).toMatchObject({
-			user: { id: alice.userId, displayName: "Alice Changed", email: "alice@example.com", ssoManaged: false },
-			editableFields: ["displayName", "email"],
+			user: { id: alice.userId, displayName: "Alice Changed", email: null, ssoManaged: false },
+			editableFields: ["displayName"],
 		});
 		expect(
 			(await call("/api/auth/profile", "PATCH", { userId: bob.userId, displayName: "spoof" }, alice.token)).status,

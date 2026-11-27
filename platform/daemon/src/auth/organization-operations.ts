@@ -140,45 +140,32 @@ export async function profile(p: Principal) {
 	return {
 		user: userView(user),
 		identityProvider: user.oidc_issuer ? { kind: "oidc", issuer: user.oidc_issuer } : null,
-		editableFields: user.oidc_issuer ? [] : ["displayName", "email"],
+		editableFields: user.oidc_issuer ? [] : ["displayName"],
 	};
 }
 export async function updateProfile(p: Principal, input: unknown) {
 	const identity = requireUser(p);
 	if (p.credential.kind !== "session" || p.sourceKeyId)
 		throw new IdentityError(403, "permission", "Requires a signed-in user session");
-	const data = z
-		.object({ displayName: text.optional(), email: z.email().max(320).nullable().optional() })
-		.strict()
-		.parse(input);
+	if (typeof input === "object" && input !== null && Object.hasOwn(input, "email"))
+		throw new IdentityError(403, "email_change_requires_admin");
+	const data = z.object({ displayName: text.optional() }).strict().parse(input);
 	const user = await activeUser(identity.userId, p.deviceId);
 	if (user.oidc_issuer)
 		throw new IdentityError(403, "org_policy", "Your identity provider manages your name and email");
-	try {
-		await organizationWrite(
-			[
-				{
-					...statement(
-						"UPDATE users SET display_name=COALESCE(?,display_name),email=CASE WHEN ?=1 THEN ? ELSE email END,updated_at=? WHERE id=? AND status='active' AND oidc_issuer IS NULL",
-						[
-							data.displayName ?? null,
-							Number(data.email !== undefined),
-							data.email ?? null,
-							new Date().toISOString(),
-							identity.userId,
-						],
-					),
-					requireChanges: true,
-				},
-				auditStatement(p, "user.profile_updated", "user", identity.userId, { fields: Object.keys(data) }),
-			],
-			409,
-		);
-	} catch (error) {
-		if (error instanceof Error && error.message.includes("UNIQUE constraint failed: users.email"))
-			throw new IdentityError(409, "email_in_use");
-		throw error;
-	}
+	await organizationWrite(
+		[
+			{
+				...statement(
+					"UPDATE users SET display_name=COALESCE(?,display_name),updated_at=? WHERE id=? AND status='active' AND oidc_issuer IS NULL",
+					[data.displayName ?? null, new Date().toISOString(), identity.userId],
+				),
+				requireChanges: true,
+			},
+			auditStatement(p, "user.profile_updated", "user", identity.userId, { fields: Object.keys(data) }),
+		],
+		409,
+	);
 	return profile(p);
 }
 
@@ -711,18 +698,25 @@ export async function connectorErrors(p: Principal, keyId: string) {
 export async function updateUser(p: Principal, userId: string, input: unknown) {
 	requireAdmin(p);
 	const data = z
-		.object({ role: roleSchema.optional(), compliance: z.boolean().optional(), displayName: text.optional() })
+		.object({
+			role: roleSchema.optional(),
+			compliance: z.boolean().optional(),
+			displayName: text.optional(),
+			email: z.email().max(320).nullable().optional(),
+		})
 		.parse(input);
 	if (!(await readUser(userId))) throw new IdentityError(404, "not_found");
 	if (userId === p.userId && data.role && data.role !== "admin")
 		throw new IdentityError(403, "org_policy", "Cannot demote your own administrator account");
 	await organizationWrite([
 		statement(
-			"UPDATE users SET role = COALESCE(?,role),compliance = COALESCE(?,compliance),display_name = COALESCE(?,display_name),updated_at = ? WHERE id = ?",
+			"UPDATE users SET role = COALESCE(?,role),compliance = COALESCE(?,compliance),display_name = COALESCE(?,display_name),email = CASE WHEN ? THEN ? ELSE email END,updated_at = ? WHERE id = ?",
 			[
 				data.role ?? null,
 				data.compliance === undefined ? null : Number(data.compliance),
 				data.displayName ?? null,
+				Number(data.email !== undefined),
+				data.email ?? null,
 				new Date().toISOString(),
 				userId,
 			],

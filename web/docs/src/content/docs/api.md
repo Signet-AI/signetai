@@ -195,7 +195,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/methods` | Mode, organization claim state, and available password/OIDC providers. |
 | GET | `/api/auth/whoami` | Resolved identity and effective access; safe without a credential. |
 | GET | `/api/auth/profile` | Own profile, `identityProvider` ownership metadata and `editableFields`; never accepts another user's identity. |
-| PATCH | `/api/auth/profile` | User session; `{ displayName?, email? }`; SSO-managed identity fields are read-only. |
+| PATCH | `/api/auth/profile` | User session; `{ displayName? }`; any `email` field returns 403 `email_change_requires_admin`. Admins change email through the org users API. SSO-managed identity fields are read-only. |
 | PATCH | `/api/auth/preferences` | User session; `{ defaultReadAgentId }` sets only the caller's default read agent. |
 | POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited. |
 | GET | `/api/auth/sso/start` | OIDC authorization redirect; optional `continuation` is a single-use code with a 60-second TTL, never an invitation token. |
