@@ -96,9 +96,10 @@ function head(revision: number, entries: readonly { id: string; text: string; co
 			at(60),
 		);
 		write(
-			`INSERT INTO memory_head_entries (entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, compartment_id, created_at, updated_at)
-			 VALUES (?, 'default', ?, ?, 'active', ?, ?, ?, ?, ?)
-			 ON CONFLICT(agent_id, entry_id) DO UPDATE SET last_revision=excluded.last_revision`,
+			`INSERT INTO memory_head_entries (id, entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, compartment_id, created_at, updated_at)
+			 VALUES (?, ?, 'default', ?, ?, 'active', ?, ?, ?, ?, ?)
+			 ON CONFLICT(agent_id, entry_id, COALESCE(compartment_id,0)) DO UPDATE SET last_revision=excluded.last_revision`,
+			entry.id,
 			entry.id,
 			entry.text,
 			entry.id,
@@ -109,9 +110,10 @@ function head(revision: number, entries: readonly { id: string; text: string; co
 			at(1),
 		);
 		write(
-			`INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json, compartment_id)
-			 VALUES ('default', ?, ?, ?, 'add', ?, ?)`,
+			`INSERT INTO memory_head_revision_entries (agent_id, revision, revision_id, entry_id, ordinal, operation, provenance_json, compartment_id)
+			 VALUES ('default', ?, ?, ?, ?, 'add', ?, ?)`,
 			revision,
+			revisionId,
 			entry.id,
 			ordinal,
 			JSON.stringify([{ source_ref: `memory:support-${entry.id}`, quote: entry.text }]),

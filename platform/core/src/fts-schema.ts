@@ -53,8 +53,8 @@ function ensureMemoriesFtsState(db: FtsSchemaExecDb): void {
 }
 
 function createMemoriesFtsTriggers(db: FtsSchemaExecDb): void {
-	if (hasCompartments(db)) {
-		db.exec(`
+	const sql = hasCompartments(db)
+		? `
    DROP TRIGGER IF EXISTS memories_ai;
    DROP TRIGGER IF EXISTS memories_ad;
    DROP TRIGGER IF EXISTS memories_au;
@@ -74,10 +74,8 @@ function createMemoriesFtsTriggers(db: FtsSchemaExecDb): void {
     INSERT INTO memories_fts(memories_fts,rowid,content) SELECT 'delete',old.rowid,old.content WHERE old.compartment_id IS NULL;
     INSERT INTO memories_fts(rowid,content) SELECT new.rowid,new.content WHERE new.compartment_id IS NULL;
    END;
-  `);
-		return;
-	}
-	db.exec(`
+  `
+		: `
 		DROP TRIGGER IF EXISTS memories_ai;
 		DROP TRIGGER IF EXISTS memories_ad;
 		DROP TRIGGER IF EXISTS memories_au;
@@ -120,7 +118,32 @@ function createMemoriesFtsTriggers(db: FtsSchemaExecDb): void {
 			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
 			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
 		END;
-	`);
+	`;
+	const expected = new Map<string, string>();
+	for (const match of sql.matchAll(/CREATE TRIGGER (memories_a[iud])[\s\S]*?END;/g)) {
+		const name = match[1];
+		if (typeof name === "string") expected.set(name, normalizeSql(match[0]).replace(/;$/, ""));
+	}
+	const existing = db
+		.prepare?.(
+			"SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND name IN ('memories_ai', 'memories_ad', 'memories_au', 'memories_fts_ai', 'memories_fts_ad', 'memories_fts_au')",
+		)
+		.all?.();
+	if (
+		existing?.length === expected.size &&
+		existing.every(
+			(row) =>
+				typeof row === "object" &&
+				row !== null &&
+				"name" in row &&
+				"sql" in row &&
+				typeof row.name === "string" &&
+				typeof row.sql === "string" &&
+				expected.get(row.name) === normalizeSql(row.sql).replace(/;$/, ""),
+		)
+	)
+		return;
+	db.exec(sql);
 }
 
 export function recreateMemoriesFtsSchema(db: FtsSchemaExecDb): void {

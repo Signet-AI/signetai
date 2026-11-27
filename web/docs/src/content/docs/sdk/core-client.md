@@ -8,7 +8,7 @@ description: "Use core memory operations, token auth, and queued secret executio
 For Node and Bun, resolve the target once and read credentials through the node layer:
 
 ```typescript
-import { createNodeClient, resolveTarget } from "@signet/sdk/node";
+import { createNodeClient, resolveTarget } from "@signetai/sdk/node";
 
 const target = await resolveTarget({ harness: "hermes", env: process.env });
 const client = createNodeClient(target);
@@ -19,7 +19,7 @@ URL precedence is `flagUrl`, `SIGNET_DAEMON_URL`, the harness registry entry, su
 For a browser or embedded plugin, supply a URL explicitly:
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
+import { SignetClient } from "@signetai/sdk";
 
 const client = new SignetClient({
   daemonUrl: window.location.origin,
@@ -51,8 +51,8 @@ Expired access tokens and 401 `expired` responses use `POST /api/auth/refresh` o
 ## Durable session-end delivery
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
-import { NodeTransport, resolveTarget } from "@signet/sdk/node";
+import { SignetClient } from "@signetai/sdk";
+import { NodeTransport, resolveTarget } from "@signetai/sdk/node";
 
 const transport = new NodeTransport(await resolveTarget({ harness: "hermes" }));
 const client = new SignetClient({ transport });

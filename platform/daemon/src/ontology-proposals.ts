@@ -3079,7 +3079,14 @@ export function assertOntologyOperationPartitionInTx(
 				const explicit =
 					idFields.some((key) => input.payload[key] === selector) ||
 					readStringArray(input.payload, "source_entity_ids").includes(selector);
-				if (explicit) throw new OntologyProposalError("compartment_mismatch", 409);
+				if (
+					explicit &&
+					prepareTypedStatement<{ id: string }>(db, "SELECT id FROM entities WHERE id = ? AND agent_id = ?").get(
+						selector,
+						input.agentId,
+					)
+				)
+					throw new OntologyProposalError("compartment_mismatch", 409);
 				throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
 			}
 			return null;
@@ -3128,7 +3135,14 @@ export function assertOntologyOperationPartitionInTx(
 	);
 	if (op === "archive_entity_alias") {
 		const id = readString(p, "alias_id");
-		if (id !== null) add("entity_aliases", id);
+		if (
+			id !== null &&
+			prepareTypedStatement<{ id: string }>(db, "SELECT id FROM entity_aliases WHERE id = ? AND agent_id = ?").get(
+				id,
+				input.agentId,
+			)
+		)
+			add("entity_aliases", id);
 	}
 	const a = aspect(e, readPayloadSelector(p, "aspect", "aspect_id"));
 	if (["create_entity", "create_action_type", "create_interface"].includes(op))

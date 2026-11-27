@@ -535,6 +535,7 @@ test("compaction summaries isolate agents sharing a key and timestamp", async ()
 	for (const agentId of ["summary-a", "summary-b"]) {
 		expect(
 			await commitCompactionSummary(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId,
 				sessionKey: "shared-compaction",
 				harness: "codex",

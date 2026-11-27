@@ -304,11 +304,7 @@ async function executeInlineOwnerRequest(
 
 	if (request.kind === "dreaming_reviewed_read")
 		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
-			(await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
-				db,
-				request.agentId,
-				request.scope,
-			),
+			(await import("./content-read-owner")).readDreamingReviewedEvidenceInOwner(db, request.agentId, request.scope),
 		);
 	if (request.kind === "reflection_list") {
 		const { readReflectionsInOwner } = await import("./reflection-owner");
@@ -884,7 +880,7 @@ export async function dbOwnerReviewedEvidence(
 	accessor: DbAccessor,
 	agentId: string,
 	scope?: import("./read-scope").ReadScope,
-): Promise<readonly import("./pipeline/dreaming-evidence-reviews").DreamingReviewedEvidence[]> {
+): Promise<readonly import("./content-read-owner").DreamingReviewedEvidence[]> {
 	return submitWithAdmission(
 		await getDbOwnerForAccessor(accessor),
 		{ kind: "dreaming_reviewed_read", agentId, scope },

@@ -1,6 +1,7 @@
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { compartmentFor, ensureCompartmentShards } from "@signet/core";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,7 @@ let registerHooksRoutes: typeof import("./routes/hooks-routes").registerHooksRou
 let registerMemoryRoutes: typeof import("./routes/memory-routes").registerMemoryRoutes;
 
 beforeAll(async () => {
-	root = mkdtempSync(join(tmpdir(), "signet-recall-public-ids-"));
+	root = process.env.SIGNET_PUBLIC_IDS_TEST_ROOT ?? mkdtempSync(join(tmpdir(), "signet-recall-public-ids-"));
 	mkdirSync(join(root, "memory"), { recursive: true });
 	writeFileSync(
 		join(root, "agent.yaml"),
@@ -206,6 +207,23 @@ test("public recall ids and payloads do not change when hidden artifacts precede
 }, 60000);
 
 test("telemetry keeps artifact labels for stable and legacy native artifact ids", async () => {
+	if (process.env.SIGNET_PUBLIC_IDS_TEST_ROOT === undefined) {
+		const directory = mkdtempSync(join(tmpdir(), "signet-public-ids-telemetry-"));
+		try {
+			const child = spawnSync(
+				process.execPath,
+				["test", import.meta.filename, "--test-name-pattern", "telemetry keeps artifact labels"],
+				{
+					env: { ...process.env, SIGNET_PATH: directory, SIGNET_PUBLIC_IDS_TEST_ROOT: directory },
+					encoding: "utf8",
+				},
+			);
+			expect(child.status, child.stdout + child.stderr).toBe(0);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+		return;
+	}
 	const compartment = seedWorld("world-telemetry", 3);
 	try {
 		const audience = await observe(readerPrincipal("carol"));

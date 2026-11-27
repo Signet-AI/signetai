@@ -131,6 +131,13 @@ export function backfillEvidenceCitations(db: MigrationDb): void {
 			);
 	}
 }
+function installTrigger(db: MigrationDb, name: string, sql: string): void {
+	const existing = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?").get(name)?.sql;
+	const canonical = (value: string): string => value.trim().replace(/;$/, "");
+	if (typeof existing === "string" && canonical(existing) === canonical(sql)) return;
+	db.exec(`DROP TRIGGER IF EXISTS "${name.replaceAll('"', '""')}";${sql}`);
+}
+
 export function installWriteGuards(db: MigrationDb): void {
 	for (const table of [
 		"cross_agent_messages",
@@ -220,8 +227,10 @@ export function installWriteGuards(db: MigrationDb): void {
 				event === "UPDATE"
 					? ` WHEN ${scopeColumns.map((column) => `old.${column} IS NOT new.${column}`).join(" OR ")}`
 					: "";
-			db.exec(
-				`DROP TRIGGER IF EXISTS ${table}_compartment_${event.toLowerCase()};CREATE TRIGGER ${table}_compartment_${event.toLowerCase()} BEFORE ${event}${update} ON ${table}${changed} BEGIN ${table === "session_checkpoints" && event === "INSERT" ? "SELECT RAISE(ABORT,'agent_required') WHERE new.agent_id IS NULL;" : ""} SELECT RAISE(ABORT,'compartment_required') WHERE EXISTS(SELECT 1 FROM (${required.join(" UNION ")}) required WHERE NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=new.compartment_id AND cm.classification_id=required.classification_id));END`,
+			installTrigger(
+				db,
+				`${table}_compartment_${event.toLowerCase()}`,
+				`CREATE TRIGGER ${table}_compartment_${event.toLowerCase()} BEFORE ${event}${update} ON ${table}${changed} BEGIN ${table === "session_checkpoints" && event === "INSERT" ? "SELECT RAISE(ABORT,'agent_required') WHERE new.agent_id IS NULL;" : ""} SELECT RAISE(ABORT,'compartment_required') WHERE EXISTS(SELECT 1 FROM (${required.join(" UNION ")}) required WHERE NOT EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=new.compartment_id AND cm.classification_id=required.classification_id));END`,
 			);
 		}
 	}
@@ -378,15 +387,19 @@ export function installEvidencePurgeLifecycle(db: MigrationDb): void {
 		const enqueue = exists(db, "org_jobs")
 			? `UPDATE org_jobs SET status='pending',progress_json=NULL,error=NULL,finished_at=NULL WHERE kind='recompute' AND status IN ('pending','running') AND json_extract(params_json,'$.agentId')=old.agent_id AND EXISTS(${affected}); INSERT INTO org_jobs(id,kind,status,params_json,created_at) SELECT 'job_recompute_'||lower(hex(randomblob(16))),'recompute','pending',json_object('agentId',old.agent_id),datetime('now') WHERE EXISTS(${affected}) AND NOT EXISTS(SELECT 1 FROM org_jobs WHERE kind='recompute' AND status IN ('pending','running') AND json_extract(params_json,'$.agentId')=old.agent_id);`
 			: "";
-		db.exec(
-			`DROP TRIGGER IF EXISTS ${table}_evidence_purge; CREATE TRIGGER ${table}_evidence_purge AFTER DELETE ON ${table} BEGIN ${enqueue}${deletes} DELETE FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}' AND evidence_id=old.${key}; END`,
+		installTrigger(
+			db,
+			`${table}_evidence_purge`,
+			`CREATE TRIGGER ${table}_evidence_purge AFTER DELETE ON ${table} BEGIN ${enqueue}${deletes} DELETE FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}' AND evidence_id=old.${key}; END`,
 		);
 	}
 	for (const [kind, table, columns] of derived) {
 		if (!exists(db, table)) continue;
 		const oldKey = keySql(columns, "old");
-		db.exec(
-			`DROP TRIGGER IF EXISTS ${table}_citation_purge; CREATE TRIGGER ${table}_citation_purge AFTER DELETE ON ${table} BEGIN DELETE FROM evidence_citations WHERE derived_kind='${kind}' AND agent_id=old.agent_id AND derived_id=${oldKey}; END`,
+		installTrigger(
+			db,
+			`${table}_citation_purge`,
+			`CREATE TRIGGER ${table}_citation_purge AFTER DELETE ON ${table} BEGIN DELETE FROM evidence_citations WHERE derived_kind='${kind}' AND agent_id=old.agent_id AND derived_id=${oldKey}; END`,
 		);
 	}
 }

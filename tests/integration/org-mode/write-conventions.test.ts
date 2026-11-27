@@ -15,8 +15,8 @@ function visit(node: ts.Node, inspect: (node: ts.Node) => void): void {
 	inspect(node);
 	ts.forEachChild(node, (child) => visit(child, inspect));
 }
-test("changed test descriptions do not contain lane labels", () => {
-	const paths = execFileSync("git", ["diff", "--name-only", "6730d3dc7", "HEAD"], { cwd: root, encoding: "utf8" })
+test("tracked test descriptions do not contain lane labels", () => {
+	const paths = execFileSync("git", ["ls-files", "*.test.ts"], { cwd: root, encoding: "utf8" })
 		.trim()
 		.split("\n")
 		.filter((path) => path.endsWith(".test.ts"));

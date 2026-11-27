@@ -134,19 +134,21 @@ describe("dreaming operations", () => {
 		});
 	});
 
-	it("rejects a foreign-agent archive target before minting its same-batch flag", async () => {
+	it("hides foreign and absent archive targets before minting same-batch flags", async () => {
 		insertEntity("foreign-archive-target", "Foreign archive target", "foreign archive target", "agent-b");
-		const result = await applyDreamingOperations({
-			accessor: getDbAccessor(),
-			agentId: "agent-a",
-			actor: "dreaming",
-			passId: "pass-1",
-			operations: [
-				flag({ subjectRef: "entity:foreign-archive-target" }),
-				{ operation: "archive_entity", payload: { target: "foreign-archive-target" }, provenance: "attention:$0" },
-			],
-		});
-		expect(result).toMatchObject({ ok: false, items: [], error: "compartment_mismatch" });
+		for (const target of ["foreign-archive-target", "missing-archive-target"]) {
+			const result = await applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				passId: "pass-1",
+				operations: [
+					flag({ subjectRef: `entity:${target}` }),
+					{ operation: "archive_entity", payload: { target }, provenance: "attention:$0" },
+				],
+			});
+			expect(result).toEqual({ ok: false, items: [], error: `Entity not found: ${target}` });
+		}
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
 		).toEqual({ count: 0 });
@@ -528,6 +530,7 @@ describe("dreaming operations", () => {
 		for (let index = 0; index < 25; index += 1) {
 			insertEpisodicMemory(`m-1414-${index}`, `Evidence for retry operation ${index}.`);
 		}
+		let committedPrefix = 0;
 		const accessor: DbAccessor = {
 			...base,
 			withWriteTxAsync: (fn) => {
@@ -537,9 +540,11 @@ describe("dreaming operations", () => {
 					typeof committed === "object" &&
 					"count" in committed &&
 					typeof committed.count === "number" &&
-					committed.count >= 20
-				)
+					committed.count > 0
+				) {
+					committedPrefix = committed.count;
 					return Promise.reject(new Error("injected writer rejection"));
+				}
 				return enqueue(fn);
 			},
 		};
@@ -560,14 +565,18 @@ describe("dreaming operations", () => {
 		expect(partial.error).toContain("injected");
 		expect(partial.ok).toBe(false);
 		expect(partial.retryable).toBe(true);
-		expect(partial.retryFrom).toBe(20);
+		expect(committedPrefix).toBeGreaterThan(0);
+		expect(committedPrefix).toBeLessThan(operations.length);
+		expect(partial.retryFrom).toBe(committedPrefix);
 		expect(partial.error).toBe("injected writer rejection");
-		expect(partial.items.map((item) => item.index)).toEqual(Array.from({ length: 20 }, (_, index) => index));
+		expect(partial.items.map((item) => item.index)).toEqual(
+			Array.from({ length: committedPrefix }, (_, index) => index),
+		);
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),
 			),
-		).toEqual({ c: 20 });
+		).toEqual({ c: committedPrefix });
 
 		const retryFrom = partial.retryFrom;
 		if (retryFrom === undefined) throw new Error("partial response has no retry boundary");
@@ -578,7 +587,7 @@ describe("dreaming operations", () => {
 			operations: operations.slice(retryFrom),
 		});
 		expect(resumed.ok).toBe(true);
-		expect(resumed.items).toHaveLength(5);
+		expect(resumed.items).toHaveLength(operations.length - committedPrefix);
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),

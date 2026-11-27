@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { localAllReadScope } from "@signet/core";
 import { stopProjectionWorkers } from "./projection-worker-client";
 import { purgeExpiredHookUploads } from "./hook-transcript-uploads";
@@ -7,7 +8,6 @@ import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { startClassificationRecovery } from "./classifications";
 import { requestMemoryHead } from "./memory-head";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
-import { workspaceLayoutStartup } from "./workspace-layout-startup";
 
 import "./bun-socket-polyfill";
 import { createHash, randomUUID } from "node:crypto";

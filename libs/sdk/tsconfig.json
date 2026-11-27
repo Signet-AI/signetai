@@ -4,7 +4,7 @@
 		"rootDir": "src",
 		"resolveJsonModule": true,
 		"outDir": "dist",
-		"types": ["bun", "node"],
+		"types": ["node"],
 		"lib": ["ES2023", "DOM", "DOM.Iterable"]
 	},
 	"include": ["src/**/*.ts", "src/**/*.tsx"],

@@ -25,6 +25,9 @@ describe("memories FTS state triggers", () => {
 		}
 
 		createMemoriesFts(database);
+		const generation = database.prepare("PRAGMA schema_version").get();
+		createMemoriesFts(database);
+		expect(database.prepare("PRAGMA schema_version").get()).toEqual(generation);
 		database.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories WHERE rowid <= 2");
 		refreshMemoriesFtsState(database);
 
@@ -50,6 +53,9 @@ test("FTS runtime repair and integrity counters exclude classified rows across m
 	const db = new Database(":memory:");
 	db.exec("CREATE TABLE memories(content TEXT NOT NULL,compartment_id INTEGER)");
 	createMemoriesFts(db);
+	const generation = db.prepare("PRAGMA schema_version").get();
+	createMemoriesFts(db);
+	expect(db.prepare("PRAGMA schema_version").get()).toEqual(generation);
 	ensureCompartmentShards(db, 1, 0);
 	db.exec("INSERT INTO memories VALUES('public apple',NULL),('hidden apple',1)");
 	refreshMemoriesFtsState(db);

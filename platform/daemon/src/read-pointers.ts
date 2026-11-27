@@ -59,7 +59,7 @@ function reference(key: string, value: unknown, record: Record<string, unknown>)
 	}
 	return null;
 }
-export async function redactReadPointers(value: unknown, scope: ReadScope): Promise<unknown> {
+export async function redactReadPointers(value: unknown, scope: ReadScope, organizationMode = true): Promise<unknown> {
 	const refs = new Map<string, Reference>();
 	const collect = (node: unknown, depth: number, metadata = false): void => {
 		if (depth > 32) throw new Error("Pointer nesting limit exceeded");
@@ -105,6 +105,7 @@ export async function redactReadPointers(value: unknown, scope: ReadScope): Prom
 		const result: Record<string, unknown> = {};
 		for (const [key, item] of Object.entries(record)) {
 			if (
+				organizationMode &&
 				[
 					"compartment_id",
 					"content_hash",
@@ -152,7 +153,7 @@ export const readPointerMiddleware: MiddlewareHandler = async (c, next) => {
 	)
 		return;
 	const value: unknown = await c.res.json();
-	const result = await redactReadPointers(value, scope);
+	const result = await redactReadPointers(value, scope, Boolean(c.get("organization")));
 	const headers = new Headers(c.res.headers);
 	headers.delete("content-length");
 	c.res = new Response(JSON.stringify(result), { status: c.res.status, headers });

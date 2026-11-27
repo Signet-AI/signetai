@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { classificationFixture, currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { executeClassification } from "./classification-owner";
 import { readScopeSql } from "./read-scope";
 import { up } from "../../core/src/migrations/177-classifications";
@@ -24,17 +24,18 @@ function apply(
 	executeClassification(db, { op: "execute", jobId: job.jobId });
 }
 test("one derivation fans through every copy kind and the full copy chain", () => {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.exec(`
  INSERT INTO classifications(id,name) VALUES('cls_hr','HR');
  INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name) VALUES('aspect','e','default','Aspect','aspect');
  INSERT INTO entity_attributes(id,aspect_id,agent_id,kind,content,normalized_content) VALUES('attr','aspect','default','fact','claim','claim');
  INSERT INTO ontology_proposals(id,agent_id,operation,payload) VALUES('proposal','default','copy','{}'),('cycle','default','copy','{}');
  INSERT INTO ontology_contradictions(id,agent_id,entity_name,aspect_name,claim_key,left_content,right_content,detector,reason,detected_at,created_at,updated_at) VALUES('contradiction','default','e','a','c','left','right','manual','test','now','now','now');
- INSERT INTO memory_head_revision_entries(agent_id,revision,entry_id,ordinal,operation,provenance_json) VALUES('default',1,'entry',0,'add','{}');
+ INSERT INTO memory_head_revisions(id,agent_id,revision,content,content_hash,rendered_token_count,pass_id,base_revision,base_hash,created_at) VALUES('revision','default',1,'head','hash',1,'pass',0,'','now');
+ INSERT INTO memory_head_revision_entries(agent_id,revision,revision_id,entry_id,ordinal,operation,provenance_json) VALUES('default',1,'revision','entry',0,'add','{}');
  INSERT INTO memory_search_telemetry(id,agent_id,created_at,route,query,filters_json,method,result_count,timings_json,results_json) VALUES('telemetry','default','now','search','q','{}','keyword',1,'{}','[]');
  INSERT INTO session_recall_events(session_key,agent_id,item_kind,item_id,surface,mode) VALUES('s','default','memory','m','test','test');
- INSERT INTO evidence_citations VALUES('attribute','attr','default','memory','m'),('proposal','proposal','default','attribute','attr'),('proposal','proposal','default','attribute','cycle'),('proposal','cycle','default','attribute','proposal'),('contradiction','contradiction','default','attribute','proposal'),('head_revision','[1,"entry"]','default','attribute','contradiction'),('telemetry','telemetry','default','attribute','[1,"entry"]'),('telemetry','["s",0,"memory","m"]','default','memory','m');`);
+ INSERT INTO evidence_citations VALUES('attribute','attr','default','memory','m'),('proposal','proposal','default','attribute','attr'),('proposal','proposal','default','attribute','cycle'),('proposal','cycle','default','attribute','proposal'),('contradiction','contradiction','default','attribute','proposal'),('head_revision','["revision","entry"]','default','attribute','contradiction'),('telemetry','telemetry','default','attribute','["revision","entry"]'),('telemetry','["s",0,"memory","m"]','default','memory','m');`);
 	apply(db, "cls_hr", { kind: "memory", id: "m", agentId: "default" });
 	const expected = db.prepare("SELECT compartment_id FROM memories WHERE id='m'").get();
 	expect(expected).toMatchObject({ compartment_id: expect.any(Number) });
@@ -46,7 +47,7 @@ test("one derivation fans through every copy kind and the full copy chain", () =
 		"memory_search_telemetry",
 		"session_recall_events",
 	])
-		expect(db.prepare(`SELECT compartment_id FROM ${table}`).get()).toEqual(expected);
+		expect(db.prepare(`SELECT compartment_id FROM ${table}`).get(), table).toEqual(expected);
 	apply(db, "cls_hr", { kind: "memory", id: "m", agentId: "default" }, true);
 	for (const table of [
 		"entity_attributes",
@@ -56,7 +57,7 @@ test("one derivation fans through every copy kind and the full copy chain", () =
 		"memory_search_telemetry",
 		"session_recall_events",
 	])
-		expect(db.prepare(`SELECT compartment_id FROM ${table}`).get()).toEqual({ compartment_id: null });
+		expect(db.prepare(`SELECT compartment_id FROM ${table}`).get(), table).toEqual({ compartment_id: null });
 	db.close();
 });
 test("ambiguous checkpoints retain the union of owners and require all reach", () => {
@@ -65,6 +66,7 @@ test("ambiguous checkpoints retain the union of owners and require all reach", (
 		`INSERT INTO agents(id,name,created_at,updated_at) VALUES('other','Other','now','now');INSERT INTO classifications(id,name) VALUES('cls_hr','HR'),('cls_legal','Legal');INSERT INTO session_transcripts(session_key,content,agent_id,created_at) VALUES('shared','one','default','now'),('shared','two','other','now');DROP TRIGGER IF EXISTS session_checkpoints_compartment_insert;INSERT INTO session_checkpoints(id,session_key,harness,trigger,digest,prompt_count,created_at) VALUES('checkpoint','shared','test','test','mixed',1,'now')`,
 	);
 	up(db);
+	currentClassificationFixture(db);
 	apply(db, "cls_hr", { kind: "session", id: "shared", agentId: "default" });
 	apply(db, "cls_legal", { kind: "session", id: "shared", agentId: "other" });
 	expect(() => db.prepare("UPDATE session_checkpoints SET compartment_id=NULL WHERE id='checkpoint'").run()).toThrow(

@@ -118,6 +118,8 @@ export default defineConfig({
 							],
 						},
 						{ label: "Teams", slug: "teams" },
+						{ label: "Organization", slug: "organization" },
+						{ label: "Classifications", slug: "classifications" },
 						{ label: "Authentication", slug: "auth" },
 						{ label: "Self-hosting", slug: "self-hosting" },
 						{ label: "Remote connectors", slug: "remote-connectors" },

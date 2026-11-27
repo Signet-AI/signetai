@@ -1,6 +1,7 @@
 import "../../../tests/support/connector-safety.js";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import process from "node:process";
 
 test("Hermes client uses registry credentials and durably queues rejected evidence", async () => {
 	const child = Bun.spawn(
@@ -94,6 +95,7 @@ for (const suite of ["TransportTests", "UploadResumeConformanceTests"]) {
 	test(`bundled Python SDK regression suite: ${suite}`, async () => {
 		const child = Bun.spawn(["python", "-m", "unittest", "-q", `test_signet_transport.${suite}`], {
 			cwd: join(import.meta.dir, "hermes-plugin"),
+			env: { ...process.env, SIGNET_TEST_BUN: process.execPath },
 			stdout: "pipe",
 			stderr: "pipe",
 		});

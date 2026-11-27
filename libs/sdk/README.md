@@ -1,11 +1,11 @@
 # Signet SDK
 
-`@signet/sdk` is a typed HTTP client for the Signet daemon. The core entry runs in browsers, Node, Bun, and embedded plugins without importing Node or the core barrel. `@signet/sdk/node` adds local credential storage, target resolution, refresh, and durable delivery.
+`@signetai/sdk` is a typed HTTP client for the Signet daemon. The core entry runs in browsers, Node, Bun, and embedded plugins without importing Node or the core barrel. `@signetai/sdk/node` adds local credential storage, target resolution, refresh, and durable delivery.
 
 ## Node and Bun
 
 ```typescript
-import { createNodeClient, resolveTarget } from "@signet/sdk/node";
+import { createNodeClient, resolveTarget } from "@signetai/sdk/node";
 
 const target = await resolveTarget({ harness: "hermes", env: process.env });
 const signet = createNodeClient(target);
@@ -39,8 +39,8 @@ Expired access tokens and 401 `expired` responses use `POST /api/auth/refresh` o
 ### Durable session-end delivery
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
-import { NodeTransport, resolveTarget } from "@signet/sdk/node";
+import { SignetClient } from "@signetai/sdk";
+import { NodeTransport, resolveTarget } from "@signetai/sdk/node";
 
 const transport = new NodeTransport(await resolveTarget({ harness: "hermes" }));
 const client = new SignetClient({ transport });
@@ -68,7 +68,7 @@ Legacy origin-only queues have no reliable registry-harness identity. On explici
 ## Browser-safe core
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
+import { SignetClient } from "@signetai/sdk";
 
 const signet = new SignetClient({
   daemonUrl: window.location.origin,
@@ -88,7 +88,7 @@ Every client method accepts an optional final `RequestControl`: `{ signal?, dead
 
 Retries are jittered exponential backoff, at most two retries. GET, HEAD, OPTIONS, PUT, and DELETE are eligible; POST is eligible only with a nonempty `Idempotency-Key` header. Network errors and HTTP 408/429/500/502/503/504 can retry. Authentication/authorization failures never enter the generic retry loop. A refresh after a definitive 401 `expired` is a separate, single authentication recovery attempt. Credential-provider failures are terminal and never enter the HTTP retry loop.
 
-Errors exported from `@signet/sdk`:
+Errors exported from `@signetai/sdk`:
 
 - `SignetUnauthorizedError(reason, body?)`: status 401, machine-readable `reason`.
 - `SignetForbiddenError(reason, required?, body?)`: status 403, `reason`, optional `required`.

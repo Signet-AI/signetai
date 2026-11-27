@@ -295,6 +295,13 @@ describe("organization credential boundary", () => {
 			const first = await post();
 			expect(first.status).toBe(200);
 			const hidden = await first.json();
+			const detail = await app.request(`/api/memory/${hidden.id}`, {
+				headers: { authorization: `Bearer ${token}` },
+			});
+			expect(detail.status).toBe(200);
+			const projection = await detail.json();
+			expect(projection).not.toHaveProperty("idempotency_key");
+			expect(projection).not.toHaveProperty("idempotencyKey");
 			await organizationWrite([
 				statement("INSERT OR IGNORE INTO classifications(id,name) VALUES('cls_hidden','Hidden')"),
 				statement("INSERT OR IGNORE INTO compartments(key,created_at) VALUES('cls_hidden','now')"),

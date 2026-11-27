@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 import {
 	spawnHidden as spawn,
 	type ChildProcess,
@@ -266,7 +267,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let lastError: string | null = null;
 	let initialization: DbOwnerInitializationState = "not_started";
 	let sequence = 0;
-	let input = "";
+	const input = new DbOwnerLineBuffer();
 	let stderr = "";
 	let writeBlocked = false;
 	const migrationControl =
@@ -388,7 +389,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (retiredClose !== null) retiredChildClose = retiredClose;
 		pid = null;
 		activeJobId = null;
-		input = "";
+		input.reset();
 		startPromise = null;
 		state = closed ? "closed" : nextState;
 		lastError = error.message;
@@ -471,9 +472,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	function handleStdout(owner: ChildProcess, chunk: string): void {
 		if (child !== owner) return;
-		input += chunk;
-		const lines = input.split("\n");
-		input = lines.pop() ?? "";
+		const lines = input.read(chunk);
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {
@@ -498,7 +497,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			child = null;
 			pid = null;
 			activeJobId = null;
-			input = "";
+			input.reset();
 			startPromise = null;
 			state = "closed";
 			lastError = null;

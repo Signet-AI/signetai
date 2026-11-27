@@ -306,7 +306,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 					const stats = await sourceStats(source, agentId, resolved.scope);
 					const health = await sourceHealth(source, agentId, stats, resolved.scope);
 					return {
-						...publicSource(source),
+						...publicSource(source, Boolean(c.get("organization"))),
 						...(c.get("organization") ? { lastIndexedAt: health.latestArtifactAt ?? undefined } : {}),
 						stats,
 						health,
@@ -392,7 +392,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			});
 
 			return c.json(
-				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				{
+					source: publicSource(result.source, Boolean(c.get("organization"))),
+					created: result.created,
+					indexed: 0,
+					queued: true,
+					job,
+				},
 				202,
 			);
 		} finally {
@@ -477,7 +483,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			});
 
 			return c.json(
-				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				{
+					source: publicSource(result.source, Boolean(c.get("organization"))),
+					created: result.created,
+					indexed: 0,
+					queued: true,
+					job,
+				},
 				202,
 			);
 		} finally {
@@ -547,7 +559,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const health = await sourceHealth(source, resolved.agentId, stats, resolved.scope);
 		return c.json({
 			source: {
-				...publicSource(source),
+				...publicSource(source, Boolean(c.get("organization"))),
 				...(c.get("organization") ? { lastIndexedAt: health.latestArtifactAt ?? undefined } : {}),
 			},
 			stats,
@@ -683,7 +695,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			});
 
 			return c.json(
-				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				{
+					source: publicSource(result.source, Boolean(c.get("organization"))),
+					created: result.created,
+					indexed: 0,
+					queued: true,
+					job,
+				},
 				202,
 			);
 		} finally {
@@ -723,7 +741,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordIndexOperation,
 			});
 			return c.json(
-				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				{
+					source: publicSource(result.source, Boolean(c.get("organization"))),
+					created: result.created,
+					indexed: 0,
+					queued: true,
+					job,
+				},
 				202,
 			);
 		} finally {
@@ -766,7 +790,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				recordIndexOperation,
 			});
 			return c.json(
-				{ source: publicSource(result.source), created: result.created, indexed: 0, queued: true, job },
+				{
+					source: publicSource(result.source, Boolean(c.get("organization"))),
+					created: result.created,
+					indexed: 0,
+					queued: true,
+					job,
+				},
 				202,
 			);
 		} finally {
@@ -819,14 +849,22 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 					logger.warn("system", `Source deletion completed for ${source.id}; cleanup marker remains for retry`, {
 						error: error instanceof Error ? error.message : String(error),
 					});
-					return c.json({ source: publicSource(result.source ?? source), purged, cleanupPending: true });
+					return c.json({
+						source: publicSource(result.source ?? source, Boolean(c.get("organization"))),
+						purged,
+						cleanupPending: true,
+					});
 				}
 			}
 			if (cleanupPending) {
 				deferRelease = true;
-				return c.json({ source: publicSource(result.source ?? source), purged, cleanupPending: true });
+				return c.json({
+					source: publicSource(result.source ?? source, Boolean(c.get("organization"))),
+					purged,
+					cleanupPending: true,
+				});
 			}
-			return c.json({ source: publicSource(result.source ?? source), purged });
+			return c.json({ source: publicSource(result.source ?? source, Boolean(c.get("organization"))), purged });
 		} finally {
 			if (deferRelease) releaseSourceDeletionAfterIndexRuns(source.id, releaseSourceDeletion);
 			else releaseSourceDeletion();
@@ -838,15 +876,16 @@ function sourceDeletionPending(c: Context, source: SignetSourceEntry, purged: nu
 	logger.warn("system", `Source deletion deferred for ${source.id}; retry remains available`, {
 		error: error instanceof Error ? error.message : String(error),
 	});
-	return c.json({ source: publicSource(source), purged, pending: true }, 202);
+	return c.json({ source: publicSource(source, Boolean(c.get("organization"))), purged, pending: true }, 202);
 }
 
 function legacySourceMutationDenied(c: Context, source: SignetSourceEntry): boolean {
 	return Boolean(c.get("organization")) && !source.writeIdentity && c.get("principal")?.role !== "admin";
 }
 
-function publicSource(source: SignetSourceEntry) {
+function publicSource(source: SignetSourceEntry, organizationMode = true) {
 	return {
+		...(organizationMode ? {} : { generation: source.generation }),
 		id: source.id,
 		kind: source.kind,
 		name: source.name,

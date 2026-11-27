@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor, runWriteTxAsync } from "./db-accessor";
 import { chunkBySentence } from "./routes/utils";
 import { txIngestEnvelope } from "./transactions";
 
@@ -543,7 +543,7 @@ memory:
 		expect(firstJson.id).toBeString();
 
 		getDbAccessor().withWriteTx((db) => {
-			db.prepare("UPDATE memories SET agent_id = '', visibility = NULL WHERE id = ?").run(firstJson.id);
+			db.prepare("UPDATE memories SET visibility = NULL WHERE id = ?").run(firstJson.id);
 		});
 
 		const retry = await app.request("http://localhost/api/memory/remember", {
@@ -558,6 +558,22 @@ memory:
 		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
 		expect(retry.status).toBe(200);
 		expect(retryJson).toMatchObject({ id: firstJson.id, deduped: true });
+
+		await runWriteTxAsync(getDbAccessor(), (db) => {
+			db.prepare("UPDATE memories SET agent_id = '' WHERE id = ?").run(firstJson.id);
+		});
+		const unownedRetry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Retry cannot acquire unowned evidence",
+				idempotencyKey: "legacy-normalized-key",
+			}),
+		});
+		expect(unownedRetry.status).toBe(200);
+		const unownedJson = await unownedRetry.json();
+		expect(unownedJson.id).not.toBe(firstJson.id);
+		expect(unownedJson.deduped).not.toBe(true);
 	});
 
 	it("POST /api/memory/remember returns existing chunk ids on idempotent oversized retries", async () => {

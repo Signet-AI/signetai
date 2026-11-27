@@ -15,6 +15,9 @@ import { join } from "node:path";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
 import { runMigrations } from "../../core/src/migrations";
 import { resolveWorkspaceLayout } from "../../core/src/workspace-layout";
+import { createDbOwnerClient } from "./db-owner-client";
+import { runIncrementalDatabaseIntegrityCheck } from "./incremental-database-integrity";
+import { upgradeWorkspaceLayout } from "./workspace-layout-upgrade";
 
 const daemonScript = join(import.meta.dir, "daemon.ts");
 const tempDirs: string[] = [];
@@ -221,6 +224,20 @@ describe("daemon workspace startup preflight", () => {
 			"",
 		].join("\n");
 		writeFileSync(join(workspace, "agent.yaml"), config);
+		upgradeWorkspaceLayout(workspace);
+		const owner = createDbOwnerClient({ dbPath: resolveWorkspaceLayout(workspace).database });
+		try {
+			await owner.initialize(workspace);
+			let integrity = await runIncrementalDatabaseIntegrityCheck({ owner, tablesPerRun: 64, maxWorkUnits: 64 });
+			for (let batch = 1; batch < 16 && integrity.phase === "running" && integrity.remainingObjects > 64; batch += 1) {
+				integrity = await runIncrementalDatabaseIntegrityCheck({ owner, tablesPerRun: 64, maxWorkUnits: 64 });
+			}
+			expect(integrity.phase).toBe("running");
+			expect(integrity.remainingObjects).toBeGreaterThan(0);
+			expect(integrity.remainingObjects).toBeLessThanOrEqual(64);
+		} finally {
+			await owner.close();
+		}
 		const activeFile = join(root, "vacuum-active");
 		const port = await freePort();
 		const daemon = startDaemon({

@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { createDbOwnerClient } from "./db-owner-client";
 import type { ClassificationRequest, ClassificationActor } from "./classifications";
 
 test("real DB owner commits classifications and exposes terminal durable job state through IPC", async () => {
 	const directory = mkdtempSync(join(tmpdir(), "signet-classification-owner-"));
 	const dbPath = join(directory, "signet.db");
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.prepare("VACUUM INTO ?").run(dbPath);
 	db.close();
 	const owner = createDbOwnerClient({ dbPath });

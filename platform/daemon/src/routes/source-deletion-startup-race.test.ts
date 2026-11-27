@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
+import { createIdentityMiddleware } from "../auth/identity-middleware";
+import { parseAuthConfig } from "../auth/config";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import {
 	clearSourceIndexInFlight,
@@ -110,6 +112,7 @@ describe("startup source-index deletion race", () => {
 
 		await waitFor(() => indexedEvents > 0);
 		const app = new Hono();
+		app.use("*", createIdentityMiddleware(parseAuthConfig({ mode: "local" }, agentsDir), null));
 		registerSourcesRoutes(app, { agentsDir, purgeNativeSource });
 		const indexedBeforeDelete = indexedEvents;
 		const response = await app.request(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
@@ -168,6 +171,7 @@ describe("startup source-index deletion race", () => {
 		});
 		trackSourceIndexRun({ sourceId: added.source.id, jobId: job.id, kind: "startup", run: activeRun });
 		const app = new Hono();
+		app.use("*", createIdentityMiddleware(parseAuthConfig({ mode: "local" }, agentsDir), null));
 		registerSourcesRoutes(app, { agentsDir, purgeNativeSource });
 		const response = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" });
 		const body = (await response.json()) as { readonly cleanupPending?: boolean };

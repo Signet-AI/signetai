@@ -1,7 +1,8 @@
+import { fileURLToPath } from "node:url";
 import "../../../../tests/support/connector-safety.js";
 import { withFileLock } from "../node/storage.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, rm, readdir, stat, utimes } from "node:fs/promises";
+import { mkdtemp, rm, readdir, stat, utimes, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DurableOutbox, LoginStore, NodeTransport, resolveTarget } from "../node.js";
@@ -270,17 +271,17 @@ test("foreign-origin entries are left untouched instead of replayed", async () =
 });
 
 test("failed replacement admission preserves all queued evidence", async () => {
-	const moduleUrl = new URL("../node.ts", import.meta.url).href;
-	const script = `import * as fs from 'node:fs/promises'; import {mock} from 'bun:test'; import {basename,dirname} from 'node:path'; const original={...fs}; let fail=false; let crash=false; let directory=''; mock.module('node:fs/promises',()=>({...original,rename:async(from,to)=>{if(fail&&dirname(String(to))===directory&&/^[a-f0-9-]{36}\\.json$/.test(basename(String(to))))throw Object.assign(new Error('disk full'),{code:'ENOSPC'});const result=await original.rename(from,to);if(crash&&basename(String(to))==='.status.json'&&JSON.parse(await original.readFile(to,'utf8')).evicted>0)process.exit(0);return result}})); const {DurableOutbox}=await import(${JSON.stringify(moduleUrl)}); const box=new DurableOutbox('https://admission.example');directory=box.directory;for(let i=0;i<200;i++)await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{i}});fail=true;try{await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{replacement:true}});throw new Error('expected admission failure')}catch(error){if(error.code!=='ENOSPC')throw error}fail=false; console.log(JSON.stringify({status:await box.status(),bodies:(await box.entries()).map(e=>e.body)}));crash=true;await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{replacement:true}});throw new Error('expected simulated exit');`;
-	const child = Bun.spawn([process.execPath, "--eval", script], {
-		env: { ...process.env, ...env },
+	const script = fileURLToPath(new URL("../../test-support/outbox-admission.fixture.mjs", import.meta.url));
+	const report = join(home, "admission-report.json");
+	const child = Bun.spawn([process.execPath, "test", script], {
+		env: { ...process.env, ...env, FIXTURE_REPORT: report },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const stdout = await new Response(child.stdout).text();
+	await new Response(child.stdout).text();
 	const stderr = await new Response(child.stderr).text();
 	expect(await child.exited, stderr).toBe(0);
-	expect(JSON.parse(stdout)).toMatchObject({
+	expect(JSON.parse(await readFile(report, "utf8"))).toMatchObject({
 		status: { pending: 200, evicted: 0 },
 		bodies: Array.from({ length: 200 }, (_, i) => ({ i })),
 	});
@@ -291,10 +292,9 @@ test("failed replacement admission preserves all queued evidence", async () => {
 }, 60000);
 
 test("cross-process enqueue is serialized and dead stale locks recover", async () => {
-	const moduleUrl = new URL("../node.ts", import.meta.url).href;
-	const script = `import { DurableOutbox } from ${JSON.stringify(moduleUrl)}; const box = new DurableOutbox('https://org.example'); for(let i=0;i<8;i++) await box.enqueue({method:'POST',path:'/api/hooks/session-end',body:{pid:process.pid,i}});`;
+	const script = fileURLToPath(new URL("../../test-support/outbox-writers.fixture.mjs", import.meta.url));
 	const children = Array.from({ length: 4 }, () =>
-		Bun.spawn([process.execPath, "--eval", script], {
+		Bun.spawn([process.execPath, "test", script], {
 			env: { ...process.env, ...env },
 			stdout: "pipe",
 			stderr: "pipe",
@@ -468,10 +468,10 @@ test("delivery is durable before dispatch and survives the sending process exiti
 		}
 		return Response.json({ ok: true });
 	});
-	const moduleUrl = new URL("../node.ts", import.meta.url).href;
-	const script = `import { NodeTransport, resolveTarget } from ${JSON.stringify(moduleUrl)}; const target=await resolveTarget({flagUrl:${JSON.stringify(origin)},flagKey:'valid'}); await new NodeTransport(target).post('/api/hooks/session-end',{transcript:'durable before dispatch'});`;
-	const child = Bun.spawn([process.execPath, "--eval", script], {
-		env: { ...process.env, ...env },
+
+	const script = fileURLToPath(new URL("../../test-support/outbox-delivery.fixture.mjs", import.meta.url));
+	const child = Bun.spawn([process.execPath, "test", script], {
+		env: { ...process.env, ...env, FIXTURE_ORIGIN: origin },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -555,11 +555,11 @@ test("cross-process refresh remains serialized while recovering abandoned lock g
 		await import("node:fs/promises").then((fs) => fs.chmod(path, 0o600));
 		await utimes(path, new Date(0), new Date(0));
 	}
-	const moduleUrl = new URL("../node.ts", import.meta.url).href;
-	const script = `import { NodeTransport, resolveTarget } from ${JSON.stringify(moduleUrl)}; const keyring={get:async()=>({state:'unavailable'}),set:async()=>({state:'unavailable'})}; await new NodeTransport(await resolveTarget({flagUrl:${JSON.stringify(origin)},keyring})).get('/protected');`;
+
+	const script = fileURLToPath(new URL("../../test-support/outbox-refresh.fixture.mjs", import.meta.url));
 	const children = Array.from({ length: 12 }, () =>
-		Bun.spawn([process.execPath, "--eval", script], {
-			env: { ...process.env, ...env },
+		Bun.spawn([process.execPath, "test", script], {
+			env: { ...process.env, ...env, FIXTURE_ORIGIN: origin },
 			stdout: "pipe",
 			stderr: "pipe",
 		}),

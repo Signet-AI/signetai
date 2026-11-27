@@ -2210,7 +2210,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			{
 				sql: `SELECT m.id, m.content, m.author_user_id AS authorUserId, m.type, m.importance, m.tags, m.pinned, m.who, m.agent_id,
 				        m.source_id, m.source_type, m.source_path, m.runtime_path,
-				        m.project, NULL AS session_id, m.confidence,
+				        m.idempotency_key, m.project, NULL AS session_id, m.confidence,
 				        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
 				        m.extraction_status, m.embedding_model, m.version,
 				        m.memory_kind, m.created_at, m.updated_at, m.updated_by
@@ -2236,6 +2236,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			...row,
 			sourcePath: row.source_path,
 			runtimePath: row.runtime_path,
+			idempotencyKey: row.idempotency_key,
 			sessionId,
 		});
 	});

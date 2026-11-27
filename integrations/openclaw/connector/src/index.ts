@@ -11,7 +11,7 @@ import {
 	isJsonObject,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
-import { LOOPBACK_HOST, expandHome } from "@signet/core";
+import { LOOPBACK_HOST, expandHome, renderExecFileHiddenModule } from "@signet/core";
 import { resolveSignetDaemonUrl } from "@signet/core/daemon-url";
 
 type JsonObject = Record<string, unknown>;
@@ -871,12 +871,12 @@ description: "Signet memory integration"
 - \`/recall <query>\` - Search memories
 `;
 
-		const handlerJs = `import { execFile } from "node:child_process";
+		const handlerJs = `${renderExecFileHiddenModule()}
 const launcher = ${JSON.stringify(resolveSignetCliCommand())};
 async function fetchDaemon(path, body) {
  const event = path.split("/").pop();
  return new Promise((resolve, reject) => {
-  const child = execFile(launcher.command, [...launcher.args, "hook", event, "--harness", "openclaw", "--json"], {timeout: 20000, maxBuffer: 1024 * 1024}, (error, stdout, stderr) => {
+  const child = execFileHidden(launcher.command, [...launcher.args, "hook", event, "--harness", "openclaw", "--json"], {timeout: 20000, maxBuffer: 1024 * 1024}, (error, stdout, stderr) => {
    if (error) { reject(new Error(stderr.trim() || "Signet hook command failed")); return; }
    try { resolve(JSON.parse(stdout)); } catch (failure) { reject(failure); }
   });

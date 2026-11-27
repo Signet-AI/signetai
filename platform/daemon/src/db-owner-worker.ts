@@ -1,4 +1,5 @@
 import { executeEmbeddingProjectionInTx } from "./embedding-projection-owner";
+import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1213,10 +1214,10 @@ export function runDbOwnerWorker(): void {
 			return result;
 		}
 		if (job.request.kind === "fts_partition") {
-			const { createMemoriesFts, recreateMemoriesFts } = await import("@signet/core");
+			const { createMemoriesFts, recreateMemoriesFtsSchema } = await import("@signet/core");
 			db.exec("BEGIN IMMEDIATE");
 			try {
-				if (job.request.action === "rebuild") recreateMemoriesFts(db);
+				if (job.request.action === "rebuild") recreateMemoriesFtsSchema(db);
 				else createMemoriesFts(db);
 				db.exec("COMMIT");
 				context.committed = true;
@@ -1441,7 +1442,7 @@ export function runDbOwnerWorker(): void {
 			});
 
 		if (job.request.kind === "dreaming_reviewed_read")
-			return (await import("./pipeline/dreaming-evidence-reviews")).readDreamingReviewedEvidenceInOwner(
+			return (await import("./content-read-owner")).readDreamingReviewedEvidenceInOwner(
 				db,
 				job.request.agentId,
 				job.request.scope,
@@ -1664,12 +1665,10 @@ export function runDbOwnerWorker(): void {
 		runNext();
 	}
 
-	let input = "";
+	const input = new DbOwnerLineBuffer();
 	process.stdin.setEncoding("utf8");
 	process.stdin.on("data", (chunk: string) => {
-		input += chunk;
-		const lines = input.split("\n");
-		input = lines.pop() ?? "";
+		const lines = input.read(chunk);
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {

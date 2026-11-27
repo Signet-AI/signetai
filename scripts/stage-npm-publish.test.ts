@@ -40,7 +40,7 @@ describe("stage-npm-publish", () => {
 		expect(parsed.dependencies["@signetai/connector-base"]).toBe("0.140.1");
 		expect(parsed.dependencies["@signetai/core"]).toBe("0.140.1");
 		expect(parsed.dependencies.zod).toBe("^4.0.0");
-		expect(parsed.devDependencies["@signet/sdk"]).toBe("workspace:*");
+		expect(parsed.devDependencies["@signetai/sdk"]).toBe("workspace:*");
 		expect(parsed.repository.url).toBe("git+https://github.com/Signet-AI/signetai.git");
 	});
 

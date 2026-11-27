@@ -1,7 +1,7 @@
 import * as recovery from "./startup-recovery";
 import { readScopeSql, readVisibilitySchema } from "./read-scope";
 import { expect, test, spyOn } from "bun:test";
-import { classificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { executeClassification } from "./classification-owner";
 import { resumeClassificationJobs, executeClassificationJob } from "./classifications";
 import type { ClassificationActor, ClassificationRequest } from "./classifications";
@@ -14,7 +14,7 @@ const actor: ClassificationActor = {
 	allowedProjects: null,
 	credential: "session:test",
 };
-function job(db: ReturnType<typeof classificationFixture>, kind: "agent" | "memory") {
+function job(db: ReturnType<typeof currentClassificationFixture>, kind: "agent" | "memory") {
 	const value = executeClassification(db, {
 		op: "enqueue",
 		actor,
@@ -27,7 +27,7 @@ function job(db: ReturnType<typeof classificationFixture>, kind: "agent" | "memo
 	return value.jobId;
 }
 test("five consecutive batch failures are terminal, audited, and release the agent queue", async () => {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	db.exec(
 		"INSERT INTO classifications(id,name) VALUES('cls_hr','HR');WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<2011) INSERT INTO memories(id,content,agent_id,created_at,updated_at) SELECT 'batch-'||printf('%06d',x),'secret','default','now','now' FROM n",
 	);

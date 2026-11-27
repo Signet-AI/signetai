@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { Hono } from "hono";
 import { executeClassification } from "../classification-owner";
-import { classificationFixture } from "../test-support/classification-fixture.test";
+import { currentClassificationFixture } from "../test-support/classification-fixture.test";
 import { registerClassificationRoutes } from "./classification-routes";
 
 function routeFixture(eager = false) {
-	const db = classificationFixture();
+	const db = currentClassificationFixture();
 	const app = new Hono();
 	app.use("*", async (c, next) => {
 		const user = c.req.header("x-test-user") ?? "bob";

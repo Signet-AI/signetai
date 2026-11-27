@@ -6,7 +6,7 @@ description: "Resolve a Signet target and make the first typed SDK calls."
 ## Node and Bun
 
 ```typescript
-import { createNodeClient, resolveTarget } from "@signet/sdk/node";
+import { createNodeClient, resolveTarget } from "@signetai/sdk/node";
 
 const target = await resolveTarget({ harness: "hermes", env: process.env });
 const signet = createNodeClient(target);
@@ -19,7 +19,7 @@ Resolve once, then reuse the client. The node layer reads the connector registry
 ## Browser or embedded host
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
+import { SignetClient } from "@signetai/sdk";
 
 const signet = new SignetClient({
   daemonUrl: window.location.origin,
