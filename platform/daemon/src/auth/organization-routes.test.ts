@@ -101,6 +101,12 @@ describe("organization HTTP flows", () => {
 		const warm: unknown = JSON.parse(second.headers.get("x-signet-owner-profile") ?? "null");
 		expect(cold).toEqual(expect.arrayContaining([expect.objectContaining({ operation: "organization.read" })]));
 		expect(warm).toEqual([]);
+		await (await import("../db-owner-runtime")).closeDbOwner();
+		const restarted = await call("/api/cache-proof");
+		expect(restarted.status).toBe(200);
+		expect(JSON.parse(restarted.headers.get("x-signet-owner-profile") ?? "null")).toEqual(
+			expect.arrayContaining([expect.objectContaining({ operation: "organization.read" })]),
+		);
 	});
 	test("cached authority observes a role change and deactivation on the next request", async () => {
 		app.get("/api/cache-role", (c) =>
@@ -344,6 +350,30 @@ describe("organization HTTP flows", () => {
 				),
 			).toEqual({ revoked: 1 });
 		}
+	});
+	test("cached key ancestry expires without another database mutation", async () => {
+		await claim();
+		const expiresAt = new Date(Date.now() + 300000).toISOString();
+		const parent = await (
+			await call("/api/auth/api-keys", "POST", { name: "clock-parent", permissions: ["recall"], expiresAt })
+		).json();
+		const childResponse = await call(
+			"/api/auth/api-keys",
+			"POST",
+			{ name: "clock-child", permissions: ["recall"], expiresAt },
+			parent.secret,
+		);
+		expect(childResponse.status).toBe(201);
+		const child = await childResponse.json();
+		const expires = Date.now() + 2000;
+		const { organizationWrite, statement } = await import("./organization-store");
+		await organizationWrite([
+			statement("UPDATE api_keys SET expires_at=? WHERE id=?", [new Date(expires).toISOString(), parent.key.id]),
+		]);
+		for (let i = 0; i < 2; i++)
+			expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(true);
+		await Bun.sleep(Math.max(0, expires - Date.now() + 5));
+		expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(false);
 	});
 	test.each(["revoked", "expired"])("B2 requests validate the live key ancestor: %s", async (reason) => {
 		await claim();
