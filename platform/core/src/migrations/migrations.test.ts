@@ -406,6 +406,102 @@ describe("migration framework", () => {
 		});
 	});
 
+	test("176 retires the whole-row transcript index and queues stored rows for the turn backfill", () => {
+		db = createFreshDb();
+		for (const migration of MIGRATIONS.filter((entry) => entry.version < 176)) migration.up(db);
+		const insert = db.prepare(
+			"INSERT INTO session_transcripts (session_key, content, harness, agent_id, created_at) VALUES (?, ?, 'codex', 'agent-a', '2026-11-25T00:00:00Z')",
+		);
+		insert.run("sess-a", "User: alpha");
+		insert.run("sess-b", "User: bravo");
+		const legacyIndex = "SELECT COUNT(*) AS count FROM sqlite_master WHERE name LIKE 'session_transcripts_fts%'";
+		expect(db.query(legacyIndex).get()).not.toEqual({ count: 0 });
+
+		runMigrations(db);
+
+		expect(db.query(legacyIndex).get()).toEqual({ count: 0 });
+		expect(db.query("SELECT cursor, end_rowid FROM session_transcript_turns_backfill").get()).toEqual({
+			cursor: null,
+			end_rowid: 2,
+		});
+		expect(db.query("SELECT COUNT(*) AS count FROM session_transcript_turns").get()).toEqual({ count: 0 });
+		expect(hasPendingMigrations(db)).toBe(false);
+		insert.run("sess-c", "User: charlie");
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS count FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH 'charlie'",
+				)
+				.get(),
+		).toEqual({ count: 1 });
+		expect(db.query("SELECT seq, byte_offset, text FROM session_transcript_turns").all()).toEqual([
+			{ seq: 1, byte_offset: 0, text: "User: charlie" },
+		]);
+	});
+
+	test("a missing transcript turn trigger re-runs 176 and requeues every session for the turn backfill", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		const insert = db.prepare(
+			"INSERT INTO session_transcripts (session_key, content, harness, agent_id, created_at) VALUES (?, ?, 'codex', 'agent-a', '2026-11-25T00:00:00Z')",
+		);
+		insert.run("sess-a", "User: alpha");
+		insert.run("sess-b", "User: bravo");
+		db.exec("UPDATE session_transcript_turns_backfill SET cursor = end_rowid");
+		db.exec("DROP TRIGGER session_transcript_turns_au");
+		db.exec("UPDATE session_transcripts SET content = 'User: redacted' WHERE session_key = 'sess-a'");
+		const stale =
+			"SELECT COUNT(*) AS count FROM session_transcript_turns_fts WHERE session_transcript_turns_fts MATCH 'alpha'";
+		expect(db.query(stale).get()).toEqual({ count: 1 });
+		expect(hasPendingMigrations(db)).toBe(true);
+
+		runMigrations(db);
+
+		expect(hasPendingMigrations(db)).toBe(false);
+		expect(db.query(stale).get()).toEqual({ count: 0 });
+		expect(db.query("SELECT COUNT(*) AS count FROM session_transcript_turns").get()).toEqual({ count: 0 });
+		expect(db.query("SELECT cursor, end_rowid FROM session_transcript_turns_backfill").get()).toEqual({
+			cursor: null,
+			end_rowid: 2,
+		});
+		db.exec("UPDATE session_transcripts SET content = 'User: redacted again' WHERE session_key = 'sess-a'");
+		expect(db.query("SELECT text FROM session_transcript_turns").all()).toEqual([{ text: "User: redacted again" }]);
+	});
+
+	test("176 queues a transcript stored at the minimum rowid and marks an empty table ready", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP TRIGGER session_transcript_turns_ai");
+		db.prepare(
+			"INSERT INTO session_transcripts (rowid, session_key, content, harness, agent_id, created_at) VALUES (-9223372036854775808, 'sess-a', 'User: alpha', 'codex', 'agent-a', '2026-11-25T00:00:00Z')",
+		).run();
+		runMigrations(db);
+		expect(
+			db.query("SELECT cursor IS NULL OR cursor < end_rowid AS pending FROM session_transcript_turns_backfill").get(),
+		).toEqual({
+			pending: 1,
+		});
+
+		db = createFreshDb();
+		runMigrations(db);
+		expect(db.query("SELECT cursor >= end_rowid AS ready FROM session_transcript_turns_backfill").get()).toEqual({
+			ready: 1,
+		});
+	});
+
+	test("a missing transcript turn lookup index re-runs 176", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP INDEX idx_session_transcript_turns_seq");
+		expect(hasPendingMigrations(db)).toBe(true);
+		runMigrations(db);
+		expect(
+			db
+				.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_transcript_turns_seq'")
+				.get(),
+		).toEqual({ name: "idx_session_transcript_turns_seq" });
+	});
+
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {
 		for (const version of [138, 139] as const) {
 			db = createFreshDb();
@@ -415,7 +511,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(175);
+			expect(applied.version).toBe(176);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });

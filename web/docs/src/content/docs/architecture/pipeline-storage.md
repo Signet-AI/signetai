@@ -127,6 +127,26 @@ The table includes `session_key`, `content`, `harness`, `project`, `agent_id`,
 `created_at`, `updated_at`, `completed_at`, and `content_hash`. Reads and writes
 are agent-scoped.
 
+Transcript search reads `session_transcript_turns`, a derived copy of the
+transcript text split by turn and keyed by `agent_id` and `session_key`, with
+the full-text index `session_transcript_turns_fts` over it. Triggers on
+`session_transcripts` keep the copy in step inside the same write. Each turn
+row carries `seq` and `byte_offset`, so the rows in `seq` order join to exactly
+the stored content. On a change, the trigger keeps the rows that still match
+the new content, deletes the rest, and indexes the new text from that point.
+An append indexes only the new turn, and a rewritten last turn reindexes only
+that turn. When the new text continues the last word of a row, the cut moves
+back one row, so a word is never split across two rows. The copy adds roughly
+the size of the transcript text to the database. It replaces the whole-row
+`session_transcripts_fts` index, which reindexed the full transcript on every
+live append.
+
+The copy is rebuildable. Migration 176 declares its triggers as schema
+artifacts, so a missing trigger re-runs the migration at startup. The migration
+clears the copy and resets `session_transcript_turns_backfill`. A background
+DB-owner job then copies existing rows in bounded chunks, and search scans the
+transcript text until that job finishes.
+
 Imported completed transcripts additionally carry `source_id`,
 `source_record_id`, and bounded `source_meta_json`. The importer writes a
 lossless typed message representation directly; it does not round-trip through
@@ -264,7 +284,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `175-memory-artifact-manifest-path-repair.ts`.
+`schema_migrations_audit`. The latest migration is `176-session-transcript-turn-fts.ts`.
 
 ### Evidence and semantic state
 
