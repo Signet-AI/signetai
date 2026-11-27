@@ -53,6 +53,7 @@ if (!process.env.SIGNET_MEMBER_ONBOARDING_TEST_CHILD) {
 			calls.push(`${init?.method ?? "GET"} ${path}`);
 			if (init?.body) bodies.push({ path, body: JSON.parse(String(init.body)) });
 			if (path === "/api/auth/whoami") return Response.json({ mode: "local", effectiveAccess: true });
+			if (path === "/api/classifications") return Response.json([]);
 			if (path === "/api/auth/profile")
 				return Response.json({ editableFields: ["displayName", "email"], user: whoami.user });
 			if (path === "/api/memory/remember") return Response.json({ id: "about-alice" });
@@ -230,6 +231,7 @@ if (!process.env.SIGNET_MEMBER_ONBOARDING_TEST_CHILD) {
 			expect(element.textContent).toContain("Remembered through my harness");
 			await click("Continue");
 			expect(element.textContent).toContain("Summary");
+			expect(element.querySelector('section[aria-label="Copy personal memories"]')).not.toBeNull();
 			await click("Open dashboard");
 			expect(completed).toBe(1);
 			expect(bodies).toContainEqual({ path: "/api/auth/onboarding", body: { action: "complete" } });

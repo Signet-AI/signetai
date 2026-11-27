@@ -201,6 +201,19 @@ describe("createMcpServer", () => {
 		const denied = await callTool(server, "signet_org_audit", { actor: "usr_alice" });
 		expect(denied.isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/org/audit?actor=usr_alice");
+		expect((await callTool(server, "signet_operator_settings_get", {})).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/operator/settings");
+		expect(capture.method).toBe("GET");
+		expect(
+			(
+				await callTool(server, "signet_operator_settings_set", {
+					section: "instructions",
+					value: "Company conventions",
+				})
+			).isError,
+		).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/operator/settings");
+		expect(capture.method).toBe("PATCH");
 		expect((await callTool(server, "signet_operator_logs", { limit: 5 })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/logs?limit=5");
 		expect((await callTool(server, "signet_operator_job", { action: "embed.audit" })).isError).toBe(true);
@@ -448,7 +461,9 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_org_sso_set");
 		expect(names).toContain("signet_result_attribution");
 		expect(names).toContain("signet_org_upgrade");
-		expect(names.length).toBe(76);
+		expect(names).toContain("signet_operator_settings_get");
+		expect(names).toContain("signet_operator_settings_set");
+		expect(names.length).toBe(78);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {

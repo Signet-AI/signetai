@@ -1,5 +1,6 @@
 import { type FileHandle, open, lstat } from "node:fs/promises";
 import { join } from "node:path";
+import { atomicPrivateWrite } from "@signet/sdk/node";
 import { PIPELINE_CONFIG_FILES } from "@signet/core";
 import { IdentityError } from "./auth/organization-store";
 import { constants } from "node:fs";
@@ -32,4 +33,14 @@ export async function readRuntimeConfigFile(agentsDir: string, refuseSymlinks = 
 		}
 	}
 	throw new IdentityError(404, "config_not_found", "No Signet config file found");
+}
+
+export async function publishRuntimeConfigFile(file: string, text: string): Promise<void> {
+	if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new IdentityError(413, "config_too_large");
+	const info = await lstat(file).catch((error: unknown) => {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+		throw error;
+	});
+	if (info?.isSymbolicLink()) throw new IdentityError(409, "config_symlink");
+	await atomicPrivateWrite(file, text);
 }

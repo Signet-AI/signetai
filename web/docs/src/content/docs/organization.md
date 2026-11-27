@@ -36,6 +36,18 @@ Upgrading also repairs legacy child ownership, including memory embeddings, from
 
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
+## Operator bootstrap
+
+Run `signet setup --host --public-url https://memory.example.com` on the instance host, then open its setup URL from your own computer. Enter the one-time token and create the first administrator. The operator wizard configures the organization name and authentication choice, AI provider/model, embedding profile, organization instructions, optional teams/classifications, source defaults and sources, and invitations. It has no Harnesses or First memory step.
+
+Keep the bootstrap password until SSO works, or expand the SSO controls to configure the existing authentication owner. Provider and embedding keys are stored in Secrets; the wizard accepts only secret names as references. Allow remote inference explicitly before sending organization evidence to a hosted provider. Inference can be deferred and embeddings can use keyword-only search. A saved embedding profile may still need the existing index transition before semantic search uses it.
+
+Organization instructions are saved as the instance's `AGENTS.md`, not a member's personal profile. Source defaults seed each source dialog; its agent/classification controls remain editable and the sources owner rechecks admission. Creating classifications requires compliance authority; admin status alone grants no classified access. Teams and sources may be left empty.
+
+Invitations are one-time links to copy and send yourself; Signet sends no email. Copying or leaving the invitation step clears the displayed link. Allowed SSO email domains support joining on first sign-in. Finishing setup writes durable completion and reads it back before opening the dashboard. Setup remains available to administrators later.
+
+The wizard uses `GET` and `PATCH /api/org/operator/settings`, not the unrestricted configuration-file interface. Only unrestricted administrator sessions can read or change this projection. Member, compliance-only and API-key credentials are rejected. Each successful read/update and denied authorization is audited without instruction text or secret values. Agents with an administrator session can use `signet_operator_settings_get` and `signet_operator_settings_set` through the same HTTP authorization.
+
 ## Classified imports
 
 Choose a classification when creating a transcript import: `POST /api/sources/imports` accepts an optional `classificationId` alongside `files`. Multipart document uploads to `POST /api/sources/import` accept the same optional form field. You must be allowed to apply the classification and read the destination, including its inherited classifications. A denied admission writes no import job or evidence. Project-bound credentials cannot start these imports because the manifest does not establish every record's project.
@@ -61,6 +73,14 @@ Next, review your personal and team agents and your default reading agent. **Abo
 Run the displayed `signet login` and `signet connect` commands on your own computer, then send a prompt from your harness. The connector step updates automatically when your first active connector key is used. Joining does not replace your local workspace or automatically copy personal memories. Choose the destination for each harness in the CLI; a harness connects to one daemon at a time.
 
 **First memory** is optional. Ask your connected harness to remember something and watch the new memory appear in the dashboard. This screen only reads your write agent; it does not create a sample memory for you. Continue to **Summary**, then open the dashboard. Members are not asked to configure organization providers or embeddings. Personal-mode onboarding is unchanged.
+
+## Copy selected personal memories
+
+On the member onboarding **Summary**, optionally choose the `memories.jsonl` file from `signet --local export` on your own computer. The browser accepts at most 4 MiB and 1,000 records. Choose the original agent, select individual memories, and choose a destination classification. Nothing is selected by default.
+
+**Preview selected copy** is a local dry run: it shows the selected records, evidence size, and your organization write agent without uploading anything. Changing the selection, original agent, or classification clears the preview. **Copy selected memories** then submits only that selection to the existing document importer. The daemon rechecks write scope and classification admission before creating evidence. Preview does not reserve access or promise a successful import.
+
+The import preserves each selected export record, including its original ID, agent, author fields, source fields, and timestamps, as source evidence. Those fields do not become organization identity or restored semantic claims; the importing organization user is the recorded author, and Dreaming derives memory from the evidence. The original export and local workspace are never modified or deleted. Remove the resulting imported source through Sources to purge its evidence and derived state.
 
 ## Roles and teams
 

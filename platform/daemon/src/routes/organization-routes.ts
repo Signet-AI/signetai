@@ -1,4 +1,5 @@
 import { registerOrganizationUpgradeRoutes } from "./organization-upgrade-routes";
+import { getOperatorSettings, setOperatorSettings } from "../operator-settings";
 import { setOrganizationSso } from "../organization-sso";
 import { contentRead } from "../content-read";
 import { resolveRouteReadScope } from "./read-scope";
@@ -143,6 +144,22 @@ export function registerOrganizationRoutes(
 			return endpoint(fn)(c, next);
 		};
 	registerOrganizationUpgradeRoutes(app, active);
+	app.get(
+		"/api/org/operator/settings",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length || c.req.header("x-signet-agent-id"))
+				throw new IdentityError(403, "permission", "Requires an unrestricted administrator session");
+			return c.json(await getOperatorSettings(user(c), workspaceRoot));
+		}),
+	);
+	app.patch(
+		"/api/org/operator/settings",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length || c.req.header("x-signet-agent-id"))
+				throw new IdentityError(403, "permission", "Requires an unrestricted administrator session");
+			return c.json(await setOperatorSettings(user(c), workspaceRoot, await body(c)));
+		}),
+	);
 	app.post(
 		"/api/org/claim",
 		endpoint(async (c) => {

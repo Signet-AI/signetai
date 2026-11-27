@@ -44,9 +44,17 @@ export function AgentContextSelect({
 	readonly onValueChange: (value: string) => void;
 	readonly placeholder?: string;
 }) {
+	const displayName = groups.flatMap((group) => group.agents).find((agent) => agent.id === value)?.name ?? placeholder;
 	return (
 		<Select value={value} disabled={disabled} onValueChange={onValueChange}>
-			<SelectTrigger className="home-source-filter max-w-full" aria-label="Agent context">
+			<SelectTrigger
+				className="home-source-filter max-w-full max-sm:size-9 max-sm:min-w-9 max-sm:justify-center max-sm:px-0 max-sm:[&>svg]:hidden max-sm:[&>[data-slot=select-value]]:hidden"
+				aria-label="Agent context"
+				title={displayName}
+			>
+				<span aria-hidden="true" className="sm:hidden">
+					{Array.from(displayName)[0]?.toLocaleUpperCase() ?? "?"}
+				</span>
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent className="home-source-options" position="popper" align="end" sideOffset={4}>
@@ -90,7 +98,7 @@ export function AgentContextSwitcher() {
 		},
 	];
 	return (
-		<div className="sig-no-drag flex min-w-0 max-w-24 flex-1 items-center gap-2 sm:max-w-36">
+		<div className="sig-no-drag flex min-w-0 max-w-9 flex-none items-center gap-2 sm:max-w-36 sm:flex-1">
 			<AgentContextSelect
 				value={selected}
 				groups={groups}

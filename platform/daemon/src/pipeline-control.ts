@@ -1,8 +1,7 @@
-import { readRuntimeConfigFile } from "./runtime-config-file";
-import { lstat } from "node:fs/promises";
+import { readRuntimeConfigFile, publishRuntimeConfigFile } from "./runtime-config-file";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
-import { atomicPrivateWrite, withFileLock } from "@signet/sdk/node";
+import { withFileLock } from "@signet/sdk/node";
 import { auditStatement, IdentityError, organizationWrite } from "./auth/organization-store";
 import type { Principal } from "./auth/principal";
 import { loadMemoryConfigFromText } from "./memory-config";
@@ -15,12 +14,6 @@ import {
 	telemetryRef,
 } from "./routes/state";
 
-const MAX_CONFIG_BYTES = 1_048_576;
-async function publish(file: string, text: string): Promise<void> {
-	if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new IdentityError(413, "config_too_large");
-	if ((await lstat(file)).isSymbolicLink()) throw new IdentityError(409, "config_symlink");
-	await atomicPrivateWrite(file, text);
-}
 export async function changePipelinePause(p: Principal, paused: boolean) {
 	if (!p.permissions.has("admin")) throw new IdentityError(403, "permission", "Requires the admin role");
 	if (p.boundAgentId !== null) throw new IdentityError(403, "agent_not_permitted");
@@ -45,11 +38,11 @@ export async function changePipelinePause(p: Principal, paused: boolean) {
 			]);
 			if (changed && restart) {
 				try {
-					await publish(previous.file, nextText);
+					await publishRuntimeConfigFile(previous.file, nextText);
 					await restart(next, telemetryRef);
 				} catch (error) {
 					const restored = await Promise.allSettled([
-						publish(previous.file, previous.text).then(() => restart(before, telemetryRef)),
+						publishRuntimeConfigFile(previous.file, previous.text).then(() => restart(before, telemetryRef)),
 					]);
 					const rollback = restored[0];
 					if (rollback?.status === "rejected")

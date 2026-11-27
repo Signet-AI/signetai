@@ -19,7 +19,13 @@ export function instanceOrigin(input: string): string | null {
 	return url.origin;
 }
 
-export function OnboardingEntry({ personal }: { readonly personal: ReactNode }) {
+export function OnboardingEntry({
+	personal,
+	onPersonal,
+}: {
+	readonly personal: ReactNode;
+	readonly onPersonal?: () => void;
+}) {
 	const [choice, setChoice] = useState<"personal" | "join" | "host" | null>(null);
 	const [url, setUrl] = useState("");
 	const origin = instanceOrigin(url);
@@ -53,7 +59,14 @@ export function OnboardingEntry({ personal }: { readonly personal: ReactNode }) 
 						] as const
 					).map(([value, label, description]) => (
 						<div className="flex flex-col gap-3 rounded-lg border p-4" key={value}>
-							<Button variant="outline" className="self-start" onClick={() => setChoice(value)}>
+							<Button
+								variant="outline"
+								className="self-start"
+								onClick={() => {
+									if (value === "personal") onPersonal?.();
+									setChoice(value);
+								}}
+							>
 								{label}
 							</Button>
 							<p className="text-small text-muted-foreground">{description}</p>
