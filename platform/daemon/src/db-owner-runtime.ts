@@ -326,7 +326,10 @@ async function executeInlineOwnerRequest(
 	if (request.kind === "organization_memory_purge")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			if (!("exec" in db)) throw new Error("Purge requires writer");
-			return purgeAuthoredMemoryBatchInTx(db, request.userId, request.author);
+			return purgeAuthoredMemoryBatchInTx(db, request.userId, request.author, {
+				scope: request.scope,
+				classificationId: request.classificationId,
+			});
 		});
 	if (request.kind === "agent_remove")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
@@ -343,6 +346,7 @@ async function executeInlineOwnerRequest(
 		case "transcript_capture_transition":
 		case "transcript_capture_enqueue":
 		case "fts_partition":
+		case "connector_errors":
 		case "organization_purge_plan":
 		case "operator_job":
 		case "classification":
@@ -918,17 +922,23 @@ export async function dbOwnerReflectionAnswer(input: ReflectionAnswerInput, acce
 export async function dbOwnerOrganizationPurgePlan(
 	userId: string,
 	scope: import("./read-scope").ReadScope,
+	classificationId?: string,
 ): Promise<Record<string, number>> {
 	return submitWithAdmission(
 		await getDbOwner(),
-		{ kind: "organization_purge_plan", userId, scope },
+		{ kind: "organization_purge_plan", userId, scope, classificationId },
 		{ operation: "organization.purge-plan", lane: "read", deadlineMs: 15_000 },
 	);
 }
-export async function dbOwnerOrganizationPurge(userId: string, author: WriteAuthor): Promise<PurgeBatchResult> {
+export async function dbOwnerOrganizationPurge(
+	userId: string,
+	author: WriteAuthor,
+	scope: import("./read-scope").ReadScope,
+	classificationId?: string,
+): Promise<PurgeBatchResult> {
 	return submitWithAdmission(
 		await getDbOwner(),
-		{ kind: "organization_memory_purge", userId, author },
+		{ kind: "organization_memory_purge", userId, author, scope, classificationId },
 		{ operation: "organization.purge-memory", lane: "write", deadlineMs: 60_000 },
 	);
 }

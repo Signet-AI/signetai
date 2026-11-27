@@ -173,17 +173,13 @@ export class Fixture {
 			await this.invite(
 				name,
 				name === "carol" ? [this.hrGroupId] : name === "alice" || name === "bob" ? [this.engId] : [],
+				"member",
+				name === "cora",
 			);
 		await this.invite("audra", [this.hrGroupId], "admin");
 	}
 	async setup(seedEvidence = true): Promise<void> {
 		await this.setupIdentity();
-		success(
-			await request(this.daemon.origin, `/api/org/users/${this.user("cora").id}`, this.admin, "PATCH", {
-				compliance: true,
-			}),
-			"PATCH /api/org/users/:id compliance",
-		);
 		this.engAgent = text(
 			success(
 				await request(this.daemon.origin, "/api/agents", this.admin, "POST", {
@@ -290,7 +286,12 @@ export class Fixture {
 		await this.seedReadState(0);
 		await this.classify("source", this.hrSource, this.user("carol").agentId);
 	}
-	async invite(name: string, groupIds: string[] = [], role: "member" | "admin" = "member"): Promise<User> {
+	async invite(
+		name: string,
+		groupIds: string[] = [],
+		role: "member" | "admin" = "member",
+		compliance = false,
+	): Promise<User> {
 		const invited = success(
 			await request(this.daemon.origin, "/api/org/invites", this.admin, "POST", { role, groupIds }),
 			"POST /api/org/invites",
@@ -306,6 +307,13 @@ export class Fixture {
 		});
 		success(accepted, "POST /api/auth/invites/accept");
 		const web = browser(accepted);
+		if (compliance)
+			success(
+				await request(this.daemon.origin, `/api/org/users/${id(record(accepted.body).user)}`, this.admin, "PATCH", {
+					compliance: true,
+				}),
+				"Set compliance before approving the device",
+			);
 		const who = success(await request(this.daemon.origin, "/api/auth/whoami", web), "GET /api/auth/whoami");
 		assert.equal(record(who.user).role, role, "Invite must preserve the requested organization role");
 		const dev = await device(this.daemon, web, name);

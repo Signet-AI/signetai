@@ -440,7 +440,6 @@ export {
 	addNotionSource,
 	addObsidianSource,
 	addWebSource,
-	deterministicImportedSourceId,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
 	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
@@ -769,6 +768,7 @@ import { COMPARTMENT_TABLES as HISTORICAL_COMPARTMENT_TABLES } from "./migration
 export { backfillEvidenceCitations, configureEvidencePurgeConnection } from "./migrations/177-classifications";
 export const COMPARTMENT_TABLES = [
 	...HISTORICAL_COMPARTMENT_TABLES,
+	"import_content_registry",
 	"entity_aliases",
 	"memory_entity_mentions",
 	"derived_memory_sources",

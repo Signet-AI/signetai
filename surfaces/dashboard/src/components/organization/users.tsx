@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { getDesktopBridge } from "@/lib/desktop";
 import { Panel } from "@/components/shell/panel";
 import { Button } from "@/components/ui/button";
 import {
@@ -413,37 +414,41 @@ export function UsersContent({ users, refresh }: { users: readonly OrganizationU
 					options={ORGANIZATION_ROLES.map((value) => ({ value, label: displayLabel(value) }))}
 				/>
 			</ConfirmationDialog>
-			<OrganizationBlock title="Invite a person">
-				<TextField label="Email" type="email" value={email} onChange={setEmail} />
-				<Choice
-					label="Invitation role"
-					value={role}
-					onChange={setRole}
-					options={ORGANIZATION_ROLES.map((value) => ({ value, label: displayLabel(value) }))}
-				/>
-				<Action disabled={busy} onClick={() => void createInvite()}>
-					Create invitation
-				</Action>
-				{invite && (
-					<div role="status" className="flex flex-col gap-2">
-						<p>This invitation is shown once. Copy it now.</p>
-						<code className="break-all select-all">{invite}</code>
-						<Action
-							secondary
-							onClick={() => {
-								void navigator.clipboard
-									.writeText(invite)
-									.catch(() => setError("Copy failed. Select the invitation manually."));
-							}}
-						>
-							Copy invitation
-						</Action>
-						<Action secondary onClick={() => setInvite(null)}>
-							Dismiss invitation
-						</Action>
-					</div>
-				)}
-			</OrganizationBlock>
+			{getDesktopBridge() ? (
+				<p>Create invitations from the browser dashboard or the CLI</p>
+			) : (
+				<OrganizationBlock title="Invite a person">
+					<TextField label="Email" type="email" value={email} onChange={setEmail} />
+					<Choice
+						label="Invitation role"
+						value={role}
+						onChange={setRole}
+						options={ORGANIZATION_ROLES.map((value) => ({ value, label: displayLabel(value) }))}
+					/>
+					<Action disabled={busy} onClick={() => void createInvite()}>
+						Create invitation
+					</Action>
+					{invite && (
+						<div role="status" className="flex flex-col gap-2">
+							<p>This invitation is shown once. Copy it now.</p>
+							<code className="break-all select-all">{invite}</code>
+							<Action
+								secondary
+								onClick={() => {
+									void navigator.clipboard
+										.writeText(invite)
+										.catch(() => setError("Copy failed. Select the invitation manually."));
+								}}
+							>
+								Copy invitation
+							</Action>
+							<Action secondary onClick={() => setInvite(null)}>
+								Dismiss invitation
+							</Action>
+						</div>
+					)}
+				</OrganizationBlock>
+			)}
 		</div>
 	);
 }

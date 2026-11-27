@@ -1005,6 +1005,23 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 					request.actor.userId,
 					new Date().toISOString(),
 				);
+			if (request.target.kind === "source") {
+				const sources = db
+					.prepare(
+						"SELECT source_id FROM import_content_registry WHERE agent_id=? AND (source_id=? OR substr(source_id,1,length(?)+1)=?||':')",
+					)
+					.all(request.target.agentId, request.target.id, request.target.id, request.target.id);
+				for (const source of sources) {
+					const sourceId = z.string().parse(source.source_id);
+					const labels = importSourceLabelsInTx(db, request.target.agentId, sourceId);
+					const compartment = compartmentFor(db, labels);
+					db.prepare("UPDATE import_content_registry SET compartment_id=? WHERE agent_id=? AND source_id=?").run(
+						compartment,
+						request.target.agentId,
+						sourceId,
+					);
+				}
+			}
 			db.prepare("UPDATE org_jobs SET status='running',started_at=?,progress_json=? WHERE id=?").run(
 				new Date().toISOString(),
 				JSON.stringify({ table: 0, rowid: 0, updated: 0 }),
@@ -1077,6 +1094,14 @@ function visibility(db: MigrationDb, subject: AudienceSubject) {
 		.prepare(`SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} LIMIT 1`)
 		.get(subject.userId, subject.userId);
 	return { compartments: readable(db, subject), ...(pending ? { inFlightUserId: subject.userId } : {}) };
+}
+function importSourceLabelsInTx(db: MigrationDb, agentId: string, sourceId: string): readonly string[] {
+	return db
+		.prepare(
+			"SELECT DISTINCT classification_id FROM classification_assignments WHERE agent_id=? AND (target_kind='agent' OR (target_kind='source' AND (target_id=? OR substr(?,1,length(target_id)+1)=target_id||':'))) ORDER BY classification_id",
+		)
+		.all(agentId, sourceId, sourceId)
+		.map((row) => z.string().parse(row.classification_id));
 }
 function importLabels(
 	db: MigrationDb,
@@ -1173,6 +1198,88 @@ export function assertImportSourceLabelsInTx(
 	return expected;
 }
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
+	if (request.op === "import-identity")
+		return transaction(db, () => {
+			if (!/^[a-f0-9]{64}$/.test(request.contentHash)) throw new Error("invalid_import");
+			const job = request.jobId
+				? db
+						.prepare("SELECT labels_json,author_user_id FROM source_import_jobs WHERE id=? AND agent_id=?")
+						.get(request.jobId, request.agentId)
+				: null;
+			if (request.jobId && (!job || job.author_user_id !== request.author.userId)) throw new Error("permission");
+			const labels = job
+				? z.array(z.string()).parse(JSON.parse(z.string().parse(job.labels_json)))
+				: importLabels(db, request.agentId, request.author, request.actor, request.classificationId);
+			assertImportAudience(db, labels, request.author.userId);
+			const missing = db
+				.prepare(
+					"SELECT value FROM json_each(?) s WHERE NOT EXISTS(SELECT 1 FROM import_content_registry r WHERE r.agent_id=? AND r.source_id=json_extract(s.value,'$.id'))",
+				)
+				.all(JSON.stringify(request.legacySources), request.agentId);
+			for (const row of missing) {
+				const legacy = z
+					.object({
+						id: z.string(),
+						authorUserId: z.string().nullable(),
+						authorCredential: z.string(),
+						createdAt: z.string(),
+					})
+					.parse(JSON.parse(z.string().parse(row.value)));
+				const compartment = compartmentFor(db, importSourceLabelsInTx(db, request.agentId, legacy.id));
+				db.prepare(
+					"INSERT OR IGNORE INTO import_content_registry(agent_id,source_id,content_hash,compartment_id,author_user_id,author_credential,created_at) VALUES(?,?,?,?,?,?,?)",
+				).run(
+					request.agentId,
+					legacy.id,
+					request.contentHash,
+					compartment,
+					legacy.authorUserId,
+					legacy.authorCredential,
+					legacy.createdAt,
+				);
+			}
+			const compartment = compartmentFor(db, labels);
+			const subject = {
+				local: request.author.userId === null && request.actor?.legacy !== true,
+				userId: request.author.userId,
+				groupIds: [],
+			};
+			const scope: ReadScope = {
+				reach: { kind: "own", agentId: request.agentId },
+				projects: null,
+				...(request.actor?.legacy ? { compartments: [] } : visibility(db, subject)),
+			};
+			const clause = readScopeSql("r", scope, { visibility: null, memory: null, session: null, source: "source_id" });
+			if (
+				request.author.userId !== null &&
+				db
+					.prepare(
+						`SELECT 1 FROM import_content_registry r WHERE r.agent_id=? AND r.content_hash=? AND r.author_user_id=? AND r.compartment_id IS NOT ? ${clause.sql} LIMIT 1`,
+					)
+					.get(request.agentId, request.contentHash, request.author.userId, compartment, ...clause.args)
+			)
+				throw new Error("import_classification_conflict");
+			const duplicate = db
+				.prepare(
+					`SELECT r.source_id FROM import_content_registry r WHERE r.agent_id=? AND r.content_hash=? AND r.compartment_id IS ? ${clause.sql} ORDER BY r.created_at,r.rowid LIMIT 1`,
+				)
+				.get(request.agentId, request.contentHash, compartment, ...clause.args);
+			const duplicateSourceId = text(duplicate?.source_id);
+			const sourceId = !request.newGeneration && duplicateSourceId ? duplicateSourceId : id("imp");
+			if (sourceId !== duplicateSourceId)
+				db.prepare(
+					"INSERT INTO import_content_registry(agent_id,source_id,content_hash,compartment_id,author_user_id,author_credential,created_at) VALUES(?,?,?,?,?,?,?)",
+				).run(
+					request.agentId,
+					sourceId,
+					request.contentHash,
+					compartment,
+					request.author.userId,
+					request.author.credential,
+					new Date().toISOString(),
+				);
+			return { classificationKey: JSON.stringify([...labels].sort()), sourceId, duplicateSourceId };
+		});
 	if (request.op === "import-create")
 		return transaction(db, () => {
 			const input = request.input;

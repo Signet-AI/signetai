@@ -14,7 +14,6 @@ import {
 	addNotionSource,
 	addObsidianSource,
 	addWebSource,
-	deterministicImportedSourceId,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
@@ -730,7 +729,10 @@ describe("sources-config", () => {
 			contentHash: input.contentHash,
 			format: "json",
 		});
-		expect(first.source.id).toBe(deterministicImportedSourceId(input.contentHash));
+		const independent = addImportedSource(input, tmp());
+		expect(independent.ok).toBe(true);
+		if (independent.ok === false) throw new Error(independent.error);
+		expect(first.source.id).not.toBe(independent.source.id);
 
 		const skipped = addImportedSource({ ...input, duplicateMode: "skip" }, agentsDir);
 		expect(skipped).toEqual({ ok: true, source: first.source, created: false, duplicate: true });

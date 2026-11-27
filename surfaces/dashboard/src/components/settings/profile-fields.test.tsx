@@ -11,7 +11,6 @@ test("SSO profile fields are read-only without a save affordance", () => {
 			ssoManaged
 			busy={false}
 			onNameChange={() => {}}
-			onEmailChange={() => {}}
 			onSubmit={() => {}}
 		/>,
 	);
@@ -25,14 +24,14 @@ test("password profiles offer only the fields authorized by the daemon", () => {
 		<ProfileFields
 			name="Alice"
 			email="alice@example.org"
-			editableFields={["displayName", "email"]}
+			editableFields={["displayName"]}
 			ssoManaged={false}
 			busy={false}
 			onNameChange={() => {}}
-			onEmailChange={() => {}}
 			onSubmit={() => {}}
 		/>,
 	);
-	expect(html).not.toContain('readOnly=""');
+	expect(html.match(/readOnly=""/g)?.length).toBe(1);
+	expect(html).toContain("Ask an administrator to change your email");
 	expect(html).toContain("Save profile");
 });

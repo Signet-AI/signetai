@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { getDesktopBridge } from "@/lib/desktop";
 import { displayLabel } from "./controls";
 import { getJSONResult } from "@/lib/api";
 import type {
@@ -50,6 +51,12 @@ export function SharedKeyForm({
 		setError(result.error);
 		setSecret(result.data?.secret ?? null);
 	};
+	if (getDesktopBridge())
+		return (
+			<OrganizationBlock title="Issue a shared-agent key">
+				<p>Create keys from the browser dashboard or the CLI</p>
+			</OrganizationBlock>
+		);
 	return (
 		<OrganizationBlock
 			title="Issue a shared-agent key"

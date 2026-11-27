@@ -46,7 +46,7 @@ test("dashboard opens a one-time fragment code, never a bearer", async () => {
 		await organizationDashboard(new NodeTransport(target), target.url, false, async (value) => {
 			opened.push(value);
 		});
-		expect(opened).toEqual([`${server.url.origin}/#handoff=one-time-handoff`]);
+		expect(opened).toEqual([`${server.url.origin}/#signet-handoff=one-time-handoff`]);
 		expect(opened.join()).not.toContain("fixture-bearer");
 		await expect(organizationDashboard(new NodeTransport(target), target.url, true, async () => {})).rejects.toThrow(
 			"--non-interactive",

@@ -9,7 +9,6 @@ export function ProfileFields({
 	ssoManaged,
 	busy,
 	onNameChange,
-	onEmailChange,
 	onSubmit,
 }: {
 	readonly name: string;
@@ -18,7 +17,6 @@ export function ProfileFields({
 	readonly ssoManaged: boolean;
 	readonly busy: boolean;
 	readonly onNameChange: (value: string) => void;
-	readonly onEmailChange: (value: string) => void;
 	readonly onSubmit: (event: FormEvent) => void;
 }) {
 	return (
@@ -37,16 +35,9 @@ export function ProfileFields({
 			</label>
 			<label htmlFor="profile-email" className="flex flex-col gap-1.5 text-small">
 				Email
-				<Input
-					id="profile-email"
-					name="email"
-					type="email"
-					value={email}
-					maxLength={320}
-					readOnly={ssoManaged || !editableFields.includes("email")}
-					onChange={(event) => onEmailChange(event.target.value)}
-				/>
+				<Input id="profile-email" name="email" type="email" value={email} maxLength={320} readOnly />
 			</label>
+			<p className="m-0 text-small text-muted-foreground">Ask an administrator to change your email</p>
 			{ssoManaged && <p className="m-0 text-small text-muted-foreground">Managed by your identity provider</p>}
 			{!ssoManaged && editableFields.length > 0 && (
 				<Button type="submit" disabled={busy} className="self-start">

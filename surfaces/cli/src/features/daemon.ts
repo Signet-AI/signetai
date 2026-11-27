@@ -1,3 +1,4 @@
+import { DASHBOARD_HANDOFF_PARAM } from "../../../../libs/sdk/src/dashboard-handoff";
 import type { ChildProcess, DaemonRuntime } from "@signet/core";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -133,7 +134,7 @@ async function signedInDashboardUrl(target: DashboardTarget): Promise<string> {
 	if (mode.data.mode === "local" || !target.hasCredential) return target.url;
 	const result = await target.fetchDaemonResult<{ code?: unknown }>("/api/auth/handoff", { method: "POST" });
 	if (result.ok && typeof result.data.code === "string") {
-		return `${target.url}/#signet-handoff=${encodeURIComponent(result.data.code)}`;
+		return `${target.url}/#${DASHBOARD_HANDOFF_PARAM}=${encodeURIComponent(result.data.code)}`;
 	}
 	const reason = result.ok
 		? "the daemon returned no handoff code"

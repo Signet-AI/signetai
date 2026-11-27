@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSourcesConfig } from "@signet/core";
+import { addImportedSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { localPrincipal } from "../auth/principal";
 import { LOCAL_AUTHOR } from "../auth/audit-owner";
@@ -60,6 +60,36 @@ describe("import routes", () => {
 		});
 		return instance;
 	}
+
+	it("local re-import preserves the pre-registry source ID golden", async () => {
+		const sourceId = "import:e56c76bed6269b89:419e2ff8";
+		const legacy = addImportedSource(
+			{
+				fileName: "golden.md",
+				format: "markdown",
+				agentId: "import-test-agent",
+				contentHash: "e56c76bed6269b89a21624022927aa12373087b27da6bbc54d950e15a3be68e6",
+				sourceId,
+			},
+			dir,
+		);
+		expect(legacy.ok).toBe(true);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const response = await app().request("/api/sources/import", {
+				method: "POST",
+				body: formWithFile(new File(["legacy local golden document"], "golden.md", { type: "text/markdown" })),
+			});
+			expect(response.status).toBe(201);
+			expect((await response.json()).files[0].sourceId).toBe(sourceId);
+		}
+		expect(loadSourcesConfig(dir).sources.map((source) => source.id)).toEqual([sourceId]);
+		expect(loadSourcesConfig(dir).sources[0]?.providerSettings?.contentRegistry).toBe(true);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT source_id FROM import_content_registry WHERE agent_id='import-test-agent'").all(),
+			),
+		).toEqual([{ source_id: sourceId }]);
+	});
 
 	it("admits multipart bytes before document normalization", async () => {
 		const seen: Uint8Array[] = [];

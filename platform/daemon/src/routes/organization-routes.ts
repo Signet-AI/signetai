@@ -68,7 +68,10 @@ function endpoint(fn: (c: Context) => Promise<Response>): MiddlewareHandler {
 		try {
 			return await fn(c);
 		} catch (error) {
-			if (error instanceof IdentityError) return failure(c, error);
+			if (error instanceof IdentityError) {
+				if (error.status === 429 && c.req.path === "/api/org/users/lookup") c.header("Retry-After", "60");
+				return failure(c, error);
+			}
 			if (error instanceof z.ZodError || error instanceof SyntaxError)
 				return c.json({ error: "Invalid request body", reason: "invalid_request" }, 400);
 			throw error;
@@ -323,6 +326,7 @@ export function registerOrganizationRoutes(
 		"/api/auth/handoff/redeem",
 		active(async (c) => {
 			const result = await operations.redeemDashboardHandoff(await body(c));
+			if ("confirmationRequired" in result) return c.json(result);
 			sessionCookies(c, result, c.get("organization"));
 			return c.json(browserResult(result));
 		}),
@@ -381,6 +385,18 @@ export function registerOrganizationRoutes(
 	app.delete(
 		"/api/org/invites/:id",
 		active(async (c) => c.json(await admin.deleteInvite(user(c), c.req.param("id") ?? ""))),
+	);
+	app.post(
+		"/api/classifications/:id/purge-author",
+		active(async (c) => {
+			const result = await admin.purgeClassificationAuthor(
+				user(c),
+				c.req.param("id") ?? "",
+				await body(c),
+				workspaceRoot,
+			);
+			return c.json(result, "jobId" in result ? 202 : 200);
+		}),
 	);
 	app.get(
 		"/api/org/users/lookup",

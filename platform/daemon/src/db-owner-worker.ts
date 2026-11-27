@@ -1468,15 +1468,20 @@ export function runDbOwnerWorker(): void {
 			const input = job.request.input;
 			return withBusyRetry(() => txAnswerReflection(db, input), context);
 		}
+		if (job.request.kind === "connector_errors") {
+			const { connectorErrorsInOwner } = await import("./auth/audit-owner");
+			return connectorErrorsInOwner(db, ownerDbPath, job.request.input);
+		}
 		if (job.request.kind === "organization_purge_plan") {
 			const { planOffboardPurgeInTx } = await import("./auth/organization-purge");
-			return planOffboardPurgeInTx(db, job.request.userId, job.request.scope);
+			return planOffboardPurgeInTx(db, job.request.userId, job.request.scope, job.request.classificationId);
 		}
 		if (job.request.kind === "organization_memory_purge") {
 			const { purgeAuthoredMemoryBatchInTx } = await import("./auth/organization-purge");
 			const userId = job.request.userId;
 			const author = job.request.author;
-			return withBusyRetry(() => purgeAuthoredMemoryBatchInTx(db, userId, author), context);
+			const options = { scope: job.request.scope, classificationId: job.request.classificationId };
+			return withBusyRetry(() => purgeAuthoredMemoryBatchInTx(db, userId, author, options), context);
 		}
 		if (job.request.kind === "agent_remove") {
 			db.exec("BEGIN IMMEDIATE");

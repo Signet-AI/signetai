@@ -500,7 +500,8 @@ function requireWorkspaceSender(event: Electron.IpcMainInvokeEvent): void {
 	if (
 		!frame ||
 		frame !== event.sender.mainFrame ||
-		!["app://signet/desktop/workspaces", "app://signet/"].some((prefix) => frame.url === prefix)
+		frame.url !== "app://signet/desktop/workspaces" ||
+		(event.sender !== mainWindow?.webContents && event.sender !== workspaceWindow?.webContents)
 	)
 		throw new Error("Workspace controls require the desktop workspace screen");
 }
