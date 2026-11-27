@@ -1024,15 +1024,22 @@ export async function readOwnerVectorsBySource(
 	const vectors: Array<{ source_id: string; vector: Float32Array }> = [];
 	for (let offset = 0; offset < sourceIds.length; offset += pageRows) {
 		const pageIds = sourceIds.slice(offset, offset + pageRows);
-		const placeholders = pageIds.map(() => "?").join(", ");
 		let cursor = 0;
 		for (;;) {
 			const rows = await read(
-				`SELECT e.rowid, e.source_id, hex(e.vector) AS vector_hex FROM embeddings e
-				 WHERE e.source_type = 'memory' AND e.source_id IN (${placeholders})
-				   AND e.dimensions = ? AND length(e.vector) = ? AND e.rowid > ?${scope.sql}
+				`WITH requested AS MATERIALIZED (SELECT DISTINCT value AS id FROM json_each(?))
+				 SELECT e.rowid, e.source_id, hex(e.vector) AS vector_hex
+				 FROM requested CROSS JOIN embeddings e ON e.source_type='memory' AND e.source_id=requested.id
+				 WHERE e.dimensions = ? AND length(e.vector) = ? AND e.rowid > ?${scope.sql}
 				 ORDER BY e.rowid LIMIT ?`,
-				[...pageIds, dimensions, dimensions * Float32Array.BYTES_PER_ELEMENT, cursor, ...scope.args, pageRows],
+				[
+					JSON.stringify(pageIds),
+					dimensions,
+					dimensions * Float32Array.BYTES_PER_ELEMENT,
+					cursor,
+					...scope.args,
+					pageRows,
+				],
 				pageRows,
 			);
 			for (const row of rows) {
