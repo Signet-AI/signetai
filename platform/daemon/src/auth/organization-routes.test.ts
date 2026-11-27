@@ -494,10 +494,29 @@ describe("organization HTTP flows", () => {
 		).json();
 		expect((await call(path, "GET", undefined, key.secret)).status).toBe(403);
 	});
+	test("compliance lookup requires two characters and limits each principal", async () => {
+		await claim();
+		const alice = await member("lookup-alice");
+		await call(`/api/org/users/${alice.userId}`, "PATCH", { compliance: true });
+		expect((await call("/api/org/users/lookup?q=a", "GET", undefined, alice.token)).status).toBe(400);
+	});
+
+	test("compliance lookup rate limit is per principal", async () => {
+		await claim();
+		const alice = await member("limited-alice");
+		await call(`/api/org/users/${alice.userId}`, "PATCH", { compliance: true });
+		for (let i = 0; i < 30; i++)
+			expect((await call("/api/org/users/lookup?q=al", "GET", undefined, alice.token)).status).toBe(200);
+		const limited = await call("/api/org/users/lookup?q=al", "GET", undefined, alice.token);
+		expect(limited.status).toBe(429);
+		expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThan(0);
+		expect((await call("/api/org/users/lookup?q=al")).status).toBe(200);
+	});
+
 	test("bounded user lookup serves compliance without widening the directory", async () => {
 		await claim();
 		const alice = await member("alice");
-		const bob = await member("bob");
+		const bob = await member("albert");
 		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, bob.token)).status).toBe(403);
 		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
 		const found = await call("/api/org/users/lookup?q=alice&limit=1", "GET", undefined, bob.token);
@@ -508,12 +527,14 @@ describe("organization HTTP flows", () => {
 		expect(
 			(await (await call("/api/org/users/lookup?q=%40example.test", "GET", undefined, bob.token)).json()).users,
 		).toEqual([{ id: alice.userId, displayName: "alice", email: "alice@example.test" }]);
-		expect((await (await call("/api/org/users/lookup?q=%25", "GET", undefined, bob.token)).json()).users).toEqual([]);
-		const page = await (await call("/api/org/users/lookup?q=a&limit=1", "GET", undefined, bob.token)).json();
+		expect((await (await call("/api/org/users/lookup?q=%25%25", "GET", undefined, bob.token)).json()).users).toEqual(
+			[],
+		);
+		const page = await (await call("/api/org/users/lookup?q=al&limit=1", "GET", undefined, bob.token)).json();
 		expect(page.users).toHaveLength(1);
 		expect(typeof page.nextCursor).toBe("string");
 		const next = await (
-			await call(`/api/org/users/lookup?q=a&limit=1&cursor=${page.nextCursor}`, "GET", undefined, bob.token)
+			await call(`/api/org/users/lookup?q=al&limit=1&cursor=${page.nextCursor}`, "GET", undefined, bob.token)
 		).json();
 		expect(next.users).toHaveLength(1);
 		expect(next.users[0].id).not.toBe(page.users[0].id);

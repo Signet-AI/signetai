@@ -1,3 +1,4 @@
+import { AuthRateLimiter } from "./rate-limiter";
 import { oidcSchema, settingsSchema } from "./organization-settings-contract";
 import { operatorActor, operatorRequest } from "../operator-jobs";
 import { attemptAsync } from "@signet/core";
@@ -25,15 +26,19 @@ import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 
 const text = z.string().trim().min(1).max(128);
+const lookupLimiter = new AuthRateLimiter(60_000, 30);
 export async function lookupUsers(p: Principal, input: unknown) {
 	if (!(p.permissions.has("admin") || (p.compliance && p.permissions.has("classify"))))
 		throw new IdentityError(403, "permission", "Requires admin or compliance access");
 	if (p.boundAgentId !== null) throw new IdentityError(403, "agent_not_permitted");
 	if (p.allowedProjects !== null) throw new IdentityError(403, "project_not_permitted");
 	const data = z
-		.object({ q: text, limit: z.coerce.number().int().min(1).max(50).default(20), cursor: text.optional() })
+		.object({ q: text.min(2), limit: z.coerce.number().int().min(1).max(50).default(20), cursor: text.optional() })
 		.strict()
 		.parse(input);
+	const principalId = p.userId ?? `${p.credential.kind}:${p.credential.id}`;
+	if (!lookupLimiter.check(principalId).allowed) throw new IdentityError(429, "rate_limit");
+	lookupLimiter.record(principalId);
 	const pattern = `%${data.q.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
 	const rows = await organizationQuery<readonly { id: string; displayName: string; email: string | null }[]>(
 		statement(

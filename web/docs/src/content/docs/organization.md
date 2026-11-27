@@ -165,7 +165,7 @@ Organization Dreaming status and pass responses include the system author (`{ ki
 
 ## User lookup for compliance
 
-`GET /api/org/users/lookup?q=<name-or-email>` lets administrators and compliance officers find active people without granting the full user directory. Results contain only `id`, `displayName`, and `email`. Search is literal, case-insensitive, and bounded to 128 characters. Pages default to 20 people with a maximum `limit` of 50; pass the returned `nextCursor` as `cursor` for the next page. Agent- or project-restricted credentials cannot search this organization-wide directory. Queries are audited without recording the search text. `GET /api/org/users` remains admin-only. Agents can use the same operation through `signet_org_user_lookup`.
+`GET /api/org/users/lookup?q=<name-or-email>` lets administrators and compliance officers find active people without granting the full user directory. Results contain only `id`, `displayName`, and `email`. Search is literal, case-insensitive, and requires 2–128 characters. Each principal may make 30 queries per minute; excess requests return 429 with `Retry-After`. Pages default to 20 people with a maximum `limit` of 50; pass the returned `nextCursor` as `cursor` for the next page. Agent- or project-restricted credentials cannot search this organization-wide directory. Queries are audited without recording the search text. `GET /api/org/users` remains admin-only. Agents can use the same operation through `signet_org_user_lookup`.
 
 ## Worker pause controls
 
