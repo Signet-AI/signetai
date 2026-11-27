@@ -149,7 +149,7 @@ describe("organization HTTP flows", () => {
 		).toBe(400);
 	});
 
-	test("L2 handoff previews identity without replacing an existing session until confirmation", async () => {
+	test("handoff previews identity without replacing an existing session until confirmation", async () => {
 		await claim();
 		const bob = await member("handoff-bob");
 		const handoff = await (await call("/api/auth/handoff", "POST", {})).json();
@@ -168,7 +168,7 @@ describe("organization HTTP flows", () => {
 		expect((await confirmed.json()).user.displayName).toBe("Admin");
 	});
 
-	test.each(["principal", "global"])("L3 key exchange enforces the %s active-session cap", async (scope) => {
+	test.each(["principal", "global"])("key exchange enforces the %s active-session cap", async (scope) => {
 		const root = await claim();
 		const other = scope === "global" ? await member("exchange-other") : { userId: root.user.id, token: admin };
 		const expiresAt = new Date(Date.now() + 300_000).toISOString();
@@ -192,7 +192,7 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'cap-%'")]);
 		expect((await call("/api/auth/session", "POST", {}, target.secret)).status).toBe(200);
 	});
-	test("L3 handoff caps apply across a user's sessions with Retry-After", async () => {
+	test("handoff caps apply across a user's sessions with Retry-After", async () => {
 		const root = await claim();
 		const { issueSession } = await import("./organization-store");
 		for (let sessionIndex = 0; sessionIndex < 4; sessionIndex++) {
