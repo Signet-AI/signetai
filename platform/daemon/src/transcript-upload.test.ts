@@ -18,9 +18,11 @@ import { getTranscriptCaptureStatus, runTranscriptCaptureOnce } from "./transcri
 import * as safeFs from "./transcript-import-safe-fs";
 import {
 	type TranscriptUploadEnd,
+	type TranscriptUploadRead,
 	type TranscriptUploadRequest,
 	drainTranscriptUploadPurges,
 	endTranscriptUpload,
+	readTranscriptUploadContent,
 	stopTranscriptUploadPurges,
 	uploadTranscriptRange,
 } from "./transcript-upload";
@@ -103,6 +105,10 @@ describe("transcript upload ranges", () => {
 			sessionKey: "sess-1",
 			endedAt: "2026-11-26T11:00:00.000Z",
 		};
+	}
+
+	function read(maxBytes = 1024): TranscriptUploadRead {
+		return { basePath: dir, agentId: "noam", sessionKey: "sess-1", maxBytes };
 	}
 
 	async function captureJobs(): Promise<Array<{ id: string; status: string; ended_at: string | null }>> {
@@ -698,5 +704,49 @@ describe("transcript upload ranges", () => {
 		const ended = await endTranscriptUpload(accessor, end());
 		expect(ended).toEqual({ status: "none" });
 		expect(await captureJobs()).toEqual([]);
+	});
+
+	it("reads the committed lines of an upload", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		await uploadTranscriptRange(accessor, request('{"b":2}\n', { offset: 8 }));
+		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"a":1}\n{"b":2}\n');
+	});
+
+	it("reads an upload up to its last complete line", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n{"b"'));
+		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"a":1}\n');
+	});
+
+	it("reads nothing for a session without an upload", async () => {
+		init();
+		const accessor = getDbAccessor();
+		expect(await readTranscriptUploadContent(accessor, read())).toBe(null);
+	});
+
+	it("reads nothing from an upload with no complete line", async () => {
+		init();
+		const accessor = getDbAccessor();
+		expect(await uploadTranscriptRange(accessor, request('{"a":1'))).toMatchObject({ status: "committed" });
+		expect(await readTranscriptUploadContent(accessor, read())).toBe(null);
+	});
+
+	it("reads nothing from an upload larger than the limit", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n{"b":2}\n'));
+		expect(await readTranscriptUploadContent(accessor, read(15))).toBe(null);
+		expect(await readTranscriptUploadContent(accessor, read(16))).toBe('{"a":1}\n{"b":2}\n');
+	});
+
+	it("reads the latest generation of an upload", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"old":1}\n'));
+		await uploadTranscriptRange(accessor, request('{"new":1}\n', { generation: 1 }));
+		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"new":1}\n');
 	});
 });

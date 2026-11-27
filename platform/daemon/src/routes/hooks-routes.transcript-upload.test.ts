@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
-import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
 import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
 import { transcriptUploadAgentDirectory } from "../transcript-upload-paths";
@@ -77,6 +77,52 @@ async function patch(
 			"Upload-Checksum": options.checksum ?? sha(body),
 		},
 		body: options.stream ?? body,
+	});
+}
+
+const SKILL_TRANSCRIPT = `${[
+	JSON.stringify({
+		sessionId: "sess-1",
+		timestamp: "2026-11-26T10:00:00.000Z",
+		cwd: "/repo",
+		message: { content: [{ type: "tool_use", name: "Skill", id: "toolu_AAA", input: { skill: "web-search" } }] },
+	}),
+	JSON.stringify({
+		sessionId: "sess-1",
+		timestamp: "2026-11-26T10:00:01.000Z",
+		cwd: "/repo",
+		message: { content: [{ type: "tool_result", tool_use_id: "toolu_AAA", is_error: false }] },
+	}),
+].join("\n")}\n`;
+
+type SkillRow = { skill_name: string; tool_use_id: string | null; origin: string };
+
+async function skillRows(): Promise<SkillRow[]> {
+	const deadline = Date.now() + 2000;
+	for (;;) {
+		const rows = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db
+					.prepare("SELECT skill_name, tool_use_id, origin FROM skill_invocations WHERE agent_id = ?")
+					.all(agent) as SkillRow[],
+		);
+		if (rows.length > 0 || Date.now() > deadline) return rows;
+		await Bun.sleep(20);
+	}
+}
+
+async function hook(path: string, extra: Readonly<Record<string, string>> = {}): Promise<Response> {
+	return await app.request(path, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			harness: "codex",
+			sessionKey: "sess-1",
+			sessionId: "sess-1",
+			agentId: agent,
+			cwd: "/repo",
+			...extra,
+		}),
 	});
 }
 
@@ -237,5 +283,17 @@ describe("transcript upload route", () => {
 		});
 		expect(ended.status).toBe(200);
 		expect(await ended.json()).toMatchObject({ queued: true, transcriptCaptureJobId: jobId });
+	});
+
+	it("records the skills of an uploaded transcript at session end", async () => {
+		expect((await patch(SKILL_TRANSCRIPT)).status).toBe(200);
+		expect((await hook("/api/hooks/session-end")).status).toBe(200);
+		expect(await skillRows()).toEqual([{ skill_name: "web-search", tool_use_id: "toolu_AAA", origin: "scan" }]);
+	});
+
+	it("records the skills of an uploaded transcript before compaction", async () => {
+		expect((await patch(SKILL_TRANSCRIPT)).status).toBe(200);
+		expect((await hook("/api/hooks/pre-compaction")).status).toBe(200);
+		expect(await skillRows()).toEqual([{ skill_name: "web-search", tool_use_id: "toolu_AAA", origin: "scan" }]);
 	});
 });

@@ -28,6 +28,8 @@ const hooks = await import("./hooks");
 const { setLifecycleObservers, assertSlowProviderInvariant } = await import("@signet/lifecycle-proof");
 const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
+const { uploadTranscriptRange } = await import("./transcript-upload");
+const { TranscriptUploadAdmission } = await import("./transcript-upload-agent-lock");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
 const { upsertSessionTranscript } = await import("./session-transcripts");
 const { buildSignetSystemPrompt } = await import("./session-start-format");
@@ -4180,6 +4182,36 @@ describe("handleCheckpointExtract", () => {
 		});
 
 		expect(result.skipped).toBe(true);
+	});
+
+	test.serial("reads the uploaded transcript when the request has none", async () => {
+		createMemoryDb([]);
+		const body = Buffer.from(`${"checkpoint upload words ".repeat(30)}\n`);
+		const uploaded = await uploadTranscriptRange(getDbAccessor(), {
+			admission: TranscriptUploadAdmission.admit("default"),
+			basePath: TEST_DIR,
+			agentId: "default",
+			sessionKey: "ckpt-upload",
+			sessionId: "ckpt-upload",
+			harness: "test",
+			project: null,
+			projectScoped: false,
+			generation: 0,
+			offset: 0,
+			checksum: createHash("sha256").update(body).digest("hex"),
+			body,
+			capturedAt: "2026-11-26T10:00:00.000Z",
+		});
+		expect(uploaded).toMatchObject({ status: "committed" });
+
+		await handleCheckpointExtract({ harness: "test", sessionKey: "ckpt-upload" });
+
+		const db = openTestDb();
+		const row = db
+			.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+			.get("ckpt-upload", "default") as { content: string } | undefined;
+		db.close();
+		expect(row?.content).toContain("checkpoint upload words");
 	});
 });
 
