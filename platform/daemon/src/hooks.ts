@@ -138,6 +138,7 @@ import {
 	appendSessionTranscriptAsync,
 	findStaleLiveSessions,
 	getStoredSessionTranscriptInfoAsync,
+	type TranscriptUploadAccess,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
@@ -2302,7 +2303,13 @@ async function deferSessionEndWork(params: {
 	}
 }
 
-async function readCheckpointSource(req: CheckpointExtractRequest, agentId: string): Promise<string | null> {
+export type CheckpointProjectScope = Omit<TranscriptUploadAccess, "harness">;
+
+async function readCheckpointSource(
+	req: CheckpointExtractRequest,
+	agentId: string,
+	scope: CheckpointProjectScope,
+): Promise<string | null> {
 	if (req.transcriptPath) {
 		return existsSync(req.transcriptPath) ? readFileSync(req.transcriptPath, "utf-8") : null;
 	}
@@ -2311,10 +2318,14 @@ async function readCheckpointSource(req: CheckpointExtractRequest, agentId: stri
 		agentId,
 		sessionKey: normalizeSessionKey(req.sessionKey),
 		maxBytes: MAX_TRANSCRIPT_SCAN_BYTES,
+		access: { harness: req.harness, ...scope },
 	});
 }
 
-export async function handleCheckpointExtract(req: CheckpointExtractRequest): Promise<CheckpointExtractResponse> {
+export async function handleCheckpointExtract(
+	req: CheckpointExtractRequest,
+	scope: CheckpointProjectScope,
+): Promise<CheckpointExtractResponse> {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	await ensureAgentRegistered(agentId);
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
@@ -2329,7 +2340,7 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	} else {
 		try {
-			const source = await readCheckpointSource(req, agentId);
+			const source = await readCheckpointSource(req, agentId, scope);
 			if (source) {
 				rawTranscript = source;
 				transcript = normalizeSessionTranscript(req.harness, source);

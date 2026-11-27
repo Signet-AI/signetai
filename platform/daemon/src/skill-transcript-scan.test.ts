@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../../core/src/migrations";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
-import { MAX_TRANSCRIPT_SCAN_BYTES, recordSkillsFromTranscript } from "./skill-transcript-scan";
+import {
+	MAX_TRANSCRIPT_SCAN_BYTES,
+	recordSkillsFromTranscript,
+	scheduleSessionSkillScan,
+} from "./skill-transcript-scan";
 const FIXTURE_JSONL = [
 	JSON.stringify({
 		sessionId: "sess-scan-1",
@@ -99,6 +103,44 @@ describe("recordSkillsFromTranscript", () => {
 
 		const { n } = db.prepare("SELECT COUNT(*) AS n FROM skill_invocations").get() as { n: number };
 		expect(n).toBe(0);
+	});
+
+	it("matches records against the session key without its session prefix", async () => {
+		const prefixedPath = join(tmpdir(), `transcript-prefixed-session-${crypto.randomUUID()}.jsonl`);
+		const skillUse = (sessionId: string, id: string, skill: string): string[] => [
+			JSON.stringify({
+				sessionId,
+				timestamp: "2024-01-01T00:00:00.000Z",
+				message: { content: [{ type: "tool_use", name: "Skill", id, input: { skill } }] },
+			}),
+			JSON.stringify({
+				sessionId,
+				timestamp: "2024-01-01T00:00:01.000Z",
+				message: { content: [{ type: "tool_result", tool_use_id: id, is_error: false }] },
+			}),
+		];
+		try {
+			writeFileSync(
+				prefixedPath,
+				[...skillUse("abc", "toolu_abc", "web-search"), ...skillUse("xyz", "toolu_xyz", "tavily-cli")].join("\n"),
+			);
+			scheduleSessionSkillScan({
+				basePath: tmpdir(),
+				transcriptPath: prefixedPath,
+				sessionKey: "session:abc",
+				harness: "claude-code",
+				agentId: "default",
+			});
+			const deadline = Date.now() + 2000;
+			let rows: unknown[] = [];
+			while (rows.length === 0 && Date.now() < deadline) {
+				await Bun.sleep(20);
+				rows = db.prepare("SELECT tool_use_id, session_id FROM skill_invocations").all();
+			}
+			expect(rows).toEqual([{ tool_use_id: "toolu_abc", session_id: "abc" }]);
+		} finally {
+			rmSync(prefixedPath, { force: true });
+		}
 	});
 
 	it("skips records missing session ids when a session is expected", () => {

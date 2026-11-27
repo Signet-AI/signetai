@@ -49,10 +49,11 @@ export function recordSkillsFromTranscript(args: SkillScanScope & { readonly tra
 function recordSkillsFromContent(args: SkillScanScope & { readonly content: string; readonly path?: string }): void {
 	const { records, skipped } = parseTranscriptSkills(args.content);
 	const origin = args.origin ?? "scan";
+	const expectedSessionId = args.expectedSessionId ? normalizeSessionKey(args.expectedSessionId) : undefined;
 
 	let skippedSessionMismatch = 0;
 	for (const rec of records) {
-		if (args.expectedSessionId && rec.sessionId !== args.expectedSessionId) {
+		if (expectedSessionId && rec.sessionId !== expectedSessionId) {
 			skippedSessionMismatch++;
 			continue;
 		}
@@ -63,7 +64,7 @@ function recordSkillsFromContent(args: SkillScanScope & { readonly content: stri
 			latencyMs: rec.latencyMs,
 			success: rec.success,
 			harness: args.harness,
-			sessionId: rec.sessionId || args.expectedSessionId,
+			sessionId: rec.sessionId || expectedSessionId,
 			toolUseId: rec.toolUseId,
 			cwd: rec.cwd,
 			args: rec.args,
@@ -88,7 +89,12 @@ export function scheduleSessionSkillScan(input: {
 	readonly agentId: string;
 }): void {
 	const { transcriptPath, sessionKey } = input;
-	const scope = { harness: input.harness, agentId: input.agentId, origin: "scan", expectedSessionId: sessionKey };
+	const scope = {
+		harness: input.harness,
+		agentId: input.agentId,
+		origin: "scan",
+		expectedSessionId: sessionKey,
+	};
 	if (transcriptPath) {
 		setImmediate(() => recordSkillsFromTranscript({ ...scope, transcriptPath }));
 		return;

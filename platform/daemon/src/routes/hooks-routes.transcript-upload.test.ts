@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
 import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
 import { transcriptUploadAgentDirectory } from "../transcript-upload-paths";
@@ -21,6 +22,23 @@ process.env.SIGNET_PATH = AGENTS_DIR;
 const agent = `noam-${randomUUID()}`;
 let dir = "";
 let app: Hono;
+
+function scopedApp(sub: string, scope: TokenClaims["scope"]): Hono {
+	const claims: TokenClaims = {
+		sub,
+		scope,
+		role: "agent",
+		iat: Math.floor(Date.now() / 1000),
+		exp: Math.floor(Date.now() / 1000) + 3600,
+	};
+	const scoped = new Hono();
+	scoped.use("*", async (c, next) => {
+		c.set("auth", { authenticated: true, claims });
+		await next();
+	});
+	registerHooksRoutes(scoped);
+	return scoped;
+}
 
 beforeEach(() => {
 	dir = mkdtempSync(join(suiteDir, "case-"));
@@ -215,19 +233,7 @@ describe("transcript upload route", () => {
 		await patch('{"a":1}\n', { query: { cwd: null } });
 		const previousMode = authConfig.mode;
 		authConfig.mode = "team";
-		const claims: TokenClaims = {
-			sub: "project-token",
-			scope: { agent, project: "/repo" },
-			role: "agent",
-			iat: Math.floor(Date.now() / 1000),
-			exp: Math.floor(Date.now() / 1000) + 3600,
-		};
-		const scoped = new Hono();
-		scoped.use("*", async (c, next) => {
-			c.set("auth", { authenticated: true, claims });
-			await next();
-		});
-		registerHooksRoutes(scoped);
+		const scoped = scopedApp("project-token", { agent, project: "/repo" });
 		try {
 			expect((await scoped.request(query({ agentId: null }))).status).toBe(403);
 			expect((await patch('{"b":2}\n', { offset: 8, target: scoped, query: { agentId: null } })).status).toBe(403);
@@ -236,22 +242,35 @@ describe("transcript upload route", () => {
 		}
 	});
 
+	it("keeps a checkpoint from copying an upload into another project", async () => {
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		const scopedTo = (project: string): Hono => scopedApp(`project-token-${project}`, { agent, project });
+		const checkpoint = async (target: Hono, project: string): Promise<Response> =>
+			await target.request("/api/hooks/session-checkpoint-extract", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ harness: "test", sessionKey: "sess-1", agentId: agent, project }),
+			});
+		const storedRow = async () => await getStoredSessionTranscriptInfoAsync("sess-1", agent);
+		const words = `${"checkpoint upload words ".repeat(30)}\n`;
+		const repo = scopedTo("/repo");
+		try {
+			const uploaded = await patch(words, { target: repo, query: { agentId: null, harness: "test" } });
+			expect(uploaded.status).toBe(200);
+			await checkpoint(scopedTo("/other"), "/other");
+			expect(await storedRow()).toBeUndefined();
+			expect((await checkpoint(repo, "/repo")).status).toBe(200);
+			expect(await storedRow()).toMatchObject({ project: "/repo", content: expect.stringContaining("upload words") });
+		} finally {
+			authConfig.mode = previousMode;
+		}
+	});
+
 	it("uses the token agent and rejects another agent in team mode", async () => {
 		const previousMode = authConfig.mode;
 		authConfig.mode = "team";
-		const claims: TokenClaims = {
-			sub: "agent-token",
-			scope: { agent },
-			role: "agent",
-			iat: Math.floor(Date.now() / 1000),
-			exp: Math.floor(Date.now() / 1000) + 3600,
-		};
-		const scoped = new Hono();
-		scoped.use("*", async (c, next) => {
-			c.set("auth", { authenticated: true, claims });
-			await next();
-		});
-		registerHooksRoutes(scoped);
+		const scoped = scopedApp("agent-token", { agent });
 		try {
 			expect((await patch('{"a":1}\n', { target: scoped, query: { agentId: "other" } })).status).toBe(403);
 			const own = await patch('{"a":1}\n', { target: scoped, query: { agentId: null } });

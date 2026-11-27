@@ -14,10 +14,12 @@ import {
 } from "./db-owner-runtime";
 import { logger } from "./logger";
 import {
+	type TranscriptUploadAccess,
 	type TranscriptUploadCommitResult,
 	type TranscriptUploadEndCommit,
 	type TranscriptUploadEndCommitResult,
 	transcriptUploadConflict,
+	transcriptUploadScopeConflict,
 } from "./session-transcripts";
 import { sha256 } from "./transcript-capture-jobs";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
@@ -57,6 +59,7 @@ export interface TranscriptUploadRead {
 	readonly agentId: string;
 	readonly sessionKey: string;
 	readonly maxBytes: number;
+	readonly access?: TranscriptUploadAccess;
 }
 
 async function syncDirectory(root: string, path: string): Promise<void> {
@@ -123,6 +126,7 @@ async function readCommittedLines(accessor: DbAccessor, input: TranscriptUploadR
 	const scope = await readUploadScope(accessor, input.agentId, input.sessionKey, "transcript-upload.read");
 	const state = scope.state;
 	if (!state) return null;
+	if (input.access && transcriptUploadScopeConflict(scope, input.access)) return null;
 	if (state.committedOffset > input.maxBytes) {
 		logger.warn("hooks", "Transcript upload read skipped for oversized upload", {
 			sessionKey: input.sessionKey,

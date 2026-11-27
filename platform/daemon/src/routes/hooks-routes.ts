@@ -1003,14 +1003,25 @@ async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploa
 	if (bindingError) return c.json({ error: bindingError }, 403);
 	const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 	if (denied) return denied;
-	const project = resolveScopedProject(c, parseOptionalString(c.req.query("cwd")));
-	if (project.error) return c.json({ error: project.error }, 403);
+	const project = resolveProjectAccess(c, parseOptionalString(c.req.query("cwd")));
+	if ("error" in project) return c.json({ error: project.error }, 403);
 	return {
 		agentId: scope.agentId,
 		sessionKey: normalizeSessionKey(sessionId),
 		sessionId,
 		harness,
-		project: project.project ?? null,
+		...project,
+	};
+}
+
+function resolveProjectAccess(
+	c: Context,
+	requested: string | undefined,
+): { readonly error: string } | { readonly project: string | null; readonly projectScoped: boolean } {
+	const resolved = resolveScopedProject(c, requested);
+	if (resolved.error) return { error: resolved.error };
+	return {
+		project: resolved.project ?? null,
 		projectScoped: shouldEnforceAuthScope(c) && Boolean(c.get("auth")?.claims?.scope?.project),
 	};
 }
@@ -1308,6 +1319,9 @@ function registerCheckpointExtract(app: Hono): void {
 				context: "sessionKey",
 			});
 			if (checkpointBinding) return c.json({ error: checkpointBinding }, 403);
+			const checkpointProject = resolveProjectAccess(c, parseOptionalString(body.project));
+			if ("error" in checkpointProject) return c.json({ error: checkpointProject.error }, 403);
+			body.project = checkpointProject.project ?? undefined;
 
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
@@ -1329,7 +1343,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			renewSession(body.sessionKey, agentId);
 
-			const result = await handleCheckpointExtract(body);
+			const result = await handleCheckpointExtract(body, checkpointProject);
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Checkpoint extract hook failed", e as Error);

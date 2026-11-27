@@ -17,6 +17,7 @@ import { TranscriptLockTimeoutError } from "./transcript-jsonl";
 
 let root = "";
 let app: Hono;
+const UNSCOPED_CHECKPOINT = { project: null, projectScoped: false };
 
 beforeAll(async () => {
 	root = mkdtempSync(join(tmpdir(), "hooks-transcript-review-"));
@@ -92,12 +93,15 @@ describe("H: artifact files follow transcript admission", () => {
 	it("stores the checkpoint transcript of a new generation", async () => {
 		await deleteCompletely("default", "h-checkpoint");
 		await updateTranscriptLifecycle({ agentId: "default", sessionKey: "h-checkpoint", action: "start" });
-		await handleCheckpointExtract({
-			agentId: "default",
-			sessionKey: "h-checkpoint",
-			harness: "claude-code",
-			transcript: "User: fresh question\nAssistant: fresh answer",
-		});
+		await handleCheckpointExtract(
+			{
+				agentId: "default",
+				sessionKey: "h-checkpoint",
+				harness: "claude-code",
+				transcript: "User: fresh question\nAssistant: fresh answer",
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		const stored = await getStoredSessionTranscriptInfoAsync("h-checkpoint", "default");
 		expect(stored?.content).toContain("fresh answer");
 	});

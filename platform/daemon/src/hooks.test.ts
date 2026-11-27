@@ -19,6 +19,7 @@ import { createPromptContext } from "@signet/core";
 
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
 const PREV_SIGNET_AGENT_ID_FOR_HOOKS = process.env.SIGNET_AGENT_ID;
+const UNSCOPED_CHECKPOINT = { project: null, projectScoped: false };
 process.env.SIGNET_AGENT_ID = "default";
 process.env.SIGNET_PATH = TEST_DIR;
 
@@ -4166,10 +4167,13 @@ describe("handleCheckpointExtract", () => {
 	test.serial("returns skipped when no transcript available", async () => {
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-no-transcript",
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-no-transcript",
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
@@ -4178,11 +4182,14 @@ describe("handleCheckpointExtract", () => {
 	test.serial("returns skipped when delta is below 500 chars", async () => {
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-short",
-			transcript: "x".repeat(400),
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-short",
+				transcript: "x".repeat(400),
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
@@ -4191,17 +4198,23 @@ describe("handleCheckpointExtract", () => {
 	test.serial("truncated inline transcript does not overwrite stored lossless transcript", async () => {
 		createMemoryDb([]);
 		const full = "x".repeat(600);
-		await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-truncation",
-			transcript: full,
-		});
+		await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-truncation",
+				transcript: full,
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		const truncated = "x".repeat(200);
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-truncation",
-			transcript: truncated,
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-truncation",
+				transcript: truncated,
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		expect(result.skipped).toBe(true);
 		const db = openTestDb();
 		const row = db
@@ -4214,11 +4227,14 @@ describe("handleCheckpointExtract", () => {
 	test.serial("skips when transcriptPath does not exist", async () => {
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-nopath",
-			transcriptPath: "/nonexistent/path/transcript.jsonl",
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-nopath",
+				transcriptPath: "/nonexistent/path/transcript.jsonl",
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 		expect(result.skipped).toBe(true);
 		expect(result.queued).toBeUndefined();
 	});
@@ -4230,11 +4246,14 @@ describe("handleCheckpointExtract", () => {
 `);
 		createMemoryDb([]);
 
-		const result = await handleCheckpointExtract({
-			harness: "test",
-			sessionKey: "ckpt-both-disabled",
-			transcript: "x".repeat(600),
-		});
+		const result = await handleCheckpointExtract(
+			{
+				harness: "test",
+				sessionKey: "ckpt-both-disabled",
+				transcript: "x".repeat(600),
+			},
+			UNSCOPED_CHECKPOINT,
+		);
 
 		expect(result.skipped).toBe(true);
 	});
@@ -4245,14 +4264,14 @@ describe("handleCheckpointExtract", () => {
 			status: "committed",
 		});
 
-		await handleCheckpointExtract({ harness: "test", sessionKey: "ckpt-upload" });
+		await handleCheckpointExtract({ harness: "test", sessionKey: "ckpt-upload" }, UNSCOPED_CHECKPOINT);
 
 		const db = openTestDb();
 		const row = db
 			.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
-			.get("ckpt-upload", "default") as { content: string } | undefined;
+			.get("ckpt-upload", "default");
 		db.close();
-		expect(row?.content).toContain("checkpoint upload words");
+		expect(row).toMatchObject({ content: expect.stringContaining("checkpoint upload words") });
 	});
 });
 

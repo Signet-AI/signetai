@@ -2094,9 +2094,15 @@ export function readTranscriptUploadScopeInDb(db: ReadDb, agentId: string, sessi
 	};
 }
 
+export interface TranscriptUploadAccess {
+	readonly harness: string;
+	readonly project: string | null;
+	readonly projectScoped: boolean;
+}
+
 export function transcriptUploadScopeConflict(
 	scope: TranscriptUploadScope,
-	request: { readonly harness: string; readonly project: string | null; readonly projectScoped: boolean },
+	request: TranscriptUploadAccess,
 ): TranscriptUploadCommitResult | null {
 	const rows = [scope.state, scope.stored].flatMap((row) => (row ? [row] : []));
 	if (rows.some((row) => row.harness != null && row.harness !== request.harness)) return { status: "harness_mismatch" };
