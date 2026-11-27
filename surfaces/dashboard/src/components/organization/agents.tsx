@@ -86,7 +86,9 @@ export function AgentsContent({
 								{agent.archivedAt
 									? "Nobody"
 									: agent.kind === "organization"
-										? "Every active user"
+										? agent.id === "default"
+											? "Every active user"
+											: "Administrator · explicit target only"
 										: agent.kind === "team"
 											? "Team members"
 											: agent.kind === "personal"
