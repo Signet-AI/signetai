@@ -3,6 +3,17 @@ import { contextBridge, ipcRenderer } from "electron";
 const daemonPort = Number.parseInt(process.env.SIGNET_PORT ?? "3850", 10);
 const daemonBaseUrl = process.env.SIGNET_DESKTOP_DAEMON_BASE_URL ?? `http://localhost:${daemonPort}`;
 
+const workspaceControls =
+	location.href === "app://signet/desktop/workspaces"
+		? {
+				getWorkspace: () => ipcRenderer.invoke("desktop:getWorkspace"),
+				selectWorkspace: (selection: unknown) => ipcRenderer.invoke("desktop:selectWorkspace", selection),
+				workspaceStatus: () => ipcRenderer.invoke("desktop:workspaceStatus"),
+				signIn: () => ipcRenderer.invoke("desktop:signIn"),
+				signOut: () => ipcRenderer.invoke("desktop:signOut"),
+			}
+		: {};
+
 contextBridge.exposeInMainWorld("signetDesktop", {
 	platform: process.platform,
 	daemonPort,
@@ -20,11 +31,7 @@ contextBridge.exposeInMainWorld("signetDesktop", {
 	pickFiles: (options?: { title?: string }) => ipcRenderer.invoke("desktop:pickFiles", options),
 	checkForUpdate: () => ipcRenderer.invoke("desktop:checkForUpdate"),
 	openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url),
-	getWorkspace: () => ipcRenderer.invoke("desktop:getWorkspace"),
-	selectWorkspace: (selection: unknown) => ipcRenderer.invoke("desktop:selectWorkspace", selection),
-	workspaceStatus: () => ipcRenderer.invoke("desktop:workspaceStatus"),
-	signIn: () => ipcRenderer.invoke("desktop:signIn"),
-	signOut: () => ipcRenderer.invoke("desktop:signOut"),
+	...workspaceControls,
 	openWorkspaces: () => ipcRenderer.invoke("desktop:openWorkspaces"),
 	quit: () => ipcRenderer.invoke("desktop:quit"),
 });

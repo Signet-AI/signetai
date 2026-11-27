@@ -273,6 +273,14 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				"Alice",
 			);
 			expect(await cdp.evaluate("fetch('/api/auth/refresh',{method:'POST'}).then(r=>r.status)")).toBe(403);
+			for (const method of ["getWorkspace", "workspaceStatus", "signIn", "signOut"]) {
+				expect(
+					await cdp.evaluate(
+						`typeof window.signetDesktop.${method} !== "function" || window.signetDesktop.${method}().then(()=>false,()=>true)`,
+					),
+				).toBe(true);
+			}
+
 			await until(
 				async () => text(await page.evaluate("document.body.innerText")).length > 100,
 				"Remote dashboard rendered",
