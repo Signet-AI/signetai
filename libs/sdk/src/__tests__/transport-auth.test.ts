@@ -19,6 +19,24 @@ afterEach(() => {
 	for (const s of servers) s.stop(true);
 });
 
+test("authenticated cross-origin redirects are refused without forwarding credentials", async () => {
+	const foreignRequests: boolean[] = [];
+	const foreign = server((req) => {
+		foreignRequests.push(req.headers.has("authorization"));
+		return Response.json({ ok: true });
+	});
+	const credential = crypto.randomUUID();
+	const initialRequests: boolean[] = [];
+	const origin = server((req) => {
+		initialRequests.push(req.headers.get("authorization") === `Bearer ${credential}`);
+		return Response.redirect(`${foreign}/capture`, 302);
+	});
+	const client = new SignetTransport({ baseUrl: origin, retries: 0, credentialProvider: async () => credential });
+	await expect(client.get("/redirect")).rejects.toThrow();
+	expect(initialRequests).toEqual([true]);
+	expect(foreignRequests).toEqual([]);
+});
+
 test.each([
 	{ deadline: Number.POSITIVE_INFINITY },
 	{ deadline: Number.NEGATIVE_INFINITY },

@@ -5,6 +5,30 @@ import { resolveCliTarget, localOnlyMessage, registerOrganizationTarget } from "
 
 afterEach(() => registerOrganizationTarget(new Command()));
 
+test("explicit HTTP CLI targets produce one clear-text warning without credentials in output", async () => {
+	const script = `
+const { resolveCliTarget } = await import(${JSON.stringify(new URL("./organization-target.ts", import.meta.url).href)});
+const key = "cli-fixture-key-" + crypto.randomUUID();
+const results = [];
+for (const url of ["http://192.168.20.10:3850", "http://100.64.20.10:3850"]) {
+ const target = await resolveCliTarget({ url }, { flagKey: key, env: { HOME: process.env.HOME, APPDATA: process.env.APPDATA } });
+ results.push(target.remote && await target.credential.get() === key);
+}
+console.log(JSON.stringify(results));
+`;
+	const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+	const [stdout, stderr, code] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	expect(code, stderr).toBe(0);
+	expect(JSON.parse(stdout)).toEqual([true, true]);
+	expect(stderr.match(/HTTP sends credentials in clear text/g)).toHaveLength(1);
+	expect(stderr).not.toContain("cli-fixture-key-");
+	expect(stdout).not.toContain("cli-fixture-key-");
+});
+
 test("local-only commands refuse remotely before running their action and --local preserves it", async () => {
 	let actions = 0;
 	for (const local of [false, true]) {
