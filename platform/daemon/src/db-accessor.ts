@@ -71,13 +71,7 @@ export { DbSpacePreflightError };
 
 export async function probeDbOwner(owner: DbOwnerClient): Promise<void> {
 	const { runOwnerJob } = await import("./db-owner-maintenance");
-	await runOwnerJob(
-		owner,
-		{ kind: "query", statement: { sql: "SELECT 1", result: "get", readonly: true } },
-		"health.database-probe",
-		"read",
-		{ deadlineMs: 500 },
-	);
+	await runOwnerJob(owner, { kind: "database_probe" }, "health.database-probe", "read", { deadlineMs: 500 });
 }
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";

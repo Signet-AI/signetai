@@ -110,6 +110,10 @@ describe("GET /health owner diagnostics", () => {
 		const owner = createDbOwnerClient({ dbPath: join(dir, "memory", "memories.db") });
 		await owner.start();
 		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+		expect(
+			await owner.submit({ kind: "database_probe" }, { operation: "health.probe-test", lane: "read", deadlineMs: 1000 })
+				.result,
+		).toEqual({ "1": 1 });
 		const active = owner.submit(
 			{ kind: "sleep", durationMs: 100 },
 			{ operation: "maintenance.active-health-test", lane: "maintenance", deadlineMs: 1000 },

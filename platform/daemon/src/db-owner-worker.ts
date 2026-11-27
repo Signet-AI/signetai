@@ -1223,6 +1223,10 @@ export function runDbOwnerWorker(): void {
 			context.committed = true;
 			return result;
 		}
+		if (job.request.kind === "database_probe") {
+			if (job.lane !== "read") throw new Error("Database probes require the read lane");
+			return db.prepare("SELECT 1").get();
+		}
 		if (job.request.kind === "classification") {
 			const { executeClassification } = await import("./classification-owner");
 			const request = job.request.request;

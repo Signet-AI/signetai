@@ -510,6 +510,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "dreaming_evidence_requeue"; readonly input: DbOwnerDreamingEvidenceRequeue }
 	| { readonly kind: "embedding_migration_progress"; readonly configuredBaseUrl?: string }
 	| { readonly kind: "health_ready" }
+	| { readonly kind: "database_probe" }
 	| { readonly kind: "diagnostics"; readonly trackerStats: DbOwnerProviderTrackerStats }
 	| {
 			readonly kind: "vector_backfill";
