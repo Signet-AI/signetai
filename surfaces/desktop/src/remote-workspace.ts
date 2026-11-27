@@ -65,6 +65,7 @@ const PRIVATE_AUTH_PATHS = new Set([
 	"/api/auth/device/token",
 	"/api/auth/logout",
 	"/api/org/claim",
+	"/api/org/bootstrap",
 	"/api/auth/invites/accept",
 	"/api/auth/sso/start",
 	"/api/auth/sso/callback",
@@ -269,6 +270,10 @@ export class RemoteWorkspace {
 		}
 		if (
 			PRIVATE_AUTH_PATHS.has(path) ||
+			(request.method === "POST" &&
+				["/api/auth/api-keys", "/api/auth/connector-keys", "/api/auth/device/approve", "/api/org/invites"].includes(
+					path,
+				)) ||
 			(path.startsWith("/api/auth/") &&
 				!/^\/api\/auth\/(?:whoami|methods|profile|preferences|sessions(?:\/[^/]+)?|devices(?:\/[^/]+)?|connector-keys(?:\/[^/]+(?:\/errors)?)?|api-keys(?:\/[^/]+)?|device\/approve|device\/[A-Z2-9-]+)$/.test(
 					path,

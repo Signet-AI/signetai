@@ -100,6 +100,8 @@ Against an organization, `signet agent list` shows each agent's owner IDs and `c
 
 Administrators can rename with `signet agent set <name-or-id> --name <new-name>`, archive with `signet agent remove <name-or-id>`, and transfer with `signet agent transfer <name-or-id> --user <user-id>` or `--team <group-id>`. Transfer changes ownership, not evidence authorship. Local read policies do not apply in organization mode. Organization agent purge is not yet available through the CLI; it refuses without changing local files.
 
+In desktop organization mode, create API keys, shared-agent keys, and invitations from the browser dashboard or the CLI. The main-process proxy refuses credential-issuing requests from the renderer; existing key lists and revocation remain available.
+
 `signet api-key create --name CI` creates a personal key using your permissions and a 30-day expiry. Restrict it with `--permission recall remember`, or set `--expires-at <ISO timestamp>`. `--agent <id>` requests a shared-agent key, which the daemon allows only for administrators or the owning team's owner. `signet api-key list` lists your keys; `--all` requires admin. Revoke by ID with `signet api-key revoke <id>`. The secret is printed once; JSON creation also prints a warning on stderr. List responses never include secrets.
 
 ## Organization commands
