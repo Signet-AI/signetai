@@ -94,6 +94,24 @@ function registerTargetFlags(command: Command): void {
 	}
 	command.hook("preSubcommand", (_parent, child) => registerTargetFlags(child));
 }
+const targetOwningCommands = new Set([
+	"connect",
+	"disconnect",
+	"connector mcp",
+	"connector install",
+	"connector rotate",
+	"connector list",
+	"connector doctor",
+	"hook session-start",
+	"hook user-prompt-submit",
+	"hook notifications",
+	"hook wake",
+	"hook session-end",
+	"hook stop",
+	"hook pre-compaction",
+	"hook compaction-complete",
+	"hook synthesis",
+]);
 const remoteCommands = new Set([
 	"login",
 	"logout",
@@ -178,7 +196,9 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		}
 		let top = command;
 		while (top.parent && top.parent !== program) top = top.parent;
-		if (["hook", "connect", "disconnect", "connector"].includes(top.name())) return;
+		const path: string[] = [];
+		for (let node: Command | null = command; node && node !== program; node = node.parent) path.unshift(node.name());
+		if (targetOwningCommands.has(path.join(" "))) return;
 		const options = command.opts<CliTargetOptions>();
 		if (options.nonInteractive && top.name() === "dashboard")
 			throw new SignetError("Browser opening is disabled by --non-interactive", "non_interactive");
@@ -188,9 +208,7 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		if (selected.remote && top.name() === "import" && !selectedAgent)
 			throw new Error("Organization imports require --agent <id>.");
 
-		const path: string[] = [];
-		for (let node: Command | null = command; node && node !== program; node = node.parent) path.unshift(node.name());
-		if (selected.remote && !remoteCommands.has(path.join(" ")) && !(top.name() === "setup" && options.join))
+		if (selected.remote && !remoteCommands.has(path.join(" ")) && !(path.join(" ") === "setup" && options.join))
 			throw new Error(localOnlyMessage(new URL(selected.url).hostname));
 	});
 }

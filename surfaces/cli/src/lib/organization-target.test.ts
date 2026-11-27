@@ -35,6 +35,8 @@ test("unknown and local workspace commands refuse remote targets by default", as
 		"desktop",
 		"future-command",
 		"agent future-command",
+		"connector future-command",
+		"hook future-command",
 	]) {
 		const program = new Command();
 		registerOrganizationTarget(program, {
@@ -73,6 +75,24 @@ test("every registered command is explicitly remote-capable or refuses before it
 	expect(await child.exited, errors).toBe(0);
 	const paths = z.array(z.array(z.string())).parse(JSON.parse(output));
 	expect(paths.length).toBeGreaterThan(200);
+	const targetOwning = new Set([
+		"connect",
+		"disconnect",
+		"connector mcp",
+		"connector install",
+		"connector rotate",
+		"connector list",
+		"connector doctor",
+		"hook session-start",
+		"hook user-prompt-submit",
+		"hook notifications",
+		"hook wake",
+		"hook session-end",
+		"hook stop",
+		"hook pre-compaction",
+		"hook compaction-complete",
+		"hook synthesis",
+	]);
 	const supported = new Set([
 		"login",
 		"logout",
@@ -157,8 +177,7 @@ test("every registered command is explicitly remote-capable or refuses before it
 		command.action(() => {
 			ran = true;
 		});
-		const allowed =
-			supported.has(path.join(" ")) || ["hook", "connect", "disconnect", "connector"].includes(path[0] ?? "");
+		const allowed = supported.has(path.join(" ")) || targetOwning.has(path.join(" "));
 		const result = program.parseAsync(["--agent", "fixture", ...path], { from: "user" });
 		if (allowed) await result;
 		else await expect(result, path.join(" ")).rejects.toThrow(localOnlyMessage("org.example"));
