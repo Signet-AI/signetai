@@ -1,4 +1,8 @@
 import { setOrganizationSso } from "../organization-sso";
+import { contentRead } from "../content-read";
+import { resolveRouteReadScope } from "./read-scope";
+import { audienceSubjectFromPrincipal } from "../read-scope";
+import { organizationWrite, auditStatement } from "../auth/organization-store";
 import { startAgentPurge } from "../agent-purge";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -82,6 +86,45 @@ export function registerOrganizationRoutes(
 	workspaceRoot: string,
 ): void {
 	const getConfig = typeof config === "function" ? config : () => config;
+	app.post(
+		"/api/result-attribution",
+		endpoint(async (c) => {
+			if (c.get("organization") && getConfig().mode !== "team") throw new IdentityError(403, "org_policy");
+			const p = c.get("principal");
+			if (!p || !p.permissions.has("recall"))
+				throw new IdentityError(p ? 403 : 401, p ? "permission" : "missing_credential");
+			const ids = z.array(z.string().min(1).max(256)).max(100).default([]);
+			const input = z
+				.object({
+					authors: ids,
+					agents: ids,
+					memories: ids,
+					artifactPaths: z.array(z.string().min(1).max(4096)).max(100).default([]),
+				})
+				.strict()
+				.parse(await body(c));
+			const resolved = await resolveRouteReadScope(c, { memory: true, allowAllAgents: true });
+			if (resolved instanceof Response) return resolved;
+			const directory =
+				p.kind === "local" ||
+				((p.permissions.has("admin") || (p.compliance && p.permissions.has("classify"))) &&
+					p.boundAgentId === null &&
+					p.allowedProjects === null);
+			const result = await contentRead(
+				{
+					op: "result_attribution",
+					...input,
+					scope: resolved.scope,
+					subject: audienceSubjectFromPrincipal(p),
+					directory,
+				},
+				c.req.raw.signal,
+			);
+			if (directory && p.kind !== "local") await organizationWrite([auditStatement(p, "user.lookup", "user", null)]);
+			return c.json(result);
+		}),
+	);
+
 	app.use("/api/*", async (c, next) => {
 		const isOrg = c.get("organization");
 		if (!isOrg && !["/api/org/claim", "/api/org/bootstrap"].includes(c.req.path)) return next();

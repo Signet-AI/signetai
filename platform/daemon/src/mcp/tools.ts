@@ -414,6 +414,24 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	};
 	registerMcpTool(
 		server,
+		"signet_result_attribution",
+		{
+			title: "Resolve Result Attribution",
+			description:
+				"Resolve canonical author and agent display names without exposing hidden people. Requires recall. Batches at most 100 identifiers per field.",
+			inputSchema: z
+				.object({
+					authors: z.array(z.string().min(1).max(256)).max(100).optional(),
+					agents: z.array(z.string().min(1).max(256)).max(100).optional(),
+					memories: z.array(z.string().min(1).max(256)).max(100).optional(),
+					artifactPaths: z.array(z.string().min(1).max(4096)).max(100).optional(),
+				})
+				.strict(),
+		},
+		async (input) => organizationResult("/api/result-attribution", "POST", input),
+	);
+	registerMcpTool(
+		server,
 		"signet_operator_doctor",
 		{
 			title: "Inspect Instance Health",

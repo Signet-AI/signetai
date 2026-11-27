@@ -897,6 +897,9 @@ function publicSource(source: SignetSourceEntry, organizationMode = true) {
 		lastIndexedAt: source.lastIndexedAt,
 		excludeGlobs: source.excludeGlobs,
 		providerSettings: publicSourceSettings(source.providerSettings),
+		...(source.writeIdentity
+			? { agentId: source.writeIdentity.agentId, authorUserId: source.writeIdentity.authorUserId }
+			: {}),
 	};
 }
 

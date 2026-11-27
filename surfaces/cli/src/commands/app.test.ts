@@ -204,3 +204,99 @@ describe("registerDefaultAction", () => {
 		expect(calls).toEqual(["/tmp/agents"]);
 	});
 });
+
+test("interactive setup entry dispatches personal, host and join without changing explicit setup paths", async () => {
+	const prompts = await import("@clack/prompts"),
+		{ spyOn } = await import("bun:test");
+	const tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+	Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+	const select = spyOn(prompts, "select"),
+		input = spyOn(prompts, "text"),
+		cancelCheck = spyOn(prompts, "isCancel");
+	const create = () => {
+		const calls: unknown[] = [],
+			program = new Command();
+		registerAppCommands(program, {
+			collectListOption: (value, prior) => [...prior, value],
+			configureAgent: async () => {},
+			installNative: async () => {},
+			launchDashboard: async () => {},
+			migrateSchema: async () => {},
+			setupWizard: async (options) => {
+				calls.push(options);
+			},
+			showDoctor: async () => {},
+			showStatus: async () => {},
+			syncTemplates: async () => {},
+		});
+		program
+			.command("login")
+			.option("--url <url>")
+			.action((options) => {
+				calls.push({ login: options.url });
+			});
+		return { calls, program };
+	};
+	try {
+		for (const choice of ["personal", "host", "join"]) {
+			select.mockClear();
+			select.mockResolvedValue(choice);
+			input.mockResolvedValue("https://org.example");
+			const { calls, program } = create();
+			await program.parseAsync(["setup"], { from: "user" });
+			expect(select.mock.calls[0]?.[0]).toMatchObject({
+				options: [
+					{ value: "personal", label: "Personal workspace" },
+					{ value: "host", label: "Host an organization" },
+					{ value: "join", label: "Join an organization" },
+				],
+			});
+			if (choice === "host")
+				expect(calls).toEqual([expect.objectContaining({ host: true, publicUrl: "https://org.example" })]);
+			else if (choice === "join") expect(calls).toEqual([{ login: "https://org.example" }]);
+			else expect(calls).toEqual([{ harness: [], obsidianSource: [], agent: [] }]);
+		}
+		for (const [args, key, value] of [
+			[["--non-interactive"], "nonInteractive", true],
+			[["--file", "plan.json"], "file", "plan.json"],
+			[["--json", "{}"], "json", "{}"],
+			[["--dry-run"], "dryRun", true],
+			[["--skip-git"], "skipGit", true],
+			[["--schema"], "schema", true],
+			[["--path", "personal"], "path", "personal"],
+		] as const) {
+			select.mockClear();
+			const { calls, program } = create();
+			await program.parseAsync(["setup", ...args], { from: "user" });
+			expect(select).not.toHaveBeenCalled();
+			expect(calls).toEqual([expect.objectContaining({ [key]: value })]);
+		}
+
+		select.mockClear();
+		const global = create();
+		global.program.option("--agent <id>");
+		await global.program.parseAsync(["--agent", "selected-agent", "setup"], { from: "user" });
+		expect(select).not.toHaveBeenCalled();
+		expect(global.calls).toHaveLength(1);
+		select.mockClear();
+		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+		const headless = create();
+		await headless.program.parseAsync(["setup"], { from: "user" });
+		expect(select).not.toHaveBeenCalled();
+		expect(headless.calls).toHaveLength(1);
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		cancelCheck.mockReturnValue(true);
+		select.mockResolvedValue(Symbol("cancel"));
+		const cancelled = create();
+		await expect(cancelled.program.parseAsync(["setup"], { from: "user" })).rejects.toMatchObject({
+			code: "cancelled",
+		});
+		expect(cancelled.calls).toEqual([]);
+	} finally {
+		select.mockRestore();
+		input.mockRestore();
+		cancelCheck.mockRestore();
+		if (tty) Object.defineProperty(process.stdin, "isTTY", tty);
+		else Reflect.deleteProperty(process.stdin, "isTTY");
+	}
+});

@@ -1,3 +1,7 @@
+import { cliTarget } from "../lib/organization-target.js";
+import { attributed } from "./result-attribution.js";
+import { printResultAttribution, resultField } from "../lib/result-attribution.js";
+import { loadSourcesConfig } from "@signet/core";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import type { SignetSourceEntry } from "@signet/core";
@@ -246,7 +250,46 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 	sources
 		.command("list")
 		.description("List configured external sources")
-		.action(() => listSources(deps));
+		.option("--json", "Output as JSON")
+		.option("--agent <id>")
+		.action(async (options: { json?: boolean }) => {
+			if (cliTarget()?.remote) {
+				if (!deps.secretApiCall) throw new Error("Source reads require the daemon client");
+				const result = await deps.secretApiCall("GET", "/api/sources");
+				if (!result.ok) throw new Error("Source read failed");
+				if (options.json) {
+					console.log(JSON.stringify(result.data, null, 2));
+					return;
+				}
+				const data: unknown = result.data;
+				const sources: unknown = typeof data === "object" && data !== null ? Reflect.get(data, "sources") : undefined;
+				if (!Array.isArray(sources)) throw new Error("Invalid source response");
+				for (const source of await attributed(
+					sources.filter((row: unknown): row is object => typeof row === "object" && row !== null),
+					deps.secretApiCall,
+				)) {
+					console.log(resultField(source, "name") ?? "Source");
+					printResultAttribution(source);
+				}
+				return;
+			}
+			const sources = loadSourcesConfig(deps.agentsDir).sources;
+			if (options.json) {
+				if (!deps.secretApiCall) throw new Error("Source JSON requires the daemon public view");
+				const result = await deps.secretApiCall("GET", "/api/sources");
+				if (!result.ok) throw new Error("Source read failed");
+				console.log(JSON.stringify(result.data, null, 2));
+				return;
+			}
+			if (!sources.some((source) => source.writeIdentity) || !deps.secretApiCall) {
+				await listSources(deps);
+				return;
+			}
+			for (const source of await attributed(sources, deps.secretApiCall)) {
+				console.log(`${source.name} (${source.kind}, ${source.mode}, ${source.enabled ? "enabled" : "disabled"})`);
+				printResultAttribution(source);
+			}
+		});
 
 	sources
 		.command("remove <sourceId>")
