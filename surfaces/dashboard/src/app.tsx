@@ -84,7 +84,13 @@ function Shell() {
 					>
 						{view === "setup" ? (
 							whoami?.user.role === "admin" ? (
-								<OperatorSetup organizationName={whoami.organization.name} onComplete={() => setView("home")} />
+								<OperatorSetup
+									organizationName={whoami.organization.name}
+									onComplete={() => {
+										setSetupComplete(true);
+										setView("home");
+									}}
+								/>
 							) : whoami ? (
 								<MemberSetup
 									whoami={whoami}

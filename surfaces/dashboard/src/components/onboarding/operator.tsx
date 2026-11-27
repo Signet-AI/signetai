@@ -18,6 +18,7 @@ import type { OrganizationClassification, OrganizationGroup, OrganizationSetting
 import type { Whoami } from "@/lib/session";
 import { useWhoami } from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
+import { useView } from "@/lib/view-context";
 
 const PATH = "/api/org/operator/settings";
 export function OperatorOnboardingGate({
@@ -43,6 +44,7 @@ function OperatorGate({
 	readonly children: ReactNode;
 }) {
 	const { result, refresh } = usePanelQuery<OperatorSettings>(PATH);
+	const { setView, setSetupComplete } = useView();
 	const [finished, setFinished] = useState(false);
 	const [settings, setSettings] = useState<OperatorSettings | null>(null);
 	useEffect(() => {
@@ -51,7 +53,15 @@ function OperatorGate({
 	if (finished || settings?.complete) return children;
 	if (settings)
 		return (
-			<OperatorWizard settings={settings} organizationName={organizationName} onComplete={() => setFinished(true)} />
+			<OperatorWizard
+				settings={settings}
+				organizationName={organizationName}
+				onComplete={() => {
+					setSetupComplete(true);
+					setView("home");
+					setFinished(true);
+				}}
+			/>
 		);
 	return (
 		<AuthPage
