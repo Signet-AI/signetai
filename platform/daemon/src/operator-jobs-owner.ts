@@ -22,6 +22,7 @@ import {
 	type OperatorJobRow,
 } from "./operator-job-contract";
 import type { UnembeddedRow } from "./embedding-coverage";
+import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
 
 const actorSchema = z.object({
 	userId: z.string(),
@@ -289,7 +290,8 @@ function sweepOperatorJobs(db: WriteDb, runtimeId: string | undefined): void {
 	}
 }
 function operation(db: WriteDb, request: OperatorRequest): unknown {
-	if (request.op === "list" || request.op === "create") sweepOperatorJobs(db, request.runtimeId);
+	if (request.op === "list" || request.op === "create" || (request.op === "logs-access" && request.audit))
+		sweepOperatorJobs(db, request.runtimeId);
 	if (request.op === "settings") {
 		operation(db, { op: "authorize-global", actor: request.actor });
 		const data = settingsSchema.parse(request.input);
@@ -518,7 +520,7 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 		}
 		db.prepare("UPDATE org_jobs SET progress_json=? WHERE id=?").run(JSON.stringify(progress), id);
 		if (!rows.length) finish(db, jobRow(db, id), request.actor, null);
-		return { jobId: id, rows };
+		return { jobId: id, rows, embedding: resolveActiveEmbeddingConfig(db, request.embedding) };
 	}
 	const row = jobRow(db, request.jobId),
 		plan = planSchema.parse(JSON.parse(row.params_json));

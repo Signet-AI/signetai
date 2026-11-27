@@ -137,7 +137,7 @@ async function startAdmittedOperatorJob(p: Principal, raw: unknown, headerAgent?
 	const cfg = loadMemoryConfigFromText(resolveSqliteAgentsDir(), text, configPath);
 	if (active.size >= 2 && input.action === "embed.backfill" && !input.options.dryRun)
 		throw new IdentityError(429, "capacity");
-	const result = await operatorRequest<{ jobId: string; rows: readonly UnembeddedRow[] }>({
+	const result = await operatorRequest<{ jobId: string; rows: readonly UnembeddedRow[]; embedding: EmbeddingConfig }>({
 		op: "create",
 		actor,
 		input: { ...input, agentId: selected.value },
@@ -148,7 +148,7 @@ async function startAdmittedOperatorJob(p: Principal, raw: unknown, headerAgent?
 	});
 	if (result.rows.length) {
 		active.add(result.jobId);
-		void runBackfill(actor, result.jobId, result.rows, cfg.embedding).finally(() => active.delete(result.jobId));
+		void runBackfill(actor, result.jobId, result.rows, result.embedding).finally(() => active.delete(result.jobId));
 	}
 	return { jobId: result.jobId };
 }
