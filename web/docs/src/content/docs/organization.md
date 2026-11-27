@@ -298,13 +298,20 @@ do not stop the organization instance or open its database from a client.
 ## Hosting and joining
 
 On the instance host, run `signet setup --host --local --public-url https://memory.example.com`.
-Use `--path` for a separate workspace and an unused `SIGNET_PORT` if another
-instance is running. Host setup creates a team-mode workspace without installing
-harnesses, starts that workspace's daemon, and checks the public URL with its
-setup nonce. A mismatch or unreachable URL fails rather than silently configuring
-SSO and device-approval links for the wrong host. Rerun against the same unclaimed
-team workspace after fixing connectivity; existing personal workspaces are not
-converted. Configure providers, embeddings, and shared sources after claiming.
+Use `--path` for a separate workspace and `--port <port>` to select its listen
+port. Port selection is resolved once: `--port` overrides `SIGNET_PORT`, then the
+port in `SIGNET_DAEMON_URL`, then the default. A listener already using the port
+makes setup fail before creating or launching a workspace; choose an unused
+`--port`. Readiness must report the PID and workspace of the daemon just launched.
+Without `--public-url`, the setup link uses that resolved loopback origin. Supply
+`--public-url` for a reverse proxy's externally reachable origin; it does not
+change the daemon's listen port. Host setup creates a team-mode workspace without
+installing harnesses, starts that workspace's daemon, and checks the public URL
+with its setup nonce. A mismatch or unreachable URL fails rather than silently
+configuring SSO and device-approval links for the wrong host. Before rerunning
+setup, stop that workspace's daemon through its service manager. Existing personal
+workspaces are not converted. Configure providers, embeddings, and shared sources
+after claiming.
 
 The command prints a setup URL and the one-time setup token separately; the token
 is never put in the URL. A service-started daemon stores it in its private runtime

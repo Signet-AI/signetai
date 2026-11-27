@@ -9,6 +9,7 @@ import {
 	type SpawnSyncReturns,
 } from "@signet/core";
 import { randomUUID } from "node:crypto";
+import { assertHostPortAvailable, isHostDaemonReady } from "./host-target.js";
 import {
 	appendFileSync,
 	closeSync,
@@ -1955,6 +1956,7 @@ export async function waitForDaemonLiveness(
 	pause: (ms: number) => Promise<void> = sleep,
 	now: () => number = Date.now,
 	lifecycle?: DaemonStartLifecycleProbe,
+	probe: () => Promise<boolean> = isDaemonRunning,
 ): Promise<boolean> {
 	while (now() < deadline) {
 		await pause(250);
@@ -1970,7 +1972,7 @@ export async function waitForDaemonLiveness(
 		) {
 			return false;
 		}
-		if (await isDaemonRunning()) return true;
+		if (await probe()) return true;
 	}
 	return false;
 }
@@ -1979,7 +1981,10 @@ export async function startDaemon(
 	agentsDir: string = AGENTS_DIR,
 	preferredRuntime?: DaemonRuntime,
 	preferredDaemonPath?: string,
+	target?: { readonly origin: string },
 ): Promise<boolean> {
+	if (target) await assertHostPortAvailable(target.origin);
+	const port = target ? Number(new URL(target.origin).port || "80") : DEFAULT_PORT;
 	const workspace = preflightWorkspace({
 		env: { ...process.env, SIGNET_PATH: agentsDir },
 	});
@@ -1996,8 +2001,9 @@ export async function startDaemon(
 		return false;
 	}
 	const runtimeRequested = preferredRuntime !== undefined || Boolean(process.env[DAEMON_RUNTIME_ENV]?.trim());
-	const daemonRunning = await isDaemonRunning();
+	const daemonRunning = target ? false : await isDaemonRunning();
 	const daemonProcess = await hasDaemonProcess(agentsDir);
+	if (target && daemonProcess) throw new Error("This workspace already owns a daemon; stop it before setup --host");
 	if (daemonRunning || daemonProcess) {
 		if (!runtimeRequested) return true;
 		const current = await getDaemonStatus();
@@ -2044,7 +2050,8 @@ export async function startDaemon(
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(daemonPath) : null;
 	const daemonEnv = {
 		...process.env,
-		SIGNET_PORT: DEFAULT_PORT.toString(),
+		SIGNET_PORT: port.toString(),
+		...(target ? { SIGNET_DAEMON_URL: target.origin } : {}),
 		SIGNET_HOST: net.host,
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
@@ -2058,12 +2065,13 @@ export async function startDaemon(
 	let procExited = false;
 	let processExit: DaemonStartProcessExit | null = null;
 	let startedByServiceManager = false;
+	let launchedPid: number | null = null;
 	if (process.platform === "linux") {
 		const systemdArgs = buildSystemdDaemonStartArgs({
 			daemonPath,
 			agentsDir,
 			runtime,
-			port: DEFAULT_PORT,
+			port,
 			host: net.host,
 			bind: net.bind,
 			startupLogPath,
@@ -2125,7 +2133,7 @@ export async function startDaemon(
 				daemonPath,
 				agentsDir,
 				runtime,
-				port: DEFAULT_PORT,
+				port,
 				host: net.host,
 				bind: net.bind,
 				startupLogPath,
@@ -2187,6 +2195,7 @@ export async function startDaemon(
 		});
 
 		if (typeof proc.pid === "number") {
+			launchedPid = proc.pid;
 			try {
 				writeFileSync(pidFile(agentsDir), `${proc.pid}\n`);
 			} catch {}
@@ -2208,8 +2217,37 @@ export async function startDaemon(
 				...(process.platform === "linux" ? { systemdUnitName } : {}),
 			}
 		: undefined;
-	const ready = await waitForDaemonLiveness(deadline, () => procExited, sleep, Date.now, lifecycleProbe);
+	const ownedPid = (): number | null => {
+		if (launchedPid !== null) return launchedPid;
+		const record = readDaemonLifecycleRecord(agentsDir);
+		return isDaemonLifecycleFromStartAttempt(
+			record,
+			startAttemptId,
+			attemptStartedAt,
+			process.platform === "linux" ? systemdUnitName : undefined,
+		)
+			? record.pid
+			: null;
+	};
+	const probe = target
+		? async (): Promise<boolean> => {
+				const pid = ownedPid();
+				return pid === null ? false : await isHostDaemonReady(target.origin, pid, agentsDir);
+			}
+		: isDaemonRunning;
+	let ready: boolean;
+	try {
+		ready = await waitForDaemonLiveness(deadline, () => procExited, sleep, Date.now, lifecycleProbe, probe);
+	} catch (error) {
+		const pid = ownedPid();
+		if (target && pid !== null) await stopManagedDaemonProcess(pid);
+		throw error;
+	}
 	if (ready) return true;
+	if (target) {
+		const pid = ownedPid();
+		if (pid !== null) await stopManagedDaemonProcess(pid);
+	}
 
 	try {
 		const latestLifecycleRecord = readDaemonLifecycleRecord(agentsDir);
