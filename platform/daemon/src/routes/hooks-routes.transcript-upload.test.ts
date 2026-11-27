@@ -288,6 +288,30 @@ describe("transcript upload route", () => {
 		});
 	});
 
+	it("stores a team-mode checkpoint under the upload's project when the token has no project scope", async () => {
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		const scoped = scopedApp("agent-token", { agent });
+		try {
+			const words = `${"team checkpoint words ".repeat(30)}\n`;
+			expect((await patch(words, { target: scoped, query: { harness: "test", agentId: null } })).status).toBe(200);
+
+			const response = await scoped.request("/api/hooks/session-checkpoint-extract", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ harness: "test", sessionKey: "sess-1", agentId: agent }),
+			});
+
+			expect(response.status).toBe(200);
+			expect(await getStoredSessionTranscriptInfoAsync("sess-1", agent)).toMatchObject({
+				project: "/repo",
+				content: expect.stringContaining("team checkpoint words"),
+			});
+		} finally {
+			authConfig.mode = previousMode;
+		}
+	});
+
 	it("uses the token agent and rejects another agent in team mode", async () => {
 		const previousMode = authConfig.mode;
 		authConfig.mode = "team";

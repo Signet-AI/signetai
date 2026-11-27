@@ -79,12 +79,13 @@ export function endTranscriptCaptureJobInTx(
 		 LIMIT 1`,
 	).get(input.agentId, fileSourceIdentity(input.harness, input.sourcePath));
 	if (!job) return null;
-	if (job.ended_at === input.endedAt && job.status !== "failed") return job.id;
+	const endedAt = job.ended_at !== null && job.ended_at > input.endedAt ? job.ended_at : input.endedAt;
+	if (job.ended_at === endedAt && job.status !== "failed") return job.id;
 	db.prepare(
 		`UPDATE transcript_capture_jobs
 		 SET ended_at = ?, summary_status = 'not_requested', status = 'pending', attempts = 0, error = NULL, updated_at = ?
 		 WHERE id = ?`,
-	).run(input.endedAt, new Date().toISOString(), job.id);
+	).run(endedAt, new Date().toISOString(), job.id);
 	return job.id;
 }
 

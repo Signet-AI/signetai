@@ -625,14 +625,14 @@ describe("transcript capture worker", () => {
 		expect(jobState()).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
 	});
 
-	it("keeps the lease when a session end repeats the same end time", async () => {
-		const sourcePath = join(dir, "repeated-end.jsonl");
-		writeFileSync(sourcePath, "User: ended twice\n", "utf8");
+	async function leasedEndedJob(name: string, endedAt: string) {
+		const sourcePath = join(dir, `${name}.jsonl`);
+		writeFileSync(sourcePath, `User: ${name}\n`, "utf8");
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
-			sessionKey: "session-repeated-end",
-			sessionId: "session-repeated-end",
+			sessionKey: `session-${name}`,
+			sessionId: `session-${name}`,
 			project: "/repo",
 			transcript: "",
 			transcriptPath: sourcePath,
@@ -641,28 +641,44 @@ describe("transcript capture worker", () => {
 			endedAt: null,
 		});
 		if (!id) throw new Error("expected source capture job");
-		const end = {
+		const end = (at: string) => ({
 			agentId: "agent-a",
 			harness: "pi",
 			sourcePath: realpathSync(sourcePath),
-			endedAt: "2026-06-20T10:05:00.000Z",
-		};
+			endedAt: at,
+		});
 		getDbAccessor().withWriteTx((db) => {
-			endTranscriptCaptureJobInTx(db, end);
+			endTranscriptCaptureJobInTx(db, end(endedAt));
 			db.prepare("UPDATE transcript_capture_jobs SET status = 'processing', attempts = attempts + 1 WHERE id = ?").run(
 				id,
 			);
 		});
+		return {
+			endAgain: (at: string) =>
+				getDbAccessor().withWriteTx((db) => {
+					endTranscriptCaptureJobInTx(db, end(at));
+				}),
+			state: () =>
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT status, attempts, ended_at FROM transcript_capture_jobs WHERE id = ?").get(id),
+				),
+		};
+	}
 
-		getDbAccessor().withWriteTx((db) => {
-			endTranscriptCaptureJobInTx(db, end);
-		});
+	it("keeps the lease when a session end repeats the same end time", async () => {
+		const job = await leasedEndedJob("repeated-end", "2026-06-20T10:05:00.000Z");
 
-		expect(
-			getDbAccessor().withReadDb((db) =>
-				db.prepare("SELECT status, attempts, ended_at FROM transcript_capture_jobs WHERE id = ?").get(id),
-			),
-		).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
+		job.endAgain("2026-06-20T10:05:00.000Z");
+
+		expect(job.state()).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
+	});
+
+	it("keeps the newer end time when an older session end arrives after it", async () => {
+		const job = await leasedEndedJob("older-end", "2026-06-20T10:10:00.000Z");
+
+		job.endAgain("2026-06-20T10:05:00.000Z");
+
+		expect(job.state()).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:10:00.000Z" });
 	});
 
 	it("releases the lease when the source lock cannot be taken", async () => {
