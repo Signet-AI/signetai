@@ -15,6 +15,7 @@ const columns = {
 		"row_count",
 		"recall_indexed_count",
 		"recall_eligible_count",
+		"recall_kind",
 		"retired_generation",
 	],
 	vector_shard_recall_rows: ["partition_id", "embedding_id", "memory_id", "memory_scope", "is_current", "is_aggregate"],
@@ -108,6 +109,8 @@ export function up(db: MigrationDb): void {
 	db.exec(
 		"UPDATE vector_shard_repairs SET last_generation=MAX(last_generation,active_generation,COALESCE(building_generation,0)) WHERE projection IN ('vec_embeddings','vec_embeddings_staging')",
 	);
+	if (!db.prepare("SELECT 1 FROM pragma_table_info('vector_shard_keys') WHERE name='recall_kind'").get())
+		db.exec("ALTER TABLE vector_shard_keys ADD COLUMN recall_kind INTEGER");
 	for (const column of ["recall_indexed_count", "recall_eligible_count"] as const)
 		if (!db.prepare("SELECT 1 FROM pragma_table_info('vector_shard_keys') WHERE name=?").get(column))
 			db.exec(`ALTER TABLE vector_shard_keys ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0 CHECK(${column}>=0)`);
@@ -131,6 +134,9 @@ export function up(db: MigrationDb): void {
 		db.exec(
 			"UPDATE vector_shard_repairs SET phase='pending' WHERE EXISTS(SELECT 1 FROM vector_shard_members m WHERE m.projection=vector_shard_repairs.projection)",
 		);
+	db.exec(
+		"UPDATE vector_shard_repairs SET phase='pending' WHERE EXISTS(SELECT 1 FROM vector_shard_keys k WHERE k.projection=vector_shard_repairs.projection AND k.retired_generation IS NULL AND k.row_count>0 AND (k.recall_indexed_count!=k.row_count OR k.recall_kind IS NULL OR CASE WHEN json_valid(k.fingerprint) THEN json_array_length(k.fingerprint)!=7 ELSE 1 END))",
+	);
 	db.exec("DROP INDEX IF EXISTS idx_vector_shard_keys_admission");
 	db.exec(
 		"CREATE INDEX idx_vector_shard_keys_admission ON vector_shard_keys(projection,compartment_id,embedding_compartment_id,retired_generation,generation,agent_id,visibility,project,in_flight_jobs,row_count)",

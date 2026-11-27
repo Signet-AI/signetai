@@ -210,6 +210,24 @@ test("shard sync keeps recall eligibility counts through parent and vector mutat
 	}
 });
 
+test("memory and non-memory vectors use separate admitted KNN shards", () => {
+	const db = fixture();
+	try {
+		db.exec("BEGIN");
+		for (let i = 0; i < 128; i++) {
+			add(db, `separate-memory-${i}`, "default", 0.2 + i / 1000);
+			add(db, `separate-chunk-${i}`, "default", i / 1000, "source_chunk");
+		}
+		db.exec("COMMIT");
+		const result = recall(db);
+		expect(result.response.results.map((row) => row.id)).toEqual(["separate-memory-0", "separate-memory-1"]);
+		expect(result.windows).toHaveLength(2);
+		expect(result.admittedInputs).toEqual([]);
+	} finally {
+		db.close();
+	}
+});
+
 test("dense admitted shards stay inside SQLite through hidden mutations", () => {
 	const db = fixture();
 	try {
