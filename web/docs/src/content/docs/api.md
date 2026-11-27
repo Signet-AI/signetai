@@ -265,8 +265,10 @@ Roles and their permissions:
 | `readonly` | recall only                                                          |
 
 Token scopes (`project`, `agent`, `user`) restrict mutations to records
-matching the scope. Admin role bypasses scope checks. Unscoped tokens have
-full access within their role.
+matching the scope. In organization mode, credential agent and project ceilings
+still apply to administrators; an admin role never bypasses classification
+audiences. Unscoped credentials retain only their role permissions and audience
+access.
 
 Rate limits apply in `team` and `hybrid` modes:
 
@@ -427,19 +429,14 @@ deciding whether onboarding is still needed must gate on `configuredHarnesses`
 (the field is absent on older daemons; treat absence as unknown and fall back
 without hiding setup affordances).
 
-### Supervised organization operations
+### Organization setup and operations
 
-- `POST /api/org/sso`: unrestricted admin; OIDC issuer/client ID and exactly one `clientSecretRef` or write-only `clientSecret`. Uses Signet Secrets, verifies storage, publishes settings and audit through the DB owner, and never returns secret values. MCP `signet_org_sso_set` accepts references only.
-
-- `POST /api/org/agents/:id/purge`: empty body; archived non-organization agent; unrestricted admin; returns HTTP 202 `{jobId}`. Poll `/api/org/jobs/:id`. MCP: `signet_agent_purge` with `confirm: true`.
-
-- `POST /api/org/bootstrap`: unclaimed team instance only; setup nonce and validated public URL.
-
-- `GET /api/org/operator/doctor`: audited identity, clock, and DB-owner diagnostics.
-
-- `GET /api/org/operator/capabilities`: verified supervisor availability, admin only.
-- `POST /api/org/operator/restart`: unrestricted admin; empty JSON body; HTTP 202
-  with `{accepted, jobId, status, supervisor}`. Poll the job for actual readiness.
-- `POST /api/org/operator/jobs`: scoped queue repair, embedding audit, and
-  embedding backfill jobs. Returns HTTP 202 with `{jobId}`. See Organization for
-  action schemas, admission limits, and incomplete-job semantics.
+| Method | Path | Behavior |
+|---|---|---|
+| POST | `/api/org/bootstrap` | Unclaimed team instance only; setup nonce and checked public URL. |
+| POST | `/api/org/sso` | Unrestricted admin; issuer/client ID and exactly one `clientSecretRef` or write-only `clientSecret`. Verifies Signet Secrets storage, then publishes settings and audit through the DB owner. Never returns secret values. MCP `signet_org_sso_set` accepts references only. |
+| POST | `/api/org/agents/:id/purge` | Unrestricted admin; empty body and archived non-organization agent; `202 {jobId}`. Poll the job for durable evidence and file cleanup. MCP `signet_agent_purge` requires `confirm: true`. |
+| GET | `/api/org/operator/doctor` | Audited identity, clock, and DB-owner diagnostics. |
+| GET | `/api/org/operator/capabilities` | Admin; verified supervisor availability. |
+| POST | `/api/org/operator/restart` | Unrestricted admin; empty JSON body; `202 {accepted, jobId, status, supervisor}`. Poll the job for actual readiness, not just acceptance. |
+| POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill; `202 {jobId}`. See Organizations for action schemas, admission limits, and incomplete-job semantics. |
