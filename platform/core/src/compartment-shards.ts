@@ -596,7 +596,7 @@ function vectorAdmissionMoveSql(
 	const fallbackId = fallbackTable === base ? "e.id" : `(SELECT json_array(e.id,generation) FROM (${live}) LIMIT 1)`;
 	const removal = preparing
 		? `DELETE FROM ${table} WHERE id=json_array(${wanted},${generation}); DELETE FROM vector_shard_members WHERE projection='${base}' AND generation=${generation} AND embedding_id=${wanted};`
-		: `${vectorAdmissionRemoveSql(base, `SELECT json_array(${wanted},generation) FROM (${live})`)} DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=${wanted} AND partition_id IN(SELECT id FROM vector_shard_keys WHERE projection='${base}' AND retired_generation IS NULL AND generation<=${generation});`;
+		: `${vectorAdmissionRemoveSql(base, `SELECT json_array(${wanted},generation) FROM (${live})`)} DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=${wanted} AND EXISTS(SELECT 1 FROM vector_shard_keys k WHERE k.id=vector_shard_members.partition_id AND k.projection='${base}' AND k.retired_generation IS NULL AND k.generation<=${generation});`;
 	return `
 	DELETE FROM _vector_admission_transfer;
 	INSERT INTO _vector_admission_transfer(id,vector) SELECT e.id,COALESCE((SELECT vector FROM _vector_admission_override WHERE id=e.id),e.vector,(SELECT embedding FROM ${fallbackTable} WHERE id=${fallbackId}),(SELECT embedding FROM ${base} WHERE id=e.id)) FROM ${store} e WHERE e.id=${wanted};

@@ -88,6 +88,12 @@ test("single-row vector writes never scan admission payloads", () => {
 	try {
 		add(db, "write-target", "default", 0);
 		add(db, "unrelated", "other", 1);
+		const keyRoots = new Set(
+			db
+				.prepare<{ rootpage: number }, []>("SELECT rootpage FROM sqlite_master WHERE tbl_name='vector_shard_keys'")
+				.all()
+				.map((row) => row.rootpage),
+		);
 		for (const sql of [
 			"UPDATE embeddings SET vector=vector WHERE id='write-target'",
 			"DELETE FROM embeddings WHERE id='write-target'",
@@ -96,6 +102,23 @@ test("single-row vector writes never scan admission payloads", () => {
 			try {
 				const bytecode = statement.all();
 				expect(bytecode.filter((row) => row.opcode === "VFilter" && row.p4 === "1")).toEqual([]);
+				const programs: Record<string, unknown>[][] = [];
+				for (const row of bytecode) {
+					if (row.addr === 0) programs.push([]);
+					programs.at(-1)?.push(row);
+				}
+				for (const program of programs) {
+					const cursors = new Set(
+						program
+							.filter((row) => row.opcode === "OpenRead" && typeof row.p2 === "number" && keyRoots.has(row.p2))
+							.map((row) => row.p1),
+					);
+					expect(
+						program.filter(
+							(row) => ["Next", "Prev", "Rewind", "Last"].includes(String(row.opcode)) && cursors.has(row.p1),
+						),
+					).toEqual([]);
+				}
 			} finally {
 				statement.finalize();
 			}
