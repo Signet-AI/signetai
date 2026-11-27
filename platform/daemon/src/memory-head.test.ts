@@ -917,7 +917,12 @@ describe("memory head owner runtime", () => {
 			[JSON.stringify({ id: "cls_hr", target: { kind: "memory", id: "meeting", agentId: "default" } })],
 		);
 		expect(await read("alice")).toEqual(visible);
+		const malformed = await read("").then(
+			() => null,
+			(error: unknown) => error,
+		);
 		expect(await read("bob")).toMatchObject({ status: "stale", content: null });
+		expect(malformed instanceof Error ? malformed.message : null).toBe("In-flight reader identity required");
 		expect(await slots()).toEqual({ n: 2 });
 		await sql("DELETE FROM classification_audience WHERE principal_id='alice'");
 		expect(await slots()).toEqual({ n: 0 });

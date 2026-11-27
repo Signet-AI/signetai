@@ -1477,6 +1477,7 @@ export function runDbOwnerWorker(): void {
 			if (request.action === "inspect") {
 				if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
 				const scope = requireReadScope(request.readScope);
+				if (scope.inFlightUserId === "") throw new Error("In-flight reader identity required");
 				const version = db.prepare("PRAGMA data_version").get()?.data_version;
 				if (version !== headDataVersion) {
 					scopedHeads.clear();
