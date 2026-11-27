@@ -88,7 +88,7 @@ describe("embedding index DB-owner routing", () => {
 		const extension = findSqliteVecExtension();
 		let path = "";
 
-		beforeAll(() => {
+		beforeAll(async () => {
 			if (extension === null) return;
 			const rawDirectory = mkdtempSync(join(tmpdir(), "signet-embedding-owner-"));
 			directory = rawDirectory;
@@ -133,11 +133,14 @@ describe("embedding index DB-owner routing", () => {
 			raw.exec("COMMIT");
 			ensureEmbeddingIndexState(raw as unknown as WriteDb, activeConfig);
 			raw.close();
+			owner = createDbOwnerClient({ dbPath: path });
+			await owner.start();
 		});
 
 		it("recovers staged embeddings and atomically promotes without daemon SQLite calls", async () => {
 			if (extension === null) return;
-			owner = createDbOwnerClient({ dbPath: path });
+			if (owner === null) throw new Error("recovery fixture owner did not start");
+			expect(owner.health()).toMatchObject({ state: "ready", generation: 1 });
 			const handle = await startEmbeddingIndexMigration({
 				accessor: ownerAccessor(),
 				configured: stagingConfig,
