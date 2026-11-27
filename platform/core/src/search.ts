@@ -353,10 +353,13 @@ function admittedVectorSearch(
 				options.until === undefined &&
 				options.project === undefined;
 			const statistics = db
-				.prepare("SELECT row_count,recall_indexed_count,recall_eligible_count FROM vector_shard_keys WHERE id=?")
+				.prepare(
+					"SELECT row_count,recall_indexed_count,recall_eligible_count,recall_kind FROM vector_shard_keys WHERE id=?",
+				)
 				.get(partition);
 			if (statistics?.recall_indexed_count !== partitioned.sizes.get(partition))
 				throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+			if (statistics.recall_kind === 0) continue;
 			const eligible = standard
 				? `SELECT json_array(f.embedding_id,s.generation) native_id,f.memory_id source_id FROM vector_shard_recall_rows f CROSS JOIN vector_shard_members s ON s.partition_id=f.partition_id AND s.embedding_id=f.embedding_id WHERE f.partition_id=? AND s.projection=? AND f.is_current=1 AND f.memory_scope IS NULL${options.excludeAggregateRecall ? " AND f.is_aggregate=0" : ""}`
 				: `SELECT r.id native_id,e.source_id FROM vector_shard_members s CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) WHERE s.partition_id=? AND s.projection=? AND e.source_type='memory' AND ${predicate}`;

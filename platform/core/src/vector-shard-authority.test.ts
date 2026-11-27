@@ -221,7 +221,8 @@ test("memory and non-memory vectors use separate admitted KNN shards", () => {
 		db.exec("COMMIT");
 		const result = recall(db);
 		expect(result.response.results.map((row) => row.id)).toEqual(["separate-memory-0", "separate-memory-1"]);
-		expect(result.windows).toHaveLength(2);
+		expect(db.query("SELECT COUNT(*) n FROM vector_shard_keys WHERE row_count>0").get()).toEqual({ n: 2 });
+		expect(result.windows).toHaveLength(1);
 		expect(result.admittedInputs).toEqual([]);
 	} finally {
 		db.close();
