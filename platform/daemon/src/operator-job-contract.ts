@@ -41,6 +41,7 @@ export interface OperatorJobRow {
 	readonly finished_at: string | null;
 }
 export type OperatorRequest =
+	| import("./organization-upgrade-contract").UpgradeRequest
 	| { readonly op: "settings"; readonly actor: OperatorActor; readonly input: unknown; readonly runtimeId?: string }
 	| {
 			readonly op: "agent-purge";
