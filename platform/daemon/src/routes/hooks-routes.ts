@@ -1184,7 +1184,7 @@ function registerSessionEnd(app: Hono): void {
 						removeAgentPresence(sessionKey);
 					}
 				}
-				scheduleSessionSkillScan({ transcriptPath, sessionKey, harness: body.harness, agentId });
+				scheduleSessionSkillScan({ basePath: AGENTS_DIR, transcriptPath, sessionKey, harness: body.harness, agentId });
 				return c.json(result);
 			} catch (e) {
 				if (sessionKey) {
@@ -1582,7 +1582,13 @@ function registerPreCompaction(app: Hono): void {
 			}
 
 			const result = handlePreCompaction(body);
-			scheduleSessionSkillScan({ transcriptPath, sessionKey: body.sessionKey, harness: body.harness, agentId });
+			scheduleSessionSkillScan({
+				basePath: AGENTS_DIR,
+				transcriptPath,
+				sessionKey: body.sessionKey,
+				harness: body.harness,
+				agentId,
+			});
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Pre-compaction hook failed", e as Error);

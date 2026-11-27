@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { parseTranscriptSkills, resolveDefaultBasePath } from "@signet/core";
+import { parseTranscriptSkills } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger.js";
 import { normalizeSessionKey } from "./session-end-state";
@@ -31,16 +31,22 @@ export function recordSkillsFromTranscript(args: SkillScanScope & { readonly tra
 			});
 			return;
 		}
-		recordSkillsFromContent({ ...args, content: readFileSync(args.transcriptPath, "utf-8") });
-	} catch (err) {
-		logger.warn("skills", "Transcript skill scan failed (non-fatal)", {
+		recordSkillsFromContent({
+			...args,
 			path: args.transcriptPath,
-			error: err instanceof Error ? err.message : String(err),
+			content: readFileSync(args.transcriptPath, "utf-8"),
 		});
+	} catch (err) {
+		const failure = { path: args.transcriptPath, error: err instanceof Error ? err.message : String(err) };
+		if (err instanceof Error && "code" in err && err.code === "ENOENT") {
+			logger.debug("skills", "Transcript scan skipped for missing file", failure);
+		} else {
+			logger.warn("skills", "Transcript skill scan failed (non-fatal)", failure);
+		}
 	}
 }
 
-function recordSkillsFromContent(args: SkillScanScope & { readonly content: string }): void {
+function recordSkillsFromContent(args: SkillScanScope & { readonly content: string; readonly path?: string }): void {
 	const { records, skipped } = parseTranscriptSkills(args.content);
 	const origin = args.origin ?? "scan";
 
@@ -67,6 +73,7 @@ function recordSkillsFromContent(args: SkillScanScope & { readonly content: stri
 	}
 
 	logger.debug("skills", "Transcript skill scan complete", {
+		path: args.path,
 		records: records.length - skippedSessionMismatch,
 		skipped,
 		skippedSessionMismatch,
@@ -74,6 +81,7 @@ function recordSkillsFromContent(args: SkillScanScope & { readonly content: stri
 }
 
 export function scheduleSessionSkillScan(input: {
+	readonly basePath: string;
 	readonly transcriptPath: string | undefined;
 	readonly sessionKey: string | undefined;
 	readonly harness: string;
@@ -87,7 +95,7 @@ export function scheduleSessionSkillScan(input: {
 	}
 	if (!sessionKey) return;
 	readTranscriptUploadContent(getDbAccessor(), {
-		basePath: resolveDefaultBasePath(),
+		basePath: input.basePath,
 		agentId: input.agentId,
 		sessionKey: normalizeSessionKey(sessionKey),
 		maxBytes: MAX_TRANSCRIPT_SCAN_BYTES,

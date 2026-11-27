@@ -116,6 +116,10 @@ export async function readTranscriptUploadContent(
 	accessor: DbAccessor,
 	input: TranscriptUploadRead,
 ): Promise<string | null> {
+	return await withTranscriptUploadAgentLock(input.agentId, "shared", () => readCommittedLines(accessor, input));
+}
+
+async function readCommittedLines(accessor: DbAccessor, input: TranscriptUploadRead): Promise<string | null> {
 	const scope = await readUploadScope(accessor, input.agentId, input.sessionKey, "transcript-upload.read");
 	const state = scope.state;
 	if (!state) return null;

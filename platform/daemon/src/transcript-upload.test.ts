@@ -749,4 +749,21 @@ describe("transcript upload ranges", () => {
 		await uploadTranscriptRange(accessor, request('{"new":1}\n', { generation: 1 }));
 		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"new":1}\n');
 	});
+
+	it("waits for an exclusive upload lock before reading", async () => {
+		init();
+		const accessor = getDbAccessor();
+		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		let settled = false;
+		let pending: Promise<string | null> = Promise.resolve(null);
+		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {
+			pending = readTranscriptUploadContent(accessor, read()).then((content) => {
+				settled = true;
+				return content;
+			});
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(settled).toBe(false);
+		});
+		expect(await pending).toBe('{"a":1}\n');
+	});
 });
