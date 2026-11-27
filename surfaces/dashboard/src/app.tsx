@@ -18,6 +18,7 @@ import { GraphView } from "@/views/graph";
 
 import { TelemetryConsentDialog } from "@/components/telemetry-consent";
 import { OnboardingPage } from "@/components/onboarding/page";
+import { OnboardingEntry } from "@/components/onboarding/entry";
 import { MemberSetup, OrganizationOnboardingGate } from "@/components/onboarding/member";
 
 export function App() {
@@ -84,7 +85,9 @@ function Shell() {
 									}}
 								/>
 							) : (
-								<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
+								<OnboardingEntry
+									personal={<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />}
+								/>
 							)
 						) : (
 							<>

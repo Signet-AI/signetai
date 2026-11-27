@@ -7,6 +7,10 @@ Organization mode adds individual identities to a daemon running in `team` mode.
 
 **Your personal agent is yours to organize. The organization can read it unless it's hidden.** Agents organize work. Classifications control who can read sensitive material; an administrator does not automatically gain access to classified material.
 
+## Choose a workspace
+
+Open Setup in the dashboard or desktop app to choose **Personal workspace**, **Join an organization**, or **Host an organization instance**. Personal workspace opens the existing nine-step personal flow. Joining shows `signet setup --join` for your own computer and an explicit link to your organization's instance. Hosting shows `signet setup --host` for the server, including the reverse-proxy warning. Neither option changes the local workspace from the browser.
+
 ## Claim a new organization
 
 Set `auth.mode: team` in the server workspace's `agent.yaml` and start the daemon. An unclaimed team daemon prints a setup URL and a setup token. Keep the token private. Restarting an unclaimed daemon replaces its setup token.

@@ -33,6 +33,7 @@ if (!process.env.SIGNET_MEMBER_ONBOARDING_TEST_CHILD) {
 	let createRoot: typeof import("react-dom/client").createRoot;
 	let MemberOnboarding: typeof import("./member").MemberOnboarding;
 	let OrganizationOnboardingGate: typeof import("./member").OrganizationOnboardingGate;
+	let OnboardingEntry: typeof import("./entry").OnboardingEntry;
 	const calls: string[] = [];
 	let failAcknowledgement = true;
 	let connectorUsed = false;
@@ -46,6 +47,7 @@ if (!process.env.SIGNET_MEMBER_ONBOARDING_TEST_CHILD) {
 			if (!(key in globalThis)) Reflect.set(globalThis, key, Reflect.get(dom, key));
 		({ createRoot } = await import("react-dom/client"));
 		({ MemberOnboarding, OrganizationOnboardingGate } = await import("./member"));
+		({ OnboardingEntry } = await import("./entry"));
 		globalThis.fetch = async (input, init) => {
 			const path = String(input);
 			calls.push(`${init?.method ?? "GET"} ${path}`);
@@ -110,6 +112,36 @@ if (!process.env.SIGNET_MEMBER_ONBOARDING_TEST_CHILD) {
 	afterAll(() => {
 		globalThis.fetch = originalFetch;
 		dom.close();
+	});
+	test("three-way entry preserves the personal flow and keeps remote setup explicit", async () => {
+		const element = document.createElement("div");
+		document.body.append(element);
+		const root = createRoot(element);
+		const click = async (text: string) => {
+			const button = [...element.querySelectorAll("button")].find((item) => item.textContent?.trim() === text);
+			expect(button).toBeDefined();
+			await act(async () => button?.click());
+		};
+		try {
+			await act(async () => root.render(<OnboardingEntry personal={<p>Unchanged nine-step personal flow</p>} />));
+			expect(element.textContent).toContain("Personal workspace");
+			expect(element.textContent).toContain("Join an organization");
+			expect(element.textContent).toContain("Host an organization instance");
+			await click("Join an organization");
+			expect(element.textContent).toContain("signet setup --join");
+			expect(element.textContent).toContain("Your local workspace is never replaced");
+			await click("Back");
+			await click("Host an organization instance");
+			expect(element.textContent).toContain("signet setup --host");
+			expect(element.textContent).toContain("hybrid");
+			await click("Back");
+			await click("Personal workspace");
+			expect(element.textContent).toBe("Unchanged nine-step personal flow");
+			expect(calls).toEqual([]);
+		} finally {
+			await act(async () => root.unmount());
+			element.remove();
+		}
 	});
 	test("local mode bypasses organization onboarding without making a request", async () => {
 		const element = document.createElement("div");
