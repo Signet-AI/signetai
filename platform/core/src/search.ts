@@ -303,7 +303,7 @@ export function vectorSearchWithMetadata(
 						const batch: number[] = [];
 						const admissions: Array<readonly [number, number]> = [];
 						let budget = 0;
-						while (offset < pending.length && batch.length < 128) {
+						while (offset < pending.length && batch.length < 4096) {
 							const group = pending[offset];
 							if (group === undefined) throw new Error("invalid_vector_admission_group");
 							const ids = partitioned.groups[group];
@@ -323,7 +323,7 @@ export function vectorSearchWithMetadata(
 						}
 						const rows = db
 							.prepare(
-								`WITH neighbors AS MATERIALIZED(SELECT id,admission,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission IN(SELECT partition_id FROM admitted)),admitted AS MATERIALIZED(SELECT json_extract(value,'$[0]') partition_id,json_extract(value,'$[1]') shard_group FROM json_each(?)),ranked AS MATERIALIZED(SELECT json_extract(n.id,'$[0]') id,n.distance,a.shard_group,row_number() OVER(PARTITION BY a.shard_group ORDER BY n.distance) position FROM neighbors n CROSS JOIN admitted a ON a.partition_id=n.admission),hits AS MATERIALIZED(SELECT id,distance,shard_group FROM ranked WHERE position<=?) SELECT e.source_id,hits.distance,hits.shard_group,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id ORDER BY hits.shard_group,hits.distance`,
+								`WITH request AS MATERIALIZED(SELECT ? vector,? window),admitted AS MATERIALIZED(SELECT json_extract(value,'$[0]') partition_id,json_extract(value,'$[1]') shard_group FROM json_each(?)),singletons AS MATERIALIZED(SELECT json_array(m.embedding_id,m.generation) id,k.id admission,vec_distance_cosine(s.vector,(SELECT vector FROM request)) distance FROM admitted a CROSS JOIN vector_shard_keys k ON k.id=a.partition_id AND k.row_count=1 CROSS JOIN vector_shard_singletons s ON s.partition_id=k.id CROSS JOIN vector_shard_members m ON m.partition_id=k.id),neighbors AS MATERIALIZED(SELECT id,admission,distance FROM singletons UNION ALL SELECT id,admission,distance FROM ${partitioned.table} WHERE embedding MATCH (SELECT vector FROM request) AND k=(SELECT window FROM request) AND admission IN(SELECT a.partition_id FROM admitted a LEFT JOIN singletons s ON s.admission=a.partition_id WHERE s.admission IS NULL)),ranked AS MATERIALIZED(SELECT json_extract(n.id,'$[0]') id,n.distance,a.shard_group,row_number() OVER(PARTITION BY a.shard_group ORDER BY n.distance) position FROM neighbors n CROSS JOIN admitted a ON a.partition_id=n.admission),hits AS MATERIALIZED(SELECT id,distance,shard_group FROM ranked WHERE position<=?) SELECT e.source_id,hits.distance,hits.shard_group,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id ORDER BY hits.shard_group,hits.distance`,
 							)
 							.all(queryVector, window, JSON.stringify(admissions), window, ...args);
 						const grouped = new Map<number, Record<string, unknown>[]>();

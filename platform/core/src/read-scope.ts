@@ -122,7 +122,7 @@ export function inFlightClassificationJobsSql(
 export function classificationLabelsForJobsSql(alias: string, field: string): string {
 	const jobs = `${identifier(alias)}.${identifier(field)}`;
 	const j = "_vector_classification_job";
-	return `(SELECT json_group_array(classification_id) FROM (SELECT DISTINCT ${jobValue(j, "id")} classification_id FROM org_jobs ${j} WHERE ${activeClassificationSql(j)} AND ${j}.id IN (SELECT value FROM json_each(${jobs})) ORDER BY classification_id))`;
+	return `(CASE WHEN ${jobs}='[]' THEN '[]' ELSE (SELECT json_group_array(classification_id) FROM (SELECT DISTINCT ${jobValue(j, "id")} classification_id FROM org_jobs ${j} WHERE ${activeClassificationSql(j)} AND ${j}.id IN (SELECT value FROM json_each(${jobs})) ORDER BY classification_id)) END)`;
 }
 export function readScopeSql(
 	alias: string,

@@ -16,6 +16,7 @@ const columns = {
 		"retired_generation",
 	],
 	vector_shard_repair_partitions: ["projection", "generation", "partition_id"],
+	vector_shard_singletons: ["partition_id", "vector"],
 	vector_shard_members: ["projection", "generation", "embedding_id", "partition_id"],
 	vector_shard_dirty: ["projection", "generation", "embedding_id"],
 	vector_shard_unresolved: ["projection", "generation", "embedding_id"],
@@ -69,6 +70,9 @@ export function up(db: MigrationDb): void {
 	db.exec(
 		"CREATE TABLE IF NOT EXISTS vector_shard_repair_partitions(projection TEXT NOT NULL,generation INTEGER NOT NULL,partition_id INTEGER NOT NULL,PRIMARY KEY(projection,generation,partition_id)) WITHOUT ROWID",
 	);
+	db.exec(
+		"CREATE TABLE IF NOT EXISTS vector_shard_singletons(partition_id INTEGER PRIMARY KEY REFERENCES vector_shard_keys(id) ON DELETE CASCADE,vector BLOB NOT NULL)",
+	);
 	for (const table of ["vector_shard_dirty", "vector_shard_unresolved"] as const)
 		db.exec(
 			`CREATE TABLE IF NOT EXISTS ${table}(projection TEXT NOT NULL,generation INTEGER NOT NULL,embedding_id TEXT NOT NULL,PRIMARY KEY(projection,generation,embedding_id)) WITHOUT ROWID`,
@@ -95,17 +99,19 @@ export function up(db: MigrationDb): void {
 	db.exec(
 		"UPDATE vector_shard_repairs SET last_generation=MAX(last_generation,active_generation,COALESCE(building_generation,0)) WHERE projection IN ('vec_embeddings','vec_embeddings_staging')",
 	);
+	db.exec("DROP INDEX IF EXISTS idx_vector_shard_keys_admission");
 	db.exec(
-		"CREATE INDEX IF NOT EXISTS idx_vector_shard_keys_admission ON vector_shard_keys(projection,generation,agent_id,compartment_id)",
+		"CREATE INDEX idx_vector_shard_keys_admission ON vector_shard_keys(projection,compartment_id,embedding_compartment_id,retired_generation,generation,agent_id,visibility,project,in_flight_jobs,row_count)",
 	);
 	db.exec(
 		"CREATE INDEX IF NOT EXISTS idx_vector_shard_members_partition ON vector_shard_members(partition_id,embedding_id)",
 	);
+	db.exec("DROP TRIGGER IF EXISTS vector_shard_members_ai;DROP TRIGGER IF EXISTS vector_shard_members_ad");
 	db.exec(
-		"CREATE TRIGGER IF NOT EXISTS vector_shard_members_ai AFTER INSERT ON vector_shard_members BEGIN UPDATE vector_shard_keys SET row_count=row_count+1 WHERE id=new.partition_id; END",
+		"CREATE TRIGGER IF NOT EXISTS vector_shard_members_ai AFTER INSERT ON vector_shard_members BEGIN UPDATE vector_shard_keys SET row_count=row_count+1 WHERE id=new.partition_id; DELETE FROM vector_shard_singletons WHERE partition_id=new.partition_id; END",
 	);
 	db.exec(
-		"CREATE TRIGGER IF NOT EXISTS vector_shard_members_ad AFTER DELETE ON vector_shard_members BEGIN UPDATE vector_shard_keys SET row_count=row_count-1 WHERE id=old.partition_id; END",
+		"CREATE TRIGGER IF NOT EXISTS vector_shard_members_ad AFTER DELETE ON vector_shard_members BEGIN UPDATE vector_shard_keys SET row_count=row_count-1 WHERE id=old.partition_id; DELETE FROM vector_shard_singletons WHERE partition_id=old.partition_id; END",
 	);
 	for (const [projection, store] of [
 		["vec_embeddings", "embeddings"],

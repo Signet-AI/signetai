@@ -58,7 +58,7 @@ function bindings(values: readonly unknown[]): SQLQueryBindings[] {
 		throw new Error("Unsupported binding");
 	});
 }
-function observed(db: Database, windows: unknown[]) {
+function observed(db: Database, windows: unknown[], plans?: string[]) {
 	return {
 		exec: (sql: string) => db.exec(sql),
 		prepare: (sql: string) => {
@@ -70,6 +70,11 @@ function observed(db: Database, windows: unknown[]) {
 				get: (...args: unknown[]) => q.get(...bindings(args)),
 				all: (...args: unknown[]) => {
 					if (sql.includes("embedding MATCH")) windows.push(args[1]);
+					if (plans && sql.includes("FROM vector_shard_keys k WHERE"))
+						for (const row of db
+							.prepare<Record<string, unknown>, SQLQueryBindings[]>("EXPLAIN QUERY PLAN " + sql)
+							.all(...bindings(args)))
+							if (typeof row.detail === "string") plans.push(row.detail);
 					return q.all(...bindings(args));
 				},
 			};
@@ -83,16 +88,55 @@ const own: ReadScope = {
 	compartments: [],
 	inFlightUserId: "reader",
 };
-function recall(db: Database, scope: ReadScope = own) {
+function recall(db: Database, scope: ReadScope = own, existingSnapshot = false) {
 	const windows: unknown[] = [];
-	const response = vectorSearchWithMetadata(observed(db, windows), new Float32Array([1, 0, 0]), {
-		limit: 2,
-		currentOnly: true,
-		memoryScope: null,
-		readScope: scope,
-	});
+	const tracked = observed(db, windows);
+	const response = vectorSearchWithMetadata(
+		existingSnapshot ? { prepare: tracked.prepare } : tracked,
+		new Float32Array([1, 0, 0]),
+		{
+			limit: 2,
+			currentOnly: true,
+			memoryScope: null,
+			readScope: scope,
+		},
+	);
 	return { response, windows };
 }
+
+function uncachedRecall(db: Database, scope: ReadScope = own) {
+	db.exec("SAVEPOINT without_singletons");
+	try {
+		db.exec("DELETE FROM vector_shard_singletons");
+		return recall(db, scope, true);
+	} finally {
+		db.exec("ROLLBACK TO without_singletons;RELEASE without_singletons");
+	}
+}
+
+test("singleton distances match native payload overrides through mutation and purge", () => {
+	const db = fixture();
+	try {
+		add(db, "a", "default", 0.6);
+		add(db, "b", "default", 0.2);
+		db.exec("UPDATE memories SET project=id WHERE id IN ('a','b')");
+		syncEmbeddingCompartment(db, "embeddings", "a", undefined, new Float32Array([1, 0.05, 0]));
+		expect(db.query("SELECT COUNT(*) n FROM vector_shard_singletons").get()).toEqual({ n: 2 });
+		expect(recall(db).response.results.map((r) => r.id)).toEqual(["a", "b"]);
+		expect(recall(db)).toEqual(uncachedRecall(db));
+		add(db, "second-a", "default", 0.4);
+		db.exec("UPDATE memories SET project='a' WHERE id='second-a'");
+		expect(recall(db)).toEqual(uncachedRecall(db));
+		db.exec("DELETE FROM embeddings WHERE id='second-a'");
+		expect(recall(db)).toEqual(uncachedRecall(db));
+		db.exec("UPDATE memories SET is_deleted=1 WHERE id='a'");
+		expect(recall(db)).toEqual(uncachedRecall(db));
+		db.exec("DELETE FROM memories;DELETE FROM embeddings");
+		expect(db.query("SELECT COUNT(*) n FROM vector_shard_singletons").get()).toEqual({ n: 0 });
+	} finally {
+		db.close();
+	}
+});
 
 test("fully admitted public shard preserves main's plain KNN candidate window", () => {
 	const db = fixture();
@@ -123,9 +167,21 @@ test("admitted fan-out batches 192 physical shards without losing the nearest hi
 			add(db, `admitted-${i}`, agent, i / 1000);
 		}
 		db.exec("COMMIT");
-		const result = recall(db, { ...own, reach: { kind: "all" }, compartments: "all" });
+		const scope: ReadScope = { ...own, reach: { kind: "shared", agentId: "default" }, compartments: [] };
+		const result = recall(db, scope);
 		expect(result.response.results.map((r) => r.id)).toEqual(["admitted-0", "admitted-1"]);
-		expect(result.windows.length).toBeLessThanOrEqual(2);
+		expect(result.windows.length).toBeLessThanOrEqual(1);
+		const plans: string[] = [];
+		admittedVectorPartitions(observed(db, [], plans), "vec_embeddings", scope);
+		expect(plans.some((p) => p.includes("USING COVERING INDEX idx_vector_shard_keys_admission"))).toBe(true);
+		for (let i = 0; i < 12; i++) {
+			db.exec("BEGIN");
+			add(db, `private-${i}`, "other", 0);
+			db.prepare("UPDATE memories SET visibility='private' WHERE id=?").run(`private-${i}`);
+			db.exec("COMMIT");
+			expect(recall(db, scope)).toEqual(result);
+			expect(uncachedRecall(db, scope)).toEqual(result);
+		}
 	} finally {
 		db.close();
 	}
@@ -227,6 +283,7 @@ test.each([4097, 65537, 104729, 271828])(
 		try {
 			add(db, "visible-a", "default", 0.2);
 			add(db, "visible-b", "default", 0.3);
+			db.exec("UPDATE memories SET project=id WHERE id IN ('visible-a','visible-b')");
 			const compartments = [compartmentFor(db, ["cls_hidden_a"]), compartmentFor(db, ["cls_hidden_b"])];
 			const before = recall(db);
 			const states: ReturnType<typeof recall>[] = [];
@@ -265,7 +322,9 @@ test.each([4097, 65537, 104729, 271828])(
 						syncEmbeddingCompartment(db, "embeddings", id);
 					}
 				}
-				states.push(recall(db));
+				const state = recall(db);
+				states.push(state);
+				expect(state).toEqual(uncachedRecall(db));
 			}
 			expect(Object.values(counts).every((count) => count > 0)).toBe(true);
 			for (const state of states) expect(state).toEqual(before);

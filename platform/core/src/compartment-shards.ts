@@ -587,6 +587,7 @@ function vectorAdmissionMoveSql(
 	INSERT OR IGNORE INTO vector_shard_keys(projection,generation,fingerprint,agent_id,visibility,project,compartment_id,embedding_compartment_id,in_flight_jobs) SELECT '${base}',${generation},${fingerprint},r.agent_id,r.visibility,r.project,r.compartment_id,r.embedding_compartment_id,r.in_flight_jobs FROM (${rows}) r;
 	INSERT INTO ${table}(id,admission,embedding) SELECT json_array(r.id,${generation}),k.id,t.vector FROM (${rows}) r JOIN vector_shard_keys k ON k.projection='${base}' AND k.generation=${generation} AND k.fingerprint=${fingerprint} JOIN _vector_admission_transfer t ON t.id=r.id WHERE t.vector IS NOT NULL${vectorBytes === undefined ? "" : ` AND length(t.vector)=${vectorBytes}`};
 	INSERT INTO vector_shard_members(projection,generation,embedding_id,partition_id) SELECT '${base}',${generation},json_extract(v.id,'$[0]'),v.admission FROM ${table} v WHERE v.id=json_array(${wanted},${generation});
+	INSERT OR REPLACE INTO vector_shard_singletons(partition_id,vector) SELECT k.id,t.vector FROM vector_shard_keys k JOIN vector_shard_members m ON m.partition_id=k.id JOIN _vector_admission_transfer t ON t.id=m.embedding_id WHERE k.projection='${base}' AND k.generation=${generation} AND k.row_count=1 AND m.embedding_id=${wanted};
 	DELETE FROM _vector_admission_transfer;`;
 }
 const vectorAdmissionWriters = new WeakMap<MigrationDb, Map<string, unknown>>();
