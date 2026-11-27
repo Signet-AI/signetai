@@ -1,5 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,20 +90,46 @@ const own: ReadScope = {
 	compartments: [],
 	inFlightUserId: "reader",
 };
-function recall(db: Database, scope: ReadScope = own, existingSnapshot = false) {
+function recall(
+	db: Database,
+	scope: ReadScope = own,
+	existingSnapshot = false,
+	filters: Partial<Omit<import("./search").VectorSearchOptions, "readScope" | "limit">> = {},
+) {
 	const windows: unknown[] = [];
 	const tracked = observed(db, windows);
-	const response = vectorSearchWithMetadata(
-		existingSnapshot ? { prepare: tracked.prepare } : tracked,
-		new Float32Array([1, 0, 0]),
-		{
-			limit: 2,
-			currentOnly: true,
-			memoryScope: null,
-			readScope: scope,
-		},
-	);
-	return { response, windows };
+	const kernel: typeof import("@signet/native") = createRequire(import.meta.url)("@signet/native");
+	const original = kernel.scanAdmittedVectors;
+	const admittedInputs: string[] = [];
+	const scan = spyOn(kernel, "scanAdmittedVectors").mockImplementation((query, chunks, limit) => {
+		windows.push(limit);
+		const rows: string[] = [];
+		for (const chunk of chunks)
+			for (let row = 0; row < chunk.rowids.length / 8; row++) {
+				if ((chunk.validity[row >> 3] & (1 << (row & 7))) === 0) continue;
+				rows.push(
+					JSON.stringify([
+						chunk.rowids.readBigInt64LE(row * 8).toString(),
+						(chunk.eligibility[row >> 3] >> (row & 7)) & 1,
+						createHash("sha256")
+							.update(chunk.vectors.subarray(row * query.length * 4, (row + 1) * query.length * 4))
+							.digest("hex"),
+					]),
+				);
+			}
+		admittedInputs.push(createHash("sha256").update(JSON.stringify(rows.sort())).digest("hex"));
+		return original(query, chunks, limit);
+	});
+	try {
+		const response = vectorSearchWithMetadata(
+			existingSnapshot ? { prepare: tracked.prepare } : tracked,
+			new Float32Array([1, 0, 0]),
+			{ limit: 2, currentOnly: true, memoryScope: null, readScope: scope, ...filters },
+		);
+		return { response, windows, admittedInputs };
+	} finally {
+		scan.mockRestore();
+	}
 }
 
 function uncachedRecall(db: Database, scope: ReadScope = own) {
@@ -138,15 +166,17 @@ test("singleton distances match native payload overrides through mutation and pu
 	}
 });
 
-test("fully admitted public shard preserves main's plain KNN candidate window", () => {
+test("admitted eligibility keeps nearest memory hits beyond non-memory vectors", () => {
 	const db = fixture();
 	try {
 		add(db, "chunk-a", "default", 0, "source_chunk");
 		add(db, "chunk-b", "default", 0.01, "source_chunk");
 		for (let i = 0; i < 10; i++) add(db, `memory-${i}`, "default", 0.2 + i / 100);
 		const result = recall(db);
-		expect(result.response).toEqual({ results: [], completeness: "complete" });
+		expect(result.response.completeness).toBe("complete");
+		expect(result.response.results.map((row) => row.id)).toEqual(["memory-0", "memory-1"]);
 		expect(result.windows).toEqual([2]);
+		expect(result.admittedInputs).toHaveLength(1);
 		deleteCompartmentVectors(db, ["chunk-a", "chunk-b"]);
 		expect(recall(db).response.results.map((row) => row.id)).toEqual(["memory-0", "memory-1"]);
 	} finally {
@@ -154,7 +184,7 @@ test("fully admitted public shard preserves main's plain KNN candidate window", 
 	}
 });
 
-test("current filtering resolves a fourfold cohort in at most two native windows", () => {
+test("current filtering resolves a fourfold cohort in one native pass", () => {
 	const db = fixture();
 	try {
 		for (let i = 0; i < 6; i++) add(db, `stale-${i}`, "default", i / 100);
@@ -164,7 +194,36 @@ test("current filtering resolves a fourfold cohort in at most two native windows
 		const result = recall(db);
 		expect(result.response.results.map((row) => row.id)).toEqual(["current-a", "current-b"]);
 		expect(result.response.completeness).toBe("complete");
-		expect(result.windows.length).toBeLessThanOrEqual(2);
+		expect(result.windows).toEqual([2]);
+		expect(result.admittedInputs).toHaveLength(1);
+	} finally {
+		db.close();
+	}
+});
+
+test.each([
+	{ tags: "selected" },
+	{ who: "selected" },
+	{ pinned: true },
+	{ importanceMin: 0.8 },
+	{ since: "2021" },
+	{ until: "2019" },
+	{ project: "selected" },
+])("metadata eligibility applies before the single native heap: %j", (filter) => {
+	const db = fixture();
+	try {
+		add(db, "nearest-ineligible", "default", 0);
+		add(db, "eligible-a", "default", 0.2);
+		add(db, "eligible-b", "default", 0.3);
+		db.exec(
+			"UPDATE memories SET tags='selected',who='selected',pinned=1,importance=0.9,created_at='2022' WHERE id LIKE 'eligible-%'",
+		);
+		if ("until" in filter) db.exec("UPDATE memories SET created_at='2018' WHERE id LIKE 'eligible-%'");
+		if ("project" in filter) db.exec("UPDATE memories SET project='selected' WHERE id LIKE 'eligible-%'");
+		const result = recall(db, own, false, filter);
+		expect(result.response.results.map((row) => row.id)).toEqual(["eligible-a", "eligible-b"]);
+		expect(result.windows).toEqual([2]);
+		expect(result.admittedInputs).toHaveLength(1);
 	} finally {
 		db.close();
 	}
@@ -240,7 +299,11 @@ test("a single admitted cohort cannot exceed the native candidate budget", () =>
 			"UPDATE vector_shard_repairs SET active_generation=2051,last_generation=2051 WHERE projection='vec_embeddings'",
 		).run();
 		db.exec("COMMIT");
-		expect(recall(db)).toEqual({ response: { results: [], completeness: "unavailable" }, windows: [] });
+		expect(recall(db)).toEqual({
+			response: { results: [], completeness: "unavailable" },
+			windows: [],
+			admittedInputs: [],
+		});
 		const tracked = observed(db, []);
 		const indexed = {
 			...tracked,
@@ -265,7 +328,8 @@ test("hidden memory id collisions cannot turn source chunks into candidate work"
 		add(db, "visible-a", "default", 0.2);
 		add(db, "visible-b", "default", 0.3);
 		const before = recall(db);
-		expect(before.response.results).toEqual([]);
+		expect(before.response.results.map((row) => row.id)).toEqual(["visible-a", "visible-b"]);
+		expect(before.admittedInputs).toHaveLength(1);
 		for (const id of ["chunk-a", "chunk-b"])
 			db.prepare(
 				"INSERT INTO memories(id,content,agent_id,visibility,type,created_at,updated_at) VALUES(?,'hidden','other','private','fact','2020','2020')",

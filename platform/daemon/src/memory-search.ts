@@ -723,62 +723,42 @@ async function findAuthorizedVectorCandidates(
 		readScope.compartments !== "all" && readScope.compartments.length === 0
 			? []
 			: await readShardCatalogue(owner, "foreground");
-	const discovered = new Set<string>();
-	const authorized = new Map<string, { readonly id: string; readonly score: number }>();
-	let usedWork = 0;
-	let requested = Math.max(1, targetCount);
-	let completeness: VectorSearchCompleteness = "complete";
-	let searchedWindow = 0;
-	let exhausted = false;
-
-	while (usedWork < maxWork) {
-		checkRecallCancellation(execution);
-		const vectorResult = await vectorSearchThroughDbOwner(owner, [...queryVector], {
-			limit: requested,
-			type: params.type,
-			currentOnly: true,
-			memoryScope: params.scope ?? null,
-			excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
-			maxScanRows: requested,
-			readScope,
-			shardNames,
-		});
-		usedWork += requested;
-		completeness = vectorResult.completeness;
-		searchedWindow = Math.max(searchedWindow, vectorResult.searchedWindow ?? vectorResult.results.length);
-		if (completeness === "unavailable")
-			return {
-				results: [],
-				completeness,
-				searchedWindow,
-				...(vectorResult.degraded ? { degraded: vectorResult.degraded } : {}),
-			};
-
-		const fresh = vectorResult.results.flatMap((row) => {
-			if (discovered.has(row.id) || !Number.isFinite(row.score) || row.score <= 0) return [];
-			const candidate = { id: row.id, score: row.score, source: "vector" };
-			discovered.add(row.id);
-			return [candidate];
-		});
-		const scoped = await authorizeScoredCandidates(fresh, filter, owner);
-		for (const row of scoped) authorized.set(row.id, { id: row.id, score: row.score });
-		if (authorized.size >= targetCount) break;
-
-		if (vectorResult.completeness === "complete" && vectorResult.results.length < requested) {
-			exhausted = true;
-			break;
-		}
-		const remainingWork = maxWork - usedWork;
-		if (remainingWork <= 0) {
-			completeness = "recent-window";
-			break;
-		}
-		requested = Math.min(requested * 2, remainingWork);
-	}
-
-	if (!exhausted && authorized.size < targetCount && usedWork >= maxWork) completeness = "recent-window";
-	const results = [...authorized.values()].sort((left, right) => right.score - left.score).slice(0, targetCount);
-	return { results, completeness, searchedWindow };
+	checkRecallCancellation(execution);
+	const vectorResult = await vectorSearchThroughDbOwner(owner, [...queryVector], {
+		limit: Math.max(1, targetCount),
+		type: params.type,
+		currentOnly: true,
+		memoryScope: params.scope ?? null,
+		excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
+		tags: params.tags,
+		who: params.who,
+		pinned: params.pinned,
+		importanceMin: params.importance_min,
+		since: params.since,
+		until: params.until,
+		project: params.project,
+		maxScanRows: Math.max(1, targetCount),
+		readScope,
+		shardNames,
+	});
+	const searchedWindow = vectorResult.searchedWindow ?? vectorResult.results.length;
+	if (vectorResult.completeness === "unavailable")
+		return {
+			results: [],
+			completeness: vectorResult.completeness,
+			searchedWindow,
+			...(vectorResult.degraded ? { degraded: vectorResult.degraded } : {}),
+		};
+	const candidates = vectorResult.results
+		.filter((row) => Number.isFinite(row.score) && row.score > 0)
+		.map((row) => ({ id: row.id, score: row.score, source: "vector" }));
+	const scoped = await authorizeScoredCandidates(candidates, filter, owner);
+	const unique = new Map(scoped.map((row) => [row.id, { id: row.id, score: row.score }]));
+	return {
+		results: [...unique.values()].sort((left, right) => right.score - left.score).slice(0, targetCount),
+		completeness: vectorResult.completeness,
+		searchedWindow,
+	};
 }
 
 async function loadObservedScores(

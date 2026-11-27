@@ -129,6 +129,8 @@ Candidate collection uses several independent channels:
   `meta.vectorCompleteness: "recent-window"` and `meta.searchedWindow` (the
   default is 10,000 rows), so it must not be read as complete workspace recall.
   Shards are admitted under the caller's read scope before vector search.
+  Within admitted shards, currentness, memory scope, and metadata filters apply
+  before exact top-k selection, so ineligible rows do not consume result slots.
   If an authorized search would span more than 4,096 physical shards, recall
   skips its vector channels and continues with keyword and graph evidence.
   The successful response includes `meta.degraded: ["vector_fanout_cap"]`,

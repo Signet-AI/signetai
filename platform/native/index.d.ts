@@ -3,6 +3,7 @@ export interface AdmittedVectorChunk {
 	rowids: Buffer;
 	validity: Buffer;
 	eligibility: Buffer;
+	identities?: Buffer;
 }
 export interface AdmittedVectorHit {
 	rowid: string;

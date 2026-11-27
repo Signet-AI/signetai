@@ -10,6 +10,7 @@ pub struct AdmittedVectorChunk {
     pub rowids: Buffer,
     pub validity: Buffer,
     pub eligibility: Buffer,
+    pub identities: Option<Buffer>,
 }
 
 #[napi(object)]
@@ -29,6 +30,7 @@ pub struct AdmittedVectorResult {
 #[derive(PartialEq)]
 struct Candidate {
     rowid: i64,
+    identity: i64,
     distance: f32,
 }
 impl Eq for Candidate {}
@@ -65,6 +67,10 @@ pub fn scan_admitted_vectors(
             || chunk.vectors.len() != rows * dimensions * 4
             || chunk.validity.len() != rows.div_ceil(8)
             || chunk.eligibility.len() != rows.div_ceil(8)
+            || chunk
+                .identities
+                .as_ref()
+                .is_some_and(|ids| ids.len() != rows * 4)
         {
             return Err(Error::from_reason("invalid admitted chunk"));
         }
@@ -79,7 +85,7 @@ pub fn scan_admitted_vectors(
         }
         query_magnitude += value * value;
     }
-    let mut heap = BinaryHeap::with_capacity(limit as usize);
+    let mut heap: BinaryHeap<Candidate> = BinaryHeap::with_capacity(limit as usize);
     let mut scanned_rows = 0u32;
     let mut eligible_rows = 0u32;
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -88,6 +94,9 @@ pub fn scan_admitted_vectors(
             return Err(Error::from_reason("admitted scan deadline"));
         }
         for row in 0..chunk.rowids.len() / 8 {
+            if row & 127 == 0 && Instant::now() >= deadline {
+                return Err(Error::from_reason("admitted scan deadline"));
+            }
             let mask = 1u8 << (row & 7);
             if chunk.validity[row >> 3] & mask == 0 {
                 continue;
@@ -126,7 +135,25 @@ pub fn scan_admitted_vectors(
                 chunk.rowids[offset + 6],
                 chunk.rowids[offset + 7],
             ]);
-            let candidate = Candidate { rowid, distance };
+            let identity = match &chunk.identities {
+                Some(ids) => {
+                    let start = row * 4;
+                    u32::from_le_bytes([ids[start], ids[start + 1], ids[start + 2], ids[start + 3]])
+                        as i64
+                }
+                None => rowid,
+            };
+            let candidate = Candidate {
+                rowid,
+                identity,
+                distance,
+            };
+            if let Some(existing) = heap.iter().find(|hit| hit.identity == identity) {
+                if candidate >= *existing {
+                    continue;
+                }
+                heap.retain(|hit| hit.identity != identity);
+            }
             if heap.len() < limit as usize {
                 heap.push(candidate);
             } else if heap.peek().is_some_and(|worst| candidate < *worst) {
