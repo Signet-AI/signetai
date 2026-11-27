@@ -182,14 +182,26 @@ describe("DB owner client", () => {
 				{ operation: "test.read-isolation", lane: "read", deadlineMs: 5_000 },
 			).result;
 		const content = () => query("SELECT content, 'a' LIKE 'A' AS insensitive FROM memories");
+		const state = () =>
+			query(
+				"WITH state AS (SELECT recursive_triggers FROM pragma_recursive_triggers) SELECT recursive_triggers, 'a' LIKE 'A' AS insensitive FROM state",
+			);
+		const expectedState = [{ recursive_triggers: 1, insensitive: 1 }];
+		expect(await state()).toEqual(expectedState);
 		expect(await content()).toEqual([{ content: "owner-routed recall", insensitive: 1 }]);
+		await query("PRAGMA recursive_triggers = OFF");
+		expect(await state()).toEqual(expectedState);
 		await query("PRAGMA case_sensitive_like = ON");
+		expect(await state()).toEqual(expectedState);
 		expect(await content()).toEqual([{ content: "owner-routed recall", insensitive: 1 }]);
 		await query("CREATE TEMP TABLE residue (value TEXT)");
+		expect(await state()).toEqual(expectedState);
 		expect(await query("SELECT name FROM sqlite_temp_master WHERE name='residue'")).toEqual([]);
 		await query("ATTACH DATABASE ':memory:' AS residue");
+		expect(await state()).toEqual(expectedState);
 		await expect(query("SELECT name FROM residue.sqlite_master")).rejects.toThrow();
 		await query("BEGIN");
+		expect(await state()).toEqual(expectedState);
 		await owned.submit(
 			{
 				kind: "transaction",
