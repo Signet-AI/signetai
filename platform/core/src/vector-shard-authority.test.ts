@@ -72,7 +72,7 @@ function observed(db: Database, windows: unknown[], plans?: string[]) {
 				get: (...args: unknown[]) => q.get(...bindings(args)),
 				all: (...args: unknown[]) => {
 					if (sql.includes("embedding MATCH")) windows.push(args[1]);
-					if (plans && sql.includes("FROM vector_shard_keys k WHERE"))
+					if (plans && (sql.includes("FROM vector_shard_keys k WHERE") || sql.includes("embedding MATCH")))
 						for (const row of db
 							.prepare<Record<string, unknown>, SQLQueryBindings[]>("EXPLAIN QUERY PLAN " + sql)
 							.all(...bindings(args)))
@@ -221,6 +221,18 @@ test("dense admitted shards stay inside SQLite through hidden mutations", () => 
 		expect(before.response.results.map((row) => row.id)).toEqual(["dense-100", "dense-101"]);
 		expect(before.admittedInputs).toEqual([]);
 		expect(before.windows).toHaveLength(1);
+		for (const limit of [1, 5, 20, 64]) {
+			const plans: string[] = [];
+			const response = vectorSearchWithMetadata(observed(db, [], plans), new Float32Array([1, 0, 0]), {
+				limit,
+				currentOnly: true,
+				memoryScope: null,
+				readScope: own,
+			});
+			expect(response.completeness).toBe("complete");
+			expect(plans.some((plan) => plan.includes("SEARCH e USING INDEX"))).toBe(true);
+			expect(plans.some((plan) => /^SCAN [em]\b/.test(plan))).toBe(false);
+		}
 		db.exec("BEGIN");
 		for (let i = 0; i < 256; i++) add(db, `hidden-dense-${i}`, "other", 0);
 		db.exec("COMMIT");
@@ -414,14 +426,21 @@ test("hidden agent vectors cannot change a fully admitted shard's visible result
 	}
 });
 
-test.each([4097, 65537, 104729, 271828])(
-	"seeded hidden insertions deletions and reclassifications preserve ids order and windows: %s",
-	(initialSeed) => {
+test.each(
+	[4097, 65537, 104729, 271828].flatMap((initialSeed) => [0, 63, 64].map((padding) => ({ initialSeed, padding }))),
+)(
+	"seeded hidden insertions deletions and reclassifications preserve ids order and windows: %j",
+	({ initialSeed, padding }) => {
 		const db = fixture();
 		try {
 			add(db, "visible-a", "default", 0.2);
 			add(db, "visible-b", "default", 0.3);
-			db.exec("UPDATE memories SET project=id WHERE id IN ('visible-a','visible-b')");
+			db.exec("UPDATE memories SET project=id WHERE id IN ('visible-a','visible-b');BEGIN");
+			for (let i = 0; i < padding; i++) {
+				add(db, `padding-${i}`, "default", 2 + i / 1000);
+				db.prepare("UPDATE memories SET project='visible-a' WHERE id=?").run(`padding-${i}`);
+			}
+			db.exec("COMMIT");
 			const compartments = [compartmentFor(db, ["cls_hidden_a"]), compartmentFor(db, ["cls_hidden_b"])];
 			const before = recall(db);
 			const states: ReturnType<typeof recall>[] = [];
