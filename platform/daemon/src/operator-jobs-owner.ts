@@ -22,6 +22,7 @@ import {
 	type OperatorJobRow,
 } from "./operator-job-contract";
 import type { UnembeddedRow } from "./embedding-coverage";
+import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
 
 const actorSchema = z.object({
 	userId: z.string(),
@@ -203,7 +204,13 @@ function audit(
 function view(db: WriteDb, actor: OperatorActor, row: OperatorJobRow): OperatorJobRow | null {
 	const plan = planSchema.parse(JSON.parse(row.params_json));
 	if (actor.boundAgentId && actor.boundAgentId !== plan.scope.reach.agentId) return null;
-	const fresh = actorScope(db, actor, plan.scope, plan.input.action === "embed.audit" ? "diagnostics" : "admin");
+	let fresh: ReadScope;
+	try {
+		fresh = actorScope(db, actor, plan.scope, plan.input.action === "embed.audit" ? "diagnostics" : "admin");
+	} catch (error) {
+		if (error instanceof Error && error.message === "operator:agent_not_permitted") return null;
+		throw error;
+	}
 	const allowed = fresh.compartments;
 	if (allowed !== "all" && plan.scope.compartments.some((c) => !allowed.includes(c))) return null;
 	if (
@@ -257,7 +264,34 @@ export function executeOperatorJob(db: WriteDb, request: OperatorRequest): unkno
 		throw error;
 	}
 }
+function sweepOperatorJobs(db: WriteDb, runtimeId: string | undefined): void {
+	const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString();
+	const stale = db
+		.prepare(
+			"SELECT * FROM org_jobs WHERE kind='operator' AND status IN ('pending','running') AND (created_at<=? OR json_extract(params_json,'$.runtimeId')<>?) ORDER BY created_at LIMIT 100",
+		)
+		.all<OperatorJobRow>(new Date(Date.now() - 60_000).toISOString(), runtimeId ?? "");
+	for (const row of stale) {
+		const plan = planSchema.parse(JSON.parse(row.params_json));
+		finish(
+			db,
+			row,
+			plan.actor,
+			Date.now() >= Date.parse(row.created_at) + 60_000 ? "deadline_exceeded" : "daemon_restarted",
+		);
+	}
+	for (const [table, predicate, column, cap] of [
+		["org_jobs", "kind='operator' AND status NOT IN ('pending','running')", "finished_at", 1000],
+		["audit_events", "action LIKE 'operator.%'", "at", 10000],
+	] as const) {
+		db.prepare(
+			`DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${predicate} AND (${column}<? OR id IN (SELECT id FROM ${table} WHERE ${predicate} ORDER BY ${column} DESC,id DESC LIMIT 100 OFFSET ${cap})) ORDER BY ${column},id LIMIT 100)`,
+		).run(cutoff);
+	}
+}
 function operation(db: WriteDb, request: OperatorRequest): unknown {
+	if (request.op === "list" || request.op === "create" || (request.op === "logs-access" && request.audit))
+		sweepOperatorJobs(db, request.runtimeId);
 	if (request.op === "settings") {
 		operation(db, { op: "authorize-global", actor: request.actor });
 		const data = settingsSchema.parse(request.input);
@@ -300,6 +334,34 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 		return { ok: true };
 	}
 
+	if (request.op === "logs-access") {
+		operation(db, { op: "authorize-global", actor: request.actor });
+		const agent = z
+			.object({ id: z.string() })
+			.parse(db.prepare("SELECT id FROM agents WHERE kind='organization' AND archived_at IS NULL LIMIT 1").get());
+		const scope = actorScope(
+			db,
+			request.actor,
+			{ reach: { kind: "own", agentId: agent.id }, projects: null, compartments: "all" },
+			"diagnostics",
+			true,
+		);
+		if (
+			request.audit &&
+			!db
+				.prepare("SELECT 1 FROM audit_events WHERE actor_user_id=? AND action='operator.logs_opened' AND at>=? LIMIT 1")
+				.get(request.actor.userId, new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString())
+		)
+			auditAuthoredWriteInTx(
+				db,
+				{ userId: request.actor.userId, credential: `${request.actor.credentialKind}:${request.actor.credentialId}` },
+				"operator.logs_opened",
+				"operator",
+				"logs",
+				null,
+			);
+		return { compartments: scope.compartments };
+	}
 	if (request.op === "agent-purge") return agentPurge(db, request);
 	if (request.op === "authorize-global") {
 		if (request.actor.boundAgentId !== null || request.actor.allowedProjects !== null) deny("permission");
@@ -326,8 +388,11 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 				{ op: "visibility", subject: { userId: actor.userId, groupIds: groups, local: false } },
 			),
 		).compartments;
-		const where = ["j.kind='operator'"];
-		const args: (string | number)[] = [];
+		const where = [
+			"j.kind='operator'",
+			"EXISTS(SELECT 1 FROM agents a WHERE a.id=json_extract(j.params_json,'$.scope.reach.agentId') AND a.archived_at IS NULL AND (a.kind='organization' OR (a.kind='personal' AND a.owner_user_id=?) OR (a.kind='team' AND EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=a.owner_group_id AND gm.user_id=?)) OR a.kind='legacy'))",
+		];
+		const args: (string | number)[] = [actor.userId, actor.userId];
 		if (!actor.permissions.includes("diagnostics"))
 			where.push("json_extract(j.params_json,'$.input.action')<>'embed.audit'");
 		if (actor.boundAgentId) {
@@ -376,13 +441,10 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 			input.action === "embed.audit" ? "diagnostics" : "admin",
 		);
 		const stale = db
-			.prepare("SELECT * FROM org_jobs WHERE kind='operator' AND status IN ('pending','running') LIMIT 3")
-			.all<OperatorJobRow>();
-		for (const old of stale) {
-			const plan = planSchema.parse(JSON.parse(old.params_json));
-			if (plan.runtimeId !== request.runtimeId || Date.now() >= Date.parse(old.created_at) + 60_000)
-				finish(db, old, plan.actor, "interrupted");
-		}
+			.prepare(
+				"SELECT * FROM org_jobs WHERE kind='operator' AND status IN ('pending','running') AND json_extract(params_json,'$.runtimeId')=? AND created_at>? LIMIT 2",
+			)
+			.all<OperatorJobRow>(request.runtimeId, new Date(Date.now() - 60_000).toISOString());
 		if (
 			stale.filter(
 				(r) =>
@@ -390,6 +452,14 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 					Date.now() < Date.parse(r.created_at) + 60_000,
 			).length >= 2
 		)
+			deny("capacity");
+		const minute = new Date(Date.now() - 60_000).toISOString();
+		const starts = db
+			.prepare(
+				"SELECT created_by FROM org_jobs WHERE kind='operator' AND created_at>=? ORDER BY created_at DESC LIMIT 100",
+			)
+			.all<{ created_by: string }>(minute);
+		if (starts.length >= 100 || starts.filter((row) => row.created_by === request.actor.userId).length >= 20)
 			deny("capacity");
 		const id = `job_${randomUUID().replaceAll("-", "")}`,
 			now = new Date().toISOString();
@@ -450,7 +520,7 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 		}
 		db.prepare("UPDATE org_jobs SET progress_json=? WHERE id=?").run(JSON.stringify(progress), id);
 		if (!rows.length) finish(db, jobRow(db, id), request.actor, null);
-		return { jobId: id, rows };
+		return { jobId: id, rows, embedding: resolveActiveEmbeddingConfig(db, request.embedding) };
 	}
 	const row = jobRow(db, request.jobId),
 		plan = planSchema.parse(JSON.parse(row.params_json));

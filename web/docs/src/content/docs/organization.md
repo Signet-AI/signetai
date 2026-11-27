@@ -110,11 +110,11 @@ In desktop organization mode, create API keys, shared-agent keys, and invitation
 
 ## Organization commands
 
-The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL` and credentials, then the stored `daemon.url` from login. `--org` requires an organization target. `--local` ignores organization credentials and selects the loopback daemon. Switching targets does not rebind connected harnesses.
+The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL` and credentials, then the stored `daemon.url` from login. `--org` requires an organization target. `--local` ignores organization credentials and selects the loopback daemon. Switching targets does not rebind connected harnesses. Remote URLs require HTTPS; plain HTTP is accepted only for loopback. There is no insecure override. An environment API key does not follow an explicit `--url` to another origin unless `SIGNET_DAEMON_URL` names that origin.
 
-Local filesystem and process commands (`start`, `stop`, `install`, `setup`, `migrate-schema`, `migrate-vectors`, `git`, `sync`, and `workspace`) refuse against a remote target. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
+Only explicitly supported daemon-backed commands run against a remote target. Every other command—including local skill, source configuration, session, Dreaming, update, and desktop management—refuses before its action runs. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
 
-Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
+Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`restart`, `repair`, and `embed`) use tracked daemon operations; portable bundle import/export transfers evidence through the selected instance. Organization imports require an explicit `--agent`.
 
 Administrators can use:
 
@@ -153,9 +153,9 @@ Classification definition reads (`GET /api/classifications` and `GET /api/classi
 
 `signet logs` (also `signet daemon logs`) reads a bounded snapshot from the selected organization. Use `--follow` to stream new events; Ctrl-C cancels the request, releases the server subscription, and exits cleanly. `--lines` accepts 1–500 events (default 50); `--level` and `--category` filter the feed. `--json` returns one JSON snapshot, or newline-delimited JSON when following, starting with a `connected` record. A stream ends after at most 60 seconds; it does not reconnect automatically. Authentication and permission failures are returned without reading local log files or starting a daemon. JSON log output is organization-only; existing local text logging behavior is unchanged.
 
-Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Both are audited. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Local-mode logging is unchanged.
+Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Snapshot and stream opens share one audit event per principal per minute. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Content-item events without compartment attribution, and unattributed content-pipeline categories, are omitted entirely: they leave no timestamp, count, or event-budget footprint. Attributed stream events are visible only to their audience. The recent snapshot retains only organization-visible operational metadata, so classified events cannot evict public history. Daemon and system events remain available. Local-mode logging is unchanged.
 
-A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
+A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Credentials and authority are rechecked every two seconds with a one-second owner deadline. Revocation, deactivation, permission loss, or a changed audience closes the stream with a terminal `scope_changed` event within five seconds. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
 
 ## Memory review filters
 
@@ -175,7 +175,7 @@ Organization Dreaming status and pass responses include the system author (`{ ki
 
 ## Worker pause controls
 
-Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited.
+Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited. Pause/resume writers serialize under a bounded configuration lock and use the shared durable atomic-write helper. A symlinked configuration is refused with `config_symlink`; it is never followed or replaced. YAML formatting and unrelated settings are preserved.
 
 ## Offboarding and audit
 
@@ -217,7 +217,11 @@ The response is HTTP 202 with `{jobId}`. Poll `/api/org/jobs/:id` for durable
 completion. The job and its audit events are committed with each owner batch;
 acceptance is not completion. Queue repairs share the existing repair owner
 implementation. Legacy unscoped repair endpoints refuse organization requests.
-MCP exposes `signet_operator_job` and `signet_org_job`.
+MCP exposes `signet_operator_job` and `signet_org_job`. Jobs outside your act-as reach are absent from lists; fetching one returns the same 404 as a nonexistent ID, including through MCP.
+
+Admission reserves DB-owner maintenance capacity for non-operator work. At most eight operator owner requests are admitted globally and two per principal. Job starts also have a rolling one-minute budget of 20 per principal and 100 globally, including immediately completed dry runs. Excess requests return `503 busy` or `429 capacity` with `Retry-After`, never an internal error. Operator activity sweeps terminal job rows and operator audit events through the owner in batches of at most 100 each: retention is 30 days, with count targets of 1,000 finished jobs and 10,000 operator audit events. Lists also reap up to 100 orphaned or expired jobs per request. Existing backlogs converge across bounded sweeps; pending work is not deleted.
+
+Embedding backfills resolve their active profile from the pinned database profile before fetching or committing vectors. Each provider response has a 10-second deadline and a 1-MiB body bound; cancellation remains attached until the body is consumed. The whole backfill has a 60-second deadline, including multi-item batches.
 
 Queue actions default to a dry run, 20 rows, with a maximum of 100. Embedding
 backfill defaults to a dry run through the API and selects at most 20 memories,

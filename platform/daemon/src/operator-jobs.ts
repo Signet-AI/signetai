@@ -22,7 +22,23 @@ import type { UnembeddedRow } from "./embedding-coverage";
 import { operatorInputSchema, type OperatorActor, type OperatorRequest } from "./operator-job-contract";
 const runtimeId = randomUUID();
 const active = new Set<string>();
+const admitted = new Map<string, number>();
+let admittedTotal = 0;
 export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
+	const principal = request.actor.userId;
+	if (admittedTotal >= 8 || (admitted.get(principal) ?? 0) >= 2) throw new IdentityError(503, "busy");
+	admittedTotal++;
+	admitted.set(principal, (admitted.get(principal) ?? 0) + 1);
+	try {
+		return await submitOperatorRequest<T>(request);
+	} finally {
+		admittedTotal--;
+		const remaining = (admitted.get(principal) ?? 1) - 1;
+		if (remaining) admitted.set(principal, remaining);
+		else admitted.delete(principal);
+	}
+}
+async function submitOperatorRequest<T>(request: OperatorRequest): Promise<T> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
 	if (!owner) throw new IdentityError(503, "db_owner_unavailable");
 	try {
@@ -32,11 +48,13 @@ export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
 				operation: `operator.${request.op}`,
 				lane: "maintenance",
 				workloadClass: "maintenance",
-				deadlineMs: 5000,
+				deadlineMs: request.op === "logs-access" ? 1000 : 5000,
 				estimatedWorkUnits: 1000,
 			},
 		).result;
 	} catch (error) {
+		if (error instanceof DbOwnerError && ["DB_OWNER_QUEUE_FULL", "DB_OWNER_TIMEOUT"].includes(String(error.code)))
+			throw new IdentityError(503, "busy");
 		if (error instanceof DbOwnerError && error.message.startsWith("operator:")) {
 			const reason = error.message.slice("operator:".length);
 			throw new IdentityError(
@@ -50,7 +68,11 @@ export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
 							? 409
 							: 403,
 				reason,
-				reason === "permission" ? "Requires the admin role with permission for this operation and scope" : reason,
+				reason === "not_found"
+					? "not found"
+					: reason === "permission"
+						? "Requires the admin role with permission for this operation and scope"
+						: reason,
 			);
 		}
 		throw error;
@@ -68,7 +90,27 @@ export function operatorActor(p: Principal): OperatorActor {
 		allowedProjects: p.allowedProjects,
 	};
 }
+const starting = new Map<string, number>();
+let startingTotal = 0;
 export async function startOperatorJob(p: Principal, raw: unknown, headerAgent?: string) {
+	const principal = p.userId ?? p.credential.id;
+	if (startingTotal >= 8 || (starting.get(principal) ?? 0) >= 2) throw new IdentityError(503, "busy");
+	startingTotal++;
+	starting.set(principal, (starting.get(principal) ?? 0) + 1);
+	try {
+		return await startAdmittedOperatorJob(p, raw, headerAgent);
+	} catch (error) {
+		if (error instanceof DbOwnerError && String(error.code) === "DB_OWNER_QUEUE_FULL")
+			throw new IdentityError(503, "busy");
+		throw error;
+	} finally {
+		startingTotal--;
+		const remaining = (starting.get(principal) ?? 1) - 1;
+		if (remaining) starting.set(principal, remaining);
+		else starting.delete(principal);
+	}
+}
+async function startAdmittedOperatorJob(p: Principal, raw: unknown, headerAgent?: string) {
 	const parsed = operatorInputSchema.parse(raw);
 	const reconciled = reconcileAgentSources([parsed.agentId, headerAgent]);
 	if (!reconciled.ok) throw new IdentityError(reconciled.error.status, reconciled.error.reason);
@@ -95,7 +137,7 @@ export async function startOperatorJob(p: Principal, raw: unknown, headerAgent?:
 	const cfg = loadMemoryConfigFromText(resolveSqliteAgentsDir(), text, configPath);
 	if (active.size >= 2 && input.action === "embed.backfill" && !input.options.dryRun)
 		throw new IdentityError(429, "capacity");
-	const result = await operatorRequest<{ jobId: string; rows: readonly UnembeddedRow[] }>({
+	const result = await operatorRequest<{ jobId: string; rows: readonly UnembeddedRow[]; embedding: EmbeddingConfig }>({
 		op: "create",
 		actor,
 		input: { ...input, agentId: selected.value },
@@ -106,7 +148,7 @@ export async function startOperatorJob(p: Principal, raw: unknown, headerAgent?:
 	});
 	if (result.rows.length) {
 		active.add(result.jobId);
-		void runBackfill(actor, result.jobId, result.rows, cfg.embedding).finally(() => active.delete(result.jobId));
+		void runBackfill(actor, result.jobId, result.rows, result.embedding).finally(() => active.delete(result.jobId));
 	}
 	return { jobId: result.jobId };
 }

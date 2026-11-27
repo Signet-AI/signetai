@@ -38,12 +38,14 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 	const selectedUrl = flagUrl || registry?.url || envUrl || (!hasEnvironmentBinding ? options.configUrl : undefined);
 	const url = resolveSignetDaemonUrl({ env: { ...env, SIGNET_DAEMON_URL: selectedUrl } });
 	const origin = new URL(url).origin;
+	if (new URL(url).protocol !== "https:" && !isLoopback(new URL(url).hostname))
+		throw new TypeError("Remote Signet targets require HTTPS; plain HTTP is allowed only on loopback");
 	const hasEnvironmentCredential = Boolean(env.SIGNET_API_KEY?.trim() || env.SIGNET_API_KEY_FILE?.trim());
 	const environmentCredentialApplies =
 		options.flagKey !== undefined ||
 		!hasEnvironmentCredential ||
-		!envUrl ||
-		new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: envUrl } })).origin === origin;
+		(!envUrl && !flagUrl) ||
+		Boolean(envUrl && new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: envUrl } })).origin === origin);
 	let credential: TargetCredential;
 	if (options.flagKey !== undefined) {
 		if (!options.flagKey.trim()) throw new TypeError("flagKey cannot be empty");

@@ -249,8 +249,8 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | PATCH | `/api/org/keys/:id` | Admin; `{ userId }` assigns a legacy key to an active user. |
 | GET | `/api/org/audit` | Audit permission; actor/action/target/time filters, cursor, limit; `{ events, nextCursor }`. |
 | GET | `/api/org/audit/export` | Audit permission; NDJSON; narrow the time range for large exports. |
-| GET | `/api/org/jobs` | Admin; optional `kind`. |
-| GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. |
+| GET | `/api/org/jobs` | Admin; optional `kind`. Operator jobs outside the viewer’s act-as reach are omitted before limiting. Reaps orphaned operator work in bounded batches. |
+| GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. An inaccessible operator job returns the same `404 not_found` as a nonexistent job, including through MCP. |
 
 `POST /api/auth/token` is disabled after claim (`403 org_policy`). `POST /api/auth/session` accepts a personal API key as a bearer credential and returns cookie authentication with durable parent-key permission, agent, project, and expiry ceilings; it rejects shared, connector, and legacy keys and never returns a bearer token. `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }` to preview `{ confirmationRequired: true, user, organization }` without changing cookies. After an explicit user confirmation, `{ code, confirm: true }` consumes the code, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
 
@@ -437,6 +437,10 @@ without hiding setup affordances).
 
 ### Organization setup and operations
 
+Organization log snapshots (`GET /api/logs`) and SSE streams (`GET /api/logs/stream`) require unrestricted `admin` and `diagnostics`. Unreadable item metadata and unattributed content-pipeline events are omitted, not replaced by placeholders. Snapshot history is organization-visible only; attributed stream events follow the caller's compartment audience. Opens coalesce to one audit event per principal per minute. Streams recheck credential authority every two seconds and terminate with `scope_changed` on revocation or changed access; verification has a one-second owner deadline.
+
+`POST /api/pipeline/pause` and `/api/pipeline/resume` persist their setting through a serialized, durable atomic write. Symlinked configuration returns `409 config_symlink` without reading or replacing the symlink target.
+
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/api/org/bootstrap` | Unclaimed team instance only; setup nonce and checked public URL. |
@@ -445,4 +449,4 @@ without hiding setup affordances).
 | GET | `/api/org/operator/doctor` | Audited identity, clock, and DB-owner diagnostics. |
 | GET | `/api/org/operator/capabilities` | Admin; verified supervisor availability. |
 | POST | `/api/org/operator/restart` | Unrestricted admin; empty JSON body; `202 {accepted, jobId, status, supervisor}`. Poll the job for actual readiness, not just acceptance. |
-| POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill; `202 {jobId}`. See Organizations for action schemas, admission limits, and incomplete-job semantics. |
+| POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill; `202 {jobId}`. Admission overflow is `503 busy` or `429 capacity` with `Retry-After`. See Organizations for action schemas, admission limits, retention, and incomplete-job semantics. |

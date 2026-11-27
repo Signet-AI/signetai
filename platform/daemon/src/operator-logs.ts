@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { auditStatement, IdentityError, organizationWrite } from "./auth/organization-store";
+import { IdentityError } from "./auth/organization-store";
+import { operatorActor, operatorRequest } from "./operator-jobs";
 import type { Principal } from "./auth/principal";
 import { logger, type LogEntry } from "./logger";
 import { openBoundedSse } from "./sse-stream";
@@ -32,10 +33,30 @@ function view(entry: LogEntry) {
 		redacted: true,
 	};
 }
-const recent: ReturnType<typeof view>[] = [];
+type LogAccess = { readonly compartments: "all" | readonly number[] };
+function visible(entry: LogEntry, access: LogAccess): boolean {
+	if (entry.data && Object.hasOwn(entry.data, "compartmentId")) {
+		const compartment = entry.data.compartmentId;
+		return (
+			compartment === null ||
+			(typeof compartment === "number" && (access.compartments === "all" || access.compartments.includes(compartment)))
+		);
+	}
+	const data = entry.data;
+	if (data && ["memoryId", "sourceId", "documentId", "entityId", "sessionKey"].some((key) => Object.hasOwn(data, key)))
+		return false;
+	return !/memory|pipeline|dreaming|source|classif|embedding|synthesis|document|transcript|reflection|session-memories/.test(
+		entry.category,
+	);
+}
+const recent: LogEntry[] = [];
 const severity = { debug: 0, info: 1, warn: 2, error: 3 };
 logger.on("log", (entry: LogEntry) => {
-	recent.push(view(entry));
+	if (!visible(entry, { compartments: [] })) return;
+	recent.push({
+		...view(entry),
+		...(entry.data && Object.hasOwn(entry.data, "compartmentId") ? { data: { compartmentId: null } } : {}),
+	});
 	if (recent.length > 500) recent.shift();
 });
 function accepts(entry: Pick<LogEntry, "timestamp" | "level" | "category">, options: z.infer<typeof query>): boolean {
@@ -53,8 +74,11 @@ function filters(input: unknown) {
 export async function operatorLogSnapshot(p: Principal, input: unknown) {
 	authorize(p);
 	const options = filters(input);
-	await organizationWrite([auditStatement(p, "operator.logs_opened", "operator", "logs", { stream: false })]);
-	const logs = recent.filter((entry) => accepts(entry, options)).slice(-options.limit);
+	const access = await operatorRequest<LogAccess>({ op: "logs-access", actor: operatorActor(p), audit: true });
+	const logs = recent
+		.filter((entry) => visible(entry, access) && accepts(entry, options))
+		.slice(-options.limit)
+		.map(view);
 	return { logs, count: logs.length, redacted: true };
 }
 export async function operatorLogStream(
@@ -81,7 +105,7 @@ export async function operatorLogStream(
 		else subscriptions.delete(key);
 	};
 	try {
-		await organizationWrite([auditStatement(p, "operator.logs_opened", "operator", "logs", { stream: true })]);
+		const access = await operatorRequest<LogAccess>({ op: "logs-access", actor: operatorActor(p), audit: true });
 		return openBoundedSse({
 			highWaterMarkBytes: 64 * 1024,
 			maxFrameBytes: 1024,
@@ -96,9 +120,31 @@ export async function operatorLogStream(
 					producer.close();
 					return;
 				}
+				let checking = false;
+				const recheck = setInterval(() => {
+					if (checking) return;
+					checking = true;
+					void operatorRequest<LogAccess>({ op: "logs-access", actor: operatorActor(p), audit: false })
+						.then(
+							(fresh) => {
+								if (JSON.stringify(fresh) !== JSON.stringify(access)) {
+									producer.write({ type: "error", reason: "scope_changed" });
+									producer.close();
+								}
+							},
+							() => {
+								producer.write({ type: "error", reason: "scope_changed" });
+								producer.close();
+							},
+						)
+						.finally(() => {
+							checking = false;
+						});
+				}, 2000);
+				producer.addDisposer(() => clearInterval(recheck));
 				let events = 0;
 				const onLog = (entry: LogEntry) => {
-					if (!accepts(entry, options)) return;
+					if (!visible(entry, access) || !accepts(entry, options)) return;
 					producer.write(view(entry));
 					if (++events >= options.limit) producer.close();
 				};

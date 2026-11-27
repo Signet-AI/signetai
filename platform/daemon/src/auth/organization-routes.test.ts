@@ -447,6 +447,103 @@ describe("organization HTTP flows", () => {
 		expect((await (await call("/api/org/operator/capabilities")).json()).supervisor).toBeNull();
 		expect((await call("/api/auth/whoami")).status).toBe(200);
 	});
+	test("operator jobs outside another admin's act-as reach are indistinguishable from absent", async () => {
+		await claim();
+		const other = await member("other-admin");
+		await call(`/api/org/users/${other.userId}`, "PATCH", { role: "admin" });
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const started = await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" });
+		expect(started.status).toBe(202);
+		const { jobId } = await started.json();
+		const hidden = await call(`/api/org/jobs/${jobId}`, "GET", undefined, other.token);
+		const missing = await call("/api/org/jobs/job_missing", "GET", undefined, other.token);
+		expect(hidden.status).toBe(404);
+		expect(await hidden.json()).toEqual(await missing.json());
+		for (const path of ["/api/org/jobs", "/api/org/jobs?kind=operator"]) {
+			const response = await call(path, "GET", undefined, other.token);
+			expect(response.status).toBe(200);
+			expect(JSON.stringify(await response.json())).not.toContain(jobId);
+		}
+	});
+	test("operator admission rejects bursts with retry metadata rather than internal errors", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const responses = await Promise.all(
+			Array.from({ length: 150 }, () => call("/api/org/operator/jobs", "POST", { action: "queue.requeue" })),
+		);
+		expect(responses.some((response) => response.status === 503 || response.status === 429)).toBe(true);
+		for (const response of responses) {
+			expect([202, 429, 503]).toContain(response.status);
+			if (response.status !== 202) expect(response.headers.get("Retry-After")).toBeTruthy();
+		}
+	});
+	test("finished operator jobs cannot evade the per-principal start budget", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const responses: Response[] = [];
+		for (let n = 0; n < 21; n++)
+			responses.push(await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" }));
+		expect(responses[20]?.status).toBe(429);
+		expect(responses[20]?.headers.get("Retry-After")).toBeTruthy();
+	});
+	test("job listing reaps orphaned work and sweeps terminal retention in bounded batches", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const { jobId } = await (await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" })).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO org_jobs(id,kind,status,created_by,params_json,created_at) SELECT 'orphan',kind,'running',created_by,json_set(params_json,'$.runtimeId','old'),'2020-01-01T00:00:00.000Z' FROM org_jobs WHERE id=?",
+				[jobId],
+			),
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1100) INSERT INTO org_jobs(id,kind,status,created_by,params_json,created_at,finished_at) SELECT 'old-'||x,kind,'complete',created_by,params_json,'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z' FROM n,org_jobs WHERE id=?",
+				[jobId],
+			),
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10100) INSERT INTO audit_events(id,at,action,outcome) SELECT 'audit-old-'||x,'2020-01-01T00:00:00.000Z','operator.logs_opened','ok' FROM n",
+				[],
+			),
+		]);
+		expect((await call("/api/org/jobs")).status).toBe(200);
+		expect(await organizationQuery(statement("SELECT status FROM org_jobs WHERE id='orphan'", [], "get"))).toEqual({
+			status: "failed",
+		});
+		const counts = await organizationQuery(
+			statement(
+				"SELECT (SELECT count(*) FROM org_jobs WHERE id LIKE 'old-%') AS jobs,(SELECT count(*) FROM audit_events WHERE id LIKE 'audit-old-%') AS audits",
+				[],
+				"get",
+			),
+		);
+		expect(counts).toEqual({ jobs: 1000, audits: 10000 });
+	});
+	test("operator retention enforces count caps even for recent rows", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const { jobId } = await (await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" })).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1100) INSERT INTO org_jobs(id,kind,status,created_by,params_json,created_at,finished_at) SELECT 'recent-'||x,kind,'complete',created_by,params_json,created_at,finished_at FROM n,org_jobs WHERE id=?",
+				[jobId],
+			),
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10100) INSERT INTO audit_events(id,at,action,outcome) SELECT 'recent-audit-'||x,?,'operator.logs_opened','ok' FROM n",
+				[new Date().toISOString()],
+			),
+		]);
+		for (let n = 0; n < 2; n++) expect((await call("/api/org/jobs")).status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT (SELECT count(*) FROM org_jobs WHERE kind='operator') AS jobs,(SELECT count(*) FROM audit_events WHERE action LIKE 'operator.%') AS audits",
+					[],
+					"get",
+				),
+			),
+		).toEqual({ jobs: 1000, audits: 10000 });
+	});
 	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
@@ -803,6 +900,56 @@ describe("organization HTTP flows", () => {
 		).json();
 		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, scoped.secret)).status).toBe(403);
 	});
+	test("log streams end promptly after their credential is revoked", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		registerMiscRoutes(app);
+		await claim();
+		const response = await call("/api/logs/stream");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing stream");
+		await reader.read();
+		const started = Date.now();
+		await call("/api/auth/logout", "POST", {});
+		let text = "";
+		while (true) {
+			const frame = await reader.read();
+			if (frame.done) break;
+			text += new TextDecoder().decode(frame.value);
+		}
+		expect(Date.now() - started).toBeLessThanOrEqual(5000);
+		expect(text).toContain("scope_changed");
+	});
+	test("hidden content logs have no event, timestamp, count or stream budget footprint", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		const { logger } = await import("../logger");
+		registerMiscRoutes(app);
+		await claim();
+		const before = await (await call("/api/logs?category=memory")).json();
+		const response = await call("/api/logs/stream?limit=1");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing stream");
+		await reader.read();
+		logger.info("memory", "HR write", { memoryId: "hr-write", compartmentId: 999 });
+		logger.info("pipeline", "unattributed write");
+		const after = await (await call("/api/logs?category=memory")).json();
+		expect(after).toEqual(before);
+		logger.info("daemon", "safe event");
+		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"category":"daemon"');
+		expect((await reader.read()).done).toBe(true);
+	});
+	test("log snapshot and stream audit opens coalesce per principal per minute", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		registerMiscRoutes(app);
+		await claim();
+		for (let n = 0; n < 5; n++) expect((await call("/api/logs")).status).toBe(200);
+		const stream = await call("/api/logs/stream");
+		await stream.body?.cancel();
+		expect(
+			await organizationQuery(
+				statement("SELECT count(*) AS n FROM audit_events WHERE action='operator.logs_opened'", [], "get"),
+			),
+		).toEqual({ n: 1 });
+	});
 	test("operator log streams are scoped, content-free and cancelled cleanly", async () => {
 		const { registerMiscRoutes } = await import("../routes/misc-routes");
 		const { logger } = await import("../logger");
@@ -838,7 +985,7 @@ describe("organization HTTP flows", () => {
 			await organizationQuery(
 				statement("SELECT COUNT(*) AS n FROM audit_events WHERE action='operator.logs_opened'", [], "get"),
 			),
-		).toEqual({ n: 2 });
+		).toEqual({ n: 1 });
 		expect((await call(`/api/org/users/${alice.userId}`, "PATCH", { role: "operator" })).status).toBe(200);
 		expect((await call("/api/logs", "GET", undefined, alice.token)).status).toBe(403);
 		const identity = await (await call("/api/auth/whoami")).json();

@@ -22,6 +22,169 @@ test("local-only commands refuse remotely before running their action and --loca
 	expect(actions).toBe(1);
 });
 
+test("unknown and local workspace commands refuse remote targets by default", async () => {
+	for (const path of [
+		"skill list",
+		"sources list",
+		"telemetry",
+		"bypass",
+		"session search",
+		"dream status",
+		"update",
+		"accelerate",
+		"desktop",
+		"future-command",
+		"agent future-command",
+		"connector future-command",
+		"hook future-command",
+	]) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let command = program;
+		for (const name of path.split(" ")) command = command.command(name);
+		let ran = false;
+		command.action(() => {
+			ran = true;
+		});
+		await expect(program.parseAsync(path.split(" "), { from: "user" })).rejects.toThrow(
+			localOnlyMessage("org.example"),
+		);
+		expect(ran).toBe(false);
+	}
+});
+
+test("every registered command is explicitly remote-capable or refuses before its action", async () => {
+	const { z } = await import("zod");
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			"--preload",
+			new URL("./test-support/command-tree.ts", import.meta.url).pathname,
+			new URL("../cli.ts", import.meta.url).pathname,
+		],
+		{
+			env: { ...process.env, SIGNET_DAEMON_URL: "http://127.0.0.1:49998" },
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const output = await new Response(child.stdout).text();
+	const errors = await new Response(child.stderr).text();
+	expect(await child.exited, errors).toBe(0);
+	const paths = z.array(z.array(z.string())).parse(JSON.parse(output));
+	expect(paths.length).toBeGreaterThan(200);
+	const targetOwning = new Set([
+		"connect",
+		"disconnect",
+		"connector mcp",
+		"connector install",
+		"connector rotate",
+		"connector list",
+		"connector doctor",
+		"hook session-start",
+		"hook user-prompt-submit",
+		"hook notifications",
+		"hook wake",
+		"hook session-end",
+		"hook stop",
+		"hook pre-compaction",
+		"hook compaction-complete",
+		"hook synthesis",
+	]);
+	const supported = new Set([
+		"login",
+		"logout",
+		"whoami",
+		"dashboard",
+		"status",
+		"restart",
+		"pause",
+		"resume",
+		"logs",
+		"remember",
+		"recall",
+		"import",
+		"export",
+		"export transcripts",
+		"export bundle",
+		"doctor",
+		"daemon restart",
+		"daemon pause",
+		"daemon resume",
+		"daemon status",
+		"daemon logs",
+		"embed audit",
+		"embed backfill",
+		"repair queue requeue",
+		"repair queue cancel",
+		"repair queue prune",
+		"agent use",
+		"agent transfer",
+		"agent list",
+		"agent add",
+		"agent remove",
+		"agent purge",
+		"agent info",
+		"agent show",
+		"agent set",
+		"secret put",
+		"secret list",
+		"secret delete",
+		"secret get",
+		"secret has",
+		"secret exec",
+		"secret exec-status",
+		"api-key create",
+		"api-key list",
+		"api-key revoke",
+		"auth sso set",
+		"auth devices",
+		"auth devices revoke",
+		"auth devices rename",
+		"auth sessions",
+		"auth sessions revoke",
+		"org users list",
+		"org users invite",
+		"org users role",
+		"org users reactivate",
+		"org users deactivate",
+		"org teams list",
+		"org teams create",
+		"org teams show",
+		"org teams delete",
+		"org teams rename",
+		"org teams add",
+		"org teams remove",
+		"org access",
+		"org jobs",
+		"org agents list",
+		"audit",
+		"classification list",
+		"classification create",
+		"classification audience",
+		"classify",
+	]);
+	for (const path of paths) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let command = program;
+		for (const name of path) command = command.command(name);
+		let ran = false;
+		command.action(() => {
+			ran = true;
+		});
+		const allowed = supported.has(path.join(" ")) || targetOwning.has(path.join(" "));
+		const result = program.parseAsync(["--agent", "fixture", ...path], { from: "user" });
+		if (allowed) await result;
+		else await expect(result, path.join(" ")).rejects.toThrow(localOnlyMessage("org.example"));
+		expect(ran, path.join(" ")).toBe(allowed);
+	}
+});
+
 test("--local routes existing clients to loopback without organization credentials", async () => {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
