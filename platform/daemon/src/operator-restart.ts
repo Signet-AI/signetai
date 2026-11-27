@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { attemptAsync, launchdDaemonLabel, launchdDaemonPlistPath } from "@signet/core";
+import { attemptAsync, execFileHidden, launchdDaemonLabel, launchdDaemonPlistPath } from "@signet/core";
 import { z } from "zod";
 import type { Principal } from "./auth/principal";
 import { requireAdmin } from "./auth/organization-operations";
@@ -9,7 +8,7 @@ import { IdentityError } from "./auth/organization-store";
 import { beginSupervisedRestart, settleSupervisedRestart, completeSupervisedRestart } from "./auth/organization-admin";
 import { operatorActor, operatorRequest } from "./operator-jobs";
 import { logger } from "./logger";
-const execute = promisify(execFile);
+const execute = promisify(execFileHidden);
 async function command(file: string, args: readonly string[]) {
 	const result = await execute(file, [...args], {
 		encoding: "utf8",
