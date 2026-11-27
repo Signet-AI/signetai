@@ -170,7 +170,7 @@ export async function agents(p: Principal) {
 	return {
 		agents: rows.map((a) => ({
 			id: a.id,
-			name: a.name,
+			name: a.kind === "organization" && a.id !== "default" ? `${a.name} (imported)` : a.name,
 			kind: a.kind,
 			ownerUserId: a.owner_user_id,
 			ownerGroupId: a.owner_group_id,
