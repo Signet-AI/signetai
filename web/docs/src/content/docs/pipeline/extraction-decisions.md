@@ -224,7 +224,7 @@ The daemon reports a Pipeline V2 mode derived from these controls:
 | Control | Current meaning |
 | --- | --- |
 | `enabled` | Enables Pipeline V2 runtime processing. |
-| `paused` | Prevents the normal pipeline runtime from starting; retention can still run as a standalone safeguard. |
+| `paused` | Prevents the normal pipeline runtime from starting; retention can still run as a standalone safeguard. Live transcript capture and the canonical-history recovery it requires continue so pausing derivation does not discard evidence. |
 | `mutationsFrozen` | Prevents mutation-producing pipeline workers, including Dreaming, from starting. |
 | `shadowMode` | Causes the daemon to report `shadow` pipeline status and keeps checkpoint extraction available when the main pipeline switch is off. It does not restore the old extraction worker or its simulated decision pass. |
 | `autonomous.enabled` | Enables the scheduled maintenance interval. |

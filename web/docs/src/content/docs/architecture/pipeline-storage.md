@@ -266,7 +266,8 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `185-import-content-registry.ts`.
+`schema_migrations_audit`. The latest migration is `186-vector-admission-shards.ts`.
+It adds vector shard metadata and resumable repair markers without copying vector payloads during the schema upgrade.
 
 New evidence inherits its agent, session, and source classifications before
 indexing. A principal must be able to read the destination compartment to write
