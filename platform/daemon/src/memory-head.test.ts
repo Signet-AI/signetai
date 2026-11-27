@@ -846,6 +846,8 @@ describe("memory head owner runtime", () => {
 		expect(await read()).toEqual(expected);
 		expect(await read()).toEqual(expected);
 		expect(await dependencies()).toEqual({ n: 2 });
+		await sql("UPDATE memory_md_heads SET updated_at=datetime('now') WHERE agent_id='default'");
+		expect(await dependencies()).toEqual({ n: 2 });
 		await sql("DELETE FROM classification_audience WHERE principal_id='reader'");
 		expect(await dependencies()).toEqual({ n: 0 });
 		expect(await read()).toEqual(expected);

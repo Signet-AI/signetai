@@ -1345,12 +1345,25 @@ export function runDbOwnerWorker(): void {
 				continue;
 			for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
 				const reference = operation === "DELETE" ? "OLD" : "NEW";
+				const changed =
+					operation === "UPDATE"
+						? ` AND (${columns
+								.filter(
+									(column) =>
+										!["created_at", "updated_at", "lease_token", "lease_owner", "lease_expires_at"].includes(column),
+								)
+								.map((column) => {
+									const name = `"${column.replaceAll('"', '""')}"`;
+									return `OLD.${name} IS NOT NEW.${name}`;
+								})
+								.join(" OR ")})`
+						: "";
 				const readable = (row: string) =>
 					`s.agent_id=${row}.agent_id AND (${table === "memory_md_heads" ? "1=1" : `${row}.compartment_id IS NULL OR s.compartments_json IS NULL OR EXISTS(SELECT 1 FROM json_each(s.compartments_json) WHERE value=${row}.compartment_id)`})`;
 				const agentMatch =
 					operation === "UPDATE" ? `((${readable("OLD")}) OR (${readable("NEW")}))` : readable(reference);
 				db.exec(
-					`CREATE TEMP TRIGGER IF NOT EXISTS signet_head_${table}_${operation} AFTER ${operation} ON main.${table} BEGIN INSERT INTO signet_head_dirty SELECT cache_key FROM signet_head_scopes s WHERE ${agentMatch} AND NOT EXISTS(SELECT 1 FROM signet_head_dirty WHERE cache_key=s.cache_key); END`,
+					`CREATE TEMP TRIGGER IF NOT EXISTS signet_head_${table}_${operation} AFTER ${operation} ON main.${table} BEGIN INSERT INTO signet_head_dirty SELECT cache_key FROM signet_head_scopes s WHERE ${agentMatch}${changed} AND NOT EXISTS(SELECT 1 FROM signet_head_dirty WHERE cache_key=s.cache_key); END`,
 				);
 			}
 		}
