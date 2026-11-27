@@ -1,3 +1,4 @@
+import * as contentReads from "../content-read";
 import { getDreamingReviewedEvidence } from "./dreaming-evidence-reviews";
 import { getDreamingEvidenceExclusions } from "./dreaming";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
@@ -7,7 +8,7 @@ import { readOrganization } from "../auth/organization-store";
 import { rolePermissions, type Principal } from "../auth/principal";
 import { registerPipelineRoutes } from "../routes/pipeline-routes";
 import { dreamingLiveEvents } from "./dreaming-live-events";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +74,16 @@ test("stored pass reads enforce label and reach before limits and child logs", a
 		}),
 	).toBeNull();
 });
+test("optional review metadata cannot shorten a SQL-admitted Dreaming page", async () => {
+	const metadata = spyOn(contentReads, "contentRead").mockResolvedValueOnce([]);
+	try {
+		const page = await getDreamingPasses(getDbAccessor(), "agent-a", 1, { ...scope, organizationMode: true });
+		expect(page.map((pass) => pass.id)).toEqual(["visible"]);
+	} finally {
+		metadata.mockRestore();
+	}
+});
+
 test("Dreaming review pages fail closed for project-restricted scopes", async () => {
 	const accessor = getDbAccessor();
 	const organizationScope = { ...scope, organizationMode: true };

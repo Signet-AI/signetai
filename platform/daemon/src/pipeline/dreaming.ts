@@ -960,10 +960,7 @@ async function withDreamPassReview<T extends { readonly id: string }>(
 		signal,
 	);
 	const byId = new Map(metadata.map((row) => [row.id, row]));
-	return rows.flatMap((row) => {
-		const review = byId.get(row.id);
-		return review ? [{ ...row, ...review }] : [];
-	});
+	return rows.map((row) => ({ ...row, ...byId.get(row.id) }));
 }
 export async function getDreamingPasses(
 	accessor: DbAccessor,

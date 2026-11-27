@@ -2,12 +2,12 @@ import { type ReadScope, readScopeSql } from "../read-scope";
 
 export function dreamingReadPredicate(alias: string, scope?: ReadScope): { sql: string; args: (string | number)[] } {
 	if (scope === undefined) return { sql: "", args: [] };
+	if (scope.projects !== null) return { sql: " AND 0", args: [] };
 	const predicate = readScopeSql(
 		alias,
 		{
 			...scope,
 			reach: scope.reach.kind === "shared" ? { kind: "own", agentId: scope.reach.agentId } : scope.reach,
-			projects: scope.projects === null ? null : [],
 		},
 		{ visibility: null, memory: null, session: null, source: null },
 	);

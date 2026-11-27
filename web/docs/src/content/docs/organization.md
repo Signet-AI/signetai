@@ -171,6 +171,8 @@ Organization Dreaming status and pass responses include the system author (`{ ki
 
 Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited.
 
+Dreaming pass lists apply audience, agent, and project restrictions in SQL before paging. Pass records have no project ownership, so project-restricted credentials receive no passes. Optional author, team, and classification review metadata enriches admitted rows; missing metadata never silently shortens a page.
+
 ## Offboarding and audit
 
 Deactivation is a dry run by default. `POST /api/org/users/:id/deactivate` returns a plan for `keep`, `transfer`, or `purge`; send `dryRun: false` to execute it as a tracked job. Keep retains evidence, transfer moves personal-agent ownership to another active person without rewriting the original authors or speakers, and purge invokes the evidence deletion owners. Purge publishes removed counts only after durable deletion and cleanup complete. Running jobs report their phase; an incomplete job does not claim completed removal counts. Pinned evidence or a derivation beyond the bounded batch can leave a job `incomplete`; inspect its readable residuals instead of assuming it completed.
