@@ -371,3 +371,29 @@ describe("recall surface helpers", () => {
 		expect(parseRecallPayload(result).rows).toHaveLength(1);
 	});
 });
+
+it("renders canonical attribution instead of legacy who, including hidden people", () => {
+	const row = {
+		id: "memory-1",
+		content: "evidence",
+		created_at: "2026-01-01T00:00:00Z",
+		who: "spoofed harness",
+		attribution: { author: { name: "Alice Smith", handle: "alice" }, agent: { name: "Engineering" } },
+	};
+	const visible = formatRecallText({ results: [row] });
+	expect(visible).toContain("author: Alice Smith (@alice) · agent: Engineering");
+	expect(visible).not.toContain("spoofed harness");
+	const hidden = formatRecallText({
+		results: [{ ...row, attribution: { ...row.attribution, author: { name: "Another person" } } }],
+	});
+	expect(hidden).toContain("author: Another person");
+	expect(hidden).not.toContain("Alice");
+});
+
+it("keeps unattributed local recall byte-identical to the main-branch golden", async () => {
+	const golden: { main: string; cases: { input: unknown; output: string }[] } = await Bun.file(
+		new URL("../contracts/recall-main-golden.json", import.meta.url),
+	).json();
+	expect(golden.main).toBe("ad5a3839e66bc787916fec3ae7feb09d0c2090e1");
+	for (const fixture of golden.cases) expect(formatRecallText(fixture.input)).toBe(fixture.output);
+});

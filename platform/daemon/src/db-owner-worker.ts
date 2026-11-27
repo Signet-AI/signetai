@@ -151,6 +151,7 @@ export function runDbOwnerWorker(): void {
 	}
 	const parentPid = process.ppid;
 	let db = undefined as unknown as SqliteDatabase;
+	let readDb: SqliteDatabase | undefined;
 	let parentWatch: ReturnType<typeof setInterval> | undefined;
 	let workspaceRoot: string | undefined;
 	function bindTranscriptWorkspace(candidate: string): string {
@@ -166,7 +167,11 @@ export function runDbOwnerWorker(): void {
 	const closeAndExit = (code: number): never => {
 		if (parentWatch !== undefined) clearInterval(parentWatch);
 		try {
-			if (db !== undefined) db.close(true);
+			try {
+				readDb?.close(true);
+			} finally {
+				if (db !== undefined) db.close(true);
+			}
 		} finally {
 			process.exit(code);
 		}
@@ -359,9 +364,13 @@ export function runDbOwnerWorker(): void {
 
 	function executeReadOnlyStatement(statement: DbOwnerStatement): unknown {
 		if (statement.result === "run") throw new Error("DB owner readonly statements must return rows");
-		const readonlyDb = new Database(ownerDbPath, { readonly: true });
-		configureEvidencePurgeConnection(readonlyDb);
+		const reuse = /^(SELECT|WITH)\b/i.test(statement.sql.trimStart());
+		const readonlyDb = (reuse ? readDb : undefined) ?? new Database(ownerDbPath, { readonly: true });
 		try {
+			if (readonlyDb !== readDb) {
+				configureEvidencePurgeConnection(readonlyDb);
+				if (reuse) readDb = readonlyDb;
+			}
 			const params = (statement.params ?? []).map((value) => bindParameter(value));
 			const prepared = readonlyDb.prepare(statement.sql);
 			try {
@@ -372,7 +381,7 @@ export function runDbOwnerWorker(): void {
 				prepared.finalize?.();
 			}
 		} finally {
-			readonlyDb.close(true);
+			if (readonlyDb !== readDb) readonlyDb.close(true);
 		}
 	}
 

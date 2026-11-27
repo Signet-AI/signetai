@@ -14,6 +14,16 @@ export interface DreamPassReview {
 	readonly classifications?: readonly { readonly id: string; readonly name: string }[];
 }
 export type ContentReadRequest =
+	| {
+			readonly op: "result_attribution";
+			readonly scope: ReadScope;
+			readonly subject: import("./read-scope").AudienceSubject;
+			readonly directory: boolean;
+			readonly authors: readonly string[];
+			readonly agents: readonly string[];
+			readonly memories: readonly string[];
+			readonly artifactPaths: readonly string[];
+	  }
 	| { readonly op: "dream_pass_review"; readonly scope: ReadScope; readonly ids: readonly string[] }
 	| {
 			readonly op: "memory_list";
@@ -216,6 +226,10 @@ function estimatedReadWork(request: ContentReadRequest): number {
 			return request.references.length;
 		case "projection_rows":
 			return (request.query.limit ?? 100) + (request.query.offset ?? 0);
+		case "result_attribution":
+			return (
+				request.authors.length + request.agents.length + request.memories.length + request.artifactPaths.length + 1
+			);
 		case "dream_pass_review":
 			return Math.max(1, request.ids.length);
 		case "forget_candidates":

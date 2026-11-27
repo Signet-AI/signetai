@@ -1,3 +1,4 @@
+import { chooseSetupEntry } from "../features/setup-entry.js";
 import chalk from "chalk";
 import type { Command } from "commander";
 import { withJson, withPath } from "./shared.js";
@@ -170,7 +171,12 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",
 		)
 		.option("--identity-mode <mode>", "Identity management mode in non-interactive mode (managed, off)")
-		.action(async (options: SetupOptions) => {
+		.action(async (input: SetupOptions, command: Command) => {
+			const supplied = Object.values(command.optsWithGlobals()).some(
+				(value) => value !== undefined && value !== false && (!Array.isArray(value) || value.length > 0),
+			);
+			const options: SetupOptions =
+				!supplied && process.stdin.isTTY ? { ...input, ...(await chooseSetupEntry()) } : input;
 			if (options.join && options.host) throw new Error("Choose --join or --host, not both");
 			if (options.join) {
 				if (options.path || options.harness?.length)

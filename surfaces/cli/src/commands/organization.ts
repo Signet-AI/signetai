@@ -1,3 +1,4 @@
+import { attributeResults, printResultAttribution, resultField } from "../lib/result-attribution.js";
 import { SignetError, SignetNetworkError, SignetTimeoutError } from "../../../../libs/sdk/src/index.js";
 import { Command } from "commander";
 import type { NodeTransport } from "../../../../libs/sdk/src/node.js";
@@ -67,6 +68,19 @@ export function registerOrganizationCommands(program: Command, deps: AuthCommand
 					opts,
 					args.filter((arg): arg is string => typeof arg === "string"),
 				);
+				if (command.name() === "audit" && !opts.json && typeof result === "object" && result !== null) {
+					const entries: unknown = Reflect.get(result, "events");
+					if (Array.isArray(entries)) {
+						for (const row of await attributeResults(
+							entries.filter((item: unknown): item is object => typeof item === "object" && item !== null),
+							(body) => transport.post("/api/result-attribution", body),
+						)) {
+							print(`${resultField(row, "at", "created_at", "createdAt") ?? ""} ${resultField(row, "action") ?? ""}`);
+							printResultAttribution(row, print);
+						}
+						return;
+					}
+				}
 				print(JSON.stringify(result, null, opts.json ? undefined : 2));
 			} catch (error) {
 				reportAuthError(error, opts.json);

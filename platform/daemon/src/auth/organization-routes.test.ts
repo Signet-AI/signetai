@@ -88,6 +88,67 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("local attribution resolves only workspace identities without organization sign-in", async () => {
+		const { localPrincipal } = await import("./principal");
+		const local = new Hono();
+		local.use("*", async (c, next) => {
+			c.set("principal", localPrincipal());
+			c.set("organization", null);
+			await next();
+		});
+		registerOrganizationRoutes(local, parseAuthConfig({ mode: "local" }, dir), dir);
+		const result = await local.request("/api/result-attribution", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ authors: [], agents: ["default"], memories: [] }),
+		});
+		expect(result.status).toBe(200);
+		const labels = await result.json();
+		expect(labels.authors).toEqual([]);
+		expect(labels.agents).toEqual([{ id: "default", name: expect.any(String) }]);
+	});
+
+	test("result attribution uses canonical names, hides other authors and denies bound-agent lookup", async () => {
+		await claim();
+		const alice = await member("label-alice"),
+			bob = await member("label-bob");
+		const data = { authors: [alice.userId, bob.userId], agents: [alice.agentId, bob.agentId], memories: [] };
+		const self = await call("/api/result-attribution", "POST", data, alice.token);
+		expect(self.status).toBe(200);
+		const own = await self.json();
+		expect(own.authors.map((u: { id: string }) => u.id)).toEqual([alice.userId]);
+		expect(own.authors[0].name).toBe("label-alice");
+		const visible = await (await call("/api/result-attribution", "POST", data)).json();
+		expect(visible.authors).toHaveLength(2);
+		const issued = await call(
+			"/api/auth/api-keys",
+			"POST",
+			{
+				name: "label-bound",
+				agentId: alice.agentId,
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 60000).toISOString(),
+			},
+			alice.token,
+		);
+		expect(issued.status).toBe(201);
+		const key = await issued.json();
+		expect(typeof key.secret).toBe("string");
+		const denied = await app.request("/api/result-attribution", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${key.secret}`,
+				"x-signet-agent-id": bob.agentId,
+			},
+			body: JSON.stringify(data),
+		});
+		expect(denied.status).toBe(403);
+		expect(
+			(await call("/api/result-attribution", "POST", { ...data, authors: Array(101).fill(alice.userId) })).status,
+		).toBe(400);
+	});
+
 	test("SSO configuration refuses narrowed authority before secret access and never publishes missing secrets", async () => {
 		await claim();
 		const alice = await member("sso-alice");
