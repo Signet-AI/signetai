@@ -1,3 +1,6 @@
+import { withTranscriptFileSource } from "@signet/core";
+import { TranscriptUploadError, type TranscriptUploadOutcome, uploadTranscript } from "@signet/core/transcript-upload";
+import { SignetApiError } from "./errors.js";
 import type { SignetTransport } from "./transport.js";
 import type {
 	AgentMessageAcknowledgeResponse,
@@ -83,6 +86,26 @@ export class SignetClientP2 {
 		readonly reason?: string;
 	}): Promise<SessionEndResponse> {
 		return this.transport.post<SessionEndResponse>("/api/hooks/session-end", opts);
+	}
+
+	async uploadTranscript(opts: {
+		readonly transcriptPath: string;
+		readonly harness: string;
+		readonly sessionKey: string;
+		readonly agentId?: string;
+		readonly cwd?: string;
+	}): Promise<TranscriptUploadOutcome> {
+		const { transcriptPath, ...target } = opts;
+		const client = {
+			baseUrl: this.transport.baseUrl,
+			fetch: (url: string, init: RequestInit) => this.transport.fetch(url, init),
+		};
+		try {
+			return await withTranscriptFileSource(transcriptPath, (source) => uploadTranscript(client, target, source));
+		} catch (error) {
+			if (error instanceof TranscriptUploadError) throw new SignetApiError(error.status, { error: error.message });
+			throw error;
+		}
 	}
 
 	sessionEndFireAndForget(opts: {
