@@ -33,7 +33,7 @@ export async function connectorErrorsInOwner(db: MigrationDb, databasePath: stri
 		errors.unshift({ ...input.record, reason, at: new Date(now).toISOString() });
 		errors.splice(10);
 		await mkdir(directory, { recursive: true, mode: 0o700 });
-		const temporary = `${path}.${randomUUID()}.tmp`;
+		const temporary = `${path}.tmp`;
 		await writeFile(temporary, JSON.stringify(errors), { mode: 0o600 });
 		await rename(temporary, path);
 		const minute = new Date(Math.floor(now / 60_000) * 60_000).toISOString();

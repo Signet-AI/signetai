@@ -73,6 +73,25 @@ test("stored pass reads enforce label and reach before limits and child logs", a
 		}),
 	).toBeNull();
 });
+test("Dreaming review pages fail closed for project-restricted scopes", async () => {
+	const accessor = getDbAccessor();
+	const organizationScope = { ...scope, organizationMode: true };
+	for (const limit of [1, 2, 10]) {
+		const page = await getDreamingPasses(accessor, "agent-a", limit, organizationScope);
+		expect(page).toMatchObject([{ id: "visible", author: { kind: "system", name: "Dreaming" } }]);
+		expect(await getDreamingPasses(accessor, "agent-a", limit, { ...organizationScope, projects: ["atlas"] })).toEqual(
+			[],
+		);
+		expect(
+			await getDreamingPasses(accessor, "agent-a", limit, {
+				...organizationScope,
+				compartments: [1],
+				projects: ["atlas"],
+			}),
+		).toEqual([]);
+	}
+});
+
 test("attention lists apply audience and reach before priority limit", async () => {
 	const accessor = getDbAccessor();
 	expect(await listDreamingAttention(accessor, { limit: 1, readScope: scope })).toMatchObject([

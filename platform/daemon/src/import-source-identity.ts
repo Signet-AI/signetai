@@ -18,7 +18,7 @@ export async function resolveImportSourceIdentity(input: {
 			source.providerSettings?.agentId === input.agentId &&
 			source.providerSettings?.contentHash === input.contentHash,
 	);
-	const classificationKey = await importClassificationRequest<string>({
+	const labelsKey = await importClassificationRequest<string>({
 		op: "import-identity",
 		agentId: input.agentId,
 		author: input.author,
@@ -32,12 +32,16 @@ export async function resolveImportSourceIdentity(input: {
 						.filter((source) => source.writeIdentity?.authorUserId === input.author.userId)
 						.map((source) => source.id),
 	});
+	const classificationKey = input.author.userId === null && labelsKey === "[]" ? undefined : labelsKey;
 	const duplicate = sameContent.find((source) => source.providerSettings?.classificationKey === classificationKey);
 	return {
 		classificationKey,
 		duplicate,
 		sourceId:
 			duplicate?.id ??
-			deterministicImportedSourceId(input.contentHash, JSON.stringify([input.agentId, classificationKey])),
+			deterministicImportedSourceId(
+				input.contentHash,
+				classificationKey === undefined ? input.agentId : JSON.stringify([input.agentId, classificationKey]),
+			),
 	};
 }

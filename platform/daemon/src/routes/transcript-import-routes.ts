@@ -388,9 +388,11 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				state: string;
 				source_id: string;
 				duplicate_mode: ImportDuplicateMode;
+				author_user_id: string | null;
+				author_credential: string;
 			}>(
 				{
-					sql: "SELECT f.name,f.content_hash,f.size_bytes,f.state,f.source_id,j.duplicate_mode FROM source_import_files f JOIN source_import_jobs j ON j.id = f.job_id AND j.agent_id = f.agent_id WHERE f.id = ? AND f.job_id = ? AND f.agent_id = ? AND f.upload_generation = ? AND f.storage_state = 'sealed' AND j.state = 'staging'",
+					sql: "SELECT f.name,f.content_hash,f.size_bytes,f.state,f.source_id,j.duplicate_mode,j.author_user_id,j.author_credential FROM source_import_files f JOIN source_import_jobs j ON j.id = f.job_id AND j.agent_id = f.agent_id WHERE f.id = ? AND f.job_id = ? AND f.agent_id = ? AND f.upload_generation = ? AND f.storage_state = 'sealed' AND j.state = 'staging'",
 					params: [upload.fileId, upload.jobId, upload.agentId, upload.generation],
 					result: "get",
 					readonly: true,
@@ -409,7 +411,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 			const identity = await resolveImportSourceIdentity({
 				agentId: upload.agentId,
 				jobId: upload.jobId,
-				author: c.get("author"),
+				author: { userId: file.author_user_id, credential: file.author_credential },
 				contentHash: file.content_hash,
 				workspaceRoot: resolveDefaultBasePath(),
 			});
