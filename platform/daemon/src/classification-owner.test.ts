@@ -1,4 +1,9 @@
-import { compartmentFor } from "@signet/core";
+import {
+	compartmentFor,
+	findSqliteVecExtension,
+	syncEmbeddingCompartment,
+	vectorSearchWithMetadata,
+} from "@signet/core";
 import { executeClassificationJob, resumeClassificationJobs } from "./classifications";
 import { currentClassificationFixture as classificationFixture } from "./test-support/classification-fixture.test";
 import { expect, test } from "bun:test";
@@ -454,6 +459,117 @@ test("child relabel closure retains independent pass provenance through classify
 		for (const table of tables.filter((table) => table !== "relations"))
 			expect(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
 		expect(db.prepare("SELECT id FROM relations").all()).toEqual([{ id: "child-edge" }]);
+	} finally {
+		db.close();
+	}
+});
+
+test("hidden-agent vectors cannot delay another agent's classification publication", () => {
+	const run = (hidden: number) => {
+		const db = classificationFixture();
+		try {
+			const extension = findSqliteVecExtension();
+			if (!extension) throw new Error("sqlite-vec required");
+			db.loadExtension(extension);
+			db.exec(
+				"CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine);INSERT INTO agents(id,name,kind,owner_user_id,created_at,updated_at) VALUES('hidden','Hidden','personal','bob','now','now')",
+			);
+			const memory = db.prepare(
+				"INSERT INTO memories(id,content,agent_id,author_user_id,created_at,updated_at) VALUES(?,'fixture','hidden','bob','now','now')",
+			);
+			const embedding = db.prepare(
+				"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text) VALUES(?,?,'memory',?,?,3,'now',?,'fixture')",
+			);
+			db.exec("BEGIN");
+			embedding.run("visible-vector", "visible-hash", "m", new Float32Array([1, 0, 0]), "default");
+			syncEmbeddingCompartment(db, "embeddings", "visible-vector");
+			for (let i = 0; i < hidden; i++) {
+				const id = `hidden-${i.toString().padStart(4, "0")}`;
+				memory.run(id);
+				embedding.run(id, id, id, new Float32Array([0, 1, 0]), "hidden");
+				syncEmbeddingCompartment(db, "embeddings", id);
+			}
+			db.exec("COMMIT");
+			const label = field(
+				executeClassification(db, {
+					op: "create",
+					actor: compliance,
+					name: "Private",
+					color: null,
+					description: null,
+					audience: [{ kind: "user", id: "alice" }],
+					appliers: [],
+				}),
+				"id",
+			);
+			const jobId = field(
+				executeClassification(db, { op: "enqueue", actor: alice, id: label, target, remove: false }),
+				"jobId",
+			);
+			for (let ticks = 1; ticks <= 20; ticks++) {
+				executeClassification(db, { op: "execute", jobId });
+				if (db.prepare("SELECT kind FROM org_jobs WHERE id=?").get(jobId)?.kind === "classify") return ticks;
+			}
+			throw new Error("classification never published");
+		} finally {
+			db.close();
+		}
+	};
+	expect(run(401)).toBe(run(0));
+});
+
+test("classification owner prepares vector membership before publishing its read fence", () => {
+	const db = classificationFixture();
+	try {
+		const extension = findSqliteVecExtension();
+		if (!extension) throw new Error("sqlite-vec required");
+		db.loadExtension(extension);
+		db.exec(
+			"DROP TABLE IF EXISTS vec_embeddings;CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+		);
+		db.prepare(
+			"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text) VALUES('vector','hash','memory','m',?,3,'now','default','chunk')",
+		).run(new Float32Array([1, 0, 0]));
+		syncEmbeddingCompartment(db, "embeddings", "vector");
+		const read = () =>
+			vectorSearchWithMetadata(db, new Float32Array([1, 0, 0]), {
+				limit: 2,
+				readScope: {
+					reach: { kind: "own", agentId: "default" },
+					projects: null,
+					compartments: [],
+					inFlightUserId: "bob",
+				},
+			}).results.map((row) => row.id);
+		expect(read()).toEqual(["m"]);
+		const classification = field(
+			executeClassification(db, {
+				op: "create",
+				actor: compliance,
+				name: "Prepared",
+				color: null,
+				description: null,
+				audience: [{ kind: "user", id: "alice" }],
+				appliers: [],
+			}),
+			"id",
+		);
+		const jobId = field(
+			executeClassification(db, { op: "enqueue", actor: compliance, id: classification, target, remove: false }),
+			"jobId",
+		);
+		expect(db.prepare("SELECT kind FROM org_jobs WHERE id=?").get(jobId)).toEqual({ kind: "classify-preparing" });
+		expect(read()).toEqual(["m"]);
+		for (let i = 0; i < 20; i++) {
+			executeClassification(db, { op: "execute", jobId });
+			const job = db.prepare("SELECT kind,status FROM org_jobs WHERE id=?").get(jobId);
+			if (job?.kind === "classify") {
+				expect(read()).toEqual([]);
+				break;
+			}
+			expect(read()).toEqual(["m"]);
+		}
+		expect(db.prepare("SELECT kind FROM org_jobs WHERE id=?").get(jobId)).toEqual({ kind: "classify" });
 	} finally {
 		db.close();
 	}
