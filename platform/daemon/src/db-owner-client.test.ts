@@ -171,6 +171,49 @@ describe("DB owner client", () => {
 		}
 	}
 
+	test("reads stay fresh and isolated across schema, connection state and rejected writes", async () => {
+		const fixture = makeDb();
+		directory = fixture.directory;
+		const owned = createDbOwnerClient({ dbPath: fixture.path });
+		client = owned;
+		const query = (sql: string) =>
+			owned.submit<readonly Record<string, unknown>[]>(
+				{ kind: "query", statement: { sql, result: "all", readonly: true } },
+				{ operation: "test.read-isolation", lane: "read", deadlineMs: 5_000 },
+			).result;
+		const content = () => query("SELECT content, 'a' LIKE 'A' AS insensitive FROM memories");
+		expect(await content()).toEqual([{ content: "owner-routed recall", insensitive: 1 }]);
+		await query("PRAGMA case_sensitive_like = ON");
+		expect(await content()).toEqual([{ content: "owner-routed recall", insensitive: 1 }]);
+		await query("CREATE TEMP TABLE residue (value TEXT)");
+		expect(await query("SELECT name FROM sqlite_temp_master WHERE name='residue'")).toEqual([]);
+		await query("ATTACH DATABASE ':memory:' AS residue");
+		await expect(query("SELECT name FROM residue.sqlite_master")).rejects.toThrow();
+		await query("BEGIN");
+		await owned.submit(
+			{
+				kind: "transaction",
+				transaction: {
+					statements: [
+						{ sql: "ALTER TABLE memories ADD COLUMN label TEXT", result: "run" },
+						{ sql: "UPDATE memories SET content='updated', label='current'", result: "run" },
+					],
+				},
+			},
+			{ operation: "test.write-between-reads", lane: "write", deadlineMs: 5_000 },
+		).result;
+		expect(await query("WITH current AS (SELECT content,label FROM memories) SELECT * FROM current")).toEqual([
+			{ content: "updated", label: "current" },
+		]);
+		for (const sql of [
+			"DELETE FROM memories RETURNING id",
+			"WITH ignored AS (SELECT 1) DELETE FROM memories RETURNING id",
+		]) {
+			await expect(query(sql)).rejects.toThrow(/readonly/);
+		}
+		expect(await content()).toEqual([{ content: "updated", insensitive: 1 }]);
+	});
+
 	test("Dreaming evidence search on the read owner never acquires leases", async () => {
 		const database = await makeMigratedDb();
 		directory = database.directory;
