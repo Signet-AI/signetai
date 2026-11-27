@@ -3,7 +3,7 @@ import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
 import type { DbOwnerHealth } from "../db-owner-client";
-import { getDbOwnerMaintenanceState, ownerQueryOne, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
+import { getDbOwnerMaintenanceState, runOwnerJob, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import { QUEUE_MAX_DEAD_RATE, QUEUE_MAX_DEPTH, QUEUE_MAX_OLDEST_AGE_SEC, type QueueHealth } from "../diagnostics";
 import { getAllFeatureFlags } from "../feature-flags";
@@ -165,7 +165,13 @@ export function mountHealthRoutes(app: Hono): void {
 			try {
 				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
 					try {
-						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:168", "SELECT 1", [], { deadlineMs: 500 });
+						await runOwnerJob(
+							ownerMaintenance.owner,
+							{ kind: "query", statement: { sql: "SELECT 1", result: "get", readonly: true } },
+							"routes/health.ts:168",
+							"read",
+							{ deadlineMs: 500 },
+						);
 						dbOk = true;
 					} catch {}
 					return ownerMaintenance.health();

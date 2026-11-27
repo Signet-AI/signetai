@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { MAX_READ_CONNECTIONS, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import type { DbOwnerClient, DbOwnerHealth } from "../db-owner-client";
+import { createDbOwnerClient, type DbOwnerClient, type DbOwnerHealth } from "../db-owner-client";
 import type { QueueHealth } from "../diagnostics";
 import { EMPTY_QUEUE_COUNTS } from "../diagnostics-queue";
 import { publishDatabaseIntegrityStatus, resetGlobalIntegrityLatch } from "../database-integrity";
@@ -106,6 +106,31 @@ afterEach(async () => {
 });
 
 describe("GET /health owner diagnostics", () => {
+	test("health probes take foreground admission ahead of queued maintenance", async () => {
+		const owner = createDbOwnerClient({ dbPath: join(dir, "memory", "memories.db") });
+		await owner.start();
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+		const active = owner.submit(
+			{ kind: "sleep", durationMs: 100 },
+			{ operation: "maintenance.active-health-test", lane: "maintenance", deadlineMs: 1000 },
+		);
+		while (owner.health().activeJobId !== active.job.id) await Bun.sleep(1);
+		let maintenanceFinished = false;
+		const queued = owner
+			.submit(
+				{ kind: "sleep", durationMs: 300 },
+				{ operation: "maintenance.queued-health-test", lane: "maintenance", deadlineMs: 1000 },
+			)
+			.result.then(() => {
+				maintenanceFinished = true;
+			});
+		const response = await makeApp().request("http://localhost/health");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ db: true });
+		expect(maintenanceFinished).toBe(false);
+		await Promise.all([active.result, queued]);
+	});
+
 	test("reports a missing configured workspace as degraded", async () => {
 		const missingPath = join(dir, "moved-workspace");
 		process.env.SIGNET_PATH = missingPath;
