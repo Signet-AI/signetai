@@ -91,7 +91,7 @@ describe("agent id registration", () => {
 	test("does not overwrite existing agent policies", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
-		const now = new Date().toISOString();
+		const now = "2000-01-01T00:00:00.000Z";
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
 				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
@@ -102,10 +102,10 @@ describe("agent id registration", () => {
 		await ensureAgentRegistered("noam");
 
 		const row = (await getDbAccessor().withReadDbAsync((db) =>
-			db.prepare("SELECT name, read_policy, policy_group FROM agents WHERE id = 'noam'").get(),
+			db.prepare("SELECT name, read_policy, policy_group, updated_at FROM agents WHERE id = 'noam'").get(),
 		)) as { name: string; read_policy: string; policy_group: string | null } | undefined;
 
-		expect(row).toEqual({ name: "Noam", read_policy: "isolated", policy_group: "private-team" });
+		expect(row).toEqual({ name: "Noam", read_policy: "isolated", policy_group: "private-team", updated_at: now });
 	});
 
 	test("caches scope reads until roster invalidation", async () => {

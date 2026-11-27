@@ -138,11 +138,11 @@ export async function ensureAgentRegistered(agentId: string): Promise<void> {
 	const now = new Date().toISOString();
 	try {
 		const owner = await getDbOwner(getDbAccessorPath());
-		await ownerRun(
+		const registered = await ownerRun(
 			owner,
 			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
 			 VALUES (?, ?, 'isolated', NULL, ?, ?)
-			 ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
+			 ON CONFLICT(id) DO NOTHING`,
 			[id, id, now, now],
 			{
 				operation: "agent-scope.register",
@@ -151,7 +151,7 @@ export async function ensureAgentRegistered(agentId: string): Promise<void> {
 				estimatedWorkUnits: 1,
 			},
 		);
-		invalidateAgentScopeCache(id);
+		if (registered.changes > 0) invalidateAgentScopeCache(id);
 	} catch (err) {
 		console.warn(
 			`[agent-id] Failed to register agent "${id}" (non-fatal):`,
