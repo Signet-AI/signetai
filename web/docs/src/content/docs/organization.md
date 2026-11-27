@@ -46,6 +46,16 @@ Clients inspect an invitation with `POST /api/auth/invites/lookup` and a JSON `{
 
 Password accounts accept through `POST /api/auth/invites/accept`. An SSO-required organization sends invitees to its SSO flow instead. The invitation's email, when specified, must match the verified SSO identity.
 
+## Join from the dashboard
+
+Members see **What's shared** before the dashboard opens. Read the visibility explanation, check the acknowledgement, and continue. Signet records the acknowledgement through the daemon under your signed-in identity; a failed request leaves you on that screen. API keys and narrowed sessions cannot acknowledge it for you. The versioned audit record survives daemon restarts. If audit retention removes it, Signet asks again rather than assuming consent.
+
+Next, review your personal and team agents and your default reading agent. **About you** saves your name through your own profile and optional preferences as evidence in your own write agent, never in a workspace-wide `USER.md`. SSO-managed names remain read-only.
+
+Run the displayed `signet login` and `signet connect` commands on your own computer, then send a prompt from your harness. The connector step updates automatically when your first active connector key is used. Joining does not replace your local workspace or automatically copy personal memories. Choose the destination for each harness in the CLI; a harness connects to one daemon at a time.
+
+**First memory** is optional. Ask your connected harness to remember something and watch the new memory appear in the dashboard. This screen only reads your write agent; it does not create a sample memory for you. Continue to **Summary**, then open the dashboard. Members are not asked to configure organization providers or embeddings. Personal-mode onboarding is unchanged.
+
 ## Roles and teams
 
 - **Admin** manages people, policy, agents, credentials, and audit. Admin does not include the `classify` permission.
