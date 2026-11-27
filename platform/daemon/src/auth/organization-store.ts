@@ -118,6 +118,7 @@ export interface SessionRow {
 	refresh_expires_at: string | null;
 	source_key_id: string | null;
 	source_key_ceiling_json: string | null;
+	permission_ceiling_json: string | null;
 	csrf_hash: string | null;
 	created_at: string;
 	last_used_at: string | null;
@@ -305,7 +306,7 @@ const keySessionCeilingSchema = z
 	})
 	.strict();
 export interface SessionKeyBinding {
-	readonly sourceKeyId: string;
+	readonly sourceKeyId: string | null;
 	readonly ceiling: z.infer<typeof keySessionCeilingSchema>;
 }
 function storedJson(value: string): unknown {
@@ -316,9 +317,11 @@ function storedJson(value: string): unknown {
 	}
 }
 export function sourceSessionBinding(session: SessionRow): SessionKeyBinding | undefined {
-	if (!session.source_key_id && !session.source_key_ceiling_json) return undefined;
-	if (!session.source_key_id || !session.source_key_ceiling_json) throw new IdentityError(401, "invalid_credential");
-	const ceiling = keySessionCeilingSchema.safeParse(storedJson(session.source_key_ceiling_json));
+	const raw = session.source_key_id ? session.source_key_ceiling_json : session.permission_ceiling_json;
+	if (!session.source_key_id && !raw && !session.source_key_ceiling_json) return undefined;
+	if (!raw || (!session.source_key_id && session.source_key_ceiling_json))
+		throw new IdentityError(401, "invalid_credential");
+	const ceiling = keySessionCeilingSchema.safeParse(storedJson(raw));
 	if (!ceiling.success) throw new IdentityError(401, "invalid_credential");
 	return { sourceKeyId: session.source_key_id, ceiling: ceiling.data };
 }
@@ -329,6 +332,10 @@ function intersectProjects(left: readonly string[] | null, right: readonly strin
 async function sessionKeyLimits(session: SessionRow) {
 	const binding = sourceSessionBinding(session);
 	if (!binding) return undefined;
+	if (!binding.sourceKeyId) {
+		if (binding.ceiling.expiresAt <= new Date().toISOString()) throw new IdentityError(401, "expired");
+		return { ...binding.ceiling, sourceKeyId: undefined };
+	}
 	const key = await readBoundKey(binding.sourceKeyId);
 	if (!key || key.user_id !== session.user_id || key.kind !== "personal")
 		throw new IdentityError(401, "invalid_credential");
@@ -375,8 +382,9 @@ export function sessionMaterial(
 	deviceId: string | null,
 	org: OrganizationRow,
 	binding?: SessionKeyBinding,
+	admission?: "key-exchange",
 ) {
-	if (binding && kind !== "browser") throw new IdentityError(403, "org_policy");
+	if (binding?.sourceKeyId && kind !== "browser") throw new IdentityError(403, "org_policy");
 	const sessionId = id("ses");
 	const access = secret();
 	const refresh = kind === "browser" ? null : secret();
@@ -386,7 +394,12 @@ export function sessionMaterial(
 		Date.now() + (kind === "browser" ? org.session_ttl_seconds : org.access_ttl_seconds) * 1000,
 	).toISOString();
 	const accessExpiresAt = binding && binding.ceiling.expiresAt < expires ? binding.ceiling.expiresAt : expires;
-	const refreshExpiresAt = refresh ? new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString() : null;
+	const refreshExpiry = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
+	const refreshExpiresAt = refresh
+		? binding && binding.ceiling.expiresAt < refreshExpiry
+			? binding.ceiling.expiresAt
+			: refreshExpiry
+		: null;
 	return {
 		sessionId,
 		accessToken: `sig_ses_${sessionId}_${access}`,
@@ -396,24 +409,32 @@ export function sessionMaterial(
 		refreshExpiresAt,
 		deviceId,
 		statements: [
-			statement(
-				"INSERT INTO auth_sessions (id,user_id,kind,device_id,token_hash,access_expires_at,refresh_hash,refresh_expires_at,csrf_hash,created_at,last_used_at,source_key_id,source_key_ceiling_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-				[
-					sessionId,
-					userId,
-					kind,
-					deviceId,
-					digest(access),
-					accessExpiresAt,
-					refresh ? digest(refresh) : null,
-					refreshExpiresAt,
-					csrf ? digest(csrf) : null,
-					now,
-					now,
-					binding?.sourceKeyId ?? null,
-					binding ? JSON.stringify(binding.ceiling) : null,
-				],
-			),
+			{
+				...statement(
+					"INSERT INTO auth_sessions (id,user_id,kind,device_id,token_hash,access_expires_at,refresh_hash,refresh_expires_at,csrf_hash,created_at,last_used_at,source_key_id,source_key_ceiling_json,permission_ceiling_json) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ?=0 OR ((SELECT count(*) FROM (SELECT 1 FROM auth_sessions WHERE user_id=? AND source_key_id IS NOT NULL AND revoked_at IS NULL AND access_expires_at>? LIMIT 20))<20 AND (SELECT count(*) FROM (SELECT 1 FROM auth_sessions WHERE source_key_id IS NOT NULL AND revoked_at IS NULL AND access_expires_at>? LIMIT 1000))<1000)",
+					[
+						sessionId,
+						userId,
+						kind,
+						deviceId,
+						digest(access),
+						accessExpiresAt,
+						refresh ? digest(refresh) : null,
+						refreshExpiresAt,
+						csrf ? digest(csrf) : null,
+						now,
+						now,
+						binding?.sourceKeyId ?? null,
+						binding?.sourceKeyId ? JSON.stringify(binding.ceiling) : null,
+						binding && !binding.sourceKeyId ? JSON.stringify(binding.ceiling) : null,
+						Number(admission === "key-exchange"),
+						userId,
+						now,
+						now,
+					],
+				),
+				requireChanges: true,
+			},
 		],
 	};
 }
@@ -554,11 +575,14 @@ export async function issueKeyBrowserSession(p: Principal) {
 			expiresAt: key.expires_at ?? new Date(Date.now() + org.session_ttl_seconds * 1000).toISOString(),
 		},
 	};
-	const material = sessionMaterial(user.id, "browser", key.device_id, org, binding);
-	await organizationWrite([
-		...material.statements,
-		auditStatement(p, "session.key_exchanged", "session", material.sessionId, { sourceKeyId: key.id }),
-	]);
+	const material = sessionMaterial(user.id, "browser", key.device_id, org, binding, "key-exchange");
+	await organizationWrite(
+		[
+			...material.statements,
+			auditStatement(p, "session.key_exchanged", "session", material.sessionId, { sourceKeyId: key.id }),
+		],
+		429,
+	);
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
 }
@@ -654,6 +678,7 @@ async function rotateSession(
 	if (!row.refresh_expires_at || row.refresh_expires_at <= new Date().toISOString())
 		throw new IdentityError(401, "expired");
 	const user = await activeUser(row.user_id, row.device_id);
+	const limits = await sessionKeyLimits(row);
 	if (!matchesHash(parsed.secret, row.refresh_hash)) {
 		const replay = replayRefreshRetry(row.refresh_retry_json, token, row.id, row.token_hash, row.refresh_hash);
 		if (replay) {
@@ -680,8 +705,10 @@ async function rotateSession(
 	const org = await readOrganization();
 	const access = secret();
 	const refresh = secret();
-	const accessExpiresAt = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
-	const refreshExpiresAt = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
+	const accessExpiry = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
+	const refreshExpiry = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
+	const accessExpiresAt = limits && limits.expiresAt < accessExpiry ? limits.expiresAt : accessExpiry;
+	const refreshExpiresAt = limits && limits.expiresAt < refreshExpiry ? limits.expiresAt : refreshExpiry;
 	const retryState = appendRefreshRetry(token, row.id, row.refresh_hash, {
 		accessToken: `sig_ses_${row.id}_${access}`,
 		refreshToken: `sig_ref_${row.id}_${refresh}`,
@@ -767,14 +794,21 @@ export interface BoundKeyRow {
 	expires_at: string | null;
 	revoked_at: string | null;
 }
-export function readBoundKey(keyId: string): Promise<BoundKeyRow | null> {
-	return organizationQuery(
+export async function readBoundKey(keyId: string): Promise<BoundKeyRow | null> {
+	const key = await organizationQuery<(BoundKeyRow & { ancestors_live: number }) | null>(
 		statement(
-			"SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,scope_json,expires_at,revoked_at FROM api_keys WHERE id = ?",
-			[keyId],
+			`WITH RECURSIVE ancestry(id,parent_key_id,user_id,expires_at,revoked_at,depth) AS (
+				SELECT id,parent_key_id,user_id,expires_at,revoked_at,0 FROM api_keys WHERE id=?
+				UNION ALL SELECT p.id,p.parent_key_id,p.user_id,p.expires_at,p.revoked_at,a.depth+1 FROM ancestry a JOIN api_keys p ON p.id=a.parent_key_id WHERE a.depth<64
+			) SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,scope_json,expires_at,revoked_at,
+			NOT EXISTS(SELECT 1 FROM ancestry a WHERE a.depth>=64 OR (a.depth>0 AND (a.revoked_at IS NOT NULL OR a.expires_at<=? OR a.user_id IS NOT api_keys.user_id)) OR (a.parent_key_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM api_keys p WHERE p.id=a.parent_key_id))) AS ancestors_live
+			FROM api_keys WHERE id=?`,
+			[keyId, new Date().toISOString(), keyId],
 			"get",
 		),
 	);
+	if (key && !key.ancestors_live) throw new IdentityError(401, "invalid_credential");
+	return key;
 }
 export async function renewConnectorKey(key: BoundKeyRow, org: OrganizationRow): Promise<void> {
 	if (
@@ -812,6 +846,13 @@ export async function createOrganizationKey(
 	if (!p.userId) throw new IdentityError(403, "org_policy");
 	if (input.permissions.some((permission) => !p.permissions.has(permission)))
 		throw new IdentityError(403, "permission");
+	const parent = p.credential.kind === "api_key" ? await readBoundKey(p.credential.id) : null;
+	if (
+		p.credential.kind === "api_key" &&
+		(!parent || parent.revoked_at || (parent.expires_at && parent.expires_at <= new Date().toISOString()))
+	)
+		throw new IdentityError(401, "invalid_credential");
+	const expiresAt = parent?.expires_at && parent.expires_at < input.expiresAt ? parent.expires_at : input.expiresAt;
 	if (input.deviceId) await activeUser(p.userId, input.deviceId);
 	const keyId = id("key"),
 		prefix = randomBytes(6).toString("hex"),
@@ -820,29 +861,39 @@ export async function createOrganizationKey(
 	const hash = await new Promise<Buffer>((resolve, reject) =>
 		scrypt(key, salt, 32, (error, result) => (error ? reject(error) : resolve(result))),
 	);
-	await organizationWrite([
-		statement(
-			"INSERT INTO api_keys (id,prefix,name,key_hash,role,scope_json,permissions_json,harness,agent_id,allowed_projects_json,created_at,expires_at,user_id,device_id,session_id,kind,legacy) VALUES (?,?,?,?,'member',?,?,?,?,?,?,?,?,?,?,?,0)",
-			[
-				keyId,
-				prefix,
-				input.name,
-				`scrypt:${salt}:${hash.toString("hex")}`,
-				JSON.stringify({ user: p.userId, agent: input.agentId ?? undefined }),
-				JSON.stringify(input.permissions),
-				input.harness,
-				input.agentId,
-				input.allowedProjects ? JSON.stringify(input.allowedProjects) : null,
-				new Date().toISOString(),
-				input.expiresAt,
-				p.userId,
-				input.deviceId,
-				p.sessionId,
-				input.kind,
-			],
-		),
-		auditStatement(p, "key.created", "key", keyId),
-	]);
+	await organizationWrite(
+		[
+			{
+				...statement(
+					"INSERT INTO api_keys (id,prefix,name,key_hash,role,scope_json,permissions_json,harness,agent_id,allowed_projects_json,created_at,expires_at,user_id,device_id,session_id,kind,legacy,parent_key_id) SELECT ?,?,?,?,'member',?,?,?,?,?,?,?,?,?,?,?,0,? WHERE ? IS NULL OR EXISTS(SELECT 1 FROM api_keys WHERE id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?))",
+					[
+						keyId,
+						prefix,
+						input.name,
+						`scrypt:${salt}:${hash.toString("hex")}`,
+						JSON.stringify({ user: p.userId, agent: input.agentId ?? undefined }),
+						JSON.stringify(input.permissions),
+						input.harness,
+						input.agentId,
+						input.allowedProjects ? JSON.stringify(input.allowedProjects) : null,
+						new Date().toISOString(),
+						expiresAt,
+						p.userId,
+						input.deviceId,
+						p.sessionId,
+						input.kind,
+						parent?.id ?? null,
+						parent?.id ?? null,
+						parent?.id ?? null,
+						new Date().toISOString(),
+					],
+				),
+				requireChanges: true,
+			},
+			auditStatement(p, "key.created", "key", keyId),
+		],
+		401,
+	);
 	return {
 		key: {
 			id: keyId,
@@ -850,7 +901,7 @@ export async function createOrganizationKey(
 			harness: input.harness,
 			agentId: input.agentId,
 			deviceId: input.deviceId,
-			expiresAt: input.expiresAt,
+			expiresAt,
 		},
 		secret: key,
 	};

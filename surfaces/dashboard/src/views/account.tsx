@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { getDesktopBridge } from "@/lib/desktop";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { Panel } from "@/components/shell/panel";
@@ -388,7 +389,9 @@ function PersonalKeys() {
 	};
 	return (
 		<div className="flex flex-col gap-6">
-			{secret ? (
+			{getDesktopBridge() ? (
+				<p>Create keys from the browser dashboard or the CLI</p>
+			) : secret ? (
 				<div className="flex flex-col gap-3 rounded-lg border p-4">
 					<h2 className="m-0 text-body font-medium">Copy your key now</h2>
 					<p className="m-0 text-small text-muted-foreground">

@@ -1,3 +1,4 @@
+import { DASHBOARD_HANDOFF_PARAM } from "../../../../libs/sdk/src/dashboard-handoff";
 import { waitForOrganizationJob } from "./organization.js";
 import type { NodeTransport } from "../../../../libs/sdk/src/node.js";
 import { SignetError, SignetUnauthorizedError } from "../../../../libs/sdk/src/index.js";
@@ -45,7 +46,7 @@ export async function organizationDashboard(
 	if (!/^[A-Za-z0-9_-]{1,256}$/.test(handoff.code) || Date.parse(handoff.expiresAt) <= Date.now())
 		throw new Error("Invalid dashboard handoff");
 	const destination = new URL(url);
-	destination.hash = `handoff=${handoff.code}`;
+	destination.hash = `${DASHBOARD_HANDOFF_PARAM}=${handoff.code}`;
 	destination.search = "";
 	await open(destination.href);
 }

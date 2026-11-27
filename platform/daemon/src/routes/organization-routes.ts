@@ -283,6 +283,7 @@ export function registerOrganizationRoutes(
 		"/api/auth/handoff/redeem",
 		active(async (c) => {
 			const result = await operations.redeemDashboardHandoff(await body(c));
+			if ("confirmationRequired" in result) return c.json(result);
 			sessionCookies(c, result, c.get("organization"));
 			return c.json(browserResult(result));
 		}),

@@ -407,6 +407,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 export function failure(c: Context, error: IdentityError): Response {
 	c.set("authFailureReason", error.reason);
 	if (error.status === 401) c.header("WWW-Authenticate", "Bearer");
+	if (error.status === 429 && !c.res.headers.has("Retry-After")) c.header("Retry-After", "60");
 	const required =
 		error.status === 403
 			? error.message !== error.reason

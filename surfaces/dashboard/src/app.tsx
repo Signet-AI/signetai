@@ -4,10 +4,16 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
 import { SessionExpiryToast, SignInDialog, SignInScreen } from "@/components/shell/sign-in";
 import { AccountView } from "@/views/account";
-import { ClaimPage, InvitationPage, DeviceApprovalPage, authEntryKind } from "@/components/shell/auth-entry";
+import {
+	ClaimPage,
+	InvitationPage,
+	DeviceApprovalPage,
+	DashboardHandoffPage,
+	authEntryKind,
+} from "@/components/shell/auth-entry";
 import { useAgentContext } from "@/lib/agent-context";
 import { Topbar } from "@/components/shell/topbar";
-import { useSession, useWhoami } from "@/lib/session";
+import { useSession, useWhoami, useDashboardHandoff } from "@/lib/session";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
@@ -21,11 +27,14 @@ import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
 	const session = useSession();
+	const handoff = useDashboardHandoff();
 	const whoami = useWhoami();
 	const entry = authEntryKind(location.pathname, "mode" in session ? session.mode : whoami ? "team" : "");
 	return (
 		<TooltipProvider delayDuration={200}>
-			{session.kind === "checking" ? null : entry === "claim" ? (
+			{handoff ? (
+				<DashboardHandoffPage handoff={handoff} />
+			) : session.kind === "checking" ? null : entry === "claim" ? (
 				<ClaimPage />
 			) : entry === "invite" ? (
 				<InvitationPage />

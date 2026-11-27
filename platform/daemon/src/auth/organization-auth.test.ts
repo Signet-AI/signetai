@@ -130,7 +130,11 @@ describe("organization credential boundary", () => {
 			body: JSON.stringify({ agentId, sessionKey: "blind-session", content: "Blind evidence" }),
 		});
 		expect(response.status).toBe(403);
-		expect(await response.json()).toEqual({ error: "classified destination", reason: "classified_destination" });
+		expect(await response.json()).toEqual({
+			error: "classified destination",
+			reason: "classified_destination",
+			required: "classified destination",
+		});
 		expect(entered).toBe(false);
 		expect(await organizationQuery(statement("SELECT count(*) n FROM destination_side_effects", [], "get"))).toEqual({
 			n: 0,
