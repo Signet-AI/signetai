@@ -102,7 +102,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 	return async (c, next) => {
 		c.set("organization", null);
 		resolveRequestNetwork(c, config);
-		if (c.req.method === "GET" && c.req.path === "/health/live") return next();
+		if (c.req.method === "GET" && ["/health", "/health/live"].includes(c.req.path)) return next();
 		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${rateLimitClientAddress(c) ?? "unknown"}`, c))
 			return failure(c, new IdentityError(429, "rate_limit"));
 		try {

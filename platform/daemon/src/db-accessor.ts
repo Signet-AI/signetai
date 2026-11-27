@@ -42,7 +42,6 @@ import {
 	missingCompartmentVectorSql,
 	runMigrations,
 } from "@signet/core";
-import type { DbOwnerClient } from "./db-owner-client";
 import { closeDbAccessorParticipants } from "./db-accessor-lifecycle";
 import {
 	type DbOperationOutcome,
@@ -68,11 +67,6 @@ import {
 export type { SyncDbCallSiteToken } from "./sync-db-attribution";
 
 export { DbSpacePreflightError };
-
-export async function probeDbOwner(owner: DbOwnerClient): Promise<void> {
-	const { runOwnerJob } = await import("./db-owner-maintenance");
-	await runOwnerJob(owner, { kind: "database_probe" }, "health.database-probe", "read", { deadlineMs: 500 });
-}
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);

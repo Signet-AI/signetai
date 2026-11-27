@@ -58,7 +58,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 		identitySecret = authSecret,
 		identity = createIdentityMiddleware(identityConfig, identitySecret);
 	app.use("*", async (c, next) => {
-		if (authConfig.mode !== "local" && !authSecret) {
+		if (authConfig.mode !== "local" && !authSecret && !["/health", "/health/live"].includes(c.req.path)) {
 			c.status(503);
 			return c.json({ error: "server initializing" });
 		}

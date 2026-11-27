@@ -423,6 +423,8 @@ scripted imports and `--confirm --wait` for destructive organization jobs.
 
 ## Local request profiling
 
+`/health` reads in-process state and never submits owner work or waits for authentication lookups. `dbOwnerLiveness` reports the last owner measurement time, its age, and whether it is stale. Measurements older than five seconds, or missing measurements, make health degraded. Completed owner traffic refreshes the measurement; an idle owner receives at most one background probe per second, with a 500-ms deadline. A stalled owner cannot make health wait for that probe. Readiness checks remain separate at `/health/ready`.
+
 For local performance diagnosis, start the daemon with `SIGNET_DB_PROFILE=1`. Responses include an `x-signet-owner-profile` header with bounded per-request owner operation counts, completed owner busy time, and queue time. The profile records operation names and table names, never SQL parameters or credentials. A count without a matching measured operation means the operation had not reported completion when the response finished; its duration is unknown, not zero. Identity-denial responses omit the header. Profiling is off by default; enable it only for a controlled local diagnostic run.
 
 ## Names in terminal results

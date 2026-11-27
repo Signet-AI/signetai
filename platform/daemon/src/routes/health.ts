@@ -1,9 +1,13 @@
 import { preflightWorkspace } from "@signet/core";
 import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
-import { type ReadPressure, type WritePressure, getDbAccessor, probeDbOwner } from "../db-accessor";
-import type { DbOwnerHealth } from "../db-owner-client";
-import { getDbOwnerMaintenanceState, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
+import { type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
+import { DB_OWNER_LIVENESS_STALE_MS, type DbOwnerHealth } from "../db-owner-client";
+import {
+	getDbOwnerMaintenance,
+	getDbOwnerMaintenanceState,
+	withRegisteredDbOwnerMaintenance,
+} from "../db-owner-maintenance";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import { QUEUE_MAX_DEAD_RATE, QUEUE_MAX_DEPTH, QUEUE_MAX_OLDEST_AGE_SEC, type QueueHealth } from "../diagnostics";
 import { getAllFeatureFlags } from "../feature-flags";
@@ -152,9 +156,10 @@ function checkInference(): { ok: boolean; detail: InferenceCheck; reason: string
 }
 
 export function mountHealthRoutes(app: Hono): void {
-	app.get("/health", async (c) => {
+	const workspaceSnapshot = preflightWorkspace();
+	app.get("/health", (c) => {
 		const us = getUpdateState();
-		const workspace = preflightWorkspace();
+		const workspace = workspaceSnapshot;
 		let dbOk = false;
 		let dbWriter: WritePressure | null = null;
 		let dbReader: ReadPressure | null = null;
@@ -162,23 +167,16 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbOwner: DbOwnerHealth | null = null;
 		try {
 			const accessor = getDbAccessor();
-			try {
-				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
-					try {
-						await probeDbOwner(ownerMaintenance.owner);
-						dbOk = true;
-					} catch {}
-					return ownerMaintenance.health();
-				});
-				if (ownerHealth !== undefined) {
-					dbOwner = ownerHealth;
-				}
-			} catch {}
+			dbOwner = getDbOwnerMaintenance()?.health() ?? null;
 			dbWriter = accessor.getWritePressure?.() ?? null;
 			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
 		} catch {}
 
+		const checkedAtMs = dbOwner?.lastMeasuredAtMs ?? null;
+		const ageMs = checkedAtMs === null ? null : Math.max(0, Date.now() - checkedAtMs);
+		const dbOwnerLiveness = { checkedAtMs, ageMs, stale: ageMs === null || ageMs > DB_OWNER_LIVENESS_STALE_MS };
+		dbOk = dbOwner?.state === "ready" && !dbOwnerLiveness.stale;
 		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
 		const eventLoop = getEventLoopLiveness();
 		const ownerState = getDbOwnerMaintenanceState();
@@ -213,6 +211,7 @@ export function mountHealthRoutes(app: Hono): void {
 			dbReader,
 			dbRuntime,
 			dbOwner,
+			dbOwnerLiveness,
 			databaseIntegrity,
 			eventLoop,
 			shuttingDown,

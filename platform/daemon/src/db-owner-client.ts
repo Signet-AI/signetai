@@ -42,6 +42,7 @@ export const MAX_DB_OWNER_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
 export const MAX_DB_OWNER_DEADLINE_MS = DB_OWNER_MAX_DEADLINE_MS;
 export const MAX_DB_OWNER_RESULT_BYTES = DB_OWNER_MAX_RESULT_BYTES;
 const dbOwnerWallClockNow = Date.now.bind(Date);
+export const DB_OWNER_LIVENESS_STALE_MS = 5_000;
 const DB_OWNER_CLOSE_WAIT_MS = 1_000;
 const DB_OWNER_CLOSE_FORCE_KILL_AFTER_MS = 250;
 
@@ -60,6 +61,7 @@ export interface DbOwnerLaneHealth {
 }
 
 export interface DbOwnerHealth {
+	readonly lastMeasuredAtMs?: number | null;
 	readonly state: DbOwnerHealthState;
 	readonly initialization: DbOwnerInitializationState;
 	readonly databaseReady: boolean;
@@ -266,6 +268,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let pid: number | null = null;
 	let activeJobId: string | null = null;
 	let lastError: string | null = null;
+	let lastMeasuredAtMs: number | null = null;
+	let livenessTimer: ReturnType<typeof setInterval> | null = null;
+	let livenessPending = false;
 	let initialization: DbOwnerInitializationState = "not_started";
 	let sequence = 0;
 	const input = new DbOwnerLineBuffer();
@@ -315,6 +320,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		return {
 			state,
 			initialization,
+			lastMeasuredAtMs,
 			databaseReady: initialization === "ready",
 			pid,
 			generation,
@@ -411,9 +417,47 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		}
 	}
 
+	function startLivenessMonitor(): void {
+		if (livenessTimer !== null) return;
+		livenessTimer = setInterval(() => {
+			if (
+				closed ||
+				state !== "ready" ||
+				initialization !== "ready" ||
+				livenessPending ||
+				pending.size > 0 ||
+				abandonedMetrics.size > 0
+			)
+				return;
+			if (lastMeasuredAtMs !== null && dbOwnerWallClockNow() - lastMeasuredAtMs < 1000) return;
+			try {
+				livenessPending = true;
+				const probe = submit(
+					{ kind: "database_probe" },
+					{ operation: "owner.liveness", lane: "read", deadlineMs: 500 },
+				);
+				void probe.result.then(
+					() => {
+						livenessPending = false;
+					},
+					(error: unknown) => {
+						livenessPending = false;
+						lastError = error instanceof Error ? error.message : "Owner liveness probe failed";
+					},
+				);
+			} catch (error) {
+				livenessPending = false;
+				lastError = error instanceof Error ? error.message : "Owner liveness admission failed";
+			}
+		}, 1000);
+		livenessTimer.unref();
+	}
+
 	function handleEvent(owner: ChildProcess, event: DbOwnerEvent): void {
 		if (child !== owner) return;
+		if (event.type !== "fatal") lastMeasuredAtMs = dbOwnerWallClockNow();
 		if (event.type === "ready") {
+			startLivenessMonitor();
 			state = "ready";
 			pid = event.pid;
 			void write(owner, { type: "set_write_blocked", blocked: writeBlocked }).catch((error: unknown) => {
@@ -840,6 +884,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	async function close(): Promise<void> {
 		if (closePromise !== null) return closePromise;
+		if (livenessTimer !== null) clearInterval(livenessTimer);
+		livenessTimer = null;
 		migrationControl.beginDrain();
 		const owner = child;
 		const ownerClose = activeChildClose;

@@ -43,6 +43,7 @@ function makeOwnerHealth(generation: number): DbOwnerHealth {
 	return {
 		...lane,
 		initialization: "ready",
+		lastMeasuredAtMs: Date.now(),
 		databaseReady: true,
 		lanes: { read: lane, write: lane, maintenance: lane },
 	};
@@ -106,7 +107,25 @@ afterEach(async () => {
 });
 
 describe("GET /health owner diagnostics", () => {
-	test("health probes take foreground admission ahead of queued maintenance", async () => {
+	for (const measuredAt of [null, 1]) {
+		test(`reports stale owner liveness without probing: ${measuredAt}`, async () => {
+			const owner = makeOwner(() => ({ ...makeOwnerHealth(1), lastMeasuredAtMs: measuredAt }));
+			registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+			const response = await makeApp().request("http://localhost/health");
+			const body: unknown = await response.json();
+			expect(body).toMatchObject({
+				status: "degraded",
+				db: false,
+				dbOwnerLiveness: {
+					checkedAtMs: measuredAt,
+					stale: true,
+					ageMs: measuredAt === null ? null : expect.any(Number),
+				},
+			});
+		});
+	}
+
+	test("health answers without waiting for active maintenance", async () => {
 		const owner = createDbOwnerClient({ dbPath: join(dir, "memory", "memories.db") });
 		await owner.start();
 		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
@@ -114,10 +133,14 @@ describe("GET /health owner diagnostics", () => {
 			await owner.submit({ kind: "database_probe" }, { operation: "health.probe-test", lane: "read", deadlineMs: 1000 })
 				.result,
 		).toEqual({ "1": 1 });
+		let activeFinished = false;
 		const active = owner.submit(
 			{ kind: "sleep", durationMs: 100 },
 			{ operation: "maintenance.active-health-test", lane: "maintenance", deadlineMs: 1000 },
 		);
+		void active.result.then(() => {
+			activeFinished = true;
+		});
 		while (owner.health().activeJobId !== active.job.id) await Bun.sleep(1);
 		let maintenanceFinished = false;
 		const queued = owner
@@ -132,6 +155,7 @@ describe("GET /health owner diagnostics", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({ db: true });
 		expect(maintenanceFinished).toBe(false);
+		expect(activeFinished).toBe(false);
 		await Promise.all([active.result, queued]);
 	});
 

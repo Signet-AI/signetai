@@ -88,6 +88,13 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("health bypasses organization authentication when the owner is unavailable", async () => {
+		closeDbAccessor();
+		app.get("/health", (c) => c.json({ status: "degraded" }));
+		const response = await call("/health", "GET", undefined, "");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ status: "degraded" });
+	});
 	test("local attribution resolves only workspace identities without organization sign-in", async () => {
 		const { localPrincipal } = await import("./principal");
 		const local = new Hono();
