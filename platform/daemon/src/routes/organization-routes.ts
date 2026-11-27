@@ -64,7 +64,10 @@ function endpoint(fn: (c: Context) => Promise<Response>): MiddlewareHandler {
 		try {
 			return await fn(c);
 		} catch (error) {
-			if (error instanceof IdentityError) return failure(c, error);
+			if (error instanceof IdentityError) {
+				if (error.reason === "busy" || error.reason === "capacity") c.header("Retry-After", "5");
+				return failure(c, error);
+			}
 			if (error instanceof z.ZodError || error instanceof SyntaxError)
 				return c.json({ error: "Invalid request body", reason: "invalid_request" }, 400);
 			throw error;

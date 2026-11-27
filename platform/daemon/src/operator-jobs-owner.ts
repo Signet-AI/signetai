@@ -263,7 +263,33 @@ export function executeOperatorJob(db: WriteDb, request: OperatorRequest): unkno
 		throw error;
 	}
 }
+function sweepOperatorJobs(db: WriteDb, runtimeId: string | undefined): void {
+	const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString();
+	const stale = db
+		.prepare(
+			"SELECT * FROM org_jobs WHERE kind='operator' AND status IN ('pending','running') AND (created_at<=? OR json_extract(params_json,'$.runtimeId')<>?) ORDER BY created_at LIMIT 100",
+		)
+		.all<OperatorJobRow>(new Date(Date.now() - 60_000).toISOString(), runtimeId ?? "");
+	for (const row of stale) {
+		const plan = planSchema.parse(JSON.parse(row.params_json));
+		finish(
+			db,
+			row,
+			plan.actor,
+			Date.now() >= Date.parse(row.created_at) + 60_000 ? "deadline_exceeded" : "daemon_restarted",
+		);
+	}
+	for (const [table, predicate, column, cap] of [
+		["org_jobs", "kind='operator' AND status NOT IN ('pending','running')", "finished_at", 1000],
+		["audit_events", "action LIKE 'operator.%'", "at", 10000],
+	] as const) {
+		db.prepare(
+			`DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${predicate} AND (${column}<? OR id IN (SELECT id FROM ${table} WHERE ${predicate} ORDER BY ${column} DESC,id DESC LIMIT 100 OFFSET ${cap})) ORDER BY ${column},id LIMIT 100)`,
+		).run(cutoff);
+	}
+}
 function operation(db: WriteDb, request: OperatorRequest): unknown {
+	if (request.op === "list" || request.op === "create") sweepOperatorJobs(db, request.runtimeId);
 	if (request.op === "settings") {
 		operation(db, { op: "authorize-global", actor: request.actor });
 		const data = settingsSchema.parse(request.input);
@@ -385,13 +411,10 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 			input.action === "embed.audit" ? "diagnostics" : "admin",
 		);
 		const stale = db
-			.prepare("SELECT * FROM org_jobs WHERE kind='operator' AND status IN ('pending','running') LIMIT 3")
-			.all<OperatorJobRow>();
-		for (const old of stale) {
-			const plan = planSchema.parse(JSON.parse(old.params_json));
-			if (plan.runtimeId !== request.runtimeId || Date.now() >= Date.parse(old.created_at) + 60_000)
-				finish(db, old, plan.actor, "interrupted");
-		}
+			.prepare(
+				"SELECT * FROM org_jobs WHERE kind='operator' AND status IN ('pending','running') AND json_extract(params_json,'$.runtimeId')=? AND created_at>? LIMIT 2",
+			)
+			.all<OperatorJobRow>(request.runtimeId, new Date(Date.now() - 60_000).toISOString());
 		if (
 			stale.filter(
 				(r) =>
@@ -399,6 +422,14 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 					Date.now() < Date.parse(r.created_at) + 60_000,
 			).length >= 2
 		)
+			deny("capacity");
+		const minute = new Date(Date.now() - 60_000).toISOString();
+		const starts = db
+			.prepare(
+				"SELECT created_by FROM org_jobs WHERE kind='operator' AND created_at>=? ORDER BY created_at DESC LIMIT 100",
+			)
+			.all<{ created_by: string }>(minute);
+		if (starts.length >= 100 || starts.filter((row) => row.created_by === request.actor.userId).length >= 20)
 			deny("capacity");
 		const id = `job_${randomUUID().replaceAll("-", "")}`,
 			now = new Date().toISOString();

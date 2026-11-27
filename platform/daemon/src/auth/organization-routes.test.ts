@@ -206,6 +206,59 @@ describe("organization HTTP flows", () => {
 			expect(JSON.stringify(await response.json())).not.toContain(jobId);
 		}
 	});
+	test("operator admission rejects bursts with retry metadata rather than internal errors", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const responses = await Promise.all(
+			Array.from({ length: 150 }, () => call("/api/org/operator/jobs", "POST", { action: "queue.requeue" })),
+		);
+		expect(responses.some((response) => response.status === 503 || response.status === 429)).toBe(true);
+		for (const response of responses) {
+			expect([202, 429, 503]).toContain(response.status);
+			if (response.status !== 202) expect(response.headers.get("Retry-After")).toBeTruthy();
+		}
+	});
+	test("finished operator jobs cannot evade the per-principal start budget", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const responses: Response[] = [];
+		for (let n = 0; n < 21; n++)
+			responses.push(await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" }));
+		expect(responses[20]?.status).toBe(429);
+		expect(responses[20]?.headers.get("Retry-After")).toBeTruthy();
+	});
+	test("job listing reaps orphaned work and sweeps terminal retention in bounded batches", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const { jobId } = await (await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" })).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO org_jobs(id,kind,status,created_by,params_json,created_at) SELECT 'orphan',kind,'running',created_by,json_set(params_json,'$.runtimeId','old'),'2020-01-01T00:00:00.000Z' FROM org_jobs WHERE id=?",
+				[jobId],
+			),
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1100) INSERT INTO org_jobs(id,kind,status,created_by,params_json,created_at,finished_at) SELECT 'old-'||x,kind,'complete',created_by,params_json,'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z' FROM n,org_jobs WHERE id=?",
+				[jobId],
+			),
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10100) INSERT INTO audit_events(id,at,action,outcome) SELECT 'audit-old-'||x,'2020-01-01T00:00:00.000Z','operator.logs_opened','ok' FROM n",
+				[],
+			),
+		]);
+		expect((await call("/api/org/jobs")).status).toBe(200);
+		expect(await organizationQuery(statement("SELECT status FROM org_jobs WHERE id='orphan'", [], "get"))).toEqual({
+			status: "failed",
+		});
+		const counts = await organizationQuery(
+			statement(
+				"SELECT (SELECT count(*) FROM org_jobs WHERE id LIKE 'old-%') AS jobs,(SELECT count(*) FROM audit_events WHERE id LIKE 'audit-old-%') AS audits",
+				[],
+				"get",
+			),
+		);
+		expect(counts).toEqual({ jobs: 1000, audits: 10000 });
+	});
 	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
