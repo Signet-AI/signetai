@@ -5,6 +5,7 @@ import type { DbOwnerJobMetrics, DbOwnerRequest } from "./db-owner-protocol";
 interface Operation {
 	readonly kind: string;
 	readonly lane: string;
+	readonly access: "read" | "write";
 	readonly operation: string;
 	readonly tables: readonly string[];
 	count: number;
@@ -55,7 +56,18 @@ export function observeRequestOwnerJob(
 			profile.dropped++;
 			return;
 		}
-		sample = { kind: request.kind, lane, operation: label, tables, count: 0, measured: 0, busyMs: 0, queueMs: 0 };
+		sample = {
+			kind: request.kind,
+			lane,
+			access:
+				lane === "read" || (statements.length > 0 && statements.every((s) => s.readonly === true)) ? "read" : "write",
+			operation: label,
+			tables,
+			count: 0,
+			measured: 0,
+			busyMs: 0,
+			queueMs: 0,
+		};
 		profile.operations.set(key, sample);
 	}
 	sample.count++;

@@ -40,6 +40,7 @@ test("owner profiling isolates concurrent requests and excludes parameters", asy
 			{
 				kind: "query",
 				lane: "read",
+				access: "read",
 				operation: index === 0 ? "slow" : "fast",
 				tables: ["users"],
 				count: 1,
