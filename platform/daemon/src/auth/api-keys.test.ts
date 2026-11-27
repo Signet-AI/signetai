@@ -8,6 +8,8 @@ import * as ownerRuntime from "../db-owner-runtime";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
 import { checkPermission } from "./policy";
+import { flushAuthObservations } from "./observations";
+import * as observations from "./observations";
 
 let tempDir = "";
 
@@ -137,10 +139,36 @@ describe("api keys", () => {
 		expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key expired" });
 	});
 
+	test("last-use observations coalesce and reject oversized owner turns", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "observed key" });
+		const client = await ownerRuntime.getDbOwner();
+		const at = Date.now() - 5000;
+		for (let i = 0; i < 80; i++)
+			await observations.recordAuthObservation("api_key", created.id, new Date(at + i).toISOString());
+		expect(await lastUsedAt(created.id)).toBeNull();
+		await flushAuthObservations();
+		expect(await lastUsedAt(created.id)).toBe(new Date(at + 79).toISOString());
+		await expect(
+			client.submit(
+				{
+					kind: "auth_observations",
+					observations: Array.from({ length: 129 }, () => ({
+						kind: "api_key" as const,
+						id: created.id,
+						at: new Date().toISOString(),
+					})),
+				},
+				{ lane: "maintenance", operation: "auth.observations.test", deadlineMs: 5000 },
+			).result,
+		).rejects.toThrow("Invalid authentication observation batch");
+		expect(await lastUsedAt(created.id)).toBe(new Date(at + 79).toISOString());
+	});
 	test("records last use at most once a minute per key", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
 
 		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+		expect(await lastUsedAt(created.id)).toBeNull();
+		await flushAuthObservations();
 		const first = await lastUsedAt(created.id);
 		expect(first).toEqual(expect.any(String));
 
@@ -151,6 +179,8 @@ describe("api keys", () => {
 		const stale = new Date(Date.now() - 61_000).toISOString();
 		await setKeyColumn(created.id, "last_used_at", stale);
 		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+		expect(await lastUsedAt(created.id)).toBe(stale);
+		await flushAuthObservations();
 		const refreshed = await lastUsedAt(created.id);
 		expect(refreshed).not.toBe(stale);
 		expect(Date.parse(refreshed ?? "")).toBeGreaterThan(Date.parse(stale));
@@ -171,6 +201,7 @@ describe("api keys", () => {
 		} finally {
 			staleRead.mockRestore();
 		}
+		await flushAuthObservations();
 		expect(await lastUsedAt(created.id)).toBe(recent);
 	});
 
@@ -188,11 +219,13 @@ describe("api keys", () => {
 
 	test("a key revoked while its last use is recorded does not authenticate", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
-		const batch = dbOwnerBatch;
-		const write = spyOn(ownerRuntime, "dbOwnerBatch").mockImplementationOnce((async (statements, options) => {
-			revokeApiKey(getDbAccessor(), created.prefix);
-			return batch(statements, options);
-		}) as typeof dbOwnerBatch);
+		const record = observations.recordAuthObservation;
+		const write = spyOn(observations, "recordAuthObservation").mockImplementationOnce(
+			async (kind: Parameters<typeof observations.recordAuthObservation>[0], id: string, at: string) => {
+				revokeApiKey(getDbAccessor(), created.prefix);
+				return record(kind, id, at);
+			},
+		);
 		try {
 			expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key revoked" });
 			expect(write).toHaveBeenCalledTimes(1);
@@ -203,12 +236,14 @@ describe("api keys", () => {
 
 	test("a key that expires while its last use is recorded does not authenticate", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
-		const batch = dbOwnerBatch;
-		const write = spyOn(ownerRuntime, "dbOwnerBatch").mockImplementationOnce((async (statements, options) => {
-			await setKeyColumn(created.id, "expires_at", new Date(Date.now() + 20).toISOString());
-			await Bun.sleep(40);
-			return batch(statements, options);
-		}) as typeof dbOwnerBatch);
+		const record = observations.recordAuthObservation;
+		const write = spyOn(observations, "recordAuthObservation").mockImplementationOnce(
+			async (kind: Parameters<typeof observations.recordAuthObservation>[0], id: string, at: string) => {
+				await setKeyColumn(created.id, "expires_at", new Date(Date.now() + 20).toISOString());
+				await Bun.sleep(40);
+				return record(kind, id, at);
+			},
+		);
 		try {
 			expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key expired" });
 		} finally {

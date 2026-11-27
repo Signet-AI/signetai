@@ -1245,6 +1245,41 @@ export function runDbOwnerWorker(): void {
 			installAuthorityEpoch();
 			return value;
 		}
+		if (job.request.kind === "auth_observations") {
+			if (job.lane === "read" || job.request.observations.length > 128)
+				throw new Error("Invalid authentication observation batch");
+			const until = performance.now() + 20;
+			let applied = 0;
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				for (const observation of job.request.observations) {
+					if (applied > 0 && performance.now() >= until) break;
+					if (!/^[a-zA-Z0-9_-]{1,128}$/.test(observation.id) || !Number.isFinite(Date.parse(observation.at)))
+						throw new Error("Invalid authentication observation");
+					const table =
+						observation.kind === "api_key"
+							? "api_keys"
+							: observation.kind === "session"
+								? "auth_sessions"
+								: observation.kind === "device"
+									? "devices"
+									: null;
+					if (table === null) throw new Error("Invalid authentication observation kind");
+					const column = table === "devices" ? "last_seen_at" : "last_used_at";
+					db.prepare(`UPDATE ${table} SET ${column}=? WHERE id=? AND (${column} IS NULL OR ${column}<=?)`).run(
+						observation.at,
+						observation.id,
+						new Date(Date.parse(observation.at) - 60000).toISOString(),
+					);
+					applied++;
+				}
+				commit(context);
+				return applied;
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		}
 		if (job.request.kind === "query") {
 			return job.request.statement.readonly
 				? executeReadOnlyStatement(job.request.statement)

@@ -1,8 +1,10 @@
 import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
+import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import type { AuthResult, Permission, TokenClaims, TokenRole, TokenScope } from "./types";
 import { PERMISSIONS, TOKEN_ROLES } from "./types";
+
+import { recordAuthObservation } from "./observations";
 
 const API_KEY_PREFIX = "sig_sk_";
 const DEFAULT_CONNECTOR_PERMISSIONS: readonly Permission[] = ["recall", "remember", "documents"];
@@ -316,15 +318,7 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 
 	const staleBefore = new Date(nowMs - LAST_USED_WRITE_INTERVAL_MS).toISOString();
 	if (!row.last_used_at || row.last_used_at <= staleBefore) {
-		await dbOwnerBatch(
-			[
-				ownerStatement(
-					"UPDATE api_keys SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
-					[now, row.id, staleBefore],
-				),
-			],
-			{ operation: "auth.record-api-key-use", lane: "write" },
-		);
+		await recordAuthObservation("api_key", row.id, now);
 	}
 	const current = await readApiKey(prefix);
 	if (!current || current.id !== row.id || current.key_hash !== row.key_hash) {

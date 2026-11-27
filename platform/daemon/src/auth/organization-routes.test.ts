@@ -121,6 +121,25 @@ describe("organization HTTP flows", () => {
 		).toBe(202);
 		expect((await call("/api/cache-role", "GET", undefined, user.token)).status).toBe(401);
 	});
+	test("API key last-seen observations do not submit per-request writes", async () => {
+		app.get("/api/observation-proof", (c) => c.json({ userId: c.get("principal").userId }));
+		await claim();
+		const issued = await call("/api/auth/api-keys", "POST", {
+			name: "observed",
+			permissions: ["recall"],
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+		});
+		expect(issued.status).toBe(201);
+		const key = await issued.json();
+		const { organizationWrite, statement } = await import("./organization-store");
+		await organizationWrite([statement("UPDATE api_keys SET last_used_at=NULL WHERE id=?", [key.key.id])]);
+		const first = await call("/api/observation-proof", "GET", undefined, key.secret);
+		expect(first.status).toBe(200);
+		const profile: unknown = JSON.parse(first.headers.get("x-signet-owner-profile") ?? "null");
+		expect(profile).not.toEqual(
+			expect.arrayContaining([expect.objectContaining({ operation: "auth.record-api-key-use" })]),
+		);
+	});
 	test("health bypasses organization authentication when the owner is unavailable", async () => {
 		closeDbAccessor();
 		app.get("/health", (c) => c.json({ status: "degraded" }));

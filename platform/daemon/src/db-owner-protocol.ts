@@ -364,7 +364,14 @@ export interface DbOwnerTranscriptBulkCommit {
 		readonly complete: boolean;
 	};
 }
+export interface AuthObservation {
+	readonly kind: "api_key" | "session" | "device";
+	readonly id: string;
+	readonly at: string;
+}
+
 export type DbOwnerRequest =
+	| { readonly kind: "auth_observations"; readonly observations: readonly AuthObservation[] }
 	| {
 			readonly kind: "filesystem_document_write";
 			readonly input: Parameters<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>[1];

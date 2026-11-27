@@ -383,6 +383,7 @@ async function executeInlineOwnerRequest(
 		case "dreaming_evidence_requeue":
 		case "embedding_migration_progress":
 		case "health_ready":
+		case "auth_observations":
 		case "database_probe":
 		case "diagnostics":
 		case "vector_backfill":

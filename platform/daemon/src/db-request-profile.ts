@@ -80,6 +80,10 @@ export function observeRequestOwnerJob(
 	});
 }
 
+export function withoutRequestOwnerProfile<T>(work: () => T): T {
+	return profiles.exit(work);
+}
+
 export function ownerRequestProfiling(enabled: boolean): MiddlewareHandler {
 	return async (c, next) => {
 		if (!enabled) return await next();

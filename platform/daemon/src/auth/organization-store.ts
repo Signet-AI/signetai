@@ -1,5 +1,6 @@
 import { attemptAsync } from "@signet/core";
 import { logger } from "../logger";
+import { recordAuthObservation } from "./observations";
 import { publishSetupToken, removeSetupToken } from "./setup-token-file";
 import { createHash, pbkdf2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
@@ -638,12 +639,14 @@ export async function verifySession(
 				? new Date(now + org.session_ttl_seconds * 1000).toISOString()
 				: session.access_expires_at;
 		const expires = expiresAtCeiling && expiresAtCeiling < slidingExpires ? expiresAtCeiling : slidingExpires;
-		await organizationWrite([
-			statement(
-				"UPDATE auth_sessions SET last_used_at = ?,access_expires_at = ? WHERE id = ? AND revoked_at IS NULL AND ((last_used_at IS NULL OR last_used_at <= ?) OR access_expires_at>?)",
-				[new Date(now).toISOString(), expires, session.id, new Date(now - 60_000).toISOString(), expires],
-			),
-		]);
+		if (expires !== session.access_expires_at) {
+			await organizationWrite([
+				statement(
+					"UPDATE auth_sessions SET last_used_at = ?,access_expires_at = ? WHERE id = ? AND revoked_at IS NULL AND ((last_used_at IS NULL OR last_used_at <= ?) OR access_expires_at>?)",
+					[new Date(now).toISOString(), expires, session.id, new Date(now - 60_000).toISOString(), expires],
+				),
+			]);
+		} else await recordAuthObservation("session", session.id, new Date(now).toISOString());
 		currentSession = { ...session, access_expires_at: expires, last_used_at: new Date(now).toISOString() };
 	}
 	return {
