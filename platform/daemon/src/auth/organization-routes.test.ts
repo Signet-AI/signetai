@@ -88,6 +88,43 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test.each(["principal", "global"])("L3 key exchange enforces the %s active-session cap", async (scope) => {
+		const root = await claim();
+		const other = scope === "global" ? await member("exchange-other") : { userId: root.user.id, token: admin };
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const makeKey = async (bearer: string) =>
+			(
+				await call("/api/auth/api-keys", "POST", { name: "exchange", permissions: ["recall"], expiresAt }, bearer)
+			).json();
+		const seeded = await makeKey(other.token);
+		const target = await makeKey(admin);
+		const { organizationWrite } = await import("./organization-store");
+		const ceiling = JSON.stringify({ permissions: ["recall"], agentId: null, projects: null, expiresAt });
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?) INSERT INTO auth_sessions(id,user_id,kind,token_hash,access_expires_at,source_key_id,source_key_ceiling_json) SELECT 'cap-'||x,?,'browser','hash',?,?,? FROM n",
+				[scope === "global" ? 1000 : 20, other.userId, expiresAt, seeded.key.id, ceiling],
+			),
+		]);
+		const denied = await call("/api/auth/session", "POST", {}, target.secret);
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		await organizationWrite([statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'cap-%'")]);
+		expect((await call("/api/auth/session", "POST", {}, target.secret)).status).toBe(200);
+	});
+	test("L3 handoff caps apply across a user's sessions with Retry-After", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		for (let sessionIndex = 0; sessionIndex < 4; sessionIndex++) {
+			const session = await issueSession(root.user.id, "cli");
+			for (let i = 0; i < 5; i++)
+				expect((await call("/api/auth/handoff", "POST", {}, session.accessToken)).status).toBe(200);
+		}
+		const denied = await call("/api/auth/handoff", "POST", {});
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
+	});
+
 	test("M2 admin session-management keys may sign out all sessions", async () => {
 		await claim();
 		const key = await (

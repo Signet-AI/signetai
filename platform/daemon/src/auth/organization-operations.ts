@@ -48,11 +48,18 @@ export async function createDashboardHandoff(p: Principal) {
 		if (entry.expiresAt <= now) dashboardHandoffs.delete(key);
 	}
 	const pending = [...dashboardHandoffs.values()].filter((entry) => entry.sessionId === p.sessionId).length;
-	if (dashboardHandoffs.size >= 1000 || pending >= 5) throw new IdentityError(429, "rate_limit");
+	const principalPending = [...dashboardHandoffs.values()].filter((entry) => entry.userId === p.userId).length;
+	if (dashboardHandoffs.size >= 1000 || pending >= 5 || principalPending >= 20)
+		throw new IdentityError(429, "rate_limit");
 	const code = secret();
 	const expiresAt = now + 60_000;
-	await organizationWrite([auditStatement(p, "session.handoff_created", "session", p.sessionId)]);
 	dashboardHandoffs.set(digest(code), { sessionId: p.sessionId, userId: user.userId, deviceId: p.deviceId, expiresAt });
+	try {
+		await organizationWrite([auditStatement(p, "session.handoff_created", "session", p.sessionId)]);
+	} catch (error) {
+		dashboardHandoffs.delete(digest(code));
+		throw error;
+	}
 	return { code, expiresAt: new Date(expiresAt).toISOString() };
 }
 export async function redeemDashboardHandoff(input: unknown) {

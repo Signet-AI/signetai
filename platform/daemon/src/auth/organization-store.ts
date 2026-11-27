@@ -382,6 +382,7 @@ export function sessionMaterial(
 	deviceId: string | null,
 	org: OrganizationRow,
 	binding?: SessionKeyBinding,
+	admission?: "key-exchange",
 ) {
 	if (binding?.sourceKeyId && kind !== "browser") throw new IdentityError(403, "org_policy");
 	const sessionId = id("ses");
@@ -408,25 +409,32 @@ export function sessionMaterial(
 		refreshExpiresAt,
 		deviceId,
 		statements: [
-			statement(
-				"INSERT INTO auth_sessions (id,user_id,kind,device_id,token_hash,access_expires_at,refresh_hash,refresh_expires_at,csrf_hash,created_at,last_used_at,source_key_id,source_key_ceiling_json,permission_ceiling_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-				[
-					sessionId,
-					userId,
-					kind,
-					deviceId,
-					digest(access),
-					accessExpiresAt,
-					refresh ? digest(refresh) : null,
-					refreshExpiresAt,
-					csrf ? digest(csrf) : null,
-					now,
-					now,
-					binding?.sourceKeyId ?? null,
-					binding?.sourceKeyId ? JSON.stringify(binding.ceiling) : null,
-					binding && !binding.sourceKeyId ? JSON.stringify(binding.ceiling) : null,
-				],
-			),
+			{
+				...statement(
+					"INSERT INTO auth_sessions (id,user_id,kind,device_id,token_hash,access_expires_at,refresh_hash,refresh_expires_at,csrf_hash,created_at,last_used_at,source_key_id,source_key_ceiling_json,permission_ceiling_json) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ?=0 OR ((SELECT count(*) FROM (SELECT 1 FROM auth_sessions WHERE user_id=? AND source_key_id IS NOT NULL AND revoked_at IS NULL AND access_expires_at>? LIMIT 20))<20 AND (SELECT count(*) FROM (SELECT 1 FROM auth_sessions WHERE source_key_id IS NOT NULL AND revoked_at IS NULL AND access_expires_at>? LIMIT 1000))<1000)",
+					[
+						sessionId,
+						userId,
+						kind,
+						deviceId,
+						digest(access),
+						accessExpiresAt,
+						refresh ? digest(refresh) : null,
+						refreshExpiresAt,
+						csrf ? digest(csrf) : null,
+						now,
+						now,
+						binding?.sourceKeyId ?? null,
+						binding?.sourceKeyId ? JSON.stringify(binding.ceiling) : null,
+						binding && !binding.sourceKeyId ? JSON.stringify(binding.ceiling) : null,
+						Number(admission === "key-exchange"),
+						userId,
+						now,
+						now,
+					],
+				),
+				requireChanges: true,
+			},
 		],
 	};
 }
@@ -567,11 +575,14 @@ export async function issueKeyBrowserSession(p: Principal) {
 			expiresAt: key.expires_at ?? new Date(Date.now() + org.session_ttl_seconds * 1000).toISOString(),
 		},
 	};
-	const material = sessionMaterial(user.id, "browser", key.device_id, org, binding);
-	await organizationWrite([
-		...material.statements,
-		auditStatement(p, "session.key_exchanged", "session", material.sessionId, { sourceKeyId: key.id }),
-	]);
+	const material = sessionMaterial(user.id, "browser", key.device_id, org, binding, "key-exchange");
+	await organizationWrite(
+		[
+			...material.statements,
+			auditStatement(p, "session.key_exchanged", "session", material.sessionId, { sourceKeyId: key.id }),
+		],
+		429,
+	);
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
 }
