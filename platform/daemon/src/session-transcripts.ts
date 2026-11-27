@@ -2013,11 +2013,12 @@ export interface TranscriptUploadCommit {
 	readonly expectedOffset: number;
 	readonly tailSha256: string;
 	readonly source: TranscriptCaptureSource;
+	readonly endsRecord: boolean;
 	readonly capturedAt: string;
 }
 
 export type TranscriptUploadCommitResult =
-	| { readonly status: "committed"; readonly state: TranscriptUploadState; readonly jobId: string }
+	| { readonly status: "committed"; readonly state: TranscriptUploadState; readonly jobId: string | null }
 	| { readonly status: "bypassed" }
 	| { readonly status: "project_mismatch" }
 	| { readonly status: "harness_mismatch" }
@@ -2133,22 +2134,24 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 		now,
 		now,
 	);
-	const jobId = upsertTranscriptCaptureJobInTx(db, {
-		input: {
-			agentId: input.agentId,
-			harness: input.harness,
-			sessionKey: input.sessionKey,
-			sessionId: input.sessionId,
-			project,
-			transcript: "",
-			capturedAt: input.capturedAt,
-			endedAt: null,
-		},
-		source: input.source,
-		sourceSha256: null,
-		storedAvailable: false,
-		createdAt: now,
-	});
+	const jobId = input.endsRecord
+		? upsertTranscriptCaptureJobInTx(db, {
+				input: {
+					agentId: input.agentId,
+					harness: input.harness,
+					sessionKey: input.sessionKey,
+					sessionId: input.sessionId,
+					project,
+					transcript: "",
+					capturedAt: input.capturedAt,
+					endedAt: null,
+				},
+				source: input.source,
+				sourceSha256: null,
+				storedAvailable: false,
+				createdAt: now,
+			})
+		: null;
 	return {
 		status: "committed",
 		state: {

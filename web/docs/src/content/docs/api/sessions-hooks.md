@@ -268,12 +268,18 @@ transcript's project.
   offset of the current generation.
 - `Upload-Checksum`: the SHA-256 hex digest of the body.
 
-The body holds whole JSONL records: at most 1 MiB, ending with a newline.
+The body holds the next bytes of the file, at most 1 MiB. A range may end
+inside a record, so a record larger than 1 MiB goes in several ranges. Send
+bytes only up to the file's last newline: a line the harness is still writing
+waits for the next upload.
 
 **Response**: `{ "committedOffset": 16, "generation": 0, "tailSha256": "…",
-"jobId": "tcj_…" }`. `tailSha256` hashes the last 64 KiB of committed bytes, so
-a connector can check that its own file still matches before it sends the next
-range. A bypassed session or a session being deleted returns
+"jobId": "tcj_…" }`. The daemon queues a capture only when the range ends with
+a newline; a range that ends inside a record returns `"jobId": null`, and the
+next range that ends its line queues the capture.
+
+`tailSha256` hashes the last 64 KiB of committed bytes, so a connector can
+check that its own file still matches before it sends the next range. A bypassed session or a session being deleted returns
 `{ "bypassed": true }` and commits nothing.
 
 A new generation keeps the bytes of the old one on disk. When the rewritten
@@ -283,8 +289,8 @@ purging its agent, removes every generation file.
 
 **Errors**
 
-- `400`: a missing parameter or header, an empty body, a body without a final
-  newline, a checksum mismatch, or no agent.
+- `400`: a missing parameter or header, an empty body, a checksum mismatch, or
+  no agent.
 - `403`: an agent scope, project scope, or session-binding violation, or a
   session whose upload or stored transcript belongs to another project. The
   first range that names a project fixes it for the session. A project-scoped

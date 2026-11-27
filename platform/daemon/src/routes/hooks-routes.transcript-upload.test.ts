@@ -135,7 +135,6 @@ describe("transcript upload route", () => {
 	it("rejects bad headers and bad bodies", async () => {
 		expect((await patch('{"a":1}\n', { checksum: "nope" })).status).toBe(400);
 		expect((await patch('{"a":1}\n', { checksum: sha("other") })).status).toBe(400);
-		expect((await patch('{"a":1}')).status).toBe(400);
 		expect((await patch('{"a":1}\n', { offset: -1 })).status).toBe(400);
 		expect((await patch('{"a":1}\n', { query: { harness: null } })).status).toBe(400);
 		const large = `${"x".repeat(MAX_TRANSCRIPT_UPLOAD_BYTES)}\n`;

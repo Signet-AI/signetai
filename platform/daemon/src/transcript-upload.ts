@@ -43,7 +43,7 @@ export interface TranscriptUploadRequest {
 
 export type TranscriptUploadResult =
 	| TranscriptUploadCommitResult
-	| { readonly status: "invalid"; readonly reason: "empty" | "newline" | "checksum" };
+	| { readonly status: "invalid"; readonly reason: "empty" | "checksum" };
 
 async function syncDirectory(root: string, path: string): Promise<void> {
 	const directory = await openContainedTranscriptFile(root, path, constants.O_RDONLY | constants.O_DIRECTORY);
@@ -56,7 +56,6 @@ async function syncDirectory(root: string, path: string): Promise<void> {
 
 function validate(input: TranscriptUploadRequest): TranscriptUploadResult | null {
 	if (input.body.byteLength === 0) return { status: "invalid", reason: "empty" };
-	if (input.body[input.body.byteLength - 1] !== 0x0a) return { status: "invalid", reason: "newline" };
 	if (sha256(input.body) !== input.checksum.toLowerCase()) return { status: "invalid", reason: "checksum" };
 	return null;
 }
@@ -157,6 +156,7 @@ async function writeAndCommitRange(
 				expectedOffset: input.offset,
 				tailSha256,
 				source: { path, sizeBytes: end, mtimeMs },
+				endsRecord: input.body[input.body.byteLength - 1] === 0x0a,
 				capturedAt: input.capturedAt,
 			},
 			options,

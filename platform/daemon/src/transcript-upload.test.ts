@@ -340,6 +340,7 @@ describe("transcript upload ranges", () => {
 				expectedOffset: 0,
 				tailSha256: sha('{"a":1}\n'),
 				source: { path: file(), sizeBytes: 8, mtimeMs: 1 },
+				endsRecord: true,
 				capturedAt: "2026-11-26T10:00:00.000Z",
 			},
 			{ operation: "test.transcript-upload.commit" },

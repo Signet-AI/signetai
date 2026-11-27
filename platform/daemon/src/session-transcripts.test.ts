@@ -794,6 +794,7 @@ describe("transcript upload state", () => {
 				sizeBytes: committedOffset,
 				mtimeMs: committedOffset,
 			},
+			endsRecord: true,
 			capturedAt: "2026-11-26T10:00:00.000Z",
 			...rest,
 		};
