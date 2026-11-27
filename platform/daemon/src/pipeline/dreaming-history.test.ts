@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { up as upgradeDreaming } from "../../../core/src/migrations/179-dreaming-evidence-leases";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "../db-owner-client";
+import { ownerQueryOne } from "../db-owner-maintenance";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import {
 	DREAMING_HISTORY_LINE_BYTES,
@@ -21,15 +22,12 @@ const SCOPE = "scope-a";
 
 describe("dreaming history", () => {
 	let dir = "";
-	let fixtureMs = 0;
 
 	beforeEach(() => {
-		const startedAt = performance.now();
 		dir = mkdtempSync(join(tmpdir(), "signet-dreaming-history-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		getDbAccessor().withWriteTx((db) => upgradeDreaming(db));
-		fixtureMs = performance.now() - startedAt;
 	});
 
 	afterEach(async () => {
@@ -271,20 +269,21 @@ describe("dreaming history", () => {
 	});
 
 	it("merges the oldest lines once the history outgrows its budget", async () => {
-		console.info("dreaming_history_budget.fixture_ms", fixtureMs);
-		const seedStartedAt = performance.now();
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
 		const leafBytes = 500;
 		const passes = Math.ceil(DREAMING_HISTORY_VIEW_BYTES / leafBytes) + 2;
 		for (let index = 0; index < passes; index++) insertPass(`p${index}`, index);
-		console.info("dreaming_history_budget.seed_ms", performance.now() - seedStartedAt);
 		const completer = recordingCompleter((prompt) =>
 			prompt.includes("<older>") ? "merged first two passes" : "l".repeat(leafBytes),
 		);
-		const compactStartedAt = performance.now();
+		const readerVersion = () =>
+			ownerQueryOne<{ version: number }>(
+				owner,
+				"test.history.reader-version",
+				"SELECT data_version AS version FROM pragma_data_version",
+			);
+		const before = await readerVersion();
 		while ((await compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)) > 0) {}
-		console.info("dreaming_history_budget.compact_ms", performance.now() - compactStartedAt);
-		console.info("dreaming_history_budget.completion_calls", completer.prompts.length);
-		const readStartedAt = performance.now();
 
 		const merges = storedNodes().filter((node) => node.level > 0);
 		expect(merges[0]).toMatchObject({ level: 1, idx: 0, text: "merged first two passes" });
@@ -321,7 +320,9 @@ describe("dreaming history", () => {
 				n: 2,
 			}),
 		).toMatchObject({ ok: false });
-		console.info("dreaming_history_budget.read_ms", performance.now() - readStartedAt);
+		const after = await readerVersion();
+		if (before === undefined || after === undefined) throw new Error("Missing reader generation");
+		expect(after.version).toBeGreaterThan(before.version);
 	});
 
 	it("keeps each scope's history separate, in both what a pass sees and what it can open", async () => {

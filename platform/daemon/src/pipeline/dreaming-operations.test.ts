@@ -1220,7 +1220,7 @@ describe("dreaming operations", () => {
 			],
 		});
 		const attentionId = (flagged.items[0] as { result?: { attentionId?: string } }).result?.attentionId ?? "";
-		const miscopied = `${attentionId.slice(0, -4)}${[...attentionId.slice(-4)].reverse().join("")}`;
+		const miscopied = `${attentionId.slice(0, -1)}${attentionId.endsWith("0") ? "1" : "0"}`;
 		expect(miscopied).not.toBe(attentionId);
 		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
