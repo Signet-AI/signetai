@@ -1225,7 +1225,11 @@ export function runDbOwnerWorker(): void {
 		}
 		if (job.request.kind === "classification") {
 			const { executeClassification } = await import("./classification-owner");
-			const result = executeClassification(db, job.request.request);
+			const request = job.request.request;
+			const result =
+				request.op === "execute" || request.op === "rebuild"
+					? withWritePrincipal(undefined, () => executeClassification(db, request))
+					: executeClassification(db, request);
 			context.committed = true;
 			return result;
 		}

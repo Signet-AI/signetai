@@ -1,3 +1,4 @@
+import { withWritePrincipal } from "@signet/core";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +11,10 @@ test("real DB owner commits classifications and exposes terminal durable job sta
 	const directory = mkdtempSync(join(tmpdir(), "signet-classification-owner-"));
 	const dbPath = join(directory, "signet.db");
 	const db = currentClassificationFixture();
+	db.exec("UPDATE organization SET claimed_at='now',agent_model='single' WHERE id=1");
+	db.prepare(
+		"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,agent_id,chunk_text,created_at) VALUES('v','v',?,3,'memory','m','default','secret','now')",
+	).run(new Uint8Array(12));
 	db.prepare("VACUUM INTO ?").run(dbPath);
 	db.close();
 	const owner = createDbOwnerClient({ dbPath });
@@ -23,16 +28,20 @@ test("real DB owner commits classifications and exposes terminal durable job sta
 		credential: "session:test",
 	};
 	const request = (request: ClassificationRequest) =>
-		owner.submit<unknown>(
-			{ kind: "classification", request },
-			{
-				operation: `classification.${request.op}`,
-				lane: "maintenance",
-				workloadClass: "maintenance",
-				deadlineMs: 120000,
-				estimatedWorkUnits: 10000,
-			},
-		).result;
+		withWritePrincipal(
+			{ userId: "carol" },
+			() =>
+				owner.submit<unknown>(
+					{ kind: "classification", request },
+					{
+						operation: `classification.${request.op}`,
+						lane: "maintenance",
+						workloadClass: "maintenance",
+						deadlineMs: 120000,
+						estimatedWorkUnits: 10000,
+					},
+				).result,
+		);
 	const field = (value: unknown, name: string) => {
 		if (typeof value === "object" && value !== null) {
 			const result: unknown = Reflect.get(value, name);
