@@ -282,8 +282,7 @@ export function withContentPassWrites<T>(db: WriteDb, passId: string | undefined
 }
 
 export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
-	const agentId = input.agentId;
-	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
+	const agentId = requireMemoryHeadAgentId(input.agentId);
 	const partition = dreamingPassPartitionInDb(db, input.passId, agentId);
 	const pass = prepareTypedStatement<{ mode: string; head_base_revision: number | null }>(
 		db,
@@ -355,6 +354,12 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	return result;
 }
 
+export function requireMemoryHeadAgentId(agentId: unknown): string {
+	if (typeof agentId !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(agentId))
+		throw new Error("Invalid memory head agentId");
+	return agentId;
+}
+
 export function executeMemoryHead(
 	db: WriteDb,
 	root: string,
@@ -363,8 +368,7 @@ export function executeMemoryHead(
 ): Record<string, unknown> {
 	if (!["read", "inspect", "commit", "publish"].includes(request.action))
 		throw new Error("Unsupported memory head action");
-	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
-	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
+	const agentId = requireMemoryHeadAgentId(request.action === "commit" ? request.input.agentId : request.agentId);
 	const passId =
 		request.action === "commit" ? request.input.passId : request.action === "read" ? request.passId : undefined;
 	const partition =

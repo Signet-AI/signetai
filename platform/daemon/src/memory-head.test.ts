@@ -935,6 +935,14 @@ describe("memory head owner runtime", () => {
 		expect(await read("bob")).toEqual(visible);
 	});
 
+	it("rejects absent agent identities before looking up cached heads", async () => {
+		expect(await commit("cache-agent-admission")).toMatchObject({ ok: true });
+		const request = { action: "inspect" as const, agentId: "default", content: "", readScope: outside };
+		expect(await head(request)).toMatchObject({ content: "- Meeting is Tuesday." });
+		Reflect.deleteProperty(request, "agentId");
+		await expect(head(request)).rejects.toThrow("Invalid memory head agentId");
+	});
+
 	it("withholds authored head evidence from readers outside the agent label", async () => {
 		const authored = "# My memory\nHRSECRET authored note.";
 		await label(9);

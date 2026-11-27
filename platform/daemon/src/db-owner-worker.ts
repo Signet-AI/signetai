@@ -1472,9 +1472,10 @@ export function runDbOwnerWorker(): void {
 			return result;
 		}
 		if (job.request.kind === "memory_head") {
-			const { executeMemoryHead } = await import("./memory-head-owner");
+			const { executeMemoryHead, requireMemoryHeadAgentId } = await import("./memory-head-owner");
 			const request = job.request.request;
 			if (request.action === "inspect") {
+				requireMemoryHeadAgentId(request.agentId);
 				if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
 				const scope = requireReadScope(request.readScope);
 				if (scope.inFlightUserId === "") throw new Error("In-flight reader identity required");
