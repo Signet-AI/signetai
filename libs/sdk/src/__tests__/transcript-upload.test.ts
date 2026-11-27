@@ -126,3 +126,15 @@ test("reports a daemon without the upload route", async () => {
 	expect(outcome).toEqual({ status: "unsupported" });
 	expect(uploads).toEqual([]);
 });
+
+test("stops the upload when the caller signal aborts", async () => {
+	const { client, uploads } = daemon();
+	const upload = client.uploadTranscript({
+		transcriptPath: transcriptFile('{"a":1}\n'),
+		harness: "openclaw",
+		sessionKey: "sdk-session",
+		signal: AbortSignal.abort(),
+	});
+	await expect(upload).rejects.toThrow();
+	expect(uploads).toEqual([]);
+});

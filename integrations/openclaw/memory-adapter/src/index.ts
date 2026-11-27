@@ -507,6 +507,29 @@ export async function onCompactionComplete(
 	return result?.success === true;
 }
 
+function declaredAgentId(agentId: string | undefined, sessionKey: string): string | undefined {
+	if (agentId) return agentId;
+	if (sessionKey.startsWith("agent:")) return undefined;
+	return process.env.SIGNET_AGENT_ID?.trim() || "default";
+}
+
+function writeClient(daemonUrl: string): SignetClient {
+	return new SignetClient({ daemonUrl, retries: 0, timeoutMs: WRITE_TIMEOUT });
+}
+
+async function uploadSessionFile(
+	daemonUrl: string,
+	target: { harness: string; sessionKey: string; agentId?: string; cwd?: string },
+	sessionFile: string,
+): Promise<string | undefined> {
+	const outcome = await writeClient(daemonUrl).uploadTranscript({
+		...target,
+		transcriptPath: sessionFile,
+		signal: AbortSignal.timeout(WRITE_TIMEOUT),
+	});
+	return outcome.status === "unsupported" ? sessionFile : undefined;
+}
+
 export async function onSessionEnd(
 	harness: string,
 	options: {
@@ -520,22 +543,31 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	new SignetClient({
-		daemonUrl: options.daemonUrl || DEFAULT_DAEMON_URL,
-		retries: 0,
-		timeoutMs: WRITE_TIMEOUT,
-	}).sessionEndFireAndForget({
-		harness,
-		agentId: options.agentId,
-		transcriptPath: options.transcriptPath,
-		...(options.transcript && { transcript: options.transcript }),
-		sessionKey: options.sessionKey,
-		sessionId: options.sessionId,
-		cwd: options.cwd,
-		reason: options.reason,
-		runtimePath: RUNTIME_PATH,
-	});
-
+	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
+	const sessionKey = options.sessionKey ?? options.sessionId;
+	const agentId = sessionKey ? declaredAgentId(options.agentId, sessionKey) : options.agentId;
+	let transcriptPath: string | undefined;
+	try {
+		if (options.transcriptPath && sessionKey) {
+			transcriptPath = await uploadSessionFile(
+				daemonUrl,
+				{ harness, sessionKey, agentId, cwd: options.cwd },
+				options.transcriptPath,
+			);
+		}
+	} finally {
+		writeClient(daemonUrl).sessionEndFireAndForget({
+			harness,
+			agentId,
+			...(transcriptPath && { transcriptPath }),
+			...(options.transcript && { transcript: options.transcript }),
+			sessionKey: options.sessionKey,
+			sessionId: options.sessionId,
+			cwd: options.cwd,
+			reason: options.reason,
+			runtimePath: RUNTIME_PATH,
+		});
+	}
 	return null;
 }
 
@@ -1732,19 +1764,30 @@ const signetPlugin = {
 					!sessionFile && Array.isArray(messages) && messages.length > 0
 						? messages.map((m) => JSON.stringify(m)).join("\n")
 						: undefined;
-				void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
-					method: "POST",
-					body: {
-						harness: "openclaw",
-						sessionKey,
-						agentId,
-						project,
-						transcriptPath: sessionFile,
-						...(inlineTranscript && { transcript: inlineTranscript }),
-						runtimePath: RUNTIME_PATH,
-					},
-					timeout: WRITE_TIMEOUT,
-				})
+				const checkpointAgentId = declaredAgentId(agentId, sessionKey);
+				const uploading = sessionFile
+					? uploadSessionFile(
+							daemonUrl,
+							{ harness: "openclaw", sessionKey, agentId: checkpointAgentId, cwd: project },
+							sessionFile,
+						)
+					: Promise.resolve(undefined);
+				void uploading
+					.then((transcriptPath) =>
+						daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
+							method: "POST",
+							body: {
+								harness: "openclaw",
+								sessionKey,
+								agentId: checkpointAgentId,
+								project,
+								...(transcriptPath && { transcriptPath }),
+								...(inlineTranscript && { transcript: inlineTranscript }),
+								runtimePath: RUNTIME_PATH,
+							},
+							timeout: WRITE_TIMEOUT,
+						}),
+					)
 					.then((resp) => {
 						if (isRecord(resp) && resp.skipped === true) {
 							const cur = checkpointTurns.get(scopedKey);
@@ -2095,7 +2138,11 @@ const signetPlugin = {
 					sessionKey: resolved.sessionKey,
 					transcriptPath: resolved.sessionFile,
 					...(endTranscript && { transcript: endTranscript }),
-				});
+				}).catch((error) =>
+					api.logger.warn(
+						`signet-memory: transcript upload failed (${error instanceof Error ? error.message : String(error)}); the daemon keeps the lines it already has`,
+					),
+				);
 				if (scopedKey) {
 					claimedSessions.delete(scopedKey);
 					sessionStartContexts.delete(scopedKey);

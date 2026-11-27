@@ -1,4 +1,9 @@
-import { spawnHidden as spawn } from "@signet/core";
+import { spawnHidden as spawn, withTranscriptFileSource } from "@signet/core";
+import {
+	type TranscriptUploadOutcome,
+	type TranscriptUploadTarget,
+	uploadTranscript,
+} from "@signet/core/transcript-upload";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +20,7 @@ import {
 	isSignetCliLauncher,
 	readMcpLauncher,
 	renderCommand,
+	resolveSignetAgentId,
 	mcpFromCli,
 	cliFromMcp,
 	type ResolvedCommand,
@@ -147,8 +153,11 @@ export interface SessionEndResult {
 export interface SessionEndFireAndForgetPayload {
 	harness: "claude-code";
 	sessionId?: string;
+	agentId?: string;
 	transcriptPath?: string;
 }
+
+const SESSION_END_UPLOAD_TIMEOUT_MS = 8_000;
 
 type DetachedSpawn = typeof spawn;
 
@@ -313,13 +322,36 @@ export class ClaudeCodeConnector extends BaseConnector {
 	protected dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
 		return dispatchSessionEndFireAndForget(this.daemonUrl, payload);
 	}
-	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
-		const dispatched = this.dispatchSessionEnd({
-			harness: "claude-code",
-			sessionId: ctx.sessionId,
-			transcriptPath: ctx.transcriptPath,
-		});
+	protected uploadTranscript(target: TranscriptUploadTarget, path: string): Promise<TranscriptUploadOutcome> {
+		return withTranscriptFileSource(path, (source) =>
+			uploadTranscript(
+				{ baseUrl: this.daemonUrl, fetch, signal: AbortSignal.timeout(SESSION_END_UPLOAD_TIMEOUT_MS) },
+				target,
+				source,
+			),
+		);
+	}
 
+	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
+		const agentId = resolveSignetAgentId();
+		let transcriptPath: string | undefined;
+		let dispatched: boolean;
+		try {
+			if (ctx.transcriptPath && ctx.sessionId) {
+				const outcome = await this.uploadTranscript(
+					{ harness: "claude-code", sessionKey: ctx.sessionId, agentId, cwd: ctx.projectPath },
+					ctx.transcriptPath,
+				);
+				if (outcome.status === "unsupported") transcriptPath = ctx.transcriptPath;
+			}
+		} finally {
+			dispatched = this.dispatchSessionEnd({
+				harness: "claude-code",
+				sessionId: ctx.sessionId,
+				agentId,
+				...(transcriptPath ? { transcriptPath } : {}),
+			});
+		}
 		return { success: dispatched, memoriesExtracted: 0 };
 	}
 	private configureHooks(

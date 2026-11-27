@@ -12,6 +12,8 @@ mock.module("node:os", () => ({
 
 const { ClaudeCodeConnector, dispatchSessionEndFireAndForget } = await import("./src/index.js");
 type SessionEndFireAndForgetPayload = import("./src/index.js").SessionEndFireAndForgetPayload;
+type TranscriptUploadOutcome = import("@signet/core/transcript-upload").TranscriptUploadOutcome;
+type TranscriptUploadTarget = import("@signet/core/transcript-upload").TranscriptUploadTarget;
 
 const origHome = process.env.HOME;
 let tmpRoot = "";
@@ -120,12 +122,17 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 		class TestConnector extends ClaudeCodeConnector {
 			lastPayload: SessionEndFireAndForgetPayload | undefined;
 
+			protected override async uploadTranscript(): Promise<TranscriptUploadOutcome> {
+				return { status: "unsupported" };
+			}
+
 			protected override dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
 				this.lastPayload = payload;
 				return false;
 			}
 		}
 
+		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		const connector = new TestConnector();
 		const result = await connector.onSessionEnd({
 			sessionId: "session-failed-dispatch",
@@ -136,6 +143,7 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 		expect(connector.lastPayload).toEqual({
 			harness: "claude-code",
 			sessionId: "session-failed-dispatch",
+			agentId: "default",
 			transcriptPath: "/tmp/failed-dispatch.jsonl",
 		});
 	});
@@ -580,4 +588,108 @@ describe("ClaudeCodeConnector user hooks", () => {
 			});
 		}
 	}
+});
+
+describe("ClaudeCodeConnector.onSessionEnd transcript upload", () => {
+	class UploadConnector extends ClaudeCodeConnector {
+		readonly events: string[] = [];
+		readonly uploads: Array<{ target: TranscriptUploadTarget; path: string }> = [];
+		payload: SessionEndFireAndForgetPayload | undefined;
+
+		constructor(private readonly answer: () => Promise<TranscriptUploadOutcome>) {
+			super();
+		}
+
+		protected override async uploadTranscript(target: TranscriptUploadTarget, path: string) {
+			this.events.push("upload");
+			this.uploads.push({ target, path });
+			return await this.answer();
+		}
+
+		protected override dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
+			this.events.push("dispatch");
+			this.payload = payload;
+			return true;
+		}
+	}
+
+	const ctx = { sessionId: "sess-1", projectPath: "/repo", transcriptPath: "/tmp/sess-1.jsonl" };
+
+	beforeEach(() => {
+		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+	});
+
+	it("uploads the transcript before it ends the session and sends no path", async () => {
+		const connector = new UploadConnector(async () => ({ status: "uploaded", committedOffset: 2, generation: 0 }));
+		expect(await connector.onSessionEnd(ctx)).toEqual({ success: true, memoriesExtracted: 0 });
+		expect(connector.events).toEqual(["upload", "dispatch"]);
+		expect(connector.uploads).toEqual([
+			{
+				target: { harness: "claude-code", sessionKey: "sess-1", agentId: "default", cwd: "/repo" },
+				path: "/tmp/sess-1.jsonl",
+			},
+		]);
+		expect(connector.payload).toEqual({ harness: "claude-code", sessionId: "sess-1", agentId: "default" });
+	});
+
+	it("declares SIGNET_AGENT_ID as the agent", async () => {
+		process.env.SIGNET_AGENT_ID = "env-agent";
+		try {
+			const connector = new UploadConnector(async () => ({ status: "unchanged" }));
+			await connector.onSessionEnd(ctx);
+			expect(connector.uploads[0]?.target.agentId).toBe("env-agent");
+			expect(connector.payload?.agentId).toBe("env-agent");
+		} finally {
+			Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+		}
+	});
+
+	it("sends the path to a daemon without the upload route", async () => {
+		const connector = new UploadConnector(async () => ({ status: "unsupported" }));
+		await connector.onSessionEnd(ctx);
+		expect(connector.payload?.transcriptPath).toBe("/tmp/sess-1.jsonl");
+	});
+
+	it("still ends the session and reports the error when the upload fails", async () => {
+		const connector = new UploadConnector(async () => {
+			throw new Error("daemon busy");
+		});
+		await expect(connector.onSessionEnd(ctx)).rejects.toThrow("daemon busy");
+		expect(connector.events).toEqual(["upload", "dispatch"]);
+		expect(connector.payload).toEqual({ harness: "claude-code", sessionId: "sess-1", agentId: "default" });
+	});
+
+	it("uploads the transcript file to the daemon upload route", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-cc-upload-"));
+		const file = join(dir, "sess-1.jsonl");
+		writeFileSync(file, '{"a":1}\n');
+		const seen: Array<{ method: string; url: string; signal: unknown }> = [];
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const method = init?.method ?? "GET";
+			seen.push({ method, url: String(input), signal: init?.signal });
+			if (method === "PATCH") return Response.json({ committedOffset: 8, generation: 0, tailSha256: "x", jobId: "j" });
+			return Response.json({ committedOffset: 0, generation: null, tailSha256: null });
+		}) as typeof fetch;
+		class Probe extends ClaudeCodeConnector {
+			readonly payloads: SessionEndFireAndForgetPayload[] = [];
+			protected override dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
+				this.payloads.push(payload);
+				return true;
+			}
+		}
+		try {
+			const connector = new Probe({ daemonUrl: "http://127.0.0.1:3999" });
+			await connector.onSessionEnd({ sessionId: "sess-1", transcriptPath: file });
+			expect(seen.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+			expect(seen[0]?.url).toBe(
+				"http://127.0.0.1:3999/api/hooks/transcript-upload?harness=claude-code&sessionKey=sess-1&agentId=default",
+			);
+			expect(seen.every((request) => request.signal instanceof AbortSignal)).toBe(true);
+			expect(connector.payloads).toEqual([{ harness: "claude-code", sessionId: "sess-1", agentId: "default" }]);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

@@ -7,6 +7,14 @@ declare module "@signet/sdk" {
 
 	export class SignetClient {
 		constructor(config?: SignetClientConfig);
+		uploadTranscript(opts: {
+			readonly transcriptPath: string;
+			readonly harness: string;
+			readonly sessionKey: string;
+			readonly agentId?: string;
+			readonly cwd?: string;
+			readonly signal?: AbortSignal;
+		}): Promise<{ readonly status: "uploaded" | "unchanged" | "bypassed" | "unsupported" }>;
 		sessionEndFireAndForget(opts: {
 			readonly sessionKey?: string;
 			readonly summary?: string;

@@ -41,6 +41,8 @@ let lastMemoryRecallBody: unknown = null;
 let lastSessionSearchBody: unknown = null;
 let lastCheckpointBody: unknown = null;
 let lastHeartbeatBody: unknown = null;
+let transcriptUploadRoute = false;
+let uploadRequests: Array<{ method: string; query: Record<string, string> }> = [];
 let warnMessages: string[] = [];
 let testDir = "";
 
@@ -143,6 +145,8 @@ beforeEach(() => {
 	lastSessionSearchBody = null;
 	lastCheckpointBody = null;
 	lastHeartbeatBody = null;
+	transcriptUploadRoute = false;
+	uploadRequests = [];
 	checkpointResponse = null;
 	notificationInject = null;
 	warnMessages = [];
@@ -239,6 +243,15 @@ beforeEach(() => {
 							},
 						},
 					});
+				case "/api/hooks/transcript-upload": {
+					if (!transcriptUploadRoute) return jsonResponse({ error: "not found" }, 404);
+					const method = init?.method ?? "GET";
+					uploadRequests.push({ method, query: Object.fromEntries(new URL(url).searchParams) });
+					if (method !== "PATCH") return jsonResponse({ committedOffset: 0, generation: null, tailSha256: null });
+					const offset = Number(new Headers(init?.headers).get("Upload-Offset"));
+					const size = (await new Response(init?.body).arrayBuffer()).byteLength;
+					return jsonResponse({ committedOffset: offset + size, generation: 0, tailSha256: "tail", jobId: "job-1" });
+				}
 				case "/api/hooks/session-checkpoint-extract":
 					lastCheckpointBody = init?.body ? JSON.parse(String(init.body)) : null;
 					if (checkpointResponse) {
@@ -1029,6 +1042,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(agentEnd).toBeDefined();
 
 		const sessionFile = join(testDir, "session-end.jsonl");
+		writeFileSync(sessionFile, '{"type":"user"}\n');
 		await agentEnd?.(
 			{
 				cwd: "/tmp/session-end-project",
@@ -1052,6 +1066,78 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "session-end-key",
 			transcriptPath: sessionFile,
 		});
+	});
+
+	it("uploads the session file on agent_end and sends no path", async () => {
+		transcriptUploadRoute = true;
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+		const sessionFile = join(testDir, "session-upload.jsonl");
+		writeFileSync(sessionFile, '{"type":"user"}\n');
+
+		await hooks.get("agent_end")?.(
+			{ cwd: "/tmp/upload-project", sessionId: "upload-id", sessionKey: "upload-key", sessionFile },
+			{ agentId: "agent-1" },
+		);
+
+		expect(uploadRequests.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+		expect(uploadRequests[0]?.query).toEqual({
+			harness: "openclaw",
+			sessionKey: "upload-key",
+			agentId: "agent-1",
+			cwd: "/tmp/upload-project",
+		});
+		expect(getHits("/api/hooks/session-end")).toBe(1);
+		expect(lastSessionEndBody).toMatchObject({ agentId: "agent-1", sessionKey: "upload-key" });
+		expect(lastSessionEndBody).not.toHaveProperty("transcriptPath");
+	});
+
+	it("declares the default agent on agent_end when nothing names one", async () => {
+		transcriptUploadRoute = true;
+		const savedAgent = process.env.SIGNET_AGENT_ID;
+		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+		try {
+			const { api, hooks } = createMockApi();
+			signetPlugin.register(api);
+			const sessionFile = join(testDir, "session-anonymous.jsonl");
+			writeFileSync(sessionFile, '{"type":"user"}\n');
+
+			await hooks.get("agent_end")?.({ sessionKey: "anonymous-key", sessionFile }, {});
+
+			expect(uploadRequests[0]?.query.agentId).toBe("default");
+			expect(lastSessionEndBody).toMatchObject({ agentId: "default" });
+		} finally {
+			if (savedAgent === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			else process.env.SIGNET_AGENT_ID = savedAgent;
+		}
+	});
+
+	it("leaves the agent to an agent session key on agent_end", async () => {
+		transcriptUploadRoute = true;
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+		const sessionFile = join(testDir, "session-agent-key.jsonl");
+		writeFileSync(sessionFile, '{"type":"user"}\n');
+
+		await hooks.get("agent_end")?.({ sessionKey: "agent:keyed:main", sessionFile }, {});
+
+		expect(uploadRequests[0]?.query).not.toHaveProperty("agentId");
+		expect(lastSessionEndBody).not.toHaveProperty("agentId");
+	});
+
+	it("still ends the session and warns when the session file upload fails", async () => {
+		transcriptUploadRoute = true;
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		await hooks.get("agent_end")?.(
+			{ sessionKey: "missing-file-key", sessionFile: join(testDir, "missing.jsonl") },
+			{ agentId: "agent-1" },
+		);
+
+		expect(getHits("/api/hooks/session-end")).toBe(1);
+		expect(lastSessionEndBody).not.toHaveProperty("transcriptPath");
+		expect(warnMessages.some((message) => message.includes("transcript upload failed"))).toBe(true);
 	});
 
 	it("extracts clean user message from event.messages instead of metadata-wrapped prompt", async () => {
@@ -1408,6 +1494,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		const agentEnd = hooks.get("agent_end");
 		expect(agentEnd).toBeDefined();
+		const typedSessionFile = join(testDir, "typed-session.jsonl");
+		writeFileSync(typedSessionFile, '{"type":"user"}\n');
 		await agentEnd?.(
 			{
 				messages: [{ role: "user", content: "done" }],
@@ -1418,7 +1506,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				sessionKey: "typed-ctx-key",
 				sessionId: "typed-ctx-id",
 				workspaceDir: "/tmp/typed-project",
-				sessionFile: "/tmp/typed-session.jsonl",
+				sessionFile: typedSessionFile,
 			},
 		);
 
@@ -1427,7 +1515,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "typed-ctx-key",
 			sessionId: "typed-ctx-id",
 			cwd: "/tmp/typed-project",
-			transcriptPath: "/tmp/typed-session.jsonl",
+			transcriptPath: typedSessionFile,
 		});
 	});
 
@@ -1437,6 +1525,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		const agentEnd = hooks.get("agent_end");
 		expect(agentEnd).toBeDefined();
+		const legacySessionFile = join(testDir, "legacy-session.jsonl");
+		writeFileSync(legacySessionFile, '{"type":"user"}\n');
 		await agentEnd?.(
 			{
 				messages: [],
@@ -1444,7 +1534,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				cwd: "/tmp/legacy-project",
 				sessionKey: "legacy-key",
 				sessionId: "legacy-id",
-				sessionFile: "/tmp/legacy-session.jsonl",
+				sessionFile: legacySessionFile,
 				agentId: "agent-legacy",
 			},
 			{},
@@ -1455,7 +1545,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "legacy-key",
 			sessionId: "legacy-id",
 			cwd: "/tmp/legacy-project",
-			transcriptPath: "/tmp/legacy-session.jsonl",
+			transcriptPath: legacySessionFile,
 		});
 	});
 
@@ -1692,6 +1782,43 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const lines = (body.transcript as string).split("\n");
 		expect(lines.length).toBe(lastMsgs.length);
 		expect(JSON.parse(lines[0])).toEqual(lastMsgs[0]);
+	});
+
+	it("uploads the session file before checkpoint extract and sends no path", async () => {
+		transcriptUploadRoute = true;
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+		const sessionFile = join(testDir, "checkpoint-session.jsonl");
+		writeFileSync(sessionFile, '{"type":"user"}\n');
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const ctx = { sessionKey: "checkpoint-upload", agentId: "agent-1", sessionFile };
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.({ prompt: `Turn ${i + 1}` }, ctx);
+		}
+		for (let i = 0; i < 100 && getHits("/api/hooks/session-checkpoint-extract") === 0; i++) await Bun.sleep(5);
+
+		expect(uploadRequests.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+		expect(uploadRequests[0]?.query).toMatchObject({ sessionKey: "checkpoint-upload", agentId: "agent-1" });
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+		expect(lastCheckpointBody).not.toHaveProperty("transcriptPath");
+	});
+
+	it("sends the checkpoint path to a daemon without the upload route", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+		const sessionFile = join(testDir, "checkpoint-legacy.jsonl");
+		writeFileSync(sessionFile, '{"type":"user"}\n');
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const ctx = { sessionKey: "checkpoint-legacy", agentId: "agent-1", sessionFile };
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.({ prompt: `Turn ${i + 1}` }, ctx);
+		}
+		for (let i = 0; i < 100 && getHits("/api/hooks/session-checkpoint-extract") === 0; i++) await Bun.sleep(5);
+
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+		expect(lastCheckpointBody).toMatchObject({ transcriptPath: sessionFile });
 	});
 
 	it("restores counter on skipped:true so next turn retries (CAS guard)", async () => {
