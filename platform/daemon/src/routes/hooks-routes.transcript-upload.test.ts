@@ -217,4 +217,25 @@ describe("transcript upload route", () => {
 			authConfig.mode = previousMode;
 		}
 	});
+
+	it("ends the session on the uploaded transcript instead of the stored one", async () => {
+		const uploaded = await patch('{"a":1}\n');
+		expect(uploaded.status).toBe(200);
+		const { jobId } = await uploaded.json();
+		expect(jobId).toEqual(expect.any(String));
+		const ended = await app.request("/api/hooks/session-end", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "codex",
+				sessionKey: "sess-1",
+				sessionId: "sess-1",
+				agentId: agent,
+				cwd: "/repo",
+				reason: "session_shutdown",
+			}),
+		});
+		expect(ended.status).toBe(200);
+		expect(await ended.json()).toMatchObject({ queued: true, transcriptCaptureJobId: jobId });
+	});
 });

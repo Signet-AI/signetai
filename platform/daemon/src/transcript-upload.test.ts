@@ -17,8 +17,10 @@ import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
 import { getTranscriptCaptureStatus, runTranscriptCaptureOnce } from "./transcript-capture-worker";
 import * as safeFs from "./transcript-import-safe-fs";
 import {
+	type TranscriptUploadEnd,
 	type TranscriptUploadRequest,
 	drainTranscriptUploadPurges,
+	endTranscriptUpload,
 	stopTranscriptUploadPurges,
 	uploadTranscriptRange,
 } from "./transcript-upload";
@@ -92,6 +94,26 @@ describe("transcript upload ranges", () => {
 
 	function file(generation = 0): string {
 		return transcriptUploadFilePath(dir, "noam", 0, "sess-1", generation);
+	}
+
+	function end(): TranscriptUploadEnd {
+		return {
+			basePath: dir,
+			agentId: "noam",
+			sessionKey: "sess-1",
+			sessionId: "sess-1",
+			project: "/repo",
+			endedAt: "2026-11-26T11:00:00.000Z",
+		};
+	}
+
+	async function captureJobs(): Promise<Array<{ id: string; status: string; ended_at: string | null }>> {
+		return await getDbAccessor().withReadDbAsync((db) =>
+			prepareTypedStatement<{ id: string; status: string; ended_at: string | null }>(
+				db,
+				"SELECT id, status, ended_at FROM transcript_capture_jobs WHERE agent_id = ?",
+			).all("noam"),
+		);
 	}
 
 	it("appends each range at the committed offset and hashes the committed tail", async () => {
@@ -637,5 +659,48 @@ describe("transcript upload ranges", () => {
 		const stored = await getStoredSessionTranscriptInfoAsync("sess-1", "noam", accessor);
 		expect(stored?.content).toContain("complete words");
 		expect(stored?.content).not.toContain("partial words");
+	});
+
+	it("attaches the session end to the upload capture job", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const uploaded = await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		if (uploaded.status !== "committed") throw new Error("upload not committed");
+		const jobId = uploaded.jobId;
+		expect(jobId).toEqual(expect.any(String));
+		const ended = await endTranscriptUpload(accessor, end());
+		expect(ended).toEqual({ status: "ended", jobId });
+		expect(await captureJobs()).toEqual([{ id: jobId, status: "pending", ended_at: "2026-11-26T11:00:00.000Z" }]);
+	});
+
+	it("queues a completed upload job again with the session end", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const uploaded = await uploadTranscriptRange(accessor, request('{"a":1}\n'));
+		if (uploaded.status !== "committed") throw new Error("upload not committed");
+		const jobId = uploaded.jobId;
+		expect(jobId).toEqual(expect.any(String));
+		expect(await runTranscriptCaptureOnce(accessor, dir)).toBe(true);
+		const ended = await endTranscriptUpload(accessor, end());
+		expect(ended).toEqual({ status: "ended", jobId });
+		expect(await captureJobs()).toEqual([{ id: jobId, status: "pending", ended_at: "2026-11-26T11:00:00.000Z" }]);
+	});
+
+	it("ends an upload with no complete record without a capture job", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const uploaded = await uploadTranscriptRange(accessor, request('{"a":1'));
+		expect(uploaded).toMatchObject({ status: "committed", jobId: null });
+		const ended = await endTranscriptUpload(accessor, end());
+		expect(ended).toEqual({ status: "ended", jobId: null });
+		expect(await captureJobs()).toEqual([]);
+	});
+
+	it("leaves a session without an upload unchanged at its end", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const ended = await endTranscriptUpload(accessor, end());
+		expect(ended).toEqual({ status: "none" });
+		expect(await captureJobs()).toEqual([]);
 	});
 });
