@@ -9,6 +9,7 @@ import { resolveDaemonAgentId } from "../agent-id";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
+import { claimSession, releaseSession } from "../session-tracker";
 import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
 import { transcriptUploadAgentDirectory } from "../transcript-upload-paths";
 
@@ -77,6 +78,10 @@ function query(overrides: Readonly<Record<string, string | null>> = {}): string 
 	return `/api/hooks/transcript-upload?${params.toString()}`;
 }
 
+function runtimeHeaders(runtimePath: string | undefined): Record<string, string> {
+	return runtimePath ? { "x-signet-runtime-path": runtimePath } : {};
+}
+
 async function patch(
 	body: string,
 	options: {
@@ -86,6 +91,7 @@ async function patch(
 		readonly query?: Readonly<Record<string, string | null>>;
 		readonly target?: Hono;
 		readonly stream?: ReadableStream<Uint8Array>;
+		readonly runtimePath?: string;
 	} = {},
 ): Promise<Response> {
 	return await (options.target ?? app).request(query(options.query), {
@@ -95,6 +101,7 @@ async function patch(
 			"Upload-Generation": String(options.generation ?? 0),
 			"Upload-Offset": String(options.offset ?? 0),
 			"Upload-Checksum": options.checksum ?? sha(body),
+			...runtimeHeaders(options.runtimePath),
 		},
 		body: options.stream ?? body,
 	});
@@ -191,6 +198,29 @@ describe("transcript upload route", () => {
 		const state = await app.request(query(purged));
 		expect(await state.json()).toEqual({ committedOffset: 0, generation: null, tailSha256: null });
 		expect(existsSync(transcriptUploadAgentDirectory(AGENTS_DIR, purged.agentId))).toBe(false);
+	});
+
+	it("refuses a range from a runtime path that does not own the session", async () => {
+		claimSession("sess-1", "plugin", agent, "codex");
+		try {
+			const other = await patch('{"a":1}\n', { runtimePath: "legacy" });
+			expect(other.status).toBe(409);
+			expect(await other.json()).toEqual({ error: "session claimed by plugin path" });
+			const otherState = await app.request(query(), { headers: runtimeHeaders("legacy") });
+			expect(otherState.status).toBe(409);
+			expect(await (await app.request(query())).json()).toEqual({
+				committedOffset: 0,
+				generation: null,
+				tailSha256: null,
+			});
+			const owner = await patch('{"a":1}\n', { runtimePath: "plugin" });
+			expect(owner.status).toBe(200);
+			expect(await owner.json()).toMatchObject({ committedOffset: 8, generation: 0 });
+			const ownerState = await app.request(query(), { headers: runtimeHeaders("plugin") });
+			expect(await ownerState.json()).toMatchObject({ committedOffset: 8 });
+		} finally {
+			releaseSession("sess-1", agent);
+		}
 	});
 
 	it("resolves a missing agent the way the other hook routes do", async () => {

@@ -315,8 +315,11 @@ purging its agent, removes every generation file.
   request with no `cwd` skips the project check.
 - `409`: `{ "error": "offset_mismatch", "committedOffset", "generation",
   "tailSha256" }` when the offset or generation does not continue the
-  committed state, or `{ "error": "harness_mismatch" }` when the session's
-  upload or stored transcript belongs to another harness.
+  committed state, `{ "error": "harness_mismatch" }` when the session's
+  upload or stored transcript belongs to another harness, or
+  `{ "error": "session claimed by plugin path" }` when `x-signet-runtime-path`
+  names a runtime path that does not own the session. That range commits
+  nothing. A request without the header skips this check.
 - `413`: a body larger than 1 MiB.
 - `503`: more than 8 uploads in flight (`Retry-After: 1`), database write
   pressure (`retryable: true` and a `Retry-After` header), or
@@ -331,8 +334,7 @@ Returns the committed upload state for the same query parameters:
 `{ "committedOffset", "generation", "tailSha256" }`. Before the first range it
 returns `{ "committedOffset": 0, "generation": null, "tailSha256": null }`. A
 connector calls it after a restart or a `409` to find where to resume. It
-returns the same `403` and `409` errors as `PATCH` for another project or
-another harness.
+returns the same `403` and `409` errors as `PATCH`.
 
 ### POST /api/hooks/remember
 
@@ -895,7 +897,9 @@ Otherwise, Signet searches transcripts in the requested agent and project scope
 while excluding `currentSessionKey`.
 
 A query that exactly matches a stored session key or session id returns that
-session with `rank` 0. Otherwise full-text search runs. Signet indexes each
+session with `rank` 0 when that session is inside the same agent, project, and
+session scope as full-text search. Otherwise full-text search runs, so a
+session outside the scope never appears. Signet indexes each
 transcript turn by turn and returns one hit per session. Signet ignores
 stopwords and one-letter words. When at most three search words remain, a
 session matches only when every word appears somewhere in it, even in different
