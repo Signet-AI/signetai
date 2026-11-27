@@ -585,18 +585,25 @@ async function runTranscriptCaptureOnceInternal(dbAccessor: DbAccessor, basePath
 	const job = await leaseJob(dbAccessor);
 	if (!job) return false;
 	const identity = job.sourceIdentity ?? `legacy:${job.id}`;
-	return await withTranscriptFileLock(sourceLockPath(basePath, job.agentId, identity), async () => {
-		if (!(await currentJobMatches(dbAccessor, job))) return true;
-		try {
-			const result = await processTranscriptCaptureJob(dbAccessor, basePath, job);
-			await markDone(dbAccessor, job, result);
-		} catch (error) {
-			await markFailed(dbAccessor, job, error);
-			if (error instanceof CanonicalTranscriptMismatchError) return true;
-			throw error;
-		}
-		return true;
-	});
+	let locked = false;
+	try {
+		return await withTranscriptFileLock(sourceLockPath(basePath, job.agentId, identity), async () => {
+			locked = true;
+			if (!(await currentJobMatches(dbAccessor, job))) return true;
+			try {
+				const result = await processTranscriptCaptureJob(dbAccessor, basePath, job);
+				await markDone(dbAccessor, job, result);
+			} catch (error) {
+				await markFailed(dbAccessor, job, error);
+				if (error instanceof CanonicalTranscriptMismatchError) return true;
+				throw error;
+			}
+			return true;
+		});
+	} catch (error) {
+		if (!locked) await markFailed(dbAccessor, job, error);
+		throw error;
+	}
 }
 
 export function runTranscriptCaptureOnce(dbAccessor: DbAccessor, basePath: string): Promise<boolean> {

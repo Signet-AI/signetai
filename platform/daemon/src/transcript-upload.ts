@@ -126,7 +126,14 @@ async function readCommittedLines(accessor: DbAccessor, input: TranscriptUploadR
 	const scope = await readUploadScope(accessor, input.agentId, input.sessionKey, "transcript-upload.read");
 	const state = scope.state;
 	if (!state) return null;
-	if (input.access && transcriptUploadScopeConflict(scope, input.access)) return null;
+	const conflict = input.access ? transcriptUploadScopeConflict(scope, input.access) : null;
+	if (conflict) {
+		logger.warn("hooks", "Transcript upload read denied outside the upload scope", {
+			sessionKey: input.sessionKey,
+			status: conflict.status,
+		});
+		return null;
+	}
 	if (state.committedOffset > input.maxBytes) {
 		logger.warn("hooks", "Transcript upload read skipped for oversized upload", {
 			sessionKey: input.sessionKey,

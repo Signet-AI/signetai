@@ -258,7 +258,7 @@ describe("transcript upload route", () => {
 		try {
 			const uploaded = await patch(words, { target: repo, query: { agentId: null, harness: "test" } });
 			expect(uploaded.status).toBe(200);
-			await checkpoint(scopedTo("/other"), "/other");
+			expect(await (await checkpoint(scopedTo("/other"), "/other")).json()).toMatchObject({ skipped: true });
 			expect(await storedRow()).toBeUndefined();
 			expect((await checkpoint(repo, "/repo")).status).toBe(200);
 			expect(await storedRow()).toMatchObject({ project: "/repo", content: expect.stringContaining("upload words") });

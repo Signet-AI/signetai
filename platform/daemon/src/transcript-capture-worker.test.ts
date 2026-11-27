@@ -11,7 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
 import { upsertSessionTranscriptAsync } from "./session-transcripts";
@@ -623,6 +623,38 @@ describe("transcript capture worker", () => {
 
 		expect(await staleRun.run).toBe(true);
 		expect(jobState()).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
+	});
+
+	it("releases the lease when the source lock cannot be taken", async () => {
+		const sourcePath = join(dir, "locked-session.jsonl");
+		writeFileSync(sourcePath, "User: waiting on the lock\n", "utf8");
+		const input = {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-locked",
+			sessionId: "session-locked",
+			project: "/repo",
+			transcript: "",
+			transcriptPath: sourcePath,
+			basePath: dir,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:05:00.000Z",
+		};
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), input);
+		if (!id) throw new Error("expected source capture job");
+		const locks = dirname(
+			sourceLockPath(dir, "agent-a", transcriptCaptureSourceIdentity(input, realpathSync(sourcePath))),
+		);
+		rmSync(locks, { recursive: true, force: true });
+		writeFileSync(locks, "", "utf8");
+
+		await expect(runTranscriptCaptureOnce(getDbAccessor(), dir)).rejects.toThrow();
+
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status, attempts FROM transcript_capture_jobs WHERE id = ?").get(id),
+			),
+		).toEqual({ status: "failed", attempts: 1 });
 	});
 
 	it("queues a file-backed job while the inline backlog is full", async () => {
