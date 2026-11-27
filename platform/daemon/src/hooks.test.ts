@@ -457,6 +457,30 @@ function canonicalSessionRecords(harness: string, sessionKey: string): Record<st
 		.filter((record) => record.session_key === sessionKey);
 }
 
+async function uploadTranscript(
+	sessionKey: string,
+	harness: string,
+	text: string,
+	project: string | null = null,
+): Promise<Awaited<ReturnType<typeof uploadTranscriptRange>>> {
+	const body = Buffer.from(text);
+	return await uploadTranscriptRange(getDbAccessor(), {
+		admission: TranscriptUploadAdmission.admit("default"),
+		basePath: TEST_DIR,
+		agentId: "default",
+		sessionKey,
+		sessionId: sessionKey,
+		harness,
+		project,
+		projectScoped: false,
+		generation: 0,
+		offset: 0,
+		checksum: createHash("sha256").update(body).digest("hex"),
+		body,
+		capturedAt: "2026-11-26T10:00:00.000Z",
+	});
+}
+
 function insertCompletedTranscript(
 	db: Database,
 	options: { sessionKey: string; content: string; agentId?: string; harness?: string; project?: string },
@@ -1706,6 +1730,37 @@ describe("direct transcript regressions", () => {
 		try {
 			expect(
 				db.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?").get("codex-stop-session"),
+			).toEqual({ count: 0 });
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("leaves the assistant reply to the upload when the session uploaded", async () => {
+		createMemoryDb([]);
+		expect(
+			await uploadTranscript(
+				"codex-upload-session",
+				"codex",
+				"User: hi\nAssistant: from the upload\n",
+				"/home/user/signetai",
+			),
+		).toMatchObject({ status: "committed" });
+
+		await handleSessionEnd({
+			harness: "codex",
+			sessionKey: "codex-upload-session",
+			sessionId: "codex-upload-session",
+			cwd: "/home/user/signetai",
+			lastAssistantMessage: "from the hook payload",
+		});
+
+		const db = openTestDb();
+		try {
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?")
+					.get("codex-upload-session"),
 			).toEqual({ count: 0 });
 		} finally {
 			db.close();
@@ -4186,23 +4241,9 @@ describe("handleCheckpointExtract", () => {
 
 	test.serial("reads the uploaded transcript when the request has none", async () => {
 		createMemoryDb([]);
-		const body = Buffer.from(`${"checkpoint upload words ".repeat(30)}\n`);
-		const uploaded = await uploadTranscriptRange(getDbAccessor(), {
-			admission: TranscriptUploadAdmission.admit("default"),
-			basePath: TEST_DIR,
-			agentId: "default",
-			sessionKey: "ckpt-upload",
-			sessionId: "ckpt-upload",
-			harness: "test",
-			project: null,
-			projectScoped: false,
-			generation: 0,
-			offset: 0,
-			checksum: createHash("sha256").update(body).digest("hex"),
-			body,
-			capturedAt: "2026-11-26T10:00:00.000Z",
+		expect(await uploadTranscript("ckpt-upload", "test", `${"checkpoint upload words ".repeat(30)}\n`)).toMatchObject({
+			status: "committed",
 		});
-		expect(uploaded).toMatchObject({ status: "committed" });
 
 		await handleCheckpointExtract({ harness: "test", sessionKey: "ckpt-upload" });
 
