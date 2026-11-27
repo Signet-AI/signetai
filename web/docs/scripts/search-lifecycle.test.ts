@@ -286,6 +286,7 @@ describe("docs search lifecycle", () => {
 				"--disable-gpu",
 				"--disable-dev-shm-usage",
 				"--no-first-run",
+				"--password-store=basic",
 				"--no-default-browser-check",
 				"--remote-debugging-address=127.0.0.1",
 				"--remote-debugging-port=0",
