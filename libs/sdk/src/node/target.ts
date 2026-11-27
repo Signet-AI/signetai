@@ -24,6 +24,14 @@ export interface ResolvedTarget {
 	readonly credential: TargetCredential;
 	readonly remote: boolean;
 }
+const insecureHttpWarning = Symbol.for("signet.sdk.insecure-http-warning");
+function warnInsecureHttp(): void {
+	const warned: unknown = Reflect.get(process, insecureHttpWarning);
+	if (warned === true) return;
+	Reflect.set(process, insecureHttpWarning, true);
+	console.error("Signet warning: HTTP sends credentials in clear text. Use HTTPS or a private tunnel.");
+}
+
 export async function resolveTarget(options: ResolveTargetOptions = {}): Promise<ResolvedTarget> {
 	const harness = identifier(options.harness ?? "cli");
 	const env = options.env ?? process.env;
@@ -38,12 +46,16 @@ export async function resolveTarget(options: ResolveTargetOptions = {}): Promise
 	const selectedUrl = flagUrl || registry?.url || envUrl || (!hasEnvironmentBinding ? options.configUrl : undefined);
 	const url = resolveSignetDaemonUrl({ env: { ...env, SIGNET_DAEMON_URL: selectedUrl } });
 	const origin = new URL(url).origin;
+	if (new URL(url).protocol === "http:" && !isLoopback(new URL(url).hostname)) {
+		if (!selectedUrl && !env.SIGNET_HOST?.trim()) throw new TypeError("Remote HTTP targets must be explicit");
+		warnInsecureHttp();
+	}
 	const hasEnvironmentCredential = Boolean(env.SIGNET_API_KEY?.trim() || env.SIGNET_API_KEY_FILE?.trim());
 	const environmentCredentialApplies =
 		options.flagKey !== undefined ||
 		!hasEnvironmentCredential ||
-		!envUrl ||
-		new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: envUrl } })).origin === origin;
+		(!envUrl && !flagUrl) ||
+		Boolean(envUrl && new URL(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: envUrl } })).origin === origin);
 	let credential: TargetCredential;
 	if (options.flagKey !== undefined) {
 		if (!options.flagKey.trim()) throw new TypeError("flagKey cannot be empty");

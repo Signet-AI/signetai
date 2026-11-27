@@ -259,6 +259,7 @@ describe("recordPathFeedback", () => {
 	});
 
 	it("promotes co-occurrence edge after repeated sessions", () => {
+		db.prepare("UPDATE entity_dependency_history SET created_at='2000-01-01' WHERE dependency_id='dep-a'").run();
 		for (const key of ["sess-co-1", "sess-co-2", "sess-co-3"]) {
 			seedSessionMemory(db, key, "mem-a");
 			recordPathFeedback(getDbAccessor(), {
@@ -308,12 +309,14 @@ describe("recordPathFeedback", () => {
 				 FROM entity_dependency_history
 				 WHERE source_entity_id = 'ent-a'
 				   AND target_entity_id = 'ent-b'
-				 ORDER BY created_at DESC
+				   AND event = 'updated'
+				 ORDER BY rowid DESC
 				 LIMIT 1`,
 			)
 			.get() as { event: string; changed_by: string; metadata: string | null } | undefined;
+		expect(forwardHist?.event).toBe("updated");
 		expect(forwardHist?.changed_by).toBe("db-trigger");
-		expect(forwardHist?.metadata).toContain("trg_entity_dependencies_audit_insert");
+		expect(forwardHist?.metadata).toContain("trg_entity_dependencies_audit_update");
 
 		const reverse = db
 			.prepare(
@@ -347,5 +350,15 @@ describe("recordPathFeedback", () => {
 			| undefined;
 		expect(reverseProposal).toMatchObject({ operation: "create_link", status: "applied", created_by: "path-feedback" });
 		expect(reverseProposal?.evidence).toContain('"memory_id":"mem-a"');
+		const reverseHistory = db
+			.prepare(
+				"SELECT event,changed_by,metadata FROM entity_dependency_history WHERE source_entity_id='ent-b' AND target_entity_id='ent-a' AND event='created'",
+			)
+			.get();
+		expect(reverseHistory).toMatchObject({
+			event: "created",
+			changed_by: "db-trigger",
+			metadata: expect.stringContaining("trg_entity_dependencies_audit_insert"),
+		});
 	});
 });

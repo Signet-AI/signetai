@@ -1,3 +1,5 @@
+import { registerOrganizationUpgradeRoutes } from "./organization-upgrade-routes";
+import { getOperatorSettings, setOperatorSettings } from "../operator-settings";
 import { setOrganizationSso } from "../organization-sso";
 import { contentRead } from "../content-read";
 import { resolveRouteReadScope } from "./read-scope";
@@ -69,6 +71,7 @@ function endpoint(fn: (c: Context) => Promise<Response>): MiddlewareHandler {
 			return await fn(c);
 		} catch (error) {
 			if (error instanceof IdentityError) {
+				if (error.reason === "busy" || error.reason === "capacity") c.header("Retry-After", "5");
 				if (error.status === 429 && c.req.path === "/api/org/users/lookup") c.header("Retry-After", "60");
 				return failure(c, error);
 			}
@@ -141,6 +144,23 @@ export function registerOrganizationRoutes(
 			if (!c.get("organization")) return next();
 			return endpoint(fn)(c, next);
 		};
+	registerOrganizationUpgradeRoutes(app, active);
+	app.get(
+		"/api/org/operator/settings",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length || c.req.header("x-signet-agent-id"))
+				throw new IdentityError(403, "permission", "Requires an unrestricted administrator session");
+			return c.json(await getOperatorSettings(user(c), workspaceRoot));
+		}),
+	);
+	app.patch(
+		"/api/org/operator/settings",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length || c.req.header("x-signet-agent-id"))
+				throw new IdentityError(403, "permission", "Requires an unrestricted administrator session");
+			return c.json(await setOperatorSettings(user(c), workspaceRoot, await body(c)));
+		}),
+	);
 	app.post(
 		"/api/org/claim",
 		endpoint(async (c) => {
@@ -221,6 +241,17 @@ export function registerOrganizationRoutes(
 	app.get(
 		"/api/auth/profile",
 		active(async (c) => c.json(await operations.profile(user(c)))),
+	);
+	app.get(
+		"/api/auth/onboarding",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length) throw new IdentityError(400, "invalid_input");
+			return c.json(await operations.onboardingStatus(user(c)));
+		}),
+	);
+	app.post(
+		"/api/auth/onboarding",
+		active(async (c) => c.json(await operations.updateOnboarding(user(c), await body(c)))),
 	);
 	app.patch(
 		"/api/auth/profile",

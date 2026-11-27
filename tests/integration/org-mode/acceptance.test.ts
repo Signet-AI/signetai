@@ -2,6 +2,7 @@ import "../../support/connector-safety.js";
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToken } from "../../../platform/daemon/src/auth/tokens";
 import { connectorSecrets } from "./connectors";
@@ -305,7 +306,7 @@ test(
 				const matchedFacts = requiredFacts.filter((fact) => context.includes(fact.toLowerCase()));
 				rows.push({ question, requiredFacts, matchedFacts, passed: matchedFacts.length === requiredFacts.length });
 			}
-			const results = join(import.meta.dir, "results");
+			const results = process.env.SIGNET_ORG_EVAL_OUTPUT_DIR ?? join(tmpdir(), "signet-org-mode-results");
 			await mkdir(results, { recursive: true });
 			await writeFile(
 				join(results, "atlas-recall.json"),

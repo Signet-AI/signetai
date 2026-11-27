@@ -60,56 +60,92 @@ export function AgentsContent({
 			: (users.find((user) => user.id === agent.ownerUserId)?.displayName ??
 				groups.find((group) => group.id === agent.ownerGroupId)?.name ??
 				(agent.ownerUserId ? "Person" : agent.ownerGroupId ? "Team" : "Unassigned"));
+	const writeAccess = (agent: OrganizationAgent) =>
+		agent.archivedAt
+			? "Nobody"
+			: agent.kind === "organization"
+				? agent.id === "default"
+					? "Every active user"
+					: "Administrator · explicit target only"
+				: agent.kind === "team"
+					? "Team members"
+					: agent.kind === "personal"
+						? "Owner only"
+						: "Administrators";
 	return (
 		<div className="flex flex-col gap-6">
 			<OrganizationBlock title="Organization agents">
-				<OrganizationTable columns={["Agent", "Kind", "Owner", "Who may act as it", "Actions"]}>
-					{agents.map((agent) => (
-						<tr key={agent.id} className={rowClass}>
-							<td className={cellClass}>
-								<Action
-									secondary
-									onClick={() => {
-										setSelected(agent);
-										setNewOwner("");
-									}}
-								>
-									{agentDisplayName(agent)}
-								</Action>
-							</td>
-							<td className={cellClass}>
-								{displayLabel(agent.kind)}
-								{agent.archivedAt ? " · archived" : ""}
-							</td>
-							<td className={cellClass}>{owner(agent)}</td>
-							<td className={cellClass}>
-								{agent.archivedAt
-									? "Nobody"
-									: agent.kind === "organization"
-										? "Every active user"
-										: agent.kind === "team"
-											? "Team members"
-											: agent.kind === "personal"
-												? "Owner only"
-												: "Administrators"}
-							</td>
-							<td className={cellClass}>
-								{!agent.archivedAt && agent.id !== "default" && (
+				<div className="hidden md:block">
+					<OrganizationTable columns={["Agent", "Kind", "Owner", "Who may act as it", "Actions"]}>
+						{agents.map((agent) => (
+							<tr key={agent.id} className={rowClass}>
+								<td className={cellClass}>
 									<Action
 										secondary
-										disabled={busy}
 										onClick={() => {
 											setSelected(agent);
 											setNewOwner("");
 										}}
 									>
-										Manage…
+										{agentDisplayName(agent)}
 									</Action>
-								)}
-							</td>
-						</tr>
+								</td>
+								<td className={cellClass}>
+									{displayLabel(agent.kind)}
+									{agent.archivedAt ? " · archived" : ""}
+								</td>
+								<td className={cellClass}>{owner(agent)}</td>
+								<td className={cellClass}>{writeAccess(agent)}</td>
+								<td className={cellClass}>
+									{!agent.archivedAt && agent.id !== "default" && (
+										<Action
+											secondary
+											disabled={busy}
+											onClick={() => {
+												setSelected(agent);
+												setNewOwner("");
+											}}
+										>
+											Manage…
+										</Action>
+									)}
+								</td>
+							</tr>
+						))}
+					</OrganizationTable>
+				</div>
+				<div className="flex min-w-0 flex-col gap-3 md:hidden">
+					{agents.map((agent) => (
+						<article
+							key={agent.id}
+							aria-label={agentDisplayName(agent)}
+							className="flex min-w-0 flex-col gap-3 rounded-lg border p-4 text-small"
+						>
+							<h3 className="break-words font-medium">{agentDisplayName(agent)}</h3>
+							<dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+								<dt className="text-muted-foreground">Owner</dt>
+								<dd className="break-words">{owner(agent)}</dd>
+								<dt className="text-muted-foreground">Write access</dt>
+								<dd className="break-words">{writeAccess(agent)}</dd>
+								<dt className="text-muted-foreground">Kind</dt>
+								<dd>
+									{displayLabel(agent.kind)}
+									{agent.archivedAt ? " · archived" : ""}
+								</dd>
+							</dl>
+							<Action
+								secondary
+								disabled={busy}
+								onClick={() => {
+									setSelected(agent);
+									setNewOwner("");
+								}}
+							>
+								View agent
+							</Action>
+						</article>
 					))}
-				</OrganizationTable>
+				</div>
 			</OrganizationBlock>
 			{selected && (
 				<OrganizationBlock

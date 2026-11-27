@@ -124,6 +124,17 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 			});
 			success(claim, "Claim Electron fixture");
 			success(
+				await request(daemon.origin, "/api/org/operator/settings", browser(claim), "PATCH", {
+					section: "complete",
+					value: true,
+				}),
+				"Complete existing desktop organization setup",
+			);
+			expect(
+				success(await request(daemon.origin, "/api/org/operator/settings", browser(claim)), "Read desktop setup")
+					.complete,
+			).toBe(true);
+			success(
 				await request(daemon.origin, "/api/org/groups", browser(claim), "POST", { name: "desktop-team" }),
 				"Create desktop team fixture",
 			);

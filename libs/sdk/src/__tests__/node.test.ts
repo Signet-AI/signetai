@@ -48,6 +48,64 @@ for (const fixture of conformance.targets) {
 	});
 }
 
+test("explicit HTTP connector targets send origin-bound credentials and warn once per process", async () => {
+	const script = `
+const source = await import(${JSON.stringify(new URL("../node.ts", import.meta.url).href)});
+const bundled = await import(${JSON.stringify(new URL("../../dist/node.js", import.meta.url).href)});
+const env = { HOME: process.env.HOME, APPDATA: process.env.APPDATA };
+const absent = { get: async () => ({ state: "unavailable" }), set: async () => ({ state: "unavailable" }) };
+const key = "fixture-key-" + crypto.randomUUID();
+const lan = "http://192.168.20.10:3850";
+const tailnet = "http://100.64.20.10:3850";
+let expected = key;
+const authenticated = [];
+globalThis.fetch = async (_url, init) => {
+ authenticated.push(new Headers(init.headers).get("authorization") === (expected === null ? null : "Bearer " + expected));
+ return Response.json({ ok: true });
+};
+const keyFile = await source.writeKeyFile(tailnet, "openclaw", key, { env });
+await new source.ConnectorRegistry({ env }).set("openclaw", { url: tailnet, keyFile });
+for (const [sdk, options] of [
+ [source, { env: { ...env, SIGNET_DAEMON_URL: lan, SIGNET_API_KEY: key } }],
+ [bundled, { env, harness: "openclaw" }],
+ [source, { env: { ...env, SIGNET_API_KEY: key }, configUrl: lan }],
+ [bundled, { env, flagUrl: tailnet, flagKey: key }],
+]) {
+ const target = await sdk.resolveTarget({ ...options, keyring: absent });
+ await new sdk.NodeTransport(target, { env }).get("/health");
+}
+expected = null;
+for (const envUrl of [undefined, tailnet]) {
+ const target = await source.resolveTarget({ env: { ...env, SIGNET_API_KEY: key, SIGNET_DAEMON_URL: envUrl }, flagUrl: lan, keyring: absent });
+ await new source.NodeTransport(target, { env }).get("/health");
+}
+console.log(JSON.stringify(authenticated));
+`;
+	const child = Bun.spawn([process.execPath, "--eval", script], {
+		env: { ...process.env, ...env, SIGNET_DAEMON_URL: "", SIGNET_API_KEY: "", SIGNET_API_KEY_FILE: "" },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [stdout, stderr, code] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	expect(code, stderr).toBe(0);
+	expect(JSON.parse(stdout)).toEqual([true, true, true, true, true, true]);
+	expect(stderr.match(/HTTP sends credentials in clear text/g)).toHaveLength(1);
+	expect(stderr).not.toContain("fixture-key-");
+	expect(stdout).not.toContain("fixture-key-");
+});
+test("an unbound environment key never follows an explicit URL", async () => {
+	const target = await resolveTarget({
+		env: { ...env, SIGNET_API_KEY: "fixture" },
+		flagUrl: "https://other.example",
+		keyring: absentKeyring,
+	});
+	expect(await target.credential.get()).toBeNull();
+});
+
 test("shared outbox record conformance", async () => {
 	const box = new DurableOutbox(conformance.outbox.origin, { env, harness: conformance.harness });
 	await box.enqueue(conformance.outbox.request);
@@ -182,8 +240,9 @@ test("Python and TypeScript share protected registry, origin hashes and outbox r
 	] as const;
 	const keyFile = await writeKeyFile("https://faß.example", "hermes", "shared", { env });
 	await new ConnectorRegistry({ env }).set("hermes", { url: "https://faß.example", keyFile });
-	for (const [raw, canonical] of variants)
+	for (const [raw, canonical] of variants) {
 		expect((await resolveTarget({ flagUrl: raw, flagKey: "fixture", env })).origin).toBe(canonical);
+	}
 	const plugin = new URL("../../../../integrations/hermes-agent/connector/hermes-plugin", import.meta.url).pathname;
 	const script = `import sys,json; sys.path.insert(0,${JSON.stringify(plugin)}); import signet_transport as s; t=s.resolve_target(harness='hermes'); assert t.credential.get()=='shared'; s.DurableOutbox('https://faß.example').enqueue('POST','/api/hooks/session-end',{'from':'python'}); print(json.dumps([[s.resolve_target(flag_url=raw,flag_key='fixture').origin, s.origin_hash(raw)==s.origin_hash(canonical)] for raw,canonical in ${JSON.stringify(variants)}]))`;
 	const child = Bun.spawn(["python3", "-c", script], {

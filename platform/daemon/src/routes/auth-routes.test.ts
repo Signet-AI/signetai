@@ -171,7 +171,7 @@ describe("dashboard handoff", () => {
 		);
 	}
 
-	test("L2 legacy handoff requires confirmation before returning credentials", async () => {
+	test("legacy handoff requires confirmation before returning credentials", async () => {
 		const code = await handoff();
 		const preview = await redeem(code, false);
 		expect(preview.status).toBe(200);

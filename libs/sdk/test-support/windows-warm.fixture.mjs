@@ -8,8 +8,9 @@ test("windows warm subprocess contract", async () => {
 		const url = "http://127.0.0.1:" + server.port;
 		const target = await resolveTarget({
 			flagUrl: url,
-			env: { APPDATA: process.env.HOME, SIGNET_API_KEY_FILE: process.env.KEY_FILE },
+			env: { APPDATA: process.env.HOME, SIGNET_DAEMON_URL: url, SIGNET_API_KEY_FILE: process.env.KEY_FILE },
 		});
+		if (target.credential.source !== "key-file") throw new Error("key-file credential was not selected");
 		const client = new NodeTransport(target, { env: { APPDATA: process.env.HOME } });
 		for (let i = 0; i < 20; i++) await client.get("/health");
 		await client.flush();
@@ -25,12 +26,14 @@ test("windows warm subprocess contract", async () => {
 		if ((await count()) !== cold) throw new Error("warm deliveries spawned more ACL processes");
 		await chmod(process.env.KEY_FILE, 0o644);
 		let refused = false;
+		let refusal = "no error";
 		try {
 			await client.get("/health");
 		} catch (e) {
 			refused = e.code === "credential_provider_error";
+			refusal = `${e.name}:${e.code}`;
 		}
-		if (!refused) throw new Error("unsafe ACL accepted");
+		if (!refused) throw new Error(`unsafe ACL accepted (${refusal})`);
 	} finally {
 		server.stop(true);
 	}

@@ -24,6 +24,8 @@ beforeAll(async () => {
 	const { readOrganization } = await import("../auth/organization-store");
 	for (const sql of [
 		"INSERT INTO users(id,username,display_name,role) VALUES('reader','reader','Reader','admin'),('audience','audience','Audience','admin')",
+		"UPDATE agents SET kind='organization' WHERE id='default'",
+		"INSERT INTO auth_sessions(id,user_id,kind,token_hash,access_expires_at) SELECT id,id,'browser',lower(hex(randomblob(32))),'2090-01-01T00:00:00.000Z' FROM users WHERE id IN ('reader','audience')",
 		"INSERT INTO classifications(id,name) VALUES('cls_secret','Secret')",
 		"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES('cls_secret','user','audience')",
 		"INSERT INTO compartments(id,key) VALUES(1,'cls_secret'),(2,'public-fixture')",
@@ -278,6 +280,12 @@ test("organization log diagnostics expose only redacted operational fields", asy
 	const streamed = await app.request("/api/logs/stream");
 	expect(streamed.status).toBe(200);
 	await streamed.body?.cancel();
+	await write("UPDATE auth_sessions SET revoked_at=? WHERE id='reader'", [new Date().toISOString()]);
+	try {
+		expect((await app.request("/api/logs")).status).toBe(403);
+	} finally {
+		await write("UPDATE auth_sessions SET revoked_at=NULL WHERE id='reader'");
+	}
 });
 
 test("organization permissions do not bypass unavailable unlabelled diagnostics or leak into other routes", async () => {

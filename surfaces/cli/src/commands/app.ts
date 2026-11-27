@@ -6,6 +6,7 @@ import { withJson, withPath } from "./shared.js";
 interface SetupOptions {
 	join?: string;
 	host?: boolean;
+	port?: string;
 	publicUrl?: string;
 	deviceCode?: boolean;
 	path?: string;
@@ -93,6 +94,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.description("Initialize Signet and open setup in the dashboard")
 		.option("--join <url>", "Join an organization without creating a local workspace")
 		.option("--host", "Create an organization instance on this machine")
+		.option("--port <port>", "Listen port for the organization daemon")
 		.option("--public-url <url>", "Checked public URL for --host")
 		.option("--device-code", "Print the sign-in URL without opening a browser")
 		.option("-p, --path <path>", "Base path for agent files")
@@ -178,6 +180,8 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			const options: SetupOptions =
 				!supplied && process.stdin.isTTY ? { ...input, ...(await chooseSetupEntry()) } : input;
 			if (options.join && options.host) throw new Error("Choose --join or --host, not both");
+			if (options.port !== undefined && !options.host)
+				throw new Error("--port requires --host; --join does not launch a daemon");
 			if (options.join) {
 				if (options.path || options.harness?.length)
 					throw new Error("Join does not create local workspace files; connect harnesses after signing in");

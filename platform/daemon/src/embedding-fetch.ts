@@ -142,7 +142,29 @@ async function fetchWithEmbeddingTimeout(
 ): Promise<Response> {
 	const state = createEmbeddingFetchSignal(opts, timeoutMs);
 	try {
-		return await fetch(input, { ...init, signal: state.signal });
+		const response = await fetch(input, { ...init, signal: state.signal });
+		const reader = response.body?.getReader();
+		if (!reader) return response;
+		const chunks: Uint8Array[] = [];
+		let size = 0;
+		try {
+			while (true) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				size += chunk.value.byteLength;
+				if (size > 1_048_576) throw new Error("Embedding response exceeds byte limit");
+				chunks.push(chunk.value);
+			}
+		} finally {
+			await reader.cancel();
+		}
+		const bytes = new Uint8Array(size);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
 	} catch (error) {
 		if (state.timedOut) throw new Error("Embedding request timed out");
 		throw error;

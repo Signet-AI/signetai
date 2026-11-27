@@ -7,6 +7,10 @@ Organization mode adds individual identities to a daemon running in `team` mode.
 
 **Your personal agent is yours to organize. The organization can read it unless it's hidden.** Agents organize work. Classifications control who can read sensitive material; an administrator does not automatically gain access to classified material.
 
+## Choose a workspace
+
+Open Setup in the dashboard or desktop app to choose **Personal workspace**, **Join an organization**, or **Host an organization instance**. Personal workspace opens the existing nine-step personal flow. Joining shows `signet setup --join` for your own computer and an explicit link to your organization's instance. Hosting shows `signet setup --host` for the server, including the reverse-proxy warning. Neither option changes the local workspace from the browser.
+
 ## Claim a new organization
 
 Set `auth.mode: team` in the server workspace's `agent.yaml` and start the daemon. An unclaimed team daemon prints a setup URL and a setup token. Keep the token private. Restarting an unclaimed daemon replaces its setup token.
@@ -38,6 +42,18 @@ Compliance callers with unrestricted project access can cancel a pending or runn
 
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
+## Operator bootstrap
+
+Run `signet setup --host --public-url https://memory.example.com` on the instance host, then open its setup URL from your own computer. Enter the one-time token and create the first administrator. The operator wizard configures the organization name and authentication choice, AI provider/model, embedding profile, organization instructions, optional teams/classifications, source defaults and sources, and invitations. It has no Harnesses or First memory step.
+
+Keep the bootstrap password until SSO works, or expand the SSO controls to configure the existing authentication owner. Provider and embedding keys are stored in Secrets; the wizard accepts only secret names as references. Allow remote inference explicitly before sending organization evidence to a hosted provider. Inference can be deferred and embeddings can use keyword-only search. A saved embedding profile may still need the existing index transition before semantic search uses it.
+
+Organization instructions are saved as the instance's `AGENTS.md`, not a member's personal profile. Source defaults seed each source dialog; its agent/classification controls remain editable and the sources owner rechecks admission. Creating classifications requires compliance authority; admin status alone grants no classified access. Teams and sources may be left empty.
+
+Invitations are one-time links to copy and send yourself; Signet sends no email. Copying or leaving the invitation step clears the displayed link. Allowed SSO email domains support joining on first sign-in. Finishing setup writes durable completion and reads it back before opening the dashboard. Setup remains available to administrators later.
+
+The wizard uses `GET` and `PATCH /api/org/operator/settings`, not the unrestricted configuration-file interface. Only unrestricted administrator sessions can read or change this projection. Member, compliance-only and API-key credentials are rejected. Each successful read/update and denied authorization is audited without instruction text or secret values. Agents with an administrator session can use `signet_operator_settings_get` and `signet_operator_settings_set` through the same HTTP authorization.
+
 ## Classified imports
 
 Choose a classification when creating a transcript import: `POST /api/sources/imports` accepts an optional `classificationId` alongside `files`. Multipart document uploads to `POST /api/sources/import` accept the same optional form field. You must be allowed to apply the classification and read the destination, including its inherited classifications. A denied admission writes no import job or evidence. Project-bound credentials cannot start these imports because the manifest does not establish every record's project.
@@ -54,6 +70,24 @@ Clients inspect an invitation with `POST /api/auth/invites/lookup` and a JSON `{
 
 Password accounts accept through `POST /api/auth/invites/accept`. An SSO-required organization sends invitees to its SSO flow instead. The invitation's email, when specified, must match the verified SSO identity.
 
+## Join from the dashboard
+
+Members see **What's shared** before the dashboard opens. Read the visibility explanation, check the acknowledgement, and continue. Signet records the acknowledgement through the daemon under your signed-in identity; a failed request leaves you on that screen. API keys and narrowed sessions cannot acknowledge it for you. The versioned audit record survives daemon restarts. If audit retention removes it, Signet asks again rather than assuming consent.
+
+Next, review your personal and team agents and your default reading agent. **About you** saves your name through your own profile and optional preferences as evidence in your own write agent, never in a workspace-wide `USER.md`. SSO-managed names remain read-only.
+
+Run the displayed `signet login` and `signet connect` commands on your own computer, then send a prompt from your harness. The connector step updates automatically when your first active connector key is used. Joining does not replace your local workspace or automatically copy personal memories. Choose the destination for each harness in the CLI; a harness connects to one daemon at a time.
+
+**First memory** is optional. Ask your connected harness to remember something and watch the new memory appear in the dashboard. This screen only reads your write agent; it does not create a sample memory for you. Continue to **Summary**, then open the dashboard. Members are not asked to configure organization providers or embeddings. Personal-mode onboarding is unchanged.
+
+## Copy selected personal memories
+
+On the member onboarding **Summary**, optionally choose the `memories.jsonl` file from `signet --local export` on your own computer. The browser accepts at most 4 MiB and 1,000 records. Choose the original agent, select individual memories, and choose a destination classification. Nothing is selected by default.
+
+**Preview selected copy** is a local dry run: it shows the selected records, evidence size, and your organization write agent without uploading anything. Changing the selection, original agent, or classification clears the preview. **Copy selected memories** then submits only that selection to the existing document importer. The daemon rechecks write scope and classification admission before creating evidence. Preview does not reserve access or promise a successful import.
+
+The import preserves each selected export record, including its original ID, agent, author fields, source fields, and timestamps, as source evidence. Those fields do not become organization identity or restored semantic claims; the importing organization user is the recorded author, and Dreaming derives memory from the evidence. The original export and local workspace are never modified or deleted. Remove the resulting imported source through Sources to purge its evidence and derived state.
+
 ## Roles and teams
 
 - **Admin** manages people, policy, agents, credentials, and audit. Admin does not include the `classify` permission.
@@ -62,7 +96,9 @@ Password accounts accept through `POST /api/auth/invites/accept`. An SSO-require
 - **Readonly** can recall.
 - **Compliance** is an additional flag, not a role. It adds `classify` and `audit`; it does not bypass classification audiences.
 
-Groups are teams. Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
+Groups are teams. The Teams page's empty state walks new owners through creating a team, adding members, and creating a team agent. An organization administrator creates the team; its owners manage membership and shared agents. Team owners can add members and use **Create team agent** directly on their team's page. SSO-synced teams can appear automatically.
+
+Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
 
 ## Agents and attribution
 
@@ -126,11 +162,11 @@ In desktop organization mode, create API keys, shared-agent keys, and invitation
 
 ## Organization commands
 
-The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL` and credentials, then the stored `daemon.url` from login. `--org` requires an organization target. `--local` ignores organization credentials and selects the loopback daemon. Switching targets does not rebind connected harnesses.
+The CLI resolves its target once: `--url` or `--local`, then `SIGNET_DAEMON_URL` and credentials, then the stored `daemon.url` from login. `--org` requires an organization target. `--local` ignores organization credentials and selects the loopback daemon. Switching targets does not rebind connected harnesses. Explicit remote HTTP targets are allowed, including LAN and tailnet origins. HTTP sends API keys and session tokens in clear text; use HTTPS or an encrypted private tunnel whenever possible. The SDK and CLI print one warning per process for a non-loopback HTTP target, without printing credentials. Requests refuse implicit redirects, so Authorization is never forwarded to another origin. An environment API key does not follow an explicit `--url` to another origin unless `SIGNET_DAEMON_URL` names that origin.
 
-Local filesystem and process commands (`start`, `stop`, `install`, `setup`, `migrate-schema`, `migrate-vectors`, `git`, `sync`, and `workspace`) refuse against a remote target. Pass `--local` or run them on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
+Only explicitly supported daemon-backed commands run against a remote target. Memory search and listing, session search and listing, source listing, Dreaming status, and staged transcript uploads use the selected instance. Local skill and source configuration, session mutations, Dreaming management, updates, and desktop management refuse before their actions run. Pass `--local` or run those operations on the instance host. Existing JSON memory commands use the selected instance and accept a global `--agent` override; omitted agent selection is resolved by the daemon under your identity.
 
-Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`restart`, `repair`, and `embed`) and portable bundle import/export are not available yet and refuse before touching local files, databases, or processes. Organization imports require an explicit `--agent`.
+Remote streaming requests use the selected instance and its resolved credential; they never fall back to the local daemon. `signet pause` and `signet resume` (also under `signet daemon`) control the organization's pipeline through authenticated API calls and support `--json`. They require an administrator without agent or project restrictions. Remote operator commands (`restart`, `repair`, and `embed`) use tracked daemon operations; portable bundle import/export transfers evidence through the selected instance. Organization imports require an explicit `--agent`.
 
 Administrators can use:
 
@@ -173,9 +209,9 @@ Classification definition reads (`GET /api/classifications` and `GET /api/classi
 
 `signet logs` (also `signet daemon logs`) reads a bounded snapshot from the selected organization. Use `--follow` to stream new events; Ctrl-C cancels the request, releases the server subscription, and exits cleanly. `--lines` accepts 1–500 events (default 50); `--level` and `--category` filter the feed. `--json` returns one JSON snapshot, or newline-delimited JSON when following, starting with a `connected` record. A stream ends after at most 60 seconds; it does not reconnect automatically. Authentication and permission failures are returned without reading local log files or starting a daemon. JSON log output is organization-only; existing local text logging behavior is unchanged.
 
-Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Both are audited. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Local-mode logging is unchanged.
+Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Snapshot and stream opens share one audit event per principal per minute. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Content-item events without compartment attribution, and unattributed content-pipeline categories, are omitted entirely: they leave no timestamp, count, or event-budget footprint. Attributed stream events are visible only to their audience. The recent snapshot retains only organization-visible operational metadata, so classified events cannot evict public history. Daemon and system events remain available. Local-mode logging is unchanged.
 
-A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
+A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Credentials and authority are rechecked every two seconds with a one-second owner deadline. Revocation, deactivation, permission loss, or a changed audience closes the stream with a terminal `scope_changed` event within five seconds. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
 
 ## Memory review filters
 
@@ -195,7 +231,7 @@ Organization Dreaming status and pass responses include the system author (`{ ki
 
 ## Worker pause controls
 
-Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited.
+Administrators without an agent or project restriction can call `POST /api/pipeline/pause` or `POST /api/pipeline/resume` with an empty JSON body. The daemon persists the setting before restarting its pipeline runtime; it survives a daemon restart. Repeating the current setting succeeds with `changed: false`. A failed runtime transition restores the previous configuration and runtime rather than reporting success. Start, completion, and failure events are audited. Pause/resume writers serialize under a bounded configuration lock and use the shared durable atomic-write helper. A symlinked configuration is refused with `config_symlink`; it is never followed or replaced. YAML formatting and unrelated settings are preserved.
 
 Dreaming pass lists apply audience, agent, and project restrictions in SQL before paging. Pass records have no project ownership, so project-restricted credentials receive no passes. Optional author, team, and classification review metadata enriches admitted rows; missing metadata never silently shortens a page.
 
@@ -223,9 +259,13 @@ Open authentication endpoints are rate-limited by client address. Login allows f
 
 ## Upgrade an existing team workspace
 
-Claiming does not delete or remap old data. Existing agents are marked `legacy`; administrators can inspect and map them through `/api/org/agents/legacy` and `/api/org/agents/:id/map`.
+Claiming does not delete or remap old data. In **Organization → Agents**, choose **Review upgrade**. Map existing agents to people, teams, or organization memory, assign or revoke unowned API keys, then set the legacy-key deadline. The daemon saves a dry run before anything changes. You can edit every mapping or cancel the draft until you confirm its exact revision. If the inventory changes, review a fresh revision rather than applying a stale plan.
 
-Existing API keys receive a migration grace period of fourteen days after claim. Inspect them with `/api/org/keys?legacy=1`, assign them to active users, or revoke them before the deadline. Administrators can adjust `legacyKeyDeadline`. Legacy signed tokens do not authenticate after claim; replace them with user sessions or owned API keys.
+Organization mappings, including unmapped agents, become retained organization stores. Their IDs, evidence, provenance, classifications, citations, and indexes stay in place; nothing is merged or rewritten. Organization reads include their readable material at query time, without bypassing classification audiences. Dashboard and CLI agent lists label them **(imported)** and show organization ownership. New organization writes use `default`; a retained store accepts only an administrator's explicitly targeted writes. It cannot become a default or personal write destination. Existing personal-mode write routing is unchanged. The older one-agent map API still restricts organization mappings to `default`.
+
+Confirmation starts an audited, bounded daemon-owner job. The progress counter counts ownership, key, and deadline steps, not memories. Closing the wizard does not cancel confirmed work. Committed progress resumes after a daemon restart; a stopped job retains its completed steps and can continue with **Retry continuation** after its reported conflict is resolved. Completion reports the exact saved preview as the applied plan. Upgrades admit up to 256 legacy agents and 1,000 unowned keys, with one confirmed upgrade running at a time.
+
+Existing API keys receive a migration grace period of fourteen days after claim. Assigning a key retains its permissions and bindings, bounded by its new owner's access; it cannot grant that owner write access to someone else's agent. You can revoke keys on confirmation or leave them unassigned until the displayed deadline. After the deadline, remaining unassigned legacy keys are rejected on their next request. A past deadline is shown as an immediate-expiry warning. The bootstrap administrator password remains usable. Legacy signed tokens do not authenticate after claim; replace them with user sessions or owned API keys.
 
 ## Tracked operator jobs
 
@@ -241,7 +281,11 @@ The response is HTTP 202 with `{jobId}`. Poll `/api/org/jobs/:id` for durable
 completion. The job and its audit events are committed with each owner batch;
 acceptance is not completion. Queue repairs share the existing repair owner
 implementation. Legacy unscoped repair endpoints refuse organization requests.
-MCP exposes `signet_operator_job` and `signet_org_job`.
+MCP exposes `signet_operator_job` and `signet_org_job`. Jobs outside your act-as reach are absent from lists; fetching one returns the same 404 as a nonexistent ID, including through MCP.
+
+Admission reserves DB-owner maintenance capacity for non-operator work. At most eight operator owner requests are admitted globally and two per principal. Job starts also have a rolling one-minute budget of 20 per principal and 100 globally, including immediately completed dry runs. Excess requests return `503 busy` or `429 capacity` with `Retry-After`, never an internal error. Operator activity sweeps terminal job rows and operator audit events through the owner in batches of at most 100 each: retention is 30 days, with count targets of 1,000 finished jobs and 10,000 operator audit events. Lists also reap up to 100 orphaned or expired jobs per request. Existing backlogs converge across bounded sweeps; pending work is not deleted.
+
+Embedding backfills resolve their active profile from the pinned database profile before fetching or committing vectors. Each provider response has a 10-second deadline and a 1-MiB body bound; cancellation remains attached until the body is consumed. The whole backfill has a 60-second deadline, including multi-item batches.
 
 Queue actions default to a dry run, 20 rows, with a maximum of 100. Embedding
 backfill defaults to a dry run through the API and selects at most 20 memories,
@@ -318,13 +362,20 @@ do not stop the organization instance or open its database from a client.
 ## Hosting and joining
 
 On the instance host, run `signet setup --host --local --public-url https://memory.example.com`.
-Use `--path` for a separate workspace and an unused `SIGNET_PORT` if another
-instance is running. Host setup creates a team-mode workspace without installing
-harnesses, starts that workspace's daemon, and checks the public URL with its
-setup nonce. A mismatch or unreachable URL fails rather than silently configuring
-SSO and device-approval links for the wrong host. Rerun against the same unclaimed
-team workspace after fixing connectivity; existing personal workspaces are not
-converted. Configure providers, embeddings, and shared sources after claiming.
+Use `--path` for a separate workspace and `--port <port>` to select its listen
+port. Port selection is resolved once: `--port` overrides `SIGNET_PORT`, then the
+port in `SIGNET_DAEMON_URL`, then the default. A listener already using the port
+makes setup fail before creating or launching a workspace; choose an unused
+`--port`. Readiness must report the PID and workspace of the daemon just launched.
+Without `--public-url`, the setup link uses that resolved loopback origin. Supply
+`--public-url` for a reverse proxy's externally reachable origin; it does not
+change the daemon's listen port. Host setup creates a team-mode workspace without
+installing harnesses, starts that workspace's daemon, and checks the public URL
+with its setup nonce. A mismatch or unreachable URL fails rather than silently
+configuring SSO and device-approval links for the wrong host. Before rerunning
+setup, stop that workspace's daemon through its service manager. Existing personal
+workspaces are not converted. Configure providers, embeddings, and shared sources
+after claiming.
 
 The command prints a setup URL and the one-time setup token separately; the token
 is never put in the URL. A service-started daemon stores it in its private runtime

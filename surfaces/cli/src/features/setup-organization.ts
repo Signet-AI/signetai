@@ -5,19 +5,14 @@ import { SignetTransport, SignetError } from "../../../../libs/sdk/src/index.js"
 import { readKeyFile } from "../../../../libs/sdk/src/node.js";
 import { runDashboardSetupBootstrap } from "./setup-fresh.js";
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
+import { assertHostPortAvailable, resolveHostOrigin } from "../lib/host-target.js";
 
-function connectionRefused(value: unknown, depth = 0): boolean {
-	if (typeof value !== "object" || value === null) return false;
-	if ("code" in value && (value.code === "ECONNREFUSED" || value.code === "ConnectionRefused")) return true;
-	return depth < 3 && "cause" in value && connectionRefused(value.cause, depth + 1);
-}
 export async function setupOrganizationHost(
 	options: SetupWizardOptions,
 	deps: Pick<SetupDeps, "AGENTS_DIR" | "DEFAULT_PORT" | "normalizeAgentPath" | "getTemplatesDir" | "startDaemon">,
 ) {
-	if (!options.publicUrl)
-		throw new SignetError("Host setup requires --public-url <https://instance-host>", "public_url_required");
-	const url = new URL(options.publicUrl);
+	const origin = resolveHostOrigin(options.port, process.env, deps.DEFAULT_PORT);
+	const url = new URL(options.publicUrl ?? origin);
 	if (
 		url.username ||
 		url.password ||
@@ -44,29 +39,18 @@ export async function setupOrganizationHost(
 		);
 	const basePath = deps.normalizeAgentPath(options.path ?? deps.AGENTS_DIR);
 	if (options.dryRun) {
-		console.log(JSON.stringify({ host: true, path: basePath, publicUrl: url.origin, mode: "team", dryRun: true }));
+		console.log(
+			JSON.stringify({ host: true, path: basePath, origin, publicUrl: url.origin, mode: "team", dryRun: true }),
+		);
 		return;
 	}
+	await assertHostPortAvailable(origin);
 	const local = new SignetTransport({
-		baseUrl:
-			options.bootstrapUrl ??
-			(() => {
-				throw new SignetError("Host bootstrap target was not resolved", "target_required");
-			})(),
+		baseUrl: origin,
 		retries: 0,
 		timeoutMs: 2000,
 	});
-	let running: { agentsDir: string } | null = null;
-	try {
-		running = await local.get<{ agentsDir: string }>("/health");
-	} catch (error) {
-		if (!connectionRefused(error)) throw error;
-	}
-	if (running && running.agentsDir !== basePath)
-		throw new SignetError(
-			"The local port belongs to another workspace; choose an unused SIGNET_PORT",
-			"workspace_conflict",
-		);
+
 	let exists = false;
 	try {
 		await access(join(basePath, "agent.yaml"));
@@ -88,7 +72,6 @@ export async function setupOrganizationHost(
 				"workspace_exists",
 			);
 	} else {
-		if (running) throw new SignetError("The running workspace has no configuration", "workspace_conflict");
 		await runDashboardSetupBootstrap(
 			basePath,
 			{
@@ -99,13 +82,19 @@ export async function setupOrganizationHost(
 			deps,
 		);
 	}
-	if (!running && !(await deps.startDaemon(basePath)))
+	if (!(await deps.startDaemon(basePath, undefined, undefined, { origin })))
 		throw new SignetError(
 			"Organization workspace created, but daemon startup failed; fix startup and rerun --host",
 			"daemon_start_failed",
 		);
-	const health = await local.get<{ agentsDir: string }>("/health");
-	if (health.agentsDir !== basePath)
+	const launchedPid = Number((await readFile(join(resolveWorkspaceLayout(basePath).runtime, "pid"), "utf8")).trim());
+	const health = await local.get<{ agentsDir: string; pid: number }>("/health");
+	if (
+		!Number.isSafeInteger(launchedPid) ||
+		launchedPid <= 0 ||
+		health.pid !== launchedPid ||
+		health.agentsDir !== basePath
+	)
 		throw new SignetError("Daemon readiness belongs to another workspace", "workspace_conflict");
 	const setupToken = await readKeyFile(join(resolveWorkspaceLayout(basePath).runtime, "setup-token"));
 	const publicClient = new SignetTransport({ baseUrl: url.origin, retries: 0, timeoutMs: 10_000 });
@@ -118,5 +107,5 @@ export async function setupOrganizationHost(
 	console.error(
 		"This instance uses team authentication. Do not deploy hybrid mode behind an untrusted reverse proxy. Configure providers and sources after claiming; no server harnesses were installed.",
 	);
-	console.log(`Setup URL: ${url.origin}/auth/setup\nOne-time setup token: ${setupToken}`);
+	console.log(`Daemon: ${origin}\nSetup URL: ${url.origin}/auth/setup\nOne-time setup token: ${setupToken}`);
 }

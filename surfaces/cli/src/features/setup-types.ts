@@ -3,7 +3,8 @@ import type { OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
 	host?: boolean;
-	bootstrapUrl?: string;
+	port?: string;
+
 	publicUrl?: string;
 	path?: string;
 	nonInteractive?: boolean;
@@ -69,7 +70,7 @@ export interface SetupDeps {
 	readonly showStatus: (options: { path?: string; json?: boolean }) => Promise<void>;
 	readonly signetLogo: () => string;
 	readonly signetBanner: () => string;
-	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
+	readonly startDaemon: typeof import("../lib/runtime.js").startDaemon;
 	readonly getSkillsSourceDir: () => string;
 	readonly syncBuiltinSkills: (
 		skillsSourceDir: string,

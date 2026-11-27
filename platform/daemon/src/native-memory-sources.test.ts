@@ -1630,11 +1630,14 @@ describe("native memory sources", () => {
 		let providerCalls = 0;
 		const provider = Bun.serve({
 			port: 0,
-			fetch: () => {
+			fetch: (request: Request) => {
+				if (request.method === "HEAD" && new URL(request.url).pathname === "/")
+					return new Response(null, { status: 503 });
 				providerCalls++;
 				return new Response("provider unavailable", { status: 503 });
 			},
 		});
+		expect((await fetch(`http://127.0.0.1:${provider.port}`, { method: "HEAD" })).status).toBe(503);
 		const bridge = startNativeMemoryBridge([source], {
 			agentId: "agent-worker-owned-provider",
 			pollIntervalMs: 0,

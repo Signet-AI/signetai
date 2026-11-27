@@ -30,6 +30,26 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
   errors may include structured fields such as `status`, `code`, or
   `missingCapabilities`.
 
+## Operator instance settings
+
+### GET /api/org/operator/settings
+
+Returns only `{ inference, embedding, sourcesDefaults, instructions, complete }`. It requires a claimed organization and an unrestricted administrator user session. API keys, members, compliance-only callers, bound-agent/project credentials and scope aliases are refused with HTTP 403. The general `/api/config` policy is unchanged.
+
+### PATCH /api/org/operator/settings
+
+Accepts exactly one section per request:
+
+- `{ section: "inference", value: { provider, model, endpoint, credentialRef, allowRemote } }`. Providers: `none`, `openai-compatible`, `openai`, `anthropic`, `google`, `openrouter`. A configured provider needs a model; OpenAI-compatible targets need an endpoint. Non-loopback processing requires `allowRemote: true`.
+- `{ section: "embedding", value: { provider, model, dimensions, endpoint, credentialRef } }`. Providers: `none`, `native`, `ollama`, `llama-cpp`, `openai`; dimensions are integers from 1 through 65,536. Configured embedding providers need a model; non-native endpoints are explicit.
+- `{ section: "sourcesDefaults", value: { agentId, classificationId } }`. The agent must be available to the caller; a classification reference must be visible. These defaults do not replace the sources owner's write admission.
+- `{ section: "instructions", value: "organization instructions" }`, at most 65,536 UTF-8 bytes, saved as the instance's `AGENTS.md`.
+- `{ section: "complete", value: true }`, durably completing operator setup.
+
+Unknown fields are rejected. Endpoints are HTTP(S), without credentials, query strings or fragments. Optional endpoints and secret references use `null`. Secret references are existing uppercase Secrets names, not values; hosted provider credentials must use a reference. The response never returns secret values or other configuration sections. A successful PATCH returns the same constrained projection as GET. Publication uses the existing atomic runtime-config writer and excludes overlapping pipeline/config transitions; contention returns HTTP 409. Settings read/update and denied authorization events are audited without instruction text or secret values. An embedding configuration save does not claim that index migration has completed.
+
+MCP tools `signet_operator_settings_get` and `signet_operator_settings_set` use these routes and the same administrator-session requirement.
+
 ## Organization reads and exports
 
 In a claimed organization, the organization agent reads across non-archived
@@ -197,6 +217,8 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/whoami` | Resolved identity and effective access; safe without a credential. |
 | GET | `/api/auth/profile` | Own profile, `identityProvider` ownership metadata and `editableFields`; never accepts another user's identity. |
 | PATCH | `/api/auth/profile` | User session; `{ displayName? }`; any `email` field returns 403 `email_change_requires_admin`. Admins change email through the org users API. SSO-managed identity fields are read-only. |
+| GET | `/api/auth/onboarding` | Unrestricted user session; own `{ version, acknowledged, complete }` visibility acknowledgement. No identity or scope parameters. |
+| POST | `/api/auth/onboarding` | Unrestricted user session; `{ action: "acknowledge", version: "organization-visibility-v1" }` records the human visibility acknowledgement, or `{ action: "complete" }` completes onboarding after acknowledgement. Audited and durable; credentials cannot acknowledge for another user. |
 | PATCH | `/api/auth/preferences` | User session; `{ defaultReadAgentId }` sets only the caller's default read agent. |
 | POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited. |
 | GET | `/api/auth/sso/start` | OIDC authorization redirect; optional `continuation` is a single-use code with a 60-second TTL, never an invitation token. |
@@ -243,6 +265,13 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | PATCH | `/api/agents/:id` | Admin; `{ name?, ownerUserId?, ownerGroupId?, archived? }`. |
 | GET | `/api/org/agents/legacy` | Admin; legacy agents awaiting mapping. |
 | POST | `/api/org/agents/:id/map` | Admin; `{ kind, ownerUserId?, ownerGroupId? }`. |
+| GET | `/api/org/upgrade` | Unrestricted admin; bounded legacy agent/key inventory, active owner choices, deadline, and recent jobs. |
+| POST | `/api/org/upgrade/preview` | Unrestricted admin; `{ mappings: [{ agentId, kind, ownerUserId?, ownerGroupId? }], keys: [{ id, action: "assign", userId } \| { id, action: "revoke" }], legacyKeyDeadline }`; `201` durable draft with `revision` and authoritative `preview`. |
+| GET | `/api/org/upgrade/:id` | Unrestricted admin; durable phase, status, preview, applied plan, step progress, and error. |
+| PUT | `/api/org/upgrade/:id` | Unrestricted admin; `{ revision, plan }` replaces an unconfirmed draft and issues a new revision. |
+| POST | `/api/org/upgrade/:id/confirm` | Unrestricted admin; `{ revision }`; validates inventory and starts the exact reviewed plan, `202`. |
+| POST | `/api/org/upgrade/:id/cancel` | Unrestricted admin; `{ revision }`; cancels an unconfirmed draft without ownership/key/deadline writes. |
+| POST | `/api/org/upgrade/:id/resume` | Unrestricted admin; `{ revision }`; continues an interrupted applying job, `202`, never reapplies committed steps. |
 | GET | `/api/org/access/:userId` | Admin or compliance; effective roles, groups, act-as agents, and readable classifications. |
 | GET | `/api/org/settings` | Admin; organization policy and OIDC configuration, never client-secret values. |
 | PATCH | `/api/org/settings` | Admin; name, agent model, self-service, login policy, TTLs, legacy deadline, retention, public URL, OIDC. |
@@ -251,10 +280,12 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | PATCH | `/api/org/keys/:id` | Admin; `{ userId }` assigns a legacy key to an active user. |
 | GET | `/api/org/audit` | Audit permission; actor/action/target/time filters, cursor, limit; `{ events, nextCursor }`. |
 | GET | `/api/org/audit/export` | Audit permission; NDJSON; narrow the time range for large exports. |
-| GET | `/api/org/jobs` | Admin; optional `kind`. |
-| GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. |
+| GET | `/api/org/jobs` | Admin; optional `kind`. Operator jobs outside the viewer’s act-as reach are omitted before limiting. Reaps orphaned operator work in bounded batches. |
+| GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. An inaccessible operator job returns the same `404 not_found` as a nonexistent job, including through MCP. |
 
-`POST /api/auth/token` is disabled after claim (`403 org_policy`). `POST /api/auth/session` accepts a personal API key as a bearer credential and returns cookie authentication with durable parent-key permission, agent, project, and expiry ceilings; it rejects shared, connector, and legacy keys and never returns a bearer token. `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }` to preview `{ confirmationRequired: true, user, organization }` without changing cookies. After an explicit user confirmation, `{ code, confirm: true }` consumes the code, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
+The upgrade API and MCP `signet_org_upgrade` require an active administrator with unbound agent/project authority. A preview admits at most 256 legacy agents and 1,000 unowned keys; omitted agents become organization-owned retained stores, and omitted keys remain unassigned until the deadline. `preview.retainedStorePolicy` explains this in plain words. Original evidence and store IDs are not merged or rewritten. Organization reach includes imported stores under existing classification gates. `/api/agents` labels them `<name> (imported)` with `kind: "organization"`; only explicitly targeted administrator writes are allowed. Non-upgrade map calls retain the default-only organization restriction. Jobs apply eight configuration steps per owner transaction, persist an audit and cursor with every batch, and report `appliedPlan` only after durable completion. Stale revisions/inventory return `409`; narrowed or non-admin credentials receive `403` without job details. Eight unconfirmed drafts and one running upgrade are admitted at a time.
+
+`POST /api/auth/token` is disabled after claim (`403 org_policy`). `POST /api/auth/session` accepts a personal API key as a bearer credential and returns cookie authentication with durable parent-key permission, agent, project, and expiry ceilings; it rejects shared, connector, and legacy keys and never returns a bearer token. `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }` to preview `{ confirmationRequired: true, user, organization }` without changing cookies. After an explicit user confirmation, `{ code, confirm: true }` consumes the code, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept a Signet Secrets `clientSecretRef` or a write-only `clientSecret`; MCP accepts references only. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
 
 Roles and their permissions:
 
@@ -439,6 +470,10 @@ without hiding setup affordances).
 
 ### Organization setup and operations
 
+Organization log snapshots (`GET /api/logs`) and SSE streams (`GET /api/logs/stream`) require unrestricted `admin` and `diagnostics`. Unreadable item metadata and unattributed content-pipeline events are omitted, not replaced by placeholders. Snapshot history is organization-visible only; attributed stream events follow the caller's compartment audience. Opens coalesce to one audit event per principal per minute. Streams recheck credential authority every two seconds and terminate with `scope_changed` on revocation or changed access; verification has a one-second owner deadline.
+
+`POST /api/pipeline/pause` and `/api/pipeline/resume` persist their setting through a serialized, durable atomic write. Symlinked configuration returns `409 config_symlink` without reading or replacing the symlink target.
+
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/api/org/bootstrap` | Unclaimed team instance only; setup nonce and checked public URL. |
@@ -447,4 +482,4 @@ without hiding setup affordances).
 | GET | `/api/org/operator/doctor` | Audited identity, clock, and DB-owner diagnostics. |
 | GET | `/api/org/operator/capabilities` | Admin; verified supervisor availability. |
 | POST | `/api/org/operator/restart` | Unrestricted admin; empty JSON body; `202 {accepted, jobId, status, supervisor}`. Poll the job for actual readiness, not just acceptance. |
-| POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill; `202 {jobId}`. See Organizations for action schemas, admission limits, and incomplete-job semantics. |
+| POST | `/api/org/operator/jobs` | Scoped queue repair, embedding audit, and embedding backfill; `202 {jobId}`. Admission overflow is `503 busy` or `429 capacity` with `Retry-After`. See Organizations for action schemas, admission limits, retention, and incomplete-job semantics. |

@@ -50,7 +50,7 @@ AC10 builds the CLI and invokes `connect` for each supported harness in a fresh 
 
 ## AC8 eval artifact
 
-AC8 seeds ten fixed Atlas facts across Alice, Bob, Carol, and the engineering agent, runs ten fixed organization-agent recall questions, and writes `results/atlas-recall.json`. The score is required-fact presence in returned recall context, not an LLM answer judge. Quality does not fail the test; request/fixture errors do. Results are generated, ignored artifacts: attach the actual JSON to the integrated PR rather than committing a guessed score. No result on base is expected because organization bootstrap is absent.
+AC8 seeds ten fixed Atlas facts across Alice, Bob, Carol, and the engineering agent, runs ten fixed organization-agent recall questions, and writes `atlas-recall.json` under `SIGNET_ORG_EVAL_OUTPUT_DIR`, defaulting to a `signet-org-mode-results` directory in the test's temporary directory. Set the variable to an absolute scratch directory to retain the artifact after the hermetic runner cleans up. The score is required-fact presence in returned recall context, not an LLM answer judge. Quality does not fail the test; request/fixture errors do. Results are generated, ignored artifacts: attach the actual JSON to the integrated PR rather than committing a guessed score. No result on base is expected because organization bootstrap is absent.
 
 ## Integration prerequisites
 

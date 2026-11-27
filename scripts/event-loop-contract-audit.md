@@ -157,7 +157,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/skill-reconciler.ts:183` (withReadDbAsync)
 - `pipeline/synthesis-worker.ts:91` (withReadDb)
 - `pipeline/synthesis-worker.ts:117` (withReadDb)
-- `repair-actions.ts:211` (withWriteTxAsync)
+- `repair-actions.ts:214` (withWriteTxAsync)
 - `db:repair.fts-consistency.read` (withReadDbAsync)
 - `db:repair.embedding-gap.read` (withReadDbAsync)
 - `db:repair.embedding-migration.read` (withReadDbAsync)

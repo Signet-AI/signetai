@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { OrganizationUpgrade } from "@/components/organization/upgrade";
 import { AgentsContent } from "@/components/organization/agents";
 import { AuthenticationContent } from "@/components/organization/authentication";
 import { ClassificationsContent } from "@/components/organization/classifications";
@@ -103,20 +104,23 @@ export function OrganizationSection({ section }: { section: OrganizationSectionI
 				empty={(data) => !data.agents.length}
 			>
 				{(data, refresh) => (
-					<OrganizationResource<{ groups: readonly OrganizationGroup[] }> path="/api/org/groups">
-						{(groups) => (
-							<OrganizationResource<{ users: readonly OrganizationUserRow[] }> path="/api/org/users">
-								{(users) => (
-									<AgentsContent
-										agents={data.agents}
-										groups={groups.groups}
-										users={users.users.map(organizationUser)}
-										refresh={refresh}
-									/>
-								)}
-							</OrganizationResource>
-						)}
-					</OrganizationResource>
+					<div className="flex flex-col gap-6">
+						<OrganizationUpgrade onUpdated={refresh} />
+						<OrganizationResource<{ groups: readonly OrganizationGroup[] }> path="/api/org/groups">
+							{(groups) => (
+								<OrganizationResource<{ users: readonly OrganizationUserRow[] }> path="/api/org/users">
+									{(users) => (
+										<AgentsContent
+											agents={data.agents}
+											groups={groups.groups}
+											users={users.users.map(organizationUser)}
+											refresh={refresh}
+										/>
+									)}
+								</OrganizationResource>
+							)}
+						</OrganizationResource>
+					</div>
 				)}
 			</OrganizationResource>
 		);
@@ -226,10 +230,7 @@ function TeamsSection({
 }) {
 	const [selected, setSelected] = useState<string | null>(null);
 	return (
-		<OrganizationResource<{ groups: readonly OrganizationGroup[] }>
-			path="/api/org/groups"
-			empty={(data) => !data.groups.some((group) => admin || groupIds.includes(group.id))}
-		>
+		<OrganizationResource<{ groups: readonly OrganizationGroup[] }> path="/api/org/groups">
 			{(data, refresh) => (
 				<div className="flex flex-col gap-6">
 					{selected ? (

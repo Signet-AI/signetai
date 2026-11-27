@@ -17,8 +17,18 @@ these inputs when its client starts; later environment changes do not retarget i
 ## Sign in and connect
 
 Your administrator supplies the URL of a reachable team daemon and authorizes
-your account. Use HTTPS outside a trusted private network. Install the Signet
-CLI and your harness on the client machine, then run:
+your account. Explicit HTTP targets are allowed from a URL flag, connector
+registry or configuration, or `SIGNET_DAEMON_URL`, including LAN and tailnet
+addresses. **HTTP sends API keys and session tokens in clear text.** Use HTTPS
+or an encrypted private tunnel whenever possible. A non-loopback HTTP target
+prints one warning per process to stderr, including in the CLI; the warning
+never includes a credential.
+
+An environment key never follows an explicit `--url` override to another origin
+unless `SIGNET_DAEMON_URL` names that origin. Requests refuse implicit redirects
+and never forward Authorization across origins.
+
+Install the Signet CLI and your harness on the client machine, then run:
 
 ```bash
 signet login --url https://signet.example.com

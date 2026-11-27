@@ -5,6 +5,30 @@ import { resolveCliTarget, localOnlyMessage, registerOrganizationTarget } from "
 
 afterEach(() => registerOrganizationTarget(new Command()));
 
+test("explicit HTTP CLI targets produce one clear-text warning without credentials in output", async () => {
+	const script = `
+const { resolveCliTarget } = await import(${JSON.stringify(new URL("./organization-target.ts", import.meta.url).href)});
+const key = "cli-fixture-key-" + crypto.randomUUID();
+const results = [];
+for (const url of ["http://192.168.20.10:3850", "http://100.64.20.10:3850"]) {
+ const target = await resolveCliTarget({ url }, { flagKey: key, env: { HOME: process.env.HOME, APPDATA: process.env.APPDATA } });
+ results.push(target.remote && await target.credential.get() === key);
+}
+console.log(JSON.stringify(results));
+`;
+	const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+	const [stdout, stderr, code] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	expect(code, stderr).toBe(0);
+	expect(JSON.parse(stdout)).toEqual([true, true]);
+	expect(stderr.match(/HTTP sends credentials in clear text/g)).toHaveLength(1);
+	expect(stderr).not.toContain("cli-fixture-key-");
+	expect(stdout).not.toContain("cli-fixture-key-");
+});
+
 test("local-only commands refuse remotely before running their action and --local preserves it", async () => {
 	let actions = 0;
 	for (const local of [false, true]) {
@@ -20,6 +44,177 @@ test("local-only commands refuse remotely before running their action and --loca
 		else await expect(request).rejects.toThrow(localOnlyMessage("acme.example"));
 	}
 	expect(actions).toBe(1);
+});
+
+test("unknown and local workspace commands refuse remote targets by default", async () => {
+	for (const path of [
+		"skill list",
+		"sources add obsidian",
+		"telemetry",
+		"bypass",
+		"session bypass",
+		"dream trigger",
+		"update",
+		"accelerate",
+		"desktop",
+		"future-command",
+		"agent future-command",
+		"connector future-command",
+		"hook future-command",
+	]) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let command = program;
+		for (const name of path.split(" ")) command = command.command(name);
+		let ran = false;
+		command.action(() => {
+			ran = true;
+		});
+		await expect(program.parseAsync(path.split(" "), { from: "user" })).rejects.toThrow(
+			localOnlyMessage("org.example"),
+		);
+		expect(ran).toBe(false);
+	}
+});
+
+test("every registered command is explicitly remote-capable or refuses before its action", async () => {
+	const { z } = await import("zod");
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			"--preload",
+			new URL("./test-support/command-tree.ts", import.meta.url).pathname,
+			new URL("../cli.ts", import.meta.url).pathname,
+		],
+		{
+			env: { ...process.env, SIGNET_DAEMON_URL: "http://127.0.0.1:49998" },
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const output = await new Response(child.stdout).text();
+	const errors = await new Response(child.stderr).text();
+	expect(await child.exited, errors).toBe(0);
+	const paths = z.array(z.array(z.string())).parse(JSON.parse(output));
+	expect(paths.length).toBeGreaterThan(200);
+	const targetOwning = new Set([
+		"connect",
+		"disconnect",
+		"connector mcp",
+		"connector install",
+		"connector rotate",
+		"connector list",
+		"connector doctor",
+		"hook session-start",
+		"hook user-prompt-submit",
+		"hook notifications",
+		"hook wake",
+		"hook session-end",
+		"hook stop",
+		"hook pre-compaction",
+		"hook compaction-complete",
+		"hook synthesis",
+	]);
+	const supported = new Set([
+		"login",
+		"logout",
+		"whoami",
+		"dashboard",
+		"status",
+		"restart",
+		"pause",
+		"resume",
+		"logs",
+		"remember",
+		"recall",
+		"search",
+		"memory list",
+		"memory show",
+		"session search",
+		"session list",
+		"sources list",
+		"sources imports upload",
+		"dream status",
+		"import",
+		"export",
+		"export transcripts",
+		"export bundle",
+		"doctor",
+		"daemon restart",
+		"daemon pause",
+		"daemon resume",
+		"daemon status",
+		"daemon logs",
+		"embed audit",
+		"embed backfill",
+		"repair queue requeue",
+		"repair queue cancel",
+		"repair queue prune",
+		"agent use",
+		"agent transfer",
+		"agent list",
+		"agent add",
+		"agent remove",
+		"agent purge",
+		"agent info",
+		"agent show",
+		"agent set",
+		"secret put",
+		"secret list",
+		"secret delete",
+		"secret get",
+		"secret has",
+		"secret exec",
+		"secret exec-status",
+		"api-key create",
+		"api-key list",
+		"api-key revoke",
+		"auth sso set",
+		"auth devices",
+		"auth devices revoke",
+		"auth devices rename",
+		"auth sessions",
+		"auth sessions revoke",
+		"org users list",
+		"org users invite",
+		"org users role",
+		"org users reactivate",
+		"org users deactivate",
+		"org teams list",
+		"org teams create",
+		"org teams show",
+		"org teams delete",
+		"org teams rename",
+		"org teams add",
+		"org teams remove",
+		"org access",
+		"org jobs",
+		"org agents list",
+		"audit",
+		"classification list",
+		"classification create",
+		"classification audience",
+		"classify",
+	]);
+	for (const path of paths) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let command = program;
+		for (const name of path) command = command.command(name);
+		let ran = false;
+		command.action(() => {
+			ran = true;
+		});
+		const allowed = supported.has(path.join(" ")) || targetOwning.has(path.join(" "));
+		const result = program.parseAsync(["--agent", "fixture", ...path], { from: "user" });
+		if (allowed) await result;
+		else await expect(result, path.join(" ")).rejects.toThrow(localOnlyMessage("org.example"));
+		expect(ran, path.join(" ")).toBe(allowed);
+	}
 });
 
 test("--local routes existing clients to loopback without organization credentials", async () => {

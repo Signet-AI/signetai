@@ -7,6 +7,8 @@ test("organization page titles use the local centered position at every breakpoi
 	expect(html).toContain("left-1/2");
 	expect(html).toContain("-translate-x-1/2");
 	expect(html).not.toContain("hidden sm:flex");
+	expect(html).not.toContain("max-w-12 ");
+	expect(html).toContain("max-w-[calc(100%_-_208px)]");
 });
 
 test("only organization administrators see unavailable instance updates", () => {
