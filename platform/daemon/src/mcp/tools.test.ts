@@ -206,6 +206,20 @@ describe("createMcpServer", () => {
 		expect((await callTool(server, "signet_operator_job", { action: "embed.audit" })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/org/operator/jobs");
 		expect(capture.method).toBe("POST");
+		expect((await callTool(server, "signet_org_upgrade", { action: "inventory" })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/upgrade");
+		expect(
+			(
+				await callTool(server, "signet_org_upgrade", {
+					action: "confirm",
+					jobId: "job_upgrade",
+					revision: "revision",
+					confirm: true,
+				})
+			).isError,
+		).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/org/upgrade/job_upgrade/confirm");
+		expect(capture.method).toBe("POST");
 		expect((await callTool(server, "signet_pipeline_pause", { paused: true })).isError).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/pipeline/pause");
 		expect(capture.method).toBe("POST");
@@ -429,7 +443,8 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_operator_job");
 		expect(names).toContain("signet_org_user_lookup");
 		expect(names).toContain("signet_org_sso_set");
-		expect(names.length).toBe(74);
+		expect(names).toContain("signet_org_upgrade");
+		expect(names.length).toBe(75);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {

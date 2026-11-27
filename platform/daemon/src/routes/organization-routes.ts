@@ -1,3 +1,4 @@
+import { registerOrganizationUpgradeRoutes } from "./organization-upgrade-routes";
 import { setOrganizationSso } from "../organization-sso";
 import { startAgentPurge } from "../agent-purge";
 import type { Context, Hono, MiddlewareHandler } from "hono";
@@ -95,6 +96,7 @@ export function registerOrganizationRoutes(
 			if (!c.get("organization")) return next();
 			return endpoint(fn)(c, next);
 		};
+	registerOrganizationUpgradeRoutes(app, active);
 	app.post(
 		"/api/org/claim",
 		endpoint(async (c) => {

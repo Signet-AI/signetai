@@ -243,6 +243,13 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | PATCH | `/api/agents/:id` | Admin; `{ name?, ownerUserId?, ownerGroupId?, archived? }`. |
 | GET | `/api/org/agents/legacy` | Admin; legacy agents awaiting mapping. |
 | POST | `/api/org/agents/:id/map` | Admin; `{ kind, ownerUserId?, ownerGroupId? }`. |
+| GET | `/api/org/upgrade` | Unrestricted admin; bounded legacy agent/key inventory, active owner choices, deadline, and recent jobs. |
+| POST | `/api/org/upgrade/preview` | Unrestricted admin; `{ mappings: [{ agentId, kind, ownerUserId?, ownerGroupId? }], keys: [{ id, action: "assign", userId } \| { id, action: "revoke" }], legacyKeyDeadline }`; `201` durable draft with `revision` and authoritative `preview`. |
+| GET | `/api/org/upgrade/:id` | Unrestricted admin; durable phase, status, preview, applied plan, step progress, and error. |
+| PUT | `/api/org/upgrade/:id` | Unrestricted admin; `{ revision, plan }` replaces an unconfirmed draft and issues a new revision. |
+| POST | `/api/org/upgrade/:id/confirm` | Unrestricted admin; `{ revision }`; validates inventory and starts the exact reviewed plan, `202`. |
+| POST | `/api/org/upgrade/:id/cancel` | Unrestricted admin; `{ revision }`; cancels an unconfirmed draft without ownership/key/deadline writes. |
+| POST | `/api/org/upgrade/:id/resume` | Unrestricted admin; `{ revision }`; continues an interrupted applying job, `202`, never reapplies committed steps. |
 | GET | `/api/org/access/:userId` | Admin or compliance; effective roles, groups, act-as agents, and readable classifications. |
 | GET | `/api/org/settings` | Admin; organization policy and OIDC configuration, never client-secret values. |
 | PATCH | `/api/org/settings` | Admin; name, agent model, self-service, login policy, TTLs, legacy deadline, retention, public URL, OIDC. |
@@ -253,6 +260,8 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/org/audit/export` | Audit permission; NDJSON; narrow the time range for large exports. |
 | GET | `/api/org/jobs` | Admin; optional `kind`. |
 | GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. |
+
+The upgrade API and MCP `signet_org_upgrade` require an active administrator with unbound agent/project authority. A preview admits at most 256 legacy agents and 1,000 unowned keys; omitted agents become organization-owned retained stores, and omitted keys remain unassigned until the deadline. `preview.retainedStorePolicy` explains this in plain words. Original evidence and store IDs are not merged or rewritten. Organization reach includes imported stores under existing classification gates. `/api/agents` labels them `<name> (imported)` with `kind: "organization"`; only explicitly targeted administrator writes are allowed. Non-upgrade map calls retain the default-only organization restriction. Jobs apply eight configuration steps per owner transaction, persist an audit and cursor with every batch, and report `appliedPlan` only after durable completion. Stale revisions/inventory return `409`; narrowed or non-admin credentials receive `403` without job details. Eight unconfirmed drafts and one running upgrade are admitted at a time.
 
 `POST /api/auth/token` is disabled after claim (`403 org_policy`). `POST /api/auth/session` accepts a personal API key as a bearer credential and returns cookie authentication with durable parent-key permission, agent, project, and expiry ceilings; it rejects shared, connector, and legacy keys and never returns a bearer token. `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }`, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
 
