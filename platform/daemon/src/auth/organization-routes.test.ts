@@ -188,6 +188,24 @@ describe("organization HTTP flows", () => {
 		expect((await (await call("/api/org/operator/capabilities")).json()).supervisor).toBeNull();
 		expect((await call("/api/auth/whoami")).status).toBe(200);
 	});
+	test("operator jobs outside another admin's act-as reach are indistinguishable from absent", async () => {
+		await claim();
+		const other = await member("other-admin");
+		await call(`/api/org/users/${other.userId}`, "PATCH", { role: "admin" });
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const started = await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" });
+		expect(started.status).toBe(202);
+		const { jobId } = await started.json();
+		const hidden = await call(`/api/org/jobs/${jobId}`, "GET", undefined, other.token);
+		const missing = await call("/api/org/jobs/job_missing", "GET", undefined, other.token);
+		expect(hidden.status).toBe(404);
+		expect(await hidden.json()).toEqual(await missing.json());
+		for (const path of ["/api/org/jobs", "/api/org/jobs?kind=operator"]) {
+			const response = await call(path, "GET", undefined, other.token);
+			expect(response.status).toBe(200);
+			expect(JSON.stringify(await response.json())).not.toContain(jobId);
+		}
+	});
 	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);

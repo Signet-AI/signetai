@@ -203,7 +203,13 @@ function audit(
 function view(db: WriteDb, actor: OperatorActor, row: OperatorJobRow): OperatorJobRow | null {
 	const plan = planSchema.parse(JSON.parse(row.params_json));
 	if (actor.boundAgentId && actor.boundAgentId !== plan.scope.reach.agentId) return null;
-	const fresh = actorScope(db, actor, plan.scope, plan.input.action === "embed.audit" ? "diagnostics" : "admin");
+	let fresh: ReadScope;
+	try {
+		fresh = actorScope(db, actor, plan.scope, plan.input.action === "embed.audit" ? "diagnostics" : "admin");
+	} catch (error) {
+		if (error instanceof Error && error.message === "operator:agent_not_permitted") return null;
+		throw error;
+	}
 	const allowed = fresh.compartments;
 	if (allowed !== "all" && plan.scope.compartments.some((c) => !allowed.includes(c))) return null;
 	if (
@@ -326,8 +332,11 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 				{ op: "visibility", subject: { userId: actor.userId, groupIds: groups, local: false } },
 			),
 		).compartments;
-		const where = ["j.kind='operator'"];
-		const args: (string | number)[] = [];
+		const where = [
+			"j.kind='operator'",
+			"EXISTS(SELECT 1 FROM agents a WHERE a.id=json_extract(j.params_json,'$.scope.reach.agentId') AND a.archived_at IS NULL AND (a.kind='organization' OR (a.kind='personal' AND a.owner_user_id=?) OR (a.kind='team' AND EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=a.owner_group_id AND gm.user_id=?)) OR a.kind='legacy'))",
+		];
+		const args: (string | number)[] = [actor.userId, actor.userId];
 		if (!actor.permissions.includes("diagnostics"))
 			where.push("json_extract(j.params_json,'$.input.action')<>'embed.audit'");
 		if (actor.boundAgentId) {

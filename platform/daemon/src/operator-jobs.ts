@@ -50,7 +50,11 @@ export async function operatorRequest<T>(request: OperatorRequest): Promise<T> {
 							? 409
 							: 403,
 				reason,
-				reason === "permission" ? "Requires the admin role with permission for this operation and scope" : reason,
+				reason === "not_found"
+					? "not found"
+					: reason === "permission"
+						? "Requires the admin role with permission for this operation and scope"
+						: reason,
 			);
 		}
 		throw error;
