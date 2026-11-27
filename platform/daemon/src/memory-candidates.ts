@@ -123,22 +123,19 @@ async function readScoredMemoryRows(
 	scope: ReadScope,
 	filter: { readonly sql: string; readonly args: readonly unknown[] },
 	tail: { readonly sql: string; readonly args: readonly unknown[] },
-	options: { readonly operation: string; readonly estimatedWorkUnits: number; readonly attributeBoost?: boolean },
+	options: { readonly operation: string; readonly estimatedWorkUnits: number },
 ): Promise<ScoredMemory[]> {
 	const boost = derivedScopeSql("ea", scope, { memory: "memory_id", session: null, source: "source_id" });
 	const visible = readScopeSql("m", scope);
-	const score =
-		options.attributeBoost === false
-			? "m.importance"
-			: `COALESCE((SELECT MAX(ea.importance) FROM entity_attributes ea WHERE ea.memory_id=m.id AND ea.status='active'${boost.sql}),m.importance,0.5)`;
+
 	const rows = await ownerReadAll<ScoredMemory>(
 		owner,
 		`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 		        m.source_type, m.source_id, COALESCE(m.access_count, 0) AS access_count,
-		        ${score} AS effScore
+		        COALESCE((SELECT MAX(ea.importance) FROM entity_attributes ea WHERE ea.memory_id=m.id AND ea.status='active'${boost.sql}),m.importance,0.5) AS effScore
 		 FROM memories m
 		 WHERE ${filter.sql}${currentMemorySql("m")}${visible.sql}${tail.sql}`,
-		[...(options.attributeBoost === false ? [] : boost.args), ...filter.args, ...visible.args, ...tail.args],
+		[...boost.args, ...filter.args, ...visible.args, ...tail.args],
 		{ ...options, lane: "read", deadlineMs: 5_000 },
 	);
 	return [...rows];
@@ -199,17 +196,15 @@ export async function getAllScoredCandidates(
 
 	try {
 		const owner = await getDbOwner(memoryDbPath);
-		const rows = await readScoredMemoryRows(
-			owner,
-			scope,
-			{ sql: "1 = 1", args: [] },
-			{ sql: " ORDER BY m.created_at DESC LIMIT ?", args: [limit * 3] },
+		const rows = await owner.submit<readonly Omit<ScoredMemory, "effScore">[]>(
+			{ kind: "session_start_candidates", scope, limit: limit * 3 },
 			{
 				operation: "session-start.candidate-pool",
-				estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)),
-				attributeBoost: false,
+				lane: "read",
+				deadlineMs: 5000,
+				estimatedWorkUnits: Math.max(1, Math.min(10000, limit * 3)),
 			},
-		);
+		).result;
 
 		const scored: ScoredMemory[] = rows
 			.map((r) => ({

@@ -371,6 +371,11 @@ export interface AuthObservation {
 }
 
 export type DbOwnerRequest =
+	| {
+			readonly kind: "session_start_candidates";
+			readonly scope: import("./read-scope").ReadScope;
+			readonly limit: number;
+	  }
 	| { readonly kind: "auth_observations"; readonly observations: readonly AuthObservation[] }
 	| {
 			readonly kind: "filesystem_document_write";

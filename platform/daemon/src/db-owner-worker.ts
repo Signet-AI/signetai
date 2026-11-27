@@ -18,6 +18,7 @@ import {
 	inFlightClassificationSql,
 	findSqliteVecExtension,
 	requireReadScope,
+	readScopeSql,
 	resolveWorkspaceLayout,
 	vectorSearchWithMetadata,
 } from "@signet/core";
@@ -1356,6 +1357,26 @@ export function runDbOwnerWorker(): void {
 	}
 
 	async function execute(job: DbOwnerJob, context: JobExecutionContext): Promise<unknown> {
+		if (job.request.kind === "session_start_candidates") {
+			if (job.lane !== "read") throw new Error("Candidate pools require the read lane");
+			const scope = requireReadScope(job.request.scope);
+			const limit = job.request.limit;
+			if (!Number.isSafeInteger(limit) || limit < 0 || limit > 10000) throw new Error("Invalid candidate pool limit");
+			const { currentMemorySql } = await import("./memory-search");
+			const visible = readScopeSql("m", scope);
+			return executeReadOnlyStatement({
+				readonly: true,
+				result: "all",
+				params: [...visible.args, limit],
+				sql: `WITH candidate_window AS MATERIALIZED (
+			 SELECT m.rowid AS candidate_rowid,m.created_at FROM memories m
+			 WHERE 1=1${currentMemorySql("m")}${visible.sql}
+			 ORDER BY m.created_at DESC LIMIT ?
+			) SELECT m.id,m.content,m.type,m.importance,m.tags,m.pinned,m.project,m.created_at,
+			 m.source_type,m.source_id,COALESCE(m.access_count,0) AS access_count
+			 FROM candidate_window c JOIN memories m ON m.rowid=c.candidate_rowid ORDER BY c.created_at DESC`,
+			});
+		}
 		if (job.request.kind === "initialize") {
 			const value = await executeInitialization(job.request.agentsDir, context);
 			installAuthorityEpoch();

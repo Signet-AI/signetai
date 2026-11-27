@@ -343,6 +343,7 @@ async function executeInlineOwnerRequest(
 		);
 	}
 	switch (request.kind) {
+		case "session_start_candidates":
 		case "content_read":
 		case "transcript_capture_transition":
 		case "transcript_capture_enqueue":

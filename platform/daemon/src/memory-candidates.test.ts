@@ -5,6 +5,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { getDbOwner } from "./db-owner-runtime";
 import {
 	MAX_TRAVERSAL_CANDIDATE_IDS,
 	fetchTraversalCandidates,
@@ -129,6 +130,25 @@ describe("fetchTraversalCandidates (#1250)", () => {
 		const rows = await getAllScoredCandidates(dbPath, undefined, 10, own("agent-a"));
 		expect(rows.map((row) => row.id)).toEqual(["memory-independent"]);
 		expect(rows[0]?.importance).toBe(0.9);
+	});
+
+	test("candidate owner admission rejects missing scope, excess rows and write-lane calls", async () => {
+		const owner = await getDbOwner(dbPath);
+		const options = { operation: "candidate-admission", lane: "read" as const, deadlineMs: 5000 };
+		const invalid = own("agent-a");
+		Reflect.deleteProperty(invalid, "reach");
+		await expect(
+			owner.submit({ kind: "session_start_candidates", scope: invalid, limit: 10 }, options).result,
+		).rejects.toThrow("read scope required");
+		await expect(
+			owner.submit({ kind: "session_start_candidates", scope: own("agent-a"), limit: 10001 }, options).result,
+		).rejects.toThrow("Invalid candidate pool limit");
+		await expect(
+			owner.submit(
+				{ kind: "session_start_candidates", scope: own("agent-a"), limit: 10 },
+				{ ...options, lane: "write" },
+			).result,
+		).rejects.toThrow("Candidate pools require the read lane");
 	});
 
 	test("caps the hydration IN list and yields between batches", async () => {
