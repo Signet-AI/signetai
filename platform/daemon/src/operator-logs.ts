@@ -53,7 +53,10 @@ const recent: LogEntry[] = [];
 const severity = { debug: 0, info: 1, warn: 2, error: 3 };
 logger.on("log", (entry: LogEntry) => {
 	if (!visible(entry, { compartments: [] })) return;
-	recent.push(entry);
+	recent.push({
+		...view(entry),
+		...(entry.data && Object.hasOwn(entry.data, "compartmentId") ? { data: { compartmentId: null } } : {}),
+	});
 	if (recent.length > 500) recent.shift();
 });
 function accepts(entry: Pick<LogEntry, "timestamp" | "level" | "category">, options: z.infer<typeof query>): boolean {
