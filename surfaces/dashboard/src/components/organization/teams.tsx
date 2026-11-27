@@ -169,6 +169,7 @@ export function TeamContent({
 	refresh: () => void;
 }) {
 	const [userId, setUserId] = useState("");
+	const [teamAgentName, setTeamAgentName] = useState("");
 	const [role, setRole] = useState("member");
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -187,6 +188,21 @@ export function TeamContent({
 		setError(result.error);
 		if (result.data) {
 			setUserId("");
+			refresh();
+		}
+	};
+	const createAgent = async () => {
+		if (busy || !teamAgentName.trim()) return;
+		setBusy(true);
+		const result = await getJSONResult("/api/agents", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: teamAgentName.trim(), kind: "team", ownerGroupId: group.id }),
+		});
+		setBusy(false);
+		setError(result.error);
+		if (result.data) {
+			setTeamAgentName("");
 			refresh();
 		}
 	};
@@ -241,6 +257,23 @@ export function TeamContent({
 				<Message error={error} />
 			</OrganizationBlock>
 			<OrganizationBlock title="Team agents">
+				{teamAgents.length === 0 && (
+					<Panel
+						result={{ data: teamAgents, status: 200, error: null }}
+						empty
+						emptyMessage="No team agent yet. Add members, then create a shared agent for this team's sessions."
+					>
+						{() => null}
+					</Panel>
+				)}
+				{canManage && (
+					<div className="flex flex-col gap-3">
+						<TextField label="Team agent name" value={teamAgentName} onChange={setTeamAgentName} />
+						<Action disabled={busy || !teamAgentName.trim()} onClick={() => void createAgent()}>
+							Create team agent
+						</Action>
+					</div>
+				)}
 				<ul className="text-small">
 					{teamAgents.map((agent) => (
 						<li key={agent.id}>
