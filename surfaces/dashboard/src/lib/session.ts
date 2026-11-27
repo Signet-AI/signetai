@@ -1,6 +1,7 @@
+import { DASHBOARD_HANDOFF_PARAM } from "../../../../libs/sdk/src/dashboard-handoff";
 import { useSyncExternalStore } from "react";
 export const TOKEN_KEY = "signet-token";
-const HANDOFF_PARAM = "signet-handoff";
+
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MIN_RECHECK_MS = 5_000;
 const MAX_RECHECK_MS = 300_000;
@@ -340,9 +341,9 @@ export function refreshSession(): Promise<void> {
 async function redeemHandoff(): Promise<void> {
 	if (typeof location === "undefined" || typeof history === "undefined") return;
 	const params = new URLSearchParams(location.hash.slice(1));
-	const code = params.get(HANDOFF_PARAM);
+	const code = params.get(DASHBOARD_HANDOFF_PARAM);
 	if (!code) return;
-	params.delete(HANDOFF_PARAM);
+	params.delete(DASHBOARD_HANDOFF_PARAM);
 	const hash = params.toString();
 	history.replaceState(history.state, "", `${location.pathname}${location.search}${hash ? `#${hash}` : ""}`);
 	const res = await request("/api/auth/handoff/redeem", {
@@ -360,7 +361,7 @@ export function startSession(): Promise<void> {
 	boot = demo ? Promise.resolve() : redeemHandoff().then(refreshSession);
 	if (!demo && typeof window !== "undefined") {
 		window.addEventListener("hashchange", () => {
-			if (location.hash.includes(`${HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
+			if (location.hash.includes(`${DASHBOARD_HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
 		});
 		window.addEventListener("storage", (event) => {
 			if (event.key === TOKEN_KEY || event.key === null) void refreshSession();

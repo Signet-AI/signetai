@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import { serve } from "bun";
+import { organizationDashboard } from "../../../cli/src/commands/organization-client";
+import { NodeTransport, resolveTarget } from "../../../../libs/sdk/src/node";
 import { installDashboardDomGlobals } from "@/test/dom-globals";
 
 type Reply = { readonly status: number; readonly body: unknown; readonly headers?: Record<string, string> };
@@ -46,9 +49,21 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 	const header = (init: RequestInit | undefined, name: string): string | null => new Headers(init?.headers).get(name);
 
 	beforeAll(async () => {
-		restore = installDashboardDomGlobals(
-			new Window({ url: "http://127.0.0.1:3860/#signet-handoff=code-1&view=graph" }),
-		);
+		const server = serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ code: "code-1", expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+		});
+		let url = "";
+		try {
+			const target = await resolveTarget({ env: { SIGNET_DAEMON_URL: server.url.origin, SIGNET_API_KEY: "fixture" } });
+			await organizationDashboard(new NodeTransport(target), target.url, false, async (value) => {
+				url = value;
+			});
+		} finally {
+			server.stop(true);
+		}
+		restore = installDashboardDomGlobals(new Window({ url: `${url}&view=graph` }));
 		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 			const path = String(input);
 			calls.push({ path, init });
