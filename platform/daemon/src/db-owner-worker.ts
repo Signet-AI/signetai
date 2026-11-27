@@ -297,10 +297,24 @@ export function runDbOwnerWorker(): void {
 	let writeBlocked = false;
 	let draining = false;
 
+	let metadataStreak = 0;
+	function metadataRead(job: DbOwnerJob): boolean {
+		return job.lane === "read" && job.request.kind === "query" && job.request.statement.readonly === true;
+	}
+	function nextForeground(): DbOwnerJob | undefined {
+		const metadataIndex = foregroundQueue.findIndex(metadataRead);
+		const corpusIndex = foregroundQueue.findIndex((job) => !metadataRead(job));
+		if (metadataIndex >= 0 && (metadataStreak < 8 || corpusIndex < 0)) {
+			metadataStreak = Math.min(8, metadataStreak + 1);
+			return foregroundQueue.splice(metadataIndex, 1)[0];
+		}
+		metadataStreak = 0;
+		return foregroundQueue.splice(Math.max(0, corpusIndex), 1)[0];
+	}
 	function nextJob(): DbOwnerJob | undefined {
 		if (foregroundQueue.length > 0 && (maintenanceQueue.length === 0 || foregroundStreak < MAX_FOREGROUND_BURST)) {
 			foregroundStreak += 1;
-			return foregroundQueue.shift();
+			return nextForeground();
 		}
 		if (maintenanceQueue.length > 0) {
 			foregroundStreak = 0;
@@ -308,7 +322,7 @@ export function runDbOwnerWorker(): void {
 		}
 		if (foregroundQueue.length > 0) {
 			foregroundStreak += 1;
-			return foregroundQueue.shift();
+			return nextForeground();
 		}
 		return undefined;
 	}

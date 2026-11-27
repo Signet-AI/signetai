@@ -1200,6 +1200,44 @@ describe("DB owner client", () => {
 		]);
 	});
 
+	test("metadata reads pass queued corpus turns without starving them", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const owner = client;
+		await owner.start();
+		const blocker = owner.submit(
+			{ kind: "sleep", durationMs: 100 },
+			{ operation: "maintenance.active", lane: "maintenance", deadlineMs: 1000 },
+		);
+		await waitFor(() => owner.health().activeJobId === blocker.job.id);
+		const finished: string[] = [];
+		const corpus = Array.from({ length: 2 }, (_, i) =>
+			owner
+				.submit({ kind: "sleep", durationMs: 1 }, { operation: "recall.corpus", lane: "read", deadlineMs: 1000 })
+				.result.then(() => {
+					finished.push(`corpus-${i}`);
+				}),
+		);
+		const metadata = Array.from({ length: 20 }, (_, i) =>
+			owner
+				.submit(
+					{ kind: "query", statement: { sql: "SELECT 1 ok", result: "get", readonly: true } },
+					{ operation: "organization.read", lane: "read", deadlineMs: 1000 },
+				)
+				.result.then(() => {
+					finished.push(`metadata-${i}`);
+				}),
+		);
+		await Promise.all([blocker.result, ...corpus, ...metadata]);
+		expect(finished).toEqual([
+			...Array.from({ length: 8 }, (_, i) => `metadata-${i}`),
+			"corpus-0",
+			...Array.from({ length: 8 }, (_, i) => `metadata-${i + 8}`),
+			"corpus-1",
+			...Array.from({ length: 4 }, (_, i) => `metadata-${i + 16}`),
+		]);
+	});
 	test("abandons a slow recall read without replacing its owner", async () => {
 		const database = makeDb();
 		directory = database.directory;
