@@ -589,6 +589,21 @@ function referencedRows(db: MigrationDb, kind: unknown, key: unknown, agent: unk
 		return info ? contentRows(db, table, `${info.key}=? AND agent_id=?`, [key, agent]) : [];
 	});
 }
+function publishCompartment(db: MigrationDb, item: ContentRow, compartment: number | null): void {
+	if (item.table === "embeddings" || item.table === "embeddings_staging")
+		db.prepare(`UPDATE ${item.table} SET compartment_id=?,agent_id=? WHERE rowid=?`).run(
+			compartment,
+			item.row.agent_id ?? null,
+			item.row._classification_rowid,
+		);
+	else
+		db.prepare(`UPDATE ${item.table} SET compartment_id=? WHERE rowid=?`).run(
+			compartment,
+			item.row._classification_rowid,
+		);
+	if (item.table === "embeddings" || item.table === "embeddings_staging")
+		syncEmbeddingCompartment(db, item.table, item.key);
+}
 const CLASSIFICATION_TURN_ROWS = 1024;
 const CLASSIFICATION_TURN_MS = 20;
 class ClassificationTurnFull extends Error {
@@ -809,18 +824,12 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 			if (updated) queue.push(target);
 		}
 	}
-	for (const item of ordered) {
-		const c = compartmentFor(db, [...(labels.get(`${item.table}:${item.row._classification_rowid}`) ?? [])]);
-		if (item.table === "embeddings" || item.table === "embeddings_staging")
-			db.prepare(`UPDATE ${item.table} SET compartment_id=?,agent_id=? WHERE rowid=?`).run(
-				c,
-				item.row.agent_id ?? null,
-				item.row._classification_rowid,
-			);
-		else db.prepare(`UPDATE ${item.table} SET compartment_id=? WHERE rowid=?`).run(c, item.row._classification_rowid);
-		if (item.table === "embeddings" || item.table === "embeddings_staging")
-			syncEmbeddingCompartment(db, item.table, item.key);
-	}
+	for (const item of ordered)
+		publishCompartment(
+			db,
+			item,
+			compartmentFor(db, [...(labels.get(`${item.table}:${item.row._classification_rowid}`) ?? [])]),
+		);
 	return ordered.length;
 }
 const cursorSchema = z.object({
@@ -1036,7 +1045,13 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 			const selected = page.rows.filter((row) => covers(db, request.target, row, context));
 			let changed = 0;
 			try {
-				changed = recompute(db, selected, true, CLASSIFICATION_TURN_ROWS - (progress.updated - initialUpdated));
+				if (request.target.kind === "agent" && !request.remove) {
+					for (const item of selected)
+						publishCompartment(db, item, compartmentFor(db, [...members(db, item.row.compartment_id), request.id]));
+					changed = selected.length;
+				} else {
+					changed = recompute(db, selected, true, CLASSIFICATION_TURN_ROWS - (progress.updated - initialUpdated));
+				}
 			} catch (error) {
 				if (!(error instanceof ClassificationTurnFull) || inspected === 0) throw error;
 				break;

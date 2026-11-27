@@ -94,6 +94,72 @@ test("classification bounds expanded rows per owner turn and keeps readers fence
 	}
 }, 120000);
 
+test("agent apply preserves classifications inherited before the job", () => {
+	const db = currentClassificationFixture();
+	try {
+		db.exec(
+			"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'),('cls_legal','Legal'); INSERT INTO classification_assignments VALUES('memory','m','default','cls_legal','carol','now')",
+		);
+		executeClassification(db, { op: "rebuild", agentId: "default" });
+		const queued = executeClassification(db, {
+			op: "enqueue",
+			id: "cls_hr",
+			actor,
+			target: { kind: "agent", id: "default", agentId: "default" },
+			remove: false,
+		});
+		if (typeof queued !== "object" || queued === null || !("jobId" in queued) || typeof queued.jobId !== "string")
+			throw new Error("missing job");
+		while (db.prepare("SELECT status FROM org_jobs WHERE id=?").get(queued.jobId)?.status !== "complete")
+			executeClassification(db, { op: "execute", jobId: queued.jobId });
+		for (const table of ["memories", "entities"])
+			expect(
+				db
+					.prepare(
+						`SELECT cm.classification_id FROM ${table} r JOIN compartment_members cm ON cm.compartment_id=r.compartment_id ORDER BY cm.classification_id`,
+					)
+					.all(),
+			).toEqual([{ classification_id: "cls_hr" }, { classification_id: "cls_legal" }]);
+	} finally {
+		db.close();
+	}
+});
+
+test("agent apply promotes an oversized evidence closure through the agent fence", () => {
+	const db = currentClassificationFixture();
+	try {
+		db.exec(`INSERT INTO classifications(id,name) VALUES('cls_hr','HR');
+		WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1200)
+		INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) SELECT 'wide-'||x,'W'||x,'w'||x,'concept','default','now','now' FROM n;
+		INSERT INTO evidence_citations SELECT 'entity',id,'default','memory','m' FROM entities WHERE id LIKE 'wide-%';`);
+		const total = db.prepare("SELECT (SELECT count(*) FROM entities)+(SELECT count(*) FROM memories) n").get();
+		const queued = executeClassification(db, {
+			op: "enqueue",
+			id: "cls_hr",
+			actor,
+			target: { kind: "agent", id: "default", agentId: "default" },
+			remove: false,
+		});
+		if (typeof queued !== "object" || queued === null || !("jobId" in queued) || typeof queued.jobId !== "string")
+			throw new Error("missing job");
+		let previous = 0;
+		while (db.prepare("SELECT status FROM org_jobs WHERE id=?").get(queued.jobId)?.status !== "complete") {
+			executeClassification(db, { op: "execute", jobId: queued.jobId });
+			const row = db
+				.prepare(
+					"SELECT (SELECT count(*) FROM entities WHERE compartment_id IS NOT NULL)+(SELECT count(*) FROM memories WHERE compartment_id IS NOT NULL) n",
+				)
+				.get();
+			if (typeof row?.n !== "number") throw new Error("missing count");
+			expect(row.n - previous).toBeLessThanOrEqual(1024);
+			previous = row.n;
+		}
+		expect(previous).toBe(total?.n);
+	} finally {
+		db.close();
+	}
+});
+
 test("a polling reader never observes unlabelled classified content between owner turns", async () => {
 	const directory = mkdtempSync(join(tmpdir(), "classification-reader-"));
 	const path = join(directory, "signet.db");
