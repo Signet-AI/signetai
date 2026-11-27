@@ -110,6 +110,25 @@ test("fully admitted public shard preserves main's plain KNN candidate window", 
 	}
 });
 
+test("hidden memory id collisions cannot turn source chunks into candidate work", () => {
+	const db = fixture();
+	try {
+		add(db, "chunk-a", "default", 0, "source_chunk");
+		add(db, "chunk-b", "default", 0.01, "source_chunk");
+		add(db, "visible-a", "default", 0.2);
+		add(db, "visible-b", "default", 0.3);
+		const before = recall(db);
+		expect(before.response.results).toEqual([]);
+		for (const id of ["chunk-a", "chunk-b"])
+			db.prepare(
+				"INSERT INTO memories(id,content,agent_id,visibility,type,created_at,updated_at) VALUES(?,'hidden','other','private','fact','2020','2020')",
+			).run(id);
+		expect(recall(db)).toEqual(before);
+	} finally {
+		db.close();
+	}
+});
+
 test("hidden agent vectors cannot change a fully admitted shard's visible results", () => {
 	const db = fixture();
 	try {

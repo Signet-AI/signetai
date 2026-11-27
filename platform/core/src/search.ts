@@ -300,7 +300,7 @@ export function vectorSearchWithMetadata(
 					while (true) {
 						const rows = db
 							.prepare(
-								`WITH neighbors AS MATERIALIZED(SELECT json_extract(id,'$[0]') id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission IN(SELECT value FROM json_each(?))),hits AS MATERIALIZED(SELECT id,distance FROM neighbors ORDER BY distance LIMIT ?) SELECT e.source_id,hits.distance,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON m.id=e.source_id ORDER BY hits.distance`,
+								`WITH neighbors AS MATERIALIZED(SELECT json_extract(id,'$[0]') id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission IN(SELECT value FROM json_each(?))),hits AS MATERIALIZED(SELECT id,distance FROM neighbors ORDER BY distance LIMIT ?) SELECT e.source_id,hits.distance,CASE WHEN ${eligible} THEN 1 ELSE 0 END eligible FROM hits CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id CROSS JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id ORDER BY hits.distance`,
 							)
 							.all(queryVector, window, JSON.stringify(ids), window, ...args);
 						const kept = rows.filter((row) => row.eligible === 1);
