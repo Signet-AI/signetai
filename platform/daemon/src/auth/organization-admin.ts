@@ -525,7 +525,7 @@ export async function jobs(p: Principal, kind?: string) {
 			).filter(() => !kind || kind === "operator"),
 			...(await organizationQuery<readonly import("../operator-job-contract").OperatorJobRow[]>(
 				statement(
-					"SELECT * FROM org_jobs WHERE kind<>'operator' AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
+					"SELECT * FROM org_jobs WHERE kind<>'operator' AND kind<>'classification_author_purge' AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
 					[p.boundAgentId, p.allowedProjects === null ? null : "restricted", kind ?? null, kind ?? null],
 					"all",
 				),
@@ -539,7 +539,8 @@ export async function job(p: Principal, jobId: string) {
 	const result = await organizationQuery<{ created_by: string; kind: string } | null>(
 		statement("SELECT * FROM org_jobs WHERE id = ?", [jobId], "get"),
 	);
-	if (!result) throw new IdentityError(404, "not_found");
+	if (!result || (result.kind === "classification_author_purge" && result.created_by !== p.userId))
+		throw new IdentityError(404, "not_found");
 	if (["restart", "agent_purge"].includes(result.kind) && (p.boundAgentId !== null || p.allowedProjects !== null))
 		throw new IdentityError(404, "not_found");
 	if (result.kind === "agent_purge")
@@ -613,6 +614,50 @@ export async function auditExport(p: Principal, filters: Record<string, string |
 	} while (cursor);
 	return `${lines.join("\n")}\n`;
 }
+export async function purgeClassificationAuthor(
+	p: Principal,
+	classificationId: string,
+	input: unknown,
+	basePath: string,
+) {
+	if (!p.userId || !p.permissions.has("classify") || !p.compliance) throw new IdentityError(403, "permission");
+	if (!(await readableClassificationsFor(p.userId)).some((label) => label.id === classificationId))
+		throw new IdentityError(404, "not_found");
+	const data = z
+		.object({ userId: text, dryRun: z.boolean().default(true) })
+		.strict()
+		.parse(input);
+	const departed = await readUser(data.userId);
+	if (departed?.status !== "deactivated") throw new IdentityError(400, "author_not_deactivated");
+	const scope = await resolveReadScope(
+		{ reach: p.boundAgentId ? { kind: "own", agentId: p.boundAgentId } : { kind: "all" }, projects: p.allowedProjects },
+		audienceSubjectFromPrincipal(p),
+	);
+	const counts = await dbOwnerOrganizationPurgePlan(data.userId, scope, classificationId);
+	const plan = { userId: data.userId, classificationId, counts };
+	if (data.dryRun) {
+		await organizationWrite([
+			auditStatement(p, "classification.author_purge_previewed", "classification", classificationId, plan),
+		]);
+		return { plan };
+	}
+	const jobId = id("job"),
+		now = new Date().toISOString();
+	await organizationWrite([
+		statement(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at,started_at) VALUES(?,'classification_author_purge','running',?,?,?,?)",
+			[jobId, JSON.stringify(plan), p.userId, now, now],
+		),
+		auditStatement(p, "classification.author_purge_started", "classification", classificationId, {
+			userId: data.userId,
+			jobId,
+		}),
+	]);
+	const { runOffboardPurge } = await import("./organization-purge");
+	void settleOffboardPurge(runOffboardPurge(p, jobId, data.userId, basePath, classificationId), jobId);
+	return { jobId };
+}
+
 export async function deactivate(p: Principal, userId: string, input: unknown, basePath: string) {
 	requireAdmin(p);
 	if (userId === p.userId) throw new IdentityError(403, "org_policy", "Cannot deactivate yourself");

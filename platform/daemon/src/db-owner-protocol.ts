@@ -447,11 +447,14 @@ export type DbOwnerRequest =
 	| { readonly kind: "reflection_generate"; readonly input: import("./reflection-owner").CreateDailyReflectionsInput }
 	| {
 			readonly kind: "organization_purge_plan";
+			readonly classificationId?: string;
 			readonly userId: string;
 			readonly scope: import("./read-scope").ReadScope;
 	  }
 	| {
 			readonly kind: "organization_memory_purge";
+			readonly classificationId?: string;
+			readonly scope: import("./read-scope").ReadScope;
 			readonly userId: string;
 			readonly author: WriteAuthor;
 	  }

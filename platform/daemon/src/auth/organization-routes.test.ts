@@ -1071,6 +1071,96 @@ describe("organization HTTP flows", () => {
 			await (await call(`/api/classifications/${created.id}`, "GET", undefined, narrowed.secret)).json(),
 		).not.toHaveProperty("audience");
 	});
+	test("offboarding purge removes exactly the actor-visible preview", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const departed = await member("departed");
+		const manager = await member("hr-manager");
+		await call(`/api/org/users/${manager.userId}`, "PATCH", { compliance: true });
+		const hr = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "HR purge", audience: [{ kind: "user", id: manager.userId }] },
+				manager.token,
+			)
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories(id,agent_id,author_user_id,content,type,memory_kind,created_at,updated_at) VALUES('departed-public',?,?,'public','fact','episodic','2026','2026'),('departed-hr',?,?,'private','fact','episodic','2026','2026')",
+				[departed.agentId, departed.userId, departed.agentId, departed.userId],
+			),
+			statement(
+				"INSERT INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,session_id,session_token,author_user_id,captured_at,updated_at) VALUES(?,'departed-hr-artifact','hash','source_import_md','unbound','unbound',?,'2026','2026')",
+				[departed.agentId, departed.userId],
+			),
+		]);
+		expect(
+			(
+				await call(
+					`/api/classifications/${hr.id}/apply?wait=1`,
+					"POST",
+					{ target: { kind: "memory", id: "departed-hr", agentId: departed.agentId } },
+					manager.token,
+				)
+			).status,
+		).toBe(202);
+		await organizationWrite([
+			statement(
+				"UPDATE memory_artifacts SET compartment_id=(SELECT compartment_id FROM memories WHERE id='departed-hr') WHERE source_path='departed-hr-artifact'",
+			),
+		]);
+		const preview = await (
+			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge" })
+		).json();
+		expect(preview.plan.counts).toMatchObject({ memories: 1, artifacts: 0 });
+		const started = await (
+			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge", dryRun: false })
+		).json();
+		let job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+		for (let i = 0; job.status === "running" && i < 100; i++) {
+			await Bun.sleep(20);
+			job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+		}
+		expect(job.status).toBe("complete");
+		expect(JSON.parse(job.progress_json).removed).toMatchObject({ memories: 1, memory_artifacts: 0 });
+		expect(
+			await organizationQuery(statement("SELECT id FROM memories WHERE author_user_id=?", [departed.userId], "all")),
+		).toEqual([{ id: "departed-hr" }]);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memory_artifacts WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 1 });
+		const material = `/api/classifications/${hr.id}/purge-author`;
+		expect((await call(material, "POST", { userId: departed.userId })).status).toBe(403);
+		const managerPreview = await call(material, "POST", { userId: departed.userId }, manager.token);
+		expect(managerPreview.status).toBe(200);
+		expect((await managerPreview.json()).plan.counts).toMatchObject({ memories: 1, artifacts: 1 });
+		const managerStarted = await call(material, "POST", { userId: departed.userId, dryRun: false }, manager.token);
+		expect(managerStarted.status).toBe(202);
+		const managerJob = await managerStarted.json();
+		let managerStatus = await (await call(`/api/org/jobs/${managerJob.jobId}`, "GET", undefined, manager.token)).json();
+		for (let i = 0; managerStatus.status === "running" && i < 100; i++) {
+			await Bun.sleep(20);
+			managerStatus = await (await call(`/api/org/jobs/${managerJob.jobId}`, "GET", undefined, manager.token)).json();
+		}
+		expect(managerStatus.status).toBe("complete");
+		expect(JSON.parse(managerStatus.progress_json).removed).toMatchObject({ memories: 1, memory_artifacts: 1 });
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 0 });
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memory_artifacts WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 0 });
+	});
+
 	test("offboarding preview excludes HR evidence and reports only active sessions", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
@@ -1198,10 +1288,8 @@ describe("organization HTTP flows", () => {
 			session_transcripts: 1,
 		});
 		expect(
-			await organizationQuery(
-				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [bob.userId], "get"),
-			),
-		).toEqual({ n: 0 });
+			await organizationQuery(statement("SELECT id FROM memories WHERE author_user_id=?", [bob.userId], "all")),
+		).toEqual([{ id: "memory-hr" }]);
 	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();

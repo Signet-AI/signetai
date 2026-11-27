@@ -240,6 +240,12 @@ describe("createMcpServer", () => {
 			target: { kind: "memory", id: "mem_1", agentId: "agent_a" },
 		});
 		expect(capture.url).toBe("http://localhost:3850/api/classifications/cls_hr/apply");
+		await callTool(server, "signet_classification_purge_author", {
+			classificationId: "cls_hr",
+			userId: "usr_departed",
+		});
+		expect(capture.url).toBe("http://localhost:3850/api/classifications/cls_hr/purge-author");
+		expect(JSON.parse(capture.body ?? "{}")).toEqual({ userId: "usr_departed", dryRun: true });
 	});
 
 	it("creates server with correct info", () => {
@@ -429,7 +435,8 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_operator_job");
 		expect(names).toContain("signet_org_user_lookup");
 		expect(names).toContain("signet_org_sso_set");
-		expect(names.length).toBe(74);
+		expect(names).toContain("signet_classification_purge_author");
+		expect(names.length).toBe(75);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {

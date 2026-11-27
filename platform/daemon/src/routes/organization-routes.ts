@@ -342,6 +342,18 @@ export function registerOrganizationRoutes(
 		"/api/org/invites/:id",
 		active(async (c) => c.json(await admin.deleteInvite(user(c), c.req.param("id") ?? ""))),
 	);
+	app.post(
+		"/api/classifications/:id/purge-author",
+		active(async (c) => {
+			const result = await admin.purgeClassificationAuthor(
+				user(c),
+				c.req.param("id") ?? "",
+				await body(c),
+				workspaceRoot,
+			);
+			return c.json(result, "jobId" in result ? 202 : 200);
+		}),
+	);
 	app.get(
 		"/api/org/users/lookup",
 		active(async (c) => c.json(await admin.lookupUsers(user(c), c.req.query()))),
