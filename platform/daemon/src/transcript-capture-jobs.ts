@@ -147,7 +147,10 @@ export function upsertTranscriptCaptureJobInTx(db: WriteDb, job: TranscriptCaptu
 	if (payloadBytes > MAX_INLINE_TRANSCRIPT_BYTES) {
 		throw new Error(`inline transcript capture exceeds ${MAX_INLINE_TRANSCRIPT_BYTES} bytes; provide transcriptPath`);
 	}
-	if (existingInlineBytes(db, existing?.id ?? null) + payloadBytes > MAX_INLINE_CAPTURE_TOTAL_BYTES) {
+	if (
+		payloadBytes > 0 &&
+		existingInlineBytes(db, existing?.id ?? null) + payloadBytes > MAX_INLINE_CAPTURE_TOTAL_BYTES
+	) {
 		throw new TranscriptCaptureBacklogFullError(MAX_INLINE_CAPTURE_TOTAL_BYTES);
 	}
 	const preservedCompletedAt = source ? scalarString(existing?.completed_at) : null;

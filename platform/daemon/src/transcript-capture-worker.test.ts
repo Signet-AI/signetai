@@ -4,6 +4,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	utimesSync,
@@ -15,12 +16,15 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
 import { upsertSessionTranscriptAsync } from "./session-transcripts";
 import { appendCanonicalLiveTranscriptTurns, writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
+import { endTranscriptCaptureJobInTx, transcriptCaptureSourceIdentity } from "./transcript-capture-jobs";
+import { withTranscriptFileLock } from "./transcript-jsonl";
 import {
 	enqueueTranscriptCaptureJob,
 	getTranscriptCaptureJobStatus,
 	getTranscriptCaptureStatus,
 	cleanupTranscriptCaptureStorage,
 	runTranscriptCaptureOnce,
+	sourceLockPath,
 	startTranscriptCaptureWorker,
 } from "./transcript-capture-worker";
 
@@ -569,6 +573,93 @@ describe("transcript capture worker", () => {
 				db.prepare("SELECT attempts FROM transcript_capture_jobs WHERE id = ?").get(id),
 			),
 		).toEqual({ attempts: 1 });
+	});
+
+	it("keeps a stale lease from completing a job that ended after the lease", async () => {
+		const sourcePath = join(dir, "ending-session.jsonl");
+		writeFileSync(sourcePath, "User: still running\n", "utf8");
+		const input = {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-ending",
+			sessionId: "session-ending",
+			project: "/repo",
+			transcript: "",
+			transcriptPath: sourcePath,
+			basePath: dir,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: null,
+		};
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), input);
+		if (!id) throw new Error("expected source capture job");
+		const resolvedSource = realpathSync(sourcePath);
+		const lockPath = sourceLockPath(dir, "agent-a", transcriptCaptureSourceIdentity(input, resolvedSource));
+		const jobState = () =>
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status, attempts, ended_at FROM transcript_capture_jobs WHERE id = ?").get(id),
+			);
+
+		const staleRun = await withTranscriptFileLock(lockPath, async () => {
+			const run = runTranscriptCaptureOnce(getDbAccessor(), dir);
+			const deadline = Date.now() + 2_000;
+			while (Date.now() < deadline) {
+				const state = jobState();
+				if (state && typeof state === "object" && "status" in state && state.status === "processing") break;
+				await Bun.sleep(10);
+			}
+			getDbAccessor().withWriteTx((db) => {
+				endTranscriptCaptureJobInTx(db, {
+					agentId: "agent-a",
+					harness: "pi",
+					sourcePath: resolvedSource,
+					endedAt: "2026-06-20T10:05:00.000Z",
+				});
+				db.prepare(
+					"UPDATE transcript_capture_jobs SET status = 'processing', attempts = attempts + 1 WHERE id = ?",
+				).run(id);
+			});
+			return { run };
+		});
+
+		expect(await staleRun.run).toBe(true);
+		expect(jobState()).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
+	});
+
+	it("queues a file-backed job while the inline backlog is full", async () => {
+		const inlineId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-inline-full",
+			sessionId: "session-inline-full",
+			project: "/repo",
+			transcript: "User: inline turn",
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		});
+		if (!inlineId) throw new Error("expected inline capture job");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"UPDATE transcript_capture_jobs SET transcript = replace(hex(zeroblob(?)), '00', 'x') WHERE id = ?",
+			).run(64 * 1024 * 1024 + 1, inlineId);
+		});
+		const sourcePath = join(dir, "file-backed-session.jsonl");
+		writeFileSync(sourcePath, "User: file turn\n", "utf8");
+
+		const fileId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-file-backed",
+			sessionId: "session-file-backed",
+			project: "/repo",
+			transcript: "",
+			transcriptPath: sourcePath,
+			basePath: dir,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: null,
+		});
+
+		expect(fileId).toEqual(expect.any(String));
+		expect(fileId).not.toBe(inlineId);
 	});
 
 	it("recovery preserves durable outputs and provenance after a lease crashes before completion", async () => {

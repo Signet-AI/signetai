@@ -98,10 +98,11 @@ export interface TranscriptCaptureJobReceipt {
 }
 const POLL_INTERVAL_MS = 30_000;
 const MAX_JOBS_PER_DRAIN_TICK = 5;
-const SOURCE_GENERATION_MATCH = `
+const JOB_GENERATION_MATCH = `
 	   AND (source_sha256 = ? OR (source_sha256 IS NULL AND ? IS NULL))
 	   AND (source_size_bytes = ? OR (source_size_bytes IS NULL AND ? IS NULL))
-	   AND (source_mtime_ms = ? OR (source_mtime_ms IS NULL AND ? IS NULL))`;
+	   AND (source_mtime_ms = ? OR (source_mtime_ms IS NULL AND ? IS NULL))
+	   AND ended_at IS ?`;
 
 function yieldToEventLoop(): Promise<void> {
 	return new Promise((resolve) => setImmediate(resolve));
@@ -119,9 +120,9 @@ function scalarNumber(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function sourceGenerationParams(
+function jobGenerationParams(
 	job: TranscriptCaptureJobRow,
-): readonly [string | null, string | null, number | null, number | null, number | null, number | null] {
+): readonly [string | null, string | null, number | null, number | null, number | null, number | null, string | null] {
 	return [
 		job.sourceSha256,
 		job.sourceSha256,
@@ -129,6 +130,7 @@ function sourceGenerationParams(
 		job.sourceSizeBytes,
 		job.sourceMtimeMs,
 		job.sourceMtimeMs,
+		job.endedAt,
 	];
 }
 
@@ -136,7 +138,7 @@ function basePathFor(input?: string): string {
 	return input ?? process.env.SIGNET_PATH ?? process.cwd();
 }
 
-function sourceLockPath(basePath: string, agentId: string, sourceIdentity: string): string {
+export function sourceLockPath(basePath: string, agentId: string, sourceIdentity: string): string {
 	const token = sha256(`${agentId}\0${sourceIdentity}`).slice(0, 32);
 	return join(resolveWorkspaceLayout(basePath).runtime, "locks", `transcript-capture-${token}`);
 }
@@ -282,12 +284,18 @@ async function currentJobMatches(dbAccessor: DbAccessor, job: TranscriptCaptureJ
 		async (db) => {
 			const row = db
 				.prepare(
-					"SELECT status, source_sha256, source_size_bytes, source_mtime_ms FROM transcript_capture_jobs WHERE id = ?",
+					"SELECT status, source_sha256, source_size_bytes, source_mtime_ms, ended_at FROM transcript_capture_jobs WHERE id = ?",
 				)
 				.get(job.id) as
-				| { status?: unknown; source_sha256?: unknown; source_size_bytes?: unknown; source_mtime_ms?: unknown }
+				| {
+						status?: unknown;
+						source_sha256?: unknown;
+						source_size_bytes?: unknown;
+						source_mtime_ms?: unknown;
+						ended_at?: unknown;
+				  }
 				| undefined;
-			if (row?.status !== "processing") return false;
+			if (row?.status !== "processing" || scalarString(row.ended_at) !== job.endedAt) return false;
 			if (!job.transcriptPath) return row.source_sha256 === job.sourceSha256;
 			return row.source_size_bytes === job.sourceSizeBytes && row.source_mtime_ms === job.sourceMtimeMs;
 		},
@@ -496,7 +504,7 @@ async function markDone(
 			     transcript = '', raw_transcript = NULL, audit_path = ?, source_format = ?,
 			     source_sha256 = ?, source_size_bytes = ?, source_mtime_ms = ?
 			 WHERE id = ? AND status = 'processing'
-			${SOURCE_GENERATION_MATCH}`,
+			${JOB_GENERATION_MATCH}`,
 		).run(
 			completedAt,
 			completedAt,
@@ -506,7 +514,7 @@ async function markDone(
 			result.sourceSizeBytes,
 			result.sourceMtimeMs,
 			job.id,
-			...sourceGenerationParams(job),
+			...jobGenerationParams(job),
 		);
 	});
 }
@@ -520,8 +528,8 @@ async function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, 
 			`UPDATE transcript_capture_jobs
 			 SET status = ?, error = ?, updated_at = ?
 			 WHERE id = ? AND status = 'processing'
-			${SOURCE_GENERATION_MATCH}`,
-		).run(status, message.slice(0, 2000), updatedAt, job.id, ...sourceGenerationParams(job));
+			${JOB_GENERATION_MATCH}`,
+		).run(status, message.slice(0, 2000), updatedAt, job.id, ...jobGenerationParams(job));
 	});
 }
 
