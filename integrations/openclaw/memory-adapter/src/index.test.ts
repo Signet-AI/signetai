@@ -43,7 +43,7 @@ let lastCheckpointBody: unknown = null;
 let lastHeartbeatBody: unknown = null;
 let transcriptUploadRoute = false;
 let transcriptUploadFails = false;
-let uploadRequests: Array<{ method: string; query: Record<string, string> }> = [];
+let uploadRequests: Array<{ method: string; query: Record<string, string>; runtimePath: string | null }> = [];
 let warnMessages: string[] = [];
 let testDir = "";
 
@@ -249,9 +249,14 @@ beforeEach(() => {
 					if (!transcriptUploadRoute) return jsonResponse({ error: "not found" }, 404);
 					if (transcriptUploadFails) return jsonResponse({ error: "upload broke" }, 500);
 					const method = init?.method ?? "GET";
-					uploadRequests.push({ method, query: Object.fromEntries(new URL(url).searchParams) });
+					const headers = new Headers(init?.headers);
+					uploadRequests.push({
+						method,
+						query: Object.fromEntries(new URL(url).searchParams),
+						runtimePath: headers.get("x-signet-runtime-path"),
+					});
 					if (method !== "PATCH") return jsonResponse({ committedOffset: 0, generation: null, tailSha256: null });
-					const offset = Number(new Headers(init?.headers).get("Upload-Offset"));
+					const offset = Number(headers.get("Upload-Offset"));
 					const size = (await new Response(init?.body).arrayBuffer()).byteLength;
 					return jsonResponse({ committedOffset: offset + size, generation: 0, tailSha256: "tail", jobId: "job-1" });
 				}
@@ -1083,7 +1088,10 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			{ agentId: "agent-1" },
 		);
 
-		expect(uploadRequests.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+		expect(uploadRequests.map((request) => [request.method, request.runtimePath])).toEqual([
+			["GET", "plugin"],
+			["PATCH", "plugin"],
+		]);
 		expect(uploadRequests[0]?.query).toEqual({
 			harness: "openclaw",
 			sessionKey: "upload-key",

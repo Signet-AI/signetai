@@ -37,13 +37,21 @@ describe("createDaemonClient", () => {
 		mkdirSync(dir, { recursive: true });
 		const file = join(dir, "session.jsonl");
 		writeFileSync(file, '{"a":1}\n');
-		const seen: Array<{ method: string; url: string; authorization: string | null; signal: unknown }> = [];
+		const seen: Array<{
+			method: string;
+			url: string;
+			authorization: string | null;
+			runtimePath: string | null;
+			signal: unknown;
+		}> = [];
 		globalThis.fetch = async (input, init) => {
 			const method = init?.method ?? "GET";
+			const headers = new Headers(init?.headers);
 			seen.push({
 				method,
 				url: String(input),
-				authorization: new Headers(init?.headers).get("authorization"),
+				authorization: headers.get("authorization"),
+				runtimePath: headers.get("x-signet-runtime-path"),
 				signal: init?.signal,
 			});
 			if (method === "PATCH") return Response.json({ committedOffset: 8, generation: 0, tailSha256: "x", jobId: "j" });
@@ -51,9 +59,12 @@ describe("createDaemonClient", () => {
 		};
 		try {
 			const client = createDaemonClient(3850);
-			const outcome = await client.uploadTranscriptFile({ harness: "codex", sessionKey: "s1" }, file, 1000);
+			const outcome = await client.uploadTranscriptFile({ harness: "codex", sessionKey: "s1" }, file, 1000, "legacy");
 			expect(outcome).toEqual({ status: "uploaded", committedOffset: 8, generation: 0 });
-			expect(seen.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+			expect(seen.map((request) => [request.method, request.runtimePath])).toEqual([
+				["GET", "legacy"],
+				["PATCH", "legacy"],
+			]);
 			expect(seen[0]?.url).toContain("/api/hooks/transcript-upload?harness=codex&sessionKey=s1");
 			expect(seen.every((request) => request.authorization === "Bearer sig_sk_test_secret")).toBe(true);
 			expect(seen.every((request) => request.signal instanceof AbortSignal)).toBe(true);

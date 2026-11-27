@@ -388,6 +388,7 @@ async function uploadHookTranscript(
 			{ harness, sessionKey, ...(agentId ? { agentId } : {}), ...(cwd ? { cwd } : {}) },
 			transcriptPath,
 			timeoutMs,
+			LEGACY_RUNTIME_PATH,
 		);
 		return outcome.status === "unsupported" ? transcriptPath : undefined;
 	} catch (error) {

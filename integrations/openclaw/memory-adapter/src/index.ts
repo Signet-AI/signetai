@@ -523,6 +523,7 @@ async function uploadSessionFile(
 	const outcome = await writeClient(daemonUrl).uploadTranscript({
 		...target,
 		transcriptPath: sessionFile,
+		runtimePath: RUNTIME_PATH,
 		signal: AbortSignal.timeout(WRITE_TIMEOUT),
 	});
 	return outcome.status === "unsupported" ? sessionFile : undefined;

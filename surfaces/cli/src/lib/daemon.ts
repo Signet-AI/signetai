@@ -14,6 +14,7 @@ export type TranscriptFileUploader = (
 	target: TranscriptUploadTarget,
 	path: string,
 	timeoutMs: number,
+	runtimePath: string,
 ) => Promise<TranscriptUploadOutcome>;
 
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
@@ -229,11 +230,12 @@ export function createDaemonClient(
 		}
 	};
 
-	const uploadTranscriptFile: TranscriptFileUploader = (target, path, timeoutMs) =>
+	const uploadTranscriptFile: TranscriptFileUploader = (target, path, timeoutMs, runtimePath) =>
 		withTranscriptFileSource(path, (source) =>
 			uploadTranscript(
 				{
 					baseUrl: url,
+					runtimePath,
 					signal: AbortSignal.timeout(timeoutMs),
 					fetch: (input, init) => fetch(input, { ...init, headers: withAuthHeaders(init.headers) }),
 				},

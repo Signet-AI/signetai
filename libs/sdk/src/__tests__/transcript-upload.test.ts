@@ -11,6 +11,7 @@ interface Upload {
 	readonly query: Record<string, string>;
 	readonly authorization: string | null;
 	readonly offset: string | null;
+	readonly runtimePath: string | null;
 	readonly body: string;
 }
 
@@ -30,7 +31,11 @@ function transcriptFile(content: string): string {
 	return path;
 }
 
-function daemon(routeMissing = false, refused = false): { readonly client: SignetClient; readonly uploads: Upload[] } {
+function daemon(
+	routeMissing = false,
+	refused = false,
+	claimedBy?: string,
+): { readonly client: SignetClient; readonly uploads: Upload[] } {
 	const uploads: Upload[] = [];
 	let committed = 0;
 	const server = Bun.serve({
@@ -46,8 +51,12 @@ function daemon(routeMissing = false, refused = false): { readonly client: Signe
 				query: Object.fromEntries(url.searchParams),
 				authorization: req.headers.get("authorization"),
 				offset: req.headers.get("upload-offset"),
+				runtimePath: req.headers.get("x-signet-runtime-path"),
 				body,
 			});
+			if (req.method === "PATCH" && claimedBy) {
+				return Response.json({ error: `session claimed by ${claimedBy} path` }, { status: 409 });
+			}
 			if (req.method === "PATCH" && refused) {
 				return Response.json({ error: "session transcript is outside the project scope" }, { status: 403 });
 			}
@@ -79,8 +88,39 @@ test("uploads the complete lines of a transcript file", async () => {
 		query: { harness: "openclaw", sessionKey: "sdk-session", agentId: "sdk-agent", cwd: "/work" },
 		authorization: "Bearer sdk-token",
 		offset: "0",
+		runtimePath: null,
 		body: '{"a":1}\n{"b":2}\n',
 	});
+});
+
+test("sends the runtime path on every upload request", async () => {
+	const { client, uploads } = daemon();
+	await client.uploadTranscript({
+		transcriptPath: transcriptFile('{"a":1}\n'),
+		harness: "openclaw",
+		sessionKey: "sdk-session",
+		runtimePath: "plugin",
+	});
+	expect(uploads.map((upload) => [upload.method, upload.runtimePath])).toEqual([
+		["GET", "plugin"],
+		["PATCH", "plugin"],
+	]);
+});
+
+test("raises a session claimed by another runtime path without retrying", async () => {
+	const { client, uploads } = daemon(false, false, "legacy");
+	const upload = client.uploadTranscript({
+		transcriptPath: transcriptFile('{"a":1}\n'),
+		harness: "openclaw",
+		sessionKey: "sdk-session",
+		runtimePath: "plugin",
+	});
+	await expect(upload).rejects.toBeInstanceOf(SignetApiError);
+	await expect(upload).rejects.toMatchObject({
+		status: 409,
+		message: "transcript upload failed with HTTP 409: session claimed by legacy path",
+	});
+	expect(uploads.map((request) => request.method)).toEqual(["GET", "PATCH"]);
 });
 
 test("raises a refused upload as an API error", async () => {

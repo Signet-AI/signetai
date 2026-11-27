@@ -13,6 +13,7 @@ declare module "@signet/sdk" {
 			readonly sessionKey: string;
 			readonly agentId?: string;
 			readonly cwd?: string;
+			readonly runtimePath?: string;
 			readonly signal?: AbortSignal;
 		}): Promise<{ readonly status: "uploaded" | "unchanged" | "bypassed" | "unsupported" }>;
 		sessionEndFireAndForget(opts: {

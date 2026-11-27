@@ -257,6 +257,23 @@ test("uploads a new transcript up to its last newline", async () => {
 	expect(patch?.headers.get("Content-Type")).toBe("application/octet-stream");
 });
 
+test("sends the runtime path on the state request and every range", async () => {
+	const daemon = new FakeDaemon();
+	const client = { ...daemon.client(), runtimePath: "plugin" };
+	await uploadTranscript(client, target, source(`${"x".repeat(1048585)}\n`));
+	expect(daemon.sent.map((request) => [request.method, request.headers.get("x-signet-runtime-path")])).toEqual([
+		["GET", "plugin"],
+		["PATCH", "plugin"],
+		["PATCH", "plugin"],
+	]);
+});
+
+test("sends no runtime path when the client has none", async () => {
+	const daemon = new FakeDaemon();
+	await uploadTranscript(daemon.client(), target, source("x\n"));
+	expect(daemon.sent.map((request) => request.headers.has("x-signet-runtime-path"))).toEqual([false, false]);
+});
+
 test("leaves out the agent and cwd when the target has none", async () => {
 	const daemon = new FakeDaemon();
 	await uploadTranscript(daemon.client(), { harness: "codex", sessionKey: "session-2" }, source("x\n"));
@@ -454,6 +471,24 @@ test("fails when the daemon refuses the upload", async () => {
 	const error = await failure(uploadTranscript(daemon.client(), target, source("x\n")));
 	expect(error.status).toBe(403);
 	expect(error.message).toContain("session transcript is outside the project scope");
+});
+
+test("fails without planning again when another runtime path owns the session", async () => {
+	const daemon = new FakeDaemon();
+	daemon.patchAnswers.push(Response.json({ error: "session claimed by plugin path" }, { status: 409 }));
+	const error = await failure(uploadTranscript(daemon.client(), target, source("x\n")));
+	expect(error.status).toBe(409);
+	expect(error.message).toContain("session claimed by plugin path");
+	expect(daemon.sent.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+});
+
+test("fails the state request when another runtime path owns the session", async () => {
+	const daemon = new FakeDaemon();
+	daemon.getAnswers.push(Response.json({ error: "session claimed by plugin path" }, { status: 409 }));
+	const error = await failure(uploadTranscript(daemon.client(), target, source("x\n")));
+	expect(error.status).toBe(409);
+	expect(error.message).toContain("session claimed by plugin path");
+	expect(daemon.sent.map((request) => request.method)).toEqual(["GET"]);
 });
 
 test("fails when the state request fails", async () => {

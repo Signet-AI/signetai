@@ -94,12 +94,14 @@ export class SignetClientP2 {
 		readonly sessionKey: string;
 		readonly agentId?: string;
 		readonly cwd?: string;
+		readonly runtimePath?: string;
 		readonly signal?: AbortSignal;
 	}): Promise<TranscriptUploadOutcome> {
-		const { transcriptPath, signal, ...target } = opts;
+		const { transcriptPath, signal, runtimePath, ...target } = opts;
 		const client = {
 			baseUrl: this.transport.baseUrl,
 			fetch: (url: string, init: RequestInit) => this.transport.fetch(url, init),
+			runtimePath,
 			signal,
 		};
 		try {

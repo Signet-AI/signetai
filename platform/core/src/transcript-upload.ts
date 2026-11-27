@@ -25,6 +25,7 @@ export interface TranscriptUploadClient {
 	readonly baseUrl: string;
 	readonly fetch: (url: string, init: RequestInit) => Promise<Response>;
 	readonly headers?: Readonly<Record<string, string>>;
+	readonly runtimePath?: string;
 	readonly retryDelayMs?: number;
 	readonly signal?: AbortSignal;
 }
@@ -117,7 +118,7 @@ export async function uploadTranscript(
 	source: TranscriptSource,
 ): Promise<TranscriptUploadOutcome> {
 	const url = transcriptUploadUrl(client.baseUrl, target);
-	const answer = await fetchWithRetry(client, url, { method: "GET", headers: client.headers });
+	const answer = await fetchWithRetry(client, url, { method: "GET", headers: requestHeaders(client) });
 	if (answer.status === 404) {
 		await answer.body?.cancel();
 		return { status: "unsupported" };
@@ -171,13 +172,17 @@ async function sendRange(
 	body: Uint8Array<ArrayBuffer>,
 ): Promise<Response> {
 	const headers = {
-		...client.headers,
+		...requestHeaders(client),
 		"Content-Type": "application/octet-stream",
 		"Upload-Generation": String(generation),
 		"Upload-Offset": String(offset),
 		"Upload-Checksum": await sha256Hex(body),
 	};
 	return await fetchWithRetry(client, url, { method: "PATCH", headers, body });
+}
+
+function requestHeaders(client: TranscriptUploadClient): Record<string, string> {
+	return { ...client.headers, ...(client.runtimePath ? { "x-signet-runtime-path": client.runtimePath } : {}) };
 }
 
 async function fetchWithRetry(client: TranscriptUploadClient, url: string, init: RequestInit): Promise<Response> {

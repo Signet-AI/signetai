@@ -1170,6 +1170,7 @@ describe("hook transcript upload", () => {
 		readonly target: TranscriptUploadTarget;
 		readonly path: string;
 		readonly timeoutMs: number;
+		readonly runtimePath: string;
 	}
 
 	type Uploader = (events: readonly string[]) => Promise<TranscriptUploadOutcome>;
@@ -1210,9 +1211,9 @@ describe("hook transcript upload", () => {
 					bodies.push(JSON.parse(typeof opts?.body === "string" ? opts.body : "{}"));
 					return { ok: true, data: {} };
 				},
-				uploadTranscriptFile: async (target, path, timeoutMs) => {
+				uploadTranscriptFile: async (target, path, timeoutMs, runtimePath) => {
 					events.push("upload");
-					uploads.push({ target, path, timeoutMs });
+					uploads.push({ target, path, timeoutMs, runtimePath });
 					return await upload(events);
 				},
 				readStaticIdentity: () => null,
@@ -1245,6 +1246,7 @@ describe("hook transcript upload", () => {
 				target: { harness: "claude-code", sessionKey: "sess-1", agentId: "agent-7", cwd: "/repo" },
 				path: "/tmp/session.jsonl",
 				timeoutMs: 8000,
+				runtimePath: "legacy",
 			},
 		]);
 		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
