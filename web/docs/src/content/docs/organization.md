@@ -30,6 +30,10 @@ The token is consumed once. Claiming marks the existing `default` agent as the o
 
 Upgrading also repairs legacy child ownership, including memory embeddings, from each unambiguous parent in bounded batches. This restores vectors that previously had no recorded agent without assigning them to `default`. Missing or conflicting parents remain unresolved; the local database records repair counts in `legacy_child_scope_repairs`. Unknown historical authors stay unknown. A NULL compartment is still public, not an indication that an author or classification should be guessed.
 
+Vector search shards are repaired by the database owner in resumable batches. A vector stage whose shard repair is not ready, or whose admitted fan-out exceeds its bound, reports unavailable rather than a complete empty result.
+
+Classification jobs prepare and verify their new vector membership while the previous read rules remain in effect. The new read fence and prepared membership become visible in one transaction; remaining derived rows are then updated in batches. A queued or running job is not a completed reclassification.
+
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
 ## Classified imports
