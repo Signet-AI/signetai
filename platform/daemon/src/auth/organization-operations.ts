@@ -251,12 +251,21 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 		providers: authProviders(org),
 	};
 }
+function requireSessionManagement(p: Principal): void {
+	if ((p.credential.kind !== "session" || p.sourceKeyId) && !p.permissions.has("admin"))
+		throw new IdentityError(
+			403,
+			"permission",
+			"Requires an interactive session or the admin session-management permission",
+		);
+}
 export async function logout(p: Principal, input: unknown) {
 	const data = z.object({ all: z.boolean().optional() }).parse(input);
+	if (data.all) requireSessionManagement(p);
 	await organizationWrite([
 		statement(
 			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout',refresh_retry_json = '[]' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
-			[new Date().toISOString(), data.all ? p.userId : p.sessionId],
+			[new Date().toISOString(), data.all ? p.userId : p.credential.kind === "session" ? p.sessionId : null],
 		),
 		auditStatement(p, "session.logout", "user", p.userId),
 	]);

@@ -49,7 +49,7 @@ The summary is backed by durable audit records and survives daemon restarts. It 
 
 The daemon stores the parent-key binding and issuance permission, agent, project, and expiry ceilings in the session. Every request checks the live parent key and user; revocation, expiration, and permission narrowing take effect on the next request. Extending or widening the key does not widen an existing browser session. Sliding expiry and dashboard handoff preserve these ceilings, including across daemon restarts. Device approval requires a direct user session, not an API key or a key-derived cookie. The approved device session keeps the approver's permission ceiling through token exchange, refresh, and dashboard handoff; later role promotions do not widen it.
 
-Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations.
+Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations. Signing out everywhere requires an interactive user session or the `admin` session-management permission. A narrower key-derived session can sign out only its own browser session. Signing out with a bare API key never revokes the session that created the key; use key revocation to invalidate the key itself.
 
 ## Dashboard handoff
 

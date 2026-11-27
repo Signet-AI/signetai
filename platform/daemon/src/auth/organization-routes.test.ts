@@ -88,6 +88,47 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("M2 admin session-management keys may sign out all sessions", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "session manager",
+				permissions: ["admin"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		expect((await call("/api/auth/logout", "POST", { all: true }, key.secret)).status).toBe(200);
+		expect((await (await call("/api/auth/whoami")).json()).authenticated).toBe(false);
+	});
+	test.each(["key", "derived"])("M2 recall-only %s cannot sign out other sessions", async (kind) => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "recall",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		const exchange = await call("/api/auth/session", "POST", {}, key.secret);
+		const body = await exchange.json();
+		const cookie = exchange.headers
+			.getSetCookie()
+			.map((value) => value.split(";")[0])
+			.join("; ");
+		const logout = (all: boolean) =>
+			kind === "key"
+				? call("/api/auth/logout", "POST", { all }, key.secret)
+				: app.request("/api/auth/logout", {
+						method: "POST",
+						headers: { cookie, "content-type": "application/json", "x-signet-csrf": body.csrf },
+						body: JSON.stringify({ all }),
+					});
+		expect((await logout(true)).status).toBe(403);
+		expect((await (await call("/api/auth/whoami")).json()).authenticated).toBe(true);
+		expect((await logout(false)).status).toBe(200);
+		expect((await (await call("/api/auth/whoami")).json()).authenticated).toBe(true);
+	});
+
 	test.each(["long", "equal"])("B2 child expiry and descendant revocation: %s", async (expiry) => {
 		await claim();
 		const expiresAt = new Date(Date.now() + 300_000).toISOString();
