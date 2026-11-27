@@ -17,6 +17,7 @@ import { BoardView } from "@/views/board";
 import { GraphView } from "@/views/graph";
 
 import { TelemetryConsentDialog } from "@/components/telemetry-consent";
+import { OperatorOnboardingGate, OperatorSetup } from "@/components/onboarding/operator";
 import { OnboardingPage } from "@/components/onboarding/page";
 import { OnboardingEntry } from "@/components/onboarding/entry";
 import { MemberSetup, OrganizationOnboardingGate } from "@/components/onboarding/member";
@@ -38,9 +39,11 @@ export function App() {
 					{entry === "device" ? (
 						<DeviceApprovalPage />
 					) : (
-						<OrganizationOnboardingGate whoami={whoami}>
-							<Shell key={whoami?.user.id} />
-						</OrganizationOnboardingGate>
+						<OperatorOnboardingGate whoami={whoami}>
+							<OrganizationOnboardingGate whoami={whoami}>
+								<Shell key={whoami?.user.id} />
+							</OrganizationOnboardingGate>
+						</OperatorOnboardingGate>
 					)}
 					{session.kind === "signed-out" && <SignInDialog session={session} />}
 					<SessionExpiryToast session={session} />
@@ -76,7 +79,9 @@ function Shell() {
 						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "board" || view === "settings" || view === "account" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
 					>
 						{view === "setup" ? (
-							whoami ? (
+							whoami?.user.role === "admin" ? (
+								<OperatorSetup organizationName={whoami.organization.name} onComplete={() => setView("home")} />
+							) : whoami ? (
 								<MemberSetup
 									whoami={whoami}
 									onComplete={() => {

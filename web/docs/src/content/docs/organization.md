@@ -34,6 +34,18 @@ The token is consumed once. Claiming marks the existing `default` agent as the o
 
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
+## Operator bootstrap
+
+Run `signet setup --host --public-url https://memory.example.com` on the instance host, then open its setup URL from your own computer. Enter the one-time token and create the first administrator. The operator wizard configures the organization name and authentication choice, AI provider/model, embedding profile, organization instructions, optional teams/classifications, source defaults and sources, and invitations. It has no Harnesses or First memory step.
+
+Keep the bootstrap password until SSO works, or expand the SSO controls to configure the existing authentication owner. Provider and embedding keys are stored in Secrets; the wizard accepts only secret names as references. Allow remote inference explicitly before sending organization evidence to a hosted provider. Inference can be deferred and embeddings can use keyword-only search. A saved embedding profile may still need the existing index transition before semantic search uses it.
+
+Organization instructions are saved as the instance's `AGENTS.md`, not a member's personal profile. Source defaults seed each source dialog; its agent/classification controls remain editable and the sources owner rechecks admission. Creating classifications requires compliance authority; admin status alone grants no classified access. Teams and sources may be left empty.
+
+Invitations are one-time links to copy and send yourself; Signet sends no email. Copying or leaving the invitation step clears the displayed link. Allowed SSO email domains support joining on first sign-in. Finishing setup writes durable completion and reads it back before opening the dashboard. Setup remains available to administrators later.
+
+The wizard uses `GET` and `PATCH /api/org/operator/settings`, not the unrestricted configuration-file interface. Only unrestricted administrator sessions can read or change this projection. Member, compliance-only and API-key credentials are rejected. Each successful read/update and denied authorization is audited without instruction text or secret values. Agents with an administrator session can use `signet_operator_settings_get` and `signet_operator_settings_set` through the same HTTP authorization.
+
 ## Classified imports
 
 Choose a classification when creating a transcript import: `POST /api/sources/imports` accepts an optional `classificationId` alongside `files`. Multipart document uploads to `POST /api/sources/import` accept the same optional form field. You must be allowed to apply the classification and read the destination, including its inherited classifications. A denied admission writes no import job or evidence. Project-bound credentials cannot start these imports because the manifest does not establish every record's project.

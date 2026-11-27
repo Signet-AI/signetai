@@ -48,7 +48,9 @@ async function instructions(workspace: string): Promise<string | null> {
 		if (!(await file.stat()).isFile()) throw new IdentityError(400, "instructions_not_regular");
 		const bytes = Buffer.alloc(65537);
 		let offset = 0;
+		const deadline = Date.now() + 5000;
 		while (offset < bytes.length) {
+			if (Date.now() >= deadline) throw new IdentityError(503, "instructions_read_deadline");
 			const result = await file.read(bytes, offset, bytes.length - offset, offset);
 			if (!result.bytesRead) break;
 			offset += result.bytesRead;

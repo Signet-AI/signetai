@@ -123,6 +123,8 @@ export function ConnectSourceDialog({
 	onConnected,
 	embedded = false,
 	initialKind,
+	initialAgentId,
+	initialClassificationId,
 	onBusyChange,
 }: {
 	open: boolean;
@@ -130,6 +132,8 @@ export function ConnectSourceDialog({
 	onConnected: () => void;
 	embedded?: boolean;
 	initialKind?: SourceKind;
+	initialAgentId?: string;
+	initialClassificationId?: string;
 	onBusyChange?: (busy: boolean) => void;
 }) {
 	const whoami = useWhoami();
@@ -202,8 +206,8 @@ export function ConnectSourceDialog({
 	useEffect(() => {
 		if (!open) return;
 		setKind(initialKind ?? "files");
-		setImportAgent("");
-		setImportClassification("");
+		setImportAgent(initialAgentId ?? "");
+		setImportClassification(initialClassificationId ?? "");
 		setTarget("");
 		setName("");
 		setTokenRef("");
@@ -216,7 +220,7 @@ export function ConnectSourceDialog({
 		setResult(null);
 		setTranscriptJobId(null);
 		if (inputRef.current) inputRef.current.value = "";
-	}, [open, initialKind]);
+	}, [open, initialKind, initialAgentId, initialClassificationId]);
 
 	useEffect(() => {
 		onBusyChange?.(busy || browsing);
