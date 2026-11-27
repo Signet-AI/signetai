@@ -123,25 +123,22 @@ async function readScoredMemoryRows(
 	scope: ReadScope,
 	filter: { readonly sql: string; readonly args: readonly unknown[] },
 	tail: { readonly sql: string; readonly args: readonly unknown[] },
-	options: { readonly operation: string; readonly estimatedWorkUnits: number },
+	options: { readonly operation: string; readonly estimatedWorkUnits: number; readonly attributeBoost?: boolean },
 ): Promise<ScoredMemory[]> {
 	const boost = derivedScopeSql("ea", scope, { memory: "memory_id", session: null, source: "source_id" });
 	const visible = readScopeSql("m", scope);
+	const score =
+		options.attributeBoost === false
+			? "m.importance"
+			: `COALESCE((SELECT MAX(ea.importance) FROM entity_attributes ea WHERE ea.memory_id=m.id AND ea.status='active'${boost.sql}),m.importance,0.5)`;
 	const rows = await ownerReadAll<ScoredMemory>(
 		owner,
 		`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 		        m.source_type, m.source_id, COALESCE(m.access_count, 0) AS access_count,
-		        COALESCE(
-		          (SELECT MAX(ea.importance)
-		           FROM entity_attributes ea
-		           WHERE ea.memory_id = m.id
-		             AND ea.status = 'active'${boost.sql}),
-		          m.importance,
-		          0.5
-		        ) AS effScore
+		        ${score} AS effScore
 		 FROM memories m
 		 WHERE ${filter.sql}${currentMemorySql("m")}${visible.sql}${tail.sql}`,
-		[...boost.args, ...filter.args, ...visible.args, ...tail.args],
+		[...(options.attributeBoost === false ? [] : boost.args), ...filter.args, ...visible.args, ...tail.args],
 		{ ...options, lane: "read", deadlineMs: 5_000 },
 	);
 	return [...rows];
@@ -207,7 +204,11 @@ export async function getAllScoredCandidates(
 			scope,
 			{ sql: "1 = 1", args: [] },
 			{ sql: " ORDER BY m.created_at DESC LIMIT ?", args: [limit * 3] },
-			{ operation: "session-start.candidate-pool", estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)) },
+			{
+				operation: "session-start.candidate-pool",
+				estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)),
+				attributeBoost: false,
+			},
 		);
 
 		const scored: ScoredMemory[] = rows

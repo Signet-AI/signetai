@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { type ReadScope, compartmentFor } from "@signet/core";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,6 +121,14 @@ describe("fetchTraversalCandidates (#1250)", () => {
 
 		const rows = await getAllScoredCandidates(dbPath, undefined, 10, own("agent-a"));
 		expect(rows.map((row) => row.id)).toEqual(["memory-current"]);
+	});
+
+	test("scores the ordinary pool without reading derived ontology", async () => {
+		insertMemory("memory-independent", "agent-a", 0.9);
+		getSyncDbAccessor().withWriteTx((db) => db.exec("ALTER TABLE entity_attributes RENAME TO unrelated_attributes"));
+		const rows = await getAllScoredCandidates(dbPath, undefined, 10, own("agent-a"));
+		expect(rows.map((row) => row.id)).toEqual(["memory-independent"]);
+		expect(rows[0]?.importance).toBe(0.9);
 	});
 
 	test("caps the hydration IN list and yields between batches", async () => {
