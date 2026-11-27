@@ -615,6 +615,56 @@ describe("organization HTTP flows", () => {
 		).json();
 		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, scoped.secret)).status).toBe(403);
 	});
+	test("log streams end promptly after their credential is revoked", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		registerMiscRoutes(app);
+		await claim();
+		const response = await call("/api/logs/stream");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing stream");
+		await reader.read();
+		const started = Date.now();
+		await call("/api/auth/logout", "POST", {});
+		let text = "";
+		while (true) {
+			const frame = await reader.read();
+			if (frame.done) break;
+			text += new TextDecoder().decode(frame.value);
+		}
+		expect(Date.now() - started).toBeLessThanOrEqual(5000);
+		expect(text).toContain("scope_changed");
+	});
+	test("hidden content logs have no event, timestamp, count or stream budget footprint", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		const { logger } = await import("../logger");
+		registerMiscRoutes(app);
+		await claim();
+		const before = await (await call("/api/logs?category=memory")).json();
+		const response = await call("/api/logs/stream?limit=1");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing stream");
+		await reader.read();
+		logger.info("memory", "HR write", { memoryId: "hr-write", compartmentId: 999 });
+		logger.info("pipeline", "unattributed write");
+		const after = await (await call("/api/logs?category=memory")).json();
+		expect(after).toEqual(before);
+		logger.info("daemon", "safe event");
+		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"category":"daemon"');
+		expect((await reader.read()).done).toBe(true);
+	});
+	test("log snapshot and stream audit opens coalesce per principal per minute", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		registerMiscRoutes(app);
+		await claim();
+		for (let n = 0; n < 5; n++) expect((await call("/api/logs")).status).toBe(200);
+		const stream = await call("/api/logs/stream");
+		await stream.body?.cancel();
+		expect(
+			await organizationQuery(
+				statement("SELECT count(*) AS n FROM audit_events WHERE action='operator.logs_opened'", [], "get"),
+			),
+		).toEqual({ n: 1 });
+	});
 	test("operator log streams are scoped, content-free and cancelled cleanly", async () => {
 		const { registerMiscRoutes } = await import("../routes/misc-routes");
 		const { logger } = await import("../logger");
@@ -650,7 +700,7 @@ describe("organization HTTP flows", () => {
 			await organizationQuery(
 				statement("SELECT COUNT(*) AS n FROM audit_events WHERE action='operator.logs_opened'", [], "get"),
 			),
-		).toEqual({ n: 2 });
+		).toEqual({ n: 1 });
 		expect((await call(`/api/org/users/${alice.userId}`, "PATCH", { role: "operator" })).status).toBe(200);
 		expect((await call("/api/logs", "GET", undefined, alice.token)).status).toBe(403);
 		const identity = await (await call("/api/auth/whoami")).json();

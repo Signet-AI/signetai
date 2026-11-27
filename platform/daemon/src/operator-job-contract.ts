@@ -41,6 +41,7 @@ export interface OperatorJobRow {
 	readonly finished_at: string | null;
 }
 export type OperatorRequest =
+	| { readonly op: "logs-access"; readonly actor: OperatorActor; readonly audit: boolean; readonly runtimeId?: string }
 	| { readonly op: "settings"; readonly actor: OperatorActor; readonly input: unknown; readonly runtimeId?: string }
 	| {
 			readonly op: "agent-purge";

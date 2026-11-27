@@ -332,6 +332,34 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 		return { ok: true };
 	}
 
+	if (request.op === "logs-access") {
+		operation(db, { op: "authorize-global", actor: request.actor });
+		const agent = z
+			.object({ id: z.string() })
+			.parse(db.prepare("SELECT id FROM agents WHERE kind='organization' AND archived_at IS NULL LIMIT 1").get());
+		const scope = actorScope(
+			db,
+			request.actor,
+			{ reach: { kind: "own", agentId: agent.id }, projects: null, compartments: "all" },
+			"diagnostics",
+			true,
+		);
+		if (
+			request.audit &&
+			!db
+				.prepare("SELECT 1 FROM audit_events WHERE actor_user_id=? AND action='operator.logs_opened' AND at>=? LIMIT 1")
+				.get(request.actor.userId, new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString())
+		)
+			auditAuthoredWriteInTx(
+				db,
+				{ userId: request.actor.userId, credential: `${request.actor.credentialKind}:${request.actor.credentialId}` },
+				"operator.logs_opened",
+				"operator",
+				"logs",
+				null,
+			);
+		return { compartments: scope.compartments };
+	}
 	if (request.op === "agent-purge") return agentPurge(db, request);
 	if (request.op === "authorize-global") {
 		if (request.actor.boundAgentId !== null || request.actor.allowedProjects !== null) deny("permission");

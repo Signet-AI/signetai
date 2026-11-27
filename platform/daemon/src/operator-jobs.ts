@@ -48,7 +48,7 @@ async function submitOperatorRequest<T>(request: OperatorRequest): Promise<T> {
 				operation: `operator.${request.op}`,
 				lane: "maintenance",
 				workloadClass: "maintenance",
-				deadlineMs: 5000,
+				deadlineMs: request.op === "logs-access" ? 1000 : 5000,
 				estimatedWorkUnits: 1000,
 			},
 		).result;
