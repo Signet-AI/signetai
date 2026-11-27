@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MAX_INLINE_TRANSCRIPT_BYTES } from "@signet/core/transcript-upload";
 import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 
 export interface TranscriptCaptureJobInput {
@@ -40,7 +41,6 @@ export class TranscriptCaptureBacklogFullError extends Error {
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5;
-const MAX_INLINE_CAPTURE_BYTES = 4 * 1024 * 1024;
 const MAX_INLINE_CAPTURE_TOTAL_BYTES = 64 * 1024 * 1024;
 
 export function sha256(value: string | Uint8Array): string {
@@ -119,8 +119,8 @@ export function upsertTranscriptCaptureJobInTx(db: WriteDb, job: TranscriptCaptu
 	const storedTranscript = source || canonicalAvailable ? "" : input.transcript;
 	const storedRaw = source || canonicalAvailable ? null : rawTranscript;
 	const payloadBytes = inlineBytes(storedTranscript, storedRaw);
-	if (payloadBytes > MAX_INLINE_CAPTURE_BYTES) {
-		throw new Error(`inline transcript capture exceeds ${MAX_INLINE_CAPTURE_BYTES} bytes; provide transcriptPath`);
+	if (payloadBytes > MAX_INLINE_TRANSCRIPT_BYTES) {
+		throw new Error(`inline transcript capture exceeds ${MAX_INLINE_TRANSCRIPT_BYTES} bytes; provide transcriptPath`);
 	}
 	if (existingInlineBytes(db, existing?.id ?? null) + payloadBytes > MAX_INLINE_CAPTURE_TOTAL_BYTES) {
 		throw new TranscriptCaptureBacklogFullError(MAX_INLINE_CAPTURE_TOTAL_BYTES);

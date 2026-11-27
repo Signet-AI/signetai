@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
-import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "../transcript-upload";
+import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
 import { withTranscriptUploadAgentLock } from "../transcript-upload-agent-lock";
 import { transcriptUploadAgentDirectory } from "../transcript-upload-paths";
 

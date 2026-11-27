@@ -109,7 +109,8 @@ import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
-import { MAX_TRANSCRIPT_UPLOAD_BYTES, type TranscriptUploadResult, uploadTranscriptRange } from "../transcript-upload";
+import { MAX_TRANSCRIPT_UPLOAD_BYTES, type TranscriptUploadStatus } from "@signet/core/transcript-upload";
+import { type TranscriptUploadResult, uploadTranscriptRange } from "../transcript-upload";
 import { TranscriptUploadAdmission } from "../transcript-upload-agent-lock";
 import { readBoundedBody } from "./request-body";
 import type { TranscriptUploadState } from "../session-transcripts";
@@ -1014,11 +1015,7 @@ async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploa
 	};
 }
 
-function uploadStateBody(state: TranscriptUploadState | null): {
-	committedOffset: number;
-	generation: number | null;
-	tailSha256: string | null;
-} {
+function uploadStateBody(state: TranscriptUploadState | null): TranscriptUploadStatus {
 	return {
 		committedOffset: state?.committedOffset ?? 0,
 		generation: state?.generation ?? null,

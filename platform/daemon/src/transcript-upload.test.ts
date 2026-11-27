@@ -13,11 +13,11 @@ import {
 	readTranscriptUploadStateInDb,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
+import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
 import { getTranscriptCaptureStatus, runTranscriptCaptureOnce } from "./transcript-capture-worker";
 import * as safeFs from "./transcript-import-safe-fs";
 import {
 	type TranscriptUploadRequest,
-	MAX_TRANSCRIPT_UPLOAD_BYTES,
 	drainTranscriptUploadPurges,
 	stopTranscriptUploadPurges,
 	uploadTranscriptRange,

@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { attemptAsync } from "@signet/core";
+import { transcriptUploadTailStart } from "@signet/core/transcript-upload";
 import type { DbAccessor } from "./db-accessor";
 import {
 	dbOwnerCommitTranscriptUpload,
@@ -18,8 +19,6 @@ import { openContainedTranscriptFile, removeContainedTranscriptPath } from "./tr
 import { type TranscriptUploadAdmission, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
 import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsRoot } from "./transcript-upload-paths";
 
-export const MAX_TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
-const TAIL_HASH_BYTES = 64 * 1024;
 const PURGE_RUN_DEADLINE_MS = 30_000;
 const PURGE_CONTINUE_DELAY_MS = 1_000;
 const PURGE_RETRY_LIMIT = 5;
@@ -125,7 +124,7 @@ async function writeAndCommitRange(
 			}
 			await handle.datasync();
 			mtimeMs = (await handle.stat()).mtimeMs;
-			const tailStart = Math.max(0, end - TAIL_HASH_BYTES);
+			const tailStart = transcriptUploadTailStart(end);
 			tailSha256 =
 				tailStart >= input.offset
 					? sha256(input.body.subarray(tailStart - input.offset))
