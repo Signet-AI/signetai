@@ -17,6 +17,7 @@ import { getTranscriptCaptureStatus, runTranscriptCaptureOnce } from "./transcri
 import * as safeFs from "./transcript-import-safe-fs";
 import {
 	type TranscriptUploadRequest,
+	MAX_TRANSCRIPT_UPLOAD_BYTES,
 	drainTranscriptUploadPurges,
 	stopTranscriptUploadPurges,
 	uploadTranscriptRange,
@@ -112,14 +113,10 @@ describe("transcript upload ranges", () => {
 		expect(readFileSync(file(), "utf8")).toBe('{"a":1}\n{"b":2}\n');
 	});
 
-	it("rejects an empty, unterminated, or corrupted body before touching the file", async () => {
+	it("rejects an empty or corrupted body before touching the file", async () => {
 		init();
 		const accessor = getDbAccessor();
 		expect(await uploadTranscriptRange(accessor, request(""))).toEqual({ status: "invalid", reason: "empty" });
-		expect(await uploadTranscriptRange(accessor, request('{"a":1}'))).toEqual({
-			status: "invalid",
-			reason: "newline",
-		});
 		expect(await uploadTranscriptRange(accessor, request('{"a":1}\n', { checksum: sha("other") }))).toEqual({
 			status: "invalid",
 			reason: "checksum",
@@ -582,5 +579,62 @@ describe("transcript upload ranges", () => {
 		expect(transcriptUploadFilePath(dir, "noam", 0, "sess-1", 0)).not.toBe(
 			transcriptUploadFilePath(dir, "noam", 1, "sess-1", 0),
 		);
+	});
+
+	it("commits a range that ends inside a record without a capture job", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const result = await uploadTranscriptRange(accessor, request('{"a":1'));
+		expect(result).toEqual({
+			status: "committed",
+			state: { harness: "codex", project: "/repo", generation: 0, committedOffset: 6, tailSha256: sha('{"a":1') },
+			jobId: null,
+		});
+		expect(readFileSync(file(), "utf8")).toBe('{"a":1');
+		expect((await getTranscriptCaptureStatus(accessor, "noam")).pending).toBe(0);
+	});
+
+	it("captures a record larger than one range once its last range ends the line", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const record = '{"role":"user","content":"start-' + "x".repeat(MAX_TRANSCRIPT_UPLOAD_BYTES) + '-end"}\n';
+		const firstRange = record.slice(0, MAX_TRANSCRIPT_UPLOAD_BYTES);
+		const secondRange = record.slice(MAX_TRANSCRIPT_UPLOAD_BYTES);
+		const firstResult = await uploadTranscriptRange(accessor, request(firstRange, { harness: "pi", offset: 0 }));
+		expect(firstResult).toMatchObject({
+			status: "committed",
+			jobId: null,
+			state: { committedOffset: MAX_TRANSCRIPT_UPLOAD_BYTES },
+		});
+		const secondResult = await uploadTranscriptRange(
+			accessor,
+			request(secondRange, { harness: "pi", offset: MAX_TRANSCRIPT_UPLOAD_BYTES }),
+		);
+		expect(secondResult).toMatchObject({
+			status: "committed",
+			jobId: expect.any(String),
+			state: { committedOffset: Buffer.byteLength(record) },
+		});
+		expect(await runTranscriptCaptureOnce(accessor, dir)).toBe(true);
+		const stored = await getStoredSessionTranscriptInfoAsync("sess-1", "noam", accessor);
+		expect(stored?.content).toContain("start-" + "x".repeat(MAX_TRANSCRIPT_UPLOAD_BYTES) + "-end");
+	});
+
+	it("keeps the capture job at the last complete record when a range ends inside a record", async () => {
+		init();
+		const accessor = getDbAccessor();
+		const first = '{"role":"user","content":"complete words"}\n';
+		const second = '{"role":"user","content":"partial words';
+		const firstResult = await uploadTranscriptRange(accessor, request(first, { harness: "pi" }));
+		expect(firstResult).toMatchObject({ status: "committed", jobId: expect.any(String) });
+		const secondResult = await uploadTranscriptRange(
+			accessor,
+			request(second, { harness: "pi", offset: Buffer.byteLength(first) }),
+		);
+		expect(secondResult).toMatchObject({ status: "committed", jobId: null });
+		expect(await runTranscriptCaptureOnce(accessor, dir)).toBe(true);
+		const stored = await getStoredSessionTranscriptInfoAsync("sess-1", "noam", accessor);
+		expect(stored?.content).toContain("complete words");
+		expect(stored?.content).not.toContain("partial words");
 	});
 });
