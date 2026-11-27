@@ -1,4 +1,4 @@
-import { useWhoami } from "@/lib/session";
+import { useWhoami, useCan } from "@/lib/session";
 import { useState, useCallback } from "react";
 import { ClassificationBadges } from "@/components/shell/attribution";
 import { Panel } from "@/components/shell/panel";
@@ -263,6 +263,90 @@ interface ClassificationItemPage {
 	}[];
 	readonly nextCursor: string | null;
 }
+function PurgeDepartedAuthor({
+	classification,
+	onComplete,
+}: {
+	classification: OrganizationClassification;
+	onComplete: () => void;
+}) {
+	const whoami = useWhoami();
+	const canClassify = useCan("classify");
+	const [open, setOpen] = useState(false);
+	const [userId, setUserId] = useState("");
+	const [counts, setCounts] = useState<Readonly<Record<string, number>> | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [jobId, setJobId] = useState<string | null>(null);
+	const inAudience = classification.audience?.some((principal) =>
+		principal.kind === "user"
+			? principal.id === whoami?.user.id
+			: whoami?.user.groups.some((group) => group.id === principal.id),
+	);
+	if (!canClassify || !whoami?.user.compliance || !inAudience) return null;
+	const submit = async (dryRun: boolean) => {
+		setBusy(true);
+		setError(null);
+		const result = await getJSONResult<{ plan?: { counts: Readonly<Record<string, number>> }; jobId?: string }>(
+			`/api/classifications/${encodeURIComponent(classification.id)}/purge-author`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ userId, dryRun }),
+			},
+		);
+		if (result.error) setError(result.error);
+		else if (result.data?.jobId) {
+			setJobId(result.data.jobId);
+			setCounts(null);
+		} else setCounts(result.data?.plan?.counts ?? null);
+		setBusy(false);
+	};
+	return (
+		<div className="flex flex-col gap-3">
+			<Action secondary onClick={() => setOpen(!open)}>
+				Purge departed author's material
+			</Action>
+			{open && (
+				<div className="flex flex-col gap-3">
+					<p className="m-0 text-small text-muted-foreground">
+						Only material you can read within {classification.name} is included. The author must be deactivated.
+					</p>
+					<TextField
+						label="Departed author's user ID"
+						value={userId}
+						onChange={(value) => {
+							setUserId(value);
+							setCounts(null);
+							setJobId(null);
+						}}
+					/>
+					<Action secondary disabled={busy || !userId.trim()} onClick={() => void submit(true)}>
+						Preview purge
+					</Action>
+					{counts && (
+						<>
+							<dl className="grid grid-cols-2 gap-2 text-small">
+								{Object.entries(counts).map(([kind, count]) => (
+									<div key={kind}>
+										<dt>{displayLabel(kind)}</dt>
+										<dd>{count}</dd>
+									</div>
+								))}
+							</dl>
+							<Action disabled={busy} onClick={() => void submit(false)}>
+								Permanently purge previewed material
+							</Action>
+						</>
+					)}
+					<Message error={error} />
+					{jobId && <TrackedJob id={jobId} onComplete={onComplete} />}
+				</div>
+			)}
+		</div>
+	);
+}
+
 function ClassificationItems({ classification }: { classification: OrganizationClassification }) {
 	const [cursor, setCursor] = useState("");
 	const [history, setHistory] = useState<readonly string[]>([]);
@@ -271,6 +355,7 @@ function ClassificationItems({ classification }: { classification: OrganizationC
 	);
 	return (
 		<OrganizationBlock title={`${classification.name} items`}>
+			<PurgeDepartedAuthor classification={classification} onComplete={page.refresh} />
 			<Panel
 				result={page.result}
 				empty={page.result?.data?.items.length === 0}

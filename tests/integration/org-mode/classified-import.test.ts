@@ -5,6 +5,235 @@ import { OrgDaemon } from "./daemon";
 import { device, Fixture } from "./fixture";
 import { record, request, success, text, until } from "./http";
 
+test.each(["document", "transcript"] as const)(
+	"reclassified %s imports do not reveal their old public identity",
+	async (kind) => {
+		const daemon = await OrgDaemon.create();
+		let snapshot: Database | undefined;
+		try {
+			const fixture = await Fixture.create(daemon, "single", false);
+			snapshot = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+			const database = snapshot;
+			const upload = async (name: "carol" | "alice") => {
+				const credential = fixture.user(name).session;
+				const bearer = text(credential.bearer);
+				if (kind === "transcript") {
+					const job = success(
+						await request(daemon.origin, "/api/sources/imports", credential, "POST", {
+							files: [{ name: "reclassified.jsonl" }],
+						}),
+						"create transcript import",
+					);
+					if (!Array.isArray(job.files)) throw new Error("missing import files");
+					const response = await fetch(
+						`${daemon.origin}/api/sources/imports/${text(job.id)}/files/${text(record(job.files[0]).id)}`,
+						{
+							method: "PUT",
+							headers: { authorization: `Bearer ${bearer}` },
+							body: `${JSON.stringify({ source: "signet", id: "reclassified", harness: "codex", agent_id: "foreign", session_key: "reclassified", project: null, timestamp: "2026-01-01T00:00:00Z", message_count: 1, messages: [{ role: "user", content: "Reclassification source identity probe." }] })}\n`,
+							signal: AbortSignal.timeout(30_000),
+						},
+					);
+					const body = record(await response.json());
+					if (response.status === 201) {
+						success(
+							await request(daemon.origin, `/api/sources/imports/${text(job.id)}/start`, credential, "POST", {}),
+							"start transcript import",
+						);
+						await until(
+							async () => {
+								const state = record(
+									database.query("SELECT state,error FROM source_import_jobs WHERE id=?").get(text(job.id)),
+								);
+								expect(state.state, String(state.error)).not.toBe("failed");
+								expect(state.state, String(state.error)).not.toBe("completed_with_rejections");
+								return state.state === "completed";
+							},
+							"transcript import completes",
+							45_000,
+						);
+					}
+					return { status: response.status, body: { files: [body] } };
+				}
+				const form = new FormData();
+				form.set(
+					"files",
+					new File(["Reclassification source identity probe."], "reclassified.md", { type: "text/markdown" }),
+				);
+				const response = await fetch(`${daemon.origin}/api/sources/import`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${bearer}` },
+					body: form,
+					signal: AbortSignal.timeout(30_000),
+				});
+				return { status: response.status, body: record(await response.json()) };
+			};
+			const first = await upload("carol");
+			expect(first.status).toBe(201);
+			if (!Array.isArray(first.body.files)) throw new Error("missing imported files");
+			const sourceId = text(record(first.body.files[0]).sourceId);
+			await fixture.classify("source", sourceId, "default");
+			expect(
+				database
+					.query(
+						"SELECT cm.classification_id FROM import_content_registry r JOIN compartment_members cm ON cm.compartment_id=r.compartment_id WHERE r.agent_id='default' AND r.source_id=?",
+					)
+					.all(sourceId),
+			).toEqual([{ classification_id: fixture.hrId }]);
+			await daemon.stop();
+			await daemon.start();
+			const outsider = await upload("alice");
+			expect(outsider.status, JSON.stringify(outsider.body)).toBe(201);
+			if (!Array.isArray(outsider.body.files)) throw new Error("missing imported files");
+			const outsiderId = text(record(outsider.body.files[0]).sourceId);
+			expect(outsiderId).not.toBe(sourceId);
+			const repeat = await upload("alice");
+			expect(repeat.status).toBe(201);
+			if (!Array.isArray(repeat.body.files)) throw new Error("missing imported files");
+			expect(record(repeat.body.files[0]).sourceId).toBe(outsiderId);
+			success(
+				await request(
+					daemon.origin,
+					`/api/classifications/${fixture.hrId}/remove?wait=1`,
+					fixture.user("cora").session,
+					"POST",
+					{ target: { kind: "source", id: sourceId, agentId: "default" } },
+				),
+				"remove source classification",
+			);
+			expect(
+				database.query("SELECT source_id,compartment_id FROM import_content_registry WHERE source_id=?").get(sourceId),
+			).toEqual({ source_id: sourceId, compartment_id: null });
+			await fixture.classify("source", sourceId, "default");
+			const purged = await request(
+				daemon.origin,
+				`/api/sources/${encodeURIComponent(sourceId)}`,
+				fixture.user("audra").session,
+				"DELETE",
+			);
+			expect(purged.status, JSON.stringify(purged.body)).toBe(200);
+			for (const table of ["import_content_registry", "source_import_files", "memory_artifacts", "session_transcripts"])
+				expect(database.query(`SELECT COUNT(*) AS n FROM ${table} WHERE source_id=?`).get(sourceId)).toEqual({ n: 0 });
+			expect(database.query("SELECT source_id FROM import_content_registry WHERE source_id=?").get(outsiderId)).toEqual(
+				{ source_id: outsiderId },
+			);
+			const retained = success(
+				await request(daemon.origin, "/api/sources", fixture.user("alice").session),
+				"remaining sources",
+			);
+			expect(JSON.stringify(retained)).toContain(outsiderId);
+			expect(JSON.stringify(retained)).not.toContain(sourceId);
+		} finally {
+			snapshot?.close();
+			await daemon.dispose();
+		}
+	},
+	120_000,
+);
+
+test("different destination labels do not share truncated source identities", async () => {
+	const daemon = await OrgDaemon.create();
+	try {
+		const fixture = await Fixture.create(daemon, "single", false);
+		const author = fixture.user("carol"),
+			outsider = fixture.user("alice");
+		await daemon.stop();
+		const db = new Database(join(daemon.workspace, "data/signet.db"));
+		try {
+			for (const [classificationId, userId] of [
+				["cls_collision_27213", author.id],
+				["cls_collision_48862", outsider.id],
+			]) {
+				db.query("INSERT INTO classifications(id,name,created_at) VALUES(?,?,?)").run(
+					classificationId,
+					classificationId,
+					"2026",
+				);
+				db.query(
+					"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES(?,'user',?)",
+				).run(classificationId, userId);
+			}
+		} finally {
+			db.close();
+		}
+		await daemon.start();
+		for (const [classificationId, bearer] of [
+			["cls_collision_27213", text(author.session.bearer)],
+			["cls_collision_48862", text(outsider.session.bearer)],
+		]) {
+			const form = new FormData();
+			form.set("files", new File(["source identity collision probe"], "collision.md", { type: "text/markdown" }));
+			form.set("classificationId", classificationId);
+			const response = await fetch(`${daemon.origin}/api/sources/import`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${bearer}` },
+				body: form,
+				signal: AbortSignal.timeout(30_000),
+			});
+			expect(response.status, await response.text()).toBe(201);
+		}
+	} finally {
+		await daemon.dispose();
+	}
+}, 120_000);
+
+test("same import bytes do not probe another author's hidden label set", async () => {
+	const daemon = await OrgDaemon.create();
+	try {
+		const fixture = await Fixture.create(daemon, "single", false);
+		const carol = fixture.user("carol");
+		const alice = fixture.user("alice");
+		const transcript = async (bearer: string, classificationId?: string) => {
+			const created = success(
+				await request(daemon.origin, "/api/sources/imports", { bearer }, "POST", {
+					classificationId,
+					files: [{ name: "oracle.jsonl" }],
+				}),
+				"create oracle import",
+			);
+			if (!Array.isArray(created.files)) throw new Error("missing files");
+			const response = await fetch(
+				`${daemon.origin}/api/sources/imports/${text(created.id)}/files/${text(record(created.files[0]).id)}`,
+				{
+					method: "PUT",
+					headers: { authorization: `Bearer ${bearer}`, "content-type": "application/octet-stream" },
+					body: `${JSON.stringify({ source: "signet", id: "oracle", harness: "codex", session_key: "oracle", messages: [{ role: "user", content: "confidential oracle" }] })}\n`,
+					signal: AbortSignal.timeout(30_000),
+				},
+			);
+			return { status: response.status, body: record(await response.json()) };
+		};
+		const document = async (bearer: string, classificationId?: string) => {
+			const form = new FormData();
+			form.set("files", new File(["confidential oracle document"], "oracle.md", { type: "text/markdown" }));
+			if (classificationId) form.set("classificationId", classificationId);
+			const response = await fetch(`${daemon.origin}/api/sources/import`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${bearer}` },
+				body: form,
+				signal: AbortSignal.timeout(30_000),
+			});
+			return { status: response.status, body: record(await response.json()) };
+		};
+		for (const upload of [transcript, document]) {
+			const hidden = await upload(text(carol.session.bearer), fixture.hrId);
+			expect(hidden.status, JSON.stringify(hidden.body)).toBe(201);
+			const ownConflict = await upload(text(carol.session.bearer));
+			expect(ownConflict.status).toBe(409);
+			const outsider = await upload(text(alice.session.bearer));
+			expect(outsider.status, JSON.stringify(outsider.body)).toBe(201);
+			const repeat = await upload(text(alice.session.bearer));
+			expect(repeat.status).toBe(201);
+			const source = (body: Record<string, unknown>) =>
+				Array.isArray(body.files) ? record(body.files[0]).sourceId : body.sourceId;
+			expect(source(repeat.body)).toBe(source(outsider.body));
+			expect(source(outsider.body)).not.toBe(source(hidden.body));
+		}
+	} finally {
+		await daemon.dispose();
+	}
+}, 120_000);
+
 test("classified imports stay hidden from admission through worker completion", async () => {
 	const daemon = await OrgDaemon.create();
 	let snapshot: Database | undefined;
@@ -182,9 +411,19 @@ test("classified imports stay hidden from admission through worker completion", 
 		const authorListing = await request(daemon.origin, `/api/sources${agentQuery}`, author.session);
 		expect(authorListing.status).toBe(200);
 		expect(JSON.stringify(authorListing.body)).toContain(documentSource);
+		expect(
+			(
+				await request(
+					daemon.origin,
+					`/api/sources/${encodeURIComponent(documentSource)}${agentQuery}`,
+					fixture.user("audra").session,
+					"DELETE",
+				)
+			).status,
+		).toBe(403);
 		success(
 			await request(daemon.origin, `/api/org/users/${author.id}`, fixture.admin, "PATCH", { role: "admin" }),
-			"authorize source operator",
+			"authorize source owner to manage connectors",
 		);
 		expect(
 			(await request(daemon.origin, `/api/sources/${encodeURIComponent(documentSource)}`, author.session, "DELETE"))

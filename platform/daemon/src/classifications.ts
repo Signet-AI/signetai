@@ -53,6 +53,22 @@ export interface ImportJobCreation {
 	readonly actor?: ClassificationActor;
 }
 export type ImportClassificationRequest =
+	| {
+			readonly op: "import-identity";
+			readonly agentId: string;
+			readonly author: WriteAuthor;
+			readonly actor?: ClassificationActor;
+			readonly classificationId?: string;
+			readonly jobId?: string;
+			readonly contentHash: string;
+			readonly newGeneration?: boolean;
+			readonly legacySources: readonly {
+				readonly id: string;
+				readonly authorUserId: string | null;
+				readonly authorCredential: string;
+				readonly createdAt: string;
+			}[];
+	  }
 	| { readonly op: "import-create"; readonly input: ImportJobCreation }
 	| {
 			readonly op: "import-bind";
@@ -165,7 +181,11 @@ export async function classificationRequest<Result>(
 ): Promise<Result> {
 	const owner = suppliedOwner ?? (await getDbOwnerForAccessor(getDbAccessor()));
 	const readonly = request.op === "readable" || request.op === "visibility" || request.op === "admit-write";
-	const importing = request.op === "import-create" || request.op === "import-bind" || request.op === "import-document";
+	const importing =
+		request.op === "import-identity" ||
+		request.op === "import-create" ||
+		request.op === "import-bind" ||
+		request.op === "import-document";
 	return owner.submit<Result>(
 		{ kind: "classification", request },
 		{

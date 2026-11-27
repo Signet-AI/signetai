@@ -32,7 +32,7 @@ In organization mode, browser sessions use HttpOnly cookies and CSRF protection.
 
 ## Your organization account
 
-The identity menu shows your name, role, organization, instance origin, and session expiry. Name and email can be edited in Profile unless they are managed by your identity provider. Synced memberships are marked as provider-managed. Open **My account** to inspect your profile and memberships, revoke sessions, manage devices and connector keys, create personal API keys, or create personal agents. Local mode shows none of these account screens.
+The identity menu shows your name, role, organization, instance origin, and session expiry. Your display name can be edited in Profile unless it is managed by your identity provider. Email is read-only: ask an administrator to change it. Synced memberships are marked as provider-managed. Open **My account** to inspect your profile and memberships, revoke sessions, manage devices and connector keys, create personal API keys, or create personal agents. Local mode shows none of these account screens.
 
 - **Devices and connectors** lists devices and their connector keys. Revoking a device also revokes its sessions and keys. Expand **Recent errors** on a connector key to inspect up to ten failures from the past seven days. **Connect a harness** provides commands to sign in from your computer and then connect a harness.
 - **Personal API keys** asks for a name, agent, expiry, and a subset of your permissions. Copy a new key immediately; dismissing it or leaving the page removes it from view. It cannot be revealed again.

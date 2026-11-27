@@ -149,6 +149,9 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 			sourceId,
 			agent,
 		);
+	db.prepare(
+		`DELETE FROM import_content_registry WHERE source_id=?${input.agentId === undefined ? "" : " AND agent_id=?"}`,
+	).run(sourceId, ...(input.agentId === undefined ? [] : [input.agentId]));
 	const embeddingPrefix = `${sourceId}:`;
 	db.prepare(
 		`DELETE FROM document_import_jobs WHERE source_id=?${input.agentId === undefined ? "" : " AND agent_id=?"}`,

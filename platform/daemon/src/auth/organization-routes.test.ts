@@ -915,10 +915,29 @@ describe("organization HTTP flows", () => {
 		).json();
 		expect((await call(path, "GET", undefined, key.secret)).status).toBe(403);
 	});
+	test("compliance lookup requires two characters and limits each principal", async () => {
+		await claim();
+		const alice = await member("lookup-alice");
+		await call(`/api/org/users/${alice.userId}`, "PATCH", { compliance: true });
+		expect((await call("/api/org/users/lookup?q=a", "GET", undefined, alice.token)).status).toBe(400);
+	});
+
+	test("compliance lookup rate limit is per principal", async () => {
+		await claim();
+		const alice = await member("limited-alice");
+		await call(`/api/org/users/${alice.userId}`, "PATCH", { compliance: true });
+		for (let i = 0; i < 30; i++)
+			expect((await call("/api/org/users/lookup?q=al", "GET", undefined, alice.token)).status).toBe(200);
+		const limited = await call("/api/org/users/lookup?q=al", "GET", undefined, alice.token);
+		expect(limited.status).toBe(429);
+		expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThan(0);
+		expect((await call("/api/org/users/lookup?q=al")).status).toBe(200);
+	});
+
 	test("bounded user lookup serves compliance without widening the directory", async () => {
 		await claim();
 		const alice = await member("alice");
-		const bob = await member("bob");
+		const bob = await member("albert");
 		expect((await call("/api/org/users/lookup?q=alice", "GET", undefined, bob.token)).status).toBe(403);
 		await call(`/api/org/users/${bob.userId}`, "PATCH", { compliance: true });
 		const found = await call("/api/org/users/lookup?q=alice&limit=1", "GET", undefined, bob.token);
@@ -929,12 +948,14 @@ describe("organization HTTP flows", () => {
 		expect(
 			(await (await call("/api/org/users/lookup?q=%40example.test", "GET", undefined, bob.token)).json()).users,
 		).toEqual([{ id: alice.userId, displayName: "alice", email: "alice@example.test" }]);
-		expect((await (await call("/api/org/users/lookup?q=%25", "GET", undefined, bob.token)).json()).users).toEqual([]);
-		const page = await (await call("/api/org/users/lookup?q=a&limit=1", "GET", undefined, bob.token)).json();
+		expect((await (await call("/api/org/users/lookup?q=%25%25", "GET", undefined, bob.token)).json()).users).toEqual(
+			[],
+		);
+		const page = await (await call("/api/org/users/lookup?q=al&limit=1", "GET", undefined, bob.token)).json();
 		expect(page.users).toHaveLength(1);
 		expect(typeof page.nextCursor).toBe("string");
 		const next = await (
-			await call(`/api/org/users/lookup?q=a&limit=1&cursor=${page.nextCursor}`, "GET", undefined, bob.token)
+			await call(`/api/org/users/lookup?q=al&limit=1&cursor=${page.nextCursor}`, "GET", undefined, bob.token)
 		).json();
 		expect(next.users).toHaveLength(1);
 		expect(next.users[0].id).not.toBe(page.users[0].id);
@@ -1292,20 +1313,31 @@ describe("organization HTTP flows", () => {
 			),
 		).toEqual({ n: 1 });
 	});
+	test("self-service email fields are uniformly forbidden without changing identity", async () => {
+		await claim();
+		const alice = await member("email-alice");
+		const bob = await member("email-bob");
+		expect((await call(`/api/org/users/${bob.userId}`, "PATCH", { email: "taken@example.com" })).status).toBe(200);
+		for (const email of ["taken@example.com", "free@example.com", null, "invalid"]) {
+			const response = await call("/api/auth/profile", "PATCH", { email }, alice.token);
+			expect(response.status).toBe(403);
+			expect(await response.json()).toMatchObject({ reason: "email_change_requires_admin" });
+		}
+		expect((await (await call("/api/auth/profile", "GET", undefined, alice.token)).json()).user.email).toBeNull();
+		expect((await (await call("/api/auth/profile", "GET", undefined, bob.token)).json()).user.email).toBe(
+			"taken@example.com",
+		);
+	});
+
 	test("own profile updates are scoped and SSO identity fields are read-only", async () => {
 		await claim();
 		const alice = await member("alice");
 		const bob = await member("bob");
-		const updated = await call(
-			"/api/auth/profile",
-			"PATCH",
-			{ displayName: "Alice Changed", email: "alice@example.com" },
-			alice.token,
-		);
+		const updated = await call("/api/auth/profile", "PATCH", { displayName: "Alice Changed" }, alice.token);
 		expect(updated.status).toBe(200);
 		expect(await updated.json()).toMatchObject({
-			user: { id: alice.userId, displayName: "Alice Changed", email: "alice@example.com", ssoManaged: false },
-			editableFields: ["displayName", "email"],
+			user: { id: alice.userId, displayName: "Alice Changed", email: null, ssoManaged: false },
+			editableFields: ["displayName"],
 		});
 		expect(
 			(await call("/api/auth/profile", "PATCH", { userId: bob.userId, displayName: "spoof" }, alice.token)).status,
@@ -1435,7 +1467,22 @@ describe("organization HTTP flows", () => {
 				body: JSON.stringify({ name: "private-request-body" }),
 			});
 			expect(rejected.status).toBe(403);
+			if (i === 0) expect((await (await call(path, "GET", undefined, alice.token)).json()).errors).toHaveLength(1);
 		}
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM audit_events WHERE action='connector.error'", [], "get"),
+			),
+		).toEqual({ n: 0 });
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT COUNT(*) AS n FROM audit_events WHERE action='auth.failure' AND target_id=?",
+					[issued.key.id],
+					"get",
+				),
+			),
+		).toEqual({ n: 1 });
 		const result = await call(path, "GET", undefined, alice.token);
 		expect(result.status).toBe(200);
 		const summary = await result.json();
@@ -1495,6 +1542,96 @@ describe("organization HTTP flows", () => {
 			await (await call(`/api/classifications/${created.id}`, "GET", undefined, narrowed.secret)).json(),
 		).not.toHaveProperty("audience");
 	});
+	test("offboarding purge removes exactly the actor-visible preview", async () => {
+		const { registerClassificationRoutes } = await import("../routes/classification-routes");
+		registerClassificationRoutes(app);
+		await claim();
+		const departed = await member("departed");
+		const manager = await member("hr-manager");
+		await call(`/api/org/users/${manager.userId}`, "PATCH", { compliance: true });
+		const hr = await (
+			await call(
+				"/api/classifications",
+				"POST",
+				{ name: "HR purge", audience: [{ kind: "user", id: manager.userId }] },
+				manager.token,
+			)
+		).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories(id,agent_id,author_user_id,content,type,memory_kind,created_at,updated_at) VALUES('departed-public',?,?,'public','fact','episodic','2026','2026'),('departed-hr',?,?,'private','fact','episodic','2026','2026')",
+				[departed.agentId, departed.userId, departed.agentId, departed.userId],
+			),
+			statement(
+				"INSERT INTO memory_artifacts(agent_id,source_path,source_sha256,source_kind,session_id,session_token,author_user_id,captured_at,updated_at) VALUES(?,'departed-hr-artifact','hash','source_import_md','unbound','unbound',?,'2026','2026')",
+				[departed.agentId, departed.userId],
+			),
+		]);
+		expect(
+			(
+				await call(
+					`/api/classifications/${hr.id}/apply?wait=1`,
+					"POST",
+					{ target: { kind: "memory", id: "departed-hr", agentId: departed.agentId } },
+					manager.token,
+				)
+			).status,
+		).toBe(202);
+		await organizationWrite([
+			statement(
+				"UPDATE memory_artifacts SET compartment_id=(SELECT compartment_id FROM memories WHERE id='departed-hr') WHERE source_path='departed-hr-artifact'",
+			),
+		]);
+		const preview = await (
+			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge" })
+		).json();
+		expect(preview.plan.counts).toMatchObject({ memories: 1, artifacts: 0 });
+		const started = await (
+			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge", dryRun: false })
+		).json();
+		let job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+		for (let i = 0; job.status === "running" && i < 100; i++) {
+			await Bun.sleep(20);
+			job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+		}
+		expect(job.status).toBe("complete");
+		expect(JSON.parse(job.progress_json).removed).toMatchObject({ memories: 1, memory_artifacts: 0 });
+		expect(
+			await organizationQuery(statement("SELECT id FROM memories WHERE author_user_id=?", [departed.userId], "all")),
+		).toEqual([{ id: "departed-hr" }]);
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memory_artifacts WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 1 });
+		const material = `/api/classifications/${hr.id}/purge-author`;
+		expect((await call(material, "POST", { userId: departed.userId })).status).toBe(403);
+		const managerPreview = await call(material, "POST", { userId: departed.userId }, manager.token);
+		expect(managerPreview.status).toBe(200);
+		expect((await managerPreview.json()).plan.counts).toMatchObject({ memories: 1, artifacts: 1 });
+		const managerStarted = await call(material, "POST", { userId: departed.userId, dryRun: false }, manager.token);
+		expect(managerStarted.status).toBe(202);
+		const managerJob = await managerStarted.json();
+		let managerStatus = await (await call(`/api/org/jobs/${managerJob.jobId}`, "GET", undefined, manager.token)).json();
+		for (let i = 0; managerStatus.status === "running" && i < 100; i++) {
+			await Bun.sleep(20);
+			managerStatus = await (await call(`/api/org/jobs/${managerJob.jobId}`, "GET", undefined, manager.token)).json();
+		}
+		expect(managerStatus.status).toBe("complete");
+		expect(JSON.parse(managerStatus.progress_json).removed).toMatchObject({ memories: 1, memory_artifacts: 1 });
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 0 });
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memory_artifacts WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 0 });
+	});
+
 	test("offboarding preview excludes HR evidence and reports only active sessions", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
@@ -1622,10 +1759,8 @@ describe("organization HTTP flows", () => {
 			session_transcripts: 1,
 		});
 		expect(
-			await organizationQuery(
-				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [bob.userId], "get"),
-			),
-		).toEqual({ n: 0 });
+			await organizationQuery(statement("SELECT id FROM memories WHERE author_user_id=?", [bob.userId], "all")),
+		).toEqual([{ id: "memory-hr" }]);
 	});
 	test("agent transfer changes organizational ownership without retaining the old owner", async () => {
 		await claim();
