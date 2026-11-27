@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { cachedAuthorityQuery } from "./auth/authority-cache";
 import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { requireReadScope, resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { CaptureEnqueueInput } from "./transcript-capture-owner";
@@ -571,6 +572,7 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 			owner.cancel(jobId);
 		},
 		health: (): ReturnType<DbOwnerClient["health"]> => currentOwner().health(),
+		authorityVersion: () => currentOwner().authorityVersion?.() ?? null,
 		migrationControl: () => currentOwner().migrationControl(),
 		close: async (): Promise<void> => {
 			const maintenance = getDbOwnerMaintenance();
@@ -658,15 +660,20 @@ async function submitWithAdmission<Result>(
 	}
 }
 
-export async function dbOwnerQuery<Row = unknown>(
-	statement: DbOwnerStatement,
-	options: DbOwnerSqlOptions,
-): Promise<Row> {
+export function dbOwnerQuery<Row = unknown>(statement: DbOwnerStatement, options: DbOwnerSqlOptions): Promise<Row>;
+export async function dbOwnerQuery(statement: DbOwnerStatement, options: DbOwnerSqlOptions): Promise<unknown> {
 	const owner = await getDbOwner();
-	return await submitWithAdmission<Row>(
-		owner,
-		{ kind: "query", statement },
-		{ ...options, lane: options.lane ?? "read" },
+	return await cachedAuthorityQuery(
+		statement,
+		() => {
+			const health = owner.health();
+			const version = owner.authorityVersion?.();
+			return health.state === "ready" && version
+				? JSON.stringify([getDbAccessorPath(), health.pid, health.generation, version])
+				: null;
+		},
+		() =>
+			submitWithAdmission<unknown>(owner, { kind: "query", statement }, { ...options, lane: options.lane ?? "read" }),
 	);
 }
 

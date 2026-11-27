@@ -1,4 +1,5 @@
 import { bodyLimit } from "hono/body-limit";
+import { acceptCredentialAuthority, withCredentialAuthority, withoutCredentialAuthority } from "./authority-cache";
 import { withWritePrincipal, classifiedDestinationDenied } from "@signet/core";
 import { admitWriteDestination } from "./write-destination";
 import { LOCAL_AUTHOR } from "./audit-owner";
@@ -99,7 +100,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		return true;
 	}
 
-	return async (c, next) => {
+	const resolveIdentity: MiddlewareHandler = async (c, next) => {
 		c.set("organization", null);
 		resolveRequestNetwork(c, config);
 		if (c.req.method === "GET" && ["/health", "/health/live"].includes(c.req.path)) return next();
@@ -279,6 +280,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				}
 				c.set("auth", { ...verified, claims: { ...verified.claims, role: p.role, permissions: [...p.permissions] } });
 			} else throw new IdentityError(401, "legacy_token");
+			acceptCredentialAuthority();
 			c.set("principal", p);
 			if (
 				!open &&
@@ -403,6 +405,11 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			return failure(c, error);
 		}
 	};
+	return (c, next) =>
+		withCredentialAuthority(
+			config.mode === "team" ? (c.req.header("authorization") ?? getCookie(c, authCookies(c).session)) : undefined,
+			() => resolveIdentity(c, () => withoutCredentialAuthority(next)),
+		);
 }
 export function failure(c: Context, error: IdentityError): Response {
 	c.set("authFailureReason", error.reason);

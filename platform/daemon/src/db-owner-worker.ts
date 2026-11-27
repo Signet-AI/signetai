@@ -1,7 +1,8 @@
 import { executeEmbeddingProjectionInTx } from "./embedding-projection-owner";
 import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 import type { Database as BunDatabase } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { AUTHORITY_TABLES } from "./auth/authority-epoch";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
@@ -150,6 +151,9 @@ export function runDbOwnerWorker(): void {
 			return false;
 		}
 	}
+	const authorityInstance = randomUUID();
+	let authorityEpoch = 0n;
+	let authorityEpochReady = false;
 	const parentPid = process.ppid;
 	let db = undefined as unknown as SqliteDatabase;
 	let readDb: SqliteDatabase | undefined;
@@ -179,7 +183,15 @@ export function runDbOwnerWorker(): void {
 	};
 
 	function send(event: DbOwnerEvent): void {
-		process.stdout.write(`${JSON.stringify(event)}\n`);
+		if (authorityEpochReady && event.type === "result") {
+			const epoch = db.prepare("SELECT epoch FROM temp.signet_authority_epoch WHERE id=1").get()?.epoch;
+			if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0)
+				throw new Error("Invalid authority epoch");
+			authorityEpoch = BigInt(epoch);
+		}
+		process.stdout.write(
+			`${JSON.stringify({ ...event, authorityVersion: `${authorityInstance}:${authorityEpoch}` })}\n`,
+		);
 	}
 	function writeDiagnostic(message: string): void {
 		process.stderr.write(`${message}\n`);
@@ -205,6 +217,7 @@ export function runDbOwnerWorker(): void {
 		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
 		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
+		installAuthorityEpoch();
 	} catch (error) {
 		send({ type: "fatal", error: serializeError(error) });
 		closeAndExit(1);
@@ -1192,8 +1205,46 @@ export function runDbOwnerWorker(): void {
 		};
 	}
 
+	function installAuthorityEpoch(): void {
+		db.exec(
+			"CREATE TEMP TABLE IF NOT EXISTS signet_authority_epoch (id INTEGER PRIMARY KEY CHECK(id=1), epoch INTEGER NOT NULL); INSERT OR IGNORE INTO signet_authority_epoch VALUES (1,0)",
+		);
+		authorityEpochReady = true;
+		for (const table of AUTHORITY_TABLES) {
+			const columns = db
+				.prepare(`PRAGMA table_info("${table}")`)
+				.all()
+				.flatMap((row) => {
+					if (typeof row !== "object" || row === null || !("name" in row) || typeof row.name !== "string") return [];
+					return [row.name];
+				});
+			if (columns.length === 0) continue;
+			for (const event of ["INSERT", "DELETE", "UPDATE"])
+				db.exec(`DROP TRIGGER IF EXISTS temp."signet_authority_${table}_${event}"`);
+			for (const event of ["INSERT", "DELETE"])
+				db.exec(
+					`CREATE TEMP TRIGGER IF NOT EXISTS "signet_authority_${table}_${event}" AFTER ${event} ON main."${table}" BEGIN UPDATE signet_authority_epoch SET epoch=epoch+1 WHERE id=1; END`,
+				);
+			const changed = columns
+				.filter((column) => !["last_used_at", "last_seen_at", "updated_at"].includes(column))
+				.map((column) => {
+					const quoted = `"${column.replaceAll('"', '""')}"`;
+					return `OLD.${quoted} IS NOT NEW.${quoted}`;
+				})
+				.join(" OR ");
+			if (changed)
+				db.exec(
+					`CREATE TEMP TRIGGER IF NOT EXISTS "signet_authority_${table}_UPDATE" AFTER UPDATE ON main."${table}" WHEN ${changed} BEGIN UPDATE signet_authority_epoch SET epoch=epoch+1 WHERE id=1; END`,
+				);
+		}
+	}
+
 	async function execute(job: DbOwnerJob, context: JobExecutionContext): Promise<unknown> {
-		if (job.request.kind === "initialize") return await executeInitialization(job.request.agentsDir, context);
+		if (job.request.kind === "initialize") {
+			const value = await executeInitialization(job.request.agentsDir, context);
+			installAuthorityEpoch();
+			return value;
+		}
 		if (job.request.kind === "query") {
 			return job.request.statement.readonly
 				? executeReadOnlyStatement(job.request.statement)

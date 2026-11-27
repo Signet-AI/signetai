@@ -774,7 +774,7 @@ export interface DbOwnerSerializedError {
 	readonly causeFamily?: DbOwnerFailureCause;
 }
 
-export type DbOwnerEvent =
+type DbOwnerEventPayload =
 	| { readonly type: "ready"; readonly pid: number }
 	| { readonly type: "started"; readonly jobId: string; readonly workloadClass: DbOwnerWorkloadClass }
 	| {
@@ -786,6 +786,8 @@ export type DbOwnerEvent =
 			readonly error?: DbOwnerSerializedError;
 	  }
 	| { readonly type: "fatal"; readonly error: DbOwnerSerializedError };
+
+export type DbOwnerEvent = DbOwnerEventPayload & { readonly authorityVersion?: string };
 
 function serializedCauseFamily(error: unknown): DbOwnerFailureCause | undefined {
 	if (typeof error !== "object" || error === null) return undefined;

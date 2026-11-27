@@ -795,19 +795,26 @@ export interface BoundKeyRow {
 	revoked_at: string | null;
 }
 export async function readBoundKey(keyId: string): Promise<BoundKeyRow | null> {
-	const key = await organizationQuery<(BoundKeyRow & { ancestors_live: number }) | null>(
+	const key = await organizationQuery<
+		(BoundKeyRow & { ancestors_live: number; ancestor_expires_at: string | null }) | null
+	>(
 		statement(
 			`WITH RECURSIVE ancestry(id,parent_key_id,user_id,expires_at,revoked_at,depth) AS (
 				SELECT id,parent_key_id,user_id,expires_at,revoked_at,0 FROM api_keys WHERE id=?
 				UNION ALL SELECT p.id,p.parent_key_id,p.user_id,p.expires_at,p.revoked_at,a.depth+1 FROM ancestry a JOIN api_keys p ON p.id=a.parent_key_id WHERE a.depth<64
 			) SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,scope_json,expires_at,revoked_at,
-			NOT EXISTS(SELECT 1 FROM ancestry a WHERE a.depth>=64 OR (a.depth>0 AND (a.revoked_at IS NOT NULL OR a.expires_at<=? OR a.user_id IS NOT api_keys.user_id)) OR (a.parent_key_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM api_keys p WHERE p.id=a.parent_key_id))) AS ancestors_live
+			(SELECT min(expires_at) FROM ancestry WHERE depth>0) AS ancestor_expires_at,
+			NOT EXISTS(SELECT 1 FROM ancestry a WHERE a.depth>=64 OR (a.depth>0 AND (a.revoked_at IS NOT NULL OR a.user_id IS NOT api_keys.user_id)) OR (a.parent_key_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM api_keys p WHERE p.id=a.parent_key_id))) AS ancestors_live
 			FROM api_keys WHERE id=?`,
-			[keyId, new Date().toISOString(), keyId],
+			[keyId, keyId],
 			"get",
 		),
 	);
-	if (key && !key.ancestors_live) throw new IdentityError(401, "invalid_credential");
+	if (
+		key &&
+		(!key.ancestors_live || (key.ancestor_expires_at !== null && key.ancestor_expires_at <= new Date().toISOString()))
+	)
+		throw new IdentityError(401, "invalid_credential");
 	return key;
 }
 export async function renewConnectorKey(key: BoundKeyRow, org: OrganizationRow): Promise<void> {

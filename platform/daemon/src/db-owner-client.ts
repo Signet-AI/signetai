@@ -112,6 +112,7 @@ export interface DbOwnerClient {
 	awaitResult<Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result>;
 	cancel(jobId: string): void;
 	health(): DbOwnerHealth;
+	authorityVersion?(): string | null;
 	close(): Promise<void>;
 	migrationControl(): MigrationControlBoundary;
 }
@@ -269,6 +270,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let activeJobId: string | null = null;
 	let lastError: string | null = null;
 	let lastMeasuredAtMs: number | null = null;
+	let authorityVersion: string | null = null;
 	let livenessTimer: ReturnType<typeof setInterval> | null = null;
 	let livenessPending = false;
 	let initialization: DbOwnerInitializationState = "not_started";
@@ -455,6 +457,10 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	function handleEvent(owner: ChildProcess, event: DbOwnerEvent): void {
 		if (child !== owner) return;
+		authorityVersion =
+			typeof event.authorityVersion === "string" && /^[a-f0-9-]{36}:[0-9]{1,40}$/.test(event.authorityVersion)
+				? event.authorityVersion
+				: null;
 		if (event.type !== "fatal") lastMeasuredAtMs = dbOwnerWallClockNow();
 		if (event.type === "ready") {
 			startLivenessMonitor();
@@ -964,6 +970,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		awaitResult,
 		cancel,
 		health: currentHealth,
+		authorityVersion: () => (state === "ready" ? authorityVersion : null),
 		close,
 		migrationControl: () => migrationControl,
 	};

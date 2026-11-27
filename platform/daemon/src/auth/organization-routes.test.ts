@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { ownerRequestProfiling } from "../db-request-profile";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { registerOrganizationRoutes } from "../routes/organization-routes";
 import { parseAuthConfig } from "./config";
@@ -75,6 +76,7 @@ beforeEach(async () => {
 	setup = (await ensureSetupToken()) ?? "";
 	admin = "";
 	app = new Hono();
+	app.use("*", ownerRequestProfiling(true));
 	app.use("*", createIdentityMiddleware(config, generateSecret()));
 	registerOrganizationRoutes(app, config, dir);
 	app.post("/write", (c) => c.json({ written: true }));
@@ -88,6 +90,37 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("verified credentials reuse authority resolution without owner reads", async () => {
+		app.get("/api/cache-proof", (c) => c.json({ userId: c.get("principal").userId }));
+		await claim();
+		const first = await call("/api/cache-proof");
+		const second = await call("/api/cache-proof");
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		const cold: unknown = JSON.parse(first.headers.get("x-signet-owner-profile") ?? "null");
+		const warm: unknown = JSON.parse(second.headers.get("x-signet-owner-profile") ?? "null");
+		expect(cold).toEqual(expect.arrayContaining([expect.objectContaining({ operation: "organization.read" })]));
+		expect(warm).toEqual([]);
+	});
+	test("cached authority observes a role change and deactivation on the next request", async () => {
+		app.get("/api/cache-role", (c) =>
+			c.json({ role: c.get("principal").role, permissions: [...c.get("principal").permissions] }),
+		);
+		await claim();
+		const user = await member("cached-member");
+		for (let repeat = 0; repeat < 2; repeat++)
+			expect(await (await call("/api/cache-role", "GET", undefined, user.token)).json()).toMatchObject({
+				role: "member",
+			});
+		expect((await call(`/api/org/users/${user.userId}`, "PATCH", { role: "readonly" })).status).toBe(200);
+		const narrowed = await call("/api/cache-role", "GET", undefined, user.token);
+		expect(narrowed.status).toBe(200);
+		expect(await narrowed.json()).toMatchObject({ role: "readonly", permissions: ["recall"] });
+		expect(
+			(await call(`/api/org/users/${user.userId}/deactivate`, "POST", { mode: "keep", dryRun: false })).status,
+		).toBe(202);
+		expect((await call("/api/cache-role", "GET", undefined, user.token)).status).toBe(401);
+	});
 	test("health bypasses organization authentication when the owner is unavailable", async () => {
 		closeDbAccessor();
 		app.get("/health", (c) => c.json({ status: "degraded" }));
@@ -279,6 +312,10 @@ describe("organization HTTP flows", () => {
 		const grandchild = await (
 			await call("/api/auth/api-keys", "POST", { name: "grandchild", permissions: ["recall"], expiresAt }, child.secret)
 		).json();
+		for (const key of [parent, child, grandchild]) {
+			for (let repeat = 0; repeat < 2; repeat++)
+				expect((await (await call("/api/auth/whoami", "GET", undefined, key.secret)).json()).authenticated).toBe(true);
+		}
 		expect((await call("/api/auth/api-keys/" + parent.key.id, "DELETE")).status).toBe(200);
 		for (const key of [parent, child, grandchild]) {
 			expect((await (await call("/api/auth/whoami", "GET", undefined, key.secret)).json()).authenticated).toBe(false);

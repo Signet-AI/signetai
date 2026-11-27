@@ -72,6 +72,10 @@ The `single` agent model stores default writes in the organization agent. Admini
 
 Connector keys bind an agent. A different agent in a request body, query, session key, or `x-signet-agent-id` is rejected, not silently substituted. Conflicting request aliases return `400 agent_conflict`. The daemon records the user from the credential, not a submitted author or actor header. The `x-signet-agent-id` response header on memory capture reports the agent actually used.
 
+## Authentication freshness
+
+Signet reuses validated identity metadata in bounded process memory. Role and group changes, deactivation, credential rotation or revocation, and ancestry changes invalidate that metadata before the mutation is acknowledged. They take effect on the next request, without a revocation TTL. Expiration is still checked against the current clock. An owner restart invalidates earlier entries, and an unavailable owner cannot authorize requests from cached metadata. Memory visibility and classification checks are never served from this cache.
+
 ## Provision a connector
 
 1. Start a CLI or desktop sign-in with `POST /api/auth/device/start`.
