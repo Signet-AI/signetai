@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { OrgDaemon } from "./daemon";
-import { Fixture } from "./fixture";
+import { device, Fixture } from "./fixture";
 import { record, request, success, text, until } from "./http";
 
 test("classified imports stay hidden from admission through worker completion", async () => {
@@ -186,8 +186,18 @@ test("classified imports stay hidden from admission through worker completion", 
 			await request(daemon.origin, `/api/org/users/${author.id}`, fixture.admin, "PATCH", { role: "admin" }),
 			"authorize source operator",
 		);
+		expect(
+			(await request(daemon.origin, `/api/sources/${encodeURIComponent(documentSource)}`, author.session, "DELETE"))
+				.status,
+		).toBe(403);
+		const operator = await device(daemon, author.browser, "source-operator");
 		success(
-			await request(daemon.origin, `/api/sources/${encodeURIComponent(documentSource)}`, author.session, "DELETE"),
+			await request(
+				daemon.origin,
+				`/api/sources/${encodeURIComponent(documentSource)}${agentQuery}`,
+				operator.credential,
+				"DELETE",
+			),
 			"purge classified document",
 		);
 		expect(
