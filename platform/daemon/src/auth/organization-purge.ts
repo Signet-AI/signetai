@@ -1,11 +1,6 @@
 import { audienceSubjectFromPrincipal, readScopeSql, resolveReadScope, type ReadScope } from "../read-scope";
 import { prepareTypedStatement, type WriteDb } from "../db-accessor";
-import {
-	dbOwnerOrganizationPurge,
-	dbOwnerOrganizationPurgePlan,
-	dbOwnerTranscriptOperation,
-	getDbOwner,
-} from "../db-owner-runtime";
+import { dbOwnerOrganizationPurge, dbOwnerTranscriptOperation, getDbOwner } from "../db-owner-runtime";
 import type { TranscriptDeleteResult } from "../session-transcript-lifecycle";
 import {
 	purgeArtifactRecordInTx,
@@ -28,26 +23,40 @@ function purgeReadClause(
 	scope: ReadScope | undefined,
 	kind: "memory" | "artifact" | "document" | "summary" | "transcript",
 	alias: string,
+	classificationId?: string,
 ) {
 	if (!scope) return { sql: "", args: [] };
-	if (kind === "memory") return readScopeSql(alias, scope);
-	return readScopeSql(alias, scope, {
-		visibility: null,
-		memory: null,
-		session: kind === "document" ? null : "session_key",
-		source: kind === "artifact" || kind === "transcript" ? "source_id" : null,
-	});
+	const clause =
+		kind === "memory"
+			? readScopeSql(alias, scope)
+			: readScopeSql(alias, scope, {
+					visibility: null,
+					memory: null,
+					session: kind === "document" ? null : "session_key",
+					source: kind === "artifact" || kind === "transcript" ? "source_id" : null,
+				});
+	return classificationId
+		? {
+				sql: `${clause.sql} AND EXISTS(SELECT 1 FROM compartment_members cm WHERE cm.compartment_id=${alias}.compartment_id AND cm.classification_id=?)`,
+				args: [...clause.args, classificationId],
+			}
+		: clause;
 }
 function planAuthoredMemoryPurgeInTx(
 	db: WriteDb,
 	userId: string,
-	options: { readonly scope?: ReadScope; readonly preview?: boolean; readonly agentId?: string } = {},
+	options: {
+		readonly scope?: ReadScope;
+		readonly preview?: boolean;
+		readonly agentId?: string;
+		readonly classificationId?: string;
+	} = {},
 ) {
-	const memoryScope = purgeReadClause(options.scope, "memory", "m");
-	const documentScope = purgeReadClause(options.scope, "document", "d");
-	const artifactScope = purgeReadClause(options.scope, "artifact", "a");
-	const summaryScope = purgeReadClause(options.scope, "summary", "s");
-	const transcriptScope = purgeReadClause(options.scope, "transcript", "t");
+	const memoryScope = purgeReadClause(options.scope, "memory", "m", options.classificationId);
+	const documentScope = purgeReadClause(options.scope, "document", "d", options.classificationId);
+	const artifactScope = purgeReadClause(options.scope, "artifact", "a", options.classificationId);
+	const summaryScope = purgeReadClause(options.scope, "summary", "s", options.classificationId);
+	const transcriptScope = purgeReadClause(options.scope, "transcript", "t", options.classificationId);
 	const rootLimit = options.preview ? 1001 : 50;
 	const agentId = options.agentId;
 	const evidenceLimit = options.preview ? 1001 : 1;
@@ -122,8 +131,13 @@ function planAuthoredMemoryPurgeInTx(
 	if (options.preview && nodes.length > 1000) throw new Error("plan_limit");
 	return { rows, documents, artifacts, affectedSummaries, transcripts, blocked };
 }
-export function planOffboardPurgeInTx(db: WriteDb, userId: string, scope: ReadScope): Record<string, number> {
-	const plan = planAuthoredMemoryPurgeInTx(db, userId, { scope, preview: true });
+export function planOffboardPurgeInTx(
+	db: WriteDb,
+	userId: string,
+	scope: ReadScope,
+	classificationId?: string,
+): Record<string, number> {
+	const plan = planAuthoredMemoryPurgeInTx(db, userId, { scope, preview: true, classificationId });
 	return {
 		memories: plan.rows.length,
 		documents: plan.documents.length,
@@ -136,7 +150,7 @@ export function purgeAuthoredMemoryBatchInTx(
 	db: WriteDb,
 	userId: string,
 	author: WriteAuthor,
-	options: { readonly agentId?: string } = {},
+	options: { readonly agentId?: string; readonly scope?: ReadScope; readonly classificationId?: string } = {},
 ): PurgeBatchResult {
 	const count = (sql: string, ...args: string[]) => prepareTypedStatement<{ n: number }>(db, sql).get(...args)?.n ?? 0;
 	const { rows, documents, artifacts, affectedSummaries, blocked } = planAuthoredMemoryPurgeInTx(db, userId, options);
@@ -181,18 +195,17 @@ export function purgeAuthoredMemoryBatchInTx(
 			auditAuthoredWriteInTx(db, author, "summary.purged", "summary", summary.id, summary.agent_id, detail);
 		}
 	}
-	const column = options.agentId ? "agent_id" : "author_user_id";
-	const target = options.agentId ?? userId;
-	const remaining = count(
-		`SELECT (SELECT COUNT(*) FROM memories WHERE ${column}=?)+(SELECT COUNT(*) FROM documents WHERE ${column}=?)+(SELECT COUNT(*) FROM memory_artifacts WHERE ${column}=?)+(SELECT COUNT(*) FROM session_summaries WHERE ${column}=?) AS n`,
-		target,
-		target,
-		target,
-		target,
-	);
+	const pending = planAuthoredMemoryPurgeInTx(db, userId, options);
+	const remaining =
+		pending.rows.length + pending.documents.length + pending.artifacts.length + pending.affectedSummaries.length;
 	return { removed: counts.memories ?? 0, remaining, counts, blocked };
 }
-async function purgeResidual(userId: string, jobId: string, scope?: ReadScope): Promise<Record<string, number>> {
+async function purgeResidual(
+	userId: string,
+	jobId: string,
+	scope?: ReadScope,
+	classificationId?: string,
+): Promise<Record<string, number>> {
 	const residual: Record<string, number> = {};
 	for (const [table, column] of [
 		["memories", "author_user_id"],
@@ -210,6 +223,7 @@ async function purgeResidual(userId: string, jobId: string, scope?: ReadScope): 
 						? "artifact"
 						: "transcript",
 			"r",
+			classificationId,
 		);
 		const row = await organizationQuery<{ n: number }>(
 			statement(
@@ -222,7 +236,8 @@ async function purgeResidual(userId: string, jobId: string, scope?: ReadScope): 
 	}
 	for (const table of ["session_summaries", "session_claims", "memory_thread_heads", "session_memories"]) {
 		if (scope && table !== "session_summaries") continue;
-		const clause = table === "session_summaries" ? purgeReadClause(scope, "summary", "s") : { sql: "", args: [] };
+		const clause =
+			table === "session_summaries" ? purgeReadClause(scope, "summary", "s", classificationId) : { sql: "", args: [] };
 		const row = await organizationQuery<{ n: number }>(
 			statement(
 				`SELECT COUNT(*) AS n FROM ${table} s WHERE (${table === "session_summaries" ? "s.author_user_id=? OR " : ""}EXISTS (SELECT 1 FROM audit_events a WHERE a.target_kind='session' AND a.action='session.purged' AND a.agent_id=s.agent_id AND s.session_key IN (a.target_id,'session:'||a.target_id) AND json_extract(a.detail_json,'$.offboardUserId')=? AND json_extract(a.detail_json,'$.jobId')=?))${clause.sql}`,
@@ -232,7 +247,7 @@ async function purgeResidual(userId: string, jobId: string, scope?: ReadScope): 
 		);
 		residual[table] = row.n;
 	}
-	const memoryScope = purgeReadClause(scope, "memory", "m");
+	const memoryScope = purgeReadClause(scope, "memory", "m", classificationId);
 	const retained = `SELECT DISTINCT m.id FROM memories m JOIN session_transcript_deleted_sources d ON d.kind='memory' AND d.id=m.id AND d.agent_id=m.agent_id JOIN audit_events a ON a.action='session.purged' AND a.target_kind='session' AND a.target_id=d.session_key AND a.agent_id=d.agent_id AND json_extract(a.detail_json,'$.generation')=d.generation WHERE json_extract(a.detail_json,'$.offboardUserId')=? AND json_extract(a.detail_json,'$.jobId')=?${memoryScope.sql}`;
 	const derived = `SELECT DISTINCT m.id FROM memories m JOIN derived_memory_sources d ON d.derived_memory_id=m.id WHERE EXISTS (SELECT 1 FROM audit_events a WHERE a.target_kind=d.source_kind AND a.target_id=d.source_id AND a.agent_id=d.agent_id AND a.action IN ('memory.purged','artifact.purged','summary.purged') AND json_extract(a.detail_json,'$.offboardUserId')=?)${memoryScope.sql}`;
 	const row = await organizationQuery<{ n: number }>(
@@ -254,23 +269,36 @@ async function purgeResidual(userId: string, jobId: string, scope?: ReadScope): 
 
 	return residual;
 }
-export async function runOffboardPurge(p: Principal, jobId: string, userId: string, basePath: string): Promise<void> {
+export async function runOffboardPurge(
+	p: Principal,
+	jobId: string,
+	userId: string,
+	basePath: string,
+	classificationId?: string,
+): Promise<void> {
 	const deadline = Date.now() + 10 * 60_000;
 	const author = { userId: p.userId, credential: `${p.credential.kind}:${p.credential.id}` };
 	const scope = await resolveReadScope(
 		{ reach: p.boundAgentId ? { kind: "own", agentId: p.boundAgentId } : { kind: "all" }, projects: p.allowedProjects },
 		audienceSubjectFromPrincipal(p),
 	);
-	const impact = await dbOwnerOrganizationPurgePlan(userId, scope);
+	const removed: Record<string, number> = {
+		memories: 0,
+		documents: 0,
+		memory_artifacts: 0,
+		session_summaries: 0,
+		session_transcripts: 0,
+	};
 	let blocked = false;
 	const purgeDerived = async () => {
 		for (;;) {
 			if (Date.now() >= deadline) break;
-			const batch = await dbOwnerOrganizationPurge(userId, author);
+			const batch = await dbOwnerOrganizationPurge(userId, author, scope, classificationId);
+			for (const [kind, count] of Object.entries(batch.counts)) removed[kind] = (removed[kind] ?? 0) + count;
 			blocked ||= batch.blocked;
 			await organizationWrite([
 				statement("UPDATE org_jobs SET progress_json=? WHERE id=?", [
-					JSON.stringify({ phase: "purging", removed: {} }),
+					JSON.stringify({ phase: "purging", removed }),
 					jobId,
 				]),
 			]);
@@ -283,8 +311,8 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 		if (Date.now() >= deadline) break;
 		const batch = await organizationQuery<{ agent_id: string; session_key: string }[]>(
 			statement(
-				"SELECT agent_id,session_key FROM session_transcripts WHERE speaker_user_id=? LIMIT 20",
-				[userId],
+				`SELECT t.agent_id,t.session_key FROM session_transcripts t WHERE t.speaker_user_id=?${purgeReadClause(scope, "transcript", "t", classificationId).sql} LIMIT 20`,
+				[userId, ...purgeReadClause(scope, "transcript", "t", classificationId).args],
 				"all",
 			),
 		);
@@ -310,6 +338,7 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 				},
 			);
 			if (result.status !== "complete") throw new Error(`Transcript purge did not complete: ${result.status}`);
+			removed.session_transcripts = (removed.session_transcripts ?? 0) + 1;
 			for (const table of ["session_claims", "memory_thread_heads", "session_memories"]) {
 				for (;;) {
 					if (Date.now() >= deadline) break;
@@ -346,19 +375,8 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 		}
 	}
 	await purgeDerived();
-	const allResidual = await purgeResidual(userId, jobId);
-	const residual = await purgeResidual(userId, jobId, scope);
-	const status = blocked || Object.values(allResidual).some((n) => n > 0) ? "incomplete" : "complete";
-	const removed =
-		status === "complete"
-			? {
-					memories: impact.memories ?? 0,
-					documents: impact.documents ?? 0,
-					memory_artifacts: impact.artifacts ?? 0,
-					session_summaries: impact.summaries ?? 0,
-					session_transcripts: impact.transcripts ?? 0,
-				}
-			: {};
+	const residual = await purgeResidual(userId, jobId, scope, classificationId);
+	const status = blocked || Object.values(residual).some((n) => n > 0) ? "incomplete" : "complete";
 	await organizationWrite([
 		statement("UPDATE org_jobs SET status=?,progress_json=?,finished_at=? WHERE id=?", [
 			status,
@@ -366,6 +384,12 @@ export async function runOffboardPurge(p: Principal, jobId: string, userId: stri
 			new Date().toISOString(),
 			jobId,
 		]),
-		auditStatement(p, "user.purged", "user", userId, { removed, residual, status }),
+		auditStatement(
+			p,
+			classificationId ? "classification.author_purged" : "user.purged",
+			classificationId ? "classification" : "user",
+			classificationId ?? userId,
+			{ removed, residual, status, userId, jobId },
+		),
 	]);
 }

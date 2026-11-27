@@ -161,16 +161,25 @@ describe("dashboard handoff", () => {
 		return body.code;
 	}
 
-	function redeem(code: unknown): Promise<Response> {
+	function redeem(code: unknown, confirm = true): Promise<Response> {
 		return Promise.resolve(
 			app.request("/api/auth/handoff/redeem", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ code }),
+				body: JSON.stringify({ code, ...(confirm ? { confirm: true } : {}) }),
 			}),
 		);
 	}
 
+	test("L2 legacy handoff requires confirmation before returning credentials", async () => {
+		const code = await handoff();
+		const preview = await redeem(code, false);
+		expect(preview.status).toBe(200);
+		const body = await preview.json();
+		expect(body).not.toHaveProperty("token");
+		expect(body).toMatchObject({ confirmationRequired: true, user: { displayName: "alice-laptop" } });
+		expect(await (await redeem(code)).json()).toHaveProperty("token");
+	});
 	test("redeems once for a session carrying the issuer's claims", async () => {
 		const code = await handoff();
 		const first = await redeem(code);

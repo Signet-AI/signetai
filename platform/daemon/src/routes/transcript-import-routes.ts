@@ -1,3 +1,4 @@
+import { resolveImportSourceIdentity } from "../import-source-identity";
 import { encodeTranscriptExport } from "../projection-worker-client";
 import { namedReadOperation } from "../named-content-reads";
 import { readPointerMiddleware } from "../read-pointers";
@@ -10,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import {
 	addImportedSource,
 	type buildExportTranscriptRecord,
-	deterministicImportedSourceId,
 	loadSourcesConfig,
 	resolveDefaultBasePath,
 } from "@signet/core";
@@ -388,9 +388,11 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				state: string;
 				source_id: string;
 				duplicate_mode: ImportDuplicateMode;
+				author_user_id: string | null;
+				author_credential: string;
 			}>(
 				{
-					sql: "SELECT f.name,f.content_hash,f.size_bytes,f.state,f.source_id,j.duplicate_mode FROM source_import_files f JOIN source_import_jobs j ON j.id = f.job_id AND j.agent_id = f.agent_id WHERE f.id = ? AND f.job_id = ? AND f.agent_id = ? AND f.upload_generation = ? AND f.storage_state = 'sealed' AND j.state = 'staging'",
+					sql: "SELECT f.name,f.content_hash,f.size_bytes,f.state,f.source_id,j.duplicate_mode,j.author_user_id,j.author_credential FROM source_import_files f JOIN source_import_jobs j ON j.id = f.job_id AND j.agent_id = f.agent_id WHERE f.id = ? AND f.job_id = ? AND f.agent_id = ? AND f.upload_generation = ? AND f.storage_state = 'sealed' AND j.state = 'staging'",
 					params: [upload.fileId, upload.jobId, upload.agentId, upload.generation],
 					result: "get",
 					readonly: true,
@@ -406,19 +408,17 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 					source.providerSettings?.agentId === upload.agentId &&
 					source.providerSettings?.importKey === importKey,
 			);
-			const duplicate = sources.find(
-				(source) =>
-					source.kind === "import" &&
-					source.providerSettings?.agentId === upload.agentId &&
-					source.providerSettings?.contentHash === file.content_hash,
-			);
-			const sourceId =
-				file.state === "ready"
-					? file.source_id
-					: (replay?.id ??
-						(file.duplicate_mode === "reimport"
-							? `import:${file.content_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
-							: (duplicate?.id ?? deterministicImportedSourceId(file.content_hash, upload.agentId))));
+			const identity = await resolveImportSourceIdentity({
+				agentId: upload.agentId,
+				jobId: upload.jobId,
+				author: { userId: file.author_user_id, credential: file.author_credential },
+				actor: importActor(c.get("principal")),
+				contentHash: file.content_hash,
+				newGeneration: file.state !== "ready" && file.duplicate_mode === "reimport",
+				workspaceRoot: resolveDefaultBasePath(),
+			});
+			const duplicate = identity.duplicate;
+			const sourceId = file.state === "ready" ? file.source_id : (replay?.id ?? identity.sourceId);
 			const releaseSourceMutation = beginSourceMutation(sourceId);
 			if (releaseSourceMutation === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
 			try {
@@ -433,6 +433,9 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 									authorCredential: c.get("author").credential,
 								}
 							: undefined,
+						classificationKey: identity.classificationKey,
+						contentRegistry: true,
+						duplicateSourceId: duplicate?.id ?? null,
 						contentHash: file.content_hash,
 						format: "jsonl",
 						agentId: upload.agentId,

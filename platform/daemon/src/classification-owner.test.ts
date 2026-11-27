@@ -1,18 +1,12 @@
 import { compartmentFor } from "@signet/core";
 import { executeClassificationJob, resumeClassificationJobs } from "./classifications";
-import { classificationFixture as legacyClassificationFixture } from "./test-support/classification-fixture.test";
+import { currentClassificationFixture as classificationFixture } from "./test-support/classification-fixture.test";
 import { expect, test } from "bun:test";
 import { purgeMemoryInTx } from "./source-purge-tx";
 import { executeClassification } from "./classification-owner";
 import { up as dreamingPartitionMigration } from "../../core/src/migrations/179-dreaming-evidence-leases";
 import type { ClassificationActor } from "./classifications";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
-
-function classificationFixture() {
-	const db = legacyClassificationFixture();
-	dreamingPartitionMigration(db);
-	return db;
-}
 
 const compliance: ClassificationActor = {
 	userId: "carol",

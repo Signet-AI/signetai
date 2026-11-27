@@ -72,9 +72,9 @@ user; it cannot read another user's profile.
 
 Updates the signed-in organization's user profile and returns `{ "user": ... }`.
 Requires a user session; cookie requests also require `x-signet-csrf`. Send
-`{ "displayName": "Name" }`. A password identity can also update `email`; SSO
-identities cannot change an email managed by their provider. API keys cannot
-update a profile.
+`{ "displayName": "Name" }`. Any email field returns 403
+`email_change_requires_admin`; administrators change email through the org users
+API. SSO-owned names are read-only. API keys cannot update a profile.
 
 ### GET /api/auth/connector-keys/:id/errors
 
@@ -96,14 +96,15 @@ reports it in `agents.defaultRead`.
 ### GET /api/auth/profile
 
 Returns the current organization user, `identityProvider` (OIDC kind/issuer or
-null), and `editableFields`. Name and email are editable for password accounts.
+null), and `editableFields`. Display name is editable for password accounts; email is read-only.
 SSO-owned fields are read-only.
 
 ### PATCH /api/auth/profile
 
-Updates your own `displayName` and `email` (string or null). Requires a user
-session and CSRF protection for cookie requests. SSO-managed profiles return
-403 `org_policy`; duplicate email returns 409 `email_in_use`. Read the profile
+Updates your own `displayName` only. Requires a user
+session and CSRF protection for cookie requests. Any `email` field returns
+403 `email_change_requires_admin`, whether or not the address is registered.
+SSO-managed names return 403 `org_policy`. Read the profile
 again to confirm a successful save.
 
 ### GET /api/auth/connector-keys/:id/errors

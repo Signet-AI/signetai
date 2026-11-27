@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { getDesktopBridge } from "@/lib/desktop";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { Panel } from "@/components/shell/panel";
@@ -116,14 +117,14 @@ function Profile() {
 	const whoami = useWhoami();
 	const { result, refresh } = usePanelQuery<ProfileResponse>("/api/auth/profile");
 	const [name, setName] = useState(whoami?.user.displayName ?? "");
-	const [email, setEmail] = useState(whoami?.user.email ?? "");
+	const email = result?.data?.user.email ?? whoami?.user.email ?? "";
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	if (!whoami) return null;
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		if (!result?.data || result.data.identityProvider) return;
-		const submitted = { displayName: name, email: email || null };
+		const submitted = { displayName: name };
 		setBusy(true);
 		setError(null);
 		const response = await getJSONResult<ProfileResponse>("/api/auth/profile", {
@@ -137,11 +138,7 @@ function Profile() {
 			return;
 		}
 		const confirmed = await getJSONResult<ProfileResponse>("/api/auth/profile");
-		if (
-			!confirmed.data ||
-			confirmed.data.user.displayName !== submitted.displayName.trim() ||
-			confirmed.data.user.email !== submitted.email
-		)
+		if (!confirmed.data || confirmed.data.user.displayName !== submitted.displayName.trim())
 			setError(confirmed.error ?? "The saved profile could not be confirmed. Refresh before retrying.");
 		else {
 			setName((current) =>
@@ -162,7 +159,6 @@ function Profile() {
 				ssoManaged={Boolean(result?.data?.identityProvider) || whoami.user.ssoManaged === true}
 				busy={busy}
 				onNameChange={setName}
-				onEmailChange={setEmail}
 				onSubmit={(event) => void submit(event)}
 			/>
 			{error && (
@@ -393,7 +389,9 @@ function PersonalKeys() {
 	};
 	return (
 		<div className="flex flex-col gap-6">
-			{secret ? (
+			{getDesktopBridge() ? (
+				<p>Create keys from the browser dashboard or the CLI</p>
+			) : secret ? (
 				<div className="flex flex-col gap-3 rounded-lg border p-4">
 					<h2 className="m-0 text-body font-medium">Copy your key now</h2>
 					<p className="m-0 text-small text-muted-foreground">

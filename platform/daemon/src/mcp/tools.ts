@@ -587,6 +587,27 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 	registerMcpTool(
 		server,
+		"signet_classification_purge_author",
+		{
+			title: "Purge Departed Author's Material",
+			description:
+				"Preview or submit a tracked purge of a deactivated author's readable material within a classification. Requires a classification manager in its audience.",
+			inputSchema: z
+				.object({
+					classificationId: z.string().min(1).max(200),
+					userId: z.string().min(1).max(128),
+					dryRun: z.boolean().default(true),
+				})
+				.strict(),
+		},
+		async ({ classificationId, userId, dryRun = true }) =>
+			organizationResult(`/api/classifications/${encodeURIComponent(classificationId)}/purge-author`, "POST", {
+				userId,
+				dryRun,
+			}),
+	);
+	registerMcpTool(
+		server,
 		"signet_classify",
 		{
 			title: "Classify Material",

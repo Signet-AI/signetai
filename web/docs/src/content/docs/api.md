@@ -195,7 +195,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/methods` | Mode, organization claim state, and available password/OIDC providers. |
 | GET | `/api/auth/whoami` | Resolved identity and effective access; safe without a credential. |
 | GET | `/api/auth/profile` | Own profile, `identityProvider` ownership metadata and `editableFields`; never accepts another user's identity. |
-| PATCH | `/api/auth/profile` | User session; `{ displayName?, email? }`; SSO-managed identity fields are read-only. |
+| PATCH | `/api/auth/profile` | User session; `{ displayName? }`; any `email` field returns 403 `email_change_requires_admin`. Admins change email through the org users API. SSO-managed identity fields are read-only. |
 | PATCH | `/api/auth/preferences` | User session; `{ defaultReadAgentId }` sets only the caller's default read agent. |
 | POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited. |
 | GET | `/api/auth/sso/start` | OIDC authorization redirect; optional `continuation` is a single-use code with a 60-second TTL, never an invitation token. |
@@ -222,7 +222,8 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | POST | `/api/auth/invites/lookup` | JSON `{ token }`; returns organization, role, and optional invite email. Tokens never appear in API paths. |
 | POST | `/api/auth/invites/accept` | `{ token, username, displayName, password? }`; browser session or `ssoStartPath`. |
 | GET | `/api/org/users` | Admin; optional `status`, `role`, `group`, `q`. |
-| GET | `/api/org/users/lookup` | Admin or compliance, without agent/project restrictions; required `q` searches active display names/emails. Returns `{ users: [{ id, displayName, email }], nextCursor }`; optional `limit` (1–50, default 20) and `cursor`. |
+| POST | `/api/classifications/:id/purge-author` | Classification manager in the audience; `{ userId, dryRun? }` for a deactivated author. Previews actor-readable counts by default; execution returns 202 `{ jobId }`. Hidden rows remain untouched with no hint they exist. |
+| GET | `/api/org/users/lookup` | Admin or compliance, without agent/project restrictions; required `q` (2–128 characters) searches active display names/emails. Limited to 30 queries per principal per minute (429 with `Retry-After`). Returns `{ users: [{ id, displayName, email }], nextCursor }`; optional `limit` (1–50, default 20) and `cursor`. |
 | PATCH | `/api/org/users/:id` | Admin; `{ role?, compliance?, displayName? }`. |
 | POST | `/api/org/users/:id/deactivate` | Admin; `{ mode: "keep" | "transfer" | "purge", transferTo?, dryRun?: true }`; plan, or `202 { jobId }` when `dryRun: false`. |
 | POST | `/api/org/users/:id/reactivate` | Admin; does not restore revoked credentials. |
@@ -252,7 +253,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/org/jobs` | Admin; optional `kind`. |
 | GET | `/api/org/jobs/:id` | Issuing user or admin; durable progress and terminal status. |
 
-`POST /api/auth/token` is disabled after claim (`403 org_policy`). `POST /api/auth/session` accepts a personal API key as a bearer credential and returns cookie authentication with durable parent-key permission, agent, project, and expiry ceilings; it rejects shared, connector, and legacy keys and never returns a bearer token. `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }`, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
+`POST /api/auth/token` is disabled after claim (`403 org_policy`). `POST /api/auth/session` accepts a personal API key as a bearer credential and returns cookie authentication with durable parent-key permission, agent, project, and expiry ceilings; it rejects shared, connector, and legacy keys and never returns a bearer token. `POST /api/auth/handoff` requires a user session and issues a single-use 60-second code; `POST /api/auth/handoff/redeem` accepts JSON `{ code }` to preview `{ confirmationRequired: true, user, organization }` without changing cookies. After an explicit user confirmation, `{ code, confirm: true }` consumes the code, sets browser session/CSRF cookies, and returns `{ user, expiresAt, csrf }` without a bearer. Revoking or expiring the issuing session invalidates the code. Codes are held in a bounded, restart-invalidated store. `PATCH /api/auth/preferences` accepts `{ defaultReadAgentId }` from a user session and changes only that user's default read agent. OIDC settings accept `clientSecretRef`, a Signet Secrets name, never a secret value. See [Organizations](/organization/) for provisioning, ownership, and migration behavior.
 
 Roles and their permissions:
 

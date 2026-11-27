@@ -190,6 +190,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			return failure(c, new IdentityError(401, "missing_credential"));
 		}
 		let verifiedKeyId: string | null = null;
+		const requestId = crypto.randomUUID();
 		try {
 			let p: Principal;
 			if (token.startsWith("sig_ses_")) {
@@ -377,19 +378,24 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 					await next();
 					if (classifiedDestinationDenied()) c.res = failure(c, new IdentityError(403, "classified_destination"));
 					if (verifiedKeyId && (c.res.status === 401 || c.res.status === 403))
-						await recordConnectorError(verifiedKeyId, c.res.status, c.get("authFailureReason") ?? "request_denied");
+						await recordConnectorError(
+							verifiedKeyId,
+							c.res.status,
+							c.get("authFailureReason") ?? "request_denied",
+							requestId,
+						);
 				}),
 			);
 		} catch (error) {
 			if (typeof error === "object" && error !== null && Reflect.get(error, "code") === "classified_destination") {
-				if (verifiedKeyId) await recordConnectorError(verifiedKeyId, 403, "classified_destination");
+				if (verifiedKeyId) await recordConnectorError(verifiedKeyId, 403, "classified_destination", requestId);
 				return failure(c, new IdentityError(403, "classified_destination"));
 			}
 			if (error instanceof SyntaxError || error instanceof z.ZodError)
 				return failure(c, new IdentityError(400, "invalid_request"));
 			if (!(error instanceof IdentityError)) throw error;
 			if (verifiedKeyId && (error.status === 401 || error.status === 403))
-				await recordConnectorError(verifiedKeyId, error.status, error.reason);
+				await recordConnectorError(verifiedKeyId, error.status, error.reason, requestId);
 			if (open) {
 				c.set("auth", { authenticated: false, claims: null, error: error.reason });
 				return next();
@@ -401,6 +407,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 export function failure(c: Context, error: IdentityError): Response {
 	c.set("authFailureReason", error.reason);
 	if (error.status === 401) c.header("WWW-Authenticate", "Bearer");
+	if (error.status === 429 && !c.res.headers.has("Retry-After")) c.header("Retry-After", "60");
 	const required =
 		error.status === 403
 			? error.message !== error.reason
