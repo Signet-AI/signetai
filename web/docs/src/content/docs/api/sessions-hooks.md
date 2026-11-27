@@ -100,15 +100,14 @@ search; attribute relevance chooses which aspect context to inject.
   "userPrompt": "How do I set up dark mode?",
   "lastAssistantMessage": "Earlier we discussed using CSS variables for theme tokens.",
   "sessionKey": "session-uuid",
-  "transcriptPath": "/tmp/signet/session-transcript.txt",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` is required.
 `userMessage` is preferred when the harness can provide a cleaned user turn.
-`userPrompt`, `lastAssistantMessage`, `transcriptPath`, and inline `transcript`
-are optional.
+`userPrompt`, `lastAssistantMessage`, and inline `transcript` are optional.
+The daemon accepts and ignores `transcriptPath` on this route.
 
 Prompt-submit runs recall only after a direct entity hit and has no fallback
 injection. A prompt that names a known person or project triggers the normal
@@ -217,15 +216,20 @@ Releases the session's runtime path claim.
   "harness": "claude-code",
   "sessionKey": "session-uuid",
   "sessionId": "session-uuid",
-  "transcriptPath": "/tmp/signet/session-transcript.txt",
+  "agentId": "default",
   "capturedAt": "2026-08-03T20:00:00.000Z",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` is required.
-`transcriptPath` or inline `transcript` may be provided for transcript
-capture. `capturedAt` is optional for live hooks; importers should supply the
+Inline `transcript` may carry the transcript. A connector that reads the
+harness transcript file uploads it first with
+`PATCH /api/hooks/transcript-upload` and then calls `session-end` without a
+transcript, as described below. `transcriptPath` is deprecated: the daemon
+reads that file itself, which works only when the daemon and the harness run
+on the same host. Signet's clients send it only to a daemon that answers `404`
+on the upload route. `capturedAt` is optional for live hooks; importers should supply the
 original ISO-8601 event time so temporal reasoning retains source chronology.
 Signet stores a cleaned conversation-only transcript as episodic evidence and
 may retain raw auditable traces separately in daemon logs.
@@ -504,13 +508,12 @@ to Dreaming until the transcript receives its completion marker.
   "sessionKey": "session-uuid",
   "agentId": "agent-id",
   "project": "/workspace/repo",
-  "transcriptPath": "/tmp/signet/session.jsonl",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` and `sessionKey` are required. `transcript` (inline string) takes
-precedence over `transcriptPath`. With neither, the daemon reads the complete
+precedence over `transcriptPath`, which is deprecated as on `session-end`. With neither, the daemon reads the complete
 lines of the session's transcript upload. All of them fall back to the stored
 session transcript from a prior `session-end` or `user-prompt-submit` call. Native
 daemon file-backed transcript reads require `transcriptPath` to resolve under
