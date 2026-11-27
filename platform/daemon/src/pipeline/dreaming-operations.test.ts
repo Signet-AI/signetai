@@ -530,6 +530,7 @@ describe("dreaming operations", () => {
 		for (let index = 0; index < 25; index += 1) {
 			insertEpisodicMemory(`m-1414-${index}`, `Evidence for retry operation ${index}.`);
 		}
+		let committedPrefix = 0;
 		const accessor: DbAccessor = {
 			...base,
 			withWriteTxAsync: (fn) => {
@@ -539,9 +540,11 @@ describe("dreaming operations", () => {
 					typeof committed === "object" &&
 					"count" in committed &&
 					typeof committed.count === "number" &&
-					committed.count >= 20
-				)
+					committed.count > 0
+				) {
+					committedPrefix = committed.count;
 					return Promise.reject(new Error("injected writer rejection"));
+				}
 				return enqueue(fn);
 			},
 		};
@@ -562,14 +565,18 @@ describe("dreaming operations", () => {
 		expect(partial.error).toContain("injected");
 		expect(partial.ok).toBe(false);
 		expect(partial.retryable).toBe(true);
-		expect(partial.retryFrom).toBe(20);
+		expect(committedPrefix).toBeGreaterThan(0);
+		expect(committedPrefix).toBeLessThan(operations.length);
+		expect(partial.retryFrom).toBe(committedPrefix);
 		expect(partial.error).toBe("injected writer rejection");
-		expect(partial.items.map((item) => item.index)).toEqual(Array.from({ length: 20 }, (_, index) => index));
+		expect(partial.items.map((item) => item.index)).toEqual(
+			Array.from({ length: committedPrefix }, (_, index) => index),
+		);
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),
 			),
-		).toEqual({ c: 20 });
+		).toEqual({ c: committedPrefix });
 
 		const retryFrom = partial.retryFrom;
 		if (retryFrom === undefined) throw new Error("partial response has no retry boundary");
@@ -580,7 +587,7 @@ describe("dreaming operations", () => {
 			operations: operations.slice(retryFrom),
 		});
 		expect(resumed.ok).toBe(true);
-		expect(resumed.items).toHaveLength(5);
+		expect(resumed.items).toHaveLength(operations.length - committedPrefix);
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),
