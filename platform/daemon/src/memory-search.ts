@@ -17,6 +17,7 @@ import {
 	readScopeSql,
 	requireReadScope,
 	type VectorSearchCompleteness,
+	type VectorSearchResponse,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, getDbAccessorPath, runWriteTxAsync } from "./db-accessor";
@@ -277,6 +278,7 @@ export interface RecallResponse {
 		hasSupplementary: boolean;
 		noHits: boolean;
 		vectorCompleteness?: VectorSearchCompleteness;
+		degraded?: VectorSearchResponse["degraded"];
 		searchedWindow?: number;
 		sourceVectorSearch?: SourceChunkVectorDiagnostics;
 		reranker?: RerankOutcome;
@@ -701,6 +703,7 @@ async function authorizeScoredCandidates(
 
 interface AuthorizedVectorCandidates {
 	readonly results: ReadonlyArray<{ readonly id: string; readonly score: number }>;
+	readonly degraded?: VectorSearchResponse["degraded"];
 	readonly completeness: VectorSearchCompleteness;
 	readonly searchedWindow?: number;
 }
@@ -743,7 +746,13 @@ async function findAuthorizedVectorCandidates(
 		usedWork += requested;
 		completeness = vectorResult.completeness;
 		searchedWindow = Math.max(searchedWindow, vectorResult.searchedWindow ?? vectorResult.results.length);
-		if (completeness === "unavailable") return { results: [], completeness, searchedWindow };
+		if (completeness === "unavailable")
+			return {
+				results: [],
+				completeness,
+				searchedWindow,
+				...(vectorResult.degraded ? { degraded: vectorResult.degraded } : {}),
+			};
 
 		const fresh = vectorResult.results.flatMap((row) => {
 			if (discovered.has(row.id) || !Number.isFinite(row.score) || row.score <= 0) return [];
@@ -2314,6 +2323,7 @@ async function scopedHybridRecall(
 		activeDevice: nativeRerankActiveDevice,
 		requestedDevice: crossEncoderRuntime.device,
 	});
+	let vectorDegraded: VectorSearchResponse["degraded"];
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
 		checkRecallCancellation(execution);
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
@@ -2391,6 +2401,7 @@ async function scopedHybridRecall(
 		response.results = deduped.items;
 		response.meta = {
 			...response.meta,
+			...(vectorDegraded ? { degraded: vectorDegraded, partial: true } : {}),
 			totalReturned: response.results.length,
 			hasSupplementary: response.results.some((row) => row.supplementary === true),
 			noHits: response.results.length === 0,
@@ -2811,6 +2822,12 @@ async function scopedHybridRecall(
 					);
 					vectorCompleteness = vectorResult.completeness;
 					searchedWindow = vectorResult.searchedWindow;
+					if (vectorResult.degraded?.includes("vector_fanout_cap")) {
+						vectorDegraded = vectorResult.degraded;
+						queryVecF32 = null;
+						comparableQueryVector = null;
+						logger.warn("memory", "Vector recall skipped: vector_fanout_cap");
+					}
 					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
 				});
 			} catch (e) {

@@ -128,8 +128,12 @@ Candidate collection uses several independent channels:
   explicitly partial `recent-window` channel: responses expose
   `meta.vectorCompleteness: "recent-window"` and `meta.searchedWindow` (the
   default is 10,000 rows), so it must not be read as complete workspace recall.
-  Vector search cannot pre-filter every recall scope, so constrained searches
-  over-fetch and rely on authorization after merge.
+  Shards are admitted under the caller's read scope before vector search.
+  If an authorized search would span more than 4,096 physical shards, recall
+  skips its vector channels and continues with keyword and graph evidence.
+  The successful response includes `meta.degraded: ["vector_fanout_cap"]`,
+  `meta.partial: true`, and `meta.vectorCompleteness: "unavailable"`; it does
+  not return a silently truncated vector result. The daemon logs the reason.
 - **Structured path candidates** search entity/aspect/group/claim paths so
   structured knowledge can surface even when its prose is sparse.
 - **Graph traversal** resolves focal entities and walks the knowledge graph.

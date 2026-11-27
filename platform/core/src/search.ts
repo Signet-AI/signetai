@@ -124,6 +124,7 @@ export interface VectorSearchResponse {
 	readonly results: Array<{ id: string; score: number }>;
 	readonly completeness: VectorSearchCompleteness;
 	readonly searchedWindow?: number;
+	readonly degraded?: readonly "vector_fanout_cap"[];
 }
 
 function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
@@ -408,7 +409,12 @@ export function vectorSearchWithMetadata(
 			results.splice(limit);
 		});
 	} catch (error) {
-		if (error instanceof VectorAdmissionLimitError) return { results: [], completeness: "unavailable" };
+		if (error instanceof VectorAdmissionLimitError)
+			return {
+				results: [],
+				completeness: "unavailable",
+				...(error.message === "vector_shard_fanout_limit" ? { degraded: ["vector_fanout_cap"] as const } : {}),
+			};
 		try {
 			let fallback: VectorSearchResponse | undefined;
 			withReadTransaction(db, () => {
