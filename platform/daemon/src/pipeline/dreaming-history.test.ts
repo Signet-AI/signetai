@@ -21,12 +21,15 @@ const SCOPE = "scope-a";
 
 describe("dreaming history", () => {
 	let dir = "";
+	let fixtureMs = 0;
 
 	beforeEach(() => {
+		const startedAt = performance.now();
 		dir = mkdtempSync(join(tmpdir(), "signet-dreaming-history-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		getDbAccessor().withWriteTx((db) => upgradeDreaming(db));
+		fixtureMs = performance.now() - startedAt;
 	});
 
 	afterEach(async () => {
@@ -268,13 +271,20 @@ describe("dreaming history", () => {
 	});
 
 	it("merges the oldest lines once the history outgrows its budget", async () => {
+		console.info("dreaming_history_budget.fixture_ms", fixtureMs);
+		const seedStartedAt = performance.now();
 		const leafBytes = 500;
 		const passes = Math.ceil(DREAMING_HISTORY_VIEW_BYTES / leafBytes) + 2;
 		for (let index = 0; index < passes; index++) insertPass(`p${index}`, index);
+		console.info("dreaming_history_budget.seed_ms", performance.now() - seedStartedAt);
 		const completer = recordingCompleter((prompt) =>
 			prompt.includes("<older>") ? "merged first two passes" : "l".repeat(leafBytes),
 		);
+		const compactStartedAt = performance.now();
 		while ((await compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)) > 0) {}
+		console.info("dreaming_history_budget.compact_ms", performance.now() - compactStartedAt);
+		console.info("dreaming_history_budget.completion_calls", completer.prompts.length);
+		const readStartedAt = performance.now();
 
 		const merges = storedNodes().filter((node) => node.level > 0);
 		expect(merges[0]).toMatchObject({ level: 1, idx: 0, text: "merged first two passes" });
@@ -311,6 +321,7 @@ describe("dreaming history", () => {
 				n: 2,
 			}),
 		).toMatchObject({ ok: false });
+		console.info("dreaming_history_budget.read_ms", performance.now() - readStartedAt);
 	});
 
 	it("keeps each scope's history separate, in both what a pass sees and what it can open", async () => {
