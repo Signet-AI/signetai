@@ -6,6 +6,7 @@ import {
 	beginVectorAdmissionRepairInTx,
 	stepVectorAdmissionRepairInTx,
 	publishVectorAdmissionRepairInTx,
+	cancelVectorAdmissionRepairInTx,
 	COMPARTMENT_TABLES,
 	backfillEvidenceCitations,
 	type MigrationDb,
@@ -946,6 +947,8 @@ function preview(
 }
 const enqueuedSchema = z.object({
 	op: z.literal("enqueue"),
+	previousAssignment: z.boolean().optional(),
+	cancellationOf: z.string().optional(),
 	id: z.string(),
 	remove: z.boolean(),
 	target: z.object({ kind: z.enum(["memory", "session", "source", "agent"]), id: z.string(), agentId: z.string() }),
@@ -959,6 +962,41 @@ const enqueuedSchema = z.object({
 		credential: z.string(),
 	}),
 });
+function changeAssignment(
+	db: MigrationDb,
+	request: Pick<Extract<ClassificationRequest, { op: "enqueue" }>, "target" | "id" | "actor" | "remove">,
+): void {
+	if (request.remove)
+		db.prepare(
+			"DELETE FROM classification_assignments WHERE target_kind=? AND target_id=? AND agent_id=? AND classification_id=?",
+		).run(request.target.kind, request.target.id, request.target.agentId, request.id);
+	else
+		db.prepare("INSERT OR IGNORE INTO classification_assignments VALUES(?,?,?,?,?,?)").run(
+			request.target.kind,
+			request.target.id,
+			request.target.agentId,
+			request.id,
+			request.actor.userId,
+			new Date().toISOString(),
+		);
+	if (request.target.kind === "source") {
+		const sources = db
+			.prepare(
+				"SELECT source_id FROM import_content_registry WHERE agent_id=? AND (source_id=? OR substr(source_id,1,length(?)+1)=?||':')",
+			)
+			.all(request.target.agentId, request.target.id, request.target.id, request.target.id);
+		for (const source of sources) {
+			const sourceId = z.string().parse(source.source_id);
+			const labels = importSourceLabelsInTx(db, request.target.agentId, sourceId);
+			const compartment = compartmentFor(db, labels);
+			db.prepare("UPDATE import_content_registry SET compartment_id=? WHERE agent_id=? AND source_id=?").run(
+				compartment,
+				request.target.agentId,
+				sourceId,
+			);
+		}
+	}
+}
 function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean {
 	const roots = db
 		.prepare(
@@ -997,7 +1035,85 @@ function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean
 	}
 	return false;
 }
+function executeCancellation(db: MigrationDb, jobId: string): unknown {
+	const pending = transaction(db, () => {
+		const job = db
+			.prepare("SELECT status,progress_json FROM org_jobs WHERE id=? AND kind='classify-cancelling'")
+			.get(jobId);
+		if (!job) throw Error("job_not_pending");
+		if (job.status === "cancelled") return { done: true, reversal: null };
+		const progress = z.object({ reversal: z.string().nullable() }).parse(JSON.parse(String(job.progress_json)));
+		const roots = db.prepare("SELECT projection FROM vector_shard_repairs WHERE job_id=? LIMIT 3").all(jobId);
+		let done = true;
+		for (const root of roots) {
+			if (root.projection !== "vec_embeddings" && root.projection !== "vec_embeddings_staging")
+				throw Error("vector_projection_binding_invalid");
+			if (cancelVectorAdmissionRepairInTx(db, root.projection, jobId).phase !== "ready") done = false;
+		}
+		return { done, reversal: progress.reversal };
+	});
+	if (!pending.done) return { status: "running", phase: "cancelling-shards" };
+	if (pending.reversal) {
+		const reversal = db.prepare("SELECT status FROM org_jobs WHERE id=?").get(pending.reversal);
+		if (reversal?.status !== "complete") {
+			executeJob(db, pending.reversal);
+			if (db.prepare("SELECT status FROM org_jobs WHERE id=?").get(pending.reversal)?.status !== "complete")
+				return { status: "running", phase: "reversing" };
+		}
+	}
+	return transaction(db, () => {
+		db.prepare("UPDATE org_jobs SET status='cancelled',finished_at=?,error=NULL WHERE id=?").run(
+			new Date().toISOString(),
+			jobId,
+		);
+		return { status: "cancelled" };
+	});
+}
+function cancelJob(db: MigrationDb, actor: ClassificationActor, jobId: string): unknown {
+	return transaction(db, () => {
+		compliance(actor);
+		if (actor.allowedProjects !== null) throw Error("permission");
+		const job = db
+			.prepare(
+				"SELECT * FROM org_jobs WHERE id=? AND kind IN('classify','classify-preparing','classify-cancelling') AND (? IS NULL OR json_extract(params_json,'$.target.agentId')=?)",
+			)
+			.get(jobId, actor.boundAgentId, actor.boundAgentId);
+		if (!job) throw Error("not_found");
+		const request = enqueuedSchema.parse(JSON.parse(String(job.params_json)));
+		authorize(db, request.target, request.id, actor, true);
+		if (job.kind === "classify-cancelling") return { jobId, status: job.status };
+		if (
+			job.status !== "pending" &&
+			job.status !== "running" &&
+			!(job.kind === "classify-preparing" && job.status === "failed")
+		)
+			throw Error("job_not_pending");
+		let reversal: string | null = null;
+		if (job.kind === "classify" && job.started_at != null) {
+			if (request.previousAssignment === undefined) throw Error("classification_reversal_required");
+			if (!request.previousAssignment) {
+				changeAssignment(db, { ...request, actor, remove: true });
+				reversal = id("job");
+				db.prepare(
+					"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES(?,'unclassify','pending',?,?,?)",
+				).run(
+					reversal,
+					JSON.stringify({ ...request, actor, remove: true, cancellationOf: jobId }),
+					actor.userId,
+					new Date().toISOString(),
+				);
+			}
+		}
+		db.prepare(
+			"UPDATE org_jobs SET kind='classify-cancelling',status='running',progress_json=?,error=NULL WHERE id=?",
+		).run(JSON.stringify({ reversal }), jobId);
+		audit(db, actor, "classification.cancel", request.target, request.id, { jobId, reversal });
+		return { jobId, status: "running" };
+	});
+}
 function executeJob(db: MigrationDb, jobId: string): unknown {
+	if (db.prepare("SELECT 1 FROM org_jobs WHERE id=? AND kind='classify-cancelling'").get(jobId))
+		return executeCancellation(db, jobId);
 	let job = db
 		.prepare("SELECT * FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing')")
 		.get(jobId);
@@ -1020,42 +1136,23 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 			if (
 				db
 					.prepare(
-						"SELECT 1 FROM org_jobs WHERE kind IN ('classify','unclassify') AND status='running' AND json_extract(params_json,'$.target.agentId')=? AND id<>?",
+						"SELECT 1 FROM org_jobs WHERE kind IN ('classify','unclassify','classify-cancelling') AND status='running' AND json_extract(params_json,'$.target.agentId')=? AND id<>? AND id<>COALESCE(?,'')",
 					)
-					.get(request.target.agentId, jobId)
+					.get(request.target.agentId, jobId, request.cancellationOf ?? null)
 			)
 				return false;
 			authorize(db, request.target, request.id, request.actor, request.remove);
-			if (request.remove)
-				db.prepare(
-					"DELETE FROM classification_assignments WHERE target_kind=? AND target_id=? AND agent_id=? AND classification_id=?",
-				).run(request.target.kind, request.target.id, request.target.agentId, request.id);
-			else
-				db.prepare("INSERT OR IGNORE INTO classification_assignments VALUES(?,?,?,?,?,?)").run(
-					request.target.kind,
-					request.target.id,
-					request.target.agentId,
-					request.id,
-					request.actor.userId,
-					new Date().toISOString(),
-				);
-			if (request.target.kind === "source") {
-				const sources = db
+			const previousAssignment =
+				db
 					.prepare(
-						"SELECT source_id FROM import_content_registry WHERE agent_id=? AND (source_id=? OR substr(source_id,1,length(?)+1)=?||':')",
+						"SELECT 1 FROM classification_assignments WHERE target_kind=? AND target_id=? AND agent_id=? AND classification_id=?",
 					)
-					.all(request.target.agentId, request.target.id, request.target.id, request.target.id);
-				for (const source of sources) {
-					const sourceId = z.string().parse(source.source_id);
-					const labels = importSourceLabelsInTx(db, request.target.agentId, sourceId);
-					const compartment = compartmentFor(db, labels);
-					db.prepare("UPDATE import_content_registry SET compartment_id=? WHERE agent_id=? AND source_id=?").run(
-						compartment,
-						request.target.agentId,
-						sourceId,
-					);
-				}
-			}
+					.get(request.target.kind, request.target.id, request.target.agentId, request.id) != null;
+			if (!request.cancellationOf) changeAssignment(db, request);
+			db.prepare("UPDATE org_jobs SET params_json=? WHERE id=?").run(
+				JSON.stringify({ ...request, previousAssignment }),
+				jobId,
+			);
 			db.prepare("UPDATE org_jobs SET status='running',started_at=?,progress_json=? WHERE id=?").run(
 				new Date().toISOString(),
 				JSON.stringify({ table: 0, rowid: 0, updated: 0 }),
@@ -1202,6 +1299,7 @@ export function assertImportSourceLabelsInTx(
 	return expected;
 }
 export function executeClassification(db: MigrationDb, request: ClassificationRequest): unknown {
+	if (request.op === "cancel") return cancelJob(db, request.actor, request.jobId);
 	if (request.op === "import-identity")
 		return transaction(db, () => {
 			if (!/^[a-f0-9]{64}$/.test(request.contentHash)) throw new Error("invalid_import");
@@ -1382,7 +1480,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 		return transaction(db, () => {
 			const job = db
 				.prepare(
-					"SELECT kind,status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing','recompute')",
+					"SELECT kind,status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing','classify-cancelling','recompute')",
 				)
 				.get(request.jobId);
 			if (!job) throw new Error("not_found");
@@ -1420,7 +1518,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 	if (request.op === "recover") {
 		const jobs = db
 			.prepare(
-				"SELECT id FROM org_jobs WHERE kind IN ('classify','unclassify','classify-preparing','recompute') AND status IN ('pending','running') AND id>? ORDER BY id LIMIT 100",
+				"SELECT id FROM org_jobs WHERE kind IN ('classify','unclassify','classify-preparing','classify-cancelling','recompute') AND status IN ('pending','running') AND id>? ORDER BY id LIMIT 100",
 			)
 			.all(request.cursor ?? "")
 			.flatMap((row) => (typeof row.id === "string" ? [row.id] : []));

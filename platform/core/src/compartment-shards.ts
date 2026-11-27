@@ -995,6 +995,66 @@ export function stepVectorAdmissionRepairInTx(
 	);
 	return { phase, updated: page.length };
 }
+export function cancelVectorAdmissionRepairInTx(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	jobId: string,
+): { phase: "cancelling" | "ready"; updated: number } {
+	const state = db
+		.prepare(
+			"SELECT store,active_slot,active_generation,building_generation FROM vector_shard_repairs WHERE projection=? AND job_id=?",
+		)
+		.get(base, jobId);
+	if (!state) return { phase: "ready", updated: 0 };
+	if (
+		(state.store !== "embeddings" && state.store !== "embeddings_staging") ||
+		typeof state.building_generation !== "number" ||
+		typeof state.active_generation !== "number" ||
+		state.building_generation <= state.active_generation
+	)
+		throw Error("vector_cancel_generation_invalid");
+	const generation = state.building_generation,
+		table = `${base}__admission_${state.active_slot === 1 ? 1 : 0}`;
+	const rows = db
+		.prepare(
+			"SELECT embedding_id FROM vector_shard_members WHERE projection=? AND generation=? ORDER BY embedding_id LIMIT 100",
+		)
+		.all(base, generation);
+	for (const row of rows) {
+		if (typeof row.embedding_id !== "string") throw Error("vector_cancel_member_invalid");
+		db.prepare(`DELETE FROM ${table} WHERE id=json_array(?,?)`).run(row.embedding_id, generation);
+		db.prepare("DELETE FROM vector_shard_members WHERE projection=? AND generation=? AND embedding_id=?").run(
+			base,
+			generation,
+			row.embedding_id,
+		);
+	}
+	for (const journal of ["vector_shard_dirty", "vector_shard_unresolved"] as const)
+		db.prepare(
+			`DELETE FROM ${journal} WHERE projection=? AND generation=? AND embedding_id IN(SELECT embedding_id FROM ${journal} WHERE projection=? AND generation=? LIMIT 100)`,
+		).run(base, generation, base, generation);
+	db.prepare(
+		"DELETE FROM vector_shard_repair_partitions WHERE projection=? AND generation=? AND partition_id IN(SELECT partition_id FROM vector_shard_repair_partitions WHERE projection=? AND generation=? LIMIT 100)",
+	).run(base, generation, base, generation);
+	db.prepare(
+		"DELETE FROM vector_shard_keys WHERE id IN(SELECT id FROM vector_shard_keys WHERE projection=? AND generation=? AND row_count=0 LIMIT 100)",
+	).run(base, generation);
+	for (const remaining of [
+		"vector_shard_members",
+		"vector_shard_dirty",
+		"vector_shard_unresolved",
+		"vector_shard_repair_partitions",
+		"vector_shard_keys",
+	] as const)
+		if (db.prepare(`SELECT 1 FROM ${remaining} WHERE projection=? AND generation=? LIMIT 1`).get(base, generation))
+			return { phase: "cancelling", updated: rows.length };
+	db.prepare(
+		"UPDATE vector_shard_repairs SET phase='ready',building_generation=NULL,job_id=NULL,cursor='' WHERE projection=? AND job_id=?",
+	).run(base, jobId);
+	prepareVectorAdmissionWriter(db, base, state.store);
+	return { phase: "ready", updated: rows.length };
+}
+
 export function publishVectorAdmissionRepairInTx(
 	db: MigrationDb,
 	base: VectorProjectionBase,

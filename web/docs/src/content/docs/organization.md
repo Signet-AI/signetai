@@ -34,6 +34,8 @@ Vector search shards are repaired by the database owner in resumable batches. A 
 
 Classification jobs prepare and verify their new vector membership while the previous read rules remain in effect. The new read fence and prepared membership become visible in one transaction; remaining derived rows are then updated in batches. A queued or running job is not a completed reclassification.
 
+Compliance callers with unrestricted project access can cancel a pending or running apply job with `POST /api/classifications/jobs/:jobId/cancel` or the `signet_classify_cancel` MCP tool. An agent-bound credential can cancel only its own agent’s jobs. Cancellation is tracked: wait for `cancelled`, not merely acceptance. Before publication, cleanup discards only the unpublished generation in bounded pages. After publication, cancellation atomically withdraws the read fence and any assignment introduced by that job, then resumes the existing removal operation to restore effective membership. Restarting resumes cleanup; it does not delete evidence. Completed jobs, and older started jobs without recorded prior-assignment state, require explicit classification removal instead of a guessed reversal.
+
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
 ## Classified imports

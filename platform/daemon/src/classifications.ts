@@ -162,6 +162,7 @@ export type ClassificationRequest =
 			readonly remove: boolean;
 	  }
 	| { readonly op: "execute"; readonly jobId: string }
+	| { readonly op: "cancel"; readonly actor: ClassificationActor; readonly jobId: string }
 	| {
 			readonly op: "items";
 			readonly actor: ClassificationActor;
@@ -272,7 +273,7 @@ export async function executeClassificationJob(
 			throw error;
 		}
 		const result = jobResult.parse(value);
-		if (result.status === "complete") return;
+		if (result.status === "complete" || result.status === "cancelled") return;
 		if (result.status === "pending") {
 			pendingPolls++;
 			if (pendingPolls >= 60) {
@@ -286,10 +287,10 @@ export async function executeClassificationJob(
 	}
 }
 const errorResult = z.object({
-	status: z.enum(["pending", "running", "complete", "failed"]),
+	status: z.enum(["pending", "running", "complete", "failed", "cancelled"]),
 	failures: z.number().int().nonnegative(),
 });
-const jobResult = z.object({ status: z.enum(["pending", "running", "complete"]) });
+const jobResult = z.object({ status: z.enum(["pending", "running", "complete", "cancelled"]) });
 const recoveryResult = z.object({ jobs: z.array(z.string()), nextCursor: z.string().nullable() });
 export async function resumeClassificationJobs(
 	request: (request: ClassificationRequest) => Promise<unknown> = classificationRequest,

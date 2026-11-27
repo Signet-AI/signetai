@@ -762,6 +762,7 @@ export {
 	beginVectorAdmissionRepairInTx,
 	stepVectorAdmissionRepairInTx,
 	publishVectorAdmissionRepairInTx,
+	cancelVectorAdmissionRepairInTx,
 	repairVectorAdmissionStepInTx,
 } from "./compartment-shards";
 export {

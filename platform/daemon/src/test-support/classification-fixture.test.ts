@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
 import { MIGRATIONS } from "../../../core/src/migrations";
 import { up } from "../../../core/src/migrations/177-classifications";
-export function classificationFixture() {
-	const db = new Database(":memory:");
+export function classificationFixture(path = ":memory:") {
+	const db = new Database(path);
+	if (path !== ":memory:") db.exec("PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL");
 	for (const m of MIGRATIONS) if (m.version < 177) m.up(db);
 	db.exec(
 		"INSERT INTO users(id,username,display_name,role) VALUES('alice','alice','Alice','member'),('bob','bob','Bob','member'),('carol','carol','Carol','member')",

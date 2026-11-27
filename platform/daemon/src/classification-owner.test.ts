@@ -1,3 +1,9 @@
+import { classificationLabelsForJobsSql } from "../../core/src/read-scope";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { classificationFixture as legacyClassificationFixture } from "./test-support/classification-fixture.test";
 import {
 	compartmentFor,
 	findSqliteVecExtension,
@@ -7,7 +13,7 @@ import {
 } from "@signet/core";
 import { executeClassificationJob, resumeClassificationJobs } from "./classifications";
 import { currentClassificationFixture as classificationFixture } from "./test-support/classification-fixture.test";
-import { expect, test } from "bun:test";
+import { expect, test, describe, beforeAll, afterAll } from "bun:test";
 import { purgeMemoryInTx } from "./source-purge-tx";
 import { executeClassification } from "./classification-owner";
 import { up as dreamingPartitionMigration } from "../../core/src/migrations/179-dreaming-evidence-leases";
@@ -518,6 +524,194 @@ test("hidden-agent vectors cannot delay another agent's classification publicati
 		}
 	};
 	expect(run(401)).toBe(run(0));
+});
+
+describe("classification cancellation durability", () => {
+	let prepared: { directory: string; path: string } | null = null;
+	beforeAll(() => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-classification-cancel-")),
+			path = join(directory, "fixture.db");
+		prepared = { directory, path };
+		const db = classificationFixture(legacyClassificationFixture(path));
+		db.close();
+	});
+	afterAll(() => {
+		if (prepared) rmSync(prepared.directory, { recursive: true, force: true });
+	});
+	test("classification cancellation and reversal survive interrupted cleanup", async () => {
+		if (!prepared) throw Error("fixture_missing");
+		const { directory, path } = prepared;
+		const extension = findSqliteVecExtension();
+		if (!extension) throw Error("sqlite_vec_required");
+		const initial = new Database(path);
+		let initialClosed = false;
+		initial.exec("PRAGMA synchronous=FULL");
+		const scope = {
+			reach: { kind: "own", agentId: "default" },
+			projects: null,
+			compartments: [],
+			inFlightUserId: "bob",
+		} as const;
+		const read = (db: Database) =>
+			vectorSearchWithMetadata(db, new Float32Array([1, 0, 0]), { limit: 1, readScope: scope }).results.map(
+				(r) => r.id,
+			);
+		const membership = (db: Database) =>
+			db
+				.query(
+					`SELECT m.embedding_id,json_array(k.agent_id,k.visibility,k.project,k.compartment_id,k.embedding_compartment_id,json(${classificationLabelsForJobsSql("k", "in_flight_jobs")})) fingerprint FROM vector_shard_members m JOIN vector_shard_keys k ON k.id=m.partition_id JOIN vector_shard_repairs r ON r.projection=m.projection WHERE k.retired_generation IS NULL AND k.generation<=r.active_generation ORDER BY m.embedding_id`,
+				)
+				.all();
+		const open = (readonly = false) => {
+			const db = readonly ? new Database(path, { readonly: true }) : new Database(path);
+			db.loadExtension(extension);
+			return db;
+		};
+		const crash = async (jobId: string, statement = "") => {
+			const source = `import{Database}from'bun:sqlite';import{bindVectorAdmissionWriters}from${JSON.stringify(import.meta.resolve("@signet/core"))};import{executeClassification}from${JSON.stringify(import.meta.resolve("./classification-owner"))};const raw=new Database(${JSON.stringify(path)});raw.loadExtension(${JSON.stringify(extension)});raw.exec('PRAGMA synchronous=FULL');bindVectorAdmissionWriters(raw);const db={exec:s=>raw.exec(s),prepare:s=>{const q=raw.prepare(s);return{run:(...a)=>{if(${JSON.stringify(statement)}&&s.startsWith(${JSON.stringify(statement)}))process.kill(process.pid,'SIGKILL');return q.run(...a)},get:(...a)=>q.get(...a),all:(...a)=>q.all(...a)}}};executeClassification(db,{op:'execute',jobId:${JSON.stringify(jobId)}});if(${JSON.stringify(statement)})throw Error('crash_boundary_not_reached');process.kill(process.pid,'SIGKILL');`;
+			const child = Bun.spawn([process.execPath, "-e", source], { stdout: "pipe", stderr: "pipe" });
+			await child.exited;
+			expect({ signal: child.signalCode, error: await new Response(child.stderr).text() }).toEqual({
+				signal: "SIGKILL",
+				error: "",
+			});
+		};
+		const finish = (db: Database, jobId: string, status: string) => {
+			for (let i = 0; i < 100; i++) {
+				executeClassification(db, { op: "execute", jobId });
+				if (
+					db.query<{ status: string }, [string]>("SELECT status FROM org_jobs WHERE id=?").get(jobId)?.status === status
+				)
+					return;
+			}
+			throw Error("job_did_not_settle");
+		};
+		try {
+			initial.loadExtension(extension);
+			initial.exec(
+				"UPDATE agents SET kind='organization' WHERE id='default';DROP TABLE IF EXISTS vec_embeddings;CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+			);
+			repairVectorAdmissionStepInTx(initial, "vec_embeddings", "embeddings");
+			initial.exec("BEGIN");
+			for (let i = 0; i < 101; i++) {
+				const id = i === 0 ? "m" : `row-${i}`;
+				if (i)
+					initial
+						.prepare(
+							"INSERT INTO memories(id,agent_id,author_user_id,content,created_at,updated_at) VALUES(?,'default','alice','fixture','2020','2020')",
+						)
+						.run(id);
+				initial
+					.prepare(
+						"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text) VALUES(?,?,'memory',?,?,3,'2020','default','')",
+					)
+					.run(id, id, id, new Float32Array([1, i / 1000, 0]));
+				syncEmbeddingCompartment(initial, "embeddings", id);
+			}
+			initial.exec("COMMIT");
+			const before = membership(initial);
+			expect(read(initial)).toEqual(["m"]);
+			const label = field(
+				executeClassification(initial, {
+					op: "create",
+					actor: compliance,
+					name: "Cancel",
+					color: null,
+					description: null,
+					audience: [{ kind: "user", id: "alice" }],
+					appliers: [],
+				}),
+				"id",
+			);
+			const all = { kind: "agent", id: "default", agentId: "default" } as const;
+			const jobId = field(
+				executeClassification(initial, { op: "enqueue", actor: compliance, id: label, target: all, remove: false }),
+				"jobId",
+			);
+			executeClassification(initial, { op: "execute", jobId });
+			expect(initial.query("SELECT kind FROM org_jobs WHERE id=?").get(jobId)).toEqual({ kind: "classify-preparing" });
+			expect(() => executeClassification(initial, { op: "cancel", actor: alice, jobId })).toThrow("permission");
+			initial.exec(
+				"INSERT INTO agents(id,name,created_at,updated_at,kind) VALUES('cancel_other','Other','2020','2020','organization')",
+			);
+			for (const id of [jobId, "missing"]) {
+				expect(() =>
+					executeClassification(initial, {
+						op: "cancel",
+						actor: { ...compliance, boundAgentId: "cancel_other" },
+						jobId: id,
+					}),
+				).toThrow("not_found");
+				expect(() =>
+					executeClassification(initial, { op: "cancel", actor: { ...compliance, allowedProjects: [] }, jobId: id }),
+				).toThrow("permission");
+			}
+			executeClassification(initial, { op: "cancel", actor: compliance, jobId });
+			initial.close();
+			initialClosed = true;
+			await crash(jobId, "DELETE FROM vector_shard_members WHERE projection=? AND generation=? AND embedding_id=?");
+			let reader = open(true);
+			expect(membership(reader)).toEqual(before);
+			expect(read(reader)).toEqual(["m"]);
+			expect(reader.query("SELECT COUNT(*) n FROM vector_shard_members WHERE generation>1").get()).toEqual({ n: 101 });
+			reader.close();
+			await crash(jobId);
+			reader = open(true);
+			expect(membership(reader)).toEqual(before);
+			expect(read(reader)).toEqual(["m"]);
+			expect(reader.query("SELECT COUNT(*) n FROM vector_shard_members WHERE generation>1").get()).toEqual({ n: 1 });
+			reader.close();
+			const db = open();
+			try {
+				finish(db, jobId, "cancelled");
+				expect(membership(db)).toEqual(before);
+				expect(db.query("SELECT COUNT(*) n FROM vector_shard_members WHERE generation>1").get()).toEqual({ n: 0 });
+				const slot =
+					db.query("SELECT active_slot FROM vector_shard_repairs WHERE projection='vec_embeddings'").get()
+						?.active_slot === 1
+						? 1
+						: 0;
+				expect(
+					db.query(`SELECT COUNT(*) n FROM vec_embeddings__admission_${slot} WHERE json_extract(id,'$[1]')>1`).get(),
+				).toEqual({ n: 0 });
+				const applied = field(
+					executeClassification(db, { op: "enqueue", actor: compliance, id: label, target: all, remove: false }),
+					"jobId",
+				);
+				db.exec(
+					"CREATE TEMP TRIGGER pause_materialization BEFORE UPDATE OF compartment_id ON memories WHEN new.compartment_id IS NOT NULL BEGIN SELECT RAISE(ABORT,'pause_materialization');END",
+				);
+				expect(() => finish(db, applied, "complete")).toThrow("pause_materialization");
+				db.exec("DROP TRIGGER pause_materialization");
+				expect(db.query("SELECT status FROM org_jobs WHERE id=?").get(applied)).toEqual({ status: "running" });
+				expect(read(db)).toEqual([]);
+				executeClassification(db, { op: "cancel", actor: compliance, jobId: applied });
+				await crash(applied, "UPDATE org_jobs SET params_json=");
+				const recovered = open(true);
+				try {
+					expect(read(recovered)).toEqual(["m"]);
+					expect(membership(recovered)).toEqual(before);
+					expect(recovered.query("SELECT status FROM org_jobs WHERE id=?").get(applied)).toEqual({ status: "running" });
+				} finally {
+					recovered.close();
+				}
+				expect(db.query("SELECT COUNT(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
+				finish(db, applied, "cancelled");
+				expect(db.query("SELECT COUNT(*) n FROM memories").get()).toEqual({ n: 101 });
+				expect(db.query("SELECT COUNT(*) n FROM embeddings").get()).toEqual({ n: 101 });
+				expect(read(db)).toEqual(["m"]);
+				expect(membership(db)).toEqual(before);
+				expect(
+					db.query("SELECT COUNT(*) n FROM org_jobs WHERE kind='classify' AND status IN ('pending','running')").get(),
+				).toEqual({ n: 0 });
+			} finally {
+				db.close();
+			}
+		} finally {
+			if (!initialClosed) initial.close();
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 });
 
 test("classification owner prepares vector membership before publishing its read fence", () => {
