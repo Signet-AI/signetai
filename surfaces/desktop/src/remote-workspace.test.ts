@@ -27,6 +27,105 @@ const credential = {
 };
 
 describe("desktop remote workspace", () => {
+	test("sign-in waits for a background status read instead of claiming approval is pending", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-signin-status-"));
+		let release = () => {};
+		let entered = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const reading = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let starts = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (new URL(request.url).pathname === "/api/auth/whoami") {
+					entered();
+					await held;
+					return Response.json({ authenticated: false });
+				}
+				starts++;
+				return Response.json({
+					userCode: "ABCD-EFGH",
+					deviceCode: "disposable-device",
+					verificationUriComplete: `${new URL(request.url).origin}/auth/device?user_code=ABCD-EFGH`,
+				});
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			await login.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			const status = desktop.pollSignIn();
+			await reading;
+			const signingIn = desktop.signIn().then(
+				(value) => ({ ok: true as const, value }),
+				(error: unknown) => ({ ok: false as const, error }),
+			);
+			release();
+			await status;
+			const result = await signingIn;
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw result.error;
+			expect(result.value.status.state).toBe("pending");
+			expect(starts).toBe(1);
+		} finally {
+			release();
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("M3 renderer cannot mint credential secrets", async () => {
+		const root = await mkdtemp(join(tmpdir(), "desktop-mint-"));
+		let forwarded = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				forwarded++;
+				return Response.json({ secret: "must-not-escape" });
+			},
+		});
+		try {
+			const login = new LoginStore(server.url.origin, {
+				env: { HOME: root, APPDATA: root },
+				keyring: disposableKeyring(),
+			});
+			await login.save(credential);
+			const desktop = new RemoteWorkspace(server.url.origin, { login, openExternal: async () => {} });
+			for (const path of [
+				"/api/auth/api-keys",
+				"/api/auth/connector-keys",
+				"/api/auth/device/approve",
+				"/api/org/invites",
+				"/api/auth/handoff",
+				"/api/auth/session",
+				"/api/auth/token",
+				"/api/auth/refresh",
+				"/api/auth/device/start",
+				"/api/auth/device/token",
+				"/api/auth/login",
+				"/api/auth/invites/accept",
+				"/api/org/claim",
+				"/api/org/bootstrap",
+			]) {
+				expect((await desktop.proxy(new Request(`app://signet${path}`, { method: "POST" }))).status).toBe(403);
+			}
+			expect(forwarded).toBe(0);
+			expect((await desktop.proxy(new Request("app://signet/api/auth/api-keys"))).status).toBe(200);
+		} finally {
+			server.stop(true);
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	test("auth completion only focuses and rejects query and fragment secrets", () => {
 		expect(parseDesktopDeepLink("signet://auth/complete")).toBe("auth-complete");
 		for (const link of [

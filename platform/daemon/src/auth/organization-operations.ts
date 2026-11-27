@@ -48,21 +48,28 @@ export async function createDashboardHandoff(p: Principal) {
 		if (entry.expiresAt <= now) dashboardHandoffs.delete(key);
 	}
 	const pending = [...dashboardHandoffs.values()].filter((entry) => entry.sessionId === p.sessionId).length;
-	if (dashboardHandoffs.size >= 1000 || pending >= 5) throw new IdentityError(429, "rate_limit");
+	const principalPending = [...dashboardHandoffs.values()].filter((entry) => entry.userId === p.userId).length;
+	if (dashboardHandoffs.size >= 1000 || pending >= 5 || principalPending >= 20)
+		throw new IdentityError(429, "rate_limit");
 	const code = secret();
 	const expiresAt = now + 60_000;
-	await organizationWrite([auditStatement(p, "session.handoff_created", "session", p.sessionId)]);
 	dashboardHandoffs.set(digest(code), { sessionId: p.sessionId, userId: user.userId, deviceId: p.deviceId, expiresAt });
+	try {
+		await organizationWrite([auditStatement(p, "session.handoff_created", "session", p.sessionId)]);
+	} catch (error) {
+		dashboardHandoffs.delete(digest(code));
+		throw error;
+	}
 	return { code, expiresAt: new Date(expiresAt).toISOString() };
 }
 export async function redeemDashboardHandoff(input: unknown) {
-	const { code } = z
-		.object({ code: z.string().min(20).max(256) })
+	const { code, confirm } = z
+		.object({ code: z.string().min(20).max(256), confirm: z.literal(true).optional() })
 		.strict()
 		.parse(input);
 	const key = digest(code);
 	const entry = dashboardHandoffs.get(key);
-	dashboardHandoffs.delete(key);
+	if (confirm) dashboardHandoffs.delete(key);
 	if (!entry || entry.expiresAt <= Date.now()) throw new IdentityError(401, "invalid_credential");
 	const source = await organizationQuery<SessionRow | null>(
 		statement("SELECT * FROM auth_sessions WHERE id=? AND user_id=?", [entry.sessionId, entry.userId], "get"),
@@ -70,6 +77,7 @@ export async function redeemDashboardHandoff(input: unknown) {
 	if (!source) throw new IdentityError(401, "invalid_credential");
 	const org = await readOrganization();
 	const { user, expiresAtCeiling } = await resolveSessionPrincipal(source, org);
+	if (!confirm) return { confirmationRequired: true as const, user: userView(user), organization: { name: org.name } };
 	const binding = sourceSessionBinding(source);
 	const material = sessionMaterial(
 		user.id,
@@ -251,12 +259,21 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 		providers: authProviders(org),
 	};
 }
+function requireSessionManagement(p: Principal): void {
+	if ((p.credential.kind !== "session" || p.sourceKeyId) && !p.permissions.has("admin"))
+		throw new IdentityError(
+			403,
+			"permission",
+			"Requires an interactive session or the admin session-management permission",
+		);
+}
 export async function logout(p: Principal, input: unknown) {
 	const data = z.object({ all: z.boolean().optional() }).parse(input);
+	if (data.all) requireSessionManagement(p);
 	await organizationWrite([
 		statement(
 			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout',refresh_retry_json = '[]' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
-			[new Date().toISOString(), data.all ? p.userId : p.sessionId],
+			[new Date().toISOString(), data.all ? p.userId : p.credential.kind === "session" ? p.sessionId : null],
 		),
 		auditStatement(p, "session.logout", "user", p.userId),
 	]);
@@ -354,14 +371,28 @@ export async function deviceInfo(userCode: string) {
 	return row;
 }
 export async function deviceApprove(p: Principal, input: unknown) {
-	if (p.sourceKeyId) throw new IdentityError(403, "org_policy", "Key-derived browser sessions cannot approve devices");
+	if (p.credential.kind !== "session" || p.sourceKeyId)
+		throw new IdentityError(403, "org_policy", "Requires an interactive user session");
 	const data = z.object({ userCode: text, decision: z.enum(["approve", "deny"]) }).parse(input);
 	const row = await deviceInfo(data.userCode);
 	if (row.status !== "pending") throw new IdentityError(409, "already_decided");
 	const now = new Date().toISOString();
 	const deviceId = id("dev");
 	const org = await readOrganization();
-	const session = sessionMaterial(p.userId ?? "", row.client, deviceId, org);
+	const approver = await organizationQuery<SessionRow | null>(
+		statement("SELECT * FROM auth_sessions WHERE id=?", [p.sessionId], "get"),
+	);
+	if (!approver) throw new IdentityError(401, "invalid_credential");
+	await resolveSessionPrincipal(approver, org);
+	const session = sessionMaterial(requireUser(p).userId, row.client, deviceId, org, {
+		sourceKeyId: null,
+		ceiling: {
+			permissions: [...p.permissions],
+			agentId: p.boundAgentId,
+			projects: p.allowedProjects ? [...p.allowedProjects] : null,
+			expiresAt: approver.refresh_expires_at ?? approver.access_expires_at,
+		},
+	});
 	const writes: DbOwnerStatement[] = [
 		{
 			...statement(
@@ -417,7 +448,7 @@ export async function deviceToken(input: unknown) {
 	if (!session || session.revoked_at) throw new IdentityError(401, "revoked");
 	const user = await activeUser(row.user_id, session.device_id);
 	const org = await readOrganization();
-	const material = sessionMaterial(user.id, row.client, session.device_id, org);
+	const material = sessionMaterial(user.id, row.client, session.device_id, org, sourceSessionBinding(session));
 	await organizationWrite(
 		[
 			{

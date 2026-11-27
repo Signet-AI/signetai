@@ -47,13 +47,19 @@ The summary is backed by durable audit records and survives daemon restarts. It 
 
 `POST /api/auth/session` exchanges a personal API key supplied as a bearer credential for HttpOnly browser-session and CSRF cookies. The JSON response contains only `{ user, expiresAt, csrf }`. Shared, connector, and legacy keys cannot use this exchange. Do not persist the pasted key in browser storage.
 
-The daemon stores the parent-key binding and issuance permission, agent, project, and expiry ceilings in the session. Every request checks the live parent key and user; revocation, expiration, and permission narrowing take effect on the next request. Extending or widening the key does not widen an existing browser session. Sliding expiry and dashboard handoff preserve these ceilings, including across daemon restarts. Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations.
+The daemon stores the parent-key binding and issuance permission, agent, project, and expiry ceilings in the session. Every request checks the live parent key and user; revocation, expiration, and permission narrowing take effect on the next request. Extending or widening the key does not widen an existing browser session. Sliding expiry and dashboard handoff preserve these ceilings, including across daemon restarts. Device approval requires a direct user session, not an API key or a key-derived cookie. The approved device session keeps the approver's permission ceiling through token exchange, refresh, and dashboard handoff; later role promotions do not widen it.
+
+Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations. Signing out everywhere requires an interactive user session or the `admin` session-management permission. A narrower key-derived session can sign out only its own browser session. Signing out with a bare API key never revokes the session that created the key; use key revocation to invalidate the key itself.
+
+Device client type, device name, and platform are self-declared by the requester, not verified identities. The approval screen labels them accordingly. Approve only a code from the device you are signing in on.
+
+Personal-key browser exchanges admit at most 20 active key-derived sessions per user and 1,000 globally. Handoffs admit at most five pending codes per source session, 20 per user, and 1,000 globally. Admission failures return HTTP 429 with `Retry-After`; revoking or expiring sessions releases exchange capacity, and redeeming or expiring codes releases handoff capacity.
 
 ## Dashboard handoff
 
 A signed-in user session can call `POST /api/auth/handoff` to receive `{ code, expiresAt }`. The code expires after 60 seconds, is single use, and becomes invalid when its issuing session expires or is revoked. API keys cannot issue handoff codes directly; a key-derived browser session keeps its parent-key ceilings on redemption. Pending handoffs are bounded and are invalidated by a daemon restart.
 
-The browser sends the code in the JSON body of `POST /api/auth/handoff/redeem`. Redemption sets the browser session and CSRF cookies and returns `{ user, expiresAt, csrf }`, never a bearer token. Put the code in a URL fragment rather than a query string, clear it before redemption, and never put an access or refresh token in a URL.
+The browser first posts `{ code }` to `POST /api/auth/handoff/redeem` to preview the account without changing cookies or consuming the code. It shows “Continue as <name> at <instance>?” and warns before replacing a different signed-in account. Only choosing Continue sends `{ code, confirm: true }`, consumes the code, sets the browser session and CSRF cookies, and returns `{ user, expiresAt, csrf }`, never a bearer token. Put the code in a URL fragment rather than a query string, clear it before redemption, and never put an access or refresh token in a URL.
 
 ## Reverse proxies and browser origins
 

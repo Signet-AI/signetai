@@ -1,6 +1,7 @@
+import { DASHBOARD_HANDOFF_PARAM } from "../../../../libs/sdk/src/dashboard-handoff";
 import { useSyncExternalStore } from "react";
 export const TOKEN_KEY = "signet-token";
-const HANDOFF_PARAM = "signet-handoff";
+
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MIN_RECHECK_MS = 5_000;
 const MAX_RECHECK_MS = 300_000;
@@ -90,6 +91,59 @@ let warningTimer: ReturnType<typeof setTimeout> | undefined;
 let scheduledExpiry = 0;
 let recheck = 0;
 const listeners = new Set<() => void>();
+
+export interface DashboardHandoffConfirmation {
+	readonly userId: string;
+	readonly userName: string;
+	readonly organizationName: string;
+	readonly instance: string;
+	readonly busy: boolean;
+	readonly error: string | null;
+}
+let pendingHandoffCode: string | null = null;
+let handoffConfirmation: DashboardHandoffConfirmation | null = null;
+function publishHandoff(value: DashboardHandoffConfirmation | null): void {
+	handoffConfirmation = value;
+	for (const listener of listeners) listener();
+}
+export function currentDashboardHandoff(): DashboardHandoffConfirmation | null {
+	return handoffConfirmation;
+}
+export function useDashboardHandoff(): DashboardHandoffConfirmation | null {
+	return useSyncExternalStore((listener) => {
+		listeners.add(listener);
+		return () => {
+			listeners.delete(listener);
+		};
+	}, currentDashboardHandoff);
+}
+export function cancelDashboardHandoff(): void {
+	pendingHandoffCode = null;
+	publishHandoff(null);
+}
+export async function confirmDashboardHandoff(): Promise<void> {
+	const code = pendingHandoffCode;
+	const confirmation = handoffConfirmation;
+	if (!code || !confirmation || confirmation.busy) return;
+	publishHandoff({ ...confirmation, busy: true, error: null });
+	const response = await request("/api/auth/handoff/redeem", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ code, confirm: true }),
+	});
+	if (pendingHandoffCode !== code) return;
+	if (response?.status !== 200) {
+		publishHandoff({
+			...confirmation,
+			busy: false,
+			error: "The sign-in link expired or could not be confirmed. Cancel and sign in directly.",
+		});
+		return;
+	}
+	if (isRecord(response.body)) writeToken(text(response.body.token));
+	cancelDashboardHandoff();
+	await refreshSession();
+}
 
 let legacyToken: string | null = null;
 
@@ -340,19 +394,37 @@ export function refreshSession(): Promise<void> {
 async function redeemHandoff(): Promise<void> {
 	if (typeof location === "undefined" || typeof history === "undefined") return;
 	const params = new URLSearchParams(location.hash.slice(1));
-	const code = params.get(HANDOFF_PARAM);
+	const code = params.get(DASHBOARD_HANDOFF_PARAM);
 	if (!code) return;
-	params.delete(HANDOFF_PARAM);
+	params.delete(DASHBOARD_HANDOFF_PARAM);
 	const hash = params.toString();
 	history.replaceState(history.state, "", `${location.pathname}${location.search}${hash ? `#${hash}` : ""}`);
+	pendingHandoffCode = code;
+	publishHandoff(null);
 	const res = await request("/api/auth/handoff/redeem", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ code }),
 	});
-	const token = res?.status === 200 && isRecord(res.body) ? text(res.body.token) : null;
-	if (token) writeToken(token);
-	else pendingReason = "The sign-in link from the CLI expired or was already used. Sign in here instead.";
+	if (pendingHandoffCode !== code) return;
+	if (
+		res?.status === 200 &&
+		isRecord(res.body) &&
+		res.body.confirmationRequired === true &&
+		isRecord(res.body.user) &&
+		isRecord(res.body.organization)
+	) {
+		const userName = text(res.body.user.displayName);
+		const userId = text(res.body.user.id);
+		const organizationName = text(res.body.organization.name);
+		if (userName && userId && organizationName) {
+			pendingHandoffCode = code;
+			publishHandoff({ userId, userName, organizationName, instance: location.origin, busy: false, error: null });
+			return;
+		}
+	}
+	pendingHandoffCode = null;
+	pendingReason = "The sign-in link from the CLI expired or was already used. Sign in here instead.";
 }
 
 export function startSession(): Promise<void> {
@@ -360,7 +432,7 @@ export function startSession(): Promise<void> {
 	boot = demo ? Promise.resolve() : redeemHandoff().then(refreshSession);
 	if (!demo && typeof window !== "undefined") {
 		window.addEventListener("hashchange", () => {
-			if (location.hash.includes(`${HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
+			if (location.hash.includes(`${DASHBOARD_HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
 		});
 		window.addEventListener("storage", (event) => {
 			if (event.key === TOKEN_KEY || event.key === null) void refreshSession();

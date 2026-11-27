@@ -149,6 +149,204 @@ describe("organization HTTP flows", () => {
 		).toBe(400);
 	});
 
+	test("L2 handoff previews identity without replacing an existing session until confirmation", async () => {
+		await claim();
+		const bob = await member("handoff-bob");
+		const handoff = await (await call("/api/auth/handoff", "POST", {})).json();
+		const preview = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, bob.token);
+		expect(preview.status).toBe(200);
+		expect(preview.headers.getSetCookie()).toEqual([]);
+		expect(await preview.json()).toMatchObject({
+			confirmationRequired: true,
+			user: { displayName: "Admin" },
+			organization: { name: "Acme" },
+		});
+		expect((await (await call("/api/auth/whoami", "GET", undefined, bob.token)).json()).user.id).toBe(bob.userId);
+		const confirmed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, bob.token);
+		expect(confirmed.status).toBe(200);
+		expect(confirmed.headers.getSetCookie().some((value) => value.startsWith("signet_session="))).toBe(true);
+		expect((await confirmed.json()).user.displayName).toBe("Admin");
+	});
+
+	test.each(["principal", "global"])("L3 key exchange enforces the %s active-session cap", async (scope) => {
+		const root = await claim();
+		const other = scope === "global" ? await member("exchange-other") : { userId: root.user.id, token: admin };
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const makeKey = async (bearer: string) =>
+			(
+				await call("/api/auth/api-keys", "POST", { name: "exchange", permissions: ["recall"], expiresAt }, bearer)
+			).json();
+		const seeded = await makeKey(other.token);
+		const target = await makeKey(admin);
+		const { organizationWrite } = await import("./organization-store");
+		const ceiling = JSON.stringify({ permissions: ["recall"], agentId: null, projects: null, expiresAt });
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?) INSERT INTO auth_sessions(id,user_id,kind,token_hash,access_expires_at,source_key_id,source_key_ceiling_json) SELECT 'cap-'||x,?,'browser','hash',?,?,? FROM n",
+				[scope === "global" ? 1000 : 20, other.userId, expiresAt, seeded.key.id, ceiling],
+			),
+		]);
+		const denied = await call("/api/auth/session", "POST", {}, target.secret);
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		await organizationWrite([statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'cap-%'")]);
+		expect((await call("/api/auth/session", "POST", {}, target.secret)).status).toBe(200);
+	});
+	test("L3 handoff caps apply across a user's sessions with Retry-After", async () => {
+		const root = await claim();
+		const { issueSession } = await import("./organization-store");
+		for (let sessionIndex = 0; sessionIndex < 4; sessionIndex++) {
+			const session = await issueSession(root.user.id, "cli");
+			for (let i = 0; i < 5; i++)
+				expect((await call("/api/auth/handoff", "POST", {}, session.accessToken)).status).toBe(200);
+		}
+		const denied = await call("/api/auth/handoff", "POST", {});
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
+	});
+
+	test("M2 admin session-management keys may sign out all sessions", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "session manager",
+				permissions: ["admin"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		expect((await call("/api/auth/logout", "POST", { all: true }, key.secret)).status).toBe(200);
+		expect((await (await call("/api/auth/whoami")).json()).authenticated).toBe(false);
+	});
+	test.each(["key", "derived"])("M2 recall-only %s cannot sign out other sessions", async (kind) => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "recall",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		const exchange = await call("/api/auth/session", "POST", {}, key.secret);
+		const body = await exchange.json();
+		const cookie = exchange.headers
+			.getSetCookie()
+			.map((value) => value.split(";")[0])
+			.join("; ");
+		const logout = (all: boolean) =>
+			kind === "key"
+				? call("/api/auth/logout", "POST", { all }, key.secret)
+				: app.request("/api/auth/logout", {
+						method: "POST",
+						headers: { cookie, "content-type": "application/json", "x-signet-csrf": body.csrf },
+						body: JSON.stringify({ all }),
+					});
+		expect((await logout(true)).status).toBe(403);
+		expect((await (await call("/api/auth/whoami")).json()).authenticated).toBe(true);
+		expect((await logout(false)).status).toBe(200);
+		expect((await (await call("/api/auth/whoami")).json()).authenticated).toBe(true);
+	});
+
+	test.each(["long", "equal"])("B2 child expiry and descendant revocation: %s", async (expiry) => {
+		await claim();
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const parent = await (
+			await call("/api/auth/api-keys", "POST", { name: "parent", permissions: ["recall"], expiresAt })
+		).json();
+		const childResponse = await call(
+			"/api/auth/api-keys",
+			"POST",
+			{
+				name: "child",
+				permissions: ["recall"],
+				expiresAt: expiry === "long" ? new Date(Date.now() + 86400_000).toISOString() : expiresAt,
+			},
+			parent.secret,
+		);
+		expect(childResponse.status).toBe(201);
+		const child = await childResponse.json();
+		expect(child.key.expiresAt).toBe(expiresAt);
+		expect(
+			(await call("/api/auth/api-keys", "POST", { name: "widen", permissions: ["admin"], expiresAt }, parent.secret))
+				.status,
+		).toBe(403);
+		const grandchild = await (
+			await call("/api/auth/api-keys", "POST", { name: "grandchild", permissions: ["recall"], expiresAt }, child.secret)
+		).json();
+		expect((await call("/api/auth/api-keys/" + parent.key.id, "DELETE")).status).toBe(200);
+		for (const key of [parent, child, grandchild]) {
+			expect((await (await call("/api/auth/whoami", "GET", undefined, key.secret)).json()).authenticated).toBe(false);
+			expect(
+				await organizationQuery(
+					statement("SELECT revoked_at IS NOT NULL AS revoked FROM api_keys WHERE id=?", [key.key.id], "get"),
+				),
+			).toEqual({ revoked: 1 });
+		}
+	});
+	test.each(["revoked", "expired"])("B2 requests validate the live key ancestor: %s", async (reason) => {
+		await claim();
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const parent = await (
+			await call("/api/auth/api-keys", "POST", { name: "parent", permissions: ["recall"], expiresAt })
+		).json();
+		const child = await (
+			await call("/api/auth/api-keys", "POST", { name: "child", permissions: ["recall"], expiresAt }, parent.secret)
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, child.secret);
+		expect(exchanged.status).toBe(200);
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((value) => value.split(";")[0])
+			.join("; ");
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				reason === "revoked"
+					? "UPDATE api_keys SET revoked_at=? WHERE id=?"
+					: "UPDATE api_keys SET expires_at=? WHERE id=?",
+				["2000-01-01T00:00:00.000Z", parent.key.id],
+			),
+		]);
+		expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(false);
+		expect((await (await app.request("/api/auth/whoami", { headers: { cookie } })).json()).authenticated).toBe(false);
+	});
+	test("B1 bearer keys cannot approve device authorizations", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "recall only",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		const flow = await (await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "evil" }, "")).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, key.secret))
+				.status,
+		).toBe(403);
+		expect((await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).status).toBe(428);
+	});
+	test("B1 device sessions retain the approving session permission ceiling through refresh", async () => {
+		await claim();
+		const bob = await member("ceiling-bob");
+		const before = await (await call("/api/auth/whoami", "GET", undefined, bob.token)).json();
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Laptop" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, bob.token))
+				.status,
+		).toBe(200);
+		await call(`/api/org/users/${bob.userId}`, "PATCH", { role: "admin" });
+		const login = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+		expect((await (await call("/api/auth/whoami", "GET", undefined, login.accessToken)).json()).permissions).toEqual(
+			before.permissions,
+		);
+		const refreshed = await (await call("/api/auth/refresh", "POST", { refreshToken: login.refreshToken }, "")).json();
+		expect(
+			(await (await call("/api/auth/whoami", "GET", undefined, refreshed.accessToken)).json()).permissions,
+		).toEqual(before.permissions);
+	});
+
 	test("SSO configuration refuses narrowed authority before secret access and never publishes missing secrets", async () => {
 		await claim();
 		const alice = await member("sso-alice");
@@ -813,7 +1011,7 @@ describe("organization HTTP flows", () => {
 		expect((await write("/api/auth/api-keys", { name: "escape", permissions: ["recall"] })).status).toBe(403);
 		expect((await write("/api/auth/device/approve", { userCode: "AAAA-AAAA", decision: "approve" })).status).toBe(403);
 		const handoff = await (await write("/api/auth/handoff", {})).json();
-		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "");
 		expect(redeemed.status).toBe(200);
 		expect((await redeemed.json()).expiresAt).toBe(expiresAt);
 		const secondCookie = redeemed.headers
@@ -1283,7 +1481,7 @@ describe("organization HTTP flows", () => {
 		expect(issued.status).toBe(200);
 		const handoff = await issued.json();
 		expect(Date.parse(handoff.expiresAt) - Date.now()).toBeLessThanOrEqual(60_000);
-		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "");
 		expect(redeemed.status).toBe(200);
 		expect(
 			redeemed.headers
@@ -1291,7 +1489,9 @@ describe("organization HTTP flows", () => {
 				.some((value) => value.startsWith("signet_session=") && value.includes("HttpOnly")),
 		).toBe(true);
 		expect(await redeemed.json()).not.toHaveProperty("accessToken");
-		expect((await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "")).status).toBe(401);
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "")).status).toBe(
+			401,
+		);
 		const device = await (
 			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "handoff" }, "")
 		).json();
@@ -1303,7 +1503,9 @@ describe("organization HTTP flows", () => {
 		expect((await call("/api/auth/handoff", "POST", {}, key.secret)).status).toBe(403);
 		const revoked = await (await call("/api/auth/handoff", "POST", {})).json();
 		await call("/api/auth/logout", "POST", {});
-		expect((await call("/api/auth/handoff/redeem", "POST", { code: revoked.code }, "")).status).toBe(401);
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: revoked.code, confirm: true }, "")).status).toBe(
+			401,
+		);
 	});
 
 	test("R6 POST recalls audit the published resolved agent and result count", async () => {

@@ -35,6 +35,7 @@ interface Session {
 	readonly expiresAt: string;
 	readonly role: TokenRole;
 	readonly sub: string;
+	readonly name: string;
 }
 const handoffs = new Map<string, { readonly session: Session; readonly expiresAt: number }>();
 
@@ -55,7 +56,13 @@ function mintSession(claims: TokenClaims): Session | null {
 		authConfig.sessionTokenTtlSeconds,
 	);
 	const exp = Math.min(now + authConfig.sessionTokenTtlSeconds, claims.exp);
-	return { token, expiresAt: new Date(exp * 1000).toISOString(), role: claims.role, sub: claims.sub };
+	return {
+		token,
+		expiresAt: new Date(exp * 1000).toISOString(),
+		role: claims.role,
+		sub: claims.sub,
+		name: claims.name ?? claims.sub,
+	};
 }
 
 function pruneHandoffs(now: number): void {
@@ -242,8 +249,16 @@ export function registerAuthRoutes(app: Hono): void {
 		const now = Date.now();
 		pruneHandoffs(now);
 		const entry = handoffs.get(code);
-		handoffs.delete(code);
 		if (!entry) return c.json({ error: "handoff code is invalid or expired" }, 401);
+		const confirm = typeof payload === "object" && payload !== null ? Reflect.get(payload, "confirm") : undefined;
+		if (confirm !== undefined && confirm !== true) return c.json({ error: "confirmation must be explicit" }, 400);
+		if (!confirm)
+			return c.json({
+				confirmationRequired: true,
+				user: { id: entry.session.sub, displayName: entry.session.name },
+				organization: { name: "Signet" },
+			});
+		handoffs.delete(code);
 		return c.json(entry.session);
 	});
 

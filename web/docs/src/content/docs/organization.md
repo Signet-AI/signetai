@@ -28,6 +28,8 @@ Submit the token to `POST /api/org/claim` with an organization name and the firs
 
 The token is consumed once. Claiming marks the existing `default` agent as the organization agent, creates the administrator's personal agent, and starts a browser session. Existing evidence stays in place.
 
+Upgrading also repairs legacy child ownership, including memory embeddings, from each unambiguous parent in bounded batches. This restores vectors that previously had no recorded agent without assigning them to `default`. Missing or conflicting parents remain unresolved; the local database records repair counts in `legacy_child_scope_repairs`. Unknown historical authors stay unknown. A NULL compartment is still public, not an indication that an author or classification should be guessed.
+
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
 ## Classified imports
@@ -99,6 +101,10 @@ Keep password login enabled until SSO is working. `requireSso` prevents password
 Against an organization, `signet agent list` shows each agent's owner IDs and `canActAs` result. `signet agent add notes` creates a personal agent without scaffolding local files; `signet agent add payments --team <group-id>` creates a team agent. `signet agent use <name-or-id>` changes your default read agent. Writes still default to your personal agent.
 
 Administrators can rename with `signet agent set <name-or-id> --name <new-name>`, archive with `signet agent remove <name-or-id>`, and transfer with `signet agent transfer <name-or-id> --user <user-id>` or `--team <group-id>`. Transfer changes ownership, not evidence authorship. Local read policies do not apply in organization mode. Organization agent purge is not yet available through the CLI; it refuses without changing local files.
+
+A key may mint child keys only within its existing permissions, agent, project, and expiry limits. Child expiry is capped at the parent's expiry. Revoking a key also revokes its descendants, and every request validates the live ancestry. Keys created directly by interactive sessions have no parent-key dependency. On upgrade, parent links recover from retained key-creation audit events; lineage cannot be reconstructed after those events have been deleted.
+
+In desktop organization mode, create API keys, shared-agent keys, and invitations from the browser dashboard or the CLI. The main-process proxy refuses credential-issuing requests from the renderer; existing key lists and revocation remain available.
 
 `signet api-key create --name CI` creates a personal key using your permissions and a 30-day expiry. Restrict it with `--permission recall remember`, or set `--expires-at <ISO timestamp>`. `--agent <id>` requests a shared-agent key, which the daemon allows only for administrators or the owning team's owner. `signet api-key list` lists your keys; `--all` requires admin. Revoke by ID with `signet api-key revoke <id>`. The secret is printed once; JSON creation also prints a warning on stderr. List responses never include secrets.
 
