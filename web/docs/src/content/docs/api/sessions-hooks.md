@@ -251,6 +251,10 @@ marks the upload's capture as ended and queues it again, and
 `transcriptCaptureJobId` is the `jobId` the upload returned. It does not capture
 the session's stored turns a second time. When no uploaded range has ended a
 line yet, nothing is queued and the response has no `transcriptCaptureJobId`.
+The daemon also does not append `lastAssistantMessage` to the stored turns,
+since the upload already holds that turn. After the response, it scans the
+upload's complete lines for skill use, as it scans a `transcriptPath`.
+`pre-compaction` without `transcriptPath` scans the upload the same way.
 
 ### PATCH /api/hooks/transcript-upload
 
@@ -506,8 +510,9 @@ to Dreaming until the transcript receives its completion marker.
 ```
 
 `harness` and `sessionKey` are required. `transcript` (inline string) takes
-precedence over `transcriptPath`; both fall back to the stored session
-transcript from a prior `session-end` or `user-prompt-submit` call. Native
+precedence over `transcriptPath`. With neither, the daemon reads the complete
+lines of the session's transcript upload. All of them fall back to the stored
+session transcript from a prior `session-end` or `user-prompt-submit` call. Native
 daemon file-backed transcript reads require `transcriptPath` to resolve under
 the connector staging root `/tmp/signet`, point to a regular file, and fit
 within the transcript size limit.

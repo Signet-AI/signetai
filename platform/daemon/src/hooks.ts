@@ -155,7 +155,8 @@ import {
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript as normalizeSessionTranscriptBase,
 } from "./transcript-normalization";
-import { endTranscriptUpload } from "./transcript-upload";
+import { endTranscriptUpload, hasTranscriptUpload, readTranscriptUploadContent } from "./transcript-upload";
+import { MAX_TRANSCRIPT_SCAN_BYTES } from "./skill-transcript-scan";
 import { getUpdateSummary } from "./update-system";
 import { isRetryableWritePressure } from "./write-pressure";
 
@@ -2017,6 +2018,7 @@ async function appendSessionEndAssistantTurn(
 ): Promise<void> {
 	if (!sessionKey || req.transcriptPath || req.transcript?.trim()) return;
 	try {
+		if (await hasTranscriptUpload(getDbAccessor(), agentId, normalizeSessionKey(sessionKey))) return;
 		await appendLiveAssistantTurn({
 			harness: req.harness,
 			sessionKey,
@@ -2300,6 +2302,18 @@ async function deferSessionEndWork(params: {
 	}
 }
 
+async function readCheckpointSource(req: CheckpointExtractRequest, agentId: string): Promise<string | null> {
+	if (req.transcriptPath) {
+		return existsSync(req.transcriptPath) ? readFileSync(req.transcriptPath, "utf-8") : null;
+	}
+	return await readTranscriptUploadContent(getDbAccessor(), {
+		basePath: getAgentsDir(),
+		agentId,
+		sessionKey: normalizeSessionKey(req.sessionKey),
+		maxBytes: MAX_TRANSCRIPT_SCAN_BYTES,
+	});
+}
+
 export async function handleCheckpointExtract(req: CheckpointExtractRequest): Promise<CheckpointExtractResponse> {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	await ensureAgentRegistered(agentId);
@@ -2313,13 +2327,18 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 	let fromStore = false;
 	if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
-	} else if (req.transcriptPath && existsSync(req.transcriptPath)) {
+	} else {
 		try {
-			rawTranscript = readFileSync(req.transcriptPath, "utf-8");
-			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
-		} catch {
+			const source = await readCheckpointSource(req, agentId);
+			if (source) {
+				rawTranscript = source;
+				transcript = normalizeSessionTranscript(req.harness, source);
+			}
+		} catch (err) {
 			logger.warn("hooks", "Could not read checkpoint transcript", {
 				path: req.transcriptPath,
+				sessionKey: req.sessionKey,
+				error: err instanceof Error ? err.message : String(err),
 			});
 		}
 	}

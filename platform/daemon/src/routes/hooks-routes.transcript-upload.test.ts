@@ -16,6 +16,7 @@ process.env.SIGNET_PATH = suiteDir;
 const { registerHooksRoutes } = await import("./hooks-routes");
 const { registerGlobalMiddleware } = await import("../middleware");
 const { AGENTS_DIR, authConfig } = await import("./state");
+process.env.SIGNET_PATH = AGENTS_DIR;
 
 const agent = `noam-${randomUUID()}`;
 let dir = "";

@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { attemptAsync } from "@signet/core";
-import { transcriptUploadTailStart } from "@signet/core/transcript-upload";
+import { transcriptUploadEnd, transcriptUploadTailStart } from "@signet/core/transcript-upload";
 import type { DbAccessor } from "./db-accessor";
 import {
 	dbOwnerCommitTranscriptUpload,
@@ -23,7 +23,12 @@ import { sha256 } from "./transcript-capture-jobs";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import { openContainedTranscriptFile, removeContainedTranscriptPath } from "./transcript-import-safe-fs";
 import { type TranscriptUploadAdmission, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
-import { readTranscriptUploadRange, transcriptUploadFilePath, transcriptUploadsRoot } from "./transcript-upload-paths";
+import {
+	readTranscriptUploadPrefix,
+	readTranscriptUploadRange,
+	transcriptUploadFilePath,
+	transcriptUploadsRoot,
+} from "./transcript-upload-paths";
 
 const PURGE_RUN_DEADLINE_MS = 30_000;
 const PURGE_CONTINUE_DELAY_MS = 1_000;
@@ -51,6 +56,13 @@ export type TranscriptUploadResult =
 	| { readonly status: "invalid"; readonly reason: "empty" | "checksum" };
 
 export type TranscriptUploadEnd = TranscriptUploadEndCommit;
+
+export interface TranscriptUploadRead {
+	readonly basePath: string;
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly maxBytes: number;
+}
 
 async function syncDirectory(root: string, path: string): Promise<void> {
 	const directory = await openContainedTranscriptFile(root, path, constants.O_RDONLY | constants.O_DIRECTORY);
@@ -91,6 +103,45 @@ export async function endTranscriptUpload(
 	return await dbOwnerEndTranscriptUpload(await getDbOwnerForAccessor(accessor), input, {
 		operation: "transcript-upload.end",
 	});
+}
+
+async function readUploadScope(accessor: DbAccessor, agentId: string, sessionKey: string, operation: string) {
+	return await dbOwnerReadTranscriptUploadScope(
+		await getDbOwnerForAccessor(accessor),
+		{ agentId, sessionKey },
+		{ operation },
+	);
+}
+
+export async function hasTranscriptUpload(accessor: DbAccessor, agentId: string, sessionKey: string): Promise<boolean> {
+	return (await readUploadScope(accessor, agentId, sessionKey, "transcript-upload.state")).state !== null;
+}
+
+export async function readTranscriptUploadContent(
+	accessor: DbAccessor,
+	input: TranscriptUploadRead,
+): Promise<string | null> {
+	const scope = await readUploadScope(accessor, input.agentId, input.sessionKey, "transcript-upload.read");
+	const state = scope.state;
+	if (!state) return null;
+	if (state.committedOffset > input.maxBytes) {
+		logger.warn("hooks", "Transcript upload read skipped for oversized upload", {
+			sessionKey: input.sessionKey,
+			size: state.committedOffset,
+			maxSize: input.maxBytes,
+		});
+		return null;
+	}
+	const path = transcriptUploadFilePath(
+		input.basePath,
+		input.agentId,
+		scope.purgeEpoch,
+		input.sessionKey,
+		state.generation,
+	);
+	const bytes = await readTranscriptUploadPrefix(input.basePath, path, state.committedOffset);
+	const end = transcriptUploadEnd(bytes);
+	return end === 0 ? null : bytes.subarray(0, end).toString("utf8");
 }
 
 async function writeAndCommitRange(

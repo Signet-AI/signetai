@@ -106,7 +106,7 @@ import {
 	renewSession,
 } from "../session-tracker.js";
 import { recordSkillInvocation } from "../skill-invocations";
-import { recordSkillsFromTranscript } from "../skill-transcript-scan";
+import { scheduleSessionSkillScan } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES, type TranscriptUploadStatus } from "@signet/core/transcript-upload";
@@ -1184,17 +1184,7 @@ function registerSessionEnd(app: Hono): void {
 						removeAgentPresence(sessionKey);
 					}
 				}
-				if (transcriptPath) {
-					setImmediate(() =>
-						recordSkillsFromTranscript({
-							transcriptPath,
-							harness: body.harness,
-							agentId,
-							origin: "scan",
-							expectedSessionId: sessionKey,
-						}),
-					);
-				}
+				scheduleSessionSkillScan({ transcriptPath, sessionKey, harness: body.harness, agentId });
 				return c.json(result);
 			} catch (e) {
 				if (sessionKey) {
@@ -1592,17 +1582,7 @@ function registerPreCompaction(app: Hono): void {
 			}
 
 			const result = handlePreCompaction(body);
-			if (transcriptPath) {
-				setImmediate(() =>
-					recordSkillsFromTranscript({
-						transcriptPath,
-						harness: body.harness,
-						agentId,
-						origin: "scan",
-						expectedSessionId: body.sessionKey,
-					}),
-				);
-			}
+			scheduleSessionSkillScan({ transcriptPath, sessionKey: body.sessionKey, harness: body.harness, agentId });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Pre-compaction hook failed", e as Error);
