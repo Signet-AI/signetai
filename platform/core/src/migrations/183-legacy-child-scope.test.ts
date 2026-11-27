@@ -42,6 +42,29 @@ test("legacy vectors retain all parent-owned recall candidates after upgrade", (
 	}
 });
 
+test("partial checkpoint upgrades require one authoritative session owner", () => {
+	const db = new Database(":memory:");
+	try {
+		db.exec(`CREATE TABLE session_checkpoints(id TEXT PRIMARY KEY,session_key TEXT,agent_id TEXT,compartment_id INTEGER);
+			CREATE TABLE session_transcripts(session_key TEXT,agent_id TEXT,compartment_id INTEGER);
+			CREATE TABLE session_claims(session_key TEXT,agent_id TEXT);
+			INSERT INTO session_transcripts VALUES('one','owner',NULL),('mixed','owner',NULL);
+			INSERT INTO session_claims VALUES('one','owner'),('mixed','other');
+			INSERT INTO session_checkpoints VALUES('valid','one',NULL,NULL),('ambiguous','mixed',NULL,NULL),('orphan','absent',NULL,NULL);`);
+		up(db);
+		expect(db.query("SELECT id,agent_id FROM session_checkpoints ORDER BY id").all()).toEqual([
+			{ id: "ambiguous", agent_id: null },
+			{ id: "orphan", agent_id: null },
+			{ id: "valid", agent_id: "owner" },
+		]);
+		expect(
+			db.query("SELECT unresolved FROM legacy_child_scope_repairs WHERE table_name='session_checkpoints'").get(),
+		).toEqual({ unresolved: 2 });
+	} finally {
+		db.close();
+	}
+});
+
 test("empty and partial legacy schemas are restart safe", () => {
 	const db = new Database(":memory:");
 	try {

@@ -37,6 +37,7 @@ test("exact scoped KNN bounds oversampling before selective admission", () => {
 		}
 		const probes: number[] = [];
 		const countedTables: string[] = [];
+		const selectivePlans: string[] = [];
 		const wrapped = {
 			exec: (sql: string) => {
 				db.exec(sql);
@@ -52,6 +53,13 @@ test("exact scoped KNN bounds oversampling before selective admission", () => {
 					get: (...args: unknown[]) => statement.get(...bindings(args)),
 					all: (...args: unknown[]) => {
 						if (/embedding MATCH/.test(sql) && typeof args[1] === "number") probes.push(args[1]);
+						if (sql.includes("v.id IN ("))
+							selectivePlans.push(
+								...db
+									.prepare<{ detail: string }, SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${sql}`)
+									.all(...bindings(args))
+									.map((row) => row.detail),
+							);
 						return statement.all(...bindings(args));
 					},
 				};
@@ -64,6 +72,8 @@ test("exact scoped KNN bounds oversampling before selective admission", () => {
 		expect(result.results.map((row) => row.id)).toEqual(["v40", "v41"]);
 		expect(probes).toEqual([8, 16, 2]);
 		expect(countedTables).toEqual(["vec_embeddings_rowids"]);
+		expect(selectivePlans.length).toBeGreaterThan(0);
+		expect(selectivePlans.filter((detail) => /eligible.*VIRTUAL TABLE/.test(detail))).toEqual([]);
 		expect(result.completeness).toBe("complete");
 	} finally {
 		db.close();

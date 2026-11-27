@@ -733,6 +733,8 @@ async function findAuthorizedVectorCandidates(
 		const vectorResult = await vectorSearchThroughDbOwner(owner, [...queryVector], {
 			limit: requested,
 			type: params.type,
+			currentOnly: true,
+			memoryScope: params.scope ?? null,
 			excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
 			maxScanRows: requested,
 			readScope,
