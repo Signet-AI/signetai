@@ -135,6 +135,10 @@ if (!process.env.SIGNET_UPGRADE_UI_TEST_CHILD) {
 			expect(element.textContent).toContain("Organization");
 			expect(element.textContent).toContain("Administrator · explicit target only");
 			expect(element.textContent).not.toContain("Every active user");
+			const card = element.querySelector('article[aria-label="Original (imported)"]');
+			expect(card).not.toBeNull();
+			expect(card?.textContent).toContain("OwnerOrganization");
+			expect(card?.textContent).toContain("Write accessAdministrator · explicit target only");
 		} finally {
 			await act(async () => root.unmount());
 			element.remove();
