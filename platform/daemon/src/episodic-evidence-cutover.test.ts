@@ -1,3 +1,4 @@
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
@@ -35,6 +36,7 @@ function insertEpisodicMemory(
 ): void {
 	const now = input.createdAt ?? new Date().toISOString();
 	txIngestEnvelope(asWriteDb(db), {
+		author: { userId: null, credential: "system" },
 		id: input.id,
 		content: input.content,
 		normalizedContent: input.content.toLowerCase(),
@@ -228,6 +230,7 @@ describe("episodic-evidence cutover: episodic-sources selector", () => {
 			id: first[0].id,
 		};
 		txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "epi-stable",
 			patch: { tags: "re-ranked" },
 			reason: "re-rank",
@@ -255,6 +258,7 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 		insertEpisodicMemory(db, { id: "epi-imm", content: "original evidence", contentHash: "h-imm" });
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "epi-imm",
 			patch: { content: "tampered evidence", normalizedContent: "tampered", contentHash: "h-imm-2" },
 			reason: "attempt content rewrite",
@@ -270,6 +274,7 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 		insertEpisodicMemory(db, { id: "epi-type", content: "typed evidence", contentHash: "h-type" });
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "epi-type",
 			patch: { type: "decision" },
 			reason: "attempt type change",
@@ -289,6 +294,7 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 		});
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "compaction-projection",
 			patch: { content: "rewritten projection", normalizedContent: "rewritten", contentHash: "h-compaction-rewritten" },
 			reason: "attempt compaction rewrite",
@@ -303,6 +309,7 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 		insertEpisodicMemory(db, { id: "epi-meta", content: "metadata evidence", contentHash: "h-meta" });
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "epi-meta",
 			patch: { tags: "re-ranked", importance: 0.9, pinned: 1 },
 			reason: "re-rank and label",
@@ -331,6 +338,7 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 		});
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "derived-edit",
 			patch: { content: "updated derived fact", normalizedContent: "updated", contentHash: "h-derived-edit-2" },
 			reason: "semantic update",
@@ -394,6 +402,7 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 		});
 
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "epi-struct",
 			content: "User prefers vim",
 			normalizedContent: "user prefers vim",
@@ -494,6 +503,7 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 		});
 
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "epi-no-graph",
 			content: "Project uses React",
 			normalizedContent: "project uses react",
@@ -562,6 +572,7 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 
 	it("reflection-answer writer stamps memoryKind='episodic' (matches migration 094)", () => {
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "refl-1",
 			content: "Ship the scoping fix.",
 			contentHash: "reflection-a-refl-1",
@@ -594,6 +605,7 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 
 	it("document-ingest writer stamps memoryKind='episodic' (matches migration 094)", () => {
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "doc-chunk-1",
 			content: "document source chunk",
 			normalizedContent: "document source chunk",
@@ -633,6 +645,7 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 
 	it("daemon-derived writers omit memoryKind so fresh rows stay non-episodic (NULL)", () => {
 		txIngestEnvelope(asWriteDb(db), {
+			author: { userId: null, credential: "system" },
 			id: "agg-1",
 			content: "aggregate recall answer",
 			normalizedContent: "aggregate recall answer",

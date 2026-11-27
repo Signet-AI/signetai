@@ -1,3 +1,4 @@
+import { localAllReadScope } from "@signet/core";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,10 +17,10 @@ import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
+import { buildMemorySearchFilterClause } from "./memory-search-filters";
 import {
-	buildAgentScopeClause,
 	classifyRecallTelemetry,
-	hybridRecall,
+	hybridRecall as scopedHybridRecall,
 	placeTranscriptEvidence,
 	MAX_LEXICAL_FALLBACK_SCAN_ROWS,
 	ownerVectorPageRows,
@@ -32,6 +33,16 @@ import { ownerBytesFromHex, ownerReadAll } from "./db-owner-sql";
 import type { RecallResult } from "./memory-search";
 import { HINT_ONLY_SCORE_CAP } from "./pipeline/structured-evidence";
 import { setActiveTelemetry } from "./telemetry";
+import { type LocalScopeHint, localTestReadScope, withLocalReadScope } from "./test-support/local-read-scope";
+import type { RecallParams } from "./memory-search";
+
+type ScopedHybridRecallRest = Parameters<typeof scopedHybridRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function hybridRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedHybridRecallRest
+): ReturnType<typeof scopedHybridRecall> {
+	return scopedHybridRecall(withLocalReadScope(params), ...rest);
+}
 
 describe("hybridRecall", () => {
 	let dir = "";
@@ -1279,21 +1290,26 @@ describe("hybridRecall", () => {
 		const owner = await getDbOwner(getDbAccessorPath());
 		const pages: number[] = [];
 
-		const vectors = await readOwnerVectorsBySource(sourceIds, 768, async (sql, params, pageRows) => {
-			const rows = await ownerReadAll<{ rowid: number; source_id: string; vector_hex: string | null }>(
-				owner,
-				sql,
-				params,
-				{
-					operation: "test.vector-pages",
-					workloadClass: "foreground",
-					estimatedWorkUnits: pageRows,
-					deadlineMs: 30_000,
-				},
-			);
-			pages.push(rows.length);
-			return rows;
-		});
+		const vectors = await readOwnerVectorsBySource(
+			sourceIds,
+			768,
+			async (sql, params, pageRows) => {
+				const rows = await ownerReadAll<{ rowid: number; source_id: string; vector_hex: string | null }>(
+					owner,
+					sql,
+					params,
+					{
+						operation: "test.vector-pages",
+						workloadClass: "foreground",
+						estimatedWorkUnits: pageRows,
+						deadlineMs: 30_000,
+					},
+				);
+				pages.push(rows.length);
+				return rows;
+			},
+			localAllReadScope({ kind: "all" }),
+		);
 
 		expect(400 * 768 * 4).toBeGreaterThan(MAX_DB_OWNER_RESULT_BYTES);
 		expect(vectors).toHaveLength(401);
@@ -1332,13 +1348,17 @@ describe("hybridRecall", () => {
 		});
 		const owner = await getDbOwner(getDbAccessorPath());
 
-		const vectors = await readOwnerVectorsBySource(sourceIds, 768, async (sql, params, pageRows) =>
-			ownerReadAll<{ rowid: number; source_id: string; vector_hex: string | null }>(owner, sql, params, {
-				operation: "test.vector-pages",
-				workloadClass: "foreground",
-				estimatedWorkUnits: pageRows,
-				deadlineMs: 30_000,
-			}),
+		const vectors = await readOwnerVectorsBySource(
+			sourceIds,
+			768,
+			async (sql, params, pageRows) =>
+				ownerReadAll<{ rowid: number; source_id: string; vector_hex: string | null }>(owner, sql, params, {
+					operation: "test.vector-pages",
+					workloadClass: "foreground",
+					estimatedWorkUnits: pageRows,
+					deadlineMs: 30_000,
+				}),
+			localAllReadScope({ kind: "all" }),
 		);
 
 		expect(ownerVectorPageRows(768) * 3072 * 4 * 2).toBeGreaterThan(MAX_DB_OWNER_RESULT_BYTES);
@@ -1624,8 +1644,8 @@ describe("hybridRecall", () => {
 		);
 
 		const resultText = JSON.stringify(result);
-		expect(resultText).toContain("Team alpha session timeline activity");
-		expect(resultText).toContain("/repo/alpha-temporal.md");
+		expect(resultText).not.toContain("Team alpha session timeline activity");
+		expect(resultText).not.toContain("/repo/alpha-temporal.md");
 		expect(resultText).not.toContain("Team beta session timeline activity");
 		expect(resultText).not.toContain("/repo/beta-temporal.md");
 	});
@@ -3871,21 +3891,30 @@ describe("transcriptExcerpt", () => {
 	});
 });
 
-describe("buildAgentScopeClause regression tests", () => {
+describe("local agent fallback scope regression tests", () => {
+	const localScope = (readPolicy: "group" | "shared", policyGroup: string | null) =>
+		buildMemorySearchFilterClause({
+			scope: null,
+			agentId: "agent-x",
+			readScope: localTestReadScope("agent-x", readPolicy, policyGroup),
+		});
+
 	it("falls back to isolated scope when policy is 'group' but policyGroup is null", () => {
-		const result = buildAgentScopeClause("agent-x", "group", null);
-		expect(result.sql).toBe(" AND m.agent_id = ? AND m.visibility != 'archived'");
+		const result = localScope("group", null);
+		expect(result.sql).toBe(
+			" AND m.scope IS NULL AND m.agent_id = ? AND COALESCE(m.visibility,'global') != 'archived'",
+		);
 		expect(result.args).toEqual(["agent-x"]);
 	});
 
 	it("uses group scope when both readPolicy and policyGroup are provided", () => {
-		const result = buildAgentScopeClause("agent-x", "group", "team-a");
+		const result = localScope("group", "team-a");
 		expect(result.sql).toContain("policy_group = ?");
 		expect(result.args).toEqual(["team-a", "agent-x"]);
 	});
 
 	it("uses shared scope for readPolicy 'shared'", () => {
-		const result = buildAgentScopeClause("agent-x", "shared", null);
+		const result = localScope("shared", null);
 		expect(result.sql).toContain("m.visibility = 'global'");
 		expect(result.args).toEqual(["agent-x"]);
 	});

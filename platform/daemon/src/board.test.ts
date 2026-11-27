@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeCrossAgentFixture, createAgentMessage } from "./__tests__/cross-agent-fixture";
+import { invalidateAgentScopeCache } from "./agent-id";
 import {
-	type BoardViewer,
 	BoardConflictError,
 	BoardForbiddenError,
 	BoardNotFoundError,
 	BoardValidationError,
+	type BoardViewer,
 	claimBoardActivityNotices,
 	createBoardEventVisibility,
 	createBoardThread,
@@ -21,12 +23,11 @@ import {
 	subscribeBoardEvents,
 	updateBoardThread,
 } from "./board";
-import { createAgentMessage, resetCrossAgentStateForTest } from "./cross-agent";
+import { resetCrossAgentStateForTest } from "./cross-agent";
 import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { readRecentEpisodicSources } from "./episodic-sources";
+import { getDbAccessor, initDbAccessor } from "./db-accessor";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
-import { invalidateAgentScopeCache } from "./agent-id";
+import { readRecentEpisodicSources } from "./episodic-sources";
 
 let tempDir = "";
 
@@ -49,7 +50,7 @@ afterEach(async () => {
 	resetBoardStateForTest();
 	resetCrossAgentStateForTest();
 	invalidateAgentScopeCache();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -80,11 +81,46 @@ async function registerAgent(id: string, readPolicy: string, policyGroup: string
 }
 
 describe("message board", () => {
+	it("cannot promote a hidden message into public board evidence", async () => {
+		const message = await createAgentMessage({
+			fromAgentId: "alpha",
+			toAgentId: "beta",
+			content: "Classified board promotion",
+		});
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_board_secret','Board secret'); INSERT INTO compartments(key,created_at) VALUES('cls_board_secret','now'); INSERT INTO compartment_members SELECT id,'cls_board_secret' FROM compartments WHERE key='cls_board_secret'",
+			);
+			db.prepare(
+				"UPDATE cross_agent_messages SET compartment_id=(SELECT id FROM compartments WHERE key='cls_board_secret') WHERE id=?",
+			).run(message.id);
+		});
+		const author = {
+			agentId: "alpha",
+			principalAuthor: { userId: "reader", credential: "session:reader" },
+			messageReadScope: { reach: { kind: "all" as const }, compartments: [], projects: null },
+		};
+		await expect(
+			createBoardThread({ viewer: operator, author, topic: "general", fromMessageId: message.id }),
+		).rejects.toBeInstanceOf(BoardNotFoundError);
+		expect(
+			await dbOwnerQuery(ownerStatement("SELECT count(*) n FROM board_posts", [], "get"), {
+				operation: "test.board.promotion-count",
+				lane: "read",
+			}),
+		).toEqual({ n: 0 });
+	});
+
 	it("creates a thread in a new topic, replies, and lists it with tags and counts", async () => {
 		const alpha = agent("alpha");
 		const created = await createBoardThread({
 			viewer: alpha,
-			author: { agentId: "alpha", sessionKey: "a1", harness: "claude-code" },
+			author: {
+				principalAuthor: { userId: null, credential: "system" },
+				agentId: "alpha",
+				sessionKey: "a1",
+				harness: "claude-code",
+			},
 			topic: "Signet-Release",
 			title: "Release checklist",
 			body: "What is left before 0.239?",
@@ -98,7 +134,12 @@ describe("message board", () => {
 		const beta = agent("beta");
 		const reply = await replyToBoardThread({
 			viewer: beta,
-			author: { agentId: "beta", sessionKey: "b1", harness: "hermes-agent" },
+			author: {
+				principalAuthor: { userId: null, credential: "system" },
+				agentId: "beta",
+				sessionKey: "b1",
+				harness: "hermes-agent",
+			},
 			threadId: created.thread.id,
 			body: "Changelog and docs.",
 			replyToPostId: created.post.id,
@@ -120,7 +161,7 @@ describe("message board", () => {
 
 	it("rejects invalid topics, tags, empty bodies, and cross-thread reply targets", async () => {
 		const alpha = agent("alpha");
-		const author = { agentId: "alpha" };
+		const author = { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" };
 		await expect(
 			createBoardThread({ viewer: alpha, author, topic: "Bad Topic!", title: "t", body: "b" }),
 		).rejects.toThrow(BoardValidationError);
@@ -148,14 +189,14 @@ describe("message board", () => {
 		const shared = agent("team", "shared");
 		const solo = await createBoardThread({
 			viewer: isolated,
-			author: { agentId: "solo" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "solo" },
 			topic: "private-work",
 			title: "Solo notes",
 			body: "mine",
 		});
 		const team = await createBoardThread({
 			viewer: shared,
-			author: { agentId: "team" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "team" },
 			topic: "general",
 			title: "Team notes",
 			body: "ours",
@@ -166,7 +207,12 @@ describe("message board", () => {
 		expect((await listBoardTopics(isolated)).map((topic) => topic.slug)).toEqual(["private-work"]);
 		await expect(readBoardThread(team.thread.id, isolated)).rejects.toThrow(BoardNotFoundError);
 		await expect(
-			replyToBoardThread({ viewer: isolated, author: { agentId: "solo" }, threadId: team.thread.id, body: "hi" }),
+			replyToBoardThread({
+				viewer: isolated,
+				author: { principalAuthor: { userId: null, credential: "system" }, agentId: "solo" },
+				threadId: team.thread.id,
+				body: "hi",
+			}),
 		).rejects.toThrow(BoardNotFoundError);
 		expect((await listBoardThreads(operator)).total).toBe(2);
 	});
@@ -177,14 +223,14 @@ describe("message board", () => {
 		await registerAgent("outsider", "shared");
 		const g2Thread = await createBoardThread({
 			viewer: agent("g2", "group", "ops"),
-			author: { agentId: "g2" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "g2" },
 			topic: "ops",
 			title: "Group thread",
 			body: "x",
 		});
 		await createBoardThread({
 			viewer: agent("outsider"),
-			author: { agentId: "outsider" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "outsider" },
 			topic: "ops",
 			title: "Outside thread",
 			body: "y",
@@ -198,7 +244,7 @@ describe("message board", () => {
 		const beta = agent("beta");
 		const created = await createBoardThread({
 			viewer: alpha,
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
@@ -218,7 +264,12 @@ describe("message board", () => {
 		expect(resolved.tags).toEqual(["done"]);
 		await updateBoardThread({ viewer: operator, threadId: created.thread.id, status: "archived" });
 		await expect(
-			replyToBoardThread({ viewer: beta, author: { agentId: "beta" }, threadId: created.thread.id, body: "late" }),
+			replyToBoardThread({
+				viewer: beta,
+				author: { principalAuthor: { userId: null, credential: "system" }, agentId: "beta" },
+				threadId: created.thread.id,
+				body: "late",
+			}),
 		).rejects.toThrow(BoardConflictError);
 		expect((await listBoardThreads(alpha)).total).toBe(0);
 		expect((await listBoardThreads(alpha, { status: "archived" })).total).toBe(1);
@@ -233,7 +284,7 @@ describe("message board", () => {
 		});
 		const promoted = await createBoardThread({
 			viewer: agent("beta"),
-			author: { agentId: "beta", sessionKey: "b1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "beta", sessionKey: "b1" },
 			topic: "decisions",
 			fromMessageId: message.id,
 		});
@@ -247,7 +298,7 @@ describe("message board", () => {
 		await expect(
 			createBoardThread({
 				viewer: agent("gamma"),
-				author: { agentId: "gamma" },
+				author: { principalAuthor: { userId: null, credential: "system" }, agentId: "gamma" },
 				topic: "decisions",
 				fromMessageId: message.id,
 			}),
@@ -257,7 +308,12 @@ describe("message board", () => {
 	it("projects each post as attributable Dreaming evidence for thread participants and purges it on delete", async () => {
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1", harness: "pi" },
+			author: {
+				principalAuthor: { userId: null, credential: "system" },
+				agentId: "alpha",
+				sessionKey: "a1",
+				harness: "pi",
+			},
 			topic: "research",
 			title: "Embedding drift",
 			body: "Seeing drift after the model swap.",
@@ -265,7 +321,7 @@ describe("message board", () => {
 		});
 		await replyToBoardThread({
 			viewer: agent("beta"),
-			author: { agentId: "beta", sessionKey: "b1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "beta", sessionKey: "b1" },
 			threadId: created.thread.id,
 			body: "Re-embed in batches of 500.",
 		});
@@ -294,7 +350,12 @@ describe("message board", () => {
 	it("offers projected posts to Dreaming as episodic artifact evidence", async () => {
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1", harness: "pi" },
+			author: {
+				principalAuthor: { userId: null, credential: "system" },
+				agentId: "alpha",
+				sessionKey: "a1",
+				harness: "pi",
+			},
 			topic: "decisions",
 			title: "Keep receipts separate",
 			body: "We decided to keep acknowledgement receipts in their own table.",
@@ -313,7 +374,7 @@ describe("message board", () => {
 	it("drains posts whose projection is still pending", async () => {
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
@@ -327,7 +388,7 @@ describe("message board", () => {
 		);
 		await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			threadId: created.thread.id,
 			body: "z",
 		});
@@ -337,7 +398,7 @@ describe("message board", () => {
 	it("surfaces new replies by other sessions once, without waking", async () => {
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a1" },
 			topic: "coordination",
 			title: "Who owns the migration?",
 			body: "Need an owner.",
@@ -346,7 +407,7 @@ describe("message board", () => {
 
 		await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a2" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a2" },
 			threadId: created.thread.id,
 			body: "I will take it.",
 		});
@@ -360,7 +421,7 @@ describe("message board", () => {
 		await markBoardThreadRead(created.thread.id, agent("alpha"));
 		await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a2" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a2" },
 			threadId: created.thread.id,
 			body: "Done.",
 		});
@@ -370,14 +431,14 @@ describe("message board", () => {
 	it("emits a board notice once when two hooks claim concurrently", async () => {
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a1" },
 			topic: "coordination",
 			title: "Concurrent notices",
 			body: "first",
 		});
 		await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a2" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a2" },
 			threadId: created.thread.id,
 			body: "reply",
 		});
@@ -392,7 +453,7 @@ describe("message board", () => {
 		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a1" },
 			topic: "coordination",
 			title: "Cursor",
 			body: "first",
@@ -401,7 +462,7 @@ describe("message board", () => {
 		const reply = (body: string) =>
 			replyToBoardThread({
 				viewer: agent("alpha"),
-				author: { agentId: "alpha", sessionKey: "a2" },
+				author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a2" },
 				threadId: created.thread.id,
 				body,
 				nowMs: at,
@@ -417,7 +478,7 @@ describe("message board", () => {
 		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
@@ -427,7 +488,7 @@ describe("message board", () => {
 		expect(page.hasMorePosts).toBe(false);
 		await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			threadId: created.thread.id,
 			body: "late",
 			nowMs: at,
@@ -442,20 +503,20 @@ describe("message board", () => {
 	it("keeps read cursors monotonic and rejects foreign or malformed post ids", async () => {
 		const first = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "one",
 			body: "a",
 		});
 		const reply = await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			threadId: first.thread.id,
 			body: "b",
 		});
 		const other = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "two",
 			body: "c",
@@ -484,7 +545,7 @@ describe("message board", () => {
 	it("does not leave a read cursor for a thread deleted while it is being marked read", async () => {
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
@@ -506,7 +567,7 @@ describe("message board", () => {
 		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
@@ -538,7 +599,7 @@ describe("message board", () => {
 		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a1" },
 			topic: "release",
 			title: "Same millisecond",
 			body: "first",
@@ -546,7 +607,7 @@ describe("message board", () => {
 		});
 		const second = await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a1" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha", sessionKey: "a1" },
 			threadId: created.thread.id,
 			body: "second",
 			nowMs: at,
@@ -579,7 +640,11 @@ describe("message board", () => {
 	it("lists active board topics in the session-start messaging section", async () => {
 		await createBoardThread({
 			viewer: agent("default"),
-			author: { agentId: "default", sessionKey: "other-session" },
+			author: {
+				principalAuthor: { userId: null, credential: "system" },
+				agentId: "default",
+				sessionKey: "other-session",
+			},
 			topic: "release-planning",
 			title: "What ships next",
 			body: "Collecting items.",
@@ -598,14 +663,14 @@ describe("message board", () => {
 		const unsubscribe = subscribeBoardEvents((event) => events.push(event.action));
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
 		});
 		await replyToBoardThread({
 			viewer: agent("alpha"),
-			author: { agentId: "alpha" },
+			author: { principalAuthor: { userId: null, credential: "system" }, agentId: "alpha" },
 			threadId: created.thread.id,
 			body: "z",
 		});

@@ -90,26 +90,8 @@ const state: SignetState = {
 	memoryCount: 0,
 };
 
-function readAuthToken(): string | undefined {
-	return readTrimmedRuntimeEnv("SIGNET_API_KEY") ?? readTrimmedRuntimeEnv("SIGNET_TOKEN");
-}
-
-function daemonHeaders(headers: Record<string, string> = {}): Record<string, string> {
-	const token = readAuthToken();
-	return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
-}
-
 async function checkDaemonHealth(daemonUrl: string): Promise<boolean> {
-	try {
-		const response = await fetch(`${daemonUrl}/health`, {
-			method: "GET",
-			headers: daemonHeaders({ Accept: "application/json" }),
-			signal: AbortSignal.timeout(READ_TIMEOUT),
-		});
-		return response.ok;
-	} catch {
-		return false;
-	}
+	return (await createDaemonClient(daemonUrl).getStatus("/health", READ_TIMEOUT)).ok;
 }
 
 function daemonFailure(
@@ -269,12 +251,16 @@ function updateStatus(ctx: PiExtensionContext): void {
 	ctx.ui.setStatus("signet", ctx.ui.theme.fg("accent", status));
 }
 
-function startWake(wake: WakeWaiter | undefined, ctx: PiExtensionContext, peers?: PeerContextController): void {
+async function startWake(
+	wake: WakeWaiter | undefined,
+	ctx: PiExtensionContext,
+	peers?: PeerContextController,
+): Promise<void> {
 	if (!wake) return;
 	if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
 	const session = currentSessionRef(ctx);
 	if (!session.sessionId) return;
-	void peers?.publish(ctx, true).catch(() => false);
+	await peers?.publish(ctx, true).catch(() => false);
 	wake.start({ sessionKey: session.sessionId, project: session.project });
 }
 
@@ -296,7 +282,7 @@ function registerSessionLifecycleHandlers(
 		}
 
 		await refreshSessionStart(deps, ctx);
-		startWake(wake, ctx, peers);
+		await startWake(wake, ctx, peers);
 	});
 	pi.on("session_before_switch", async () => {
 		wake?.stop();
@@ -309,11 +295,11 @@ function registerSessionLifecycleHandlers(
 
 	pi.on("session_switch", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
-		startWake(wake, ctx, peers);
+		await startWake(wake, ctx, peers);
 	});
 	pi.on("session_fork", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
-		startWake(wake, ctx, peers);
+		await startWake(wake, ctx, peers);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -513,21 +499,14 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			const sessionId = ctx.sessionManager.getSessionId();
 
 			if (healthy) {
-				const parts = [`Signet daemon is running on ${daemonUrl}`];
+				const parts = ["Signet daemon is running"];
 				if (sessionId) parts.push(`Session: ${sessionId}`);
 				ctx.ui.notify(parts.join("\n"), "success");
-				try {
-					const response = await fetch(`${daemonUrl}/api/memory/stats`, {
-						signal: AbortSignal.timeout(READ_TIMEOUT),
-					});
-					if (response.ok) {
-						const stats = (await response.json()) as Record<string, unknown>;
-						ctx.ui.notify(`Memory stats: ${JSON.stringify(stats)}`, "info");
-					}
-				} catch {}
+				const stats = await createDaemonClient(daemonUrl).getResult<unknown>("/api/memory/stats", READ_TIMEOUT);
+				if (stats.ok) ctx.ui.notify(`Memory stats: ${JSON.stringify(stats.data)}`, "info");
 			} else {
 				ctx.ui.notify(
-					"Signet daemon not responding.\nInstall: curl -fsSL https://signetai.sh/install.sh | bash && signet setup\nStart: signet daemon start",
+					"Signet connection unavailable. Run signet connector doctor and check the registered daemon.",
 					"error",
 				);
 			}

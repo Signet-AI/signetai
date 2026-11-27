@@ -228,11 +228,31 @@ describe("session transcript live append", () => {
 		return getDbAccessor();
 	}
 
+	it("rejects a missing append author before transcript mutation", async () => {
+		const accessor = init();
+		const input = {
+			author: { userId: null, credential: "system" },
+			sessionKey: "missing-author",
+			agentId: "agent-a",
+			harness: "codex",
+			project: null,
+			transcript: "Missing attribution",
+		};
+		Reflect.deleteProperty(input, "author");
+		await expect(appendSessionTranscriptAsync(input)).rejects.toThrow("explicit author");
+		expect(
+			await accessor.withReadDbAsync((db) =>
+				db.prepare("SELECT count(*) n FROM session_transcripts WHERE session_key='missing-author'").get(),
+			),
+		).toEqual({ n: 0 });
+	});
+
 	it("appends to the stored row inside one write transaction", async () => {
 		const accessor = init();
 		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
 
 		await appendSessionTranscriptAsync({
+			author: { userId: null, credential: "system" },
 			sessionKey: "live-session",
 			agentId: "agent-a",
 			harness: "claude-code",
@@ -265,6 +285,7 @@ describe("session transcript live append", () => {
 			const replies = Array.from({ length: 8 }, (_, i) => `Assistant: concurrent ${i}`);
 			const append = (transcript: string) =>
 				appendSessionTranscriptAsync({
+					author: { userId: null, credential: "system" },
 					sessionKey: "owner-session",
 					agentId: "agent-a",
 					harness: "claude-code",
@@ -307,6 +328,7 @@ describe("session transcript live append", () => {
 		try {
 			await expect(
 				appendSessionTranscriptAsync({
+					author: { userId: null, credential: "system" },
 					sessionKey: "live-session",
 					agentId: "agent-a",
 					harness: "claude-code",
@@ -327,6 +349,7 @@ describe("session transcript live append", () => {
 		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
 
 		await appendSessionTranscriptAsync({
+			author: { userId: null, credential: "system" },
 			sessionKey: "live-session",
 			agentId: "agent-a",
 			harness: "claude-code",
@@ -345,6 +368,7 @@ describe("session transcript live append", () => {
 		await upsertSessionTranscriptAsync(hyphenKey, "User: first", "oh-my-pi", "/repo", "agent-a");
 
 		await appendSessionTranscriptAsync({
+			author: { userId: null, credential: "system" },
 			sessionKey: colonKey,
 			agentId: "agent-a",
 			harness: "oh-my-pi",

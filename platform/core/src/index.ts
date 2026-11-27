@@ -1,3 +1,4 @@
+export { readMemoriesFtsCanonicalRowCount } from "./fts-schema";
 export { attempt, attemptAsync } from "./attempt";
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
@@ -22,6 +23,7 @@ export { buildProtectionEvidence, computeProtectionDigests } from "./protection-
 export type { ProtectionEvidence, ProtectionEvidenceOptions } from "./protection-evidence";
 export {
 	execFileHidden,
+	renderExecFileHiddenModule,
 	execFileSyncHidden,
 	execSyncHidden,
 	spawnHidden,
@@ -282,6 +284,7 @@ export {
 	vectorSearch,
 	vectorSearchWithMetadata,
 	keywordSearch,
+	promptEntityPageSql,
 	hybridSearch,
 	cosineSimilarity,
 	activeVectorProjectionTable,
@@ -346,6 +349,7 @@ export {
 	detectSchema,
 	detectSchemaType,
 	ensureUnifiedSchema,
+	initializeDatabaseSchema,
 	ensureMigrationsTableSchema,
 	UNIFIED_SCHEMA,
 } from "./migration";
@@ -355,6 +359,14 @@ export type {
 	MigrationResult,
 } from "./migration";
 export * from "./constants";
+export {
+	readScopeSql,
+	inFlightClassificationSql,
+	isReadScope,
+	localAllReadScope,
+	requireReadScope,
+} from "./read-scope";
+export type { ReadScope, AgentReach } from "./read-scope";
 export {
 	PROMPT_CONTEXT_CLOSE,
 	PROMPT_CONTEXT_OPEN,
@@ -722,3 +734,38 @@ export { parseTranscriptMessages, buildExportTranscriptRecord } from "./transcri
 
 export { parseAssistantChatEvent } from "./assistant-chat";
 export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat";
+export {
+	compartmentFor,
+	compartmentForWrite,
+	classificationsForWrite,
+	type CompartmentWriteScope,
+	ensureCompartmentShards,
+	ftsShardTables,
+	selectShardTables,
+	vecShardTables,
+	vectorShardSwapStatements,
+	syncEmbeddingCompartment,
+	resetCompartmentVectorShards,
+	rebuildCompartmentFtsShards,
+	missingCompartmentVectorSql,
+	deleteCompartmentVectors,
+	inheritEmbeddingCompartment,
+} from "./compartment-shards";
+export {
+	ClassifiedDestinationError,
+	withWritePrincipal,
+	currentWritePrincipal,
+	classifiedDestinationDenied,
+	recordClassifiedDestination,
+	type WritePrincipal,
+} from "./write-principal";
+import { COMPARTMENT_TABLES as HISTORICAL_COMPARTMENT_TABLES } from "./migrations/177-classifications";
+export { backfillEvidenceCitations, configureEvidencePurgeConnection } from "./migrations/177-classifications";
+export const COMPARTMENT_TABLES = [
+	...HISTORICAL_COMPARTMENT_TABLES,
+	"entity_aliases",
+	"memory_entity_mentions",
+	"derived_memory_sources",
+	"memory_history",
+	"relations",
+] as const;

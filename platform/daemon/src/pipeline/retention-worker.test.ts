@@ -51,7 +51,7 @@ function failVectorDeleteOnce(db: Database): WriteDb {
 		},
 		prepare(sql: string): SqliteStatement {
 			const statement = db.prepare(sql) as unknown as SqliteStatement;
-			if (sql !== "DELETE FROM vec_embeddings WHERE id = ?") return statement;
+			if (!/^DELETE FROM vec_embeddings WHERE id\s*=\s*\?$/.test(sql)) return statement;
 			return {
 				run(...params: unknown[]) {
 					if (!failed) {
@@ -101,6 +101,33 @@ describe("retention worker", () => {
 
 	afterEach(() => {
 		db.close();
+	});
+
+	it("expires session recall telemetry and citations with the configured telemetry retention", async () => {
+		db.exec(
+			"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('telemetry-parent','Evidence','default','now','now')",
+		);
+		const add = db.prepare(
+			"INSERT INTO session_recall_events(session_key,agent_id,context_epoch,item_kind,item_id,surface,mode,created_at) VALUES(?,'default',0,'memory','telemetry-parent','hook','automatic',?)",
+		);
+		add.run("expired-session", daysAgo(10));
+		add.run("fresh-session", daysAgo(0));
+		db.exec(
+			"INSERT INTO evidence_citations VALUES('telemetry',json_array('expired-session',0,'memory','telemetry-parent'),'default','memory','telemetry-parent'),('telemetry',json_array('fresh-session',0,'memory','telemetry-parent'),'default','memory','telemetry-parent')",
+		);
+		const worker = startRetentionWorker(accessor, testRetentionConfig({ telemetryRetentionMs: ONE_DAY_MS }));
+		try {
+			const result = await worker.sweep();
+			expect(db.prepare("SELECT session_key FROM session_recall_events").all()).toEqual([
+				{ session_key: "fresh-session" },
+			]);
+			expect(db.prepare("SELECT derived_id FROM evidence_citations WHERE derived_kind='telemetry'").all()).toEqual([
+				{ derived_id: JSON.stringify(["fresh-session", 0, "memory", "telemetry-parent"]) },
+			]);
+			expect(result.sessionRecallEventsPurged).toBe(1);
+		} finally {
+			worker.stop();
+		}
 	});
 
 	it("purges tombstoned memories past retention window", async () => {

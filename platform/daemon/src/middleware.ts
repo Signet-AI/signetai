@@ -1,9 +1,15 @@
+import "./request-read";
 import { isIP } from "node:net";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import { createAuthMiddleware, isAuthOpenPath, verifyApiKey } from "./auth";
+import { isAuthOpenPath } from "./auth";
+import { organizationReadRequest } from "./auth/agent-access";
+import { createIdentityMiddleware } from "./auth/identity-middleware";
+import { bufferReadAudit } from "./auth/organization-runtime";
 import { logger } from "./logger";
+import { JsonBodyError, prepareJsonBody, streamedRequestBody } from "./request-body";
+import { requestRoute } from "./request-route";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -12,6 +18,7 @@ const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 function isForeignBrowserWrite(c: Context): boolean {
 	if (!UNSAFE_METHODS.has(c.req.method) || isAuthOpenPath(c.req.path)) return false;
 	const origin = c.req.header("origin");
+	if (["proxy", "public", "development"].includes(c.get("acceptedOrigin") ?? "")) return false;
 	if (origin !== undefined && isAllowedOrigin(origin)) return false;
 	if (c.req.header("sec-fetch-site") === "cross-site") return true;
 	if (origin === undefined) return false;
@@ -25,7 +32,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 	app.use(
 		"*",
 		cors({
-			origin: (origin) => (isAllowedOrigin(origin) ? origin : null),
+			origin: (origin) => (authConfig.mode !== "team" && isAllowedOrigin(origin) ? origin : null),
 			credentials: true,
 		}),
 	);
@@ -36,37 +43,57 @@ export function registerGlobalMiddleware(app: Hono): void {
 		}
 		return next();
 	});
+	const limitBody = bodyLimit({ maxSize: 10 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) });
+	const importBody = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: "payload too large" }, 413) });
+	app.use("*", (c, next) =>
+		streamedRequestBody(c) || c.req.path === "/api/hooks/stop"
+			? next()
+			: c.req.method === "POST" && c.req.path === "/api/sources/imports"
+				? importBody(c, next)
+				: limitBody(c, next),
+	);
+	let identityConfig = authConfig,
+		identitySecret = authSecret,
+		identity = createIdentityMiddleware(identityConfig, identitySecret);
 	app.use("*", async (c, next) => {
 		if (authConfig.mode !== "local" && !authSecret) {
 			c.status(503);
 			return c.json({ error: "server initializing" });
 		}
-		const mw = createAuthMiddleware(authConfig, authSecret, verifyApiKey);
-		return mw(c, next);
+		if (identityConfig !== authConfig || identitySecret !== authSecret) {
+			identityConfig = authConfig;
+			identitySecret = authSecret;
+			identity = createIdentityMiddleware(identityConfig, identitySecret);
+		}
+		return identity(c, next);
 	});
 	app.use("*", async (c, next) => {
 		if (authConfig.mode !== "team" && !c.get("auth")?.claims && isForeignBrowserWrite(c)) {
 			return c.json({ error: "cross-origin request rejected" }, 403);
 		}
+		try {
+			await prepareJsonBody(c);
+		} catch (error) {
+			if (error instanceof JsonBodyError) return c.json({ error: error.message, reason: error.reason }, error.status);
+			throw error;
+		}
 		return next();
 	});
-	const limitBody = bodyLimit({
-		maxSize: 10 * 1_048_576,
-		onError: (c) => c.json({ error: "payload too large" }, 413),
-	});
-	app.use("*", (c, next) =>
-		(c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)) ||
-		(c.req.method === "POST" && c.req.path === "/api/hooks/stop")
-			? next()
-			: limitBody(c, next),
-	);
 	app.use("*", async (c, next) => {
 		const start = Date.now();
 		await next();
 		const duration = Date.now() - start;
-		logger.api.request(c.req.method, c.req.path, c.res.status, duration);
+		const principal = c.get("principal");
+		if (
+			c.get("organization") &&
+			principal &&
+			organizationReadRequest(c.req.method, c.req.path) &&
+			c.req.path.startsWith("/api/")
+		)
+			bufferReadAudit(principal, requestRoute(c), c.get("readAuditAgent"), c.get("readAuditCount") ?? null);
+		logger.api.request(c.req.method, requestRoute(c), c.res.status, duration);
 		const actor = c.req.header("x-signet-actor");
-		analyticsCollector.recordRequest(c.req.method, c.req.path, c.res.status, duration, actor ?? undefined);
+		analyticsCollector.recordRequest(c.req.method, requestRoute(c), c.res.status, duration, actor ?? undefined);
 		const p = c.req.path;
 		if (p.includes("/remember") || p.includes("/save")) {
 			analyticsCollector.recordLatency("remember", duration);

@@ -1,3 +1,4 @@
+import { compartmentFor } from "@signet/core";
 import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,6 +122,11 @@ describe("startEmbeddingTracker admission", () => {
 			);
 			insert.run("fresh-a", "A fresh derived memory.", "hash-fresh-a", now, now, null);
 			insert.run("fresh-b", "Another fresh derived memory.", "hash-fresh-b", now, now, null);
+			db.prepare(
+				"INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_tracker','Tracker','now','now')",
+			).run();
+			const compartment = compartmentFor(db, ["cls_tracker"]);
+			db.prepare("UPDATE memories SET compartment_id = ? WHERE id = 'fresh-a'").run(compartment);
 			insert.run("stale-model", "A memory embedded by an older model.", "hash-stale", now, now, "older-model");
 		});
 		const spent = await acquireEmbeddingRepairLease(accessor, 0, 1);
@@ -154,6 +160,18 @@ describe("startEmbeddingTracker admission", () => {
 			while (embedded.length < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
 			await new Promise((resolve) => setTimeout(resolve, 200));
 			expect([...embedded].sort()).toEqual(["A fresh derived memory.", "Another fresh derived memory."]);
+			accessor.withReadDb((db) => {
+				const compartment = db
+					.prepare("SELECT compartment_id FROM memories WHERE id = 'fresh-a'")
+					.get()?.compartment_id;
+				expect(compartment).toBeNumber();
+				expect(db.prepare("SELECT agent_id,compartment_id FROM embeddings WHERE source_id = 'fresh-a'").get()).toEqual({
+					agent_id: "default",
+					compartment_id: compartment,
+				});
+				expect(db.prepare("SELECT count(*) n FROM vec_embeddings").get()).toEqual({ n: 1 });
+				expect(db.prepare(`SELECT count(*) n FROM vec_embeddings__c${compartment}`).get()).toEqual({ n: 1 });
+			});
 			expect(
 				accessor.withReadDb(
 					(db) =>

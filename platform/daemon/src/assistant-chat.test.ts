@@ -3,6 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { bindPrincipalAccess } from "./auth/agent-access";
+import { readOrganization } from "./auth/organization-store";
+import { localPrincipal } from "./auth/principal";
 import { createAuthMiddleware, createToken, parseAuthConfig, requirePermission } from "./auth";
 import { closeDbAccessor, initDbAccessor, getDbAccessor } from "./db-accessor";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
@@ -41,7 +44,14 @@ function isChatCompletionRequest(request: Request): boolean {
 	return request.method === "POST" && new URL(request.url).pathname === "/v1/chat/completions";
 }
 
-async function fixture(endpoint: string, secret?: Buffer, connected = false, extraTargets = "", agentConfig = "") {
+async function fixture(
+	endpoint: string,
+	secret?: Buffer,
+	connected = false,
+	extraTargets = "",
+	agentConfig = "",
+	organization = false,
+) {
 	root = mkdtempSync(join(tmpdir(), "signet-assistant-chat-"));
 	mkdirSync(join(root, "memory"));
 	writeFileSync(
@@ -66,9 +76,150 @@ async function fixture(endpoint: string, secret?: Buffer, connected = false, ext
 		app.use("*", createAuthMiddleware(config, secret));
 		app.use("/api/assistant/*", requirePermission("recall", config));
 	}
+	if (organization) {
+		await ownerRun(
+			owner,
+			"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('test-agent','Test','organization','now','now') ON CONFLICT(id) DO UPDATE SET kind='organization'",
+			[],
+			{ operation: "test.seed-agent", lane: "write" },
+		);
+		app.use("*", async (c, next) => {
+			const userId = c.req.header("x-test-reader") ?? "alice";
+			const principal = { ...localPrincipal(), kind: "user" as const, userId };
+			bindPrincipalAccess(principal, {
+				agentModel: "single",
+				personalAgentsSelfService: false,
+				organizationAgentId: "test-agent",
+				personalAgentId: null,
+				defaultReadAgentId: null,
+				agents: [
+					{ id: "test-agent", kind: "organization", owner_user_id: null, owner_group_id: null, archived_at: null },
+				],
+			});
+			c.set("principal", principal);
+			c.set("organization", await readOrganization());
+			await next();
+		});
+	}
 	mountInferenceRoutes(app, { getAuthMode: () => (secret ? "team" : "local") });
 	return app;
 }
+
+test("organization chat does not retain provider context between requests", async () => {
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch() {
+			return sse({ role: "assistant", content: "Hello." }, "stop");
+		},
+	});
+	try {
+		const app = await fixture(`http://127.0.0.1:${server.port}/v1`, undefined, false, "", "", true);
+		const conversationId = crypto.randomUUID();
+		const request = () =>
+			app.request("/api/assistant/chat", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					requestId: crypto.randomUUID(),
+					conversationId,
+					agentId: "test-agent",
+					messages: [{ role: "user", content: "Hello" }],
+				}),
+			});
+		expect(await (await request()).text()).toContain('"type":"done"');
+		expect(activePiAgentWorkers()).toBe(0);
+		expect(await (await request()).text()).toContain('"type":"done"');
+		expect(activePiAgentWorkers()).toBe(0);
+	} finally {
+		server.stop(true);
+	}
+}, 20000);
+
+test("organization assistant retrieval is unchanged by hidden graph rows", async () => {
+	let toolResult = "";
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch(request: Request) {
+			if (!isChatCompletionRequest(request)) return new Response("not found", { status: 404 });
+			const body = await request.json();
+			if (body.messages.at(-1)?.role === "user")
+				return sse(
+					{
+						role: "assistant",
+						tool_calls: [
+							{
+								index: 0,
+								id: "search",
+								type: "function",
+								function: {
+									name: "search_entities",
+									arguments: JSON.stringify({ agentId: "test-agent", query: "Signet" }),
+								},
+							},
+						],
+					},
+					"tool_calls",
+				);
+			toolResult = JSON.stringify(body.messages.at(-1));
+			return sse({ role: "assistant", content: "Found public context." }, "stop");
+		},
+	});
+	try {
+		const app = await fixture(`http://127.0.0.1:${server.port}/v1`, undefined, false, "", "", true);
+		const chat = async (reader = "alice") => {
+			const response = await app.request("/api/assistant/chat", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "x-test-reader": reader },
+				body: JSON.stringify({
+					requestId: crypto.randomUUID(),
+					conversationId: crypto.randomUUID(),
+					agentId: "test-agent",
+					messages: [{ role: "user", content: "Find Signet" }],
+				}),
+			});
+			const events = await response.text();
+			expect(events).toContain('"type":"done"');
+			return { events, toolResult };
+		};
+		const before = await chat();
+		const maintenance = getDbOwnerMaintenance();
+		if (!maintenance) throw new Error("missing fixture owner");
+		const owner = maintenance.owner;
+		await ownerRun(owner, "INSERT INTO classifications(id,name) VALUES('cls_hr','HR');", [], {
+			operation: "test.classification",
+			lane: "write",
+		});
+		await ownerRun(owner, "INSERT INTO classification_audience VALUES('cls_hr','user','carol')", [], {
+			operation: "test.audience",
+			lane: "write",
+		});
+		await ownerRun(owner, "INSERT INTO compartments(id,key) VALUES(1,'cls_hr')", [], {
+			operation: "test.compartment",
+			lane: "write",
+		});
+		await ownerRun(owner, "INSERT INTO compartment_members VALUES(1,'cls_hr')", [], {
+			operation: "test.members",
+			lane: "write",
+		});
+		await ownerRun(
+			owner,
+			"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at,compartment_id) VALUES('hidden-entity','Signet HR','signet hr','project','test-agent','now','now',1)",
+			[],
+			{ operation: "test.hidden-entity", lane: "write" },
+		);
+		expect(await chat()).toEqual(before);
+		await ownerRun(owner, "UPDATE entities SET description='Restricted update' WHERE id='hidden-entity'", [], {
+			operation: "test.hidden-update",
+			lane: "write",
+		});
+		expect(await chat()).toEqual(before);
+		expect((await chat("carol")).toolResult).toContain("hidden-entity");
+	} finally {
+		server.stop(true);
+	}
+}, 30000);
 
 test("chat streams a Pi answer using backend assignment and existing DB-owner retrieval", async () => {
 	let requests = 0;

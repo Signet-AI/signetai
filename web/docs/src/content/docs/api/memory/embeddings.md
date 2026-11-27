@@ -3,6 +3,12 @@ title: "Memory embeddings"
 description: "Inspect embedding status, health, vectors, and projection data."
 ---
 
+In organization mode, `GET /api/embeddings/status` and
+`GET /api/embeddings/health` return
+`{ status: "unavailable", reason: "scoped_embedding_diagnostics" }`.
+Workspace-wide counts and provider diagnostics are not exposed, including to
+administrators. Local-mode diagnostics below are unchanged.
+
 ### GET /api/embeddings
 
 Export the embeddings of the memories the requesting agent can read, with

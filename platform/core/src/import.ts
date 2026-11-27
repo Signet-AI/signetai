@@ -208,7 +208,11 @@ function extractDateFromFilename(filename: string): string | null {
 	const match = filename.match(DATE_FILENAME_PATTERN);
 	return match ? match[1] : null;
 }
-export function importMemoryLogs(basePath: string, db: Database): ImportResult {
+export function importMemoryLogs(
+	basePath: string,
+	db: Database,
+	identity: { readonly agentId: string; readonly authorUserId: string | null },
+): ImportResult {
 	const result: ImportResult = {
 		imported: 0,
 		skipped: 0,
@@ -253,18 +257,21 @@ export function importMemoryLogs(basePath: string, db: Database): ImportResult {
 		const chunks = chunkContent(content, { maxTokens: 512 });
 		for (const chunk of chunks) {
 			try {
-				db.addMemory({
-					type: "daily-log",
-					category: date,
-					content: chunk.text,
-					confidence: 1.0,
-					sourceType: "import",
-					sourceId: file,
-					tags: ["imported", "daily-log"],
-					updatedBy: "signet-import",
-					vectorClock: {},
-					manualOverride: false,
-				});
+				db.addMemory(
+					{
+						type: "daily-log",
+						category: date,
+						content: chunk.text,
+						confidence: 1.0,
+						sourceType: "import",
+						sourceId: file,
+						tags: ["imported", "daily-log"],
+						updatedBy: "signet-import",
+						vectorClock: {},
+						manualOverride: false,
+					},
+					identity,
+				);
 				result.imported++;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);

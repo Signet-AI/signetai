@@ -165,7 +165,7 @@ export function registerVectorCommands(program: Command, deps: VectorDeps): void
 						db.exec(`
 							CREATE TABLE embeddings_new (
 								id TEXT PRIMARY KEY,
-								content_hash TEXT NOT NULL UNIQUE,
+								content_hash TEXT NOT NULL,
 								dimensions INTEGER NOT NULL,
 								source_type TEXT NOT NULL,
 								source_id TEXT NOT NULL,

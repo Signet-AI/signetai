@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Command } from "commander";
 import type { DaemonFetchResult } from "../lib/daemon.js";

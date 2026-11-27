@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -276,6 +276,36 @@ describe("compiled native embedding runtime", () => {
 	const dreamingTokenSmoke = dreamingTokenSmokeEnabled ? test : test.skip;
 	const dbOwnerSmoke = dbOwnerSmokeEnabled ? test : test.skip;
 	const workerThreadSmoke = workerThreadSmokeEnabled ? test : test.skip;
+
+	workerThreadSmoke.each(["projection-worker", "export-worker"])(
+		"embeds the %s asset in the compiled daemon",
+		async (name) => {
+			const prefix = `name: "${name}", contentBase64: "`;
+			let pending = "";
+			let collecting = false;
+			let source: string | null = null;
+			for await (const chunk of createReadStream(nativeSmokeBinary(), { highWaterMark: 64 * 1024 })) {
+				pending += chunk.toString("latin1");
+				if (!collecting) {
+					const start = pending.indexOf(prefix);
+					if (start < 0) {
+						pending = pending.slice(-prefix.length);
+						continue;
+					}
+					pending = pending.slice(start + prefix.length);
+					collecting = true;
+				}
+				if (pending.length > 16 * 1024 * 1024) throw new Error(`Embedded ${name} exceeds smoke admission`);
+				const end = pending.indexOf('"');
+				if (end < 0) continue;
+				source = Buffer.from(pending.slice(0, end), "base64").toString("utf8");
+				break;
+			}
+			if (!source) throw new Error(`Compiled daemon is missing the ${name} asset`);
+			expect(new Bun.Transpiler({ loader: "js" }).transformSync(source).length).toBeGreaterThan(0);
+		},
+		30_000,
+	);
 
 	workerThreadSmoke(
 		"runs an embedded Worker entrypoint in-process without spawning another signet executable",

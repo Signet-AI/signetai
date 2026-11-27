@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { compartmentFor, findSqliteVecExtension } from "@signet/core";
+import { currentClassificationFixture } from "./test-support/classification-fixture.test";
 import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
@@ -171,7 +173,7 @@ function insertMemory(db: Database, id: string, agentId?: string, contentHash?: 
 	db.prepare(
 		`INSERT INTO memories (id, content, content_hash, agent_id, type, created_at, updated_at, updated_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-	).run(id, `content for ${id}`, contentHash ?? null, agentId ?? null, "fact", now, now, "test");
+	).run(id, `content for ${id}`, contentHash ?? null, agentId ?? "default", "fact", now, now, "test");
 }
 
 function repairAuditCount(db: Database, action: string): number {
@@ -1284,6 +1286,44 @@ describe("reembedMissingMemories", () => {
 		db.close();
 	});
 
+	for (const migration of [false, true]) {
+		it(`inherits stored memory compartments during ${migration ? "model migration" : "missing embedding repair"}`, async () => {
+			const extension = findSqliteVecExtension();
+			if (!extension) throw new Error("sqlite-vec required");
+			db.loadExtension(extension);
+			db.exec(
+				"DROP TABLE IF EXISTS vec_embeddings; CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine)",
+			);
+			insertMemory(db, "classified-repair", "default", "classified-repair-hash");
+			db.prepare(
+				"INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_repair','Repair','now','now')",
+			).run();
+			const compartment = compartmentFor(db, ["cls_repair"]);
+			db.prepare("UPDATE memories SET compartment_id = ?, embedding_model = ? WHERE id = 'classified-repair'").run(
+				compartment,
+				migration ? "old-model" : null,
+			);
+			accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, TEST_EMBEDDING_CFG));
+			const repair = migration ? reembedModelMigration : reembedMissingMemories;
+			const result = await repair(
+				accessor,
+				TEST_CFG,
+				CTX_DAEMON,
+				createRateLimiter(),
+				async () => [1, 0, 0],
+				TEST_EMBEDDING_CFG,
+				"default",
+				10,
+			);
+			expect(result.affected).toBe(1);
+			expect(
+				db.prepare("SELECT agent_id, compartment_id FROM embeddings WHERE source_id = 'classified-repair'").get(),
+			).toEqual({ agent_id: "default", compartment_id: compartment });
+			expect(db.prepare("SELECT count(*) n FROM vec_embeddings").get()).toEqual({ n: 0 });
+			expect(db.prepare(`SELECT count(*) n FROM vec_embeddings__c${compartment}`).get()).toEqual({ n: 1 });
+		});
+	}
+
 	it("preserves a committed memory when embedding persistence fails, then retries idempotently", async () => {
 		insertMemory(db, "mem-write-failure");
 		let failWrite = true;
@@ -1429,7 +1469,7 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(0);
 	});
 
-	it("selects a missing agent memory but reports a cross-agent hash conflict", async () => {
+	it("repairs equal-hash memories without probing another agent parent", async () => {
 		ensureVecTable(db);
 		const sharedHash = "cross-agent-shared-hash";
 		insertMemory(db, "mem-a", "agent-a", sharedHash);
@@ -1463,23 +1503,21 @@ describe("reembedMissingMemories", () => {
 			false,
 		);
 
-		expect(selected).toEqual(["content for mem-b-unique"]);
-		expect(result.success).toBe(false);
-		expect(result.affected).toBe(1);
-		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 1 });
-		expect(result.message).toContain("1 selected memory(s) could not be persisted");
-		expect(result.message).toContain("current global uniqueness constraint");
+		expect(selected.sort()).toEqual(["content for mem-b", "content for mem-b-unique"]);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(2);
+		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 0 });
 		expect(result.message).not.toContain("embedding provider returned no vectors");
-		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
-			{ source_id: "mem-a" },
-		]);
+		expect(
+			db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ? ORDER BY source_id").all(sharedHash),
+		).toEqual([{ source_id: "mem-a" }, { source_id: "mem-b" }]);
 		const after = db
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-a'")
 			.get();
 		expect(after).toEqual(before);
 	});
 
-	it("does not let a known conflict starve later repairable memories during a full sweep", async () => {
+	it("resumes parent-scoped equal-hash repairs without starving later memories", async () => {
 		ensureVecTable(db);
 		const sharedHash = "starving-cross-agent-hash";
 		insertMemory(db, "mem-owner", "agent-a", sharedHash);
@@ -1518,7 +1556,7 @@ describe("reembedMissingMemories", () => {
 			true,
 		);
 
-		expect(providerInputs).toEqual(["content for mem-repairable"]);
+		expect(providerInputs).toEqual(["content for mem-conflict"]);
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
 		expect(result.details).toMatchObject({
@@ -1546,21 +1584,20 @@ describe("reembedMissingMemories", () => {
 			operationId as string,
 		);
 
-		expect(conflict.success).toBe(false);
-		expect(conflict.affected).toBe(0);
+		expect(conflict.success).toBe(true);
+		expect(conflict.affected).toBe(1);
 		expect(conflict.details).toMatchObject({
 			selected: 1,
 			failed: 0,
 			stale: 0,
-			crossAgentHashConflicts: 1,
-			status: "failed",
+			crossAgentHashConflicts: 0,
+			status: "complete",
 		});
-		expect(conflict.message).toContain("1 selected memory(s) could not be persisted");
 		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-repairable'").get()).toBeTruthy();
-		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-conflict'").get()).toBeNull();
-		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
-			{ source_id: "mem-owner" },
-		]);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-conflict'").get()).toBeTruthy();
+		expect(
+			db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ? ORDER BY source_id").all(sharedHash),
+		).toEqual([{ source_id: "mem-conflict" }, { source_id: "mem-owner" }]);
 		const afterOwner = db
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-owner'")
 			.get();
@@ -1687,7 +1724,7 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-lease-race")).toBeNull();
 	});
 
-	it("normalizes an empty memory agent_id on missing-memory repair", async () => {
+	it("rejects an empty memory agent_id on missing-memory repair", async () => {
 		insertMemory(db, "mem-empty-agent", "");
 
 		const result = await reembedMissingMemories(
@@ -1701,13 +1738,11 @@ describe("reembedMissingMemories", () => {
 			1,
 		);
 
-		expect(result.success).toBe(true);
-		expect(db.prepare("SELECT agent_id FROM embeddings WHERE source_id = ?").get("mem-empty-agent")).toEqual({
-			agent_id: "default",
-		});
+		expect(result.affected).toBe(0);
+		expect(db.prepare("SELECT agent_id FROM embeddings WHERE source_id = ?").get("mem-empty-agent")).toBeNull();
 	});
 
-	it("does not overwrite another agent's embedding on migration hash conflict", async () => {
+	it("migrates an owned parent without overwriting another agent hash cache", async () => {
 		const migrationDb = new Database(":memory:");
 		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
 		ensureVecTable(migrationDb);
@@ -1744,11 +1779,17 @@ describe("reembedMissingMemories", () => {
 			10,
 		);
 
-		expect(result.success).toBe(false);
-		expect(result.affected).toBe(0);
-		expect(result.message).toMatch(/cross-agent hash conflict/);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(
+			migrationDb
+				.prepare(
+					"SELECT source_id,agent_id FROM embeddings WHERE source_type='memory' AND source_id='migration-agent-a' AND agent_id='agent-a'",
+				)
+				.get(),
+		).toEqual({ source_id: "migration-agent-a", agent_id: "agent-a" });
 		expect(migrationDb.prepare("SELECT embedding_model FROM memories WHERE id = 'migration-agent-a'").get()).toEqual({
-			embedding_model: "model-a",
+			embedding_model: "model-b",
 		});
 		expect(
 			migrationDb
@@ -1794,7 +1835,7 @@ describe("reembedMissingMemories", () => {
 		migrationDb.close();
 	});
 
-	it("normalizes an empty memory agent_id on migration repair", async () => {
+	it("rejects an empty memory agent_id on migration repair", async () => {
 		const migrationDb = new Database(":memory:");
 		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
 		ensureVecTable(migrationDb);
@@ -1820,10 +1861,10 @@ describe("reembedMissingMemories", () => {
 			10,
 		);
 
-		expect(result.success).toBe(true);
+		expect(result.affected).toBe(0);
 		expect(
 			migrationDb.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ?").get("empty-agent-hash"),
-		).toEqual({ agent_id: "default" });
+		).toBeNull();
 		migrationDb.close();
 	});
 
@@ -1904,7 +1945,7 @@ describe("reembedMissingMemories", () => {
 
 	it("writes content_hash back to memories row when it was NULL -- null-hash memory does not reappear in subsequent backfill passes", async () => {
 		db.exec(
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+			`CREATE INDEX IF NOT EXISTS idx_memories_content_hash_unique
 			 ON memories(content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0`,
 		);
 		insertMemory(db, "mem-write-back");
@@ -1945,9 +1986,9 @@ describe("reembedMissingMemories", () => {
 		expect(second.message).toMatch(/no unembedded memories found/);
 	});
 
-	it("does not throw when a duplicate-content null-hash memory collides with an existing hashed memory", async () => {
+	it("repairs equal-content parents independently without merging their evidence", async () => {
 		db.exec(
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+			`CREATE INDEX IF NOT EXISTS idx_memories_content_hash_unique
 			 ON memories(content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0`,
 		);
 		const now = new Date().toISOString();
@@ -1977,10 +2018,14 @@ describe("reembedMissingMemories", () => {
 		const dupe = db.prepare("SELECT content_hash FROM memories WHERE id = 'mem-dupe'").get() as {
 			content_hash: string | null;
 		};
-		expect(dupe.content_hash).toBeNull();
+		expect(dupe.content_hash).toBe(hash);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash=? ORDER BY source_id").all(hash)).toEqual([
+			{ source_id: "mem-dupe" },
+			{ source_id: "mem-owner" },
+		]);
 	});
 
-	it("syncs vec row using canonical embedding id on hash conflict", async () => {
+	it("keeps independent evidence-parent vectors on equal content hashes", async () => {
 		ensureVecTable(db);
 		const now = new Date().toISOString();
 		const hash = normalizeAndHashContent("duplicate content").contentHash;
@@ -2000,6 +2045,7 @@ describe("reembedMissingMemories", () => {
 			sourceId: "mem-existing",
 			vector: [0.9, 0.9, 0.9],
 		});
+		db.prepare("INSERT INTO vec_embeddings(id,embedding) VALUES('emb-existing',?)").run(vectorBlob([0.9, 0.9, 0.9]));
 
 		const limiter = createRateLimiter();
 		const result = await reembedMissingMemories(
@@ -2016,13 +2062,16 @@ describe("reembedMissingMemories", () => {
 
 		expect(result.success).toBe(true);
 
-		const vecIds = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
-		expect(vecIds.map((row) => row.id)).toEqual(["emb-existing"]);
-		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(hash) as Array<{
-			source_id: string;
-		}>;
-		expect(rows).toHaveLength(1);
-		expect(rows[0]?.source_id).toBe("mem-existing");
+		expect(
+			db
+				.prepare(
+					"SELECT e.source_id FROM embeddings e JOIN vec_embeddings v ON v.id=e.id WHERE e.content_hash=? ORDER BY e.source_id",
+				)
+				.all(hash),
+		).toEqual([{ source_id: "mem-existing" }, { source_id: "mem-target" }]);
+		expect(db.prepare("SELECT vector FROM embeddings WHERE id='emb-existing'").get()).toEqual({
+			vector: vectorBlob([0.9, 0.9, 0.9]),
+		});
 	});
 
 	it("does not cycle-embed duplicate-hash memories — both report as embedded after one pass", async () => {
@@ -2059,8 +2108,7 @@ describe("reembedMissingMemories", () => {
 		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all("hash-dup") as Array<{
 			source_id: string;
 		}>;
-		expect(rows).toHaveLength(1);
-		expect(rows[0]?.source_id).toBe("mem-dup-a");
+		expect(rows.map((row) => row.source_id).sort()).toEqual(["mem-dup-a", "mem-dup-b"]);
 		const limiter2 = createRateLimiter();
 		const secondPass = await reembedMissingMemories(
 			accessor,
@@ -2854,7 +2902,7 @@ describe("cleanOrphanedEmbeddings", () => {
 		db.close();
 	});
 
-	it("keeps hash-covered embeddings even when the original source row is deleted", async () => {
+	it("purges a dead parent embedding even when a live parent shares its hash", async () => {
 		const now = new Date().toISOString();
 
 		db.prepare(
@@ -2881,18 +2929,19 @@ describe("cleanOrphanedEmbeddings", () => {
 		const result = await cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
-		expect(result.affected).toBe(0);
-		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(0);
+		expect(result.affected).toBe(1);
+		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(1);
 
 		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
-		expect(rows).toHaveLength(1);
+		expect(rows).toHaveLength(0);
 		const vecRows = db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
-		expect(vecRows).toHaveLength(1);
+		expect(vecRows).toHaveLength(0);
 	});
 
 	it("removes embeddings with no source row and no active hash peer", async () => {
 		insertEmbedding(db, {
 			id: "emb-orphan",
+			agentId: "default",
 			contentHash: "hash-orphan",
 			sourceId: "mem-missing",
 			vector: [0.5, 0.6, 0.7],
@@ -3086,6 +3135,29 @@ describe("deduplicateMemories", () => {
 		db.close();
 	});
 
+	it("keeps reviewer tags within agent project visibility and compartment partitions", async () => {
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_review','Review')");
+		const compartment = compartmentFor(db, ["cls_review"]);
+		for (const [id, agent, project, visibility, label] of [
+			["public", "default", "atlas", "private", null],
+			["reviewer", "default", "atlas", "private", compartment],
+			["other-agent", "other", "atlas", "private", null],
+			["other-project", "default", "other", "private", null],
+			["other-visibility", "default", "atlas", "shared", null],
+		] as const) {
+			db.prepare(
+				"INSERT INTO memories(id,content,content_hash,agent_id,project,visibility,compartment_id,tags,created_at,updated_at) VALUES(?,'equal','review-hash',?,?,?,?,?,'now','now')",
+			).run(id, agent, project, visibility, label, id);
+		}
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		expect(result.affected).toBe(0);
+		expect(
+			db.prepare("SELECT id,tags FROM memories WHERE content_hash='review-hash' AND is_deleted=0 ORDER BY id").all(),
+		).toEqual(
+			["other-agent", "other-project", "other-visibility", "public", "reviewer"].map((id) => ({ id, tags: id })),
+		);
+	});
+
 	it("removes exact duplicates and keeps the best keeper", async () => {
 		const now = new Date().toISOString();
 		db.prepare(
@@ -3116,6 +3188,13 @@ describe("deduplicateMemories", () => {
 			.prepare("SELECT id FROM memories WHERE content_hash = 'hash-dup' AND is_deleted = 1")
 			.all() as Array<{ id: string }>;
 		expect(deleted).toHaveLength(2);
+		const loserReason = db
+			.query<{ reason: string; metadata: string }, []>(
+				"SELECT reason,metadata FROM memory_history WHERE event='deleted' LIMIT 1",
+			)
+			.get();
+		expect(loserReason?.reason).not.toContain("high-importance");
+		expect(loserReason?.metadata).toContain('"duplicateOf":"high-importance"');
 	});
 
 	it("merges tags from all duplicates into the keeper", async () => {
@@ -3175,10 +3254,13 @@ describe("deduplicateMemories", () => {
 		expect(keeperHistory.some((h) => h.event === "merged")).toBe(true);
 
 		const loserHistory = db
-			.prepare("SELECT event, reason FROM memory_history WHERE memory_id = 'audit-loser'")
-			.all() as Array<{ event: string; reason: string }>;
+			.query<{ event: string; reason: string; metadata: string | null }, []>(
+				"SELECT event,reason,metadata FROM memory_history WHERE memory_id='audit-loser'",
+			)
+			.all();
 		expect(loserHistory.some((h) => h.event === "deleted")).toBe(true);
-		expect(loserHistory.some((h) => h.reason.includes("audit-keeper"))).toBe(true);
+		expect(loserHistory.every((h) => !h.reason.includes("audit-keeper"))).toBe(true);
+		expect(loserHistory.some((h) => h.metadata?.includes('"duplicateOf":"audit-keeper"'))).toBe(true);
 	});
 
 	it("respects dry-run mode", async () => {
@@ -3341,4 +3423,28 @@ describe("resyncVectorIndex", () => {
 		expect(result.success).toBe(false);
 		expect(result.message).toMatch(/vec_embeddings table not found/);
 	});
+});
+
+it("classified FTS consistency compares the base partition and repairs its shards", async () => {
+	const db = currentClassificationFixture();
+	try {
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_hr','HR')");
+		const c = compartmentFor(db, ["cls_hr"]);
+		db.prepare(
+			"INSERT INTO memories(id,content,agent_id,compartment_id,created_at,updated_at) VALUES('hidden','classifiedquartz','default',?,'now','now')",
+		).run(c);
+		const result = await checkFtsConsistency(asAccessor(db), TEST_CFG, CTX_OPERATOR, createRateLimiter(), false);
+		expect(result.message).toContain("FTS consistent:");
+		db.exec("INSERT INTO memories_fts(memories_fts) VALUES('delete-all')");
+		resetFtsRebuildConfirmation();
+		await checkFtsConsistency(asAccessor(db), TEST_CFG, CTX_OPERATOR, createRateLimiter(), true);
+		expect(db.prepare("SELECT count(*) n FROM memories_fts WHERE memories_fts MATCH 'classifiedquartz'").get()).toEqual(
+			{ n: 0 },
+		);
+		expect(
+			db.prepare(`SELECT count(*) n FROM memories_fts__c${c} WHERE memories_fts__c${c} MATCH 'classifiedquartz'`).get(),
+		).toEqual({ n: 1 });
+	} finally {
+		db.close();
+	}
 });

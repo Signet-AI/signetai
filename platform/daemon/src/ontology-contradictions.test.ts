@@ -1,3 +1,4 @@
+import { up as upgradeDreamingPartitions } from "../../core/src/migrations/179-dreaming-evidence-leases";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,12 +8,16 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import { DEFAULT_PIPELINE_V2 } from "./memory-config";
-import { getOntologyContradiction, listOntologyContradictions } from "./ontology-contradictions";
+import {
+	getOntologyContradiction,
+	listOntologyContradictions,
+	recordOntologyContradictionsForAttributeInTx,
+} from "./ontology-contradictions";
 import { applyOntologyOperation } from "./ontology-proposals";
 import { createDreamingCapabilities } from "./pipeline/dreaming-capabilities";
 import { uninstallSkillNode } from "./pipeline/skill-graph";
-import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { createRateLimiter, pruneGenericEntities } from "./repair-actions";
+import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { purgeSourceOwnedRows } from "./source-purge";
 
 describe("persisted ontology contradictions", () => {
@@ -27,6 +32,7 @@ describe("persisted ontology contradictions", () => {
 		process.env.SIGNET_PATH = dir;
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
+		getDbAccessor().withWriteTx((db) => upgradeDreamingPartitions(db));
 	});
 
 	afterEach(async () => {
@@ -38,6 +44,7 @@ describe("persisted ontology contradictions", () => {
 
 	async function addClaim(agentId: string, value: string, sourceId: string, sourceKind = "fixture") {
 		return applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId,
 			actor: "contradiction-test",
 			operation: "add_claim_value",
@@ -58,6 +65,7 @@ describe("persisted ontology contradictions", () => {
 
 	async function setClaim(agentId: string, value: string, sourceId: string) {
 		return applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId,
 			actor: "contradiction-test",
 			operation: "set_claim_value",
@@ -78,6 +86,7 @@ describe("persisted ontology contradictions", () => {
 
 	async function supersedeClaim(agentId: string, oldValue: string, newValue: string, sourceId: string) {
 		return applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId,
 			actor: "contradiction-test",
 			operation: "supersede_claim_value",
@@ -122,6 +131,47 @@ describe("persisted ontology contradictions", () => {
 		return attributeId;
 	}
 
+	it("labels contradiction snapshots and preserves both attribute copy edges in the pass transaction", async () => {
+		const left = await addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		const right = await addClaim("owner", "Runtime mode is disabled by default.", "source-disabled");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM evidence_citations WHERE derived_kind = 'contradiction'").run();
+			db.prepare("DELETE FROM ontology_contradictions").run();
+			db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (91, 'alpha', datetime('now'))").run();
+			db.prepare("INSERT INTO compartment_members (compartment_id, classification_id) VALUES (91, 'alpha')").run();
+			db.prepare("UPDATE entities SET compartment_id = 91").run();
+			db.prepare("UPDATE entity_aspects SET compartment_id = 91").run();
+			db.prepare("UPDATE entity_attributes SET compartment_id = 91 WHERE id = ?").run(right.result?.attributeId);
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES ('pass-copy', 'owner', 'owner', 91)",
+			).run();
+			if (typeof right.result?.attributeId !== "string") throw new Error("Missing candidate attribute");
+			recordOntologyContradictionsForAttributeInTx(db, {
+				agentId: "owner",
+				attributeId: right.result.attributeId,
+				passId: "pass-copy",
+			});
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id, status FROM ontology_contradictions").all(),
+			),
+		).toEqual([{ compartment_id: 91, status: "active" }]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT evidence_kind, evidence_id FROM evidence_citations WHERE derived_kind = 'contradiction' ORDER BY evidence_id",
+					)
+					.all(),
+			),
+		).toEqual(
+			[left.result?.attributeId, right.result?.attributeId]
+				.sort()
+				.map((id) => ({ evidence_kind: "attribute", evidence_id: id })),
+		);
+	});
+
 	it("reads contradictions without reconciling them", async () => {
 		const attributeId = await seedContradiction();
 		getDbAccessor().withWriteTx((db) => {
@@ -129,10 +179,10 @@ describe("persisted ontology contradictions", () => {
 		});
 		const before = storedStatuses("owner");
 
-		const listed = listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
+		const listed = await listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
 		const contradiction = listed.items[0];
 		if (!contradiction) throw new Error("expected contradiction fixture");
-		expect(getOntologyContradiction(getDbAccessor(), { agentId: "owner", id: contradiction.id })?.status).toBe(
+		expect((await getOntologyContradiction(getDbAccessor(), { agentId: "owner", id: contradiction.id }))?.status).toBe(
 			"active",
 		);
 		expect(storedStatuses("owner")).toEqual(before);
@@ -155,7 +205,7 @@ describe("persisted ontology contradictions", () => {
 		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
 	});
 
-	it("reconciles when generic entity repair deletes the contested entity", async () => {
+	it("purges contradiction snapshots when generic repair removes their claim evidence", async () => {
 		await seedContradiction();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE entities SET name = 'Sender', canonical_name = 'sender' WHERE agent_id = ? AND name = ?").run(
@@ -172,7 +222,7 @@ describe("persisted ontology contradictions", () => {
 		);
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
-		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+		expect(storedStatuses("owner")).toEqual([]);
 	});
 
 	it("reconciles when skill uninstall deletes the contested entity", async () => {
@@ -355,6 +405,7 @@ describe("persisted ontology contradictions", () => {
 
 	it("keeps current-claim governance separate from contradiction state", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "owner",
 			actor: "contradiction-test",
 			operation: "set_claim_value",
@@ -374,6 +425,7 @@ describe("persisted ontology contradictions", () => {
 		const activeBeforeSet = await listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
 		expect(activeBeforeSet.items).toHaveLength(1);
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "owner",
 			actor: "contradiction-test",
 			operation: "set_claim_value",

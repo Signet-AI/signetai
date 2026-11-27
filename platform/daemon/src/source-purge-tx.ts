@@ -1,8 +1,9 @@
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
-import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
 import type { WriteDb } from "./db-accessor";
+import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
+import { purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 
 interface MemoryPurgeTable {
 	readonly name: string;
@@ -83,7 +84,36 @@ export function purgeMemoryInTx(db: WriteDb, memoryId: string): void {
 	]) {
 		db.prepare(`DELETE FROM ${table} WHERE source_kind = 'memory' AND source_id = ?`).run(memoryId);
 	}
+	db.prepare("DELETE FROM memory_thread_heads WHERE node_id = ?").run(memoryId);
 	db.prepare("DELETE FROM memories WHERE id = ?").run(memoryId);
+}
+
+export function purgeSummaryRecordInTx(db: WriteDb, id: string, agentId: string): void {
+	db.prepare("DELETE FROM session_summary_children WHERE parent_id=? OR child_id=?").run(id, id);
+	db.prepare("DELETE FROM session_summary_memories WHERE summary_id=?").run(id);
+	db.prepare("DELETE FROM memory_thread_heads WHERE agent_id=? AND node_id=?").run(agentId, id);
+	db.prepare("DELETE FROM session_summaries WHERE id=? AND agent_id=?").run(id, agentId);
+}
+export function purgeDocumentRecordInTx(db: WriteDb, id: string): void {
+	if (db.prepare("SELECT 1 FROM document_memories WHERE document_id=? LIMIT 1").get(id))
+		throw new Error("Document still owns memory");
+	db.prepare("DELETE FROM memory_jobs WHERE document_id=?").run(id);
+	db.prepare("DELETE FROM documents WHERE id=?").run(id);
+}
+export function purgeArtifactRecordInTx(
+	db: WriteDb,
+	artifact: { readonly agent_id: string; readonly source_path: string; readonly source_id: string | null },
+): void {
+	if (artifact.source_id)
+		purgeSourceArtifactStructureInTx(db, {
+			agentId: artifact.agent_id,
+			sourceId: artifact.source_id,
+			sourcePath: artifact.source_path,
+		});
+	db.prepare("DELETE FROM memory_artifacts WHERE agent_id=? AND source_path=?").run(
+		artifact.agent_id,
+		artifact.source_path,
+	);
 }
 
 export interface PurgeSourceOwnedRowsInput {
@@ -101,6 +131,24 @@ const SOURCE_OWNED_GRAPH_TABLES = [
 export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRowsInput): number {
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
+	const agents =
+		input.agentId === undefined
+			? db
+					.prepare(
+						"SELECT DISTINCT agent_id FROM classification_assignments WHERE target_kind='source' AND target_id=?",
+					)
+					.all(sourceId)
+					.flatMap((row) =>
+						typeof row === "object" && row !== null && "agent_id" in row && typeof row.agent_id === "string"
+							? [row.agent_id]
+							: [],
+					)
+			: [input.agentId];
+	for (const agent of agents)
+		db.prepare("DELETE FROM classification_assignments WHERE target_kind='source' AND target_id=? AND agent_id=?").run(
+			sourceId,
+			agent,
+		);
 	const embeddingPrefix = `${sourceId}:`;
 	const agentWhere = input.agentId !== undefined ? "agent_id = ? AND " : "";
 	const embeddingRows = db

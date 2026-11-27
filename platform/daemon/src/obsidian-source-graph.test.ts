@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	buildObsidianMarkdownPathIndex,
-	isObsidianSourceFileIndexedInTx,
 	indexObsidianSourceStructure,
+	isObsidianSourceFileIndexedInTx,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
 } from "./obsidian-source-graph";
+import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { txIngestEnvelope } from "./transactions";
 
 describe("Obsidian source graph structure", () => {
@@ -37,6 +38,78 @@ describe("Obsidian source graph structure", () => {
 		if (prevAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		else process.env.SIGNET_AGENT_ID = prevAgentId;
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("inherits classified source labels and artifact citations in structural rows", async () => {
+		const agentId = "obsidian-graph-agent";
+		const sourceId = "classified-vault";
+		const sourcePath = join(vault, "literature", "Secret.md");
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_source','Source'); INSERT INTO classification_assignments VALUES('source','classified-vault','obsidian-graph-agent','cls_source','carol','now')",
+			);
+		});
+		await indexExternalMemoryArtifact({
+			author: { userId: "alice", credential: "session:alice" },
+			agentId,
+			sourceId,
+			sourcePath,
+			sourceKind: "source_notion_page",
+			harness: "notion",
+			content: "classified source text",
+			sourceMtimeMs: Date.now(),
+		});
+		indexObsidianSourceStructure({
+			agentId,
+			sourceId,
+			sourceName: "Classified",
+			root: vault,
+			filePath: sourcePath,
+			content: "# Secret\n[[Other]]",
+		});
+		indexObsidianSourceStructure({
+			agentId,
+			sourceId,
+			sourceName: "Classified",
+			root: vault,
+			filePath: sourcePath,
+			content: "# Secret\n[[Other]]",
+		});
+		getDbAccessor().withReadDb((db) => {
+			const artifact = db
+				.prepare("SELECT compartment_id,author_user_id FROM memory_artifacts WHERE agent_id=? AND source_path=?")
+				.get(agentId, sourcePath);
+			const compartment = artifact?.compartment_id;
+			expect(typeof compartment).toBe("number");
+			expect(artifact?.author_user_id).toBe("alice");
+			for (const table of ["entities", "entity_dependencies", "entity_communities"]) {
+				const rows = db
+					.prepare(`SELECT compartment_id FROM ${table} WHERE agent_id=? AND source_id=?`)
+					.all(agentId, sourceId);
+				expect(rows.length).toBeGreaterThan(0);
+				for (const row of rows) expect(row).toEqual({ compartment_id: compartment });
+			}
+			const citations = db
+				.prepare(
+					"SELECT derived_kind,evidence_id FROM evidence_citations WHERE agent_id=? AND evidence_kind='artifact'",
+				)
+				.all(agentId);
+			expect(citations).toContainEqual({ derived_kind: "entity", evidence_id: sourcePath });
+			expect(citations).toContainEqual({ derived_kind: "dependency", evidence_id: sourcePath });
+			expect(
+				db.prepare("SELECT count(*) n FROM memory_artifacts_fts WHERE memory_artifacts_fts MATCH 'classified'").get(),
+			).toEqual({ n: 0 });
+		});
+		purgeObsidianSourceFileStructure({ agentId, sourceId, root: vault, filePath: sourcePath });
+		getDbAccessor().withReadDb((db) => {
+			expect(
+				db
+					.prepare(
+						"SELECT count(*) n FROM evidence_citations WHERE agent_id=? AND evidence_kind='artifact' AND evidence_id=?",
+					)
+					.get(agentId, sourcePath),
+			).toEqual({ n: 0 });
+		});
 	});
 
 	it("maps vault folders, files, and wikilinks into the graph without writing aspects or claims", () => {
@@ -317,6 +390,7 @@ describe("Obsidian source graph structure", () => {
 			).run();
 			const aspect = { aspect_id: "removed-aspect" };
 			txIngestEnvelope(db, {
+				author: { userId: null, credential: "system" },
 				id: "removed-dreaming-claim",
 				content: "The removed note contains this semantic claim.",
 				normalizedContent: "the removed note contains this semantic claim.",

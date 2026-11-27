@@ -1,22 +1,33 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
-import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { SYSTEM_AUTHOR } from "../auth/audit-owner";
+import { runWriteTxAsync, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
 import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
 import { withContentPassWrites } from "../memory-head-owner";
 import {
+	applyOntologyOperationBatchInTx,
+	assertOntologyOperationPartitionInTx,
+	createOntologyProposalsInTx,
 	type GraphWriteCaps,
 	type OntologyOperationInput,
-	applyOntologyOperationBatchInTx,
-	createOntologyProposalsInTx,
 } from "../ontology-proposals";
+import { readScopeSql, type ReadScope } from "../read-scope";
 import { runWriteBatches } from "../yielding-writes";
+import {
+	assertDreamingAgentInDb,
+	assertDreamingAttentionSubjectInDb,
+	assertDreamingMutationLabelInDb,
+	dreamingPassPartitionInDb,
+	dreamingReadScopeInDb,
+	type DreamingPartition,
+} from "../classification-owner";
+import { findUnresolvedRelativeTime, findUntimedIsoDate } from "./claim-relative-time";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
-import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
+import { createDreamingAgentEvidence, type DreamingAgentEvidence } from "./dreaming-evidence";
 import {
 	DREAMING_HYGIENE_ARCHIVE_OPERATIONS,
 	DREAMING_OPERATION_IDS,
 	DREAMING_STRUCTURAL_OPERATIONS,
 } from "./dreaming-operation-contract";
-import { findUnresolvedRelativeTime, findUntimedIsoDate } from "./claim-relative-time";
 
 export interface DreamingOperationRequest {
 	readonly operation: string;
@@ -34,6 +45,7 @@ export interface DreamingOperationItem {
 	readonly proposal?: unknown;
 	readonly result?: unknown;
 	readonly error?: string;
+	readonly retryable?: boolean;
 }
 
 export interface ApplyDreamingOperationsResult {
@@ -92,7 +104,12 @@ interface CitationResolution {
 	readonly sourceAgentIds: readonly string[];
 }
 
-function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown): CitationResolution {
+function citeEvidence(
+	accessor: DbAccessor,
+	agentId: string,
+	citation: unknown,
+	readScope: ReadScope,
+): CitationResolution {
 	const requested = citationRecord(citation);
 	if (requested === null) return { evidence: null, sourceAgentIds: [] };
 	const result: {
@@ -100,12 +117,15 @@ function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown):
 		readonly sourceAgentIds: readonly string[];
 	} =
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
+		accessor.withReadDb((db: ReadDb) => {
+			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef, readScope });
 			if (source !== null && (source.kind !== "transcript" || source.completed)) {
 				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
 			}
-			return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
+			return {
+				evidence: [],
+				sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef).filter((owner) => owner !== agentId),
+			};
 		}, "db:dreaming.operations.cite-evidence.read");
 	return {
 		evidence:
@@ -135,21 +155,28 @@ type ValidatedDreamingOperation = {
 	readonly attentionId: string | null;
 	readonly decline?: boolean;
 	readonly reviewOnly?: boolean;
+	readonly retryError?: string;
 };
 
-function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalName: string): ReadonlySet<string> {
+function semanticDuplicateIds(
+	accessor: DbAccessor,
+	agentId: string,
+	canonicalName: string,
+	readScope: ReadScope,
+): ReadonlySet<string> {
+	const scope = readScopeSql("", readScope, { visibility: null });
 	const placeholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+	return accessor.withReadDb((db: ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT id FROM entities
 				 WHERE agent_id = ? AND COALESCE(status, 'active') = 'active'
 				   AND canonical_name = ?
 				   AND COALESCE(pinned, 0) = 0
-				   AND NOT (entity_type IN (${placeholders}) OR (entity_type = 'source' AND source_root IS NOT NULL))`,
+				   AND NOT (entity_type IN (${placeholders}) OR (entity_type = 'source' AND source_root IS NOT NULL)) ${scope.sql} ORDER BY id`,
 			)
-			.all(agentId, canonicalName, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as Array<{ id: string }>;
+			.all(agentId, canonicalName, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, ...scope.args) as Array<{ id: string }>;
 		return new Set(rows.map((row) => row.id));
 	}, "db:dreaming.operations.duplicate-group.read");
 }
@@ -166,6 +193,7 @@ async function mintFlags(
 	accessor: DbAccessor,
 	agentId: string,
 	operations: readonly DreamingOperationRequest[],
+	passId?: string,
 ): Promise<Map<number, string>> {
 	const flagged = operations.flatMap((operation, index) =>
 		operation.operation === FLAG_OP ? [{ index, operation }] : [],
@@ -174,6 +202,8 @@ async function mintFlags(
 		accessor,
 		flagged,
 		(db, entry) => {
+			const partition = operationPartitionInDb(db, agentId, passId);
+			preflightDreamingRequestInTx(db, { accessor, agentId, actor: "dreaming", operations, passId });
 			const subjectRef =
 				typeof entry.operation.payload.subjectRef === "string" ? entry.operation.payload.subjectRef.trim() : "";
 			if (!subjectRef) return { index: entry.index, attentionId: null };
@@ -182,6 +212,8 @@ async function mintFlags(
 			const attentionId = enqueueDreamingAttentionInTx(db, {
 				agentId,
 				kind: "hygiene",
+				compartmentId: partition.compartmentId,
+				passId,
 				subjectRef,
 				details: asStringRecord(entry.operation.payload.details),
 				priority,
@@ -205,26 +237,27 @@ function attentionProvenance(
 	mintedById: ReadonlyMap<number, string>,
 	operations: readonly DreamingOperationRequest[],
 	operationIndex: number,
+	readScope: ReadScope,
 ): { readonly provenance: DreamingOperationProvenance; readonly attentionId: string } | null {
 	const reference = operation.provenance?.trim();
 	if (!reference?.startsWith("attention:")) return null;
 	if (!DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) return null;
-	const payload = operation.payload;
 
 	let attention: DreamingAttention | null = null;
 	const sameBatch = reference.match(/^attention:\$(\d+)$/);
 	if (sameBatch !== null) {
-		const flagIndex = sameBatchFlagIndex(accessor, agentId, operations, operationIndex, operation);
+		const flagIndex = sameBatchFlagIndex(accessor, agentId, operations, operationIndex, operation, readScope);
 		if (flagIndex === null) return null;
 		const attentionId = mintedById.get(flagIndex);
-		if (attentionId !== undefined) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
+		if (attentionId !== undefined)
+			attention = getDreamingAttentionById(accessor, { agentId, id: attentionId, readScope });
 	} else {
 		const attentionId = reference.slice("attention:".length);
-		if (attentionId) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
+		if (attentionId) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId, readScope });
 	}
 	if (attention === null || !attentionAuthorizesArchive(attention, operation)) return null;
 
-	if (!hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return null;
+	if (!hasExpectedAttentionTarget(accessor, agentId, operation, attention, readScope)) return null;
 
 	return {
 		provenance: {
@@ -255,15 +288,20 @@ function attentionAuthorizesArchive(attention: DreamingAttention, operation: Dre
 const HYGIENE_PROVENANCE_ERROR =
 	"Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
 
-function hygieneProvenanceError(accessor: DbAccessor, agentId: string, operation: DreamingOperationRequest): string {
+function hygieneProvenanceError(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: DreamingOperationRequest,
+	readScope: ReadScope,
+): string {
 	const reference = operation.provenance?.trim() ?? "";
 	if (!reference.startsWith("attention:") || /^attention:\$\d+$/.test(reference)) return HYGIENE_PROVENANCE_ERROR;
 	const id = reference.slice("attention:".length);
-	const attention = id ? getDreamingAttentionById(accessor, { agentId, id }) : null;
+	const attention = id ? getDreamingAttentionById(accessor, { agentId, id, readScope }) : null;
 	if (attention === null || !attentionAuthorizesArchive(attention, operation)) {
 		return `${HYGIENE_PROVENANCE_ERROR}: ${id} is not a pending hygiene attention in this agent (already resolved, or the id is mistyped); copy a pending id from attention_list`;
 	}
-	const mismatch = attentionTargetMismatch(accessor, agentId, operation, attention);
+	const mismatch = attentionTargetMismatch(accessor, agentId, operation, attention, readScope);
 	return mismatch === null ? HYGIENE_PROVENANCE_ERROR : `${HYGIENE_PROVENANCE_ERROR}: ${mismatch}`;
 }
 function pinnedBySubjectRef(subjectRef: string, prefix: string): string | null {
@@ -276,8 +314,9 @@ function hasExpectedAttentionTarget(
 	agentId: string,
 	operation: DreamingOperationRequest,
 	attention: DreamingAttention,
+	readScope: ReadScope,
 ): boolean {
-	return attentionTargetMismatch(accessor, agentId, operation, attention) === null;
+	return attentionTargetMismatch(accessor, agentId, operation, attention, readScope) === null;
 }
 
 function attentionTargetMismatch(
@@ -285,6 +324,7 @@ function attentionTargetMismatch(
 	agentId: string,
 	operation: DreamingOperationRequest,
 	attention: DreamingAttention,
+	readScope: ReadScope,
 ): string | null {
 	const payload = operation.payload;
 	if (operation.operation === "archive_entity") {
@@ -309,7 +349,7 @@ function attentionTargetMismatch(
 		if (canonicalName.length === 0 || attention.subjectRef !== `duplicate:${canonicalName}`) {
 			return `attention ${attention.id} flags ${attention.subjectRef}, not a duplicate group`;
 		}
-		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName);
+		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName, readScope);
 		if (groupIds.size <= 1) {
 			return `no duplicate group named "${canonicalName}" remains; decline_attention if the flag no longer applies`;
 		}
@@ -349,6 +389,7 @@ function sameBatchFlagIndex(
 	operations: readonly DreamingOperationRequest[],
 	operationIndex: number,
 	operation: DreamingOperationRequest,
+	readScope: ReadScope,
 ): number | null {
 	const reference = operation.provenance?.trim();
 	const sameBatch = reference?.match(/^attention:\$(\d+)$/);
@@ -369,7 +410,7 @@ function sameBatchFlagIndex(
 			priority: 0,
 			createdAt: "",
 		};
-		return hasExpectedAttentionTarget(accessor, agentId, operation, attention) ? referencedIndex : null;
+		return hasExpectedAttentionTarget(accessor, agentId, operation, attention, readScope) ? referencedIndex : null;
 	}
 	for (let index = operationIndex - 1; index >= 0; index -= 1) {
 		const candidate = operations[index];
@@ -384,7 +425,7 @@ function sameBatchFlagIndex(
 			priority: 0,
 			createdAt: "",
 		};
-		if (hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return index;
+		if (hasExpectedAttentionTarget(accessor, agentId, operation, attention, readScope)) return index;
 	}
 	return null;
 }
@@ -434,6 +475,7 @@ function provenanceForEvidence(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
+	readScope: ReadScope,
 ): {
 	readonly provenance: DreamingOperationProvenance | null;
 	readonly scopeMismatch: string | null;
@@ -443,7 +485,7 @@ function provenanceForEvidence(
 	if (citations.length === 0) return { provenance: null, scopeMismatch: null };
 	const matched: DreamingAgentEvidence[] = [];
 	for (const citation of citations) {
-		const resolution = citeEvidence(accessor, agentId, citation);
+		const resolution = citeEvidence(accessor, agentId, citation, readScope);
 		if (resolution.evidence === null) {
 			if (resolution.sourceAgentIds.length > 0) {
 				const scopes = resolution.sourceAgentIds.map((sourceAgentId) => `'${sourceAgentId}'`).join(", ");
@@ -478,12 +520,30 @@ function lookupString(db: ReadDb, sql: string, ...params: unknown[]): string | n
 	return row?.value ?? null;
 }
 
-function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: string): string | null {
+function lookupScopedString(
+	db: ReadDb,
+	agentId: string,
+	compartmentId: number | null,
+	sql: string,
+	...params: unknown[]
+): string | null {
+	const scope = readScopeSql("", dreamingReadScopeInDb(db, agentId, compartmentId), { visibility: null });
+	return lookupString(db, `${sql} ${scope.sql}`, ...params, ...scope.args);
+}
+
+function lookupEntityName(
+	accessor: DbAccessor,
+	agentId: string,
+	entityId: string,
+	compartmentId: number | null,
+): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
-			lookupString(
+		(db: ReadDb) =>
+			lookupScopedString(
 				db,
+				agentId,
+				compartmentId,
 				"SELECT name AS value FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
 				entityId,
 				agentId,
@@ -492,12 +552,20 @@ function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: strin
 	);
 }
 
-function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: string, aspectId: string): string | null {
+function lookupAspectName(
+	accessor: DbAccessor,
+	agentId: string,
+	entityId: string,
+	aspectId: string,
+	compartmentId: number | null,
+): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
-			lookupString(
+		(db: ReadDb) =>
+			lookupScopedString(
 				db,
+				agentId,
+				compartmentId,
 				"SELECT name AS value FROM entity_aspects WHERE id = ? AND entity_id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
 				aspectId,
 				entityId,
@@ -507,12 +575,19 @@ function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: strin
 	);
 }
 
-function lookupAspectEntityId(accessor: DbAccessor, agentId: string, aspectId: string): string | null {
+function lookupAspectEntityId(
+	accessor: DbAccessor,
+	agentId: string,
+	aspectId: string,
+	compartmentId: number | null,
+): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
-			lookupString(
+		(db: ReadDb) =>
+			lookupScopedString(
 				db,
+				agentId,
+				compartmentId,
 				"SELECT entity_id AS value FROM entity_aspects WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
 				aspectId,
 				agentId,
@@ -526,16 +601,18 @@ function lookupActiveClaimAttributeId(
 	agentId: string,
 	aspectId: string,
 	claimKey: string,
+	compartmentId: number | null,
 ): string | null {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
+		(db: ReadDb) =>
 			lookupString(
 				db,
-				"SELECT id AS value FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND claim_key = ? AND status = 'active' ORDER BY created_at DESC, id ASC LIMIT 1",
+				"SELECT id AS value FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND claim_key = ? AND status = 'active' AND compartment_id IS ? ORDER BY created_at DESC, id ASC LIMIT 1",
 				aspectId,
 				agentId,
 				claimKey,
+				compartmentId,
 			),
 		"db:dreaming.operations.active-claim.read",
 	);
@@ -600,6 +677,7 @@ function toApplicatorPayload(
 	agentId: string,
 	operation: string,
 	payload: Readonly<Record<string, unknown>>,
+	compartmentId: number | null = null,
 ): ApplicatorPayload {
 	const target = stringField(payload, "target");
 	const reason = stringField(payload, "reason") ?? undefined;
@@ -609,7 +687,7 @@ function toApplicatorPayload(
 			return target === null ? { error: "missing payload.target" } : { payload: { entity_id: target, reason } };
 		case "archive_aspect": {
 			if (target === null) return { error: "missing payload.target" };
-			const entityId = lookupAspectEntityId(accessor, agentId, target);
+			const entityId = lookupAspectEntityId(accessor, agentId, target, compartmentId);
 			return entityId === null
 				? notFound("aspect", target, inAgent)
 				: { payload: { entity_id: entityId, aspect_id: target, reason } };
@@ -632,12 +710,12 @@ function toApplicatorPayload(
 			if (entityId === null || mergeTarget === null || sources === null || sources.length === 0) {
 				return { error: "missing payload.entityId, payload.target, or payload.sources" };
 			}
-			const name = lookupEntityName(accessor, agentId, entityId);
+			const name = lookupEntityName(accessor, agentId, entityId, compartmentId);
 			return name === null
 				? notFound("entity", entityId, inAgent)
 				: {
 						payload: {
-							entity: name,
+							entity: entityId,
 							target: mergeTarget,
 							sources,
 							new_name: stringField(payload, "newName") ?? undefined,
@@ -658,22 +736,23 @@ function toApplicatorPayload(
 			const aspectId = stringField(payload, "aspectId") ?? "";
 			const claimKey = stringField(payload, "claimKey") ?? "";
 			const value = stringField(payload, "value") ?? "";
-			const name = lookupEntityName(accessor, agentId, entityId);
+			const name = lookupEntityName(accessor, agentId, entityId, compartmentId);
 			if (name === null) return notFound("entity", entityId, inAgent);
-			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
+			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId, compartmentId);
 			if (aspect === null) return notFound("aspect", aspectId, `on entity ${entityId}`);
 			const timing = claimTimingPayload(payload);
 			if (operation !== "supersede_claim_value") {
-				return { payload: { entity: name, aspect, claim_key: claimKey, value, ...timing } };
+				return { payload: { entity: entityId, aspect: aspectId, claim_key: claimKey, value, ...timing } };
 			}
 			const attributeId =
-				stringField(payload, "attributeId") ?? lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey);
+				stringField(payload, "attributeId") ??
+				lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey, compartmentId);
 			return attributeId === null
 				? { error: `no active claim ${claimKey} on aspect ${aspectId} to supersede` }
 				: {
 						payload: {
-							entity: name,
-							aspect,
+							entity: entityId,
+							aspect: aspectId,
 							claim_key: claimKey,
 							attribute_id: attributeId,
 							new_value: value,
@@ -710,6 +789,7 @@ function toApplicatorPayload(
 					source_entity_id: stringField(payload, "fromEntityId"),
 					target_entity_id: stringField(payload, "toEntityId"),
 					link_type: stringField(payload, "linkType"),
+					reason,
 				},
 			};
 		}
@@ -765,7 +845,11 @@ function unresolvedTarget(index: number, operation: string, detail: string): str
 	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
 }
 
-function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): string | null {
+function validateRequestBeforeWrites(
+	params: ApplyDreamingOperationsParams,
+	readScope: ReadScope,
+	compartmentId: number | null,
+): string | null {
 	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
 			if (stringField(operation.payload, "subjectRef") === null) return "flag requires payload.subjectRef";
@@ -776,7 +860,7 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			if (attentionId === null) return "decline_attention requires payload.attentionId";
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const pending = params.accessor.withReadDb(
-				(db: import("../db-accessor").ReadDb) =>
+				(db: ReadDb) =>
 					db
 						.prepare(
 							`SELECT 1 FROM dreaming_attention
@@ -789,7 +873,13 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			continue;
 		}
 
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(
+			params.accessor,
+			params.agentId,
+			operation.operation,
+			operation.payload,
+			compartmentId,
+		);
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
 		if (isStructuralWithoutCitation(operation)) {
 			const structuralError = structuralProvenanceError(index, operation);
@@ -800,25 +890,87 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			const reference = operation.provenance?.trim();
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
 			if (sameBatch) {
-				if (sameBatchFlagIndex(params.accessor, params.agentId, params.operations, index, operation) === null) {
+				if (
+					sameBatchFlagIndex(params.accessor, params.agentId, params.operations, index, operation, readScope) === null
+				) {
 					return HYGIENE_PROVENANCE_ERROR;
 				}
 				continue;
 			}
 			if (
-				attentionProvenance(params.accessor, params.agentId, operation, new Map(), params.operations, index) === null
+				attentionProvenance(
+					params.accessor,
+					params.agentId,
+					operation,
+					new Map(),
+					params.operations,
+					index,
+					readScope,
+				) === null
 			) {
-				return hygieneProvenanceError(params.accessor, params.agentId, operation);
+				return hygieneProvenanceError(params.accessor, params.agentId, operation, readScope);
 			}
 			continue;
 		}
 
-		const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
+		const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation, readScope);
 		if (evidenceResult.provenance === null) {
 			return evidenceResult.scopeMismatch ?? evidenceError(index, evidenceResult.unmatched);
 		}
 	}
 	return null;
+}
+
+function operationPartitionInDb(db: ReadDb, agentId: string, passId?: string): DreamingPartition {
+	if (passId !== undefined) return dreamingPassPartitionInDb(db, passId, agentId);
+	assertDreamingAgentInDb(db, agentId);
+	return { agentId, compartmentId: null };
+}
+
+function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperationsParams): Map<number, string> {
+	const retries = new Map<number, string>();
+	const partition = operationPartitionInDb(db, params.agentId, params.passId);
+	for (const [index, operation] of params.operations.entries()) {
+		if (operation.operation === FLAG_OP) {
+			const subject = stringField(operation.payload, "subjectRef");
+			assertDreamingAttentionSubjectInDb(db, partition, subject);
+			continue;
+		}
+		const attentionId =
+			operation.operation === DECLINE_ATTENTION_OP
+				? stringField(operation.payload, "attentionId")
+				: operation.provenance?.startsWith("attention:") && !operation.provenance.startsWith("attention:$")
+					? operation.provenance.slice("attention:".length)
+					: null;
+		if (attentionId) assertDreamingMutationLabelInDb(db, "dreaming_attention", attentionId, partition);
+		if (operation.operation === DECLINE_ATTENTION_OP) continue;
+		const applicator = toApplicatorPayload(
+			params.accessor,
+			params.agentId,
+			operation.operation,
+			operation.payload,
+			partition.compartmentId,
+		);
+		if ("error" in applicator) throw new Error(applicator.error);
+		try {
+			assertOntologyOperationPartitionInTx(db, {
+				agentId: params.agentId,
+				passId: params.passId,
+				operation: operation.operation,
+				payload: applicator.payload,
+				evidence: operation.evidence,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!isRetryableOntologyItemError(message)) throw error;
+			retries.set(index, message);
+		}
+	}
+	return retries;
+}
+
+function isRetryableOntologyItemError(message: string): boolean {
+	return message === "person_identity_missing" || message === "evidence_citation_missing";
 }
 
 function existingReviewProposalId(
@@ -828,18 +980,23 @@ function existingReviewProposalId(
 		readonly operation: string;
 		readonly payload: Readonly<Record<string, unknown>>;
 		readonly evidence: readonly unknown[];
+		readonly passId?: string;
 	},
 ): string | null {
 	const row = db
 		.prepare(
 			`SELECT id FROM ontology_proposals
 			 WHERE agent_id = ? AND operation = ? AND status IN ('pending', 'applied', 'rejected')
-			   AND payload = ? AND evidence = ?
+			   AND payload = ? AND evidence = ? AND compartment_id IS ?
 			 ORDER BY updated_at DESC LIMIT 1`,
 		)
-		.get(params.agentId, params.operation, JSON.stringify(params.payload), JSON.stringify(params.evidence)) as
-		| { id?: unknown }
-		| undefined;
+		.get(
+			params.agentId,
+			params.operation,
+			JSON.stringify(params.payload),
+			JSON.stringify(params.evidence),
+			operationPartitionInDb(db, params.agentId, params.passId).compartmentId,
+		) as { id?: unknown } | undefined;
 	return typeof row?.id === "string" ? row.id : null;
 }
 
@@ -902,6 +1059,7 @@ function applyValidatedOperationBody(
 	if (entry.reviewOnly) {
 		const existingId = existingReviewProposalId(db, {
 			agentId: params.agentId,
+			passId: params.passId,
 			operation: entry.input.operation,
 			payload: entry.input.payload,
 			evidence: entry.input.evidence ?? [],
@@ -915,7 +1073,9 @@ function applyValidatedOperationBody(
 		}
 		const created = createOntologyProposalsInTx(db, [
 			{
+				author: SYSTEM_AUTHOR,
 				agentId: params.agentId,
+				passId: params.passId,
 				operation: entry.input.operation,
 				payload: entry.input.payload,
 				confidence: entry.input.confidence,
@@ -954,7 +1114,9 @@ function applyValidatedOperationBody(
 	}
 
 	const batch = applyOntologyOperationBatchInTx(db, {
+		author: SYSTEM_AUTHOR,
 		agentId: params.agentId,
+		passId: params.passId,
 		actor: params.actor,
 		operations: [entry.input],
 		writeCaps: params.writeCaps,
@@ -979,9 +1141,14 @@ function applyValidatedOperationInTx(
 	entry: ValidatedDreamingOperation,
 	params: ApplyDreamingOperationsParams,
 ): DreamingOperationItem {
+	if (entry.retryError !== undefined)
+		return { index: entry.index, ok: false, error: entry.retryError, retryable: true };
 	const savepoint = `signet_dream_op_${entry.index}`;
 	db.exec(`SAVEPOINT ${savepoint}`);
 	try {
+		const partition = operationPartitionInDb(db, params.agentId, params.passId);
+		if (entry.attentionId !== null)
+			assertDreamingMutationLabelInDb(db, "dreaming_attention", entry.attentionId, partition);
 		const result = applyValidatedOperationBody(db, entry, params);
 		db.exec(`RELEASE SAVEPOINT ${savepoint}`);
 		return result;
@@ -992,6 +1159,9 @@ function applyValidatedOperationInTx(
 			index: entry.index,
 			ok: false,
 			error: error instanceof Error ? error.message : String(error),
+			...(isRetryableOntologyItemError(error instanceof Error ? error.message : String(error))
+				? { retryable: true }
+				: {}),
 		};
 	}
 }
@@ -1019,13 +1189,39 @@ export async function applyDreamingOperations(
 		}
 	}
 
-	const validationError = validateRequestBeforeWrites(params);
+	let readScope: ReadScope;
+	let compartmentId: number | null;
+	try {
+		const resolved = await runWriteTxAsync(params.accessor, (db) => {
+			const partition = operationPartitionInDb(db, params.agentId, params.passId);
+			return {
+				scope: dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId),
+				compartmentId: partition.compartmentId,
+			};
+		});
+		readScope = resolved.scope;
+		compartmentId = resolved.compartmentId;
+	} catch (error) {
+		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };
+	}
+	const validationError = validateRequestBeforeWrites(params, readScope, compartmentId);
 	if (validationError !== null) return { ok: false, items: [], error: validationError };
 
-	const minted = await mintFlags(params.accessor, params.agentId, params.operations);
+	let retries: Map<number, string>;
+	try {
+		retries = await runWriteTxAsync(params.accessor, (db) => preflightDreamingRequestInTx(db, params));
+	} catch (error) {
+		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };
+	}
+	const minted = await mintFlags(params.accessor, params.agentId, params.operations, params.passId);
 
 	const validated: ValidatedDreamingOperation[] = [];
 	for (const [index, operation] of params.operations.entries()) {
+		const retryError = retries.get(index);
+		if (retryError !== undefined) {
+			validated.push({ index, input: null, attentionId: null, retryError });
+			continue;
+		}
 		if (operation.operation === FLAG_OP) {
 			const attentionId = minted.get(index) ?? null;
 			validated.push({ index, input: null, attentionId });
@@ -1053,16 +1249,21 @@ export async function applyDreamingOperations(
 				minted,
 				params.operations,
 				index,
+				readScope,
 			);
 			if (resolved !== null) {
 				provenance = resolved.provenance;
 				attentionId = resolved.attentionId;
 			}
 			if (provenance === null) {
-				return { ok: false, items: [], error: hygieneProvenanceError(params.accessor, params.agentId, operation) };
+				return {
+					ok: false,
+					items: [],
+					error: hygieneProvenanceError(params.accessor, params.agentId, operation, readScope),
+				};
 			}
 		} else {
-			const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
+			const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation, readScope);
 			provenance = evidenceResult.provenance;
 			if (provenance === null) {
 				return {
@@ -1072,7 +1273,13 @@ export async function applyDreamingOperations(
 				};
 			}
 		}
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(
+			params.accessor,
+			params.agentId,
+			operation.operation,
+			operation.payload,
+			compartmentId,
+		);
 		if ("error" in applicator) {
 			return { ok: false, items: [], error: unresolvedTarget(index, operation.operation, applicator.error) };
 		}

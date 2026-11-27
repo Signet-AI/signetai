@@ -1,3 +1,5 @@
+import { knowledgeReadDb } from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
 import type { EntityDependency } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { getEntityDependencyById } from "./knowledge-graph";
@@ -86,13 +88,14 @@ function linkEvidenceRefs(dependency: EntityDependency): OntologyEvidenceRef[] {
 export async function getOntologyLinkEvidence(
 	accessor: DbAccessor,
 	params: GetOntologyLinkEvidenceParams,
+	readScope?: ReadScope,
 ): Promise<OntologyLinkEvidenceResult> {
-	const dependency = await getEntityDependencyById(accessor, params);
+	const dependency = await getEntityDependencyById(accessor, params, readScope);
 	if (dependency === null) throw new OntologyLinkEvidenceError("Link not found", 404);
-	const items = await accessor.withReadDbAsync(
-		async (db) => linkEvidenceRefs(dependency).map((ref) => resolveOntologyEvidenceRef(db, params.agentId, ref)),
-		{ siteToken: "ontology-link-evidence.ts:92" },
-	);
+	const items = await (async (db) =>
+		Promise.all(
+			linkEvidenceRefs(dependency).map((ref) => resolveOntologyEvidenceRef(db, params.agentId, ref, readScope)),
+		))(knowledgeReadDb(readScope));
 	return {
 		dependency,
 		items,

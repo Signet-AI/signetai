@@ -1,4 +1,8 @@
+import { resolveNamedEntity } from "./knowledge-graph";
+import { knowledgeReadDb, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
 import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
+import type { WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { validateDerivedMemorySourceInTx } from "./derived-memory-provenance";
 import { resolveEntityRecordByName } from "./knowledge-graph";
@@ -31,6 +35,7 @@ export interface CreateEpistemicAssertionInput {
 	readonly claimAttributeId?: string | null;
 	readonly supersedesAssertionId?: string | null;
 	readonly createdBy?: string | null;
+	readonly author?: WriteAuthor;
 }
 
 export interface ListEpistemicAssertionsParams {
@@ -302,11 +307,11 @@ export function createEpistemicAssertion(
 	input: CreateEpistemicAssertionInput,
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), "ontology-assertions.ts:305");
+	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), "db:ontology.assertion.create.write");
 }
 
 export function createEpistemicAssertionsInTx(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	db: WriteDb,
 	inputs: readonly CreateEpistemicAssertionInput[],
 ): readonly EpistemicAssertion[] {
@@ -314,14 +319,15 @@ export function createEpistemicAssertionsInTx(
 	return inputs.map((input) => insertAssertion(db, input));
 }
 
-export function listEpistemicAssertions(
+export async function listEpistemicAssertions(
 	accessor: DbAccessor,
 	params: ListEpistemicAssertionsParams,
-): ListEpistemicAssertionsResult {
+	readScope?: ReadScope,
+): Promise<ListEpistemicAssertionsResult> {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: ReadDb) => {
+
+	return (async (db: KnowledgeReadDb) => {
 		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const where = ["a.agent_id = ?"];
 		const args: unknown[] = [observerId];
@@ -330,7 +336,11 @@ export function listEpistemicAssertions(
 			where.push("a.subject_entity_id = ?");
 			args.push(entityId);
 		} else if (trim(params.entity) !== null) {
-			const resolved = resolveEntityRecordByName(db, { agentId: params.agentId, name: params.entity ?? "" });
+			const resolved = await resolveNamedEntity(
+				accessor,
+				{ agentId: params.agentId, name: params.entity ?? "" },
+				readScope,
+			);
 			if (resolved === null) return { items: [], count: 0 };
 			where.push("a.subject_entity_id = ?");
 			args.push(resolved.id);
@@ -360,7 +370,7 @@ export function listEpistemicAssertions(
 			args.push(`%${normalizeContent(params.query)}%`);
 		}
 		const clause = where.join(" AND ");
-		const rows = db
+		const rows = (await db
 			.prepare(
 				`SELECT a.*, e.name AS subject_entity_name
 				 FROM epistemic_assertions a
@@ -369,36 +379,36 @@ export function listEpistemicAssertions(
 				 ORDER BY a.asserted_at DESC, a.created_at DESC
 				 LIMIT ? OFFSET ?`,
 			)
-			.all(...args, limit, offset) as Array<Record<string, unknown>>;
-		const count = db
+			.all(...args, limit, offset)) as Array<Record<string, unknown>>;
+		const count = (await db
 			.prepare(
 				`SELECT COUNT(*) AS count
 				 FROM epistemic_assertions a
 				 JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
 				 WHERE ${clause}`,
 			)
-			.get(...args) as { count: number } | undefined;
+			.get(...args)) as { count: number } | undefined;
 		return { items: rows.map(rowToAssertion), count: count?.count ?? rows.length };
-	}, "ontology-assertions.ts:324");
+	})(knowledgeReadDb(readScope));
 }
 
-export function getEpistemicAssertion(
-	accessor: DbAccessor,
+export async function getEpistemicAssertion(
+	_accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly observerId?: string | null },
-): EpistemicAssertion | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: ReadDb) => {
+	readScope?: ReadScope,
+): Promise<EpistemicAssertion | null> {
+	return (async (db: KnowledgeReadDb) => {
 		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
-		const row = db
+		const row = (await db
 			.prepare(
 				`SELECT a.*, e.name AS subject_entity_name
 				 FROM epistemic_assertions a
 				 JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
 				 WHERE a.id = ? AND a.agent_id = ?`,
 			)
-			.get(params.id, observerId) as Record<string, unknown> | undefined;
+			.get(params.id, observerId)) as Record<string, unknown> | undefined;
 		return row ? rowToAssertion(row) : null;
-	}, "ontology-assertions.ts:390");
+	})(knowledgeReadDb(readScope));
 }
 
 export function linkEpistemicAssertionClaim(
@@ -426,12 +436,18 @@ export function linkEpistemicAssertionClaim(
 			)
 			.get(params.id, params.agentId) as Record<string, unknown>;
 		return rowToAssertion(row);
-	}, "ontology-assertions.ts:409");
+	}, "db:ontology.assertion.link-claim.write");
 }
 
 export function archiveEpistemicAssertion(
 	accessor: DbAccessor,
-	params: { readonly agentId: string; readonly id: string; readonly actor: string; readonly reason?: string | null },
+	params: {
+		readonly agentId: string;
+		readonly id: string;
+		readonly actor: string;
+		readonly author?: WriteAuthor;
+		readonly reason?: string | null;
+	},
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx((db: WriteDb) => {
@@ -454,7 +470,7 @@ export function archiveEpistemicAssertion(
 			)
 			.get(params.id, params.agentId) as Record<string, unknown>;
 		return rowToAssertion(row);
-	}, "ontology-assertions.ts:437");
+	}, "db:ontology.assertion.archive.write");
 }
 
 export function supersedeEpistemicAssertion(
@@ -495,5 +511,5 @@ export function supersedeEpistemicAssertion(
 			 WHERE id = ? AND agent_id = ?`,
 		).run(new Date().toISOString(), input.oldAssertionId, input.agentId);
 		return next;
-	}, "ontology-assertions.ts:465");
+	}, "db:ontology.assertion.supersede.write");
 }

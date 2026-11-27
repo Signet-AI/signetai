@@ -2,6 +2,13 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+
+async function closeTestDatabase(): Promise<void> {
+	await (await import("./db-owner-runtime")).closeDbOwner();
+	Bun.gc(true);
+	await closeDbAccessor();
+}
+
 import {
 	ensureCanonicalManifest,
 	reindexMemoryArtifacts,
@@ -82,7 +89,7 @@ test("v2 resolves and reindexes migrated v1 manifest links without duplicating a
 			previousRows.map((row) => [row.row_id, row.source_kind]),
 		);
 	} finally {
-		await closeDbAccessor();
+		await closeTestDatabase();
 		if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousPath;
 		cleanupTestTempDir(dir);
@@ -141,7 +148,7 @@ test("v2 reindex rejects a legacy path collision without changing either artifac
 		await expect(reindexMemoryArtifacts("default")).rejects.toThrow("Migrated artifact path already indexed");
 		expect(await readPaths()).toEqual(before);
 	} finally {
-		await closeDbAccessor();
+		await closeTestDatabase();
 		if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousPath;
 		cleanupTestTempDir(dir);
@@ -185,7 +192,7 @@ test("v2 removes migrated artifact files when legacy database paths are tombston
 		expect(existsSync(manifest)).toBe(false);
 		expect(existsSync(summary)).toBe(false);
 	} finally {
-		await closeDbAccessor();
+		await closeTestDatabase();
 		if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousPath;
 		cleanupTestTempDir(dir);

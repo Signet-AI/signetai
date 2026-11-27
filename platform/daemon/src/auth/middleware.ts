@@ -1,3 +1,7 @@
+import { getPeerAddress, resolveRequestNetwork } from "./request-network";
+
+export { getClientAddress, getPeerAddress } from "./request-network";
+
 import type { Context, MiddlewareHandler } from "hono";
 import { isSignetApiKey } from "./api-keys";
 import type { AuthConfig } from "./config";
@@ -5,6 +9,7 @@ import { checkPermission, checkScope } from "./policy";
 import type { AuthRateLimiter } from "./rate-limiter";
 import { verifyToken } from "./tokens";
 import type { AuthResult, Permission, TokenScope } from "./types";
+
 declare module "hono" {
 	interface ContextVariableMap {
 		auth: AuthResult;
@@ -24,7 +29,18 @@ export function isAuthOpenPath(path: string): boolean {
 	if (path === "/health" || path === "/health/live" || path === "/health/ready") return true;
 	if (path === "/api/mode") return true;
 	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
-	if (path === "/api/auth/handoff/redeem") return true;
+	if (
+		[
+			"/api/auth/handoff/redeem",
+			"/api/auth/device/start",
+			"/api/auth/device/token",
+			"/api/auth/refresh",
+			"/api/org/claim",
+			"/api/auth/invites/accept",
+		].includes(path)
+	)
+		return true;
+	if (path === "/api/auth/invites/lookup") return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
 	return false;
 }
@@ -38,16 +54,14 @@ function isDashboardRequest(c: Context): boolean {
 	if (path === "/" || path.includes(".")) return true;
 	return c.req.header("accept")?.includes("text/html") ?? false;
 }
-export function getPeerAddress(c: Context): string | null {
-	try {
-		const addr = (c.env as Record<string, unknown>)?.incoming as { socket?: { remoteAddress?: string } } | undefined;
-		return addr?.socket?.remoteAddress ?? null;
-	} catch {
-		return null;
+export let hybridProxyDetected = false;
+const FORWARDED_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
+export function isLoopbackRequest(c: Context): boolean {
+	if (FORWARDED_HEADERS.some((header) => c.req.header(header) !== undefined)) {
+		if (!hybridProxyDetected) console.warn("[auth] Hybrid proxy detected; forwarded requests require credentials");
+		hybridProxyDetected = true;
+		return false;
 	}
-}
-
-function isLocalhost(c: Context): boolean {
 	const remote = getPeerAddress(c);
 	return remote ? LOOPBACK.has(remote) : false;
 }
@@ -71,13 +85,14 @@ export function createAuthMiddleware(
 		}
 	};
 	return async (c, next) => {
+		resolveRequestNetwork(c, config);
 		const token = extractBearerToken(c.req.header("authorization"));
 		if (isAuthOpenPath(c.req.path) || isDashboardRequest(c)) {
 			c.set(
 				"auth",
 				token && config.mode !== "local" ? await verifyOpen(c.req.path, token) : { authenticated: false, claims: null },
 			);
-			if (config.mode === "hybrid" && isLocalhost(c) && !c.get("auth")?.claims) {
+			if (config.mode === "hybrid" && isLoopbackRequest(c) && !c.get("auth")?.claims) {
 				c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
 			}
 			await next();
@@ -88,7 +103,7 @@ export function createAuthMiddleware(
 			await next();
 			return;
 		}
-		if (config.mode === "hybrid" && isLocalhost(c)) {
+		if (config.mode === "hybrid" && isLoopbackRequest(c)) {
 			c.set("auth", token ? await verify(token) : { authenticated: false, claims: null });
 			await next();
 			return;
@@ -96,7 +111,7 @@ export function createAuthMiddleware(
 		if (!token) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");
-			return c.json({ error: "authentication required" });
+			return c.json({ error: "authentication required", reason: "missing_credential" });
 		}
 
 		if (!secret && !(isSignetApiKey(token) && verifyApiKey)) {
@@ -108,7 +123,14 @@ export function createAuthMiddleware(
 		if (!result.authenticated) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");
-			return c.json({ error: result.error ?? "invalid token" });
+			return c.json({
+				error: result.error ?? "invalid token",
+				reason: result.error?.includes("expired")
+					? "expired"
+					: result.error?.includes("revoked")
+						? "revoked"
+						: "invalid_credential",
+			});
 		}
 
 		c.set("auth", result);
@@ -119,15 +141,18 @@ export function createAuthMiddleware(
 export function requirePermission(permission: Permission, config: AuthConfig): MiddlewareHandler {
 	return async (c, next) => {
 		const auth = c.get("auth");
-		if (config.mode === "hybrid" && isLocalhost(c) && (!auth || !auth.claims)) {
+		if (config.mode === "hybrid" && isLoopbackRequest(c) && (!auth || !auth.claims)) {
 			await next();
 			return;
 		}
 
-		const decision = checkPermission(auth?.claims ?? null, permission, config.mode);
+		const principal = c.get("principal");
+		const decision = principal
+			? { allowed: principal.permissions.has(permission), reason: `credential lacks '${permission}' permission` }
+			: checkPermission(auth?.claims ?? null, permission, config.mode);
 		if (!decision.allowed) {
 			c.status(403);
-			return c.json({ error: decision.reason ?? "forbidden" });
+			return c.json({ error: decision.reason ?? "forbidden", reason: "permission", required: permission });
 		}
 
 		await next();
@@ -153,7 +178,7 @@ export function requireScope(getTarget: (c: Context) => TokenScope, config: Auth
 	return async (c, next) => {
 		const auth = c.get("auth");
 
-		if (config.mode === "hybrid" && isLocalhost(c) && (!auth || !auth.claims)) {
+		if (config.mode === "hybrid" && isLoopbackRequest(c) && (!auth || !auth.claims)) {
 			await next();
 			return;
 		}

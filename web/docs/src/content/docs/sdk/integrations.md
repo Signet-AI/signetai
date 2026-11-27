@@ -5,10 +5,10 @@ description: "Use React, AI SDK, OpenAI, lifecycle hooks, and connectors through
 
 ## React
 
-`@signet/sdk/react` provides `SignetProvider`, `useSignet`, `useMemorySearch`, and `useMemory`.
+`@signetai/sdk/react` provides `SignetProvider`, `useSignet`, `useMemorySearch`, and `useMemory`.
 
 ```tsx
-import { SignetProvider, useMemorySearch } from "@signet/sdk/react";
+import { SignetProvider, useMemorySearch } from "@signetai/sdk/react";
 
 function Preferences() {
   const { data, loading, error } = useMemorySearch("user preferences", {
@@ -32,11 +32,11 @@ export function App() {
 The SDK exports four memory tools: `memory_search`, `memory_store`, `memory_modify`, and `memory_forget`.
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
-import { memoryTools } from "@signet/sdk/ai-sdk";
+import { SignetClient } from "@signetai/sdk";
+import { memoryTools } from "@signetai/sdk/ai-sdk";
 import { generateText } from "ai";
 
-const client = new SignetClient();
+const client = new SignetClient({ daemonUrl: "http://127.0.0.1:3850" });
 const result = await generateText({ model, tools: await memoryTools(client), prompt: "Find relevant preferences." });
 ```
 
@@ -47,9 +47,9 @@ For OpenAI function calling, use `memoryToolDefinitions()` to construct the tool
 The SDK uses camelCase request fields. The daemon may accept compatibility wire aliases, but SDK callers should use the exported TypeScript shape.
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
+import { SignetClient } from "@signetai/sdk";
 
-const client = new SignetClient();
+const client = new SignetClient({ daemonUrl: "http://127.0.0.1:3850" });
 await client.sessionStart({ sessionKey: "session-123", harness: "my-harness", project: "/workspace/app" });
 const context = await client.userPromptSubmit({ sessionKey: "session-123", prompt: "Review the migration", project: "/workspace/app" });
 await client.sessionEnd({ sessionKey: "session-123", harness: "my-harness", transcript: "…", project: "/workspace/app" });

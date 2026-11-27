@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { SignetClient } from "../index.js";
 import type { Server } from "bun";

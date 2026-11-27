@@ -144,6 +144,8 @@ const workerEntries = [
 	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
 	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
 	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
+	["projection-worker", "platform/daemon/src/projection-worker.ts"],
+	["export-worker", "platform/daemon/src/export-worker.ts"],
 	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
 	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
 	["pi-agent-worker", "platform/daemon/src/pipeline/pi-agent-worker.ts"],

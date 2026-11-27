@@ -1,7 +1,15 @@
+import { z } from "zod";
+import { projectEmbeddingRows } from "./embedding-projection";
+import {
+	compartmentForWrite,
+	vectorShardSwapStatements,
+	resetCompartmentVectorShards,
+	syncEmbeddingCompartment,
+} from "@signet/core";
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, DbWriteQueueFullError, type ReadDb, type WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
-import { ownerBatch, ownerBytesFromHex, ownerReadAll, ownerReadOne, ownerRun } from "./db-owner-sql";
+import { ownerBatch, ownerReadAll, ownerReadOne, ownerRun } from "./db-owner-sql";
 import { vectorToBlob } from "./db-helpers";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import {
@@ -34,6 +42,9 @@ const VECTOR_REBUILD_RETRY_DELAY_MS = 100;
 const MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION = 3;
 
 interface ActiveEmbeddingRow {
+	readonly id: string;
+	readonly staging_id: string;
+	readonly compartment_id: number | null;
 	readonly content_hash: string;
 	readonly source_type: string;
 	readonly source_id: string;
@@ -98,6 +109,7 @@ function isVecVirtualTable(db: ReadDb, name: string): boolean {
 }
 
 function createVectorIndex(db: WriteDb, table: string, dimensions: number): void {
+	resetCompartmentVectorShards(db, table);
 	db.exec(`
 		CREATE VIRTUAL TABLE ${table} USING vec0(
 			id TEXT PRIMARY KEY,
@@ -122,7 +134,7 @@ function migrationFailureCount(db: ReadDb, targetFingerprint: string | undefined
 		(
 			db
 				.prepare(
-					"SELECT COUNT(*) AS n FROM embedding_index_failures f INNER JOIN embeddings e ON e.content_hash = f.content_hash WHERE f.target_fingerprint = ? AND f.retry_policy = 'quarantined'",
+					"SELECT COUNT(*) AS n FROM embedding_index_failures f INNER JOIN embeddings e ON e.content_hash = f.content_hash AND e.source_type IS f.source_type AND e.source_id IS f.source_id AND e.agent_id IS f.agent_id WHERE f.target_fingerprint = ? AND f.retry_policy = 'quarantined'",
 				)
 				.get(targetFingerprint) as { n: number } | undefined
 		)?.n ?? 0
@@ -302,17 +314,12 @@ async function resetStagingVectorIndexThroughOwner(
 	dimensions: number,
 	projectionSlot?: "active" | "staging",
 ): Promise<void> {
-	const table = vectorTableForSlot(projectionSlot);
-	await ownerBatch(
-		owner,
-		[
-			{ sql: `DROP TABLE IF EXISTS ${table}` },
-			{
-				sql: `CREATE VIRTUAL TABLE ${table} USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${assertDimensions(dimensions)}] distance_metric=cosine)`,
-			},
-		],
-		ownerMaintenanceOptions("embedding-index.reset-projection"),
-	);
+	await projectEmbeddingRows(owner, {
+		store: "embeddings",
+		projection: vectorTableForSlot(projectionSlot),
+		ids: [],
+		resetDimensions: assertDimensions(dimensions),
+	});
 }
 
 async function rebuildVectorIndexThroughOwner(
@@ -351,17 +358,7 @@ async function rebuildVectorIndexThroughOwner(
 				ownerMaintenanceOptions("embedding-index.rebuild.read", limit),
 			);
 			if (rows.length === 0) return;
-			const statements = rows.map((row) => ({
-				sql: `INSERT INTO ${table} (id, embedding)
-					SELECT ?, ?
-					WHERE EXISTS (SELECT 1 FROM embeddings WHERE id = ?)
-					AND NOT EXISTS (SELECT 1 FROM ${table} WHERE id = ?)`,
-				params: [row.id, ownerBytesFromHex(row.vector_hex), row.id, row.id],
-			}));
-			await ownerBatch(owner, statements, {
-				...ownerMaintenanceOptions("embedding-index.rebuild.write", rows.length),
-				requireChanges: false,
-			});
+			await projectEmbeddingRows(owner, { store: "embeddings", projection: table, ids: rows.map((r) => r.id) });
 			lastId = rows[rows.length - 1]?.id ?? null;
 			if (lastId !== null) await persistCursor?.(lastId);
 			retries = 0;
@@ -433,7 +430,6 @@ async function rebuildVectorIndex(
 
 			await withQueuedWrite(accessor, (db) => {
 				const projectionTable = vectorTableForSlot(projectionSlot);
-				const insert = db.prepare(`INSERT OR IGNORE INTO ${projectionTable} (id, embedding) VALUES (?, ?)`);
 				const existing = db.prepare(`SELECT 1 FROM ${projectionTable} WHERE id = ?`);
 				const canonical = db.prepare("SELECT 1 FROM embeddings WHERE id = ?");
 				for (const row of rows) {
@@ -446,7 +442,7 @@ async function rebuildVectorIndex(
 						throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
 					if (canonical.get(row.id) == null || existing.get(row.id) != null) continue;
 					try {
-						insert.run(row.id, vector);
+						syncEmbeddingCompartment(db, "embeddings", row.id, projectionTable);
 					} catch (error) {
 						if (!isDuplicateVectorProjectionRow(error)) throw error;
 					}
@@ -581,7 +577,7 @@ export function stagingCoverage(
 			db
 				.prepare(
 					`SELECT COUNT(*) AS n FROM embeddings e
-				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
+				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id
 				 WHERE s.id IS NULL`,
 				)
 				.get() as { n: number } | undefined
@@ -634,7 +630,7 @@ async function ownerStagingCoverage(
 		(
 			await ownerReadOne<{ readonly n: number }>(
 				owner,
-				"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash WHERE s.id IS NULL",
+				"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id WHERE s.id IS NULL",
 				[],
 				ownerMaintenanceOptions("embedding-index.coverage"),
 			)
@@ -655,7 +651,7 @@ async function ownerStagingCoverage(
 				await ownerReadOne<{ readonly n: number }>(
 					owner,
 					`SELECT COUNT(*) AS n FROM embedding_index_failures f
-					 INNER JOIN embeddings e ON e.content_hash = f.content_hash
+					 INNER JOIN embeddings e ON e.content_hash = f.content_hash AND e.source_type IS f.source_type AND e.source_id IS f.source_id AND e.agent_id IS f.agent_id
 					 WHERE f.target_fingerprint = ? AND f.retry_policy = 'quarantined'`,
 					[targetFingerprint],
 					ownerMaintenanceOptions("embedding-index.coverage"),
@@ -683,10 +679,10 @@ async function pruneStagingRowsThroughOwner(owner: DbOwnerClient): Promise<void>
 		owner,
 		[
 			{
-				sql: `DELETE FROM ${table} WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash WHERE e.id IS NULL)`,
+				sql: `DELETE FROM ${table} WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash AND e.source_type IS s.source_type AND e.source_id IS s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id WHERE e.id IS NULL)`,
 			},
 			{
-				sql: "DELETE FROM embeddings_staging WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash WHERE e.id IS NULL)",
+				sql: "DELETE FROM embeddings_staging WHERE id IN (SELECT s.id FROM embeddings_staging s LEFT JOIN embeddings e ON e.content_hash = s.content_hash AND e.source_type IS s.source_type AND e.source_id IS s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id WHERE e.id IS NULL)",
 			},
 		],
 		ownerMaintenanceOptions("embedding-index.prune-staging"),
@@ -707,7 +703,7 @@ async function recordMigrationFailureThroughOwner(
 			(content_hash, source_type, source_id, agent_id, target_fingerprint, provider, model,
 			 failure_class, attempts, retry_policy, first_failed_at, last_failed_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'quarantined', ?, ?)
-			ON CONFLICT(content_hash, target_fingerprint) DO UPDATE SET
+			ON CONFLICT(agent_id,source_type,source_id,content_hash,target_fingerprint) DO UPDATE SET
 			 source_type = excluded.source_type, source_id = excluded.source_id, agent_id = excluded.agent_id,
 			 provider = excluded.provider, model = excluded.model, failure_class = excluded.failure_class,
 			 attempts = embedding_index_failures.attempts + 1, retry_policy = 'quarantined', last_failed_at = excluded.last_failed_at`,
@@ -747,12 +743,12 @@ async function stageEmbeddingBatchThroughOwner(input: {
 	await pruneStagingRowsThroughOwner(input.owner);
 	const hasFailures = await ownerTableExists(input.owner, "embedding_index_failures");
 	const failureFilter = hasFailures
-		? ` AND NOT EXISTS (SELECT 1 FROM embedding_index_failures f WHERE f.content_hash = e.content_hash AND f.target_fingerprint = ? AND f.retry_policy = 'quarantined')`
+		? ` AND NOT EXISTS (SELECT 1 FROM embedding_index_failures f WHERE f.content_hash = e.content_hash AND f.source_type IS e.source_type AND f.source_id IS e.source_id AND f.agent_id IS e.agent_id AND f.target_fingerprint = ? AND f.retry_policy = 'quarantined')`
 		: "";
 	const rows = await ownerReadAll<ActiveEmbeddingRow>(
 		input.owner,
-		`SELECT e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
-		 FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
+		`SELECT e.id, COALESCE(s.id,e.id) AS staging_id, e.compartment_id, e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
+		 FROM embeddings e LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id
 		 WHERE (s.id IS NULL OR s.dimensions != ?)${failureFilter}
 		 ORDER BY e.created_at ASC LIMIT ?`,
 		hasFailures ? [profile.dimensions, profile.fingerprint, input.batchSize] : [profile.dimensions, input.batchSize],
@@ -776,12 +772,12 @@ async function stageEmbeddingBatchThroughOwner(input: {
 			throw new Error(
 				`Staging provider returned ${vector.length} dimensions for ${profile.model}; expected ${profile.dimensions}`,
 			);
-		const id = randomUUID();
+		const id = row.staging_id;
 		const results = await ownerBatch(
 			input.owner,
 			[
 				{
-					sql: `UPDATE embeddings_staging SET vector = ?, dimensions = ?, source_type = ?, source_id = ?, chunk_text = ?, created_at = datetime('now'), agent_id = ? WHERE content_hash = ? AND EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)`,
+					sql: `UPDATE embeddings_staging SET vector = ?, dimensions = ?, source_type = ?, source_id = ?, chunk_text = ?, created_at = datetime('now'), agent_id = ?,compartment_id=? WHERE content_hash = ? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ? AND EXISTS (SELECT 1 FROM embeddings WHERE id = ? AND content_hash=? AND compartment_id IS ? AND agent_id IS ? AND source_type=? AND source_id=?)`,
 					params: [
 						vectorToBlob(vector),
 						vector.length,
@@ -789,15 +785,29 @@ async function stageEmbeddingBatchThroughOwner(input: {
 						row.source_id,
 						row.chunk_text,
 						row.agent_id,
+						{
+							type: "compartment",
+							scope: { agentId: row.agent_id, sourceId: row.source_id },
+							...(row.source_type === "memory" ? { parentMemoryId: row.source_id } : {}),
+						},
 						row.content_hash,
+						row.source_type,
+						row.source_id,
+						row.agent_id,
+						row.compartment_id,
+						row.id,
 						row.content_hash,
+						row.compartment_id,
+						row.agent_id,
+						row.source_type,
+						row.source_id,
 					],
 				},
 				{
-					sql: `INSERT INTO embeddings_staging (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-					SELECT ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?
-					WHERE EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)
-					AND NOT EXISTS (SELECT 1 FROM embeddings_staging WHERE content_hash = ?)`,
+					sql: `INSERT INTO embeddings_staging (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+					SELECT ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?,?
+					WHERE EXISTS (SELECT 1 FROM embeddings WHERE id = ? AND content_hash=? AND compartment_id IS ? AND agent_id IS ? AND source_type=? AND source_id=?)
+					AND NOT EXISTS (SELECT 1 FROM embeddings_staging WHERE content_hash = ? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ?)`,
 					params: [
 						id,
 						row.content_hash,
@@ -807,19 +817,33 @@ async function stageEmbeddingBatchThroughOwner(input: {
 						row.source_id,
 						row.chunk_text,
 						row.agent_id,
+						{
+							type: "compartment",
+							scope: { agentId: row.agent_id, sourceId: row.source_id },
+							...(row.source_type === "memory" ? { parentMemoryId: row.source_id } : {}),
+						},
+						row.id,
 						row.content_hash,
+						row.compartment_id,
+						row.agent_id,
+						row.source_type,
+						row.source_id,
 						row.content_hash,
+						row.source_type,
+						row.source_id,
+						row.agent_id,
+						row.compartment_id,
 					],
 				},
-				{
-					sql: `INSERT INTO ${vectorTable} (id, embedding)
-					SELECT id, ? FROM embeddings_staging
-					WHERE content_hash = ? AND EXISTS (SELECT 1 FROM embeddings WHERE content_hash = ?)
-					AND NOT EXISTS (SELECT 1 FROM ${vectorTable} WHERE id = embeddings_staging.id)`,
-					params: [vectorToBlob(vector), row.content_hash, row.content_hash],
-				},
 			],
-			ownerMaintenanceOptions("embedding-index.stage.write", 3),
+			{
+				...ownerMaintenanceOptions("embedding-index.stage.write", 3),
+				embeddingProjection: {
+					store: "embeddings_staging",
+					projection: vectorTable,
+					ids: [id],
+				},
+			},
 		);
 		if (results.some((result) => result.changes > 0)) staged++;
 	}
@@ -832,7 +856,7 @@ async function pruneStagingRows(accessor: DbAccessor): Promise<void> {
 		const stale = db
 			.prepare(
 				`SELECT s.id FROM embeddings_staging s
-				 LEFT JOIN embeddings e ON e.content_hash = s.content_hash
+				 LEFT JOIN embeddings e ON e.content_hash = s.content_hash AND e.source_type IS s.source_type AND e.source_id IS s.source_id AND e.agent_id IS s.agent_id AND e.compartment_id IS s.compartment_id
 				 WHERE e.id IS NULL`,
 			)
 			.all() as Array<{ id: string }>;
@@ -860,7 +884,7 @@ async function recordMigrationFailure(
 			 (content_hash, source_type, source_id, agent_id, target_fingerprint, provider, model,
 			  failure_class, attempts, retry_policy, first_failed_at, last_failed_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'quarantined', ?, ?)
-			 ON CONFLICT(content_hash, target_fingerprint) DO UPDATE SET
+			 ON CONFLICT(agent_id,source_type,source_id,content_hash,target_fingerprint) DO UPDATE SET
 			   source_type = excluded.source_type, source_id = excluded.source_id, agent_id = excluded.agent_id,
 			   provider = excluded.provider, model = excluded.model, failure_class = excluded.failure_class,
 			   attempts = embedding_index_failures.attempts + 1, retry_policy = 'quarantined',
@@ -909,16 +933,16 @@ export async function stageEmbeddingBatch(input: {
 			const failureFilter = hasFailures
 				? ` AND NOT EXISTS (
 					SELECT 1 FROM embedding_index_failures f
-					WHERE f.content_hash = e.content_hash
+					WHERE f.content_hash = e.content_hash AND f.source_type IS e.source_type AND f.source_id IS e.source_id AND f.agent_id IS e.agent_id
 					  AND f.target_fingerprint = ?
 					  AND f.retry_policy = 'quarantined'
 				)`
 				: "";
 			return db
 				.prepare(
-					`SELECT e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
+					`SELECT e.id, COALESCE(s.id,e.id) AS staging_id, e.compartment_id, e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
 				 FROM embeddings e
-				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
+				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash AND s.source_type IS e.source_type AND s.source_id IS e.source_id AND s.agent_id IS e.agent_id AND s.compartment_id IS e.compartment_id
 				 WHERE (s.id IS NULL OR s.dimensions != ?)
 				 ${failureFilter}
 				 ORDER BY e.created_at ASC
@@ -953,16 +977,35 @@ export async function stageEmbeddingBatch(input: {
 				`Staging provider returned ${vector.length} dimensions for ${profile.model}; expected ${profile.dimensions}`,
 			);
 		}
-		await withQueuedWrite(input.accessor, (db) => {
-			const id = randomUUID();
+		const applied = await withQueuedWrite(input.accessor, (db) => {
+			if (
+				!db
+					.prepare(
+						"SELECT 1 FROM embeddings WHERE id=? AND content_hash=? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ?",
+					)
+					.get(row.id, row.content_hash, row.source_type, row.source_id, row.agent_id, row.compartment_id)
+			)
+				return false;
+			if (!row.agent_id) throw new Error("agent_required");
+			const c = compartmentForWrite(db, {
+				agentId: row.agent_id,
+				sourceId: row.source_id,
+				memoryId: row.source_type === "memory" ? row.source_id : undefined,
+			});
+			const previous = db
+				.prepare(
+					"SELECT id FROM embeddings_staging WHERE content_hash=? AND source_type=? AND source_id=? AND agent_id IS ? AND compartment_id IS ?",
+				)
+				.get(row.content_hash, row.source_type, row.source_id, row.agent_id, c);
+			const id = typeof previous?.id === "string" ? previous.id : randomUUID();
 			db.prepare(
 				`INSERT INTO embeddings_staging
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?,?)
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector, dimensions = excluded.dimensions, source_type = excluded.source_type,
 				   source_id = excluded.source_id, chunk_text = excluded.chunk_text, created_at = excluded.created_at,
-				   agent_id = excluded.agent_id`,
+				   agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 			).run(
 				id,
 				row.content_hash,
@@ -972,17 +1015,12 @@ export async function stageEmbeddingBatch(input: {
 				row.source_id,
 				row.chunk_text,
 				row.agent_id,
+				c,
 			);
-			const stored = db.prepare("SELECT id FROM embeddings_staging WHERE content_hash = ?").get(row.content_hash) as
-				| { id: string }
-				| undefined;
-			if (stored)
-				db.prepare(`INSERT OR REPLACE INTO ${vectorTable} (id, embedding) VALUES (?, ?)`).run(
-					stored.id,
-					new Float32Array(vector),
-				);
+			syncEmbeddingCompartment(db, "embeddings_staging", id, vectorTable);
+			return true;
 		});
-		staged++;
+		if (applied) staged++;
 	}
 
 	const coverage = await input.accessor.withReadDbAsync(
@@ -993,9 +1031,9 @@ export async function stageEmbeddingBatch(input: {
 }
 
 async function promoteStagingIndexThroughOwner(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	owner: DbOwnerClient,
-	options?: { readonly vectorBatchSize?: number; readonly shouldContinue?: () => boolean },
+	_options?: { readonly vectorBatchSize?: number; readonly shouldContinue?: () => boolean },
 ): Promise<boolean> {
 	const state = await ownerReadState(owner);
 	if (state?.state !== "building" || !state.staging || state.staging.projectionRebuild) return false;
@@ -1013,7 +1051,16 @@ async function promoteStagingIndexThroughOwner(
 	const rebuildVectorIndex =
 		(await ownerIsVecVirtualTable(owner, activeVectorTable)) &&
 		(await ownerIsVecVirtualTable(owner, stagingVectorTable));
-	const nextProfile = { ...state.staging, projectionRebuild: true } as const;
+	const shards = z
+		.array(z.object({ name: z.string() }))
+		.parse(
+			await ownerReadAll(
+				owner,
+				"SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*__c[0-9]*'",
+				[],
+				ownerMaintenanceOptions("embedding-index.shards"),
+			),
+		);
 	const statements: Array<{
 		readonly sql: string;
 		readonly params?: readonly unknown[];
@@ -1021,7 +1068,7 @@ async function promoteStagingIndexThroughOwner(
 	}> = [
 		{
 			sql: `UPDATE embedding_index_state SET staging_profile_json = ?, state = 'building', last_error = NULL, updated_at = ? WHERE id = 1 AND state = 'building' AND staging_profile_json = ?`,
-			params: [JSON.stringify(nextProfile), new Date().toISOString(), JSON.stringify(state.staging)],
+			params: [JSON.stringify(state.staging), new Date().toISOString(), JSON.stringify(state.staging)],
 			requireChanges: true,
 		},
 		{ sql: "ALTER TABLE embeddings_staging RENAME TO embeddings_next" },
@@ -1029,6 +1076,16 @@ async function promoteStagingIndexThroughOwner(
 		{ sql: "ALTER TABLE embeddings_next RENAME TO embeddings" },
 	];
 	if (rebuildVectorIndex) {
+		statements.push(
+			{
+				sql: "UPDATE memories SET embedding_model=? WHERE id IN (SELECT source_id FROM embeddings WHERE source_type='memory')",
+				params: [state.staging.model],
+			},
+			{
+				sql: "UPDATE embedding_index_state SET active_profile_json=?,staging_profile_json=NULL,state='ready',last_error=NULL,updated_at=? WHERE id=1",
+				params: [JSON.stringify({ ...state.staging, projectionRebuild: undefined }), new Date().toISOString()],
+			},
+		);
 	} else {
 		statements.push(
 			{
@@ -1045,10 +1102,16 @@ async function promoteStagingIndexThroughOwner(
 			},
 		);
 	}
+	if (!rebuildVectorIndex)
+		statements.push(
+			...vectorShardSwapStatements(
+				shards.map((r) => r.name),
+				activeVectorTable,
+				stagingVectorTable,
+			).map((sql) => ({ sql })),
+		);
 	await ownerBatch(owner, statements, ownerMaintenanceOptions("embedding-index.promote", statements.length));
-	if (rebuildVectorIndex) {
-		await completeProjectionRebuild(accessor, nextProfile, options?.vectorBatchSize, options?.shouldContinue, owner);
-	}
+
 	await ownerRun(owner, "PRAGMA incremental_vacuum", [], ownerMaintenanceOptions("embedding-index.incremental-vacuum"));
 	return true;
 }
@@ -1166,6 +1229,7 @@ export async function promoteStagingIndex(
 		readonly owner?: DbOwnerClient;
 	},
 ): Promise<boolean> {
+	if (options?.shouldContinue && !options.shouldContinue()) return false;
 	if (options?.owner) return promoteStagingIndexThroughOwner(accessor, options.owner, options);
 	const plan = await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
@@ -1173,20 +1237,25 @@ export async function promoteStagingIndex(
 		if (state.staging.projectionRebuild) return null;
 		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return null;
 		if (!tableExists(db, vectorTableForSlot(state.staging.projectionSlot))) return null;
-		let rebuildVectorIndex = false;
-		const nextProfile = { ...state.staging, projectionRebuild: true } as const;
+		const shards = db
+			.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*__c[0-9]*'")
+			.all()
+			.flatMap((r) =>
+				typeof r === "object" && r !== null && "name" in r && typeof r.name === "string" ? [r.name] : [],
+			);
+
 		const stagingVectorTable = vectorTableForSlot(state.staging.projectionSlot);
 		const activeVectorTable = vectorTableForSlot(state.active.projectionSlot);
 		db.exec("ALTER TABLE embeddings_staging RENAME TO embeddings_next");
 		db.exec("ALTER TABLE embeddings RENAME TO embeddings_staging");
 		db.exec("ALTER TABLE embeddings_next RENAME TO embeddings");
 		if (isVecVirtualTable(db, activeVectorTable) && isVecVirtualTable(db, stagingVectorTable)) {
-			rebuildVectorIndex = true;
 			db.prepare(
-				`UPDATE embedding_index_state
-				 SET staging_profile_json = ?, state = 'building', last_error = NULL, updated_at = ?
-				 WHERE id = 1`,
-			).run(JSON.stringify(nextProfile), new Date().toISOString());
+				"UPDATE memories SET embedding_model=? WHERE id IN (SELECT source_id FROM embeddings WHERE source_type='memory')",
+			).run(state.staging.model);
+			db.prepare(
+				"UPDATE embedding_index_state SET active_profile_json=?,staging_profile_json=NULL,state='ready',last_error=NULL,updated_at=? WHERE id=1",
+			).run(JSON.stringify({ ...state.staging, projectionRebuild: undefined }), new Date().toISOString());
 		} else {
 			db.prepare(
 				`UPDATE memories SET embedding_model = ?
@@ -1202,13 +1271,12 @@ export async function promoteStagingIndex(
 				     state = 'ready', last_error = NULL, updated_at = ?
 				 WHERE id = 1`,
 			).run(JSON.stringify({ ...state.staging, projectionSlot: "active" }), new Date().toISOString());
+			for (const sql of vectorShardSwapStatements(shards, activeVectorTable, stagingVectorTable)) db.exec(sql);
 		}
-		return { dimensions: state.staging.dimensions, profile: nextProfile, rebuildVectorIndex };
+		return true;
 	});
 	if (plan === null) return false;
-	if (plan.rebuildVectorIndex) {
-		await completeProjectionRebuild(accessor, plan.profile, options?.vectorBatchSize, options?.shouldContinue);
-	}
+
 	if (accessor.incrementalVacuumAsync)
 		await accessor.incrementalVacuumAsync({ siteToken: "db:embedding.index.promote-incremental-vacuum" });
 	return true;

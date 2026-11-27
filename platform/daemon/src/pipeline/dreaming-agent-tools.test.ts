@@ -31,6 +31,16 @@ describe("dreaming-agent-tools", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	async function seedPass(id: string, agentId: string): Promise<void> {
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		await ownerRun(
+			owner,
+			"INSERT INTO dreaming_passes(id,agent_id,status,scope_key) VALUES(?,?,'running',?)",
+			[id, agentId, agentId],
+			{ operation: "test.pass.seed" },
+		);
+	}
+
 	function insertEntity(id: string, name: string, canonicalName: string, agentId = "owner"): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -459,12 +469,17 @@ describe("dreaming-agent-tools", () => {
 		for (let index = 0; index < 25; index += 1) {
 			insertEpisodicMemory(`m-capability-1414-${index}`, `Capability retry evidence ${index}.`);
 		}
-		let transactions = 0;
+		const owner = await getDbOwnerForAccessor(base);
 		const accessor: DbAccessor = {
 			...base,
-			withWriteTxAsync: (fn) => {
-				transactions += 1;
-				if (transactions === 3) return Promise.reject(new Error("injected capability writer rejection"));
+			withWriteTxAsync: async (fn) => {
+				const committed = await ownerReadOne<{ n: number }>(
+					owner,
+					"SELECT COUNT(*) AS n FROM entities WHERE agent_id='owner' AND name LIKE 'Capability retry entity %'",
+					[],
+					{ operation: "test.capability.writer-boundary" },
+				);
+				if (committed?.n === 20) throw new Error("injected capability writer rejection");
 				return enqueue(fn);
 			},
 		};
@@ -983,6 +998,27 @@ describe("dreaming-agent-tools", () => {
 		expect(contradiction.some((c) => c.detected)).toBe(true);
 	});
 
+	it("omitted attention agent never reads outside a multi-agent pass", async () => {
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		for (const agentId of ["owner", "permitted", "foreign"]) {
+			await ownerRun(
+				owner,
+				`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority) VALUES (?, ?, 'hygiene', 'entity:test', '{}', 50)`,
+				[`attention-${agentId}`, agentId],
+				{ operation: "test.attention.seed" },
+			);
+		}
+		const tools = createDreamingAgentTools({
+			accessor: getDbAccessor(),
+			agentId: "owner",
+			allowedAgentIds: ["owner", "permitted"],
+			actor: "dreaming",
+		});
+		const result = readResult(await findTool(tools, "attention_list").execute("attention", {}));
+		expect(result.ok).toBe(true);
+		expect(result.items).toEqual([expect.objectContaining({ id: "attention-owner" })]);
+	});
+
 	it("attention_list returns pending and resolved hygiene records", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
 		const tools = createDreamingAgentTools({
@@ -1058,6 +1094,7 @@ describe("dreaming-agent-tools", () => {
 	});
 
 	it("decline_attention resolves a pending flag and is one-use and scoped", async () => {
+		await seedPass("pass-1", "owner");
 		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
 		const tools = createDreamingAgentTools({
 			accessor: getDbAccessor(),
@@ -1112,7 +1149,7 @@ describe("dreaming-agent-tools", () => {
 		expect(crossScope).toMatchObject({
 			ok: false,
 			items: [],
-			error: "Attention record is not pending in this agent scope",
+			error: "agent_not_permitted",
 		});
 		const stillPending = readResult(
 			await findTool(tools, "attention_list").execute(
@@ -1170,6 +1207,7 @@ describe("dreaming-agent-tools", () => {
 	});
 
 	it("flags and archives a junk entity in one apply batch", async () => {
+		await seedPass("pass-1", "owner");
 		insertEntity("e-husk", "Legacy Husk", "legacy husk", "owner");
 		const tools = createDreamingAgentTools({
 			accessor: getDbAccessor(),

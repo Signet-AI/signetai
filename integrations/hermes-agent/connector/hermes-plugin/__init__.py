@@ -865,15 +865,7 @@ class SignetMemoryProvider(MemoryProvider):
         return "signet"
 
     def is_available(self) -> bool:
-        """Check if the Signet daemon is reachable. No credentials needed."""
-        if SignetClient is None:
-            logger.debug("Signet is_available(): SignetClient not importable")
-            return False
-        try:
-            return SignetClient().is_available()
-        except Exception as err:
-            logger.debug("Signet is_available() check failed: %s", err)
-            return False
+        return SignetClient is not None
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
         """Write config to $HERMES_HOME/signet.json."""
@@ -914,17 +906,6 @@ class SignetMemoryProvider(MemoryProvider):
             logger.warning("Signet plugin: SignetClient not importable — skipping initialization")
             return
 
-        agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip()
-        if agent_id == "hermes-agent":
-            logger.warning(
-                "SIGNET_AGENT_ID='hermes-agent' is the harness name, not an agent scope; "
-                "the daemon's configured agent will be used instead."
-            )
-            agent_id = ""
-        if not agent_id:
-            logger.debug("SIGNET_AGENT_ID is not set; the daemon's configured agent scope applies.")
-
-        self._agent_id = agent_id
         with self._mirror_state_lock:
             self._mirror_shutdown = False
         agent_context = kwargs.get("agent_context", "")
@@ -933,12 +914,12 @@ class SignetMemoryProvider(MemoryProvider):
             logger.debug("Signet skipped: cron/flush context")
             return
 
-        self._client = SignetClient(agent_id=agent_id, harness="hermes-agent")
+        self._client = SignetClient(harness="hermes-agent")
+        agent_id = self._client.agent_id
+        self._agent_id = agent_id
 
         if not self._client.is_available():
             logger.debug("Signet daemon not reachable at %s", self._client.base_url)
-            self._client = None
-            return
 
         next_session_key = session_id or "hermes-default"
         if self._session_key and self._session_key != next_session_key:
@@ -1731,15 +1712,6 @@ class SignetMemoryProvider(MemoryProvider):
 
         if not transcript:
             return
-        if len(transcript) > 100_000:
-            cutoff = len(transcript) - 100_000
-            boundary = transcript.find("\n\nuser: ", cutoff)
-            if boundary == -1:
-                boundary = transcript.find("\n\nassistant: ", cutoff)
-            if boundary != -1:
-                transcript = transcript[boundary + 2:]
-            else:
-                transcript = transcript[cutoff:]
 
         try:
             result = self._client.session_end(

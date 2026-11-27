@@ -128,54 +128,67 @@ Subcommands:
 
 ## `signet api-key`
 
-Create named API keys for remote connectors and other daemon clients. See
-[Remote Harness Connectors](/remote-connectors/) for the full remote setup flow.
+The legacy key-management commands are for local-daemon maintenance, not team
+harness enrollment. Use `signet login` and `signet connect <harness>` for a team
+instance so its daemon issues a user-session-bound connector key. Do not copy a
+key into harness settings or an environment assignment.
 
-```bash
-signet api-key create --name "work laptop pi" --connector pi --agent-id pi-work-laptop
-signet api-key list
-signet api-key revoke <id-or-prefix>
-```
-
-The raw `sig_sk_...` key is printed once. Store it on the remote machine as
-`SIGNET_API_KEY`. `--agent-id` creates an auth-enforced agent scope: a key
-created with `--agent-id <agent-name>` defaults requests to that agent and rejects requests
-for other agents.
+Revoke exposed legacy keys before reconnecting. Removing a key from a local
+configuration file does not revoke it on the server. See
+[Remote Harness Connectors](/remote-connectors/) for enrollment and recovery.
 
 ---
 
-## `signet connector`
-
-Install portable harness connectors. Use `signet connect <harness>` as a short
-alias for `signet connector install <harness>`. For a start-to-finish remote
-machine setup, see [Remote Harness Connectors](/remote-connectors/).
+## Login and session management
 
 ```bash
+signet login --url https://signet.example.com
+signet login --url https://signet.example.com --device-code
+signet whoami --json
+signet auth devices
+signet auth sessions
+signet auth devices revoke <id>
+signet auth sessions revoke <id>
+signet logout
+signet logout --all
+```
+
+Login opens a browser approval page and prints its user code. `--device-code`
+prints the URL without opening a browser. The login store saves the refresh
+credential privately; it is never printed. `whoami` reports identity, target URL,
+and credential source, not credential contents. Local mode needs no login.
+
+## `signet connect`, `signet disconnect`, and `signet connector`
+
+```bash
+signet connect codex --agent alice
 signet connector install pi
-signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
-signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-# For a Codex client scoped to one agent:
-signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
-signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connector list --json
+signet connector rotate codex
+signet connector doctor --json
+signet disconnect codex
+signet connect hermes-agent --profile work --agent alice
 ```
 
-Connector installers are also published as individual npm packages for machines
-where you only want to configure one harness:
+`connector install` is the compatibility spelling of `connect`. A team target
+requires your signed-in user session. Connect provisions a harness key, stores
+it in a private key file, and installs credential-free integration files.
+Disconnect revokes that key before removing local integration and registry
+state. An unreachable server leaves local state available for retry. Rotation
+revokes the previous key before provisioning a replacement; reconnect if the
+replacement could not be installed.
 
-```bash
-npx -y @signetai/connector-pi install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
-npx -y @signetai/connector-opencode install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id opencode-work-laptop
-npx -y @signetai/connector-codex install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-```
+Connect, install, rotate, and disconnect accept `--url`, `--agent`, `--profile`
+(for Hermes), and `--json`. `--agent-id` is a compatibility spelling of `--agent`.
+When automation supplies a credential, use `--api-key-stdin` with piped input,
+never an argv key. Team provisioning still requires a user session, not a
+connector key.
 
-For Codex, `@signetai/codex-plugin` is the native-plugin-oriented installer name.
-It writes the same generated Codex plugin marketplace bundle and compatibility
-hook/MCP config as `signet connect codex`:
-
-```bash
-npx -y @signetai/codex-plugin install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
-# Use a key created with --agent-id <agent-name> to scope this Codex install to that agent.
-```
+List reports validity, expiry, and available last-used metadata. Doctor checks
+inline credentials, private-file permissions, credential validity, outbox
+pending/quarantine state, and unassigned legacy keys. Unknown or unavailable
+checks stay visible. See [Remote Harness Connectors](/remote-connectors/) for
+profile isolation, recovery, and the complete supported-harness list.
 
 ---
 
@@ -214,7 +227,10 @@ API/migration endpoint:
 | `POST /api/synthesis/trigger` | Trigger Dreaming's manifest-gated MEMORY.md publication |
 
 Most subcommands require `-H, --harness <harness>` identifying the calling
-platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is
+platform (e.g. `claude-code`, `opencode`, `openclaw`). The SDK resolves the
+registered target and credential for that harness; hook commands do not carry
+inline keys. Authentication failures exit `3` for HTTP 401 and `4` for HTTP 403;
+`--json` includes the reason.
 
 When hook payloads are provided over stdin, the CLI now prefers canonical
 `session_key` / `sessionKey` fields before legacy `session_id` aliases.
@@ -230,6 +246,9 @@ for the daemon after 10 seconds. On an HTTP 503 it tries again, up to 3 attempts
 one second apart, within that limit. It does not retry timeouts or other errors.
 `signet hook compaction-complete` also forwards stdin `cwd` as the fallback
 `project` scope when transcript persistence has not landed yet.
-not running, hooks exit cleanly with code 0 so the harness is not blocked.
+
+When the daemon is unavailable, a zero hook exit code is not proof of server
+capture. Session-end evidence remains in the durable outbox until delivery can
+be retried; authorization failures never silently retarget it to a local daemon.
 
 ---

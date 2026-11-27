@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
 	chmodSync,
@@ -88,7 +89,8 @@ describe("ForgeConnector.install", () => {
 		const config = readJson(mcpPath);
 		expect(config.mcpServers).toEqual({
 			signet: {
-				command: "signet-mcp",
+				command: "signet",
+				args: ["connector", "mcp", "forge"],
 				env: { SIGNET_PATH: tmpRoot },
 			},
 		});
@@ -115,7 +117,7 @@ describe("ForgeConnector.install", () => {
 		expect(config.other).toBe(true);
 		expect(config.mcpServers).toMatchObject({
 			existing: { command: "example", args: ["serve"] },
-			signet: { command: "signet-mcp", env: { SIGNET_PATH: tmpRoot } },
+			signet: { command: "signet", args: ["connector", "mcp", "forge"], env: { SIGNET_PATH: tmpRoot } },
 		});
 	});
 
@@ -141,7 +143,7 @@ describe("ForgeConnector.install", () => {
 		expect(existsSync(join(tmpRoot, ".forge", ".mcp.json"))).toBe(false);
 	});
 
-	it("writes remote HTTP MCP config when SIGNET_DAEMON_URL is set", async () => {
+	it("writes a registry MCP proxy when a remote daemon is configured", async () => {
 		writeIdentity(tmpRoot);
 		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:3850";
 		process.env.SIGNET_API_KEY = "sig_sk_forge_test_secret";
@@ -152,13 +154,14 @@ describe("ForgeConnector.install", () => {
 		const config = readJson(join(tmpRoot, ".forge", ".mcp.json"));
 		expect(config.mcpServers).toEqual({
 			signet: {
-				url: "https://daemon.example.test:3850/mcp",
-				headers: { Authorization: "Bearer sig_sk_forge_test_secret" },
+				command: "signet",
+				args: ["connector", "mcp", "forge"],
+				env: { SIGNET_PATH: tmpRoot },
 			},
 		});
 	});
 
-	it.skipIf(process.platform === "win32")("keeps an MCP config that holds the API key private", async () => {
+	it.skipIf(process.platform === "win32")("keeps credentials out of existing MCP configs", async () => {
 		writeIdentity(tmpRoot);
 		const configPath = join(tmpRoot, ".forge", ".mcp.json");
 		mkdirSync(join(tmpRoot, ".forge"), { recursive: true });
@@ -169,8 +172,7 @@ describe("ForgeConnector.install", () => {
 
 		await new ForgeConnector().install(tmpRoot);
 
-		expect(readFileSync(configPath, "utf-8")).toContain("sig_sk_forge_test_secret");
-		expect(statSync(configPath).mode & 0o777).toBe(0o600);
+		expect(readFileSync(configPath, "utf-8")).not.toContain("sig_sk_forge_test_secret");
 	});
 
 	it("strips legacy Signet block from source AGENTS.md", async () => {

@@ -258,6 +258,7 @@ export function selectDreamingSurprisalInDb(
 	agentId: string,
 	config: DreamingSurprisalConfig,
 	since: string | null,
+	compartmentId: number | null = null,
 ): DreamingSurprisalSelection {
 	const startedAt = Date.now();
 	try {
@@ -267,16 +268,19 @@ export function selectDreamingSurprisalInDb(
 				`SELECT m.id, m.created_at AS capturedAt, e.vector, e.dimensions
 				 FROM memories AS m
 				 JOIN embeddings AS e ON e.source_type = 'memory' AND e.source_id = m.id
+				   AND e.compartment_id IS ?1
 				   AND e.id = (
 					   SELECT latest.id
 					   FROM embeddings AS latest
-					   WHERE latest.source_type = 'memory'
+					   WHERE latest.compartment_id IS ?1
+					     AND latest.source_type = 'memory'
 						 AND latest.source_id = m.id
 						 AND (latest.agent_id = m.agent_id OR latest.agent_id IS NULL)
 					   ORDER BY latest.created_at DESC, latest.id DESC
 					   LIMIT 1
 				   )
-				 WHERE m.agent_id = ?
+				 WHERE m.compartment_id IS ?1
+				   AND m.agent_id = ?
 				   AND (e.agent_id = ? OR e.agent_id IS NULL)
 				   AND COALESCE(m.memory_kind, 'episodic') = 'episodic'
 				   AND COALESCE(m.is_deleted, 0) = 0
@@ -287,12 +291,12 @@ export function selectDreamingSurprisalInDb(
 				 ORDER BY m.created_at DESC, m.id DESC
 				 LIMIT ?`,
 			)
-			.all(agentId, agentId, since, since, limit) as Array<{
-			id: string;
-			capturedAt: string;
-			vector: unknown;
-			dimensions: number;
-		}>;
+			.all<{
+				id: string;
+				capturedAt: string;
+				vector: unknown;
+				dimensions: number;
+			}>(compartmentId, agentId, agentId, since, since, limit);
 		const observations = rows.flatMap((row) => {
 			const vector = blobToVector(row.vector);
 			return vector === null || !Number.isInteger(row.dimensions) || row.dimensions !== vector.length

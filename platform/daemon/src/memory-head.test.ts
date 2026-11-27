@@ -1,10 +1,21 @@
+import { localAllReadScope } from "@signet/core";
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
+import { up as migrateDreamingPartitions } from "../../core/src/migrations/179-dreaming-evidence-leases";
+import { createDbOwnerClient, type DbOwnerClient, type DbOwnerSubmitOptions } from "./db-owner-client";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "./db-owner-maintenance";
+import type { DbOwnerJob, DbOwnerRequest } from "./db-owner-protocol";
 import { ownerReadOne, ownerRun } from "./db-owner-sql";
-import { writeMemoryHead, type MemoryHeadRequest } from "./memory-head";
+import { withContentPassWrites } from "./memory-head-owner";
+import { readCuratedMemoryHead, requestMemoryHead, writeMemoryHead, type MemoryHeadRequest } from "./memory-head";
 
 describe("memory head owner runtime", () => {
 	let root: string;
@@ -12,13 +23,33 @@ describe("memory head owner runtime", () => {
 	const options = { operation: "head-fixture", lane: "write" as const, deadlineMs: 10000 };
 	const sql = (query: string, values: readonly unknown[] = []) => ownerRun(client, query, values, options);
 	const head = (request: MemoryHeadRequest) =>
-		client.submit<Record<string, unknown>>({ kind: "memory_head", request }, options).result;
+		client.submit<Record<string, unknown>>(
+			{ kind: "memory_head", request },
+			{
+				...options,
+				lane: request.action === "read" || request.action === "inspect" ? "read" : "write",
+			},
+		).result;
 	const snapshot = (agentId = "default") => head({ action: "read", agentId });
-	const pass = (id: string, agentId = "default") =>
-		sql("INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES (?, ?, 'incremental-content', 'running')", [
-			id,
-			agentId,
-		]);
+	const pass = (id: string, agentId = "default", compartmentId: number | null = null) =>
+		sql(
+			"INSERT INTO dreaming_passes (id, agent_id, compartment_id, mode, status) VALUES (?, ?, ?, 'incremental-content', 'running')",
+			[id, agentId, compartmentId],
+		);
+	const partitions = async () => {
+		await sql(
+			"INSERT INTO classifications(id,name,created_at) VALUES ('hr','HR',datetime('now')),('eng','Engineering',datetime('now')),('other','Other',datetime('now'))",
+		);
+		await sql(
+			"INSERT INTO compartments(id,key,created_at) VALUES (1,'hr',datetime('now')),(2,'eng',datetime('now')),(3,'eng,hr',datetime('now')),(4,'other',datetime('now'))",
+		);
+		await sql("INSERT INTO compartment_members VALUES (1,'hr'),(2,'eng'),(3,'hr'),(3,'eng'),(4,'other')");
+	};
+	const submitEntries = (
+		passId: string,
+		entries: Extract<MemoryHeadRequest, { action: "commit" }>["input"]["entries"],
+	) => head({ action: "commit", input: { passId, agentId: "default", entries } });
+
 	const memory = (id: string, content: string, agentId = "default") =>
 		sql(
 			"INSERT INTO memories (id, content, agent_id, memory_kind, type, visibility, created_at, updated_at) VALUES (?, ?, ?, 'episodic', 'fact', 'private', datetime('now'), datetime('now'))",
@@ -42,24 +73,558 @@ describe("memory head owner runtime", () => {
 		mkdirSync(join(root, "memory"));
 		client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
 		await client.initialize(root);
+		await client.close();
+		const db = new Database(join(root, "memory", "memories.db"));
+		try {
+			migrateDreamingPartitions(db);
+		} finally {
+			db.close();
+		}
+		client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
 		await memory("meeting", "Meeting is Tuesday.");
 	});
 	afterEach(async () => {
+		await closeRegisteredDbOwnerMaintenance();
+		await closeDbAccessor();
 		await client.close();
 		rmSync(root, { recursive: true, force: true });
+	});
+
+	const observeHeadRequests = () => {
+		const dbPath = join(root, "memory", "memories.db");
+		initDbAccessor(dbPath);
+		const owner = client;
+		const jobs: DbOwnerJob[] = [];
+		registerDbOwnerMaintenance(
+			createDbOwnerMaintenance({
+				dbPath,
+				owner: {
+					...owner,
+					submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions) {
+						const handle = owner.submit<Result>(request, options);
+						jobs.push(handle.job);
+						return handle;
+					},
+				},
+			}),
+		);
+		return jobs;
+	};
+
+	it("reads and inspects completed heads on the read lane while a separate SQLite writer is held", async () => {
+		expect(await commit("read-contention")).toMatchObject({ ok: true });
+		const target = join(root, "MEMORY.md");
+		const content = readFileSync(target, "utf8");
+		rmSync(target);
+		const dbPath = join(root, "memory", "memories.db");
+		const jobs = observeHeadRequests();
+		const writer = new Database(dbPath);
+		const version = writer.query("PRAGMA data_version").get();
+		writer.exec("BEGIN IMMEDIATE");
+		let reading: Promise<unknown> | undefined;
+		let finalVersion: unknown;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			reading = Promise.all([
+				readCuratedMemoryHead("default"),
+				requestMemoryHead({
+					action: "inspect",
+					agentId: "default",
+					content,
+					readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				}),
+			]);
+			const result = await Promise.race([
+				reading,
+				new Promise((_, reject) => {
+					timer = setTimeout(() => reject(new Error("head read waited behind external writer")), 750);
+				}),
+			]);
+			expect(result).toMatchObject([
+				{ status: "current", content: "- Meeting is Tuesday." },
+				{ generated: true, status: "current" },
+			]);
+			expect(jobs.map((job) => ({ action: job.operation, lane: job.lane }))).toEqual([
+				{ action: "memory-head.read", lane: "read" },
+				{ action: "memory-head.inspect", lane: "read" },
+			]);
+			expect(existsSync(target)).toBe(false);
+		} finally {
+			clearTimeout(timer);
+			writer.exec("ROLLBACK");
+			await reading?.catch(() => undefined);
+			finalVersion = writer.query("PRAGMA data_version").get();
+			writer.close();
+		}
+		expect(finalVersion).toEqual(version);
+	});
+
+	it("reports pending publication without a database or file write from a read request", async () => {
+		const target = join(root, "MEMORY.md");
+		mkdirSync(target);
+		expect(await commit("pending-read")).toMatchObject({ code: "PUBLICATION_PENDING" });
+		rmSync(target, { recursive: true });
+		const db = new Database(join(root, "memory", "memories.db"));
+		const version = db.query("PRAGMA data_version").get();
+		try {
+			const result = await client.submit(
+				{ kind: "memory_head", request: { action: "read", agentId: "default" } },
+				{ ...options, lane: "read" },
+			).result;
+			expect(result).toMatchObject({ publication: "pending", status: "current", revision: 1 });
+			expect(existsSync(target)).toBe(false);
+			expect(db.query("PRAGMA data_version").get()).toEqual(version);
+		} finally {
+			db.close();
+		}
+	});
+
+	for (const authored of [false, true]) {
+		it(`recovers durable pending publication through a separate write after restart; authored=${authored}`, async () => {
+			const target = join(root, "MEMORY.md");
+			mkdirSync(target);
+			expect(await commit("restart-pending")).toMatchObject({ code: "PUBLICATION_PENDING" });
+			rmSync(target, { recursive: true });
+			if (authored) writeFileSync(target, "My authored memory.");
+			await client.close();
+			client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
+			const jobs = observeHeadRequests();
+			const result = await readCuratedMemoryHead("default");
+			expect(result).toMatchObject({ status: "current", revision: 1, content: "- Meeting is Tuesday." });
+			expect(jobs.map((job) => ({ action: job.operation, lane: job.lane }))).toEqual([
+				{ action: "memory-head.read", lane: "read" },
+				{ action: "memory-head.publish", lane: "write" },
+				{ action: "memory-head.read", lane: "read" },
+			]);
+			if (authored) {
+				expect(result).toMatchObject({
+					publication: "pending",
+					publicationError: expect.stringContaining("User-authored MEMORY.md preserved"),
+				});
+				expect(readFileSync(target, "utf8")).toBe("My authored memory.");
+			} else {
+				expect(result.publication).toBeUndefined();
+				expect(readFileSync(target, "utf8")).toContain("- Meeting is Tuesday.");
+			}
+			expect(
+				await ownerReadOne(
+					client,
+					"SELECT status FROM memory_head_publications WHERE agent_id='default' AND revision=1",
+					[],
+					options,
+				),
+			).toEqual({ status: authored ? "pending" : "completed" });
+			expect(await ownerReadOne(client, "SELECT COUNT(*) AS count FROM memory_head_revisions", [], options)).toEqual({
+				count: 1,
+			});
+		});
+	}
+
+	it("rejects head commit and publication requests submitted on the read lane", async () => {
+		await pass("read-mutation");
+		for (const request of [
+			{ action: "publish", agentId: "default" },
+			{ action: "commit", input: { passId: "read-mutation", agentId: "default", entries: [] } },
+		] as const) {
+			await expect(
+				client.submit({ kind: "memory_head", request }, { ...options, lane: "read" }).result,
+			).rejects.toThrow("requires the write lane");
+		}
+		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
+		expect(await ownerReadOne(client, "SELECT COUNT(*) AS count FROM memory_head_revisions", [], options)).toEqual({
+			count: 0,
+		});
+	});
+
+	for (const labels of [
+		[1, null],
+		[null, 1],
+	]) {
+		it(`keeps equal head entry IDs independent in label order ${JSON.stringify(labels)}`, async () => {
+			await partitions();
+			await memory("secret", "Confidential meeting.");
+			await sql("UPDATE memories SET compartment_id=1 WHERE id='secret'");
+			for (const label of labels) {
+				const id = label === null ? "public" : "secret";
+				const text = label === null ? "Meeting is Tuesday." : "Confidential meeting.";
+				await pass(id, "default", label);
+				expect(
+					await submitEntries(id, [
+						{
+							entryId: "meeting",
+							text,
+							support: [{ source_ref: `memory:${label === null ? "meeting" : "secret"}`, quote: text }],
+						},
+					]),
+				).toMatchObject({ ok: true, revision: 1 });
+			}
+			for (const label of labels) {
+				const id = label === null ? "public" : "secret";
+				const text = label === null ? "Meeting is Tuesday." : "Confidential meeting.";
+				expect(await head({ action: "read", agentId: "default", passId: id })).toMatchObject({
+					status: "current",
+					content: `- ${text}`,
+					entries: [{ entry_id: "meeting", canonical_text: text, status: "active" }],
+					committedEntries: [
+						{
+							entryId: "meeting",
+							text,
+							support: [{ source_ref: `memory:${label === null ? "meeting" : "secret"}`, quote: text }],
+						},
+					],
+				});
+			}
+			expect(
+				await ownerReadOne(
+					client,
+					`SELECT COUNT(*) AS n FROM evidence_citations
+				WHERE derived_kind='head_entry' AND evidence_id='meeting'`,
+					[],
+					options,
+				),
+			).toEqual({ n: 1 });
+			expect(
+				await ownerReadOne(
+					client,
+					`SELECT COUNT(*) AS n FROM evidence_citations
+				WHERE derived_kind='head_entry' AND evidence_id='secret'`,
+					[],
+					options,
+				),
+			).toEqual({ n: 1 });
+			for (const label of labels) {
+				const otherLabel = label === null ? 1 : null;
+				const otherPass = label === null ? "secret" : "public";
+				const before = await head({ action: "read", agentId: "default", passId: otherPass });
+				const otherEntry = await ownerReadOne<{ id: string }>(
+					client,
+					"SELECT id FROM memory_head_entries WHERE agent_id='default' AND entry_id='meeting' AND compartment_id IS ?",
+					[otherLabel],
+					options,
+				);
+				if (!otherEntry) throw new Error("Missing other head entry");
+				const otherCitationId = otherEntry.id;
+				const citations = await ownerReadOne(
+					client,
+					`SELECT json_group_array(evidence_id) AS ids
+					FROM evidence_citations WHERE derived_kind='head_entry' AND derived_id=?`,
+					[otherCitationId],
+					options,
+				);
+				const nextPass = label === null ? "public-next" : "secret-next";
+				const text = label === null ? "Meeting is Tuesday." : "Confidential meeting.";
+				await pass(nextPass, "default", label);
+				expect(
+					await submitEntries(nextPass, [
+						{
+							entryId: "meeting",
+							text: `${text} Updated`,
+							support: [{ source_ref: `memory:${label === null ? "meeting" : "secret"}`, quote: text }],
+						},
+					]),
+				).toMatchObject({ ok: true, revision: 2 });
+				const after = await head({ action: "read", agentId: "default", passId: otherPass });
+				expect(after.content).toEqual(before.content);
+				expect(after.committedEntries).toEqual(before.committedEntries);
+				expect(after.status).toBe("current");
+				expect(
+					await ownerReadOne(
+						client,
+						`SELECT json_group_array(evidence_id) AS ids
+					FROM evidence_citations WHERE derived_kind='head_entry' AND derived_id=?`,
+						[otherCitationId],
+						options,
+					),
+				).toEqual(citations);
+				expect(
+					await ownerReadOne(
+						client,
+						`SELECT COUNT(*) AS n FROM memory_head_revisions
+					WHERE compartment_id IS ? AND is_current=1`,
+						[label],
+						options,
+					),
+				).toEqual({ n: 1 });
+			}
+			expect(readFileSync(join(root, "MEMORY.md"), "utf8")).not.toContain("Confidential");
+		});
+	}
+
+	it("keeps classified head streams out of the public projection and public revision fence", async () => {
+		await partitions();
+		await memory("secret", "Confidential meeting.");
+		await sql("UPDATE memories SET compartment_id=1 WHERE id='secret'");
+		await pass("public");
+		await pass("classified", "default", 1);
+		expect(
+			await head({
+				action: "commit",
+				input: {
+					agentId: "default",
+					passId: "classified",
+					entries: [
+						{
+							entryId: "secret",
+							text: "Confidential meeting.",
+							support: [{ source_ref: "memory:secret", quote: "Confidential meeting." }],
+						},
+					],
+				},
+			}),
+		).toMatchObject({ ok: true });
+		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
+		expect(await snapshot()).toMatchObject({ revision: 0, content: null, entries: [] });
+		expect(await head({ action: "read", agentId: "default", passId: "classified" })).toMatchObject({
+			content: "- Confidential meeting.",
+			entries: [expect.objectContaining({ entry_id: "secret" })],
+		});
+		expect(
+			await head({
+				action: "commit",
+				input: {
+					agentId: "default",
+					passId: "public",
+					entries: [
+						{
+							entryId: "meeting",
+							text: "Meeting is Tuesday.",
+							support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }],
+						},
+					],
+				},
+			}),
+		).toMatchObject({ ok: true, revision: 1 });
+		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).not.toContain("Confidential");
+		expect(await head({ action: "read", agentId: "default", passId: "classified" })).toMatchObject({
+			content: "- Confidential meeting.",
+			status: "current",
+			readableEntries: [expect.objectContaining({ entry_id: "meeting", compartment_id: null })],
+		});
+		await sql("UPDATE memories SET content='Revised confidential meeting.' WHERE id='secret'");
+		expect(await snapshot()).toMatchObject({ content: "- Meeting is Tuesday.", revision: 1, status: "current" });
+		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).not.toContain("Confidential");
+	});
+
+	it("validates subset evidence for every source kind and persists pass labels and copy citations", async () => {
+		await partitions();
+		await memory("subset", "Subset evidence");
+		await sql("UPDATE memories SET compartment_id=1 WHERE id='subset'");
+		await sql(
+			"INSERT INTO memory_artifacts(source_path,source_sha256,source_kind,session_id,session_token,content,agent_id,compartment_id,captured_at,updated_at) VALUES ('artifact','sha','note','s','s','Artifact evidence','default',2,datetime('now'),datetime('now'))",
+		);
+		await sql(
+			"INSERT INTO session_transcripts(session_key,content,agent_id,compartment_id,created_at,completed_at) VALUES ('transcript','Transcript evidence','default',3,datetime('now'),datetime('now'))",
+		);
+		await sql(
+			"INSERT INTO session_summaries(id,content,agent_id,compartment_id,depth,kind,token_count,earliest_at,latest_at,created_at) VALUES ('summary','Summary evidence','default',NULL,0,'session',3,datetime('now'),datetime('now'),datetime('now'))",
+		);
+		await pass("union", "default", 3);
+		const entries = [
+			{ entryId: "subset", text: "Subset", support: [{ source_ref: "memory:subset", quote: "Subset evidence" }] },
+			{
+				entryId: "artifact",
+				text: "Artifact",
+				support: [{ source_ref: "artifact:artifact", quote: "Artifact evidence" }],
+			},
+			{
+				entryId: "transcript",
+				text: "Transcript",
+				support: [{ source_ref: "transcript:transcript", quote: "Transcript evidence" }],
+			},
+			{ entryId: "summary", text: "Summary", support: [{ source_ref: "summary:summary", quote: "Summary evidence" }] },
+		];
+		expect(await submitEntries("union", entries)).toMatchObject({ ok: true });
+		expect(
+			await ownerReadOne(
+				client,
+				"SELECT COUNT(*) AS n FROM memory_head_entries WHERE compartment_id=3 AND pass_id='union'",
+				[],
+				options,
+			),
+		).toEqual({ n: 4 });
+		expect(
+			await ownerReadOne(
+				client,
+				"SELECT COUNT(*) AS n FROM memory_head_revision_entries e JOIN memory_head_revisions r ON r.id=e.revision_id WHERE e.compartment_id=3 AND r.compartment_id=3 AND e.pass_id='union'",
+				[],
+				options,
+			),
+		).toEqual({ n: 4 });
+		expect(
+			await ownerReadOne(client, "SELECT compartment_id,status FROM memory_head_publications", [], options),
+		).toEqual({ compartment_id: 3, status: "completed" });
+		expect(
+			await ownerReadOne(
+				client,
+				"SELECT COUNT(*) AS n FROM evidence_citations WHERE derived_kind='head_entry'",
+				[],
+				options,
+			),
+		).toEqual({ n: 4 });
+		expect(
+			await ownerReadOne(
+				client,
+				"SELECT COUNT(*) AS n FROM evidence_citations WHERE derived_kind='head_revision' AND evidence_kind='attribute'",
+				[],
+				options,
+			),
+		).toEqual({ n: 4 });
+		await pass("foreign", "other", 3);
+		for (const entry of entries)
+			expect(
+				await head({ action: "commit", input: { agentId: "other", passId: "foreign", entries: [entry] } }),
+			).toMatchObject({ ok: false, code: "INVALID_PROVENANCE" });
+		await pass("public");
+		for (const entry of entries.slice(0, 3))
+			expect(await submitEntries("public", [{ ...entry, entryId: `public-${entry.entryId}` }])).toMatchObject({
+				ok: false,
+				code: "INVALID_PROVENANCE",
+			});
+		await sql("UPDATE memories SET compartment_id=4 WHERE id='subset'");
+		await pass("union-later", "default", 3);
+		expect(await submitEntries("union-later", entries)).toMatchObject({ ok: false, code: "INVALID_PROVENANCE" });
+	});
+
+	it("keeps new labels separate and rejects stale epochs before durable or file side effects", async () => {
+		await partitions();
+		expect(await commit("public")).toMatchObject({ ok: true });
+		const projection = readFileSync(join(root, "MEMORY.md"), "utf8");
+		await pass("classified", "default", 1);
+		expect(
+			await submitEntries("classified", [
+				{
+					entryId: "meeting",
+					text: "Changed",
+					support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }],
+				},
+			]),
+		).toMatchObject({ ok: true });
+		expect(await ownerReadOne(client, "SELECT COUNT(*) AS n FROM memory_head_revisions", [], options)).toEqual({
+			n: 2,
+		});
+		await pass("epoch");
+		await sql(
+			"INSERT INTO classification_assignments VALUES ('memory','meeting','default','hr','operator',datetime('now'))",
+		);
+		await expect(
+			submitEntries("epoch", [
+				{ entryId: "new", text: "Changed", support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }] },
+			]),
+		).rejects.toThrow("compartment_mismatch");
+		await expect(head({ action: "read", agentId: "default", passId: "epoch" })).rejects.toThrow("compartment_mismatch");
+		expect(await ownerReadOne(client, "SELECT COUNT(*) AS n FROM memory_head_revisions", [], options)).toEqual({
+			n: 2,
+		});
+		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toBe(projection);
+	});
+
+	it("keeps same-label revision fencing across owner restart without clobbering another stream", async () => {
+		await partitions();
+		await pass("winner", "default", 1);
+		await pass("loser", "default", 1);
+		const entry = {
+			entryId: "classified",
+			text: "Meeting",
+			support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }],
+		};
+		expect(await submitEntries("winner", [entry])).toMatchObject({ ok: true, revision: 1 });
+		expect(await submitEntries("loser", [entry])).toMatchObject({ ok: false, code: "STALE_HEAD" });
+		await client.close();
+		client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
+		await pass("later", "default", 1);
+		expect(await head({ action: "read", agentId: "default", passId: "later" })).toMatchObject({
+			content: "- Meeting",
+			revision: 1,
+		});
+		expect(await submitEntries("later", [{ ...entry, text: "Tuesday meeting" }])).toMatchObject({
+			ok: true,
+			revision: 2,
+		});
+		expect(await snapshot()).toMatchObject({ content: null, revision: 0 });
+		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
+	});
+
+	it("withholds a rendered revision after its cited entry moves to another label", async () => {
+		await partitions();
+		expect(await commit("original")).toMatchObject({ ok: true });
+		const target = join(root, "MEMORY.md");
+		const oldFile = readFileSync(target, "utf8");
+		await sql("UPDATE memory_head_entries SET compartment_id=1 WHERE entry_id='meeting'");
+		await sql("UPDATE memory_head_revision_entries SET compartment_id=1 WHERE entry_id='meeting'");
+		rmSync(target);
+		expect(await snapshot()).toMatchObject({ content: null, entries: [], status: "stale" });
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: oldFile,
+				readScope: { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null },
+			}),
+		).toMatchObject({
+			content: null,
+			status: "stale",
+		});
+		expect(existsSync(target)).toBe(false);
+	});
+
+	it("advances only the writing pass fence for a same-label evidence edit", async () => {
+		await partitions();
+		await memory("scoped", "Original evidence");
+		await sql("UPDATE memories SET compartment_id=1 WHERE id='scoped'");
+		await pass("writer", "default", 1);
+		await pass("peer", "default", 1);
+		await pass("public");
+		await client.close();
+		const db = new Database(join(root, "memory", "memories.db"));
+		try {
+			withContentPassWrites(db, "writer", () =>
+				db.prepare("UPDATE memories SET content='Changed evidence' WHERE id='scoped'").run(),
+			);
+		} finally {
+			db.close();
+		}
+		client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
+		const entries = [
+			{ entryId: "scoped", text: "Changed", support: [{ source_ref: "memory:scoped", quote: "Changed evidence" }] },
+		];
+		expect(await submitEntries("writer", entries)).toMatchObject({ ok: true });
+		expect(await submitEntries("peer", entries)).toMatchObject({ ok: false, code: "STALE_HEAD" });
+		expect(
+			await submitEntries("public", [
+				{
+					entryId: "meeting",
+					text: "Tuesday",
+					support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }],
+				},
+			]),
+		).toMatchObject({ ok: true });
 	});
 
 	it("publishes once, withholds corrected text across restart, and regenerates on a later pass", async () => {
 		expect(await commit("first")).toMatchObject({ ok: true, revision: 1 });
 		const oldFile = readFileSync(join(root, "MEMORY.md"), "utf8");
 		expect(oldFile).toContain("signet-generated-memory");
-		expect(await head({ action: "inspect", agentId: "default", content: oldFile })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: oldFile,
+			}),
+		).toMatchObject({
 			status: "current",
 			content: "- Meeting is Tuesday.",
 		});
 		await sql("UPDATE memories SET content='Meeting is Thursday.' WHERE id='meeting'");
 		expect(await snapshot()).toMatchObject({ status: "stale", revision: 2, entries: [] });
-		expect(await head({ action: "inspect", agentId: "default", content: oldFile })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: oldFile,
+			}),
+		).toMatchObject({
 			status: "stale",
 			content: null,
 		});
@@ -113,7 +678,14 @@ describe("memory head owner runtime", () => {
 		});
 		expect(await snapshot()).toMatchObject({ status: "current" });
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toBe(authored);
-		expect(await head({ action: "inspect", agentId: "default", content: authored })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: authored,
+			}),
+		).toMatchObject({
 			generated: false,
 			status: "authored",
 			content: authored,
@@ -126,6 +698,134 @@ describe("memory head owner runtime", () => {
 				options,
 			),
 		).toEqual({ operation: "add", provenance_json: '[{"source_ref":"memory:meeting","quote":"Meeting is Tuesday."}]' });
+	});
+
+	const label = async (compartment: number) => {
+		await sql(
+			"INSERT OR IGNORE INTO classifications (id, name, created_at, updated_at) VALUES ('cls_hr', 'HR', datetime('now'), datetime('now'))",
+		);
+		await sql("INSERT OR IGNORE INTO compartments (id, key, created_at) VALUES (?, 'cls_hr', datetime('now'))", [
+			compartment,
+		]);
+		await sql("INSERT OR IGNORE INTO compartment_members (compartment_id, classification_id) VALUES (?, 'cls_hr')", [
+			compartment,
+		]);
+	};
+	const outside = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null } as const;
+
+	it("formats a restricted reader's generated head from readable entries only", async () => {
+		await memory("salary", "Salary bands are HRSECRET.");
+		await pass("labelled");
+		await snapshot();
+		expect(
+			await head({
+				action: "commit",
+				input: {
+					passId: "labelled",
+					agentId: "default",
+					entries: [
+						{
+							entryId: "meeting",
+							text: "Meeting is Tuesday.",
+							support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }],
+						},
+						{
+							entryId: "salary",
+							text: "Salary bands are HRSECRET.",
+							support: [{ source_ref: "memory:salary", quote: "Salary bands are HRSECRET." }],
+						},
+					],
+				},
+			}),
+		).toMatchObject({ ok: true });
+		await label(7);
+		await sql("UPDATE memory_head_entries SET compartment_id=7 WHERE entry_id='salary'");
+		await sql("UPDATE memory_head_revision_entries SET compartment_id=7 WHERE entry_id='salary'");
+		const file = readFileSync(join(root, "MEMORY.md"), "utf8");
+		expect(file).toContain("HRSECRET");
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: `${file}\nHRSECRET edited projection`,
+				readScope: outside,
+			}),
+		).toMatchObject({ content: "- Meeting is Tuesday." });
+		expect(await head({ action: "inspect", agentId: "default", content: file, readScope: outside })).toEqual({
+			generated: true,
+			status: "current",
+			content: "- Meeting is Tuesday.",
+		});
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: file,
+				readScope: { ...outside, compartments: [7] },
+			}),
+		).toMatchObject({ content: "- Meeting is Tuesday.\n- Salary bands are HRSECRET." });
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: file,
+				readScope: { reach: { kind: "shared", agentId: "default" }, compartments: "all", projects: null },
+			}),
+		).toMatchObject({ content: "- Meeting is Tuesday.\n- Salary bands are HRSECRET." });
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: file,
+				readScope: { ...outside, compartments: [7], projects: ["atlas"] },
+			}),
+		).toMatchObject({ content: "" });
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: file,
+				readScope: { reach: { kind: "own", agentId: "other" }, compartments: "all", projects: null },
+			}),
+		).toMatchObject({ content: "" });
+	});
+
+	it("withholds authored head evidence from readers outside the agent label", async () => {
+		const authored = "# My memory\nHRSECRET authored note.";
+		await label(9);
+		await sql(
+			"INSERT INTO classification_assignments (target_kind, target_id, agent_id, classification_id, applied_by, applied_at) VALUES ('agent', 'default', 'default', 'cls_hr', 'test', datetime('now'))",
+		);
+		expect(await head({ action: "inspect", agentId: "default", content: authored, readScope: outside })).toMatchObject({
+			status: "authored",
+			content: null,
+		});
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: authored,
+				readScope: { ...outside, compartments: [9] },
+			}),
+		).toMatchObject({ status: "authored", content: authored });
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: authored,
+				readScope: { ...outside, compartments: [9], projects: ["atlas"] },
+			}),
+		).toMatchObject({ content: null });
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: authored,
+			}),
+		).toMatchObject({
+			content: authored,
+		});
 	});
 
 	it("rejects retired owner requests without changing the head", async () => {
@@ -168,7 +868,7 @@ describe("memory head owner runtime", () => {
 		const before = await ownerReadOne(client, "SELECT * FROM memory_head_revisions WHERE id='old-audit'", [], options);
 		expect(await commit("new-format")).toMatchObject({ ok: true, revision: 2 });
 		expect(await ownerReadOne(client, "SELECT * FROM memory_head_revisions WHERE id='old-audit'", [], options)).toEqual(
-			before,
+			{ ...before, is_current: 0 },
 		);
 		expect(await snapshot()).toMatchObject({ status: "current", content: "- Meeting is Tuesday." });
 	});
@@ -206,6 +906,19 @@ describe("memory head owner runtime", () => {
 			"CREATE TRIGGER fail_head_audit BEFORE INSERT ON memory_head_revision_entries BEGIN SELECT RAISE(ABORT, 'audit rejected'); END",
 		);
 		await expect(commit("failed", "Meeting is Thursday.")).rejects.toThrow("audit rejected");
+		await sql("DROP TRIGGER fail_head_audit");
+		await sql(
+			"CREATE TRIGGER fail_head_citation BEFORE INSERT ON evidence_citations WHEN NEW.derived_kind='head_revision' BEGIN SELECT RAISE(ABORT, 'citation rejected'); END",
+		);
+		await expect(commit("failed-citation", "Meeting is Thursday.")).rejects.toThrow("citation rejected");
+		expect(
+			await ownerReadOne(
+				client,
+				"SELECT COUNT(*) AS n FROM evidence_citations WHERE derived_kind='head_revision'",
+				[],
+				options,
+			),
+		).toEqual({ n: 2 });
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toBe(previous);
 		expect(await snapshot()).toMatchObject({ status: "stale", revision: 2 });
 		expect(await ownerReadOne(client, "SELECT COUNT(*) AS count FROM memory_head_revisions", [], options)).toEqual({
@@ -261,13 +974,22 @@ describe("memory head owner runtime", () => {
 		mkdirSync(target);
 		expect(await commit("pending")).toMatchObject({ ok: false, code: "PUBLICATION_PENDING" });
 		rmSync(target, { recursive: true });
-		expect(await snapshot()).toMatchObject({ status: "current", revision: 1 });
+		expect(await snapshot()).toMatchObject({ status: "current", revision: 1, publication: "pending" });
+		expect(existsSync(target)).toBe(false);
+		expect(await head({ action: "publish", agentId: "default" })).toMatchObject({ ok: true, publication: "completed" });
 		const generated = readFileSync(target, "utf8");
 		const edited = generated.replace("Meeting is Tuesday.", "My own wording.");
 		writeFileSync(target, edited);
 		await snapshot();
 		expect(readFileSync(target, "utf8")).toBe(edited);
-		expect(await head({ action: "inspect", agentId: "default", content: edited })).toMatchObject({
+		expect(
+			await head({
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
+				action: "inspect",
+				agentId: "default",
+				content: edited,
+			}),
+		).toMatchObject({
 			generated: false,
 			status: "authored",
 			content: edited,

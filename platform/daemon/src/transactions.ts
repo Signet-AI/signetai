@@ -1,10 +1,22 @@
-import type { WriteDb } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
+import { dreamingPassPartitionInDb, assertDreamingMutationLabelInDb } from "./classification-owner";
+import { compartmentForWrite } from "@signet/core";
+import {
+	evidenceCompartmentInTx,
+	memoryWriteDedupeSql,
+	recordEvidenceCitationsInTx,
+	syncVecDeleteBySourceExceptHash,
+	syncVecDeleteBySourceId,
+	syncVecInsert,
+	vectorToBlob,
+} from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
 
 export interface IngestEnvelope {
+	author: WriteAuthor;
 	id: string;
 	content: string;
 	normalizedContent?: string | null;
@@ -33,6 +45,9 @@ export interface IngestEnvelope {
 	visibility?: "global" | "private" | "archived";
 	reviewAfter?: string | null;
 	createdAt: string;
+	sessionKey?: string | null;
+	parentCompartment?: number | null;
+	evidence?: readonly import("./db-helpers").CitationEvidence[];
 }
 
 export interface AccessUpdate {
@@ -51,6 +66,8 @@ export interface ModifyMemoryPatch {
 }
 
 export interface MutationContext {
+	passId?: string;
+	author?: WriteAuthor;
 	actorType?: string;
 	sessionId?: string;
 	requestId?: string;
@@ -68,7 +85,7 @@ export interface ModifyMemoryTxInput {
 	embeddingModelOnContentChange?: string | null;
 	embeddingVector?: readonly number[] | null;
 	embeddingConfig?: EmbeddingConfig;
-	ctx?: MutationContext;
+	ctx: MutationContext & { readonly author: WriteAuthor };
 }
 
 export type ModifyMemoryTxStatus =
@@ -189,6 +206,10 @@ export function insertHistoryEvent(
 	db: WriteDb,
 	args: {
 		readonly memoryId: string;
+		readonly workspaceAudit?: true;
+		readonly passId?: string;
+		readonly author?: WriteAuthor;
+		readonly agentId?: string | null;
 		readonly event: string;
 		readonly oldContent: string | null;
 		readonly newContent: string | null;
@@ -202,25 +223,45 @@ export function insertHistoryEvent(
 	},
 ): void {
 	const id = crypto.randomUUID();
-	db.prepare(
-		`INSERT INTO memory_history
+	if (args.workspaceAudit && (args.memoryId !== "system" || args.agentId !== undefined || args.passId !== undefined))
+		throw new Error("invalid_workspace_audit_scope");
+	const source = args.workspaceAudit ? "(SELECT NULL AS agent_id,NULL AS compartment_id)" : "memories";
+	const filter = args.workspaceAudit ? "" : "WHERE m.id=? AND (? IS NULL OR m.agent_id=?)";
+	const sourceArgs = args.workspaceAudit ? [] : [args.memoryId, args.agentId ?? null, args.agentId ?? null];
+	if (args.passId !== undefined) {
+		if (!args.agentId) throw new Error("history_agent_required");
+		assertDreamingMutationLabelInDb(
+			db,
+			"memories",
+			args.memoryId,
+			dreamingPassPartitionInDb(db, args.passId, args.agentId),
+		);
+	}
+	const result = db
+		.prepare(
+			`INSERT INTO memory_history
 		 (id, memory_id, event, old_content, new_content, changed_by, reason,
-		  metadata, created_at, actor_type, session_id, request_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	).run(
-		id,
-		args.memoryId,
-		args.event,
-		args.oldContent,
-		args.newContent,
-		args.changedBy,
-		args.reason,
-		args.metadata,
-		args.createdAt,
-		args.actorType ?? null,
-		args.sessionId ?? null,
-		args.requestId ?? null,
-	);
+		  metadata, created_at, actor_type, session_id, request_id, agent_id, compartment_id, dreaming_pass_id)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, m.agent_id, m.compartment_id, ? FROM ${source} m ${filter} RETURNING id`,
+		)
+		.get(
+			id,
+			args.memoryId,
+			args.event,
+			args.oldContent,
+			args.newContent,
+			args.changedBy,
+			args.reason,
+			args.metadata,
+			args.createdAt,
+			args.actorType ?? null,
+			args.sessionId ?? null,
+			args.requestId ?? null,
+			args.passId ?? null,
+			...sourceArgs,
+		);
+	if (result?.id !== id) throw new Error("history_memory_scope_missing");
+	auditAuthoredWriteInTx(db, args.author, `memory.${args.event}`, "memory", args.memoryId, args.agentId ?? null);
 }
 
 function invalidateDerivedMemoriesForMemoryInTx(
@@ -239,14 +280,25 @@ function invalidateDerivedMemoriesForMemoryInTx(
 	});
 }
 export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
+	if (!mem.agentId) throw new Error("agent_required");
+	const parentCompartment = mem.evidence
+		? evidenceCompartmentInTx(db, mem.agentId, mem.evidence, mem.parentCompartment)
+		: mem.parentCompartment;
+	const compartment = compartmentForWrite(db, {
+		agentId: mem.agentId,
+		sessionKey: mem.sessionKey,
+		memoryId: mem.id,
+		sourceId: mem.sourceId,
+		parentCompartment,
+	});
 	db.prepare(
 		`INSERT INTO memories
 		 (id, content, normalized_content, content_hash, who, why, project,
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
 		  source_type, source_id, source_path, runtime_path, idempotency_key, scope, agent_id, visibility,
-		  memory_kind, evidence_meta, review_after)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  memory_kind, evidence_meta, review_after, author_user_id,compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -272,15 +324,26 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.runtimePath ?? null,
 		mem.idempotencyKey ?? null,
 		mem.scope ?? null,
-		mem.agentId ?? "default",
+		mem.agentId,
 		mem.visibility ?? "global",
 		mem.memoryKind ?? null,
 		mem.evidenceMeta ?? null,
 		mem.reviewAfter ?? null,
+		mem.author.userId,
+		compartment,
 	);
+	if (mem.evidence)
+		recordEvidenceCitationsInTx(db, {
+			agentId: mem.agentId,
+			derivedKind: "memory",
+			derivedId: mem.id,
+			evidence: mem.evidence,
+		});
+	auditAuthoredWriteInTx(db, mem.author, "memory.created", "memory", mem.id, mem.agentId);
 	return mem.id;
 }
 export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {
+	const author = requireWriteAuthor(input.ctx?.author);
 	const existing = db
 		.prepare(
 			`SELECT id, content, type, tags, importance, pinned, version, is_deleted,
@@ -354,6 +417,11 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		finalContent = input.patch.content;
 
 		if (input.patch.contentHash !== undefined && input.patch.contentHash !== null) {
+			if (!existing.agent_id) throw new Error("agent_required");
+			const boundary = memoryWriteDedupeSql(db, {
+				writeScope: { agentId: existing.agent_id, memoryId: input.memoryId },
+				author,
+			});
 			const duplicate = db
 				.prepare(
 					`SELECT id FROM memories
@@ -363,7 +431,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 					   AND COALESCE(project, '') = COALESCE(?, '')
 					   AND COALESCE(scope, '__NULL__') = COALESCE(?, '__NULL__')
 					   AND COALESCE(visibility, 'global') = COALESCE(?, 'global')
-					   AND is_deleted = 0
+					   AND is_deleted = 0 ${boundary.sql}
 					 LIMIT 1`,
 				)
 				.get(
@@ -373,6 +441,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 					existing.project,
 					existing.scope,
 					existing.visibility,
+					...boundary.params,
 				) as { id: string } | undefined;
 			if (duplicate) {
 				return {
@@ -462,21 +531,39 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		}
 
 		if (newHash && input.embeddingVector && input.embeddingVector.length > 0 && embeddingGenerationActive) {
-			const embId = crypto.randomUUID();
+			if (!existing.agent_id) throw new Error("agent_required");
+			const compartment = compartmentForWrite(db, { agentId: existing.agent_id, memoryId: input.memoryId });
 			const blob = vectorToBlob(input.embeddingVector);
-			db.prepare(
-				`INSERT INTO embeddings
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-				 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+			const stored = db
+				.prepare(
+					`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id, compartment_id)
+				 VALUES (COALESCE((SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND content_hash=? AND compartment_id IS ? ORDER BY id LIMIT 1),?), ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text,
-				   created_at = excluded.created_at`,
-			).run(embId, newHash, blob, input.embeddingVector.length, input.memoryId, input.patch.content, input.changedAt);
-			syncVecInsert(db, embId, input.embeddingVector);
+				   created_at = excluded.created_at, agent_id = excluded.agent_id, compartment_id = excluded.compartment_id RETURNING id`,
+				)
+				.get(
+					input.memoryId,
+					existing.agent_id,
+					newHash,
+					compartment,
+					crypto.randomUUID(),
+					newHash,
+					blob,
+					input.embeddingVector.length,
+					input.memoryId,
+					input.patch.content,
+					input.changedAt,
+					existing.agent_id,
+					compartment,
+				);
+			if (typeof stored?.id !== "string") throw new Error("embedding_write_failed");
+			syncVecInsert(db, stored.id, input.embeddingVector);
 		}
 	}
 
@@ -493,6 +580,9 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 			contentChanged,
 		}),
 		createdAt: input.changedAt,
+		author,
+		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -598,6 +688,9 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 			ifVersion: input.ifVersion ?? null,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -726,6 +819,9 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 			previousSupersededBy: existing.superseded_by ?? null,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,
@@ -741,21 +837,14 @@ export function txSupersedeMemory(db: WriteDb, input: SupersedeMemoryTxInput): S
 	};
 }
 export function txRecoverMemory(db: WriteDb, input: RecoverMemoryTxInput): RecoverMemoryTxResult {
-	const existing = db
-		.prepare(
-			`SELECT id, content, version, is_deleted, deleted_at
-			 FROM memories
-			 WHERE id = ?`,
-		)
-		.get(input.memoryId) as
-		| {
-				id: string;
-				content: string;
-				version: number;
-				is_deleted: number;
-				deleted_at: string | null;
-		  }
-		| undefined;
+	const existing = prepareTypedStatement<{
+		id: string;
+		content: string;
+		version: number;
+		is_deleted: number;
+		deleted_at: string | null;
+		agent_id: string | null;
+	}>(db, "SELECT id,content,version,is_deleted,deleted_at,agent_id FROM memories WHERE id = ?").get(input.memoryId);
 
 	if (!existing) {
 		return { status: "not_found", memoryId: input.memoryId };
@@ -818,6 +907,9 @@ export function txRecoverMemory(db: WriteDb, input: RecoverMemoryTxInput): Recov
 			retentionWindowMs: input.retentionWindowMs,
 		}),
 		createdAt: input.changedAt,
+		author: input.ctx?.author,
+		agentId: existing.agent_id,
+		passId: input.ctx?.passId,
 		actorType: input.ctx?.actorType,
 		sessionId: input.ctx?.sessionId,
 		requestId: input.ctx?.requestId,

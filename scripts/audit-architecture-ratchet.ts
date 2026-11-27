@@ -3,10 +3,24 @@ import { resolve } from "node:path";
 import ts from "typescript";
 
 const SQL_OWNERS = [
+	"platform/daemon/src/content-read-owner.ts",
 	"platform/core/src/database.ts",
 	"platform/core/src/fts-schema.ts",
+	"platform/core/src/compartment-shards.ts",
+	"platform/daemon/src/classification-owner.ts",
+	"platform/core/src/read-scope.ts",
+	"platform/daemon/src/embedding-projection-owner.ts",
 	"platform/core/src/search.ts",
 	"platform/daemon/src/db-owner-worker.ts",
+	"platform/daemon/src/auth/organization-store.ts",
+	"platform/daemon/src/auth/organization-operations.ts",
+	"platform/daemon/src/auth/organization-admin.ts",
+	"platform/daemon/src/auth/organization-purge.ts",
+	"platform/daemon/src/auth/oidc.ts",
+	"platform/daemon/src/auth/organization-runtime.ts",
+	"platform/daemon/src/auth/audit-owner.ts",
+	"platform/daemon/src/reflection-owner.ts",
+	"platform/daemon/src/cross-agent-message-owner.ts",
 	"platform/daemon/src/db-accessor.ts",
 	"platform/daemon/src/diagnostics.ts",
 	"platform/daemon/src/diagnostics-queue.ts",
@@ -16,6 +30,9 @@ const SQL_OWNERS = [
 	"platform/daemon/src/memory-search.ts",
 	"platform/daemon/src/query-planner-statistics.ts",
 	"platform/daemon/src/session-transcripts.ts",
+	"platform/daemon/src/staged-upload-owner.ts",
+	"platform/daemon/src/hook-transcript-uploads.ts",
+	"platform/daemon/src/transcript-capture-owner.ts",
 	"platform/daemon/src/db-helpers.ts",
 	"platform/daemon/src/db-vacuum.ts",
 	"platform/daemon/src/agent-removal.ts",
@@ -34,6 +51,9 @@ const SQL_OWNERS = [
 	"platform/daemon/src/pipeline/graph-transactions.ts",
 	"platform/daemon/src/pipeline/dreaming.ts",
 	"platform/daemon/src/pipeline/dreaming-capabilities.ts",
+	"platform/daemon/src/pipeline/dreaming-evidence-leases.ts",
+	"platform/daemon/src/pipeline/dreaming-history.ts",
+	"platform/daemon/src/ontology-proposals.ts",
 	"platform/daemon/src/pipeline/dreaming-evidence-retry.ts",
 	"platform/daemon/src/pipeline/dreaming-attention.ts",
 	"platform/daemon/src/pipeline/dreaming-surprisal.ts",
@@ -50,7 +70,6 @@ const EXCLUDED = new Set([
 	"node_modules",
 	"dist",
 ]);
-const EXCLUDED_PATHS = new Set(["libs/sdk/src/generated/client.ts"]);
 const CATEGORIES = ["raw-sql", "swallowed-error", "unchecked-cast"] as const;
 type Category = (typeof CATEGORIES)[number];
 type Counts = Record<Category, number>;
@@ -83,7 +102,6 @@ function production(path: string): boolean {
 		/^(?:platform|surfaces|libs|integrations)\//.test(path) &&
 		/\.tsx?$/.test(path) &&
 		!/\.(?:test|bench|spec|d)\.tsx?$/.test(path) &&
-		!EXCLUDED_PATHS.has(path) &&
 		!path.split("/").some((part) => EXCLUDED.has(part))
 	);
 }
@@ -410,12 +428,12 @@ function main(): void {
 					group.length > 1
 						? ` [${group.map((member) => `${member.path}=${member.head.counts[category]}`).join(", ")}]`
 						: "";
-				failures.push(`${single?.path ?? source}\t${category}\t${previous[category]} -> ${head}${detail}${members}`);
+				failures.push(`${single?.path ?? source}	${category}	${previous[category]} -> ${head}${detail}${members}`);
 			}
 		}
 	}
 	if (failures.length) {
-		console.error(`Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${failures.join("\n")}`);
+		console.error(`Architecture ratchet failed against ${base}:\nfile	category	base -> head\n${failures.join("\n")}`);
 		process.exitCode = 1;
 		return;
 	}

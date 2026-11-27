@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import type { Context } from "hono";
+import {
+	checkPrincipalProject,
+	organizationReadRequest,
+	principalAccess,
+	resolveReadAgent,
+	resolveWriteAgent,
+} from "../auth/agent-access";
+import type { WriteAuthor } from "../auth/audit-owner";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
-import { getDbAccessor } from "../db-accessor";
 import {
 	fetchEmbedding,
 	findLlamaCppEmbeddingModel,
@@ -13,15 +20,17 @@ import {
 	setNativeFallbackProvider,
 } from "../embedding-fetch";
 import { logger } from "../logger";
-import { getActiveSessions, hasSession, normalizeSessionKey } from "../session-tracker";
-import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import type { EmbeddingConfig } from "../memory-config";
+import type * as native_embeddingModule from "../native-embedding";
 import type { NativeEmbeddingRuntimeOptions } from "../native-embedding";
+import { jsonBody } from "../request-body";
 import {
 	resolveScopedAgent,
 	resolveScopedProject as resolveScopedProjectForClaims,
 	shouldEnforceScope,
 } from "../request-scope";
+import { getActiveSessions, hasSession, normalizeSessionKey } from "../session-tracker";
+import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import { authConfig } from "./state";
 
 export interface EmbeddingStatus {
@@ -203,10 +212,8 @@ export function toRecord(value: unknown): Record<string, unknown> | null {
 }
 
 export async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.text();
-	if (!raw.trim()) return {};
 	try {
-		return toRecord(JSON.parse(raw));
+		return toRecord(await jsonBody(c)());
 	} catch {
 		return null;
 	}
@@ -279,6 +286,18 @@ export function resolveScopedAgentId(
 	requestedAgentId: string | undefined,
 	fallbackAgentId = "default",
 ): { agentId: string; error?: string } {
+	const principal = c.get("principal");
+	if (c.get("organization") && principal) {
+		const access = principalAccess(principal);
+		if (!access) return { agentId: "", error: "org_policy" };
+		const requested = c.get("requestedOrganizationAgent");
+		const resolved = organizationReadRequest(c.req.method, c.req.path)
+			? resolveReadAgent(principal, requested)
+			: resolveWriteAgent(principal, requested, access);
+		if (!resolved.ok) return { agentId: "", error: resolved.error.reason };
+		if (organizationReadRequest(c.req.method, c.req.path)) c.set("readAuditAgent", resolved.value);
+		return { agentId: resolved.value };
+	}
 	return resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, requestedAgentId, fallbackAgentId);
 }
 
@@ -286,6 +305,11 @@ export function resolveScopedProject(
 	c: Context,
 	requestedProject: string | undefined,
 ): { project: string | undefined; error?: string } {
+	const principal = c.get("principal");
+	if (c.get("organization") && principal) {
+		const result = checkPrincipalProject(principal, requestedProject);
+		if (!result.ok) return { project: requestedProject, error: result.error.reason };
+	}
 	return resolveScopedProjectForClaims(c.get("auth")?.claims ?? null, authConfig.mode, requestedProject);
 }
 
@@ -360,6 +384,7 @@ export function parseTagsMutation(value: unknown): string | null | undefined {
 }
 
 export interface MutationActor {
+	author: WriteAuthor;
 	changedBy: string;
 	actorType: string;
 	sessionId: string | undefined;
@@ -368,10 +393,39 @@ export interface MutationActor {
 
 const ACTOR_TYPES = new Set(["operator", "pipeline", "harness", "sdk", "daemon"]);
 
+export function resolveOperationalActor(c: Context): { actor: string; actorType: "operator" | "agent" | "daemon" } {
+	const resolved = resolveMutationActor(c, "operator");
+	const principal = c.get("principal");
+	const type = c.req.header("x-signet-actor-type");
+	return {
+		actor: resolved.changedBy,
+		actorType:
+			c.get("organization") && principal
+				? principal.credential.kind === "api_key"
+					? "agent"
+					: "operator"
+				: type === "agent"
+					? "agent"
+					: type === "daemon"
+						? "daemon"
+						: "operator",
+	};
+}
 export function resolveMutationActor(c: Context, fallback?: string): MutationActor {
+	const principal = c.get("principal");
+	if (c.get("organization") && principal)
+		return {
+			author: c.get("author"),
+			changedBy:
+				principal.credential.kind === "api_key" ? `key:${principal.credential.id}` : `user:${principal.userId}`,
+			actorType: principal.role,
+			sessionId: principal.sessionId ?? undefined,
+			requestId: parseOptionalString(c.req.header("x-signet-request-id")),
+		};
 	const auth = c.get("auth");
 	if (auth?.claims) {
 		return {
+			author: c.get("author"),
 			changedBy: auth.claims.sub,
 			actorType: auth.claims.role,
 			sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
@@ -386,6 +440,7 @@ export function resolveMutationActor(c: Context, fallback?: string): MutationAct
 	const actorType = rawType && ACTOR_TYPES.has(rawType) ? rawType : "operator";
 
 	return {
+		author: c.get("author"),
 		changedBy,
 		actorType,
 		sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
@@ -393,194 +448,8 @@ export function resolveMutationActor(c: Context, fallback?: string): MutationAct
 	};
 }
 
-export interface ForgetCandidate {
-	id: string;
-	pinned: number;
-	version: number;
-	score: number;
-}
-
-export interface ForgetCandidatesRequest {
-	query: string;
-	type: string;
-	tags: string;
-	who: string;
-	sourceType: string;
-	since: string;
-	until: string;
-	scope: string | null;
-	limit: number;
-}
-
-const MAX_MUTATION_BATCH = 200;
-
-export function buildForgetCandidatesWhere(
-	req: ForgetCandidatesRequest,
-	alias: string,
-): { clause: string; args: unknown[] } {
-	const parts: string[] = [];
-	const args: unknown[] = [];
-	const prefix = alias.length > 0 ? `${alias}.` : "";
-
-	if (req.type) {
-		parts.push(`${prefix}type = ?`);
-		args.push(req.type);
-	}
-	if (req.tags) {
-		const tags = req.tags
-			.split(",")
-			.map((tag) => tag.trim())
-			.filter((tag) => tag.length > 0);
-		for (const tag of tags) {
-			parts.push(`${prefix}tags LIKE ?`);
-			args.push(`%${tag}%`);
-		}
-	}
-	if (req.who) {
-		parts.push(`${prefix}who = ?`);
-		args.push(req.who);
-	}
-	if (req.sourceType) {
-		parts.push(`${prefix}source_type = ?`);
-		args.push(req.sourceType);
-	}
-	if (req.scope !== null) {
-		parts.push(`${prefix}scope = ?`);
-		args.push(req.scope);
-	} else {
-		parts.push(`${prefix}scope IS NULL`);
-	}
-	if (req.since) {
-		parts.push(`${prefix}created_at >= ?`);
-		args.push(req.since);
-	}
-	if (req.until) {
-		parts.push(`${prefix}created_at <= ?`);
-		args.push(req.until);
-	}
-
-	const clause = parts.length > 0 ? ` AND ${parts.join(" AND ")}` : "";
-	return { clause, args };
-}
-
-export function loadForgetCandidates(
-	req: ForgetCandidatesRequest,
-	scope?: { readonly sql: string; readonly args: readonly unknown[] },
-): ForgetCandidate[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
-		const withQuery = req.query.trim().length > 0;
-		const { clause, args } = buildForgetCandidatesWhere(req, "m");
-		const scopeSql = scope?.sql ?? "";
-		const scopeArgs = scope?.args ?? [];
-
-		if (withQuery) {
-			try {
-				const rows = db
-					.prepare(
-						`SELECT m.id, m.pinned, m.version, bm25(memories_fts) AS raw_score
-						 FROM memories_fts
-						 JOIN memories m ON memories_fts.rowid = m.rowid
-						 WHERE memories_fts MATCH ? AND m.is_deleted = 0${clause}${scopeSql}
-						 ORDER BY raw_score
-						 LIMIT ?`,
-					)
-					.all<{ id: string; pinned: number; version: number; raw_score: number }>(
-						req.query,
-						...args,
-						...scopeArgs,
-						limit,
-					);
-				return rows.map((row) => ({
-					id: row.id,
-					pinned: row.pinned,
-					version: row.version,
-					score: 1 / (1 + Math.abs(row.raw_score ?? 0)),
-				}));
-			} catch {}
-
-			const fallbackRows = db
-				.prepare(
-					`SELECT m.id, m.pinned, m.version
-					 FROM memories m
-					 WHERE m.is_deleted = 0
-					   AND (m.content LIKE ? OR m.tags LIKE ?)${clause}${scopeSql}
-					 ORDER BY m.updated_at DESC
-					 LIMIT ?`,
-				)
-				.all<{ id: string; pinned: number; version: number }>(
-					`%${req.query}%`,
-					`%${req.query}%`,
-					...args,
-					...scopeArgs,
-					limit,
-				);
-			return fallbackRows.map((row) => ({
-				id: row.id,
-				pinned: row.pinned,
-				version: row.version,
-				score: 0,
-			}));
-		}
-
-		const rows = db
-			.prepare(
-				`SELECT m.id, m.pinned, m.version
-				 FROM memories m
-				 WHERE m.is_deleted = 0${clause}${scopeSql}
-				 ORDER BY m.pinned DESC, m.importance DESC, m.updated_at DESC
-				 LIMIT ?`,
-			)
-			.all<{ id: string; pinned: number; version: number }>(...args, ...scopeArgs, limit);
-		return rows.map((row) => ({
-			id: row.id,
-			pinned: row.pinned,
-			version: row.version,
-			score: 0,
-		}));
-	}, "db:forget.candidates.read");
-}
-
-export function loadForgetCandidatesByIds(
-	requestedIds: readonly string[],
-	limit: number,
-	scope?: { readonly sql: string; readonly args: readonly unknown[] },
-): ForgetCandidate[] {
-	const dedupedIds = [...new Set(requestedIds)]
-		.map((id) => id.trim())
-		.filter((id) => id.length > 0)
-		.slice(0, Math.max(1, Math.min(limit, MAX_MUTATION_BATCH)));
-	if (dedupedIds.length === 0) return [];
-
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-		const placeholders = dedupedIds.map(() => "?").join(", ");
-		const scopeSql = scope?.sql ?? "";
-		const scopeArgs = scope?.args ?? [];
-		const rows = db
-			.prepare(
-				`SELECT m.id, m.pinned, m.version
-				 FROM memories m
-				 WHERE m.is_deleted = 0 AND m.id IN (${placeholders})${scopeSql}`,
-			)
-			.all(...dedupedIds, ...scopeArgs) as Array<{
-			id: string;
-			pinned: number;
-			version: number;
-		}>;
-		const rowById = new Map(rows.map((row) => [row.id, row]));
-		return dedupedIds
-			.map((id) => rowById.get(id))
-			.filter((row): row is { id: string; pinned: number; version: number } => Boolean(row))
-			.map((row) => ({
-				id: row.id,
-				pinned: row.pinned,
-				version: row.version,
-				score: 0,
-			}));
-	}, "db:forget.candidates-by-id.read");
-}
+export { buildForgetCandidatesWhere } from "../memory-forget-read";
+export type { ForgetCandidate, ForgetCandidatesRequest } from "../memory-forget-read";
 
 export function buildForgetConfirmToken(memoryIds: readonly string[]): string {
 	const canonical = [...new Set(memoryIds)].sort().join("|");
@@ -702,7 +571,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 	const now = Date.now();
 	const cacheKey = embeddingStatusCacheKey(cfg);
 	const cached = embeddingStatusCache.get(cacheKey);
-	let nativeEmbedding: typeof import("../native-embedding") | null = null;
+	let nativeEmbedding: typeof native_embeddingModule | null = null;
 	if (cfg.provider === "native" && cfg.warmNative !== false) {
 		nativeEmbedding = await import("../native-embedding");
 		nativeEmbedding.configureNativeEmbeddingLifecycle({ idleTtlMs: cfg.idleTtlMs });

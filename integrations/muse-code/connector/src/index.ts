@@ -22,6 +22,7 @@ import {
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
@@ -92,7 +93,7 @@ export function resolveMuseRuntimeEnv(
 	const env: Record<string, string> = {};
 	const daemonUrl = resolveSignetDaemonUrl();
 	if (daemonUrl !== MANAGED_DAEMON_URL_DEFAULT) env.SIGNET_DAEMON_URL = daemonUrl;
-	if (apiKey) env.SIGNET_API_KEY = apiKey;
+
 	env.SIGNET_PATH = workspace;
 	for (const key of TIMEOUT_ENV_KEYS) {
 		const value = readTrimmedEnv(key);
@@ -217,7 +218,7 @@ export function readMuseSettings(path: string): SettingsRead {
 }
 
 export function buildMuseMcpServer(env: MuseRuntimeEnv, existing?: ResolvedCommand): MuseMcpServer {
-	const mcp = resolveSignetMcpCommand(existing);
+	const mcp = resolveHarnessMcpCommand("muse-code", existing);
 	return {
 		transport: "stdio",
 		command: mcp.command,

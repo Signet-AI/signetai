@@ -271,7 +271,7 @@ test("selects maintained source, tests, scripts, and configs only", () => {
 	const excluded = [
 		"dist/signetai/index.js",
 		"integrations/forge/connector/dist/index.js",
-		"libs/sdk/src/generated/client.ts",
+		"libs/example/src/generated/client.ts",
 		"platform/native/Cargo.lock",
 		"bun.lock",
 		"references/example.ts",

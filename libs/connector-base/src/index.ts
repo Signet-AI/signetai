@@ -1,4 +1,8 @@
+export { captureRemoteSessionEnd } from "./capture";
+import { cliFromMcp, resolveSignetCliCommand } from "./launcher";
+import type { ResolvedCommand } from "./config";
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { isJsonObject, readManagedTrimmedEnv } from "./config";
 export { isJsonObject, isExistingFile, readTrimmedEnv, readManagedTrimmedEnv, type ResolvedCommand } from "./config";
 import {
@@ -155,6 +159,12 @@ export abstract class BaseConnector {
 	async reinitialize(basePath: string): Promise<InstallResult> {
 		return this.install(basePath);
 	}
+	getInstallPaths(): readonly string[] {
+		return this.getConfigPaths();
+	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath()];
+	}
 	abstract getConfigPath(): string;
 }
 export function isSignetGeneratedFile(raw: string): boolean {
@@ -245,6 +255,29 @@ export {
 	resolveSignetMcpCommand,
 } from "./launcher";
 
+export function resolveHarnessMcpCommand(
+	harness: string,
+	existing?: ResolvedCommand,
+	runtime: string | null = null,
+): ResolvedCommand {
+	if (!/^[a-z][a-z0-9-]{0,63}$/.test(harness)) throw new Error("Invalid MCP harness");
+	const cli = resolveSignetCliCommand(cliFromMcp(existing), runtime);
+	const owned = new Set([
+		"SIGNET_API_KEY",
+		"SIGNET_TOKEN",
+		"SIGNET_API_KEY_FILE",
+		"SIGNET_DAEMON_URL",
+		"SIGNET_AGENT_ID",
+		"SIGNET_AGENT_WORKSPACE",
+		"SIGNET_MCP_STDIO_WORKER",
+	]);
+	const env = Object.fromEntries(Object.entries(existing?.env ?? {}).filter(([key]) => !owned.has(key)));
+	return {
+		command: cli.command,
+		args: [...cli.args, "connector", "mcp", harness],
+		...(Object.keys(env).length ? { env } : {}),
+	};
+}
 export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const MANAGED_AGENT_ID_DEFAULT = "default";
 export function isChildOf(candidate: string, parent: string): boolean {
@@ -275,20 +308,7 @@ export function resolveSignetApiKey(): string | undefined {
 	return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
 }
 export async function resolveInstallApiKey(): Promise<{ readonly apiKey?: string; readonly warning?: string }> {
-	const url = resolveSignetDaemonUrl();
-	try {
-		const response = await fetch(`${url}/api/mode`, { signal: AbortSignal.timeout(1_000), redirect: "error" });
-		if (!response.ok) throw new Error(`HTTP ${response.status}`);
-		const mode: unknown = await response.json();
-		if (!isJsonObject(mode) || typeof mode.requiresAuth !== "boolean")
-			throw new Error("response has no boolean requiresAuth");
-		return mode.requiresAuth ? { apiKey: resolveSignetApiKey() } : {};
-	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		return {
-			warning: `Could not determine daemon auth requirement from ${url}/api/mode (${reason}); SIGNET_API_KEY was omitted. Check SIGNET_DAEMON_URL and daemon connectivity, then rerun signet sync.`,
-		};
-	}
+	return {};
 }
 
 export function buildSignetRuntimeEnv(
@@ -296,12 +316,7 @@ export function buildSignetRuntimeEnv(
 ): Record<string, string> {
 	const env: Record<string, string> = {};
 	if (opts.basePath) env.SIGNET_PATH = opts.basePath;
-	const daemonUrl = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
-	const apiKey = opts.apiKey === undefined ? resolveSignetApiKey() : opts.apiKey;
-	const agentId = readManagedTrimmedEnv("SIGNET_AGENT_ID");
-	if (daemonUrl) env.SIGNET_DAEMON_URL = resolveSignetDaemonUrl();
-	if (apiKey) env.SIGNET_API_KEY = apiKey;
-	if (agentId) env.SIGNET_AGENT_ID = agentId;
+
 	return env;
 }
 export function resolveRemoteDaemonUrl(): string | null {
@@ -314,9 +329,6 @@ export function buildManagedExtensionEnvBootstrap(env: {
 	readonly agentId: string;
 	readonly apiKey?: string;
 }): string {
-	const daemonUrl = JSON.stringify(env.daemonUrl);
-	const agentId = JSON.stringify(env.agentId);
-	const apiKey = env.apiKey ? JSON.stringify(env.apiKey) : null;
 	const isDefaultWorkspace = env.signetPath === join(homedir(), ".agents");
 	const workspaceExists = isExistingDirectory(env.signetPath);
 	if (!isDefaultWorkspace && !workspaceExists) {
@@ -338,15 +350,7 @@ if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
 		return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 	};
 	if (__signetRuntimeEnv && typeof __signetRuntimeEnv === "object") {
-${signetPathBlock}		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
-			Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", ${daemonUrl});
-		}
-		if (!__signetReadEnv("SIGNET_AGENT_ID")) {
-			Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", ${agentId});
-		}
-		if (${apiKey} && !__signetReadEnv("SIGNET_API_KEY") && !__signetReadEnv("SIGNET_TOKEN")) {
-			Reflect.set(__signetRuntimeEnv, "SIGNET_API_KEY", ${apiKey});
-		}
+${signetPathBlock}
 	}
 }`;
 }
@@ -423,7 +427,7 @@ interface ParsedConnectorInstallerArgs {
 	command: "install" | "uninstall" | "status";
 	help?: boolean;
 	url?: string;
-	apiKey?: string;
+	apiKeyStdin?: boolean;
 	agentId?: string;
 	path?: string;
 }
@@ -435,15 +439,14 @@ function connectorInstallerUsage(harness: string, options: ConnectorInstallerOpt
 
 Options:
   --url <url>          Remote Signet daemon URL (sets SIGNET_DAEMON_URL)
-  --api-key <key>      Signet API key (sets SIGNET_API_KEY)
-  --token <token>      Backward-compatible alias for --api-key
+  --api-key-stdin      Read the credential from stdin; never put it in argv
   --agent-id <id>      Signet agent id for this connector
   --path <path>        Signet workspace path (default: SIGNET_PATH or ~/.agents)
   -h, --help           Show this help
 
 Examples:
-  ${commandName} install --url http://host:3850 --api-key sig_sk_...
-  npx -y ${packageName} install --url http://host:3850 --api-key sig_sk_...
+  ${commandName} install --url http://host:3850 --api-key-stdin
+  npx -y ${packageName} install --url http://host:3850 --api-key-stdin
 `;
 }
 
@@ -470,11 +473,13 @@ function parseConnectorInstallerArgs(argv: readonly string[]): ParsedConnectorIn
 			i++;
 			continue;
 		}
-		if (arg === "--api-key" || arg === "--token") {
-			options.apiKey = takeConnectorInstallerValue(argv, i, arg);
-			i++;
+		if (arg === "--api-key" || arg === "--token")
+			throw new Error("Inline credentials are not supported; use --api-key-stdin or signet login");
+		if (arg === "--api-key-stdin") {
+			options.apiKeyStdin = true;
 			continue;
 		}
+
 		if (arg === "--agent-id") {
 			options.agentId = takeConnectorInstallerValue(argv, i, arg);
 			i++;
@@ -513,7 +518,7 @@ export function runConnectorInstaller(
 			return;
 		}
 		setConnectorInstallerEnv("SIGNET_DAEMON_URL", parsed.url);
-		setConnectorInstallerEnv("SIGNET_API_KEY", parsed.apiKey);
+
 		setConnectorInstallerEnv("SIGNET_AGENT_ID", parsed.agentId);
 		const basePath = parsed.path || process.env.SIGNET_PATH || join(homedir(), ".agents");
 		const connector = new ConnectorClass();
@@ -531,6 +536,25 @@ export function runConnectorInstaller(
 			return;
 		}
 
+		if (parsed.url || parsed.apiKeyStdin || process.env.SIGNET_DAEMON_URL) {
+			const cli = resolveSignetCliCommand();
+			const args = [
+				...cli.args,
+				"connect",
+				harness,
+				"--path",
+				basePath,
+				...(parsed.url ? ["--url", parsed.url] : []),
+				...(parsed.agentId ? ["--agent", parsed.agentId] : []),
+				...(parsed.apiKeyStdin ? ["--api-key-stdin"] : []),
+			];
+			const child = spawn(cli.command, args, { stdio: "inherit", env: process.env });
+			process.exitCode = await new Promise<number>((accept, reject) => {
+				child.once("error", reject);
+				child.once("exit", (code) => accept(code ?? 1));
+			});
+			return;
+		}
 		const result = await connector.install(basePath);
 		console.log(result.message || `${label}: installed`);
 		printConnectorInstallerList("Files written", result.filesWritten);

@@ -1,25 +1,34 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { get_encoding } from "tiktoken/init";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+
+async function closeTestDatabase(): Promise<void> {
+	await (await import("./db-owner-runtime")).closeDbOwner();
+	Bun.gc(true);
+	await closeDbAccessor();
+}
+
+import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 import {
-	MEMORY_PROJECTION_MAX_TOKENS,
 	ensureCanonicalManifest,
 	indexCanonicalTranscriptJsonl,
 	indexExternalMemoryArtifact,
+	MEMORY_PROJECTION_MAX_TOKENS,
 	purgeCanonicalNoiseSessions,
 	purgeCanonicalNoiseSessionsOnce,
 	reindexMemoryArtifacts,
 	renderMemoryProjection,
 	resetProjectionPurgeState,
 	updateManifest,
+	writeCompactionArtifact,
 	writeSummaryArtifact,
 } from "./memory-lineage";
+import { writeSessionTranscriptRow } from "./session-transcripts";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 import { canonicalTranscriptPath } from "./transcript-jsonl";
-import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 
 const tok = get_encoding("cl100k_base");
 
@@ -27,7 +36,7 @@ let dir = "";
 let prev: string | undefined;
 
 async function resetWorkspace(): Promise<void> {
-	await closeDbAccessor();
+	await closeTestDatabase();
 	resetProjectionPurgeState();
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
@@ -54,6 +63,78 @@ async function addSummary(input: {
 }
 
 describe("memory-lineage", () => {
+	it("canonical async artifact indexing inherits the stored scoped speaker and session label", async () => {
+		const sessionKey = "speaker-session";
+		const transcript = "User: classified speaker evidence";
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_session','Session'); INSERT INTO classification_assignments VALUES('session','speaker-session','default','cls_session','carol','now')",
+			);
+			for (const [agentId, userId] of [
+				["default", "alice"],
+				["other", "bob"],
+			]) {
+				if (!agentId || !userId) throw new Error("missing speaker fixture");
+				expect(
+					writeSessionTranscriptRow(db, {
+						agentId,
+						sessionKey,
+						transcript,
+						harness: "codex",
+						project: null,
+						author: { userId, credential: `session:${userId}` },
+					}),
+				).toBe("written");
+			}
+		});
+		await indexCanonicalTranscriptJsonl({
+			agentId: "default",
+			sessionId: sessionKey,
+			sessionKey,
+			transcript,
+			harness: "codex",
+			project: null,
+			capturedAt: new Date().toISOString(),
+			startedAt: null,
+			endedAt: null,
+		});
+		const rows = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare(
+					"SELECT author_user_id,compartment_id FROM memory_artifacts WHERE agent_id='default' AND session_key=?",
+				)
+				.all(sessionKey),
+		);
+		expect(rows).toEqual([{ author_user_id: "alice", compartment_id: expect.any(Number) }]);
+	});
+
+	it("R2 newly created compaction manifests and fragments keep the caller author", async () => {
+		const now = new Date().toISOString();
+		await writeCompactionArtifact({
+			author: { userId: "usr_artifact_owner", credential: "session:fixture" },
+			agentId: "default",
+			sessionId: "authored-compaction",
+			sessionKey: "authored-compaction",
+			project: null,
+			harness: "hermes-agent",
+			capturedAt: now,
+			startedAt: now,
+			endedAt: now,
+			summary: "Built a deterministic parser and verified the principal at its native write boundary.",
+		});
+		const rows = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare(
+					"SELECT source_kind,author_user_id FROM memory_artifacts WHERE session_key='authored-compaction' ORDER BY source_kind",
+				)
+				.all(),
+		);
+		expect(rows).toEqual([
+			{ source_kind: "compaction", author_user_id: "usr_artifact_owner" },
+			{ source_kind: "manifest", author_user_id: "usr_artifact_owner" },
+		]);
+	});
+
 	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
 		dir = createTestTempDir("signet-memory-lineage-");
@@ -74,7 +155,7 @@ describe("memory-lineage", () => {
 	});
 
 	afterAll(async () => {
-		await closeDbAccessor();
+		await closeTestDatabase();
 		cleanupTestTempDir(dir);
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -1082,8 +1163,8 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		await resetWorkspace();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeTestDatabase();
 	});
 
 	it("threshold-crossing items are cached — second reindex is a no-op", async () => {

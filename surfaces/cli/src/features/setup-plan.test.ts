@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { describe, expect, it } from "bun:test";
 import { IDENTITY_PRESETS } from "@signet/core";
 import { type SetupPlan, parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";

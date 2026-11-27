@@ -1,5 +1,6 @@
+import { up as upgradeDreamingPartitions } from "../../core/src/migrations/179-dreaming-evidence-leases";
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setSystemTime, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createDbOwnerClient,
+	type DbOwnerSubmitOptions,
 	DB_OWNER_CANCEL_REGISTRY_MAX_AGE_MS,
 	DbOwnerAdmissionError,
 	DbOwnerCancelledError,
@@ -24,9 +26,11 @@ import {
 	MAX_DB_OWNER_PENDING_JOBS,
 	MAX_DB_OWNER_WORK_UNITS,
 } from "./db-owner-client";
+import type { DbOwnerRequest } from "./db-owner-protocol";
+import { getDreamingCapability } from "./pipeline/dreaming-capabilities";
 import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
-import { findSqliteVecExtension } from "@signet/core";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { findSqliteVecExtension, runMigrations } from "@signet/core";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { closeDbOwnerDuringShutdown } from "./daemon-shutdown";
 import {
 	closeRegisteredDbOwnerMaintenance,
@@ -86,6 +90,38 @@ async function rejectedThrow(promise: Promise<unknown>): Promise<() => never> {
 }
 
 describe("DB owner client", () => {
+	test("routes imported-source attention through the explicit agent and effective source label", async () => {
+		const fixture = await makeMigratedDb();
+		const setup = new Database(fixture.path);
+		upgradeDreamingPartitions(setup);
+		setup.exec(
+			"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('attention-agent','Attention agent','legacy','now','now'); INSERT INTO classifications(id,name) VALUES('cls_import_secret','Import secret'); INSERT INTO compartments(id,key) VALUES(17,'cls_import_secret'); INSERT INTO compartment_members(compartment_id,classification_id) VALUES(17,'cls_import_secret'); INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('source','source-note','attention-agent','cls_import_secret'); INSERT INTO session_transcripts(agent_id,session_key,source_id,content,compartment_id,created_at,completed_at) VALUES('attention-agent','imported-session','source-note','Imported evidence',17,'now','now')",
+		);
+		setup.close(true);
+		const owned = createDbOwnerClient({ dbPath: fixture.path });
+		try {
+			await owned.ready;
+			const result = await owned.submit(
+				{ kind: "dreaming_imported_source_attention", agentId: "attention-agent", sourceId: "source-note" },
+				{ operation: "test.imported-attention", lane: "write", deadlineMs: 5000, estimatedWorkUnits: 200 },
+			).result;
+			expect(result).toEqual({ ok: true });
+			const db = new Database(fixture.path, { readonly: true });
+			try {
+				expect(db.query("SELECT agent_id,compartment_id,subject_ref FROM dreaming_attention").all()).toEqual([
+					{ agent_id: "attention-agent", compartment_id: 17, subject_ref: "source:source-note" },
+				]);
+				expect(
+					db.query("SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='attention'").all(),
+				).toEqual([{ evidence_kind: "transcript", evidence_id: "imported-session" }]);
+			} finally {
+				db.close(true);
+			}
+		} finally {
+			await owned.close();
+			rmSync(fixture.directory, { recursive: true, force: true });
+		}
+	}, 20000);
 	let client: ReturnType<typeof createDbOwnerClient> | null = null;
 	let directory: string | null = null;
 
@@ -134,6 +170,401 @@ describe("DB owner client", () => {
 			throw new Error(`DB owner survivor(s) detected: ${survivors.join(", ")}`);
 		}
 	}
+
+	test("Dreaming evidence search on the read owner never acquires leases", async () => {
+		const database = await makeMigratedDb();
+		directory = database.directory;
+		const db = new Database(database.path);
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES('read-pass','default','default','incremental-content','running')",
+		);
+		db.exec(
+			"INSERT INTO memories(id,content,memory_kind,agent_id,created_at,updated_at) VALUES('read-evidence','read lane evidence','episodic','default',datetime('now'),datetime('now'))",
+		);
+		db.close();
+		client = createDbOwnerClient({ dbPath: database.path, workerRole: "recall" });
+		const result = await client.submit<{
+			readonly ok: boolean;
+			readonly items: readonly { readonly sourceRef: string }[];
+		}>(
+			{ kind: "dreaming_evidence_search", input: { agentId: "default", passId: "read-pass", evidenceLeaseMs: 60_000 } },
+			{ operation: "dreaming.read-lane-proof", lane: "read", deadlineMs: 10_000 },
+		).result;
+		expect(result.ok).toBe(true);
+		expect(result.items.map((item) => item.sourceRef)).toEqual(["memory:read-evidence"]);
+		const rows = await recallThroughDbOwner<{ readonly count: number }>(
+			client,
+			"SELECT COUNT(*) AS count FROM dreaming_evidence_leases",
+		);
+		expect(rows).toEqual([{ count: 0 }]);
+	});
+
+	test("Dreaming read search stays responsive while another connection holds the writer", async () => {
+		const database = await makeMigratedDb();
+		directory = database.directory;
+		const db = new Database(database.path);
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES('read-pass','default','default','incremental-content','running')",
+		);
+		db.exec(
+			"INSERT INTO memories(id,content,memory_kind,agent_id,created_at,updated_at) VALUES('read-evidence','read lane evidence','episodic','default',datetime('now'),datetime('now'))",
+		);
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		db.exec("BEGIN IMMEDIATE");
+		let ticks = 0;
+		const timer = setInterval(() => ticks++, 5);
+		try {
+			const result = await client.submit<{
+				readonly ok: boolean;
+				readonly items: readonly { readonly sourceRef: string }[];
+			}>(
+				{
+					kind: "dreaming_evidence_search",
+					input: { agentId: "default", passId: "read-pass", sourceRef: "memory:read-evidence" },
+				},
+				{ operation: "dreaming.read-lock-proof", lane: "read", deadlineMs: 1_000 },
+			).result;
+			expect(result.ok).toBe(true);
+			expect(result.items.map((item) => item.sourceRef)).toEqual(["memory:read-evidence"]);
+			expect(ticks).toBeGreaterThan(0);
+		} finally {
+			clearInterval(timer);
+			db.exec("ROLLBACK");
+			db.close();
+		}
+	});
+
+	test("Dreaming evidence preparation revalidates passes and bounds write batches", async () => {
+		const database = await makeMigratedDb();
+		directory = database.directory;
+		const db = new Database(database.path);
+		upgradeDreamingPartitions(db);
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES('prepare-pass','default','default','incremental-content','running')",
+		);
+		db.exec(
+			"INSERT INTO memories(id,content,memory_kind,agent_id,created_at,updated_at) VALUES('prepare-evidence','leaseable evidence','episodic','default',datetime('now'),datetime('now'))",
+		);
+		db.close();
+		client = createDbOwnerClient({ dbPath: database.path });
+		const owner = client;
+		const input = {
+			agentId: "default",
+			passId: "prepare-pass",
+			sourceRefs: ["memory:prepare-evidence"],
+			action: "lease",
+			ttlMs: 60_000,
+		} as const;
+		const write = { operation: "dreaming.prepare-proof", lane: "write", deadlineMs: 10_000 } as const;
+		const leased = await owner.submit({ kind: "dreaming_evidence_prepare", input }, write).result;
+		expect(leased).toMatchObject({ ok: true, items: [{ sourceRef: "memory:prepare-evidence" }] });
+		expect(
+			await owner.submit({ kind: "dreaming_evidence_prepare", input: { ...input, action: "speakers" } }, write).result,
+		).toMatchObject({
+			ok: true,
+			items: [{ sourceRef: "memory:prepare-evidence", speaker: { kind: "local_anonymous" } }],
+		});
+		expect(
+			await rejectedThrow(
+				owner.submit({ kind: "dreaming_evidence_prepare", input: { ...input, agentId: "unrelated" } }, write).result,
+			),
+		).toThrow("agent_not_permitted");
+		expect(
+			await rejectedThrow(
+				owner.submit(
+					{
+						kind: "dreaming_evidence_prepare",
+						input: { ...input, sourceRefs: Array.from({ length: 51 }, () => "memory:prepare-evidence") },
+					},
+					write,
+				).result,
+			),
+		).toThrow("evidence_preparation_limit");
+		expect(
+			await rejectedThrow(
+				owner.submit({ kind: "dreaming_evidence_prepare", input }, { ...write, lane: "read" }).result,
+			),
+		).toThrow("requires the write lane");
+		await owner.submit(
+			{
+				kind: "query",
+				statement: { sql: "UPDATE dreaming_passes SET status='failed' WHERE id='prepare-pass'", result: "run" },
+			},
+			write,
+		).result;
+		for (const action of ["lease", "speakers"] as const)
+			expect(
+				await rejectedThrow(
+					owner.submit({ kind: "dreaming_evidence_prepare", input: { ...input, action } }, write).result,
+				),
+			).toThrow("Dreaming pass is not running");
+	});
+
+	test("Dreaming capability uses a read search followed by separate bounded lease and speaker jobs", async () => {
+		const database = await makeMigratedDb();
+		directory = database.directory;
+		const db = new Database(database.path);
+		upgradeDreamingPartitions(db);
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES('capability-pass','default','default','incremental-hygiene','running')",
+		);
+		db.exec(
+			"INSERT INTO memories(id,content,memory_kind,agent_id,created_at,updated_at) VALUES('capability-evidence','capability evidence','episodic','default',datetime('now'),datetime('now'))",
+		);
+		db.close();
+		initDbAccessor(database.path);
+		client = createDbOwnerClient({ dbPath: database.path });
+		const owner = client;
+		const jobs: Array<{ readonly kind: string; readonly lane: string }> = [];
+		registerDbOwnerMaintenance(
+			createDbOwnerMaintenance({
+				dbPath: database.path,
+				owner: {
+					...owner,
+					submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions) {
+						jobs.push({ kind: request.kind, lane: options.lane });
+						return owner.submit<Result>(request, options);
+					},
+				},
+			}),
+		);
+		try {
+			const capability = getDreamingCapability(
+				{
+					accessor: getDbAccessor(),
+					agentId: "default",
+					actor: "test",
+					passId: "capability-pass",
+					evidenceLeaseMs: 60_000,
+				},
+				"search_evidence",
+			);
+			if (!capability) throw new Error("search_evidence missing");
+			const result = await capability.invoke({ agentId: "default" });
+			expect(result).toMatchObject({
+				ok: true,
+				items: [{ sourceRef: "memory:capability-evidence", speaker: { kind: "local_anonymous" } }],
+			});
+			expect(jobs).toEqual([
+				{ kind: "dreaming_evidence_search", lane: "read" },
+				{ kind: "dreaming_evidence_prepare", lane: "write" },
+				{ kind: "dreaming_evidence_prepare", lane: "write" },
+			]);
+			expect(
+				await recallThroughDbOwner<{ readonly pass_id: string }>(owner, "SELECT pass_id FROM dreaming_evidence_leases"),
+			).toEqual([{ pass_id: "capability-pass" }]);
+			const peer = getDreamingCapability(
+				{
+					accessor: getDbAccessor(),
+					agentId: "default",
+					actor: "test",
+					passId: "peer-pass",
+					evidenceLeaseMs: 60_000,
+				},
+				"search_evidence",
+			);
+			await owner.submit(
+				{
+					kind: "query",
+					statement: {
+						sql: "INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES('peer-pass','default','default','incremental-hygiene','running')",
+						result: "run",
+					},
+				},
+				{ operation: "dreaming.peer-fixture", lane: "write", deadlineMs: 5_000 },
+			).result;
+			if (!peer) throw new Error("search_evidence missing");
+			expect(await peer.invoke({ agentId: "default" })).toMatchObject({ ok: true, items: [] });
+			await owner.submit(
+				{
+					kind: "dreaming_pass_finalize",
+					input: {
+						passId: "capability-pass",
+						agentId: "default",
+						mode: "incremental-hygiene",
+						scopes: ["default"],
+						transcriptManifestEntries: [],
+						tokensConsumed: null,
+						inputTokens: null,
+						outputTokens: null,
+						cacheReadTokens: null,
+						cacheCreationTokens: null,
+						peakContextTokens: null,
+						totalCost: null,
+						applied: 0,
+						failed: 0,
+						summary: "Lease cleanup",
+						rejectedEvidence: [],
+						memoryHeadCommitInput: null,
+						hasBacklogByScope: [],
+						nextWatermarkByScope: [],
+					},
+				},
+				{ operation: "dreaming.finalize-fixture", lane: "write", deadlineMs: 5_000 },
+			).result;
+			expect(await peer.invoke({ agentId: "default" })).toMatchObject({
+				ok: true,
+				items: [{ sourceRef: "memory:capability-evidence" }],
+			});
+		} finally {
+			await closeDbAccessor();
+		}
+	});
+
+	test("Dreaming read search scopes rows before limits and preparation skips only missing items", async () => {
+		const database = await makeMigratedDb();
+		directory = database.directory;
+		const db = new Database(database.path);
+		upgradeDreamingPartitions(db);
+		db.exec("INSERT INTO classifications(id,name) VALUES('secret-read','Secret')");
+		db.exec("INSERT INTO compartments(id,key) VALUES(92,'secret-read')");
+		db.exec("INSERT INTO compartment_members(compartment_id,classification_id) VALUES(92,'secret-read')");
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status) VALUES('scope-pass','default','default','incremental-content','running')",
+		);
+		db.exec(
+			"INSERT INTO memories(id,content,memory_kind,agent_id,compartment_id,created_at,updated_at) VALUES('visible-evidence','needle evidence','episodic','default',NULL,'2025-01-01','2025-01-01'),('hidden-evidence','needle evidence','episodic','default',92,'2026-01-01','2026-01-01'),('other-agent','needle evidence','episodic','unrelated',NULL,'2027-01-01','2027-01-01')",
+		);
+		db.exec(
+			"INSERT INTO users(id,username,display_name,role) VALUES('missing-person-user','missing-person','Missing Person','member')",
+		);
+		db.exec(
+			"INSERT INTO session_transcripts(agent_id,session_key,content,speaker_user_id,created_at,completed_at) VALUES('default','missing-person-session','Unresolved speaker evidence','missing-person-user','2024-01-01','2024-01-01')",
+		);
+		db.close();
+		client = createDbOwnerClient({ dbPath: database.path });
+		const read = { operation: "dreaming.scope-limit-proof", lane: "read", deadlineMs: 10_000 } as const;
+		expect(
+			await client.submit(
+				{
+					kind: "dreaming_evidence_search",
+					input: { agentId: "default", passId: "scope-pass", query: "needle", limit: 1 },
+				},
+				read,
+			).result,
+		).toMatchObject({ ok: true, items: [{ sourceRef: "memory:visible-evidence" }] });
+		for (const sourceRef of ["memory:hidden-evidence", "memory:missing-evidence", "memory:other-agent"])
+			expect(
+				await client.submit(
+					{ kind: "dreaming_evidence_search", input: { agentId: "default", passId: "scope-pass", sourceRef } },
+					read,
+				).result,
+			).toEqual({ ok: false, error: "Evidence source not found" });
+		const result = await client.submit(
+			{
+				kind: "dreaming_evidence_prepare",
+				input: {
+					agentId: "default",
+					passId: "scope-pass",
+					sourceRefs: ["memory:missing-evidence", "memory:visible-evidence", "memory:hidden-evidence"],
+					action: "speakers",
+				},
+			},
+			{ ...read, lane: "write" },
+		).result;
+		expect(result).toMatchObject({
+			ok: true,
+			items: [{ sourceRef: "memory:visible-evidence", speaker: { kind: "local_anonymous" } }],
+			itemErrors: [
+				{ sourceRef: "memory:missing-evidence", error: "Evidence source not found" },
+				{ sourceRef: "memory:hidden-evidence", error: "Evidence source not found" },
+			],
+		});
+		const unresolved = await client.submit(
+			{
+				kind: "dreaming_evidence_prepare",
+				input: {
+					agentId: "default",
+					passId: "scope-pass",
+					sourceRefs: ["transcript:missing-person-session", "memory:visible-evidence"],
+					action: "speakers",
+				},
+			},
+			{ ...read, lane: "write" },
+		).result;
+		expect(unresolved).toMatchObject({
+			ok: true,
+			items: [{ sourceRef: "memory:visible-evidence" }],
+			itemErrors: [{ sourceRef: "transcript:missing-person-session", error: "person_identity_missing" }],
+		});
+		expect(
+			await recallThroughDbOwner<{ readonly count: number }>(
+				client,
+				"SELECT COUNT(*) AS count FROM entities WHERE person_user_id='missing-person-user'",
+			),
+		).toEqual([{ count: 0 }]);
+	});
+
+	test("finalizes a classified content head without creating a plaintext head", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-classified-head-"));
+		mkdirSync(join(directory, "data"));
+		const path = join(directory, "data", "signet.db");
+		const db = new Database(path);
+		runMigrations(db);
+		upgradeDreamingPartitions(db);
+		db.exec("INSERT OR IGNORE INTO agents(id,name) VALUES('ant','Ant')");
+		db.exec("INSERT INTO classifications(id,name) VALUES('private','Private')");
+		db.exec("INSERT INTO compartments(id,key) VALUES(9,'private')");
+		db.exec("INSERT INTO compartment_members(compartment_id,classification_id) VALUES(9,'private')");
+		db.exec(
+			"INSERT INTO dreaming_passes(id,agent_id,scope_key,mode,status,compartment_id) VALUES('private-pass','ant','ant','incremental-content','running',9)",
+		);
+		db.close();
+		client = createDbOwnerClient({ dbPath: path });
+		const metadata = {
+			operation: "classified-head-fixture",
+			lane: "write",
+			deadlineMs: 10_000,
+			estimatedWorkUnits: 500,
+		} as const;
+		await client.submit(
+			{ kind: "memory_head", request: { action: "read", agentId: "ant", passId: "private-pass" } },
+			metadata,
+		).result;
+		await client.submit(
+			{
+				kind: "dreaming_pass_finalize",
+				input: {
+					passId: "private-pass",
+					mode: "incremental-content",
+					agentId: "ant",
+					scopes: ["ant"],
+					transcriptManifestEntries: [],
+					tokensConsumed: null,
+					inputTokens: null,
+					outputTokens: null,
+					cacheReadTokens: null,
+					cacheCreationTokens: null,
+					peakContextTokens: null,
+					totalCost: null,
+					applied: 0,
+					failed: 0,
+					summary: "Private pass",
+					rejectedEvidence: [],
+					memoryHeadCommitInput: { agentId: "ant", passId: "private-pass", entries: [] },
+					hasBacklogByScope: [],
+					nextWatermarkByScope: [],
+				},
+			},
+			metadata,
+		).result;
+		expect(
+			readdirSync(directory, { recursive: true, encoding: "utf8" }).some((path) => path.endsWith("MEMORY.md")),
+		).toBe(false);
+		const result = await client.submit(
+			{
+				kind: "query",
+				statement: {
+					sql: "SELECT status,compartment_id FROM dreaming_passes WHERE id='private-pass'",
+					params: [],
+					result: "get",
+				},
+			},
+			{ ...metadata, lane: "read" },
+		).result;
+		expect(result).toEqual({ status: "completed", compartment_id: 9 });
+	}, 15_000);
 
 	test("closes the owner during maintenance drain without waiting for the job deadline", async () => {
 		if (process.platform === "win32") return;
@@ -304,6 +735,53 @@ describe("DB owner client", () => {
 			else process.env.SIGNET_DB_OWNER_TEST_STARTUP_STARTED = previousStarted;
 			if (previousRelease === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_STARTUP_RELEASE");
 			else process.env.SIGNET_DB_OWNER_TEST_STARTUP_RELEASE = previousRelease;
+		}
+	});
+
+	test("B5 late completion rule does not time out a write-lane read-only job", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		await client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1 AS warm", result: "get" } },
+			{ operation: "test.write-lane.warm", lane: "write", deadlineMs: 5000 },
+		).result;
+
+		const original = setTimeout;
+		const delayed = spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) =>
+			original(callback, ms && ms > 0 && ms <= 80 ? 1500 : ms, ...args),
+		);
+		try {
+			const job = client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: {
+						sql: "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<2000000) SELECT MAX(x) AS n FROM n",
+						result: "get",
+					},
+				},
+				{ operation: "test.write-lane.deadline", lane: "write", deadlineMs: 80 },
+			);
+			expect(await job.result).toEqual({ n: 2000000 });
+		} finally {
+			delayed.mockRestore();
+		}
+	});
+	test("A15 read results delivered past their deadline reject even when the timer has not run", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const handle = client.submit(
+			{ kind: "query", statement: { sql: "SELECT content FROM memories WHERE id='m1'", result: "get" } },
+			{ operation: "deadline-at-delivery", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+		);
+		try {
+			setSystemTime(new Date(handle.job.deadlineAt + 1));
+			await expect(handle.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		} finally {
+			setSystemTime();
 		}
 	});
 

@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { checkPermission, createAuthMiddleware, verifyToken } from "../auth";
 import type { AuthResult, TokenClaims } from "../auth";
+import { checkPermission, createAuthMiddleware, verifyToken } from "../auth";
 
 const KEY = "sig_sk_narrow_secretvalue";
 const KEY_EXP = Math.floor(Date.now() / 1000) + 120;
@@ -56,6 +56,17 @@ async function mint(): Promise<{ token: string; expiresAt: string }> {
 }
 
 describe("whoami", () => {
+	test("distinguishes authenticated from missing access without a truthy boolean fallback", async () => {
+		const signedIn = await app.request("/api/auth/whoami", { headers: bearer(KEY) });
+		expect(await signedIn.json()).toMatchObject({
+			effectiveAccess: "authenticated",
+			organization: null,
+			user: null,
+			agents: { defaultRead: "default", defaultWrite: "default" },
+		});
+		const signedOut = await app.request("/api/auth/whoami");
+		expect(await signedOut.json()).toMatchObject({ effectiveAccess: "none", authenticated: false });
+	});
 	test("reports an API key as authenticated with its claims", async () => {
 		const res = await app.request("/api/auth/whoami", { headers: bearer(KEY) });
 		const body = (await res.json()) as { authenticated: boolean; claims: TokenClaims | null };

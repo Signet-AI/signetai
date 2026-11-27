@@ -1,3 +1,4 @@
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,8 +14,8 @@ test("replay keeps one configured source identity while allowing a second file s
 		await mkdir(join(root, "memory"), { recursive: true });
 		closeDbAccessor();
 		initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
-		await createJob({ jobId: "job-a", agentId: "agent-a" });
-		await createJob({ jobId: "job-b", agentId: "agent-a" });
+		await createJob({ author: SYSTEM_AUTHOR, jobId: "job-a", agentId: "agent-a" });
+		await createJob({ author: SYSTEM_AUTHOR, jobId: "job-b", agentId: "agent-a" });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			for (const job of ["job-a", "job-b"])
 				db.prepare("UPDATE source_import_jobs SET state = 'queued' WHERE id = ?").run(job);

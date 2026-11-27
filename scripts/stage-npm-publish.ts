@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 export const NPM_PACKAGE_RENAMES: ReadonlyMap<string, string> = new Map([
 	["@signet/core", "@signetai/core"],
+	["@signet/sdk", "@signetai/sdk"],
 	["@signet/connector-base", "@signetai/connector-base"],
 	["@signet/connector-claude-code", "@signetai/connector-claude-code"],
 	["@signet/connector-codex", "@signetai/connector-codex"],
@@ -22,6 +23,7 @@ export const NPM_PACKAGE_RENAMES: ReadonlyMap<string, string> = new Map([
 
 export const PUBLISH_TARGETS = [
 	["platform/core", "core"],
+	["libs/sdk", "sdk"],
 	["libs/connector-base", "connector-base"],
 	["integrations/claude-code/connector", "connector-claude-code"],
 	["integrations/codex/connector", "connector-codex"],

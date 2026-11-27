@@ -212,8 +212,7 @@ These reasons emit one anonymous `session.end` telemetry event per session
 lifetime. Repeated end requests for the same session are deduplicated.
 
 Requests without a recognized boundary reason, including ordinary
-`session.idle` calls, emit `session.turn` telemetry instead. They still persist
-the transcript and queue normal session-end processing.
+`session.idle` calls, emit `session.turn` telemetry instead. They do not finalize transcript capture through this call.
 
 An optional `lastAssistantMessage` string carries the turn's final assistant
 reply. The daemon appends it to the session's live transcript only when the
@@ -241,6 +240,26 @@ bun scripts/load-test-stale-session-sweep.ts
 ```
 
 ---
+
+## Remote session-end evidence
+
+Remote connectors upload transcript files above the 4 MiB inline limit before
+calling session-end. The transfer is scoped to the original principal,
+credential, agent, harness, and session; it never uses a local-daemon fallback.
+The SDK outbox records the upload ID and offset so an interrupted harness can
+resume from the daemon's actual received-byte count.
+
+For a custom connector, declare the upload with
+`POST /api/hooks/session-end/uploads`, send bounded binary chunks with `PATCH`,
+and read progress with `GET` on the upload ID. Finish with the normal
+session-end request using `transcriptUpload: {"uploadId": "<upload UUID>"}`
+in place of inline text or a local path. Supply an explicit capture boundary
+reason such as `session_shutdown`; `clear` is not an upload-finalization event.
+The API reference documents chunk checksums, offsets, and expiry.
+
+A repeated finalization returns the original capture receipt. `queued: true`
+is not evidence that processing finished: poll the capture job when you need
+completion. Session-transcript deletion purges consumed upload bytes too.
 
 ## Per-Session Bypass
 

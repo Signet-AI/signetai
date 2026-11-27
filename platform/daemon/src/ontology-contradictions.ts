@@ -1,6 +1,16 @@
+import { knowledgeReadDb, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
 import type { OntologyContradiction, OntologyContradictionStatus } from "@signet/core";
-import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { tableExists } from "./db-helpers";
+import { prepareTypedStatement, type DbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
+import { type CitationEvidence, evidenceCompartmentInTx, recordEvidenceCitationsInTx, tableExists } from "./db-helpers";
+import { evidenceCitationInDb, recordSemanticCitationsInTx } from "./classification-owner";
+import {
+	assertDreamingMutationLabelInDb,
+	dreamingPassPartitionInDb,
+	dreamingReadScopeInDb,
+	type DreamingPartition,
+} from "./classification-owner";
+import { readScopeSql } from "./read-scope";
 import { detectProspectiveContradictionRisk } from "./pipeline/antonyms";
 
 export interface ListOntologyContradictionsParams {
@@ -24,6 +34,9 @@ export interface ListOntologyContradictionsResult {
 }
 
 export interface ReconcileOntologyContradictionsParams {
+	readonly contradictionId?: string;
+	readonly passId?: string;
+	readonly partition?: DreamingPartition;
 	readonly agentId: string;
 	readonly entityId?: string;
 	readonly aspectId?: string;
@@ -268,22 +281,42 @@ function canonicalPair(
 	return { left: secondSnapshot, right: firstSnapshot };
 }
 
-function readActiveClaim(db: ReadDb | WriteDb, agentId: string, attributeId: string | null): ClaimRow | null {
+function claimReadScope(
+	db: ReadDb,
+	partition?: DreamingPartition,
+): { readonly sql: string; readonly args: readonly unknown[] } {
+	if (partition === undefined) return { sql: "", args: [] };
+	const scope = dreamingReadScopeInDb(db, partition.agentId, partition.compartmentId);
+	const predicates = ["attr", "asp", "e"].map((alias) => readScopeSql(alias, scope, { visibility: null }));
+	return {
+		sql: predicates.map((predicate) => predicate.sql).join(""),
+		args: predicates.flatMap((predicate) => predicate.args),
+	};
+}
+
+function readActiveClaim(
+	db: ReadDb | WriteDb,
+	agentId: string,
+	attributeId: string | null,
+	partition: DreamingPartition,
+): ClaimRow | null {
 	if (attributeId === null) return null;
+	const scope = claimReadScope(db, partition);
 	const row = db
 		.prepare(`${claimSelect()}
 			WHERE attr.id = ? AND attr.agent_id = ? AND attr.status = 'active'
 			  AND COALESCE(asp.status, 'active') = 'active'
-			  AND COALESCE(e.status, 'active') = 'active'`)
-		.get(attributeId, agentId) as Record<string, unknown> | undefined | null;
+			  AND COALESCE(e.status, 'active') = 'active' ${scope.sql}`)
+		.get(attributeId, agentId, ...scope.args) as Record<string, unknown> | undefined | null;
 	return row == null ? null : claimFromRow(row);
 }
 
-function readClaim(db: WriteDb, agentId: string, attributeId: string): ClaimRow | null {
+function readClaim(db: WriteDb, agentId: string, attributeId: string, partition?: DreamingPartition): ClaimRow | null {
+	const scope = claimReadScope(db, partition);
 	const row = db
 		.prepare(`${claimSelect()}
-			WHERE attr.id = ? AND attr.agent_id = ?`)
-		.get(attributeId, agentId) as Record<string, unknown> | undefined | null;
+			WHERE attr.id = ? AND attr.agent_id = ? ${scope.sql}`)
+		.get(attributeId, agentId, ...scope.args) as Record<string, unknown> | undefined | null;
 	return row == null ? null : claimFromRow(row);
 }
 
@@ -291,6 +324,7 @@ function insertOrReactivateContradiction(
 	db: WriteDb,
 	input: {
 		readonly agentId: string;
+		readonly partition?: DreamingPartition;
 		readonly entityId: string;
 		readonly entityName: string;
 		readonly aspectId: string;
@@ -312,7 +346,16 @@ function insertOrReactivateContradiction(
 		| null
 		| undefined;
 	const timestamp = new Date().toISOString();
+	const partition = input.partition ?? {
+		agentId: input.agentId,
+		compartmentId: evidenceCompartmentInTx(db, input.agentId, [
+			{ kind: "attribute", id: input.left.id },
+			{ kind: "attribute", id: input.right.id },
+		]),
+	};
+	const compartment = partition.compartmentId;
 	if (existing != null) {
+		if (input.partition) assertDreamingMutationLabelInDb(db, "ontology_contradictions", existing.id, partition);
 		db.prepare(
 			`UPDATE ontology_contradictions
 			 SET entity_id = ?, entity_name = ?, aspect_id = ?, aspect_name = ?,
@@ -322,7 +365,7 @@ function insertOrReactivateContradiction(
 			     left_source_path = ?, left_source_root = ?, right_source_kind = ?, right_source_id = ?,
 			     right_source_path = ?, right_source_root = ?, left_evidence = ?, right_evidence = ?,
 			     detector = 'lexical', reason = ?, confidence = 1.0, status = 'active',
-			     detected_at = ?, resolved_at = NULL, resolution_reason = NULL, updated_at = ?
+			     detected_at = ?, resolved_at = NULL, resolution_reason = NULL, updated_at = ?, compartment_id = ?
 			 WHERE id = ? AND agent_id = ?`,
 		).run(
 			input.entityId,
@@ -352,9 +395,11 @@ function insertOrReactivateContradiction(
 			input.reason,
 			timestamp,
 			timestamp,
+			compartment,
 			existing.id,
 			input.agentId,
 		);
+		recordContradictionCitationsInTx(db, existing.id, { ...input, partition });
 		return existing.id;
 	}
 
@@ -367,9 +412,9 @@ function insertOrReactivateContradiction(
 		  left_source_kind, left_source_id, left_source_path, left_source_root,
 		  right_source_kind, right_source_id, right_source_path, right_source_root,
 		  left_evidence, right_evidence, detector, reason, confidence, status,
-		  detected_at, created_at, updated_at)
+		  detected_at, created_at, updated_at, compartment_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		         'lexical', ?, 1.0, 'active', ?, ?, ?)`,
+		         'lexical', ?, 1.0, 'active', ?, ?, ?, ?)`,
 	).run(
 		id,
 		input.agentId,
@@ -403,16 +448,51 @@ function insertOrReactivateContradiction(
 		timestamp,
 		timestamp,
 		timestamp,
+		compartment,
 	);
+	recordContradictionCitationsInTx(db, id, { ...input, partition });
 	return id;
+}
+
+function recordContradictionCitationsInTx(
+	db: WriteDb,
+	id: string,
+	input: { readonly partition: DreamingPartition; readonly left: ClaimSnapshot; readonly right: ClaimSnapshot },
+): void {
+	db.prepare("UPDATE ontology_contradictions SET compartment_id = ? WHERE id = ? AND agent_id = ?").run(
+		input.partition.compartmentId,
+		id,
+		input.partition.agentId,
+	);
+	recordSemanticCitationsInTx(db, {
+		kind: "contradiction",
+		id,
+		partition: input.partition,
+		evidence: [
+			{ kind: "attribute", id: input.left.id },
+			{ kind: "attribute", id: input.right.id },
+		],
+	});
 }
 
 export function recordOntologyContradictionsForAttributeInTx(
 	db: WriteDb,
-	input: { readonly agentId: string; readonly attributeId: string },
+	input: {
+		readonly agentId: string;
+		readonly attributeId: string;
+		readonly passId?: string;
+		readonly partition?: DreamingPartition;
+	},
 ): readonly string[] {
 	if (!tableExists(db, "ontology_contradictions")) return [];
-	const candidate = readClaim(db, input.agentId, input.attributeId);
+	const partition =
+		input.passId !== undefined ? dreamingPassPartitionInDb(db, input.passId, input.agentId) : input.partition;
+	if (partition) {
+		if (partition.agentId !== input.agentId) throw new Error("compartment_mismatch");
+		evidenceCitationInDb(db, partition, { kind: "attribute", id: input.attributeId });
+	}
+	const predicate = claimReadScope(db, partition);
+	const candidate = readClaim(db, input.agentId, input.attributeId, partition);
 	if (candidate === null || candidate.kind === "constraint") return [];
 	const rows = db
 		.prepare(`${claimSelect()}
@@ -422,10 +502,16 @@ export function recordOntologyContradictionsForAttributeInTx(
 			  AND COALESCE(e.status, 'active') = 'active'
 			  AND COALESCE(attr.group_key, 'general') = ?
 			  AND attr.claim_key = ?
-			  AND COALESCE(attr.kind, 'attribute') != 'constraint'`)
-		.all(input.agentId, candidate.aspectId, candidate.id, candidate.groupKey, candidate.claimKey) as Array<
-		Record<string, unknown>
-	>;
+			  AND COALESCE(attr.kind, 'attribute') != 'constraint'
+			  ${predicate.sql}`)
+		.all(
+			input.agentId,
+			candidate.aspectId,
+			candidate.id,
+			candidate.groupKey,
+			candidate.claimKey,
+			...predicate.args,
+		) as Array<Record<string, unknown>>;
 	const contradictionIds: string[] = [];
 	for (const row of rows) {
 		const other = claimFromRow(row);
@@ -435,6 +521,7 @@ export function recordOntologyContradictionsForAttributeInTx(
 		contradictionIds.push(
 			insertOrReactivateContradiction(db, {
 				agentId: input.agentId,
+				partition,
 				entityId: candidate.entityId,
 				entityName: candidate.entityName,
 				aspectId: candidate.aspectId,
@@ -455,6 +542,10 @@ function contradictionScopeWhere(params: ReconcileOntologyContradictionsParams):
 } {
 	const where = ["c.agent_id = ?", "c.status = 'active'"];
 	const args: unknown[] = [params.agentId];
+	if (params.contradictionId !== undefined) {
+		where.push("c.id = ?");
+		args.push(params.contradictionId);
+	}
 	if (params.entityId !== undefined) {
 		where.push("c.entity_id = ?");
 		args.push(params.entityId);
@@ -483,15 +574,33 @@ export function reconcileOntologyContradictionsInTx(
 	params: ReconcileOntologyContradictionsParams,
 ): number {
 	if (!tableExists(db, "ontology_contradictions")) return 0;
+	const partition =
+		params.passId !== undefined
+			? dreamingPassPartitionInDb(db, params.passId, params.agentId)
+			: (params.partition ?? { agentId: params.agentId, compartmentId: null });
+	if (partition.agentId !== params.agentId) throw new Error("compartment_mismatch");
 	const scope = contradictionScopeWhere(params);
+	scope.where.push("c.compartment_id IS ?");
+	scope.args.push(partition.compartmentId);
 	const rows = db
 		.prepare(`${CONTRADICTION_SELECT}
 			WHERE ${scope.where.join(" AND ")}`)
 		.all(...scope.args) as Array<ContradictionRow>;
 	let resolved = 0;
 	for (const row of rows) {
-		const left = readActiveClaim(db, params.agentId, row.left_attribute_id);
-		const right = readActiveClaim(db, params.agentId, row.right_attribute_id);
+		const evidence = [row.left_attribute_id, row.right_attribute_id]
+			.filter(
+				(id): id is string =>
+					id !== null &&
+					prepareTypedStatement<{ id: string }>(
+						db,
+						"SELECT id FROM entity_attributes WHERE id = ? AND agent_id = ?",
+					).get(id, params.agentId) != null,
+			)
+			.map((id) => ({ kind: "attribute" as const, id }));
+		recordSemanticCitationsInTx(db, { kind: "contradiction", id: row.id, partition, evidence });
+		const left = readActiveClaim(db, params.agentId, row.left_attribute_id, partition);
+		const right = readActiveClaim(db, params.agentId, row.right_attribute_id, partition);
 		const stillContradictory =
 			left !== null &&
 			right !== null &&
@@ -516,14 +625,15 @@ export function reconcileOntologyContradictionsInTx(
 	return resolved;
 }
 
-export function listOntologyContradictions(
-	accessor: DbAccessor,
+export async function listOntologyContradictions(
+	_accessor: DbAccessor,
 	params: ListOntologyContradictionsParams,
-): ListOntologyContradictionsResult {
+	readScope?: ReadScope,
+): Promise<ListOntologyContradictionsResult> {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+
+	return (async (db: KnowledgeReadDb) => {
 		const where = ["c.agent_id = ?"];
 		const args: unknown[] = [params.agentId];
 		if (params.status !== "all") {
@@ -555,36 +665,36 @@ export function listOntologyContradictions(
 			args.push(params.sourceId, params.sourceId);
 		}
 		const clause = where.join(" AND ");
-		const rows = db
+		const rows = (await db
 			.prepare(`${CONTRADICTION_SELECT}
 				WHERE ${clause}
 				ORDER BY CASE WHEN c.status = 'active' THEN 0 ELSE 1 END, c.updated_at DESC
 				LIMIT ? OFFSET ?`)
-			.all(...args, limit, offset) as Array<ContradictionRow>;
-		const count = db.prepare(`SELECT COUNT(*) AS count FROM ontology_contradictions c WHERE ${clause}`).get(...args) as
-			| { count: number }
-			| undefined;
+			.all(...args, limit, offset)) as Array<ContradictionRow>;
+		const count = (await db
+			.prepare(`SELECT COUNT(*) AS count FROM ontology_contradictions c WHERE ${clause}`)
+			.get(...args)) as { count: number } | undefined;
 		return {
 			items: rows.map(rowToContradiction),
 			count: count?.count ?? rows.length,
 			limit,
 			offset,
 		};
-	}, "ontology-contradictions.ts:526");
+	})(knowledgeReadDb(readScope));
 }
 
-export function getOntologyContradiction(
-	accessor: DbAccessor,
+export async function getOntologyContradiction(
+	_accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string },
-): OntologyContradiction | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const row = db
+	readScope?: ReadScope,
+): Promise<OntologyContradiction | null> {
+	return (async (db: KnowledgeReadDb) => {
+		const row = (await db
 			.prepare(`${CONTRADICTION_SELECT}
 				WHERE c.id = ? AND c.agent_id = ?`)
-			.get(params.id, params.agentId) as ContradictionRow | undefined | null;
+			.get(params.id, params.agentId)) as ContradictionRow | undefined | null;
 		return row == null ? null : rowToContradiction(row);
-	}, "ontology-contradictions.ts:581");
+	})(knowledgeReadDb(readScope));
 }
 
 export function parseOntologyContradictionStatus(

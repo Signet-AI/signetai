@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { addImportedSource, resolveDefaultBasePath } from "@signet/core";
+import type { WriteAuthor } from "./auth/audit-owner";
 import {
 	appendTranscriptChunk,
 	beginTranscriptUpload,
@@ -12,6 +13,7 @@ import { withTranscriptImportOperationLock } from "./transcript-import-operation
 import { controlImport, createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
 
 export interface TranscriptImportAdmissionInput {
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly fileName: string;
 	readonly bytes: Uint8Array;
@@ -38,6 +40,7 @@ export async function stageTranscriptImport(
 		const fileId = randomUUID();
 		const scope: TranscriptUploadScope = { agentId: input.agentId, jobId, fileId, generation: 0 };
 		await createJob({
+			author: input.author,
 			jobId,
 			agentId: input.agentId,
 			schemaId: "signet-export",

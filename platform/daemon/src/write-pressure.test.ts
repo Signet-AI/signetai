@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { DbWriteQueueFullError } from "./db-accessor";
-import { DbOwnerAdmissionError, DbOwnerDeadlineError } from "./db-owner-client";
+import { DbOwnerAdmissionError, DbOwnerDeadlineError, DbOwnerError } from "./db-owner-client";
 import { TranscriptCaptureBacklogFullError } from "./transcript-capture-worker";
 import { WorkspaceMigrationRetryableError } from "./workspace-writer-barrier";
 import { isRetryableWritePressure } from "./write-pressure";
@@ -11,6 +11,9 @@ describe("isRetryableWritePressure", () => {
 		expect(isRetryableWritePressure(new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "full"))).toBe(true);
 		expect(isRetryableWritePressure(new WorkspaceMigrationRetryableError("db-owner", "g1"))).toBe(true);
 		expect(isRetryableWritePressure(new TranscriptCaptureBacklogFullError(64))).toBe(true);
+		expect(isRetryableWritePressure(new DbOwnerError("TRANSCRIPT_CAPTURE_BACKLOG_FULL", "capture backlog full"))).toBe(
+			true,
+		);
 	});
 
 	it("leaves other failures alone so they still surface as errors", () => {

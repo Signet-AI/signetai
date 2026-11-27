@@ -3,14 +3,29 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compartmentForWrite } from "../../core/src/compartment-shards";
 import type { RouteRequest } from "@signet/core";
-import { type AggregateInferenceRouter, InvalidAggregateRecallBudgetError, aggregateRecall } from "./aggregate-recall";
+import {
+	type AggregateInferenceRouter,
+	aggregateRecall as scopedAggregateRecall,
+	InvalidAggregateRecallBudgetError,
+} from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
 import { loadMemoryConfig } from "./memory-config";
 import type { RecallParams, RecallResponse, RecallResult } from "./memory-search";
 import { txIngestEnvelope } from "./transactions";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+
+type ScopedAggregateRecallRest =
+	Parameters<typeof scopedAggregateRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function aggregateRecall(
+	params: Omit<RecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedAggregateRecallRest
+): ReturnType<typeof scopedAggregateRecall> {
+	return scopedAggregateRecall(withLocalReadScope(params), ...rest);
+}
 
 const originalFetch = globalThis.fetch;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
@@ -177,6 +192,21 @@ describe("aggregateRecall", () => {
 		prevSignetPath = process.env.SIGNET_PATH;
 		process.env.SIGNET_PATH = dir;
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, agent] of [
+				["mem-1", "agent-a"],
+				["mem-2", "agent-a"],
+				["mem-3", "agent-a"],
+				["mem-api-1", "agent-a"],
+				["mem-private", "agent-private"],
+				["mem-legacy", "agent-legacy"],
+			])
+				db.prepare("INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES(?,? ,?,'now','now')").run(
+					id,
+					`Evidence ${id}`,
+					agent,
+				);
+		});
 	});
 
 	afterEach(() => {
@@ -196,6 +226,52 @@ describe("aggregateRecall", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("labels aggregate evidence, hints, and embeddings and keeps the initiating author", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('alice','alice','Alice','member'); INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_assignments VALUES('memory','mem-1','agent-a','cls_hr','alice','now')",
+			);
+			db.prepare("UPDATE memories SET compartment_id=? WHERE id='mem-1'").run(
+				compartmentForWrite(db, { agentId: "agent-a", memoryId: "mem-1" }),
+			);
+		});
+		const cfg = loadMemoryConfig(dir);
+		const result = await aggregateRecall({ query: "private facts", agentId: "agent-a", aggregate: true }, cfg, {
+			author: { userId: "alice", credential: "session:alice" },
+			router: new StaticRouter(),
+			embedFn: async () => Array.from({ length: cfg.embedding.dimensions }, (_, index) => (index === 0 ? 1 : 0)),
+			logger: quietLogger(),
+			hybridRecall: async (params) => response(params.query, [row("mem-1", "Private facts")]),
+		});
+		const id = result.aggregate?.savedMemoryId;
+		expect(typeof id).toBe("string");
+		const persisted = await getDbAccessor().withReadDbAsync((db) => ({
+			memory: db.prepare("SELECT compartment_id,author_user_id FROM memories WHERE id=?").get(id),
+			hint: db.prepare("SELECT compartment_id FROM memory_hints WHERE memory_id=?").get(id),
+			embedding: db.prepare("SELECT compartment_id,agent_id FROM embeddings WHERE source_id=?").get(id),
+			citations: db
+				.prepare(
+					"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='memory' AND derived_id=?",
+				)
+				.all(id),
+		}));
+		expect(persisted.memory).toEqual({ compartment_id: expect.any(Number), author_user_id: "alice" });
+		expect(persisted.hint).toEqual({ compartment_id: expect.any(Number) });
+		expect(persisted.embedding).toEqual({ compartment_id: expect.any(Number), agent_id: "agent-a" });
+		expect(persisted.citations).toEqual([{ evidence_kind: "memory", evidence_id: "mem-1" }]);
+	});
+
+	it("requires a resolved agent for a principal aggregate call", async () => {
+		await expect(
+			aggregateRecall({ query: "private facts", aggregate: true }, loadMemoryConfig(dir), {
+				author: { userId: "alice", credential: "session:alice" },
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				hybridRecall: async (params) => response(params.query, [row("mem-1", "Private facts")]),
+			}),
+		).rejects.toThrow("agent_required");
+	});
+
 	it("rejects invalid aggregate budgets instead of falling back to small", async () => {
 		await expect(
 			aggregateRecall(
@@ -206,6 +282,7 @@ describe("aggregateRecall", () => {
 				} as unknown as RecallParams,
 				loadMemoryConfig(dir),
 				{
+					author: { userId: null, credential: "system" },
 					router: new StaticRouter(),
 					embedFn: async () => null,
 					logger: quietLogger(),
@@ -228,6 +305,7 @@ describe("aggregateRecall", () => {
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -347,6 +425,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -428,6 +507,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: directRouter,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -463,6 +543,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				embedFn: async () => null,
 				logger: quietLogger(),
 				hybridRecall: async (params: RecallParams) =>
@@ -492,6 +573,7 @@ memory:
 			{ query: "router unavailable", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: null,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -504,6 +586,7 @@ memory:
 			{ query: "complete aggregate", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -516,6 +599,7 @@ memory:
 			{ query: "no evidence", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -528,6 +612,7 @@ memory:
 			{ query: "synthesis failed", aggregate: true, saveAggregate: false },
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new SynthesisFailingRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -547,6 +632,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new SynthesisFailingRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -569,6 +655,53 @@ memory:
 		expect(result.aggregate?.message).toContain("synthesis");
 	});
 
+	it("A14 aggregate writes ignore hidden key and hash matches in another compartment", async () => {
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('aggregate-user','aggregate-user','Aggregate User','member');INSERT INTO classifications(id,name) VALUES('cls_aggregate_hidden','Hidden aggregate')",
+			),
+		);
+		for (const sameCompartment of [false]) {
+			const key = sameCompartment ? "same" : "different";
+			const params: RecallParams = {
+				query: `aggregate hidden ${key}`,
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+				sessionKey: `aggregate-${key}`,
+			};
+			const deps = {
+				author: { userId: "aggregate-user", credential: "session:aggregate-user" },
+				router: new StaticRouter(`Durable aggregate evidence for ${key} compartment.`),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				idFactory: () => `hidden-aggregate-${key}`,
+				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+			};
+			await aggregateRecall(params, loadMemoryConfig(dir), deps);
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("INSERT OR IGNORE INTO compartments(key) VALUES('cls_aggregate_hidden')").run();
+				db.prepare(
+					"INSERT OR IGNORE INTO compartment_members SELECT id,'cls_aggregate_hidden' FROM compartments WHERE key='cls_aggregate_hidden'",
+				).run();
+				db.prepare(
+					"UPDATE memories SET compartment_id=(SELECT id FROM compartments WHERE key='cls_aggregate_hidden') WHERE id=?",
+				).run(`hidden-aggregate-${key}`);
+				if (sameCompartment)
+					db.prepare(
+						"INSERT INTO classification_assignments VALUES('session',?,'agent-a','cls_aggregate_hidden','aggregate-user','now')",
+					).run(params.sessionKey);
+			});
+			const fresh = await aggregateRecall(params, loadMemoryConfig(dir), {
+				...deps,
+				router: new StaticRouter(`Durable aggregate evidence for ${key} compartment.`),
+				idFactory: () => `fresh-aggregate-${key}`,
+			});
+			expect(fresh.aggregate).toMatchObject({ saved: true, deduped: false, savedMemoryId: `fresh-aggregate-${key}` });
+			expect(fresh.results[0]?.id).toBe(`fresh-aggregate-${key}`);
+		}
+	});
+
 	it("dedupes repeated aggregate runs for the same evidence set", async () => {
 		const params: RecallParams = {
 			query: "what happened",
@@ -577,6 +710,7 @@ memory:
 			readPolicy: "isolated",
 		};
 		const deps = {
+			author: { userId: null, credential: "system" },
 			router: new StaticRouter(),
 			embedFn: async () => null,
 			logger: quietLogger(),
@@ -610,6 +744,7 @@ memory:
 			readPolicy: "isolated",
 		};
 		const deps = {
+			author: { userId: null, credential: "system" },
 			embedFn: async () => null,
 			logger: quietLogger(),
 			now: () => new Date("2026-05-20T12:00:00.000Z"),
@@ -663,6 +798,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => {
@@ -692,6 +828,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				logger: log,
 				embedFn: async () => {
@@ -732,6 +869,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
@@ -742,7 +880,9 @@ memory:
 		expect(result.results[0].content).toBe("Aggregate answer from memory evidence.");
 		expect(result.aggregate?.saved).toBe(false);
 		expect(result.aggregate?.savedMemoryId).toBeNull();
-		const count = getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM memories").get()) as {
+		const count = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source_type='aggregate-recall'").get(),
+		) as {
 			n: number;
 		};
 		expect(count.n).toBe(0);
@@ -801,6 +941,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => response(input.query, [ontologyRow]),
@@ -855,6 +996,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(
 					"There isn't enough evidence here to determine Nicholai's favorite food. The only explicit preference shown is earl grey tea.",
 				),
@@ -894,6 +1036,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(
 					'Yes. The evidence says Nicholai ate two gas station danishes and called them "amazing".',
 				),
@@ -931,6 +1074,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(
 					"Nicholai and Amari broke up on March 14, 2026, were still figuring things out on May 12, and by May 20 Nicholai felt ready to move on.",
 				),
@@ -962,6 +1106,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -993,6 +1138,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1029,6 +1175,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1068,6 +1215,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1092,6 +1240,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router,
 				embedFn: async () => null,
 				logger: quietLogger(),
@@ -1116,7 +1265,7 @@ memory:
 		expect(router.prompts[1]).not.toContain("Stale synthesized aggregate");
 	});
 
-	it("returns unsaved aggregate when content hash conflicts with an inaccessible memory", async () => {
+	it("A18 ignores aggregate hash matches outside the destination project and visibility", async () => {
 		const answer = "Aggregate answer from memory evidence.";
 		const normalized = normalizeAndHashContent(answer);
 		const now = "2026-05-20T12:00:00.000Z";
@@ -1152,6 +1301,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-conflict",
@@ -1160,17 +1310,17 @@ memory:
 		);
 
 		expect(result.results).toHaveLength(1);
-		expect(result.results[0].id).toStartWith("aggregate-recall:");
+		expect(result.results[0].id).toBe("aggregate-conflict");
 		expect(result.aggregate).toMatchObject({
-			savedMemoryId: null,
-			saved: false,
-			deduped: true,
+			savedMemoryId: "aggregate-conflict",
+			saved: true,
+			deduped: false,
 			stoppedReason: "complete",
 		});
 		const aggregateRows = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-conflict"),
 		) as { n: number };
-		expect(aggregateRows.n).toBe(0);
+		expect(aggregateRows.n).toBe(1);
 	});
 
 	it("does not reuse visible ordinary memories as saved aggregate dedupes", async () => {
@@ -1210,6 +1360,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-visible-conflict",
@@ -1285,6 +1436,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: new StaticRouter(),
 				embedFn: async () => null,
 				idFactory: () => "aggregate-idempotency-safe",
@@ -1316,56 +1468,108 @@ memory:
 		expect(rows.aggregate_link_count).toBe(0);
 	});
 
-	it("dedupes when a concurrent aggregate insert wins the content-hash race", async () => {
-		let raced = false;
-		const result = await aggregateRecall(
-			{
-				query: "what happened",
-				aggregate: true,
-				agentId: "agent-a",
-				readPolicy: "isolated",
-				project: "current-project",
-			},
-			loadMemoryConfig(dir),
-			{
-				router: new StaticRouter(),
-				embedFn: async () => null,
-				idFactory: () => "aggregate-loser",
-				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
-				ingestEnvelope: (db, mem) => {
-					if (!raced) {
-						raced = true;
-						txIngestEnvelope(db, {
-							...mem,
-							id: "aggregate-race-winner",
-						});
-					}
-					return txIngestEnvelope(db, mem);
+	it("serializes concurrent aggregate retries without unique evidence keys", async () => {
+		let nextId = 0;
+		const recall = () =>
+			aggregateRecall(
+				{
+					query: "what happened",
+					aggregate: true,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					project: "current-project",
 				},
-			},
-		);
+				loadMemoryConfig(dir),
+				{
+					author: { userId: null, credential: "system" },
+					router: new StaticRouter(),
+					embedFn: async () => null,
+					idFactory: () => `aggregate-race-${++nextId}`,
+					hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+				},
+			);
+		const results = await Promise.all([recall(), recall()]);
+		const winner = results[0].results[0]?.id;
+		expect(winner).toBeDefined();
+		expect(results[1].results[0]?.id).toBe(winner);
+		expect(results.filter((result) => result.aggregate?.deduped)).toHaveLength(1);
+		expect(results.every((result) => result.aggregate?.saved)).toBe(true);
+		const counts = await getDbAccessor().withReadDbAsync((db) => ({
+			memories: db.prepare("SELECT count(*) n FROM memories WHERE source_type='aggregate-recall'").get()?.n,
+			links: db.prepare("SELECT count(*) n FROM derived_memory_sources WHERE derived_memory_id=?").get(winner)?.n,
+		}));
+		expect(counts).toEqual({ memories: 1, links: 1 });
+	});
 
-		expect(result.results).toHaveLength(1);
-		expect(result.results[0].id).toBe("aggregate-race-winner");
-		expect(result.aggregate).toMatchObject({
-			savedMemoryId: "aggregate-race-winner",
-			saved: true,
-			deduped: true,
-			stoppedReason: "complete",
+	describe("read scope", () => {
+		const readScope = { reach: { kind: "own" as const, agentId: "agent-a" }, compartments: [], projects: null };
+		const params: RecallParams = { query: "what happened", aggregate: true, agentId: "agent-a", readScope };
+		const key = aggregateKeyForTest({
+			agentId: "agent-a",
+			project: null,
+			query: "what happened",
+			budget: "small",
+			sourceMemoryIds: ["mem-1"],
 		});
-		const rows = getDbAccessor().withReadDb((db) =>
-			db
-				.prepare(
-					`SELECT
-						(SELECT COUNT(*) FROM memories WHERE id = 'aggregate-loser') AS loser_count,
-						(SELECT COUNT(*) FROM derived_memory_sources WHERE derived_memory_id = 'aggregate-race-winner') AS link_count,
-						(SELECT COUNT(*) FROM memory_jobs WHERE memory_id = 'aggregate-race-winner' AND job_type = 'extract' AND status = 'pending') AS pending_extract_count`,
-				)
-				.get(),
-		) as { loser_count: number; link_count: number; pending_extract_count: number };
-		expect(rows.loser_count).toBe(0);
-		expect(rows.link_count).toBe(1);
-		expect(rows.pending_extract_count).toBe(0);
+		function seedHiddenAggregate(content: string, staleAt: string | null): void {
+			const normalized = normalizeAndHashContent(content);
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, normalized_content, content_hash, who, type, source_type, source_id,
+						idempotency_key, agent_id, visibility, compartment_id, stale_at, created_at, updated_at, updated_by
+					) VALUES ('hidden-aggregate', ?, ?, ?, 'signet', 'semantic', 'aggregate-recall', ?, ?, 'agent-a', 'global', 7, ?, ?, ?, 'test')`,
+				).run(
+					content,
+					normalized.normalizedContent || normalized.hashBasis,
+					normalized.contentHash,
+					key,
+					key,
+					staleAt,
+					"2026-05-20T12:00:00.000Z",
+					"2026-05-20T12:00:00.000Z",
+				);
+			});
+		}
+		function deps(seen: RecallParams[] = []) {
+			return {
+				author: { userId: null, credential: "system" },
+				router: new StaticRouter("Visible aggregate answer for the reader."),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				now: () => new Date("2026-05-20T12:00:00.000Z"),
+				idFactory: () => "visible-aggregate",
+				hybridRecall: async (input: RecallParams) => {
+					seen.push(input);
+					return response(input.query, [row("mem-1", "First evidence")]);
+				},
+			};
+		}
+
+		it("does not return a hidden aggregate that shares the reader's idempotency key", async () => {
+			seedHiddenAggregate("Classified aggregate content.", null);
+			const result = await aggregateRecall(params, loadMemoryConfig(dir), deps());
+			expect(result.results.map((entry) => entry.content)).toEqual(["Visible aggregate answer for the reader."]);
+			expect(result.results[0]?.id).not.toBe("hidden-aggregate");
+			expect(result.aggregate?.savedMemoryId).not.toBe("hidden-aggregate");
+		});
+
+		it("does not rederive a hidden stale aggregate", async () => {
+			seedHiddenAggregate("Classified stale aggregate.", "2026-05-21T00:00:00.000Z");
+			const result = await aggregateRecall(params, loadMemoryConfig(dir), deps());
+			expect(result.results[0]?.id).not.toBe("hidden-aggregate");
+			const stored = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT content, stale_at FROM memories WHERE id = 'hidden-aggregate'").get(),
+			);
+			expect(stored).toEqual({ content: "Classified stale aggregate.", stale_at: "2026-05-21T00:00:00.000Z" });
+		});
+
+		it("carries the ReadScope into the initial and every follow-up recall", async () => {
+			const seen: RecallParams[] = [];
+			await aggregateRecall({ ...params, saveAggregate: false }, loadMemoryConfig(dir), deps(seen));
+			expect(seen.map((input) => input.query)).toEqual(["what happened", "follow up one", "follow up two"]);
+			for (const input of seen) expect(input.readScope).toEqual(readScope);
+		});
 	});
 
 	it("returns structured no-hit metadata when aggregate recall has no evidence", async () => {
@@ -1378,6 +1582,7 @@ memory:
 			},
 			loadMemoryConfig(dir),
 			{
+				author: { userId: null, credential: "system" },
 				router: null,
 				embedFn: async () => null,
 				hybridRecall: async (input: RecallParams) => response(input.query, []),

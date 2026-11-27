@@ -53,6 +53,38 @@ describe("TTL eviction finalizer (#902)", () => {
 		clearContinuity(sessionKey);
 	});
 
+	it("preserves the bound speaker on TTL checkpoints", async () => {
+		setup();
+		const sessionKey = "ttl-bound-speaker";
+		upsertSessionTranscript(sessionKey, `User: ${"x".repeat(600)}`, "plugin", null, "default");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("UPDATE session_transcripts SET speaker_user_id = ? WHERE session_key = ? AND agent_id = ?").run(
+				"usr_bound",
+				sessionKey,
+				"default",
+			);
+		});
+		initContinuity(sessionKey, "hermes", "test-project");
+		recordPrompt(sessionKey, "query", "prompt");
+		try {
+			await createTtlEvictionHandler({ accessor: getDbAccessor(), maxCheckpointsPerSession: 50 })({
+				sessionKey,
+				agentId: "default",
+				runtimePath: "plugin",
+				claimedAt: new Date().toISOString(),
+			});
+			expect(
+				await getDbAccessor().withReadDbAsync((db) =>
+					db
+						.prepare("SELECT author_user_id FROM session_checkpoints WHERE session_key = ? AND agent_id = ?")
+						.get(sessionKey, "default"),
+				),
+			).toEqual({ author_user_id: "usr_bound" });
+		} finally {
+			clearContinuity(sessionKey);
+		}
+	});
+
 	it("marks a retained transcript complete and deduplicates repeated TTL finalization", async () => {
 		setup();
 		const transcript = `User: ${"x".repeat(600)}`;

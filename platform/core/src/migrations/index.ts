@@ -1,12 +1,5 @@
-import { up as sessionTranscriptDeletions } from "./174-session-transcript-deletions";
-import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
-import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
-import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
-import { up as sourceSyncFailures } from "./155-source-sync-failures";
-import { up as retireObsoleteInvocationLedger } from "./159-retire-obsolete-invocation-ledger";
-
-import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
-
+import { rebuildBaseCompartmentFts, rebuildCompartmentFtsShards } from "../compartment-shards";
+import { createMemoriesFts } from "../fts-schema";
 import { up as baseline } from "./001-baseline";
 import { up as pipelineV2 } from "./002-pipeline-v2";
 import { up as uniqueContentHash } from "./003-unique-content-hash";
@@ -157,10 +150,15 @@ import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-fi
 import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
 import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
+import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
+import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 import { up as vectorRepairCheckpoints } from "./153-vector-repair-checkpoints";
+import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
+import { up as sourceSyncFailures } from "./155-source-sync-failures";
 import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpoints";
 import { up as embeddingRepairProgress } from "./157-embedding-repair-progress";
 import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-index";
+import { up as retireObsoleteInvocationLedger } from "./159-retire-obsolete-invocation-ledger";
 import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-prune-scan-generation";
@@ -175,7 +173,14 @@ import { up as dependencyHistoryCompactionState } from "./170-dependency-history
 import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-board";
 import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
+import { up as sessionTranscriptDeletions } from "./174-session-transcript-deletions";
 import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
+import { up as organizationIdentity, artifacts as organizationIdentityArtifacts } from "./176-organization-identity";
+import { up as classifications } from "./177-classifications";
+import { up as writeInheritance, artifacts as writeInheritanceArtifacts } from "./178-write-inheritance";
+import { up as dreamingEvidenceLeases } from "./179-dreaming-evidence-leases";
+import { up as hookTranscriptUploads, artifacts as hookTranscriptUploadArtifacts } from "./180-hook-transcript-uploads";
+import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1627,6 +1632,102 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-artifact-manifest-path-repair",
 		up: memoryArtifactManifestPathRepair,
 	},
+	{ version: 176, name: "organization-identity", up: organizationIdentity, artifacts: organizationIdentityArtifacts },
+	{
+		version: 177,
+		name: "classifications",
+		up: classifications,
+		artifacts: {
+			tables: [
+				"classifications",
+				"classification_audience",
+				"classification_appliers",
+				"compartments",
+				"compartment_members",
+				"classification_assignments",
+				"evidence_citations",
+				"classification_access_version",
+			],
+			columns: [{ table: "memories", column: "compartment_id" }],
+		},
+	},
+	{ version: 178, name: "write-inheritance", up: writeInheritance, artifacts: writeInheritanceArtifacts },
+	{
+		version: 179,
+		name: "dreaming-evidence-leases",
+		foreignKeysOff: true,
+		up: dreamingEvidenceLeases,
+		artifacts: {
+			tables: ["dreaming_evidence_leases", "dreaming_classification_epoch", "dreaming_pass_classification_epochs"],
+			indexes: [
+				"idx_dreaming_evidence_lease_partition",
+				"idx_dreaming_evidence_consumption_partition",
+				"idx_dreaming_evidence_consumption_label",
+				"idx_dreaming_evidence_reviews_partition",
+				"idx_dreaming_evidence_reviews_label",
+				"idx_dreaming_evidence_exclusions_partition",
+				"idx_dreaming_evidence_exclusions_label",
+
+				"idx_entities_partition_name",
+				"idx_entity_aspects_partition_name",
+				"idx_memory_head_entries_partition",
+				"idx_dreaming_attention_partition",
+				"idx_head_revision_identity_citation",
+				"idx_dreaming_evidence_leases_pass",
+				"idx_dreaming_history_nodes_partition",
+				"idx_dreaming_history_nodes_pass",
+				"idx_dreaming_state_partition",
+				"idx_memory_artifacts_dreaming_partition_path",
+				"idx_memory_artifacts_dreaming_partition_sha",
+				"idx_memory_entity_mentions_compartment",
+				"idx_derived_memory_sources_compartment",
+				"idx_memory_history_compartment",
+				"idx_relations_compartment",
+				"idx_dreaming_citation_purge_lookup",
+				"idx_entity_aliases_compartment",
+				"idx_memory_head_revisions_partition",
+				"idx_memory_head_revision_entries_partition",
+				"idx_memory_head_publications_partition",
+			],
+			columns: [
+				{ table: "memory_entity_mentions", column: "agent_id" },
+				{ table: "memory_entity_mentions", column: "compartment_id" },
+				{ table: "memory_entity_mentions", column: "dreaming_pass_id" },
+				{ table: "derived_memory_sources", column: "agent_id" },
+				{ table: "derived_memory_sources", column: "compartment_id" },
+				{ table: "derived_memory_sources", column: "dreaming_pass_id" },
+				{ table: "memory_history", column: "agent_id" },
+				{ table: "memory_history", column: "compartment_id" },
+				{ table: "memory_history", column: "dreaming_pass_id" },
+				{ table: "relations", column: "agent_id" },
+				{ table: "relations", column: "compartment_id" },
+				{ table: "relations", column: "dreaming_pass_id" },
+				{ table: "entity_aliases", column: "compartment_id" },
+				{ table: "entity_aliases", column: "dreaming_pass_id" },
+				{ table: "ontology_proposals", column: "dreaming_pass_id" },
+				{ table: "dreaming_evidence_consumption", column: "compartment_id" },
+				{ table: "dreaming_evidence_reviews", column: "compartment_id" },
+				{ table: "dreaming_evidence_exclusions", column: "compartment_id" },
+
+				{ table: "entities", column: "dreaming_pass_id" },
+				{ table: "dreaming_attention", column: "dreaming_pass_id" },
+				{ table: "dreaming_state", column: "compartment_id" },
+				{ table: "memory_head_revisions", column: "is_current" },
+				{ table: "memory_head_entries", column: "pass_id" },
+				{ table: "memory_head_entries", column: "id" },
+				{ table: "memory_head_revision_entries", column: "pass_id" },
+				{ table: "memory_head_revision_entries", column: "revision_id" },
+				{ table: "memory_head_revisions", column: "compartment_id" },
+				{ table: "memory_head_publications", column: "compartment_id" },
+			],
+		},
+	},
+	{
+		version: 180,
+		name: "hook-transcript-uploads",
+		up: hookTranscriptUploads,
+		artifacts: hookTranscriptUploadArtifacts,
+	},
 ];
 function checksum(m: Migration): string {
 	let h = 0;
@@ -1781,14 +1882,18 @@ export function hasPendingMigrations(db: MigrationDb): boolean {
 	return isBogus || hasNew || phantoms.size > 0;
 }
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+const RESERVED_PARALLEL_MIGRATIONS = new Set([178, 179]);
 function assertMigrationsSequence(): void {
 	for (let i = 1; i < MIGRATIONS.length; i++) {
 		const prev = MIGRATIONS[i - 1];
 		const curr = MIGRATIONS[i];
-		if (prev !== undefined && curr !== undefined && curr.version !== prev.version + 1) {
+		if (prev === undefined || curr === undefined) continue;
+		let expected = prev.version + 1;
+		while (expected < curr.version && RESERVED_PARALLEL_MIGRATIONS.has(expected)) expected++;
+		if (curr.version !== expected) {
 			throw new Error(
 				`MIGRATIONS invariant violated: version ${curr.version} (${curr.name}) ` +
-					`must be exactly ${prev.version + 1} (prev: ${prev.name})`,
+					`must be exactly ${expected} (prev: ${prev.name})`,
 			);
 		}
 	}
@@ -1805,9 +1910,21 @@ export function runMigrations(db: MigrationDb): void {
 
 		const start = Date.now();
 		const cs = checksum(migration);
+		const foreignKeys = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+		if (migration.foreignKeysOff) {
+			db.exec("PRAGMA foreign_keys=OFF");
+			if (db.prepare("PRAGMA foreign_keys").get()?.foreign_keys === 1)
+				throw new Error(`Migration ${migration.version} requires an outermost migration transaction`);
+		}
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
 			migration.up(db);
+			if (applied.has(177) && migration.version < 177) {
+				rebuildBaseCompartmentFts(db);
+				rebuildCompartmentFtsShards(db);
+				createMemoriesFts(db);
+			}
+
 			verifyArtifacts(db, migration);
 
 			db.prepare(
@@ -1830,6 +1947,8 @@ export function runMigrations(db: MigrationDb): void {
 			throw new Error(
 				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\nYour data is safe — the failed migration was rolled back.\nPlease report this at https://github.com/Signet-AI/signetai/issues\nwith the error message above and your signetai version.`,
 			);
+		} finally {
+			if (migration.foreignKeysOff && foreignKeys === 1) db.exec("PRAGMA foreign_keys=ON");
 		}
 	}
 }

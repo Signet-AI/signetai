@@ -1,47 +1,37 @@
-import { dirname, resolve } from "node:path";
-import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { executeEmbeddingProjectionInTx } from "./embedding-projection-owner";
+import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 import type { Database as BunDatabase } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
+import { dirname, resolve } from "node:path";
 import {
-	resolveWorkspaceLayout,
+	compartmentForWrite,
+	configureEvidencePurgeConnection,
+	withWritePrincipal,
+	syncEmbeddingCompartment,
+	deleteCompartmentVectors,
 	activeVectorProjectionTable,
 	findSqliteVecExtension,
+	requireReadScope,
+	resolveWorkspaceLayout,
 	vectorSearchWithMetadata,
 } from "@signet/core";
-import {
-	applyObsidianSourceStructureInTx,
-	applyObsidianSourceStructurePurgeInTx,
-	isObsidianSourceFileIndexedInTx,
-	purgeObsidianSourceFileStructureInTx,
-} from "./obsidian-source-graph";
-import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
-import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { removeAgentInTx } from "./agent-removal";
-import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
-import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
-import { applySourceSnapshotImportInTx } from "./source-snapshots";
-import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
-import type { writeSessionTranscriptRow } from "./session-transcripts";
-import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
-import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
-import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
-import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
+import type { ReadDb, WriteDb } from "./db-accessor";
+import { vectorToBlob } from "./db-helpers";
 import type {
 	DbOwnerCommand,
 	DbOwnerEvent,
 	DbOwnerJob,
 	DbOwnerJobMetrics,
+	DbOwnerNativeMemoryIndex,
 	DbOwnerParameter,
 	DbOwnerRecallPayload,
 	DbOwnerStatement,
-	DbOwnerNativeMemoryIndex,
 	DbOwnerVectorSearchPayload,
 } from "./db-owner-protocol";
-import { applyVectorRepairBatch, VectorRepairAbortError } from "./vector-repair-owner";
-import type { EmbeddingConfig } from "./memory-config";
-import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
-import { vectorToBlob } from "./db-helpers";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
 	DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS,
@@ -51,6 +41,27 @@ import {
 	DB_OWNER_MAX_WORK_UNITS,
 	serializeError,
 } from "./db-owner-protocol";
+import type { PragmaDb } from "./db-vacuum";
+import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
+import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
+import type { EmbeddingConfig } from "./memory-config";
+import { type MemoryArtifactUpsertFields, upsertMemoryArtifactInTx } from "./memory-lineage";
+import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
+import {
+	applyObsidianSourceStructureInTx,
+	applyObsidianSourceStructurePurgeInTx,
+	isObsidianSourceFileIndexedInTx,
+	purgeObsidianSourceFileStructureInTx,
+} from "./obsidian-source-graph";
+import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
+import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
+import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
+import type { writeSessionTranscriptRow } from "./session-transcripts";
+import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
+import { applySourceSnapshotImportInTx } from "./source-snapshots";
+import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
+import { applyVectorRepairBatch, VectorRepairAbortError } from "./vector-repair-owner";
 
 interface SqliteRunResult {
 	readonly changes: number;
@@ -184,6 +195,7 @@ export function runDbOwnerWorker(): void {
 			Database.setCustomSQLite(sqlitePath);
 		}
 		db = new Database(dbPath);
+		configureEvidencePurgeConnection(db);
 		db.exec("PRAGMA busy_timeout = 5000");
 		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
@@ -283,7 +295,11 @@ export function runDbOwnerWorker(): void {
 		return undefined;
 	}
 
-	function bindParameter(value: DbOwnerParameter): unknown {
+	function bindParameter(value: DbOwnerParameter, writeBatch = false): unknown {
+		if (typeof value === "object" && value !== null && value.type === "compartment") {
+			if (!writeBatch) throw new Error("compartment_parameter_requires_batch");
+			return resolveWriteCompartmentParameterInTx(db, value);
+		}
 		if (typeof value === "object" && value !== null && value.type === "bytes") {
 			return Buffer.from(value.base64, "base64");
 		}
@@ -315,8 +331,12 @@ export function runDbOwnerWorker(): void {
 		return value;
 	}
 
-	function executeStatement(statement: DbOwnerStatement, context?: JobExecutionContext): unknown {
-		const params = (statement.params ?? []).map(bindParameter);
+	function executeStatement(
+		statement: DbOwnerStatement,
+		context?: JobExecutionContext,
+		writeTransaction = false,
+	): unknown {
+		const params = (statement.params ?? []).map((value) => bindParameter(value, writeTransaction));
 		const prepared = db.prepare(statement.sql);
 		if (statement.result === "all" && statement.readonly !== false)
 			return enforceResultLimit(statement, prepared.all(...params));
@@ -341,8 +361,9 @@ export function runDbOwnerWorker(): void {
 	function executeReadOnlyStatement(statement: DbOwnerStatement): unknown {
 		if (statement.result === "run") throw new Error("DB owner readonly statements must return rows");
 		const readonlyDb = new Database(ownerDbPath, { readonly: true });
+		configureEvidencePurgeConnection(readonlyDb);
 		try {
-			const params = (statement.params ?? []).map(bindParameter);
+			const params = (statement.params ?? []).map((value) => bindParameter(value));
 			const prepared = readonlyDb.prepare(statement.sql);
 			try {
 				return statement.result === "all"
@@ -364,10 +385,10 @@ export function runDbOwnerWorker(): void {
 			throw new Error(`DB owner transaction must contain 1 to ${DB_OWNER_MAX_TRANSACTION_STATEMENTS} statements`);
 		}
 		return withBusyRetry(() => {
-			const results = statements.map((statement) => executeStatement({ ...statement, transactional: false }, context));
-			for (let i = 0; i < results.length; i++) {
-				const statement = statements[i];
-				const result = results[i];
+			const results: unknown[] = [];
+			for (const statement of statements) {
+				const result = executeStatement({ ...statement, transactional: false }, context, true);
+				results.push(result);
 				if (
 					statement?.requireChanges === true &&
 					typeof result === "object" &&
@@ -386,6 +407,7 @@ export function runDbOwnerWorker(): void {
 		statements: readonly DbOwnerStatement[],
 		requireChanges: boolean,
 		context?: JobExecutionContext,
+		embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest,
 	): readonly unknown[] {
 		if (statements.length === 0) throw new Error("DB owner batch must contain at least one statement");
 		db.exec("BEGIN IMMEDIATE");
@@ -401,6 +423,7 @@ export function runDbOwnerWorker(): void {
 				}
 				results.push(result);
 			}
+			if (embeddingProjection) executeEmbeddingProjectionInTx(db, embeddingProjection);
 			commit(context);
 			return enforceResultLimit({ sql: "db-owner-batch", result: "all" }, results) as readonly unknown[];
 		} catch (error) {
@@ -412,7 +435,7 @@ export function runDbOwnerWorker(): void {
 	}
 
 	function executeStatementWithoutTransaction(statement: DbOwnerStatement): SqliteRunResult {
-		const params = (statement.params ?? []).map(bindParameter);
+		const params = (statement.params ?? []).map((value) => bindParameter(value, true));
 		return db.prepare(statement.sql).run(...params);
 	}
 
@@ -510,6 +533,7 @@ export function runDbOwnerWorker(): void {
 				enqueueDreamingAttentionInTx(db as never, {
 					agentId: request.input.agentId,
 					kind: "hygiene",
+					compartmentId: request.input.compartmentId,
 					subjectRef: candidate.subjectRef,
 					details: candidate.details,
 					priority: candidate.priority,
@@ -531,7 +555,13 @@ export function runDbOwnerWorker(): void {
 		context?: JobExecutionContext,
 	): unknown {
 		if (request.input.config.enabled === false) return null;
-		const selection = selectDreamingSurprisalInDb(db as never, request.input.agentId, request.input.config, null);
+		const selection = selectDreamingSurprisalInDb(
+			db as never,
+			request.input.agentId,
+			request.input.config,
+			null,
+			request.input.compartmentId,
+		);
 		if (selection.candidates.length === 0) return selection;
 		db.exec("BEGIN IMMEDIATE");
 		try {
@@ -539,6 +569,7 @@ export function runDbOwnerWorker(): void {
 				enqueueDreamingAttentionInTx(db as never, {
 					agentId: request.input.agentId,
 					kind: "surprisal",
+					compartmentId: request.input.compartmentId,
 					subjectRef: `memory:${candidate.id}`,
 					details: {
 						selector: DREAMING_SURPRISAL_SELECTOR_VERSION,
@@ -566,7 +597,11 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog" }>,
 	): Promise<number> {
 		const { getDreamingEpisodicTokenBacklogInDb } = await import("./pipeline/dreaming");
-		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId);
+		return await getDreamingEpisodicTokenBacklogInDb(
+			db as never,
+			request.input.agentId,
+			request.input.compartmentId ?? null,
+		);
 	}
 
 	async function executeDreamingEpisodicBacklogProbe(
@@ -578,6 +613,7 @@ export function runDbOwnerWorker(): void {
 			request.input.agentId,
 			request.input.tokenThreshold,
 			request.input.maxSources,
+			request.input.compartmentId ?? null,
 		);
 	}
 
@@ -585,14 +621,14 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_exists" }>,
 	): Promise<boolean> {
 		const { hasDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
-		return hasDreamingEpisodicBacklogInDb(db as never, request.input.agentId);
+		return hasDreamingEpisodicBacklogInDb(db as never, request.input.agentId, request.input.compartmentId ?? null);
 	}
 
 	async function executeDreamingEvidenceSearch(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_search" }>,
 	): Promise<unknown> {
 		const { searchDreamingEvidenceInDb } = await import("./pipeline/dreaming-capabilities");
-		return searchDreamingEvidenceInDb(db as never, request.input);
+		return searchDreamingEvidenceInDb(db, request.input);
 	}
 
 	async function executeDreamingEvidenceSource(
@@ -622,8 +658,8 @@ export function runDbOwnerWorker(): void {
 			try {
 				const { executeMemoryHead } = await import("./memory-head-owner");
 				const publication = withBusyRetry(() =>
-					executeMemoryHead(db as never, dirname(dirname(ownerDbPath)), {
-						action: "read",
+					executeMemoryHead(db, dirname(dirname(ownerDbPath)), {
+						action: "publish",
 						agentId: request.input.agentId,
 					}),
 				);
@@ -657,6 +693,7 @@ export function runDbOwnerWorker(): void {
 			request.input.agentId,
 			request.input.result as never,
 			request.input.operations as never,
+			request.input.passId,
 		);
 	}
 
@@ -708,7 +745,7 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "source_evidence_eligibility" }>,
 	): boolean {
 		return sourceHasEligibleUnconsumedEvidence(
-			db as unknown as import("./db-accessor").ReadDb,
+			db as unknown as ReadDb,
 			request.input.agentId,
 			request.input.sourceEntryId,
 			request.input.legacyObsidianRoot,
@@ -719,7 +756,7 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_coverage" }>,
 	): Promise<unknown> {
 		const { scanDreamingEvidenceCoverageStep } = await import("./pipeline/dreaming-evidence-coverage");
-		return scanDreamingEvidenceCoverageStep(db as unknown as import("./db-accessor").ReadDb, request.input);
+		return scanDreamingEvidenceCoverageStep(db as unknown as ReadDb, request.input);
 	}
 
 	function executeSourceGraph(
@@ -733,11 +770,11 @@ export function runDbOwnerWorker(): void {
 		try {
 			let result: unknown;
 			if (request.kind === "source_graph_index") {
-				result = applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+				result = applyObsidianSourceStructureInTx(db as unknown as WriteDb, request.input);
 			} else if (request.kind === "source_graph_file_purge") {
-				result = purgeObsidianSourceFileStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+				result = purgeObsidianSourceFileStructureInTx(db as unknown as WriteDb, request.input);
 			} else {
-				result = applyObsidianSourceStructurePurgeInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+				result = applyObsidianSourceStructurePurgeInTx(db as unknown as WriteDb, request.input);
 			}
 			commit(context);
 			return result;
@@ -758,6 +795,7 @@ export function runDbOwnerWorker(): void {
 			agentId: input.agentId,
 			sourcePath,
 			sourceSha256: input.sourceHash,
+			author: input.author,
 			sourceKind: input.sourceKind,
 			sessionId: `native:${input.harness}:${sourcePath}`,
 			sessionKey: `native:${input.harness}`,
@@ -858,34 +896,44 @@ export function runDbOwnerWorker(): void {
 				skipped++;
 				continue;
 			}
-			if (existing !== null) {
-				if (vecAvailable) database.prepare(`DELETE FROM ${vecTable} WHERE id = ?`).run(existing.id);
-				database.prepare("DELETE FROM embeddings WHERE id = ?").run(existing.id);
-			}
-			database
-				.prepare(
-					`INSERT INTO embeddings
-					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-					 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
-					 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
-					 created_at = excluded.created_at, agent_id = excluded.agent_id`,
-				)
-				.run(
-					embeddingId,
-					contentHash,
-					vectorToBlob(vector),
-					vector.length,
-					"source_chunk",
-					chunk.id,
-					chunk.chunkText,
-					new Date().toISOString(),
-					input.agentId,
-				);
-			if (vecAvailable && vecDimensions === String(vector.length))
+			database.exec("BEGIN IMMEDIATE");
+			try {
+				if (existing !== null) {
+					if (vecAvailable) deleteCompartmentVectors(database, [existing.id]);
+					database.prepare("DELETE FROM embeddings WHERE id = ?").run(existing.id);
+				}
 				database
-					.prepare(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`)
-					.run(embeddingId, vectorToBlob(vector));
+					.prepare(
+						`INSERT INTO embeddings
+					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
+					 ON CONFLICT(id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+					 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
+					 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
+					)
+					.run(
+						embeddingId,
+						contentHash,
+						vectorToBlob(vector),
+						vector.length,
+						"source_chunk",
+						chunk.id,
+						chunk.chunkText,
+						new Date().toISOString(),
+						input.agentId,
+						compartmentForWrite(database, { agentId: input.agentId, sourceId: chunk.id }),
+					);
+				if (vecAvailable && vecDimensions === String(vector.length)) {
+					for (const stored of database.prepare("SELECT id FROM embeddings WHERE id=?").all(embeddingId))
+						if (typeof stored === "object" && stored !== null && "id" in stored && typeof stored.id === "string")
+							syncEmbeddingCompartment(database, "embeddings", stored.id, vecTable);
+				}
+				database.exec("COMMIT");
+				if (context) context.committed = true;
+			} catch (error) {
+				database.exec("ROLLBACK");
+				throw error;
+			}
 			embedded++;
 		}
 		const prefix = `${input.sourceId}:${input.sourceExternalId ?? input.sourcePath}#`;
@@ -930,7 +978,7 @@ export function runDbOwnerWorker(): void {
 		const graphCurrent =
 			input.graph !== undefined &&
 			!artifactChanged &&
-			isObsidianSourceFileIndexedInTx(db as unknown as import("./db-accessor").WriteDb, {
+			isObsidianSourceFileIndexedInTx(db as unknown as WriteDb, {
 				agentId: input.agentId,
 				sourceId: input.graph.sourceId,
 				filePath: sourcePath,
@@ -948,7 +996,7 @@ export function runDbOwnerWorker(): void {
 				).run(input.agentId, checkpoint.sourceKey, sourcePath);
 			}
 			if (graphIndexed && input.graph !== undefined) {
-				applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, {
+				applyObsidianSourceStructureInTx(db as unknown as WriteDb, {
 					agentId: input.agentId,
 					sourceId: input.graph.sourceId,
 					sourceName: input.graph.sourceName,
@@ -997,7 +1045,7 @@ export function runDbOwnerWorker(): void {
 	): unknown {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const result = indexSourceArtifactStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+			const result = indexSourceArtifactStructureInTx(db as unknown as WriteDb, request.input);
 			commit(context);
 			return result;
 		} catch (error) {
@@ -1014,7 +1062,7 @@ export function runDbOwnerWorker(): void {
 	): unknown {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const result = purgeSourceArtifactStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+			const result = purgeSourceArtifactStructureInTx(db as unknown as WriteDb, request.input);
 			commit(context);
 			return result;
 		} catch (error) {
@@ -1099,7 +1147,11 @@ export function runDbOwnerWorker(): void {
 		}
 		const { getDbAccessor } = await import("./db-accessor");
 		return await getDbAccessor().withReadDbAsync(
-			(db) => vectorSearchWithMetadata(db, new Float32Array(payload.queryEmbedding), payload.options),
+			(db) =>
+				vectorSearchWithMetadata(db, new Float32Array(payload.queryEmbedding), {
+					...payload.options,
+					readScope: requireReadScope(payload.options.readScope),
+				}),
 			{ siteToken: "db:recall.vector.search.read", operation: "recall.vector-search" },
 		);
 	}
@@ -1138,14 +1190,56 @@ export function runDbOwnerWorker(): void {
 				? executeReadOnlyStatement(job.request.statement)
 				: executeStatement(job.request.statement, context);
 		}
+		if (job.request.kind === "content_read") {
+			const { executeContentRead } = await import("./content-read-owner");
+			return executeContentRead(db, job.request.request, () => {
+				if (cancellationRequested(job.id)) throw new DbOwnerCancellationRequested();
+				if (job.lane === "read" && Date.now() >= job.deadlineAt)
+					throw Object.assign(new Error("DB owner content read exceeded its deadline"), { code: "DB_OWNER_DEADLINE" });
+			});
+		}
+		if (job.request.kind === "embedding_projection") {
+			const { executeEmbeddingProjection } = await import("./embedding-projection-owner");
+			const result = executeEmbeddingProjection(db, job.request.request);
+			context.committed = true;
+			return result;
+		}
+		if (job.request.kind === "fts_partition") {
+			const { createMemoriesFts, recreateMemoriesFtsSchema } = await import("@signet/core");
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				if (job.request.action === "rebuild") recreateMemoriesFtsSchema(db);
+				else createMemoriesFts(db);
+				db.exec("COMMIT");
+				context.committed = true;
+				return { ok: true };
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		}
+		if (job.request.kind === "classification") {
+			const { executeClassification } = await import("./classification-owner");
+			const result = executeClassification(db, job.request.request);
+			context.committed = true;
+			return result;
+		}
 		if (job.request.kind === "memory_head") {
 			const { executeMemoryHead } = await import("./memory-head-owner");
 			const request = job.request.request;
-			return withBusyRetry(() => executeMemoryHead(db as never, dirname(dirname(ownerDbPath)), request), context);
+			if (request.action === "read" || request.action === "inspect")
+				return executeMemoryHead(db, dirname(dirname(ownerDbPath)), request);
+			if (job.lane !== "write") throw new Error("Memory head mutation requires the write lane");
+			return withBusyRetry(() => executeMemoryHead(db, dirname(dirname(ownerDbPath)), request), context);
 		}
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements, context);
 		if (job.request.kind === "batch")
-			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
+			return executeBatch(
+				job.request.statements,
+				job.request.requireChanges === true,
+				context,
+				job.request.embeddingProjection,
+			);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
 		if (job.request.kind === "vector_repair") return executeVectorRepair(job.request, context);
 		if (job.request.kind === "session_transcript_lifecycle") {
@@ -1153,6 +1247,17 @@ export function runDbOwnerWorker(): void {
 			const input = job.request.input;
 			return withBusyRetry(() => updateTranscriptLifecycleInTx(db, input), context);
 		}
+		if (job.request.kind === "transcript_capture_transition") {
+			const { transitionTranscriptCaptureInTx } = await import("./transcript-capture-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => transitionTranscriptCaptureInTx(db, input), context);
+		}
+		if (job.request.kind === "transcript_capture_enqueue") {
+			const { enqueueTranscriptCaptureInTx } = await import("./transcript-capture-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => enqueueTranscriptCaptureInTx(db, input), context);
+		}
+
 		if (job.request.kind === "session_transcript_capture") {
 			const { captureSessionTranscriptOwned } = await import("./session-transcripts");
 			const root = bindTranscriptWorkspace(job.request.input.input.basePath);
@@ -1172,6 +1277,20 @@ export function runDbOwnerWorker(): void {
 			);
 		}
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
+		if (job.request.kind === "filesystem_document_write") {
+			const { writeFilesystemDocumentInTx } = await import("./embedding-projection-owner");
+			const request = job.request;
+			return withBusyRetry(() => writeFilesystemDocumentInTx(db, request.input), context);
+		}
+		if (job.request.kind === "session_finalizer_author") {
+			const { readSessionFinalizerAuthorInTx } = await import("./db-helpers");
+			return readSessionFinalizerAuthorInTx(db, job.request.agentId, job.request.sessionKey);
+		}
+		if (job.request.kind === "session_checkpoint_write") {
+			const { writeSessionCheckpointInTx } = await import("./session-transcripts");
+			const request = job.request;
+			return withBusyRetry(() => writeSessionCheckpointInTx(db, request.input, request.maxPerSession), context);
+		}
 		if (job.request.kind === "session_transcript_write")
 			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "session_compaction_summary")
@@ -1184,12 +1303,58 @@ export function runDbOwnerWorker(): void {
 			return await executeDreamingEpisodicBacklogProbe(job.request);
 		if (job.request.kind === "dreaming_episodic_backlog_exists")
 			return await executeDreamingEpisodicBacklogExists(job.request);
+		if (job.request.kind === "dreaming_read_scope") {
+			const { readDreamingScopeInDb } = await import("./pipeline/dreaming-capabilities");
+			return readDreamingScopeInDb(db, job.request.input);
+		}
+		if (job.request.kind === "dreaming_graph_read") {
+			const { readDreamingGraphInDb } = await import("./pipeline/dreaming-capabilities");
+			return readDreamingGraphInDb(db, job.request.input);
+		}
 		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
+		if (job.request.kind === "dreaming_evidence_prepare") {
+			if (job.lane !== "write") throw new Error("Dreaming evidence preparation requires the write lane");
+			const { prepareDreamingEvidenceInDb } = await import("./pipeline/dreaming-capabilities");
+			const input = job.request.input;
+			return withBusyRetry(() => prepareDreamingEvidenceInDb(db, input), context);
+		}
+		if (job.request.kind === "dreaming_imported_source_attention") {
+			if (job.lane !== "write") throw new Error("Imported source attention requires the write lane");
+			const { importedSourceAttentionUpsert } = await import("./pipeline/dreaming-evidence-consumption");
+			const input = job.request;
+			return withBusyRetry(() => {
+				importedSourceAttentionUpsert(db, input.agentId, input.sourceId);
+				return { ok: true };
+			}, context);
+		}
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
 		if (job.request.kind === "dreaming_evidence_review") return await executeDreamingEvidenceReview(job.request);
 		if (job.request.kind === "dreaming_pass_finalize") return executeDreamingPassFinalize(job.request, context);
 		if (job.request.kind === "dreaming_review_due") return await executeDreamingReviewDue(job.request);
 		if (job.request.kind === "dreaming_evidence_classify") return await executeDreamingEvidenceClassify(job.request);
+		if (job.request.kind === "dreaming_evidence_manual_requeue") {
+			if (job.lane !== "write") throw new Error("Manual requeue requires the write lane");
+			const input = job.request.input;
+			const { requestDreamingEvidenceRequeueInDb } = await import("./pipeline/dreaming");
+			const { requestDreamingReviewedEvidenceRequeueInTx } = await import("./pipeline/dreaming-evidence-reviews");
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const changed = input.reviewed
+					? requestDreamingReviewedEvidenceRequeueInTx(
+							db,
+							input.agentId,
+							input.sourceKind,
+							input.sourceId,
+							input.readScope,
+						)
+					: requestDreamingEvidenceRequeueInDb(db, input.agentId, input.sourceKind, input.sourceId, input.readScope);
+				commit(context);
+				return changed;
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		}
 		if (job.request.kind === "dreaming_evidence_requeue")
 			return await executeDreamingEvidenceRequeue(job.request, context);
 		if (job.request.kind === "embedding_migration_progress") {
@@ -1236,6 +1401,56 @@ export function runDbOwnerWorker(): void {
 				throw error;
 			}
 		}
+		if (job.request.kind === "reflection_generate") {
+			const { txCreateDailyReflections } = await import("./reflection-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => txCreateDailyReflections(db, input), context);
+		}
+		if (job.request.kind === "diagnostics_schema")
+			return (await import("./diagnostics")).readDatabaseSchemaAsync(db, job.request.scope);
+		if (job.request.kind === "diagnostics_sample")
+			return (await import("./diagnostics")).readTableSampleAsync(
+				db,
+				job.request.table,
+				job.request.limit,
+				job.request.offset,
+				job.request.scope,
+			);
+		if (job.request.kind === "search_telemetry_export_page")
+			return (await import("./diagnostics")).readSearchTelemetryExportPage(job.request.query, job.request.cursor, db);
+		if (job.request.kind === "search_telemetry_read")
+			return (await import("./diagnostics")).readScopedSearchTelemetry(job.request.query, db);
+		if (job.request.kind === "queue_diagnostics_read")
+			return (await import("./diagnostics-queue")).getQueueDiagnosticsSnapshot(db, {
+				scope: job.request.scope,
+				fresh: true,
+			});
+
+		if (job.request.kind === "dreaming_reviewed_read")
+			return (await import("./content-read-owner")).readDreamingReviewedEvidenceInOwner(
+				db,
+				job.request.agentId,
+				job.request.scope,
+			);
+		if (job.request.kind === "reflection_list") {
+			const { readReflectionsInOwner } = await import("./reflection-owner");
+			return readReflectionsInOwner(db, job.request.scope, job.request.input);
+		}
+		if (job.request.kind === "reflection_get") {
+			const { readReflectionInOwner } = await import("./reflection-owner");
+			return readReflectionInOwner(db, job.request.scope, job.request.id);
+		}
+		if (job.request.kind === "reflection_answer") {
+			const { txAnswerReflection } = await import("./reflection-owner");
+			const input = job.request.input;
+			return withBusyRetry(() => txAnswerReflection(db, input), context);
+		}
+		if (job.request.kind === "organization_memory_purge") {
+			const { purgeAuthoredMemoryBatchInTx } = await import("./auth/organization-purge");
+			const userId = job.request.userId;
+			const author = job.request.author;
+			return withBusyRetry(() => purgeAuthoredMemoryBatchInTx(db, userId, author), context);
+		}
 		if (job.request.kind === "agent_remove") {
 			db.exec("BEGIN IMMEDIATE");
 			try {
@@ -1279,7 +1494,7 @@ export function runDbOwnerWorker(): void {
 			const { convertToIncrementalVacuum } = await import("./db-vacuum");
 			const pauseMs = Number.parseInt(process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS ?? "0", 10);
 			const activeFile = process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE;
-			const converted = convertToIncrementalVacuum(db as unknown as import("./db-vacuum").PragmaDb, {
+			const converted = convertToIncrementalVacuum(db as unknown as PragmaDb, {
 				dbPath: ownerDbPath,
 				log: () => {},
 				beforeVacuum: () => {
@@ -1347,8 +1562,10 @@ export function runDbOwnerWorker(): void {
 				} else if (Date.now() >= job.deadlineAt) {
 					result(job.id, "timed_out");
 				} else {
-					const value = await execute(job, context);
-					if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
+					const value = await withWritePrincipal(job.writePrincipal, () => execute(job, context));
+					if (job.lane === "read" && Date.now() >= job.deadlineAt && !context.committed)
+						result(job.id, "timed_out", undefined, { startedAt, finishedAt: Date.now() });
+					else if (cancellationRequested(job.id) && !context.committed) result(job.id, "cancelled");
 					else
 						result(job.id, "completed", value, {
 							startedAt,
@@ -1429,12 +1646,10 @@ export function runDbOwnerWorker(): void {
 		runNext();
 	}
 
-	let input = "";
+	const input = new DbOwnerLineBuffer();
 	process.stdin.setEncoding("utf8");
 	process.stdin.on("data", (chunk: string) => {
-		input += chunk;
-		const lines = input.split("\n");
-		input = lines.pop() ?? "";
+		const lines = input.read(chunk);
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {

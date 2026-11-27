@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import type { Permission, TokenRole, TokenScope } from "../auth";
+import { legacyPrincipal } from "../auth/principal";
+import { localTestReadScope } from "../test-support/local-read-scope";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 let agentsDir: string;
@@ -31,6 +33,14 @@ function teamApp(): Hono {
 	if (!state.authSecret) throw new Error("expected auth secret in team mode");
 	const app = new appFactory();
 	app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
+	app.use("*", async (c, next) => {
+		const claims = c.get("auth")?.claims;
+		if (claims) {
+			c.set("principal", legacyPrincipal(claims));
+			c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+		}
+		await next();
+	});
 	registerSessionRoutes(app, {
 		gitConfig: {
 			enabled: false,
@@ -149,6 +159,7 @@ afterAll(async () => {
 describe("session control permissions in team mode", () => {
 	it("forgets only attributable memories and retains mixed and pinned evidence", async () => {
 		await seed("delete-lineage", "User: lineage");
+		await seed("unrelated-session", "User: retained independent evidence");
 		await getDbAccessor().withWriteTxAsync((db) => {
 			for (const [id, pinned] of [
 				["delete-single", 0],
@@ -210,7 +221,13 @@ describe("session control permissions in team mode", () => {
 		const { loadMemoryConfig } = await import("../memory-config");
 		const cfg = loadMemoryConfig(agentsDir);
 		const recalled = await hybridRecall(
-			{ query: "delete-pinned", agentId: "agent-a", pinned: true, limit: 10 },
+			{
+				query: "delete-pinned",
+				agentId: "agent-a",
+				readScope: localTestReadScope("agent-a"),
+				pinned: true,
+				limit: 10,
+			},
 			{ ...cfg, search: { ...cfg.search, min_score: 0 } },
 			async () => null,
 		);
@@ -302,7 +319,12 @@ describe("session control permissions in team mode", () => {
 		});
 		const cfg = loadMemoryConfig(agentsDir);
 		const recalled = await hybridRecall(
-			{ query: "quokka telescope", agentId: identity.agentId, limit: 20 },
+			{
+				query: "quokka telescope",
+				agentId: identity.agentId,
+				readScope: localTestReadScope(identity.agentId),
+				limit: 20,
+			},
 			{ ...cfg, search: { ...cfg.search, min_score: 0 } },
 			async () => null,
 		);
@@ -469,6 +491,7 @@ describe("session control permissions in team mode", () => {
 		await new Promise((resolve) => setTimeout(resolve, 2));
 		await updateTranscriptLifecycle({ agentId: "agent-a", sessionKey: "generation-retry", action: "start" });
 		await transcripts.appendSessionTranscriptAsync({
+			author: { userId: null, credential: "system" },
 			...sessionFixture("generation-retry"),
 			transcript: "User: current generation",
 		});
@@ -1099,7 +1122,7 @@ describe("session control permissions in team mode", () => {
 		expect(allowed.status).toBe(200);
 	});
 
-	it("limits prompt recall to the credential's project", async () => {
+	it("fails closed on project-bound entity context and scopes explicit recall", async () => {
 		const now = new Date().toISOString();
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
@@ -1135,9 +1158,18 @@ describe("session control permissions in team mode", () => {
 			);
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { readonly inject: string; readonly engine?: string };
-			expect(body.engine).toBe("entity-recall");
-			expect(body.inject).toContain("alpha pipeline");
-			expect(body.inject).not.toContain("beta pipeline");
+			expect(body.engine).toBe("no-entity");
+			expect(body.inject).toBe("");
+			const direct = await hook(
+				teamApp(),
+				"recall",
+				{ harness: "codex", query: "Heron pipeline", agentId: "agent-a", project: "proj-a" },
+				bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } }),
+			);
+			expect(direct.status).toBe(200);
+			const recalled = await direct.text();
+			expect(recalled).toContain("alpha pipeline");
+			expect(recalled).not.toContain("beta pipeline");
 		} finally {
 			writeAuthConfig("team");
 		}

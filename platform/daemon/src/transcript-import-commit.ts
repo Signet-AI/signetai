@@ -1,15 +1,21 @@
 import { createHash } from "node:crypto";
-import { admitSessionTranscriptInDb } from "./session-transcripts";
-import { filterTranscriptMessagesInDb } from "./session-transcripts";
-import { type WriteDb, prepareTypedStatement } from "./db-accessor";
+import { getDbOwner } from "./db-owner-runtime";
+import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { z } from "zod";
+import { compartmentForWrite } from "@signet/core";
+import { auditAuthoredWriteInTx, type WriteAuthor } from "./auth/audit-owner";
+import { prepareTypedStatement, type WriteDb } from "./db-accessor";
+import type { DbOwnerTranscriptBulkCommit } from "./db-owner-protocol";
+import { admitSessionTranscriptInDb, filterTranscriptMessagesInDb } from "./session-transcripts";
 import {
-	TRANSCRIPT_IMPORT_LIMITS,
 	canonicalTranscriptIdentity,
 	externalIdentityFingerprint,
 	type SignetExportRecord,
+	TRANSCRIPT_IMPORT_LIMITS,
 } from "./transcript-import-adapter";
 
 export interface CompletedTranscriptEvidence {
+	readonly author: WriteAuthor;
 	readonly recordId: string;
 	readonly sourceId: string;
 	readonly sourceRecordId: string;
@@ -46,7 +52,7 @@ export interface TranscriptCommitResult {
 }
 export function commitTranscriptImportBatchInTx(
 	db: WriteDb,
-	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	input: DbOwnerTranscriptBulkCommit,
 ): TranscriptCommitResult[] {
 	if (
 		input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch ||
@@ -64,10 +70,19 @@ export function commitTranscriptImportBatchInTx(
 		throw new Error("transcript commit provenance does not match owner request");
 	const lease = db
 		.prepare(
-			"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
+			"SELECT author_user_id,author_credential FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
 		)
 		.get(input.jobId, input.agentId, input.generation, input.leaseToken);
 	if (lease == null) throw new Error("stale import lease");
+	const author = input.author;
+	if (lease.author_user_id !== author.userId || lease.author_credential !== author.credential)
+		throw new Error("Transcript import author does not match its durable input");
+	if (author?.userId) {
+		const user = prepareTypedStatement<{ status: string }>(db, "SELECT status FROM users WHERE id = ?").get(
+			author.userId,
+		);
+		if (user?.status !== "active") throw new Error("Transcript import author is inactive");
+	}
 	const inventory = input.inventory;
 	if (inventory) {
 		const file = db
@@ -132,7 +147,7 @@ export function commitTranscriptImportBatchInTx(
 			continue;
 		}
 		if (row.status !== "pending") throw new Error("import record is not pending");
-		const result = commitCompletedTranscriptBatchInTx(db, [item])[0];
+		const result = commitCompletedTranscriptBatchInTx(db, [{ ...item, author }])[0];
 		if (!result) throw new Error("missing transcript commit outcome");
 		const rejected =
 			result.outcome === "conversation_identity_conflict" || result.outcome === "session_transcript_deleted";
@@ -255,6 +270,7 @@ const fixed = (fields: readonly string[]) => fields.map((field) => `${field.leng
 export function buildCompletedTranscriptCommit(
 	record: SignetExportRecord,
 	input: {
+		readonly author: WriteAuthor;
 		readonly agentId: string;
 		readonly sourceId: string;
 		readonly sourceRecordId: string;
@@ -268,6 +284,7 @@ export function buildCompletedTranscriptCommit(
 		.update(fixed([input.agentId, input.sourceId, input.sourceRecordId, record.harness, identity.contentHash]))
 		.digest("hex");
 	return {
+		author: input.author,
 		recordId,
 		sourceId: input.sourceId,
 		sourceRecordId: input.sourceRecordId,
@@ -328,6 +345,17 @@ function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscri
 		commit.agentId,
 		commit.capturedAt,
 	];
+	if (names.has("compartment_id")) {
+		insertColumns.push("compartment_id");
+		values.push(
+			compartmentForWrite(db, { agentId: commit.agentId, sessionKey: commit.canonicalKey, sourceId: commit.sourceId }),
+		);
+	}
+	if (commit.author) {
+		if (!names.has("speaker_user_id")) throw new Error("Transcript author schema is missing");
+		insertColumns.push("speaker_user_id");
+		values.push(commit.author.userId);
+	}
 	if (names.has("updated_at")) {
 		insertColumns.push("updated_at");
 		values.push(commit.capturedAt);
@@ -355,6 +383,7 @@ function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscri
 	db.prepare(
 		`INSERT INTO session_transcripts (${insertColumns.join(",")}) VALUES (${insertColumns.map(() => "?").join(",")})`,
 	).run(...values);
+	auditAuthoredWriteInTx(db, commit.author, "transcript.imported", "session", commit.canonicalKey, commit.agentId);
 }
 
 function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscriptCommit): void {
@@ -374,8 +403,17 @@ function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscri
 	add("completed_at", commit.capturedAt);
 	add("content_hash", commit.contentHash);
 	add("source_id", commit.sourceId);
+	if (names.has("compartment_id"))
+		add(
+			"compartment_id",
+			compartmentForWrite(db, { agentId: commit.agentId, sessionKey: commit.canonicalKey, sourceId: commit.sourceId }),
+		);
 	add("source_record_id", commit.sourceRecordId);
 	add("source_meta_json", commit.sourceMetaJson);
+	if (commit.author && names.has("speaker_user_id")) {
+		updates.push("speaker_user_id = COALESCE(speaker_user_id, ?)");
+		values.push(commit.author.userId);
+	}
 	if (!updates.length) return;
 	values.push(commit.canonicalKey, commit.agentId);
 	db.prepare(`UPDATE session_transcripts SET ${updates.join(", ")} WHERE session_key = ? AND agent_id = ?`).run(
@@ -602,6 +640,10 @@ function updateSessionTranscriptSource(
 	if (names.has("source_id")) {
 		updates.push("source_id = ?");
 		values.push(sourceId);
+		if (names.has("compartment_id")) {
+			updates.push("compartment_id = ?");
+			values.push(compartmentForWrite(db, { agentId, sessionKey, sourceId }));
+		}
 	}
 	if (names.has("source_record_id")) {
 		updates.push("source_record_id = ?");
@@ -613,4 +655,23 @@ function updateSessionTranscriptSource(
 	db.prepare(`UPDATE session_transcripts SET ${updates.join(", ")} WHERE agent_id = ? AND session_key = ?`).run(
 		...values,
 	);
+}
+export async function nextTranscriptImportAgent(after: string): Promise<string | undefined> {
+	const read = async (cursor: string) =>
+		z
+			.object({ agent_id: z.string() })
+			.nullable()
+			.optional()
+			.parse(
+				await dbOwnerQuery(
+					ownerStatement(
+						"SELECT agent_id FROM source_import_jobs WHERE agent_id>? AND (state IN ('queued','running','inventorying','cancelling') OR cleanup_state='pending' OR retry_requested=1) ORDER BY agent_id LIMIT 1",
+						[cursor],
+						"get",
+					),
+					{ operation: "sources.import.next-agent", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+				),
+			);
+	const next = (await read(after)) ?? (await read(""));
+	return next?.agent_id;
 }

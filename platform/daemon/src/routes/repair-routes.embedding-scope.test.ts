@@ -168,7 +168,11 @@ describe("agent authorization for embedding repair routes", () => {
 
 		const getResponse = await guarded.request("/api/repair/embedding-gaps?agentId=agent-b");
 		expect(getResponse.status).toBe(403);
-		expect(await getResponse.json()).toEqual({ error: "role 'operator' lacks 'admin' permission" });
+		expect(await getResponse.json()).toEqual({
+			error: "role 'operator' lacks 'admin' permission",
+			reason: "permission",
+			required: "admin",
+		});
 
 		const postResponse = await guarded.request("/api/repair/re-embed", {
 			method: "POST",
@@ -176,7 +180,11 @@ describe("agent authorization for embedding repair routes", () => {
 			body: JSON.stringify({ agentId: "agent-b", dryRun: true }),
 		});
 		expect(postResponse.status).toBe(403);
-		expect(await postResponse.json()).toEqual({ error: "role 'operator' lacks 'admin' permission" });
+		expect(await postResponse.json()).toEqual({
+			error: "role 'operator' lacks 'admin' permission",
+			reason: "permission",
+			required: "admin",
+		});
 	});
 });
 

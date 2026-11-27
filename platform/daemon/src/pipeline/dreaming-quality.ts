@@ -1,3 +1,5 @@
+import type { ReadScope } from "../read-scope";
+import { knowledgeReadOwner } from "../knowledge-graph-hygiene";
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
@@ -9,6 +11,7 @@ const GENERIC_ASPECT_NAMES = ["profile", "details", "general", "information"] as
 
 interface ClaimPathRow {
 	readonly entity: string;
+	readonly agentId: string;
 	readonly aspect: string;
 	readonly groupKey: string;
 	readonly claimKey: string;
@@ -77,18 +80,24 @@ function qualityIssues(rows: readonly EntityRow[]): readonly DreamingQualityIssu
 			: [];
 	});
 }
-export async function getDreamingQualityReport(accessor: DbAccessor, agentId: string): Promise<DreamingQualityReport> {
-	const owner = await getDbOwnerForAccessor(accessor);
+export async function getDreamingQualityReport(
+	accessor: DbAccessor,
+	agentId: string,
+	readScope?: ReadScope,
+): Promise<DreamingQualityReport> {
+	const rawOwner = await getDbOwnerForAccessor(accessor);
+	const owner = readScope ? await knowledgeReadOwner(rawOwner, readScope) : rawOwner;
+	const agentFilter = (alias: string) => (readScope?.reach.kind === "all" ? "? IS NOT NULL" : `${alias}.agent_id = ?`);
 	const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 	const semanticFilter = `NOT (e.entity_type IN (${topologyPlaceholders}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
 	const claimPaths = await ownerReadAll<ClaimPathRow>(
 		owner,
-		`SELECT DISTINCT e.name AS entity, asp.canonical_name AS aspect,
+		`SELECT DISTINCT ea.agent_id AS agentId, e.name AS entity, asp.canonical_name AS aspect,
 		        COALESCE(ea.group_key, 'general') AS groupKey, ea.claim_key AS claimKey
 		 FROM entity_attributes ea
 		 JOIN entity_aspects asp ON asp.id = ea.aspect_id AND asp.agent_id = ea.agent_id
 		 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = ea.agent_id
-		 WHERE ea.agent_id = ? AND ea.status = 'active'
+		 WHERE ${agentFilter("ea")} AND ea.status = 'active'
 		   AND TRIM(COALESCE(ea.claim_key, '')) <> ''
 		   AND ${semanticFilter}`,
 		[agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES],
@@ -104,7 +113,7 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 		 FROM entity_attributes ea
 		 JOIN entity_aspects asp ON asp.id = ea.aspect_id AND asp.agent_id = ea.agent_id
 		 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = ea.agent_id
-		 WHERE ea.agent_id = ? AND ea.status = 'active' AND ${semanticFilter}`,
+		 WHERE ${agentFilter("ea")} AND ea.status = 'active' AND ${semanticFilter}`,
 		[agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES],
 		{ operation: "dreaming.quality-claim-counts", workloadClass: "foreground" },
 	);
@@ -112,7 +121,7 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 		owner,
 		`SELECT id, name, canonical_name AS canonicalName, entity_type AS entityType
 		 FROM entities e
-		 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${semanticFilter}`,
+		 WHERE ${agentFilter("e")} AND COALESCE(e.status, 'active') = 'active' AND ${semanticFilter}`,
 		[agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES],
 		{ operation: "dreaming.quality-entities", workloadClass: "foreground" },
 	);
@@ -134,7 +143,7 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 		   ON asp.entity_id = e.id
 		  AND asp.agent_id = e.agent_id
 		  AND COALESCE(asp.status, 'active') = 'active'
-		 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${semanticFilter}`,
+		 WHERE ${agentFilter("e")} AND COALESCE(e.status, 'active') = 'active' AND ${semanticFilter}`,
 		[...GENERIC_ASPECT_NAMES, agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES],
 		{ operation: "dreaming.quality-structure", workloadClass: "foreground" },
 	);
@@ -166,16 +175,20 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 	for (const path of claimPaths) {
 		for (let offset = 0; ; offset += 200) {
 			try {
-				const claimEvidence = await getOntologyClaimEvidence(accessor, {
-					agentId,
-					entity: path.entity,
-					aspect: path.aspect,
-					group: path.groupKey,
-					claim: path.claimKey,
-					status: "active",
-					limit: 200,
-					offset,
-				});
+				const claimEvidence = await getOntologyClaimEvidence(
+					accessor,
+					{
+						agentId: path.agentId,
+						entity: path.entity,
+						aspect: path.aspect,
+						group: path.groupKey,
+						claim: path.claimKey,
+						status: "active",
+						limit: 200,
+						offset,
+					},
+					readScope,
+				);
 				for (const item of claimEvidence.items) {
 					if (item.evidence.some(isResolvedEpisodicQuote)) valuesWithResolvedEpisodicQuote++;
 				}

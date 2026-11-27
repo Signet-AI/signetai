@@ -20,6 +20,21 @@ describe("dreaming pass record", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("hides pass records and nested tool calls through SQL read scope", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`INSERT INTO dreaming_passes(id,agent_id,status,compartment_id) VALUES('public','a','completed',NULL),('hidden','a','completed',1);
+			INSERT INTO dreaming_tool_calls(id,agent_id,pass_id,sequence,tool_name,input_json,output_json,success,latency_ms,compartment_id)
+			VALUES('hidden-call','a','public',1,'apply_ontology_ops','{"operations":[{"operation":"secret"}]}','{"items":[{"ok":true}]}',1,1,1);`);
+		});
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		const scope = { reach: { kind: "own", agentId: "a" } as const, compartments: [], projects: null };
+		expect(await readDreamingPassRecord(owner, "a", "hidden", scope)).toBeNull();
+		expect((await readDreamingPassRecord(owner, "a", "public", scope))?.operations).toEqual({
+			applied: {},
+			failed: [],
+		});
+	});
+
 	it("summarizes a pass's operations as counts plus distinct failures", async () => {
 		const claim = { operation: "add_claim_value", payload: {} };
 		getDbAccessor().withWriteTx((db) => {

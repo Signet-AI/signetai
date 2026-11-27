@@ -72,6 +72,9 @@ export class PiConnector extends BaseConnector {
 	getConfigPath(): string {
 		return this.getManagedExtensionPath();
 	}
+	getConfigPaths(): readonly string[] {
+		return this.getManagedCandidatePaths();
+	}
 
 	async install(basePath: string): Promise<InstallResult> {
 		const auth = await resolveInstallApiKey();

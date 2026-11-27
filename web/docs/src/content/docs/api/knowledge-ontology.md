@@ -21,7 +21,36 @@ The house/filesystem analogy is intentional: entities are houses or top-level
 folders, aspects are rooms, groups are dressers, claim keys are drawers, and
 attributes are notes inside those drawers.
 
-All routes accept optional `agent_id` and default to `default`.
+All routes accept optional `agent_id`. Local mode defaults to `default`; a claimed
+organization uses the credential's bound or default read agent. Organization-agent
+reads span active agents, while an explicit personal-agent view remains isolated.
+
+Organization reads apply the caller's classification audiences before pagination,
+traversal budgets, and counts. A hidden ID has the same 404 response as a missing
+ID. Community membership, cohesion, representative names, and entity mention
+counts are computed from readable rows rather than shared cached totals. Entity
+FTS reads only readable compartment shards and uses corpus-independent name
+ordering for restricted scopes. Project-bound credentials receive no graph rows
+from tables that do not carry a project label.
+
+Constellation and traversal metadata from unscoped background caches is `null` in
+organization mode; it is not a count of hidden work. Local metadata behavior is
+unchanged. Local `shared` and `group` policies do not widen graph or other
+derived tables that lack a visibility field: those rows remain own-agent only.
+Organization all-agent reach still crosses active agents.
+
+Readable rows do not authorize their linked targets. Hidden or missing memory,
+proposal, supersession, version-chain, and source references return `null` or
+are absent. A hidden replacement does not remove the readable original from
+current-claim queries. Structured evidence/proposal references are checked in
+bounded SQL before they are returned. Community IDs are stable keys derived
+from readable member IDs, not global cluster numbers. Scoped history text omits
+storage indexes, and tool-call sequence numbers are relative to readable calls.
+
+Public graph, ontology, Dreaming, reflection, and inspector responses omit
+compartment IDs, SQLite rowids, content hashes, normalized-content columns,
+vector clocks, and idempotency keys. Database samples also omit numeric storage
+IDs and shared revision/index columns. These internals are not public API fields.
 
 ### GET /api/knowledge/navigation/entities
 
@@ -540,6 +569,14 @@ memory:
 
 ### GET /api/dream/status
 
+In a claimed organization, passes and logs are visible only through the caller's
+agent reach and the pass compartment's audience. This also gates policy, runbook,
+tool-call, history, attention, and SSE reads. Hidden SSE attachment returns the
+same 404 as a missing pass. A stream emits a terminal `overflow` event before
+closing when its pass becomes unreadable or its scoped pending queue overflows.
+Unscoped `state`, `scheduler`, and `episodicTokensPending` values are `null` rather
+than exposing shared counters.
+
 Return the current dreaming worker state, configuration, recent passes,
 quarantined evidence, and pending agent-scoped semantic attention. Attention
 is operational context for work such as due reviews, hygiene, contested claims,
@@ -695,6 +732,10 @@ when no new episodic evidence has arrived, while normal failure backoff still
 applies.
 
 ### GET /api/dream/evidence/coverage
+
+Organization callers receive `{ agentId, status: "unavailable", reason:
+"scoped_totals_omitted" }`; the legacy global delivery and token counters are not
+an audience-scoped coverage measure.
 
 Report how much eligible episodic evidence Dreaming has delivered and reviewed
 in one agent scope, using the same eligibility enumeration and evidence cursor
@@ -1041,6 +1082,13 @@ clears a published head. Record deferrals and no-change explanations with
 
 ### POST /api/dream/tools/:capability
 
+Public organization reads use the same caller predicate as knowledge navigation,
+not an internal pass's broader derivation access. `memory_head_read` returns a
+scoped rendering with readable token counts and no global revision/hash metadata.
+`validate_proposal` reports `duplicateCheck: "unavailable"` when the legacy merge
+candidate detector cannot enforce that predicate; its scoped claim/conflict
+checks remain available. Internal pass writes keep their separate pass binding.
+
 Invoke one canonical Dreaming capability through the daemon. This is the
 transport binding for restricted MCP and shell-driven harnesses; the daemon
 validates the registry schema and pins all reads and writes to the credential's
@@ -1124,6 +1172,10 @@ pass sees fewer scope sets: compaction does not merge for a share.
 ### POST /api/dream/trigger
 
 Manually trigger a dreaming pass. Requires `admin` permission.
+An optional `compartmentId` selects its classification partition; omitting it or
+passing `null` selects unclassified evidence. A classified trigger requires the
+caller to belong to the entire partition audience and to have unrestricted project
+access. A partition outside the caller's audience is rejected before a pass is admitted.
 Returns `202 Accepted` immediately and runs the pass in the background
 (passes can take up to several minutes on large graphs).
 The daemon keeps the worker available for manual triggers when automatic
@@ -1148,8 +1200,44 @@ and leave out agents with no backlog.
 It never starts more passes than `worker.maxLlmConcurrency` allows, because a
 pass waiting for a shared LLM permit would spend its own timeout waiting. The
 daemon allows that many Pi agent workers plus three for retained dashboard chats.
-Each pass may read and write only its own group's agents, and an agent is in at
-most one running pass. The first pass starts immediately; the other groups start
+Each pass may read and write only its own group's agents. Admission is partitioned
+by agent and classification compartment. By default, one pass runs per partition;
+`memory.dreaming.maxPassesPerScope` (1–16, default 1) allows extra incremental
+passes when a deep backlog and spare global inference slots permit them. Concurrent
+passes lease whole evidence sources through the database owner, receive disjoint
+queue pages, and cannot settle evidence held by a peer. Expired leases and leases
+from failed passes become available again. One shared pass handles a partition's
+attention queue; its peers focus on evidence.
+
+A pass has one classification label. Its queue contains only that exact label;
+historical evidence and graph reads can also use unclassified material and labels
+that are subsets of its own. New derivations inherit the pass label. Renaming,
+archiving, merging, superseding, or deleting another label's rows is rejected with
+`compartment_mismatch` before the operation changes anything. Classification changes
+invalidate running pass authority, so stale model context cannot authorize a later
+write. In an organization using personal agents, the organization agent is a read
+aggregator and does not Dream; with the single-agent model it Dreams normally.
+
+Connector-bound evidence identifies the human speaker and a person entity in the
+pass's agent. Account and grant management maintain one structural person entity
+per authorized human in that agent, with disambiguated names when needed. Entity
+responses include `personUserId` for these structural identities; ordinary entities
+omit it. Dreaming
+never creates, renames, merges, or archives these identities. An ordinary entity
+with the same name cannot block account creation, grants, or identity renames.
+A `create_entity` request for an existing person’s name resolves to that person
+without changing either entity; new claims attach to the person. Renaming an ordinary entity to a
+person’s name is rejected with `person_identity_immutable`. Self-disclosures are
+filed under the same person across classification partitions, even when a person
+never says their name. The identity remains unclassified; its claims, aliases, and
+other derived children retain their own pass label and audience. Missing identity
+state defers processing with `person_identity_missing`, rather than inventing a
+replacement person. Imported documents and conversations retain their external authors.
+History, tool traces, runbooks, and curated head streams retain their pass label.
+Only the unclassified curated head is projected to public `MEMORY.md`; a classified
+head remains in its scoped database stream.
+
+The first pass starts immediately; the other groups start
 only after it completes a tool call, so an unavailable provider is not called once
 per group. The response's `passId` is the first pass. `worker.activePasses` in
 `GET /api/dream/status` lists every running pass that includes the requested
@@ -1259,3 +1347,5 @@ Get all checkpoints for a specific session.
   "count": 3
 }
 ```
+
+For public `zoom_history` reads, `id` is a zero-based position among readable leaf passes, not a stored history index. Ranges contain at most 128 readable leaf passes. Internal Dreaming passes retain their compressed history-tree addressing. Hidden passes and physical rowid changes do not shift public positions.

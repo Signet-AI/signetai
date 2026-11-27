@@ -60,7 +60,7 @@ function insertEmbedding(db: WriteDb, id: string, hash: string, table: "embeddin
 	db.prepare(
 		`INSERT INTO ${table} (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at)
 		 VALUES (?, 'memory', ?, ?, x'00', 768, 'test', datetime('now'))`,
-	).run(id, id, hash);
+	).run(id, hash, hash);
 }
 
 function insertPass(db: WriteDb, id: string, status: string, startedAt = "datetime('now', '-1 minute')"): void {
@@ -258,12 +258,14 @@ describe("runStartupRecovery", () => {
 			insertEmbedding(db, "emb-1", "hash-A", "embeddings");
 			insertEmbedding(db, "stage-1", "hash-A", "embeddings_staging");
 			insertEmbedding(db, "stage-2", "hash-B", "embeddings_staging");
+			insertEmbedding(db, "stage-other-parent", "hash-A", "embeddings_staging");
+			db.prepare("UPDATE embeddings_staging SET source_id='other-parent' WHERE id='stage-other-parent'").run();
 		});
 
 		const report = await runStartupRecoveryAsync(getDbAccessor());
 
 		expect(report.stagingRowsCleaned).toBe(1);
-		expect(countRows("embeddings_staging")).toBe(1);
+		expect(countRows("embeddings_staging")).toBe(2);
 	});
 
 	it("sweeps orphaned dreaming passes left by a crash", async () => {

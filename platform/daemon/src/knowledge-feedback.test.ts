@@ -1,3 +1,4 @@
+import { localAllReadScope } from "@signet/core";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -66,6 +67,7 @@ describe("knowledge feedback", () => {
 		insertEntity("entity-project", "other-project", "project");
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "pin_entity",
@@ -78,6 +80,7 @@ describe("knowledge feedback", () => {
 
 		const resolved = getDbAccessor().withReadDb((db) =>
 			resolveFocalEntities(db, "default", {
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 				project: "/tmp/other-project",
 			}),
 		);
@@ -87,6 +90,7 @@ describe("knowledge feedback", () => {
 		expect(resolved.source).toBe("project");
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "unpin_entity",
@@ -101,6 +105,7 @@ describe("knowledge feedback", () => {
 
 		insertEntity("entity-pinned", "Pinned Project", "project");
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "pin_entity",
@@ -109,6 +114,7 @@ describe("knowledge feedback", () => {
 
 		const resolved = getDbAccessor().withReadDb((db) =>
 			resolveFocalEntities(db, "default", {
+				readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 				project: "/tmp/no-match-here",
 				sessionKey: "session-1",
 			}),

@@ -1,5 +1,30 @@
 [
 	{
+		"path": "integrations/openclaw/memory-adapter/src/signet-sdk.d.ts",
+		"reason": "Use the SDK's own declarations instead of masking its exports with an obsolete ambient module.",
+		"retiredIn": "2026-11-26"
+	},
+	{
+		"path": "tests/integration/org-mode/l4-helper-benchmark.ts",
+		"reason": "Move the corpus-scale write admission benchmark to evals/compartment-writes/helper-overhead.ts.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "tests/integration/org-mode/l4-helper-overhead.test.ts",
+		"reason": "Rename the write-helper overhead contract test independently of its implementation lane.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "libs/sdk/src/generated/client.ts",
+		"reason": "Remove the unused regex-generated SDK; the handwritten client uses the shared transport.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "libs/sdk/scripts/generate-client.ts",
+		"reason": "Retire the route-regex SDK generator; future contract generation belongs to signet-domain.",
+		"retiredIn": "2026-11-25"
+	},
+	{
 		"path": "docs/specs/dependencies.yaml",
 		"reason": "Retire the spec dependency index.",
 		"retiredIn": "2026-11-17"
@@ -23,5 +48,35 @@
 		"path": "surfaces/browser-extension",
 		"reason": "Delete the unpublished, unmaintained browser extension.",
 		"retiredIn": "2026-11-20"
+	},
+	{
+		"path": "platform/daemon/src/auth/write-attribution.ts",
+		"reason": "Record authors at native write boundaries, never in organization job side records.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/embedding-projection-task.ts",
+		"reason": "Retire the L3 projection-only helper after projection ownership transferred to L2.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/embedding-projection-worker.ts",
+		"reason": "Retire the L3 projection-only helper after projection ownership transferred to L2.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/test-support/projection-query.test.ts",
+		"reason": "Retire the L3 projection-only helper after projection ownership transferred to L2.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/pipeline/dreaming-scope.ts",
+		"reason": "Classification scope, pass fences and derivation labels belong to the existing classification owner.",
+		"retiredIn": "2026-11-25"
+	},
+	{
+		"path": "platform/daemon/src/pipeline/dreaming-graph-owner.ts",
+		"reason": "Keep Dreaming graph SQL in its existing capability owner, not a separate ownership exception.",
+		"retiredIn": "2026-11-25"
 	}
 ]

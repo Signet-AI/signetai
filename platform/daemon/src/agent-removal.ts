@@ -45,6 +45,7 @@ export function removeAgentInTx(db: WriteDb, input: AgentRemovalInput): AgentRem
 	const rows: Rows = {};
 	if (input.mode === "purge") purgeAgentRowsInTx(db, input, rows);
 	else archiveAgentRowsInTx(db, input, rows);
+	deleteCounted(db, rows, "classification_assignments", "agent_id = ?", [input.agentId]);
 	deleteCounted(db, rows, "agents", "id = ?", [input.agentId]);
 	return { status: "removed", mode: input.mode, rows };
 }
@@ -99,7 +100,7 @@ function archiveAgentRowsInTx(db: WriteDb, input: AgentRemovalInput, rows: Rows)
 		 WHERE ${unarchived}`,
 	).run(input.changedAt, input.changedBy, input.agentId);
 	record(rows, "memories", memories);
-	const reason = `agent ${input.agentId} archived`;
+	const reason = "agent archived";
 	for (const table of ONTOLOGY_ARCHIVE_TABLES) {
 		const count = countWhere(db, table, "agent_id = ? AND status = 'active'", [input.agentId]);
 		db.prepare(

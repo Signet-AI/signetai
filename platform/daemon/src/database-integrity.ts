@@ -531,6 +531,7 @@ const escaped = (name) => '"' + String(name).replaceAll('"', '""') + '"';
 const database = typeof Bun === "undefined"
   ? new Database(dbPath, { timeout: ${REPAIR_BUSY_TIMEOUT_MS} })
   : new Database(dbPath);
+database.exec("PRAGMA recursive_triggers=ON");
 database.exec("PRAGMA busy_timeout = ${REPAIR_BUSY_TIMEOUT_MS}");
 const isBusyError = (error) => {
   const code = error && typeof error === "object" && "code" in error ? error.code : undefined;

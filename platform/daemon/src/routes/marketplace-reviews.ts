@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
+import { jsonBody } from "../request-body";
 
 type ReviewTargetType = "skill";
 type StoredReviewTargetType = ReviewTargetType | "mcp";
@@ -253,7 +254,7 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 		} = {};
 
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -292,7 +293,7 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 	app.patch("/api/marketplace/reviews/config", async (c) => {
 		let body: { enabled?: unknown; endpointUrl?: unknown } = {};
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -324,7 +325,7 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 		} = {};
 
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}

@@ -1,4 +1,6 @@
+import { resolveReadScope } from "./read-scope";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { type ReadScope, compartmentFor } from "@signet/core";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +13,29 @@ let dir = "";
 let prev: string | undefined;
 
 const DB_PATH = (): string => join(dir, "memory", "memories.db");
+
+const localScope = (agentId: string): ReadScope => ({
+	reach: { kind: "own", agentId },
+	compartments: "all",
+	projects: null,
+});
+
+const matchLocal = (agentId: string, message: string) =>
+	matchPromptEntities(DB_PATH(), agentId, message, undefined, localScope(agentId));
+
+function linkMentions(entityId: string, agentId: string, count: number, compartment: number | null = null): void {
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		for (let index = 0; index < count; index += 1) {
+			const memoryId = `mem-${entityId}-${compartment ?? "open"}-${index}`;
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, compartment_id, is_deleted, created_at, updated_at, updated_by)
+				 VALUES (?, ?, 'fact', ?, ?, 0, ?, ?, 'test')`,
+			).run(memoryId, `about ${memoryId}`, agentId, compartment, now, now);
+			db.prepare("INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, ?)").run(memoryId, entityId);
+		}
+	});
+}
 
 function seedEntities(): void {
 	const now = new Date().toISOString();
@@ -31,6 +56,9 @@ function seedEntities(): void {
 			 VALUES ('alias-signetai', 'ent-signet', 'default', 'SignetAI', 'signetai', 1, 'test', 'active', ?, ?)`,
 		).run(now, now);
 	});
+	linkMentions("ent-nicholai", "default", 10);
+	linkMentions("ent-signet", "default", 10);
+	linkMentions("ent-other-agent", "other-agent", 10);
 }
 
 describe("matchPromptEntities", () => {
@@ -66,19 +94,255 @@ describe("matchPromptEntities", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("reports the exact readable mention count beyond the former sampling cap", async () => {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db
+				.prepare(
+					"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,mentions,created_at,updated_at) VALUES ('ent-bulk','Bulk Atlas','bulk atlas','project','default',0,'now','now')",
+				)
+				.run(),
+		);
+		linkMentions("ent-bulk", "default", 1201);
+		const matches = await matchLocal("default", "Tell me about Bulk Atlas");
+		expect(matches.find((match) => match.entityId === "ent-bulk")?.mentions).toBe(1201);
+	});
+
 	it("returns every directly named entity for the agent", async () => {
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Tell me about Nicholai and the Signet project");
+		const matches = await matchLocal("default", "Tell me about Nicholai and the Signet project");
 		expect(matches.map((match) => match.entityName).sort()).toEqual(["Nicholai", "Signet"]);
 	});
 
 	it("resolves active aliases to the canonical entity", async () => {
-		const matches = await matchPromptEntities(DB_PATH(), "default", "How is SignetAI doing?");
+		const matches = await matchLocal("default", "How is SignetAI doing?");
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Signet", "alias"]]);
 	});
 
+	it("scopes the entity scan by compartment, reach and project before matching", async () => {
+		const now = new Date().toISOString();
+		const hr = getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO classifications (id, name, created_at, updated_at) VALUES ('cls_hr', 'HR', ?, ?)").run(
+				now,
+				now,
+			);
+			const compartment = compartmentFor(db, ["cls_hr"]) ?? 0;
+			db.prepare(
+				"INSERT OR IGNORE INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('other-agent', 'other-agent', 'isolated', ?, ?)",
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, compartment_id, created_at, updated_at)
+				 VALUES ('ent-zephyr', 'Zephyr', 'zephyr', 'person', 'default', 10, ?, ?, ?)`,
+			).run(compartment, now, now);
+			db.prepare(
+				`INSERT INTO entity_aliases
+				 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+				 VALUES ('alias-zeph', 'ent-zephyr', 'default', 'Zed Morrow', 'zed morrow', 1, 'test', 'active', ?, ?)`,
+			).run(now, now);
+			return compartment;
+		});
+		linkMentions("ent-zephyr", "default", 10);
+		const outside: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null };
+		const names = async (message: string, scope: ReadScope) =>
+			(await matchPromptEntities(DB_PATH(), "default", message, undefined, scope)).map((match) => match.entityName);
+
+		expect(await names("Tell me about Zephyr and Nicholai", outside)).toEqual(["Nicholai"]);
+		expect(await names("What did Zed Morrow decide?", outside)).toEqual([]);
+		expect(await names("Tell me about Zephyr", { ...outside, compartments: [hr] })).toEqual(["Zephyr"]);
+		expect(await names("What did Zed Morrow decide?", { ...outside, compartments: [hr] })).toEqual(["Zephyr"]);
+		expect(await names("What is Compass?", { ...outside, reach: { kind: "all" } })).toEqual(["Compass"]);
+		expect(
+			await names("What is Compass?", {
+				reach: { kind: "shared", agentId: "default" },
+				compartments: "all",
+				projects: null,
+			}),
+		).toEqual([]);
+		expect(await names("Tell me about Nicholai", { ...outside, projects: ["atlas"] })).toEqual([]);
+	});
+
+	it("keeps outsider matches byte-identical when hidden mentions bump the global counter", async () => {
+		const now = new Date().toISOString();
+		const hr = getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO classifications (id, name, created_at, updated_at) VALUES ('cls_hr', 'HR', ?, ?)").run(
+				now,
+				now,
+			);
+			const compartment = compartmentFor(db, ["cls_hr"]) ?? 0;
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 0, ?, ?)`,
+			);
+			entity.run("ent-atlas", "Atlas Deploy", "atlas deploy", now, now);
+			entity.run("ent-deploybot", "Deploy Bot", "deploy bot", now, now);
+			db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES ('alias-atlas-bot', 'ent-deploybot', 'default', 'Atlas Deploy', 'atlas deploy', 'active')`,
+			).run();
+			return compartment;
+		});
+		const hide = (memoryId: string, entityId: string): void => {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO memories (id, content, type, agent_id, compartment_id, is_deleted, created_at, updated_at, updated_by)
+					 VALUES (?, ?, 'fact', 'default', ?, 0, ?, ?, 'test')`,
+				).run(memoryId, `hidden ${memoryId}`, hr, now, now);
+				db.prepare("INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, ?)").run(memoryId, entityId);
+				db.prepare(
+					"UPDATE entities SET mentions = (SELECT COUNT(*) FROM memory_entity_mentions WHERE entity_id = ?) WHERE id = ?",
+				).run(entityId, entityId);
+			});
+		};
+		const outsider: ReadScope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null };
+		const audience: ReadScope = { ...outsider, compartments: [hr] };
+		const message = "What changed in Atlas Deploy?";
+		const read = async (scope: ReadScope) => await matchPromptEntities(DB_PATH(), "default", message, undefined, scope);
+		const before = JSON.stringify(await read(outsider));
+		expect(JSON.parse(before)).toEqual([
+			{
+				entityId: "ent-atlas",
+				entityName: "Atlas Deploy",
+				entityType: "project",
+				matchedText: "atlas deploy",
+				matchSource: "name",
+				mentions: 0,
+			},
+		]);
+		hide("mem-hidden-atlas", "ent-atlas");
+		expect(JSON.stringify(await read(outsider))).toBe(before);
+		expect((await read(audience)).map((match) => [match.entityId, match.mentions])).toEqual([["ent-atlas", 1]]);
+		hide("mem-hidden-bot-1", "ent-deploybot");
+		hide("mem-hidden-bot-2", "ent-deploybot");
+		expect(JSON.stringify(await read(outsider))).toBe(before);
+		expect((await read(audience)).map((match) => [match.entityId, match.mentions, match.matchSource])).toEqual([
+			["ent-deploybot", 2, "alias"],
+		]);
+	});
+
+	it("uses the global mention counter only for reach all with every compartment", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET mentions = 25 WHERE id = 'ent-nicholai'").run();
+		});
+		const all: ReadScope = { reach: { kind: "all" }, compartments: "all", projects: null };
+		const message = "Tell me about Nicholai";
+		const counts = async (scope: ReadScope) =>
+			(await matchPromptEntities(DB_PATH(), "default", message, undefined, scope)).map((match) => match.mentions);
+		expect(await counts(all)).toEqual([25]);
+		expect(await counts(localScope("default"))).toEqual([10]);
+		expect(await counts({ ...all, compartments: [] })).toEqual([10]);
+		expect(await counts({ ...all, projects: ["atlas"] })).toEqual([]);
+	});
+
+	it("counts readable mentions through the entity mention index", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, is_deleted, created_at, updated_at, updated_by)
+				 VALUES ('mem-nicholai', 'about nicholai', 'fact', 'default', 0, ?, ?, 'test')`,
+			).run(now, now);
+			db.prepare(
+				"INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES ('mem-nicholai', 'ent-nicholai')",
+			).run();
+		});
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		const statements: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			if (options.operation === "user-prompt-submit.entity-mentions" && request.kind === "query") {
+				statements.push({ sql: request.statement.sql, params: request.statement.params ?? [] });
+			}
+			return submit<Result>(request, options);
+		};
+		const matches = await matchLocal("default", "Tell me about Nicholai").finally(() => {
+			owner.submit = submit;
+		});
+		expect(matches.map((match) => [match.entityName, match.mentions])).toEqual([["Nicholai", 11]]);
+		expect(statements.length).toBe(1);
+		const plan = getDbAccessor().withReadDb((db) =>
+			statements.flatMap((statement) =>
+				db
+					.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`)
+					.all(
+						...statement.params.flatMap((param) =>
+							typeof param === "string" || typeof param === "number" ? [param] : [],
+						),
+					)
+					.flatMap((row) => (typeof row === "object" && row !== null && "detail" in row ? [String(row.detail)] : [])),
+			),
+		);
+		expect(plan.some((detail) => detail.includes("idx_memory_entity_mentions_entity_memory"))).toBe(true);
+		expect(plan.filter((detail) => /SCAN (memory_entity_mentions|memories|m|rm)\b/.test(detail))).toEqual([]);
+	});
+
+	it("rejects calls that omit the read scope", async () => {
+		await expect(
+			Reflect.apply(matchPromptEntities, undefined, [DB_PATH(), "default", "Tell me about Nicholai"]),
+		).rejects.toThrow("readScope is required");
+	});
+
+	it("hides classified aliases and parents in the owner scan before paging", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`INSERT INTO classifications(id,name) VALUES ('prompt-secret','Prompt Secret');
+				INSERT INTO compartments(id,key) VALUES (9101,'prompt-secret');
+				INSERT INTO compartment_members(compartment_id,classification_id) VALUES (9101,'prompt-secret');
+				INSERT INTO classification_audience(classification_id,principal_kind,principal_id)
+				VALUES ('prompt-secret','user','prompt-audience');
+				UPDATE entities SET compartment_id=9101 WHERE id='ent-nicholai';
+				UPDATE entity_aliases SET compartment_id=9101 WHERE id='alias-signetai';
+				INSERT INTO entity_aliases(id,entity_id,agent_id,alias,canonical_alias,status)
+				VALUES ('public-parent-alias','ent-nicholai','default','Public Persona','public persona','active')`);
+		});
+		const scopeFor = (userId: string) =>
+			resolveReadScope(
+				{ reach: { kind: "own", agentId: "default" }, projects: null },
+				{ userId, groupIds: [], local: false },
+			);
+		const reader = await scopeFor("prompt-reader");
+		const audience = await scopeFor("prompt-audience");
+		const match = (prompt: string, scope: ReadScope) =>
+			matchPromptEntities(DB_PATH(), "default", prompt, undefined, scope);
+		expect((await match("How is SignetAI doing?", audience)).map((row) => row.entityName)).toEqual(["Signet"]);
+		expect(await match("How is SignetAI doing?", reader)).toEqual([]);
+		expect(await match("Tell me about Nicholai", reader)).toEqual([]);
+		expect(await match("Tell me about Public Persona", reader)).toEqual([]);
+		expect((await match("Tell me about Public Persona", audience)).map((row) => row.entityName)).toEqual(["Nicholai"]);
+		expect((await match("Tell me about Signet", reader)).map((row) => row.entityName)).toEqual(["Signet"]);
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		const disclosed: string[] = [];
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			if (!/^user-prompt-submit.entity-(names|aliases)$/.test(options.operation)) return handle;
+			return {
+				...handle,
+				result: handle.result.then((value) => {
+					disclosed.push(JSON.stringify(value));
+					return value;
+				}),
+			};
+		};
+		await match("Tell me about Signet", reader).finally(() => {
+			owner.submit = submit;
+		});
+		expect(disclosed.join("\n")).not.toContain("SignetAI");
+		expect(disclosed.join("\n")).not.toContain("Nicholai");
+		expect(await match("Tell me about Signet", { ...reader, projects: ["restricted"] })).toEqual([]);
+	});
+
+	it("rejects missing read authorization before opening the owner", async () => {
+		await expect(
+			matchPromptEntities(DB_PATH(), "default", "Tell me about Signet", undefined, undefined),
+		).rejects.toThrow("readScope is required");
+		expect(
+			await matchPromptEntities(DB_PATH(), "default", "What is Compass?", undefined, {
+				reach: { kind: "own", agentId: "default" },
+				compartments: "all",
+				projects: null,
+			}),
+		).toEqual([]);
+	});
+
 	it("never matches another agent's entities", async () => {
-		expect(await matchPromptEntities(DB_PATH(), "default", "What is Compass?")).toEqual([]);
-		const other = await matchPromptEntities(DB_PATH(), "other-agent", "What is Compass?");
+		expect(await matchLocal("default", "What is Compass?")).toEqual([]);
+		const other = await matchLocal("other-agent", "What is Compass?");
 		expect(other.map((match) => match.entityName)).toEqual(["Compass"]);
 	});
 
@@ -95,7 +359,8 @@ describe("matchPromptEntities", () => {
 			}
 			insert.run("ent-zephyr", "Zephyrline", "zephyrline", now, now);
 		});
-		const matches = await matchPromptEntities(DB_PATH(), "default", "What is the status of Zephyrline?");
+		linkMentions("ent-zephyr", "default", 1);
+		const matches = await matchLocal("default", "What is the status of Zephyrline?");
 		expect(matches.map((match) => match.entityName)).toEqual(["Zephyrline"]);
 	});
 
@@ -112,10 +377,10 @@ describe("matchPromptEntities", () => {
 			}
 			insert.run("ent-quillon", "Quillonbridge", "quillonbridge", now, now);
 		});
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Is Quillonbridge shipping this week?");
+		const matches = await matchLocal("default", "Is Quillonbridge shipping this week?");
 		expect(matches.map((match) => match.entityName)).toEqual(["Quillonbridge"]);
 		const longName = `Long Project 7 ${"descriptive words ".repeat(34)}`.trim();
-		expect(await matchPromptEntities(DB_PATH(), "default", `What is ${longName}?`)).toEqual([]);
+		expect(await matchLocal("default", `What is ${longName}?`)).toEqual([]);
 	});
 
 	it("reads full pages past a name larger than the owner result limit", async () => {
@@ -139,7 +404,7 @@ describe("matchPromptEntities", () => {
 			if (options.operation === "user-prompt-submit.entity-names") reads += 1;
 			return submit<Result>(request, options);
 		};
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Where is Lanternfield now?").finally(() => {
+		const matches = await matchLocal("default", "Where is Lanternfield now?").finally(() => {
 			owner.submit = submit;
 		});
 		expect(matches.map((match) => match.entityName)).toEqual(["Lanternfield"]);
@@ -181,7 +446,7 @@ describe("matchPromptEntities", () => {
 			}
 			return submit<Result>(request, options);
 		};
-		const matches = await matchPromptEntities(DB_PATH(), "default", "What did harborlight599 ship?").finally(() => {
+		const matches = await matchLocal("default", "What did harborlight599 ship?").finally(() => {
 			owner.submit = submit;
 		});
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Aliased Project 599", "alias"]]);
@@ -221,6 +486,7 @@ describe("matchPromptEntities", () => {
 			entity.run("ent-nightharbor", "Night Harbor", "night harbor", now, now);
 			alias.run("alias-nightharbor", "ent-nightharbor", "nightharbor", "nightharbor");
 		});
+		linkMentions("ent-nightharbor", "default", 1);
 		const owner = await getDbOwner(DB_PATH());
 		const submit = owner.submit.bind(owner);
 		let pages = 0;
@@ -248,7 +514,7 @@ describe("matchPromptEntities", () => {
 				}),
 			};
 		};
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Is nightharbor still docked?").finally(() => {
+		const matches = await matchLocal("default", "Is nightharbor still docked?").finally(() => {
 			owner.submit = submit;
 		});
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Night Harbor", "alias"]]);
@@ -273,8 +539,8 @@ describe("matchPromptEntities", () => {
 			alias.run("alias-short", "quaylighthouse", "quaylighthouse");
 			alias.run("alias-huge", "a".repeat(1_048_676), "a".repeat(1_048_676));
 		});
-		const byName = await matchPromptEntities(DB_PATH(), "default", "Is Lantern Quay open?");
-		const byAlias = await matchPromptEntities(DB_PATH(), "default", "Is quaylighthouse open?");
+		const byName = await matchLocal("default", "Is Lantern Quay open?");
+		const byAlias = await matchLocal("default", "Is quaylighthouse open?");
 		expect(byName.map((match) => [match.entityName, match.matchSource])).toEqual([["Lantern Quay", "name"]]);
 		expect(byAlias.map((match) => [match.entityName, match.matchSource])).toEqual([["Lantern Quay", "alias"]]);
 	});
@@ -299,7 +565,7 @@ describe("matchPromptEntities", () => {
 			entity.run("ent-saltmarsh", "Saltmarsh Project", "saltmarsh project", now, now);
 			alias.run("alias-saltmarsh", "ent-saltmarsh", "saltmarshbeacon", "saltmarshbeacon");
 		});
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Is saltmarshbeacon lit?");
+		const matches = await matchLocal("default", "Is saltmarshbeacon lit?");
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Saltmarsh Project", "alias"]]);
 	});
 
@@ -326,7 +592,8 @@ describe("matchPromptEntities", () => {
 			).run(now, now);
 			alias.run("alias-marrow", "ent-marrow", "marrowbeacon", "marrowbeacon");
 		});
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Is marrowbeacon lit?");
+		linkMentions("ent-marrow", "default", 1);
+		const matches = await matchLocal("default", "Is marrowbeacon lit?");
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Marrow Project", "alias"]]);
 	});
 
@@ -341,10 +608,15 @@ describe("matchPromptEntities", () => {
 			insert.run("ent-tidewater", "Tidewater", "tidewater", "9".repeat(1_100_000), now, now);
 			insert.run("ent-kestrel", "Kestrelmoor", "kestrelmoor", 3, now, now);
 		});
-		const kestrel = await matchPromptEntities(DB_PATH(), "default", "Did Kestrelmoor ship?");
-		const tidewater = await matchPromptEntities(DB_PATH(), "default", "Did Tidewater ship?");
+		linkMentions("ent-kestrel", "default", 3);
+		linkMentions("ent-tidewater", "default", 2);
+		const kestrel = await matchLocal("default", "Did Kestrelmoor ship?");
+		const tidewater = await matchLocal("default", "Did Tidewater ship?");
 		expect(kestrel.map((match) => match.entityName)).toEqual(["Kestrelmoor"]);
 		expect(tidewater.map((match) => match.entityName)).toEqual(["Tidewater"]);
+		const all: ReadScope = { reach: { kind: "all" }, compartments: "all", projects: null };
+		const global = await matchPromptEntities(DB_PATH(), "default", "Did Tidewater ship?", undefined, all);
+		expect(global.map((match) => match.entityName)).toEqual(["Tidewater"]);
 	});
 
 	it("still matches aliases when the active alias index is missing", async () => {
@@ -360,7 +632,7 @@ describe("matchPromptEntities", () => {
 			).run();
 			db.exec("DROP INDEX idx_entity_aliases_active_unique");
 		});
-		const matches = await matchPromptEntities(DB_PATH(), "default", "Is fenlighthouse open?");
+		const matches = await matchLocal("default", "Is fenlighthouse open?");
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Fen Project", "alias"]]);
 	});
 

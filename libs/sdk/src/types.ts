@@ -183,7 +183,7 @@ export interface RecallResponse {
 	readonly sources?: Readonly<Record<string, string>>;
 }
 
-export type { RememberResult } from "@signet/core";
+export type { RememberResult } from "@signet/core/remember";
 
 export interface MemoryListResponse {
 	readonly memories: readonly MemoryRecord[];
@@ -1194,11 +1194,4 @@ export type {
 	AgentMessage,
 	AgentMessageListResponse,
 	AgentMessageSendResponse,
-	ComparisonsByProjectResponse,
-	ComparisonsByEntityResponse,
-	ComparisonsListResponse,
-	TrainingRun,
-	TrainingRunsResponse,
-	TrainingPairsCountResponse,
-	TrainPredictorResponse,
 } from "./types-p2.js";

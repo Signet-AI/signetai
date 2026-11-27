@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { MEMORIES_FTS_TOKENIZER } from "@signet/core";
 import {
 	DbOwnerAdmissionError,
 	DbOwnerDeadlineError,
@@ -517,45 +516,33 @@ async function submit<Result>(
 	return await handle.result;
 }
 
-async function ensureFtsSchema(client: DbOwnerClient, deadlineMs: number): Promise<void> {
-	await submit<readonly SqliteRunResult[]>(
+const partitionConditions = new WeakMap<DbOwnerClient, Promise<string>>();
+function memoryPartition(client: DbOwnerClient): Promise<string> {
+	const previous = partitionConditions.get(client);
+	if (previous) return previous;
+	const condition = submit<unknown>(
 		client,
 		{
-			kind: "batch",
-			statements: [
-				runStatement(
-					`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='${MEMORIES_FTS_TOKENIZER}')`,
-				),
-				runStatement(
-					`CREATE TABLE IF NOT EXISTS ${FTS_STATE_TABLE} (
-							id INTEGER PRIMARY KEY CHECK (id = 1),
-							memory_count INTEGER NOT NULL,
-							indexed_count INTEGER NOT NULL,
-							updated_at TEXT NOT NULL
-						)`,
-				),
-				runStatement("DROP TRIGGER IF EXISTS memories_ai"),
-				runStatement("DROP TRIGGER IF EXISTS memories_ad"),
-				runStatement("DROP TRIGGER IF EXISTS memories_au"),
-				runStatement(
-					"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE memory_count + 1 END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE indexed_count + 1 END, updated_at = datetime('now') WHERE id = 1; END",
-				),
-				runStatement(
-					"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 1 ELSE 0 END) END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
-				),
-				runStatement(
-					"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN UPDATE memories_fts_state SET indexed_count = CASE WHEN indexed_count < 0 THEN CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END ELSE indexed_count + CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
-				),
-			],
+			kind: "query",
+			statement: queryStatement("SELECT 1 present FROM pragma_table_info('memories') WHERE name='compartment_id'"),
 		},
-		"maintenance.fts.schema.ensure",
-		deadlineMs,
-		8,
-	);
+		"maintenance.fts.partition",
+		5000,
+		1,
+	).then((row) => (row ? "compartment_id IS NULL" : "1"));
+	partitionConditions.set(client, condition);
+	return condition;
+}
+async function ensureFtsSchema(client: DbOwnerClient, deadlineMs: number): Promise<void> {
+	await client.submit(
+		{ kind: "fts_partition", action: "ensure" },
+		{ operation: "maintenance.fts.schema.ensure", lane: "maintenance", deadlineMs, estimatedWorkUnits: 8 },
+	).result;
 }
 
 async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: number): Promise<void> {
 	await ensureFtsSchema(client, deadlineMs);
+	const partition = await memoryPartition(client);
 	await submit<readonly SqliteRunResult[]>(
 		client,
 		{
@@ -571,12 +558,12 @@ async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: 
 				),
 				runStatement(
 					`INSERT OR IGNORE INTO ${FTS_STATE_TABLE} (id, memory_count, indexed_count, updated_at)
-						 VALUES (1, (SELECT COUNT(*) FROM memories), (SELECT COUNT(*) FROM memories_fts_docsize), ?)`,
+						 VALUES (1, (SELECT COUNT(*) FROM memories WHERE ${partition}), (SELECT COUNT(*) FROM memories_fts_docsize), ?)`,
 					[new Date().toISOString()],
 				),
 				runStatement(
 					`UPDATE ${FTS_STATE_TABLE}
-					 SET memory_count = (SELECT COUNT(*) FROM memories),
+					 SET memory_count = (SELECT COUNT(*) FROM memories WHERE ${partition}),
 					     indexed_count = (SELECT COUNT(*) FROM memories_fts_docsize),
 					     updated_at = ?
 					 WHERE id = 1 AND (memory_count < 0 OR indexed_count < 0)`,
@@ -605,6 +592,7 @@ async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: 
 }
 
 async function readCheckpoint(client: DbOwnerClient, key: string, deadlineMs: number): Promise<FtsCheckpoint> {
+	const partition = await memoryPartition(client);
 	const row = await submit<FtsCheckpoint | null>(
 		client,
 		{
@@ -614,15 +602,15 @@ async function readCheckpoint(client: DbOwnerClient, key: string, deadlineMs: nu
 						s.memory_count AS memoryCount,
 						s.indexed_count AS indexedCount,
 						EXISTS(SELECT 1 FROM memories_fts_docsize LIMIT 1) AS hasIndexedRows,
-						CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+						CASE WHEN NOT EXISTS(SELECT 1 FROM memories WHERE ${partition}) THEN 1 ELSE EXISTS(
 							SELECT 1 FROM memories_fts_docsize
-							WHERE id = (SELECT rowid FROM memories ORDER BY rowid LIMIT 1)
+							WHERE id = (SELECT rowid FROM memories WHERE ${partition} ORDER BY rowid LIMIT 1)
 						) END AS firstMemoryIndexed,
-						CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+						CASE WHEN NOT EXISTS(SELECT 1 FROM memories WHERE ${partition}) THEN 1 ELSE EXISTS(
 							SELECT 1 FROM memories_fts_docsize
-							WHERE id = (SELECT rowid FROM memories ORDER BY rowid DESC LIMIT 1)
+							WHERE id = (SELECT rowid FROM memories WHERE ${partition} ORDER BY rowid DESC LIMIT 1)
 						) END AS lastMemoryIndexed,
-						CASE WHEN c.cursor <= 0 OR NOT EXISTS(SELECT 1 FROM memories WHERE rowid = c.cursor) THEN 1
+						CASE WHEN c.cursor <= 0 OR NOT EXISTS(SELECT 1 FROM memories WHERE ${partition} AND rowid = c.cursor) THEN 1
 							ELSE EXISTS(SELECT 1 FROM memories_fts_docsize WHERE id = c.cursor) END AS cursorIndexed
 					 FROM ${CHECKPOINT_TABLE} AS c
 					 CROSS JOIN ${FTS_STATE_TABLE} AS s
@@ -708,6 +696,7 @@ async function markComplete(client: DbOwnerClient, key: string, deadlineMs: numb
 
 async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = {}): Promise<FtsBackfillResult> {
 	const key = checkpointKey(options.checkpointKey);
+	const partition = await memoryPartition(client);
 	const chunkSize = boundedChunkSize(options.chunkSize);
 	const deadlineMs = boundedDeadline(options.deadlineMs);
 	const runBudgetMs = boundedRunBudget(options.runBudgetMs);
@@ -769,7 +758,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 						 SELECT m.rowid AS rowid
 						 FROM memories AS m
 						 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
-						 WHERE m.rowid > ? AND f.id IS NULL
+						 WHERE ${partition.replaceAll("compartment_id", "m.compartment_id")} AND m.rowid > ? AND f.id IS NULL
 						 ORDER BY m.rowid
 						 LIMIT ?
 					 )
@@ -779,7 +768,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 						 SELECT m.rowid AS rowid
 						 FROM memories AS m
 						 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
-						 WHERE m.rowid > ? AND f.id IS NULL
+						 WHERE ${partition.replaceAll("compartment_id", "m.compartment_id")} AND m.rowid > ? AND f.id IS NULL
 						 ORDER BY m.rowid
 						 LIMIT ?
 					 )
@@ -795,7 +784,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 						 SELECT m.rowid AS rowid
 						 FROM memories AS m
 						 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
-						 WHERE m.rowid > ? AND f.id IS NULL
+						 WHERE ${partition.replaceAll("compartment_id", "m.compartment_id")} AND m.rowid > ? AND f.id IS NULL
 						 ORDER BY m.rowid
 						 LIMIT ?
 					 )
@@ -808,7 +797,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 				 SELECT m.rowid, m.content
 				 FROM memories AS m
 				 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
-				 WHERE m.rowid > ? AND f.id IS NULL
+				 WHERE ${partition.replaceAll("compartment_id", "m.compartment_id")} AND m.rowid > ? AND f.id IS NULL
 				 ORDER BY m.rowid
 				 LIMIT ?`,
 				[cursor, chunkSize],
@@ -1084,44 +1073,22 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 		const key = checkpointKey(rebuildOptions.checkpointKey);
 		setFtsIndexIncomplete(true);
 		await ensureCheckpoint(owner, key, deadlineMs);
-		await submit<readonly SqliteRunResult[]>(
+		await owner.submit(
+			{ kind: "fts_partition", action: "rebuild" },
+			{ operation: "maintenance.fts.rebuild.schema", lane: "maintenance", deadlineMs, estimatedWorkUnits: 9 },
+		).result;
+		await submit(
 			owner,
 			{
-				kind: "batch",
-				statements: [
-					runStatement("DROP TRIGGER IF EXISTS memories_ai"),
-					runStatement("DROP TRIGGER IF EXISTS memories_ad"),
-					runStatement("DROP TRIGGER IF EXISTS memories_au"),
-					runStatement("DROP TABLE IF EXISTS memories_fts"),
-					runStatement("DROP TABLE IF EXISTS memories_fts_state"),
-					runStatement(
-						`CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='${MEMORIES_FTS_TOKENIZER}')`,
-					),
-					runStatement(
-						`CREATE TABLE memories_fts_state (id INTEGER PRIMARY KEY CHECK (id = 1), memory_count INTEGER NOT NULL, indexed_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`,
-					),
-					runStatement(
-						`INSERT INTO memories_fts_state (id, memory_count, indexed_count, updated_at) VALUES (1, (SELECT COUNT(*) FROM memories), 0, ?)`,
-						[new Date().toISOString()],
-					),
-					runStatement(
-						"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE memory_count + 1 END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE indexed_count + 1 END, updated_at = datetime('now') WHERE id = 1; END",
-					),
-					runStatement(
-						"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 1 ELSE 0 END) END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
-					),
-					runStatement(
-						"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN UPDATE memories_fts_state SET indexed_count = CASE WHEN indexed_count < 0 THEN CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END ELSE indexed_count + CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
-					),
-					runStatement(
-						`INSERT OR REPLACE INTO ${CHECKPOINT_TABLE} (job_key, cursor, processed, status, updated_at) VALUES (?, 0, 0, 'running', ?)`,
-						[key, new Date().toISOString()],
-					),
-				],
+				kind: "query",
+				statement: runStatement(
+					`INSERT OR REPLACE INTO ${CHECKPOINT_TABLE}(job_key,cursor,processed,status,updated_at) VALUES (?,0,0,'running',?)`,
+					[key, new Date().toISOString()],
+				),
 			},
-			"maintenance.fts.rebuild.schema",
+			"maintenance.fts.rebuild.cursor",
 			deadlineMs,
-			9,
+			1,
 		);
 		const result = await backfillFts(owner, { ...rebuildOptions, checkpointKey: key });
 		if (rebuildOptions.audit && result.status === "complete") {

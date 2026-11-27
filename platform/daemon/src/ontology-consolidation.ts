@@ -1,4 +1,5 @@
 import type { LlmProvider, OntologyProposal, OntologyProposalStatus } from "@signet/core";
+import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor } from "./db-accessor";
 import { createOntologyProposals, listOntologyProposalConflicts, listOntologyProposals } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
@@ -18,6 +19,7 @@ export interface ConsolidateOntologyParams {
 	readonly limit?: number;
 	readonly writeProposals?: boolean;
 	readonly createdBy?: string;
+	readonly author?: WriteAuthor;
 	readonly useProvider?: boolean;
 	readonly provider?: LlmProvider | null;
 	readonly providerTimeoutMs?: number;
@@ -352,6 +354,7 @@ export async function consolidateOntologyProposals(
 			sourceKind: "ontology_consolidation",
 			sourceId: `proposals:${source.items.length}`,
 			createdBy: params.createdBy?.trim() || "ontology-consolidate",
+			author: requireWriteAuthor(params.author),
 		})),
 	);
 	return {

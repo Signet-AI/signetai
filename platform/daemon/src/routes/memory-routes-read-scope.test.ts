@@ -13,7 +13,7 @@ let initDbAccessor: typeof import("../db-accessor").initDbAccessor;
 let closeDbAccessor: typeof import("../db-accessor").closeDbAccessor;
 let getDbAccessor: typeof import("../db-accessor").getDbAccessor;
 let invalidateAgentScopeCache: typeof import("../agent-id").invalidateAgentScopeCache;
-let createAuthMiddleware: typeof import("../auth").createAuthMiddleware;
+let createIdentityMiddleware: typeof import("../auth/identity-middleware").createIdentityMiddleware;
 let createToken: typeof import("../auth").createToken;
 let state: typeof import("./state.js");
 
@@ -36,10 +36,7 @@ async function makeApp(mode: "local" | "team"): Promise<Hono> {
 	writeAuthConfig(mode);
 	state.reloadAuthState(agentsDir);
 	const app = new appFactory();
-	if (mode === "team") {
-		if (!state.authSecret) throw new Error("expected auth secret in team mode");
-		app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
-	}
+	app.use("*", createIdentityMiddleware(state.authConfig, state.authSecret));
 	registerMemoryRoutes(app, { fetchEmbedding: async () => null });
 	return app;
 }
@@ -118,7 +115,8 @@ beforeAll(async () => {
 	({ initDbAccessor, closeDbAccessor, getDbAccessor } = await import("../db-accessor"));
 	({ invalidateAgentScopeCache } = await import("../agent-id"));
 	({ registerMemoryRoutes } = await import("./memory-routes"));
-	({ createAuthMiddleware, createToken } = await import("../auth"));
+	({ createToken } = await import("../auth"));
+	({ createIdentityMiddleware } = await import("../auth/identity-middleware"));
 	state = await import("./state.js");
 	initDbAccessor(join(agentsDir, "memory", "memories.db"));
 });
@@ -180,15 +178,16 @@ describe("GET /api/memories agent scope", () => {
 		const group = await list(app, "?agentId=team-a");
 		expect(ids(group.body)).toEqual(["team-b-global"]);
 		expect(group.body.memories[0]?.agent_id).toBe("team-b");
+		expect(group.body.stats.withEmbeddings).toBe(0);
 	});
 
-	it("counts a memory that shares a same-agent embedding by content hash as embedded", async () => {
+	it("counts only a memory with its own parent-scoped embedding", async () => {
 		seedMemory("alpha-copy", "alpha", { contentHash: "alpha-global-hash" });
 		seedMemory("beta-copy", "beta", { contentHash: "alpha-global-hash" });
 		const app = await makeApp("local");
 
 		const alpha = await list(app, "?agentId=alpha");
-		expect(alpha.body.stats).toMatchObject({ total: 3, withEmbeddings: 2 });
+		expect(alpha.body.stats).toMatchObject({ total: 3, withEmbeddings: 1 });
 
 		const beta = await list(app, "?agentId=beta");
 		expect(beta.body.stats).toMatchObject({ total: 3, withEmbeddings: 1 });
@@ -363,7 +362,7 @@ describe("memory read routes apply agent scope in local mode", () => {
 
 		expect((await get(app, "/api/memory/beta-private?agentId=alpha")).status).toBe(404);
 		expect((await get(app, "/api/memory/beta-private/history?agentId=alpha")).status).toBe(404);
-		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).body.count).toBe(0);
+		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).status).toBe(404);
 
 		expect((await get(app, "/api/memory/beta-private?agentId=beta")).body.id).toBe("beta-private");
 		expect((await get(app, "/api/memory/beta-private/history?agentId=beta")).body.count).toBe(1);
@@ -554,7 +553,7 @@ describe("memory routes keep a scoped credential to its own agent's memories by 
 
 		expect((await get(app, "/api/memory/beta-private", headers)).status).toBe(404);
 		expect((await get(app, "/api/memory/beta-private/history", headers)).status).toBe(404);
-		expect((await get(app, "/api/memory/beta-private/lineage", headers)).body.count).toBe(0);
+		expect((await get(app, "/api/memory/beta-private/lineage", headers)).status).toBe(404);
 		expect((await get(app, "/memory/similar?id=beta-global", headers)).status).toBe(404);
 		expect((await get(app, "/api/memory/alpha-private", headers)).status).toBe(200);
 	});
@@ -580,6 +579,15 @@ describe("memory routes keep a scoped credential to its own agent's memories by 
 		const own = await send(app, "PATCH", "/api/memory/alpha-global", headers, { importance: 0.4, reason: "x" });
 		expect(own.status).toBe(200);
 		expect(memoryRow("alpha-global").importance).toBe(0.4);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT actor_user_id, actor_credential FROM audit_events WHERE target_id = 'alpha-global' AND action = 'memory.updated' ORDER BY at DESC LIMIT 1",
+					)
+					.get(),
+			),
+		).toEqual({ actor_user_id: null, actor_credential: "token:memory-list-test" });
 	});
 
 	it("leaves another agent's memories out of batch modify and batch forget", async () => {
@@ -705,10 +713,19 @@ describe("scope boundaries around memory routes", () => {
 			expect(res.body.id).not.toBe(created.body.id);
 			expect(JSON.stringify(res.body)).not.toContain("Secret launch");
 		}
-		expect(byKey.status).toBe(409);
+		expect(bySource.status).toBe(200);
+		expect(byKey.status).toBe(200);
+		const retry = await send(app, "POST", "/api/memory/remember", allowed, {
+			content: "Another unrelated note.",
+			project: "allowed",
+			idempotencyKey: "shared-key",
+		});
+		expect(retry.status).toBe(200);
+		expect(retry.body.id).toBe(byKey.body.id);
+		expect(retry.body.deduped).toBe(true);
 	});
 
-	it("refuses a chunked idempotency key reused from another project", async () => {
+	it("keeps chunked idempotency retries inside each project", async () => {
 		const app = await makeApp("team");
 		const secret = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "secret" })}` };
 		const allowed = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "allowed" })}` };
@@ -728,13 +745,25 @@ describe("scope boundaries around memory routes", () => {
 			project: "allowed",
 			idempotencyKey: "chunk-key",
 		});
-		expect(reuse.status).toBe(409);
+		expect(first.status).toBe(200);
+		expect(reuse.status).toBe(200);
+		expect(reuse.body.ids).not.toEqual(first.body.ids);
+		const allowedRetry = await send(app, "POST", "/api/memory/remember", allowed, {
+			content,
+			project: "allowed",
+			idempotencyKey: "chunk-key",
+		});
+		expect(allowedRetry.status).toBe(200);
+		expect(allowedRetry.body.ids).toEqual(reuse.body.ids);
+		expect(allowedRetry.body.deduped).toBe(true);
 		const retry = await send(app, "POST", "/api/memory/remember", secret, {
 			content,
 			project: "secret",
 			idempotencyKey: "chunk-key",
 		});
 		expect(retry.status).toBe(200);
+		expect(retry.body.ids).toEqual(first.body.ids);
+		expect(retry.body.deduped).toBe(true);
 	});
 
 	it("requires admin to change or remove an agent, and limits registration to the credential's agent", async () => {
@@ -998,7 +1027,7 @@ describe("scope boundaries around memory routes", () => {
 		expect((await get(app, "/api/memory/jobs/alpha-job", headers)).body.memory_id).toBe("alpha-private");
 	});
 
-	it("marks a similarity result truncated when out-of-scope neighbors fill the candidate window", async () => {
+	it("does not let out-of-scope neighbors fill the candidate window", async () => {
 		const app = await makeApp("team");
 		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
 		const vector = (values: number[]) => new Uint8Array(new Float32Array(values).buffer);
@@ -1021,6 +1050,7 @@ describe("scope boundaries around memory routes", () => {
 		const res = await get(app, "/memory/similar?id=alpha-global&k=1", headers);
 		expect(res.status).toBe(200);
 		expect(JSON.stringify(res.body.results)).not.toContain("beta-near");
-		expect(res.body.truncated).toBe(true);
+		expect(rowIds(res.body.results)).toEqual(["alpha-neighbor"]);
+		expect(res.body.truncated).toBeUndefined();
 	});
 });

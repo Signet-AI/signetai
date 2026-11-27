@@ -1,6 +1,7 @@
 import { redactCredentials } from "@signet/core";
-import type { EpisodicSourceRecord } from "../episodic-sources";
+import type { DreamingSpeaker, EpisodicSourceRecord } from "../episodic-sources";
 export interface DreamingAgentEvidence {
+	readonly speaker?: DreamingSpeaker;
 	readonly sourceRef: string;
 	readonly content: string;
 	readonly sourceKind: string;
@@ -222,7 +223,17 @@ function contentText(value: unknown): string[] {
 	return text;
 }
 
-function jsonTranscriptLine(value: unknown): string[] {
+function externalAuthor(value: unknown): string | null {
+	if (typeof value === "string") return stringValue(value);
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+	for (const key of ["displayName", "display_name", "name", "username"]) {
+		const name = stringValue(Reflect.get(value, key));
+		if (name) return name;
+	}
+	return null;
+}
+
+function jsonTranscriptLine(value: unknown, preserveAuthors: boolean): string[] {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
 	const record = value as Record<string, unknown>;
 	const nestedItem = record.item ?? record.message ?? record.payload;
@@ -239,8 +250,18 @@ function jsonTranscriptLine(value: unknown): string[] {
 	const text = contentText(item.content ?? item.text ?? item.message);
 	const markers = toolCallMarkers(item);
 	if (text.length === 0 && markers.length === 0) return [];
+	const author = preserveAuthors
+		? externalAuthor(item.author ?? record.author ?? item.speaker ?? record.speaker)
+		: null;
 	const label =
-		role === "user" ? "User" : role === "assistant" ? "Assistant" : role === "reasoning" ? "Assistant reasoning" : null;
+		author ??
+		(role === "user"
+			? "User"
+			: role === "assistant"
+				? "Assistant"
+				: role === "reasoning"
+					? "Assistant reasoning"
+					: null);
 	return [...(label ? text.map((part) => `${label}: ${part}`) : text), ...markers];
 }
 
@@ -321,7 +342,7 @@ function isJsonTranscriptExcluded(value: unknown): boolean {
 		)
 	);
 }
-export function sanitizeTranscriptForDreaming(content: string): string {
+export function sanitizeTranscriptForDreaming(content: string, preserveAuthors = false): string {
 	const lines = content.split(/\r?\n/);
 	const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
 	const jsonLines: string[] = [];
@@ -331,7 +352,7 @@ export function sanitizeTranscriptForDreaming(content: string): string {
 		try {
 			const parsed: unknown = JSON.parse(line.trim());
 			parsedLines += 1;
-			const rendered = jsonTranscriptLine(parsed);
+			const rendered = jsonTranscriptLine(parsed, preserveAuthors);
 			if (rendered.length > 0) {
 				recognizedJsonLines += 1;
 				jsonLines.push(...rendered);
@@ -344,7 +365,7 @@ export function sanitizeTranscriptForDreaming(content: string): string {
 		if (trimmed.length === 0) return [line];
 		try {
 			const parsed: unknown = JSON.parse(trimmed);
-			const rendered = jsonTranscriptLine(parsed);
+			const rendered = jsonTranscriptLine(parsed, preserveAuthors);
 			if (rendered.length > 0) return rendered;
 			if (isJsonTranscriptExcluded(parsed)) return [];
 		} catch {}
@@ -355,7 +376,10 @@ export function sanitizeTranscriptForDreaming(content: string): string {
 export function renderDreamingEvidence(source: EpisodicSourceRecord): string {
 	const content =
 		source.kind === "transcript" || source.sourceKind === "transcript"
-			? sanitizeTranscriptForDreaming(source.content)
+			? sanitizeTranscriptForDreaming(
+					source.content,
+					source.speaker?.kind === "external" || source.sourceEntryId !== null,
+				)
 			: source.content;
 	const metadata = renderDreamingEvidenceMeta(source.evidenceMeta);
 	return redactCredentials(metadata ? `${content}\n${metadata}` : content);
@@ -368,6 +392,7 @@ export function createDreamingAgentEvidence(
 		const { source } = fragment;
 		return {
 			sourceRef: `${source.kind}:${source.id}`,
+			...(source.speaker ? { speaker: source.speaker } : {}),
 			content: fragment.content,
 			sourceKind: source.sourceKind,
 			sourceId: source.sourceId,

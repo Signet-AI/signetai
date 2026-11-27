@@ -11,6 +11,8 @@ import {
 	removeSourceIfGeneration,
 } from "@signet/core";
 import { Hono } from "hono";
+import { localPrincipal } from "../auth/principal";
+import { LOCAL_AUTHOR } from "../auth/audit-owner";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
 import { hashNormalizedBody } from "../memory-lineage";
@@ -100,7 +102,7 @@ describe("Sources routes", () => {
 			platform?: NodeJS.Platform;
 		} = {},
 	): Hono {
-		const app = new Hono();
+		const app = admittedLocalApp();
 		registerSourcesRoutes(app, {
 			agentsDir: dir,
 			startBridge: (sources: readonly NativeMemorySource[], bridgeOptions: NativeMemoryBridgeOptions) => {
@@ -892,7 +894,7 @@ describe("Sources routes", () => {
 		const firstScanGate = new Promise<void>((resolve) => {
 			releaseFirstScan = resolve;
 		});
-		const app = new Hono();
+		const app = admittedLocalApp();
 		registerSourcesRoutes(app, {
 			agentsDir: dir,
 			startBridge: (sources: readonly NativeMemorySource[], bridgeOptions: NativeMemoryBridgeOptions) => {
@@ -982,7 +984,7 @@ describe("Sources routes", () => {
 			(await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" })).status,
 		).toBe(200);
 		expect(runtimePurges).toBe(1);
-		const restarted = new Hono();
+		const restarted = admittedLocalApp();
 		expect(() =>
 			registerSourcesRoutes(restarted, {
 				agentsDir: dir,
@@ -2432,3 +2434,13 @@ describe("Sources routes", () => {
 		};
 	}
 });
+
+function admittedLocalApp(): Hono {
+	const app = new Hono();
+	app.use("*", async (c, next) => {
+		c.set("principal", localPrincipal());
+		c.set("author", LOCAL_AUTHOR);
+		await next();
+	});
+	return app;
+}

@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as realOs from "node:os";
@@ -32,97 +33,114 @@ afterEach(() => {
 });
 
 describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => {
-	it("dispatches session-end through a detached child process", () => {
-		let capturedCommand = "";
-		let capturedArgs: string[] = [];
-		let capturedOptions: Record<string, unknown> | undefined;
-		let unrefCalled = false;
-		const fakeSpawn = ((command: string, args: string[], options: Record<string, unknown>) => {
-			capturedCommand = command;
-			capturedArgs = args;
-			capturedOptions = options;
-			return {
-				unref() {
-					unrefCalled = true;
-				},
-			};
-		}) as never;
-
-		const ok = dispatchSessionEndFireAndForget(
-			"http://localhost:3850/",
-			{
-				harness: "claude-code",
-				sessionId: "session-123",
-				transcriptPath: "/tmp/transcript.jsonl",
-			},
-			fakeSpawn,
-		);
-
-		expect(ok).toBe(true);
-		expect(capturedCommand).toBe(process.execPath);
-		expect(capturedArgs[0]).toBe("--eval");
-		expect(capturedArgs).toHaveLength(2);
-		const capturedEnv = capturedOptions?.env as Record<string, string | undefined> | undefined;
-		expect(capturedEnv?.SIGNET_SESSION_END_URL).toBe("http://localhost:3850/api/hooks/session-end");
-		expect(JSON.parse(capturedEnv?.SIGNET_SESSION_END_BODY ?? "{}")).toEqual({
-			harness: "claude-code",
-			sessionId: "session-123",
-			transcriptPath: "/tmp/transcript.jsonl",
+	it("returns before a stalled daemon acknowledges session-end", async () => {
+		let release = () => {};
+		let requested = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
 		});
-		expect(capturedOptions).toMatchObject({ detached: true, stdio: "ignore" });
-		expect(unrefCalled).toBe(true);
-	});
-
-	it("posts session-end payload from the detached child process", async () => {
-		let server: ReturnType<typeof Bun.serve> | undefined;
+		const received = new Promise<void>((resolve) => {
+			requested = resolve;
+		});
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (request.method === "POST") {
+					requested();
+					await gate;
+				}
+				return Response.json({ success: true });
+			},
+		});
+		const previousLauncher = process.env.SIGNET_HOOK_COMMAND;
+		process.env.SIGNET_HOOK_COMMAND = JSON.stringify([
+			process.execPath,
+			new URL("../../../surfaces/cli/dist/cli.js", import.meta.url).pathname,
+		]);
+		const script = `import { ClaudeCodeConnector } from ${JSON.stringify(new URL("./src/index.ts", import.meta.url).pathname)}; await new ClaudeCodeConnector({ daemonUrl: ${JSON.stringify(server.url.origin)} }).onSessionEnd({ sessionId: "nonblocking-exit" });`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			env: { ...process.env },
+			stdout: "ignore",
+			stderr: "ignore",
+		});
 		try {
-			const received = new Promise<{ path: string; body: unknown; contentType: string | null }>((resolve) => {
-				server = Bun.serve({
-					port: 0,
-					async fetch(req) {
-						const url = new URL(req.url);
-						const body = await req.json();
-						resolve({
-							path: url.pathname,
-							body,
-							contentType: req.headers.get("content-type"),
-						});
-						return new Response("ok");
-					},
-				});
-			});
-			const ok = dispatchSessionEndFireAndForget(`http://127.0.0.1:${server.port}`, {
-				harness: "claude-code",
-				sessionId: "session-real-child",
-				transcriptPath: "/tmp/real-child.jsonl",
-			});
-			expect(ok).toBe(true);
-
-			const result = await Promise.race([
+			await Promise.race([
 				received,
-				new Promise<never>((_, reject) =>
-					setTimeout(() => reject(new Error("timed out waiting for child POST")), 2500),
-				),
+				Bun.sleep(3000).then(() => {
+					throw new Error("Detached delivery never arrived");
+				}),
 			]);
-			expect(result.path).toBe("/api/hooks/session-end");
-			expect(result.contentType).toContain("application/json");
-			expect(result.body).toEqual({
-				harness: "claude-code",
-				sessionId: "session-real-child",
-				transcriptPath: "/tmp/real-child.jsonl",
-			});
+			const winner = await Promise.race([child.exited.then(() => "exited"), Bun.sleep(300).then(() => "blocked")]);
+			expect(winner).toBe("exited");
+			expect(await child.exited).toBe(0);
 		} finally {
-			server?.stop(true);
+			release();
+			await child.exited;
+			server.stop(true);
+			if (previousLauncher === undefined) delete process.env.SIGNET_HOOK_COMMAND;
+			else process.env.SIGNET_HOOK_COMMAND = previousLauncher;
 		}
 	});
 
-	it("reports session-end dispatch startup failures", async () => {
+	it.each([false, true])("delivers session-end through the canonical transport; credential=%s", async (remote) => {
+		const previousLauncher = process.env.SIGNET_HOOK_COMMAND;
+		process.env.SIGNET_HOOK_COMMAND = JSON.stringify([
+			process.execPath,
+			new URL("../../../surfaces/cli/dist/cli.js", import.meta.url).pathname,
+		]);
+		const requests: unknown[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(req) {
+				if (req.method !== "POST") return new Response(null, { status: 405 });
+				requests.push({
+					path: new URL(req.url).pathname,
+					contentType: req.headers.get("content-type"),
+					body: await req.json(),
+				});
+				return Response.json({ success: true, memoriesExtracted: 0 });
+			},
+		});
+		try {
+			const { ConnectorRegistry, writeKeyFile } = await import("../../../libs/sdk/src/node");
+			const keyFile = remote ? await writeKeyFile(server.url.origin, "claude-code", "fixture-credential") : undefined;
+			await new ConnectorRegistry().set("claude-code", { url: server.url.origin, ...(keyFile ? { keyFile } : {}) });
+			writeFileSync(join(tmpRoot, "transcript.jsonl"), "session evidence");
+			const payload: SessionEndFireAndForgetPayload = {
+				harness: "claude-code",
+				sessionId: "session-real-transport",
+				transcriptPath: join(tmpRoot, "transcript.jsonl"),
+			};
+			expect(await dispatchSessionEndFireAndForget(server.url.origin, payload)).toBe(true);
+			const deadline = Date.now() + 3000;
+			while (!requests.length && Date.now() < deadline) await Bun.sleep(5);
+			expect(requests).toEqual([
+				{
+					path: "/api/hooks/session-end",
+					contentType: "application/json",
+					body: expect.objectContaining(
+						remote
+							? { harness: "claude-code", sessionId: "session-real-transport", transcript: "session evidence" }
+							: payload,
+					),
+				},
+			]);
+		} finally {
+			server.stop(true);
+			if (previousLauncher === undefined) delete process.env.SIGNET_HOOK_COMMAND;
+			else process.env.SIGNET_HOOK_COMMAND = previousLauncher;
+		}
+	});
+
+	it.each([true, false])("reports session-end dispatch startup status; dispatched=%s", async (dispatched) => {
 		class TestConnector extends ClaudeCodeConnector {
 			lastPayload: SessionEndFireAndForgetPayload | undefined;
 
 			protected override dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
 				this.lastPayload = payload;
-				return false;
+				return dispatched;
 			}
 		}
 
@@ -132,7 +150,11 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 			transcriptPath: "/tmp/failed-dispatch.jsonl",
 		});
 
-		expect(result).toEqual({ success: false, memoriesExtracted: 0 });
+		expect(result).toEqual({
+			success: dispatched,
+			status: dispatched ? "dispatched" : "dispatch_failed",
+			memoriesExtracted: 0,
+		});
 		expect(connector.lastPayload).toEqual({
 			harness: "claude-code",
 			sessionId: "session-failed-dispatch",
@@ -466,7 +488,12 @@ describe("ClaudeCodeConnector user hooks", () => {
 			await new ClaudeCodeConnector().install(tmpRoot);
 			expect(commands(readHooks().SessionStart)).toHaveLength(2);
 			expect(commands(readHooks().SessionStart).every((cmd) => cmd.startsWith(`${cli} hook `))).toBe(true);
-			expect(JSON.parse(readFileSync(join(tmpRoot, ".claude.json"), "utf-8")).mcpServers.signet).toMatchObject(mcp);
+			expect(JSON.parse(readFileSync(join(tmpRoot, ".claude.json"), "utf-8")).mcpServers.signet).toEqual({
+				command: cli.split(" ")[0],
+				args: [...cli.split(" ").slice(1), "connector", "mcp", "claude-code"],
+				type: "stdio",
+				env: {},
+			});
 		});
 	}
 

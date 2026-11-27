@@ -29,7 +29,7 @@ try {
 
 	const latencies: number[] = [];
 	for (let index = 0; index < SAMPLE_COUNT; index += 1) {
-		const message = createAgentMessage({
+		const message = await createAgentMessage({
 			fromAgentId: "eval-sender",
 			toAgentId: "eval-recipient",
 			type: "info",

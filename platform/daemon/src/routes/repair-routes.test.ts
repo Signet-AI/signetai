@@ -4,7 +4,8 @@ import type { ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
 import { PassThrough } from "node:stream";
 import { Hono } from "hono";
-import { spawnHidden } from "@signet/core";
+import { spawnHidden, runMigrations } from "@signet/core";
+import { migrationFixtureDb } from "../test-support/migration-fixture-db";
 import { parseAuthConfig } from "../auth";
 import type { DbAccessor, ReadAdmissionOptions, ReadDb, WriteDb } from "../db-accessor";
 import { resetPressureState } from "../system-pressure";
@@ -80,43 +81,7 @@ function readMutationState(): { mentions: number; entityMentions: number } {
 beforeEach(() => {
 	resetPressureState();
 	db = new Database(":memory:");
-	db.exec(`
-		CREATE TABLE memories (
-			id TEXT PRIMARY KEY,
-			content TEXT NOT NULL,
-			type TEXT,
-			agent_id TEXT,
-			is_deleted INTEGER DEFAULT 0,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			updated_by TEXT
-		);
-		CREATE TABLE entities (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			canonical_name TEXT,
-			entity_type TEXT,
-			agent_id TEXT NOT NULL,
-			mentions INTEGER DEFAULT 0,
-			pinned INTEGER DEFAULT 0,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
-		CREATE TABLE skill_meta (entity_id TEXT PRIMARY KEY);
-		CREATE TABLE generic_entity_prune_scan_state (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
-			generation INTEGER NOT NULL DEFAULT 0
-		);
-		INSERT INTO generic_entity_prune_scan_state (id, generation) VALUES (1, 0);
-		CREATE TABLE memory_entity_mentions (
-			memory_id TEXT NOT NULL,
-			entity_id TEXT NOT NULL,
-			mention_text TEXT,
-			confidence REAL,
-			created_at TEXT,
-			PRIMARY KEY (memory_id, entity_id)
-		);
-	`);
+	runMigrations(migrationFixtureDb(db));
 	accessor = makeAccessor(db);
 	seedRelinkCandidate();
 });
@@ -179,7 +144,7 @@ describe("POST /api/repair/prune-generic-entities", () => {
 			).run("entity-prune-cursor", "Project Phoenix", "project phoenix", "agent-relink", now, now);
 		});
 
-		const cursor = { updatedAt: "0000-01-01T00:00:00.000Z", id: "zzzz", agentId: "agent-relink", scanGeneration: 0 };
+		const cursor = { updatedAt: "0000-01-01T00:00:00.000Z", id: "zzzz", agentId: "agent-relink", scanGeneration: 2 };
 		const response = await makeApp().request("/api/repair/prune-generic-entities", {
 			method: "POST",
 			headers: requestHeaders(),

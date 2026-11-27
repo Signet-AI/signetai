@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compartmentForWrite } from "../../../core/src/compartment-shards";
 import type { LlmProvider, PipelineReflectionsConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
@@ -58,6 +59,7 @@ function seedMemory(
 	const id = randomUUID();
 	getDbAccessor().withWriteTx((db) => {
 		txIngestEnvelope(db, {
+			author: { userId: null, credential: "system" },
 			id,
 			content: opts.content ?? "The reflection worker needs durable persistence.",
 			contentHash: opts.hash ?? `worker-test-${agentId}`,
@@ -159,7 +161,7 @@ describe("reflection worker", () => {
 		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(false);
 	});
 
-	it("collects the last 50 saved memories as the daily brief source batch", () => {
+	it("collects the last 50 saved memories as the daily brief source batch", async () => {
 		const ids: string[] = [];
 		const base = Date.now() - 60_000;
 		for (let i = 0; i < 55; i += 1) {
@@ -172,7 +174,7 @@ describe("reflection worker", () => {
 			);
 		}
 
-		const context = collectReflectionContext("default", config);
+		const context = await collectReflectionContext("default", config);
 
 		expect(context.memories).toHaveLength(50);
 		expect(context.memories.map((m) => m.id)).toEqual(ids.slice(5).reverse());
@@ -436,6 +438,41 @@ describe("reflection worker", () => {
 			{ agent_id: "agent-c", memory_ids: JSON.stringify([memoryId]) },
 		]);
 		expect(existsSync(join(dir, ".daemon", "last-reflection.agent-c.json"))).toBe(true);
+	});
+
+	it("persists classified brief citations with its union compartment", async () => {
+		const memoryId = seedMemory("default");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_hr','HR'); INSERT INTO classification_assignments VALUES('memory','" +
+					memoryId +
+					"','default','cls_hr','alice','now')",
+			);
+			db.prepare("UPDATE memories SET compartment_id=? WHERE id=?").run(
+				compartmentForWrite(db, { agentId: "default", memoryId }),
+				memoryId,
+			);
+		});
+		const ids = await generateDailyBriefInsights("default", config, 1, {
+			getDbAccessor,
+			getInferenceProvider: () => provider("BRIEF: The saved evidence remains private."),
+			logger,
+		});
+		expect(ids).toHaveLength(1);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT compartment_id FROM daily_reflections WHERE id=?").get(ids[0]),
+			),
+		).toEqual({ compartment_id: expect.any(Number) });
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db
+					.prepare(
+						"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='reflection' AND derived_id=?",
+					)
+					.all(ids[0]),
+			),
+		).toEqual([{ evidence_kind: "memory", evidence_id: memoryId }]);
 	});
 
 	it("routes active-agent discovery through the DB owner, not parent read seams", async () => {

@@ -122,6 +122,7 @@ describe("compaction summary commits through the database owner process", () => 
 				{
 					kind: "session_compaction_summary",
 					input: {
+						author: { userId: null, credential: "system" },
 						agentId: "agent-a",
 						sessionKey,
 						harness: "claude-code",

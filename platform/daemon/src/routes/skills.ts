@@ -1,4 +1,3 @@
-import { spawnHidden as spawn } from "@signet/core";
 import {
 	cpSync,
 	createWriteStream,
@@ -6,15 +5,20 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { getSkillsRunnerCommand, resolveDefaultBasePath, resolvePrimaryPackageManager } from "@signet/core";
+import {
+	getSkillsRunnerCommand,
+	resolveDefaultBasePath,
+	resolvePrimaryPackageManager,
+	spawnHidden as spawn,
+} from "@signet/core";
 import type { Hono } from "hono";
 import type { Entry, ZipFile } from "yauzl";
 import * as yauzl from "yauzl";
@@ -24,6 +28,7 @@ import { logger } from "../logger.js";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config.js";
 import { uninstallSkillNode } from "../pipeline/skill-graph.js";
 import { type ReconcilerDeps, reconcileSkillFile, withSkillReconciliationLock } from "../pipeline/skill-reconciler.js";
+import { jsonBody } from "../request-body";
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -1042,7 +1047,7 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 	app.post("/api/skills/install", async (c) => {
 		let body: { name?: string; source?: string } = {};
 		try {
-			body = await c.req.json();
+			body = await jsonBody(c)();
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}

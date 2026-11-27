@@ -8,6 +8,7 @@ import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
 import { bindDreamingPassTools } from "../pipeline/dreaming-pass-tools";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
 import { registerPipelineRoutes } from "./pipeline-routes";
+import { localPrincipal } from "../auth/principal";
 
 describe("POST /api/dream/tools/apply_ontology_ops", () => {
 	let agentsDir = "";
@@ -36,13 +37,19 @@ describe("POST /api/dream/tools/apply_ontology_ops", () => {
 		});
 		const enqueue = accessor.withWriteTxAsync;
 		if (!enqueue) throw new Error("async write API is unavailable");
-		let transactions = 0;
 		const injectable = accessor as {
 			withWriteTxAsync: <T>(fn: (db: WriteDb) => T) => Promise<T>;
 		};
 		injectable.withWriteTxAsync = (fn) => {
-			transactions += 1;
-			if (transactions === 3) return Promise.reject(new Error("injected route writer rejection"));
+			const progress = accessor.withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM entities WHERE agent_id='agent-a' AND name LIKE 'Route retry entity %'",
+					)
+					.get(),
+			);
+			if (typeof progress === "object" && progress !== null && "count" in progress && progress.count === 20)
+				return Promise.reject(new Error("injected route writer rejection"));
 			return enqueue(fn);
 		};
 		const app = new Hono();
@@ -122,6 +129,10 @@ describe("POST /api/dream/tools/:capability for a request that names a pass", ()
 
 	function call(capability: string, body: Record<string, unknown>): Promise<Response> {
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("principal", localPrincipal());
+			await next();
+		});
 		registerPipelineRoutes(app);
 		return Promise.resolve(
 			app.request(`/api/dream/tools/${capability}`, {

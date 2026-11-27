@@ -21,6 +21,7 @@ import {
 	updateBoardThread,
 } from "../board";
 import { logger } from "../logger";
+import { principalMessageReadScope } from "../auth/message-read-scope";
 import { openBoundedSse } from "../sse-stream.js";
 import { authConfig, authCrossAgentMessageLimiter } from "./state";
 import {
@@ -98,6 +99,8 @@ async function resolveAuthor(
 		value: {
 			viewer: await resolveBoardViewer(scoped.agentId),
 			author: {
+				principalAuthor: c.get("author"),
+				messageReadScope: await principalMessageReadScope(c.get("principal"), Boolean(c.get("organization"))),
 				agentId: scoped.agentId,
 				sessionKey: identity.sessionKey,
 				harness: parseOptionalString(payload?.harness),

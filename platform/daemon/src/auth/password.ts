@@ -1,7 +1,7 @@
 import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 
 const PASSWORD_HASH_PREFIX = "pbkdf2-sha256";
-const DEFAULT_ITERATIONS = 210_000;
+const DEFAULT_ITERATIONS = 600_000;
 const KEY_LENGTH = 32;
 const SALT_LENGTH = 16;
 

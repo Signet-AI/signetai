@@ -2,14 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeCrossAgentFixture, createAgentMessage } from "./__tests__/cross-agent-fixture";
+import { acknowledgeAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "./cross-agent";
 import {
-	acknowledgeAgentMessage,
-	createAgentMessage,
-	resetCrossAgentStateForTest,
-	upsertAgentPresence,
-} from "./cross-agent";
-import {
-	WAKE_RATE_LIMIT_PER_HOUR,
 	activeWakeWaiterCount,
 	claimDirectMessageWakes,
 	consumeSessionEndWake,
@@ -17,9 +12,10 @@ import {
 	resetDirectMessageWakeStateForTest,
 	setWakeHistoryCapForTest,
 	setWakeWaiterCapForTest,
+	WAKE_RATE_LIMIT_PER_HOUR,
 	waitForDirectMessageWake,
 } from "./cross-agent-wake";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { initDbAccessor } from "./db-accessor";
 import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 
 let tempDir = "";
@@ -32,7 +28,7 @@ beforeEach(() => {
 afterEach(async () => {
 	resetDirectMessageWakeStateForTest();
 	resetCrossAgentStateForTest();
-	await closeDbAccessor();
+	await closeCrossAgentFixture();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -47,6 +43,7 @@ describe("direct message wake", () => {
 	it("wakes a waiting session when a direct message arrives and records one durable claim", async () => {
 		upsertAgentPresence({ sessionKey: "beta-1", agentId: "beta", harness: "claude-code" });
 		const pending = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "beta",
 			sessionKey: "beta-1",
 			harness: "claude-code",
@@ -76,10 +73,22 @@ describe("direct message wake", () => {
 	it("claims backlog immediately and never wakes for the same message twice", async () => {
 		const message = createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "queued while idle" });
 
-		const first = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 });
+		const first = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(first.wake).toBe(true);
 
-		const second = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b2", harness: "pi", waitMs: 0 });
+		const second = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b2",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(second).toEqual({ wake: false, reason: "timeout" });
 		expect((await wakeRows()).map((row) => row.message_id)).toEqual([message.id]);
 	});
@@ -87,25 +96,48 @@ describe("direct message wake", () => {
 	it("does not wake for broadcasts, acknowledged messages, or the sender's own session", async () => {
 		createAgentMessage({ fromAgentId: "alpha", broadcast: true, content: "broadcast" });
 		const acked = createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "already handled" });
-		acknowledgeAgentMessage({ messageId: acked.id, agentId: "beta" });
+		acknowledgeAgentMessage({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			messageId: acked.id,
+			agentId: "beta",
+		});
 		createAgentMessage({ fromAgentId: "beta", fromSessionKey: "b1", toAgentId: "beta", content: "note to self" });
 
-		const result = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 });
+		const result = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(result).toEqual({ wake: false, reason: "timeout" });
 
-		const other = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b2", harness: "pi", waitMs: 0 });
+		const other = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b2",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(other.wake).toBe(true);
 	});
 
 	it("keeps waiters for two agents that share a session key separate", async () => {
 		upsertAgentPresence({ sessionKey: "shared", agentId: "beta", harness: "pi" });
 		const alphaWait = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "alpha",
 			sessionKey: "shared",
 			harness: "pi",
 			waitMs: 1_500,
 		});
-		const betaWait = waitForDirectMessageWake({ agentId: "beta", sessionKey: "shared", harness: "pi", waitMs: 1_500 });
+		const betaWait = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "shared",
+			harness: "pi",
+			waitMs: 1_500,
+		});
 		await Bun.sleep(30);
 		const message = createAgentMessage({
 			fromAgentId: "gamma",
@@ -124,8 +156,20 @@ describe("direct message wake", () => {
 		upsertAgentPresence({ sessionKey: "b2", agentId: "beta", harness: "hermes-agent" });
 		const message = createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b2", content: "for b2 only" });
 
-		expect(await claimDirectMessageWakes({ agentId: "beta", sessionKey: "b1", harness: "hermes-agent" })).toEqual([]);
-		const claimed = await claimDirectMessageWakes({ agentId: "beta", sessionKey: "b2", harness: "hermes-agent" });
+		expect(
+			await claimDirectMessageWakes({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				agentId: "beta",
+				sessionKey: "b1",
+				harness: "hermes-agent",
+			}),
+		).toEqual([]);
+		const claimed = await claimDirectMessageWakes({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b2",
+			harness: "hermes-agent",
+		});
 		expect(claimed.map((item) => item.id)).toEqual([message.id]);
 	});
 
@@ -133,9 +177,26 @@ describe("direct message wake", () => {
 		upsertAgentPresence({ sessionKey: "old", agentId: "beta", harness: "pi" });
 		await Bun.sleep(5);
 		upsertAgentPresence({ sessionKey: "new", agentId: "beta", harness: "pi" });
-		await claimDirectMessageWakes({ agentId: "beta", sessionKey: "warmup", harness: "pi" });
-		const older = waitForDirectMessageWake({ agentId: "beta", sessionKey: "old", harness: "pi", waitMs: 1_500 });
-		const newer = waitForDirectMessageWake({ agentId: "beta", sessionKey: "new", harness: "pi", waitMs: 1_500 });
+		await claimDirectMessageWakes({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "warmup",
+			harness: "pi",
+		});
+		const older = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "old",
+			harness: "pi",
+			waitMs: 1_500,
+		});
+		const newer = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "new",
+			harness: "pi",
+			waitMs: 1_500,
+		});
 		await Bun.sleep(300);
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "pick one" });
 
@@ -149,6 +210,7 @@ describe("direct message wake", () => {
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "for any beta session" });
 		const direct = createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: "for b1" });
 		const claimed = await claimDirectMessageWakes({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "beta",
 			sessionKey: "b1",
 			harness: "pi",
@@ -159,8 +221,20 @@ describe("direct message wake", () => {
 
 	it("releases a claim when the waiter finished before the claim committed", async () => {
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "racing" });
-		const first = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 5_000 });
-		const second = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 5_000 });
+		const first = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 5_000,
+		});
+		const second = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 5_000,
+		});
 		const results = await Promise.all([first, second]);
 		const woke = results.filter((result) => result.wake);
 		expect(woke).toHaveLength(1);
@@ -178,6 +252,7 @@ describe("direct message wake", () => {
 		});
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "from someone else" });
 		const claimed = await claimDirectMessageWakes({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "beta",
 			sessionKey: "b-old",
 			harness: "pi",
@@ -188,9 +263,21 @@ describe("direct message wake", () => {
 
 	it("rejects new waiters past the global cap", async () => {
 		setWakeWaiterCapForTest(1);
-		const first = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 2_000 });
+		const first = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 2_000,
+		});
 		await Bun.sleep(20);
-		const second = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b2", harness: "pi", waitMs: 0 });
+		const second = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b2",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(second).toEqual({ wake: false, reason: "rate_limited", retryAfterMs: 30_000 });
 		resetDirectMessageWakeStateForTest();
 		expect((await first).wake).toBe(false);
@@ -202,8 +289,18 @@ describe("direct message wake", () => {
 			{ length: 12 },
 			(_, index) => createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: `m${index}` }).id,
 		);
-		await claimDirectMessageWakes({ agentId: "beta", sessionKey: "b1", harness: "pi" });
-		await claimDirectMessageWakes({ agentId: "beta", sessionKey: "b1", harness: "pi" });
+		await claimDirectMessageWakes({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+		});
+		await claimDirectMessageWakes({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+		});
 		expect(await wakeRows()).toHaveLength(12);
 		expect(await releaseDirectMessageWakes({ agentId: "beta", sessionKey: "b1", messageIds: ids })).toBe(12);
 		expect(await wakeRows()).toHaveLength(0);
@@ -211,6 +308,7 @@ describe("direct message wake", () => {
 
 	it("supersedes an earlier waiter for the same session", async () => {
 		const first = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "beta",
 			sessionKey: "b1",
 			harness: "claude-code",
@@ -218,6 +316,7 @@ describe("direct message wake", () => {
 		});
 		await Bun.sleep(20);
 		const second = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "beta",
 			sessionKey: "b1",
 			harness: "claude-code",
@@ -230,6 +329,7 @@ describe("direct message wake", () => {
 	it("ends the wait when the caller aborts", async () => {
 		const controller = new AbortController();
 		const pending = waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
 			agentId: "beta",
 			sessionKey: "b1",
 			harness: "pi",
@@ -246,11 +346,23 @@ describe("direct message wake", () => {
 		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
 		for (let index = 0; index < WAKE_RATE_LIMIT_PER_HOUR; index++) {
 			createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: `ping ${index}` });
-			const result = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 });
+			const result = await waitForDirectMessageWake({
+				readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+				agentId: "beta",
+				sessionKey: "b1",
+				harness: "pi",
+				waitMs: 0,
+			});
 			expect(result.wake).toBe(true);
 		}
 		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: "one too many" });
-		const limited = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 });
+		const limited = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(limited.wake).toBe(false);
 		if (limited.wake) throw new Error("expected rate limit");
 		expect(limited.reason).toBe("rate_limited");
@@ -260,7 +372,13 @@ describe("direct message wake", () => {
 
 	it("refunds only released wake batches, including partial and out-of-order releases", async () => {
 		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
-		const input = { agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 };
+		const input = {
+			readScope: { reach: { kind: "all" as const }, compartments: "all" as const, projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 0,
+		};
 		const batches: string[][] = [];
 		for (let index = 0; index < WAKE_RATE_LIMIT_PER_HOUR; index++) {
 			for (let part = 0; part < 2; part++) {
@@ -298,7 +416,13 @@ describe("direct message wake", () => {
 	it("keeps a limited session's wake history when the tracked-session table is full", async () => {
 		setWakeHistoryCapForTest(2);
 		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
-		const limitedInput = { agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 };
+		const limitedInput = {
+			readScope: { reach: { kind: "all" as const }, compartments: "all" as const, projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 0,
+		};
 		for (let index = 0; index < WAKE_RATE_LIMIT_PER_HOUR; index++) {
 			createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: `ping ${index}` });
 			expect((await waitForDirectMessageWake(limitedInput)).wake).toBe(true);
@@ -307,8 +431,20 @@ describe("direct message wake", () => {
 			upsertAgentPresence({ sessionKey, agentId: "beta", harness: "pi" });
 			createAgentMessage({ fromAgentId: "alpha", toSessionKey: sessionKey, content: `for ${sessionKey}` });
 		}
-		expect((await waitForDirectMessageWake({ ...limitedInput, sessionKey: "b2" })).wake).toBe(true);
-		const full = await waitForDirectMessageWake({ ...limitedInput, sessionKey: "b3" });
+		expect(
+			(
+				await waitForDirectMessageWake({
+					readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+					...limitedInput,
+					sessionKey: "b2",
+				})
+			).wake,
+		).toBe(true);
+		const full = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			...limitedInput,
+			sessionKey: "b3",
+		});
 		expect(full.wake).toBe(false);
 		if (full.wake) throw new Error("expected tracked-session capacity refusal");
 		expect(full.reason).toBe("rate_limited");
@@ -322,7 +458,13 @@ describe("direct message wake", () => {
 		setWakeHistoryCapForTest(2);
 		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "codex" });
 		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: "ping" });
-		const input = { agentId: "beta", sessionKey: "b1", harness: "codex", waitMs: 0 };
+		const input = {
+			readScope: { reach: { kind: "all" as const }, compartments: "all" as const, projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "codex",
+			waitMs: 0,
+		};
 		expect((await waitForDirectMessageWake(input)).wake).toBe(true);
 		expect(consumeSessionEndWake("beta", "b1")).toBe(true);
 		expect(consumeSessionEndWake("beta", "b1")).toBe(false);
@@ -336,7 +478,13 @@ describe("direct message wake", () => {
 		const start = performance.now();
 		try {
 			upsertAgentPresence({ sessionKey: "clock-beta", agentId: "beta", harness: "pi" });
-			const input = { agentId: "beta", sessionKey: "clock-beta", harness: "pi", waitMs: 0 };
+			const input = {
+				readScope: { reach: { kind: "all" as const }, compartments: "all" as const, projects: null },
+				agentId: "beta",
+				sessionKey: "clock-beta",
+				harness: "pi",
+				waitMs: 0,
+			};
 			for (let i = 0; i < WAKE_RATE_LIMIT_PER_HOUR; i++) {
 				createAgentMessage({ fromAgentId: "alpha", toSessionKey: "clock-beta", content: `ping ${i}` });
 				expect((await waitForDirectMessageWake(input)).wake).toBe(true);
@@ -357,7 +505,13 @@ describe("direct message wake", () => {
 		const inputs = ["one", "two", "three"].map((sessionKey) => {
 			upsertAgentPresence({ sessionKey, agentId: "beta", harness: "pi" });
 			createAgentMessage({ fromAgentId: "alpha", toSessionKey: sessionKey, content: "ping" });
-			return { agentId: "beta", sessionKey, harness: "pi", waitMs: 0 };
+			return {
+				readScope: { reach: { kind: "all" as const }, compartments: "all" as const, projects: null },
+				agentId: "beta",
+				sessionKey,
+				harness: "pi",
+				waitMs: 0,
+			};
 		});
 		const results = await Promise.all(inputs.map(waitForDirectMessageWake));
 		expect(results.filter((result) => result.wake)).toHaveLength(2);
@@ -369,14 +523,28 @@ describe("direct message wake", () => {
 
 	it("keeps wake claims across a daemon restart", async () => {
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "before restart" });
-		expect((await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 })).wake).toBe(
-			true,
-		);
+		expect(
+			(
+				await waitForDirectMessageWake({
+					readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+					agentId: "beta",
+					sessionKey: "b1",
+					harness: "pi",
+					waitMs: 0,
+				})
+			).wake,
+		).toBe(true);
 		resetDirectMessageWakeStateForTest();
-		await closeDbAccessor();
+		await closeCrossAgentFixture();
 		initDbAccessor(join(tempDir, "memory.db"), { agentsDir: tempDir });
 
-		const after = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 });
+		const after = await waitForDirectMessageWake({
+			readScope: { reach: { kind: "all" }, compartments: "all", projects: null },
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			waitMs: 0,
+		});
 		expect(after).toEqual({ wake: false, reason: "timeout" });
 	});
 });

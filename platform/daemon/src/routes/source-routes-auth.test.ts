@@ -12,7 +12,7 @@ const loopback = { incoming: { socket: { remoteAddress: "127.0.0.1" } } };
 let agentsDir: string;
 let secretPath: string;
 let appFactory: typeof import("hono").Hono;
-let createAuthMiddleware: typeof import("../auth").createAuthMiddleware;
+let createIdentityMiddleware: typeof import("../auth/identity-middleware").createIdentityMiddleware;
 let createToken: typeof import("../auth").createToken;
 let registerImportRoutes: typeof import("./import-routes").registerImportRoutes;
 let registerSourcesRoutes: typeof import("./sources-routes").registerSourcesRoutes;
@@ -31,7 +31,7 @@ function writeAuthConfig(mode: "local" | "team"): void {
 function teamApp(): Hono {
 	if (state.authConfig.mode === "team" && !state.authSecret) throw new Error("expected auth secret in team mode");
 	const app = new appFactory();
-	app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
+	app.use("*", createIdentityMiddleware(state.authConfig, state.authSecret));
 	registerSourcesRoutes(app, { agentsDir });
 	registerImportRoutes(app, {
 		durableImportAdmission: {
@@ -67,7 +67,8 @@ beforeAll(async () => {
 	process.env.SIGNET_PATH = agentsDir;
 	process.env.SIGNET_AGENT_ID = "agent-a";
 	appFactory = (await import("hono")).Hono;
-	({ createAuthMiddleware, createToken } = await import("../auth"));
+	({ createToken } = await import("../auth"));
+	({ createIdentityMiddleware } = await import("../auth/identity-middleware"));
 	({ registerImportRoutes } = await import("./import-routes"));
 	({ registerSourcesRoutes } = await import("./sources-routes"));
 	({ initDbAccessor, closeDbAccessor } = await import("../db-accessor"));

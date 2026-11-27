@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -1508,7 +1509,8 @@ describe("collaboration tools", () => {
 			port: 0,
 			async fetch(req) {
 				const url = new URL(req.url);
-				if (url.pathname === "/health") return new Response(null, { status: 200 });
+				if (url.pathname === "/health" || (url.pathname === "/" && req.method === "HEAD"))
+					return new Response(null, { status: 200 });
 				const text = req.method === "GET" ? "" : await req.text();
 				seen.push({
 					method: req.method,

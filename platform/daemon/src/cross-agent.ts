@@ -1,5 +1,6 @@
+import type { ReadScope } from "./read-scope";
 import { randomUUID } from "node:crypto";
-import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import type { WriteAuthor } from "./auth/audit-owner";
 import {
 	type AgentPresenceContext,
 	type AgentPresenceContextPatch,
@@ -7,9 +8,12 @@ import {
 	cloneContext,
 	mergePresenceContext,
 } from "./cross-agent-context";
+import { agentMessageReadPredicate, persistAgentMessage } from "./cross-agent-message-owner";
+import { type DbAccessor, getDbAccessor, hasDbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import { ownerRun } from "./db-owner-sql";
-export { relayMessageViaAcp, type AcpRelayRequest, type AcpRelayResult } from "./cross-agent-acp";
+
+export { type AcpRelayRequest, type AcpRelayResult, relayMessageViaAcp } from "./cross-agent-acp";
 
 export type AgentMessageType = "assist_request" | "decision_update" | "info" | "question";
 
@@ -120,6 +124,7 @@ export interface CrossAgentMessageRow {
 }
 
 export interface CreateAgentMessageInput {
+	readonly author?: WriteAuthor;
 	readonly fromAgentId?: string;
 	readonly fromSessionKey?: string;
 	readonly toAgentId?: string;
@@ -138,6 +143,8 @@ export interface CreateAgentMessageInput {
 }
 
 export interface ListAgentMessageOptions {
+	readonly readScope: ReadScope;
+	readonly messageId?: string;
 	readonly allAgents?: boolean;
 	readonly agentId?: string;
 	readonly sessionKey?: string;
@@ -161,6 +168,7 @@ export interface AgentMessagePage {
 }
 
 export interface AcknowledgeAgentMessageInput {
+	readonly readScope: ReadScope;
 	readonly messageId: string;
 	readonly agentId?: string;
 	readonly sessionKey?: string;
@@ -180,12 +188,7 @@ export class AgentMessageNotFoundError extends Error {
 	}
 }
 
-export class AgentMessageCapacityError extends Error {
-	constructor() {
-		super("Cross-agent message capacity reached; wait for retention cleanup before retrying");
-		this.name = "AgentMessageCapacityError";
-	}
-}
+export { AgentMessageCapacityError } from "./cross-agent-message-owner";
 
 export interface AgentPresenceEvent {
 	readonly type: "presence";
@@ -208,7 +211,6 @@ const AGENT_MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MESSAGE_LIMIT = 100;
 const MAX_MESSAGE_LIMIT = 500;
 const MAX_MESSAGE_CONTENT_CHARS = 65_536;
-const MAX_DURABLE_MESSAGES = 10_000;
 const ACP_RELAY_LEASE_MS = 150_000;
 const ACP_PENDING_GRACE_MS = 30_000;
 const ACP_MAX_RETRY_ATTEMPTS = 3;
@@ -629,8 +631,15 @@ function buildMessageQuery(options: ListAgentMessageOptions, now: string): Messa
 	}
 	if (visibility.length === 0) return null;
 
+	if (!options.readScope) throw new Error("read_scope_required");
+	const predicate = agentMessageReadPredicate(options.readScope);
 	const filters = ["m.expires_at > ?", `(${visibility.join(" OR ")})`];
-	const args: unknown[] = [now, ...visibilityArgs];
+	const args: unknown[] = [now, ...visibilityArgs, ...predicate.args];
+	filters.push(`(1=1 ${predicate.sql})`);
+	if (options.messageId) {
+		filters.push("m.id=?");
+		args.push(options.messageId);
+	}
 	const sinceMs = parseIsoTimestamp(options.since);
 	if (sinceMs !== null) {
 		filters.push("m.created_at >= ?");
@@ -670,7 +679,7 @@ function unreadCount(db: ReadDb, options: ListAgentMessageOptions, now: string):
 	return query ? countRows(db, query) : 0;
 }
 
-export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage {
+export function buildAgentMessageRow(input: CreateAgentMessageInput): CrossAgentMessageRow {
 	prunePresence();
 	const content = normalizeText(input.content);
 	if (!content) throw new Error("content is required");
@@ -726,56 +735,18 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 		acknowledged_at: null,
 	};
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-		pruneExpiredMessages(db, now);
-		const countRow = db.prepare("SELECT COUNT(*) AS count FROM cross_agent_messages").get() as
-			| { count: number }
-			| null
-			| undefined;
-		if ((countRow?.count ?? 0) >= MAX_DURABLE_MESSAGES) throw new AgentMessageCapacityError();
-		db.prepare(
-			`INSERT INTO cross_agent_messages (
-				id, from_agent_id, from_session_key, to_agent_id, to_session_key,
-				to_session_agent_id, broadcast, message_type, content, delivery_path,
-				delivery_status, delivery_state, delivery_attempt_id, delivery_attempts,
-				delivery_lease_token, delivery_lease_expires_at, delivery_attempt_started_at,
-				delivery_updated_at, delivery_error, delivery_receipt_json, acp_base_url,
-				acp_target_agent_name, acp_timeout_ms, acp_metadata_json, created_at, expires_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			row.id,
-			row.from_agent_id,
-			row.from_session_key,
-			row.to_agent_id,
-			row.to_session_key,
-			row.to_session_agent_id,
-			row.broadcast,
-			row.message_type,
-			row.content,
-			row.delivery_path,
-			row.delivery_status,
-			row.delivery_state,
-			row.delivery_attempt_id,
-			row.delivery_attempts,
-			row.delivery_lease_token,
-			row.delivery_lease_expires_at,
-			row.delivery_attempt_started_at,
-			row.delivery_updated_at,
-			row.delivery_error,
-			row.delivery_receipt_json,
-			row.acp_base_url,
-			row.acp_target_agent_name,
-			row.acp_timeout_ms,
-			row.acp_metadata_json,
-			row.created_at,
-			row.expires_at,
-		);
-	}, "db:cross-agent.message.create");
-
+	return row;
+}
+export function publishAgentMessage(row: CrossAgentMessageRow): AgentMessage {
 	const out = rowToAgentMessage(row);
-	emit({ type: "message", message: out, timestamp: now });
+	emit({ type: "message", message: out, timestamp: row.created_at });
 	return out;
+}
+export const createAgentMessage = createAgentMessageAsync;
+export async function createAgentMessageAsync(input: CreateAgentMessageInput): Promise<AgentMessage> {
+	const row = buildAgentMessageRow(input);
+	await persistAgentMessage(row, input.author);
+	return publishAgentMessage(row);
 }
 
 export class AgentMessageDeliveryLeaseError extends Error {
@@ -800,12 +771,12 @@ export interface AcpDeliveryAttempt {
 	};
 }
 
-function readMessageRow(db: ReadDb | WriteDb, messageId: string): CrossAgentMessageRow | null {
+function readMessageRow(db: ReadDb | WriteDb, messageId: string, scope?: ReadScope): CrossAgentMessageRow | null {
+	const predicate = scope ? agentMessageReadPredicate(scope) : { sql: "", args: [] };
 	return (
-		(db.prepare("SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ?").get(messageId) as
-			| CrossAgentMessageRow
-			| null
-			| undefined) ?? null
+		(db
+			.prepare(`SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ? ${predicate.sql}`)
+			.get(messageId, ...predicate.args) as CrossAgentMessageRow | null | undefined) ?? null
 	);
 }
 
@@ -834,6 +805,7 @@ function buildAcpAttempt(row: CrossAgentMessageRow): AcpDeliveryAttempt {
 }
 
 export function claimAcpMessageDelivery(input: {
+	readonly readScope: ReadScope;
 	readonly messageId: string;
 	readonly agentId?: string;
 	readonly retryIndeterminate?: boolean;
@@ -848,29 +820,41 @@ export function claimAcpMessageDelivery(input: {
 	const leaseToken = randomUUID();
 	const allowedState = input.retryIndeterminate ? "indeterminate" : "pending";
 	let attempt: AcpDeliveryAttempt | null = null;
+	if (!input.readScope) throw new Error("read_scope_required");
+	const predicate = agentMessageReadPredicate(input.readScope);
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		const result = db
 			.prepare(
-				`UPDATE cross_agent_messages
+				`UPDATE cross_agent_messages AS m
 				 SET delivery_state = 'in_flight', delivery_status = 'queued',
 				     delivery_attempts = delivery_attempts + 1,
 				     delivery_lease_token = ?, delivery_lease_expires_at = ?,
 				     delivery_attempt_started_at = ?, delivery_updated_at = ?
 				 WHERE id = ? AND delivery_path = 'acp'
 				   AND delivery_state = ? AND delivery_attempts < ?
-				   AND (delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?)`,
+				   AND (delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?) ${predicate.sql}`,
 			)
-			.run(leaseToken, leaseExpiresAt, now, now, messageId, allowedState, ACP_MAX_RETRY_ATTEMPTS, now);
+			.run(
+				leaseToken,
+				leaseExpiresAt,
+				now,
+				now,
+				messageId,
+				allowedState,
+				ACP_MAX_RETRY_ATTEMPTS,
+				now,
+				...predicate.args,
+			);
 		if (result.changes !== 1) {
-			const row = readMessageRow(db, messageId);
+			const row = readMessageRow(db, messageId, input.readScope);
 			if (row == null) throw new AgentMessageNotFoundError(messageId);
 			if (row.delivery_state === "in_flight") throw new Error("ACP delivery is already active");
 			if (row.delivery_attempts >= ACP_MAX_RETRY_ATTEMPTS) throw new Error("ACP retry limit reached");
 			throw new Error(`ACP delivery is not ${allowedState}`);
 		}
-		const row = readMessageRow(db, messageId);
+		const row = readMessageRow(db, messageId, input.readScope);
 		if (row == null) throw new AgentMessageNotFoundError(messageId);
 		if (agentId && row.from_agent_id !== agentId) throw new AgentMessageNotFoundError(messageId);
 		attempt = buildAcpAttempt(row);
@@ -895,7 +879,7 @@ export function completeAcpMessageDelivery(
 	const now = new Date().toISOString();
 	let updated: AgentMessage | null = null;
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		const result = db
 			.prepare(
 				`UPDATE cross_agent_messages
@@ -938,7 +922,7 @@ export function updateAgentMessageDelivery(
 		input.status === "delivered" ? "delivered" : input.status === "failed" ? "failed" : "pending";
 	const now = new Date().toISOString();
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		db.prepare(
 			`UPDATE cross_agent_messages
 			 SET delivery_status = ?, delivery_state = ?, delivery_error = ?,
@@ -994,7 +978,7 @@ export async function reconcileAcpDeliveries(
 	return result.changes;
 }
 
-export function listAgentMessagePage(options: ListAgentMessageOptions = {}): AgentMessagePage {
+export function listAgentMessagePage(options: ListAgentMessageOptions): AgentMessagePage {
 	const now = new Date().toISOString();
 	const limit = clampLimit(options.limit);
 	const offset = clampOffset(options.offset);
@@ -1004,7 +988,7 @@ export function listAgentMessagePage(options: ListAgentMessageOptions = {}): Age
 	}
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+	return getDbAccessor().withReadDb((db: ReadDb) => {
 		const total = countRows(db, query);
 		const unread = options.unreadOnly === true ? total : unreadCount(db, options, now);
 		const order = options.order === "asc" ? "ASC" : "DESC";
@@ -1031,7 +1015,7 @@ export function listAgentMessagePage(options: ListAgentMessageOptions = {}): Age
 	}, "db:cross-agent.message-page.read");
 }
 
-export function listAgentMessages(options: ListAgentMessageOptions = {}): AgentMessage[] {
+export function listAgentMessages(options: ListAgentMessageOptions): AgentMessage[] {
 	return [...listAgentMessagePage(options).items];
 }
 
@@ -1043,10 +1027,11 @@ export function acknowledgeAgentMessage(input: AcknowledgeAgentMessageInput): Ac
 	const now = new Date().toISOString();
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return getDbAccessor().withWriteTx((db: WriteDb) => {
 		pruneExpiredMessages(db, now);
 		const query = buildMessageQuery(
 			{
+				readScope: input.readScope,
 				agentId,
 				sessionKey,
 				includeBroadcast: true,
@@ -1116,7 +1101,7 @@ export function resetCrossAgentStateForTest(): void {
 	subscribers.clear();
 	if (!hasDbAccessor()) return;
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	getDbAccessor().withWriteTx((db: WriteDb) => {
 		db.prepare("DELETE FROM cross_agent_message_wakes").run();
 		db.prepare("DELETE FROM cross_agent_message_receipts").run();
 		db.prepare("DELETE FROM cross_agent_messages").run();

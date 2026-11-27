@@ -275,6 +275,13 @@ test("rollback requires all packages and a public release before moving latest b
 	expect(value.run("Publish npm packages").exitCode).toBe(0);
 	expect(value.run("rollback", rollback).exitCode).not.toBe(0);
 	expect(value.read().calls.filter((call) => call[1] === "dist-tag")).toHaveLength(0);
+	const published = value.read();
+	const missingSdk = { ...published.versions };
+	delete missingSdk["@signetai/sdk"];
+	value.write({ ...published, public: true, versions: missingSdk });
+	expect(value.run("rollback", rollback).exitCode).not.toBe(0);
+	expect(value.read().calls.filter((call) => call[1] === "dist-tag")).toHaveLength(0);
+	value.write(published);
 	value.write({
 		...value.read(),
 		public: true,

@@ -1,7 +1,10 @@
-import { redactCredentials } from "@signet/core";
+import { type ReadScope, redactCredentials } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
 import { sanitizeFtsQuery } from "./memory-search";
+import { derivedScopeSql, evidenceScopeSql } from "./read-scope-tables";
+
+const transcriptColumns = { memory: null, session: "session_key", source: "source_id" } as const;
 
 const OMP_UUID_LIKE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}[:-][0-9a-f]{4}[:-][0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -74,7 +77,11 @@ function explicitParentSessionKey(req: SubagentContextRequest): string | undefin
 	);
 }
 
-export function resolveParentSession(db: ReadDb, req: SubagentContextRequest): ParentSessionRef | null {
+export function resolveParentSession(
+	db: ReadDb,
+	req: SubagentContextRequest,
+	scope: ReadScope,
+): ParentSessionRef | null {
 	const current = cleanString(req.sessionKey);
 	const explicit = explicitParentSessionKey(req);
 	if (explicit && explicit !== current) {
@@ -91,6 +98,7 @@ export function resolveParentSession(db: ReadDb, req: SubagentContextRequest): P
 	if (!tableExists(db, "session_transcripts")) return null;
 
 	const seen = timestampExpr(db, "st");
+	const readable = evidenceScopeSql("st", scope, transcriptColumns);
 	const row = db
 		.prepare(
 			`SELECT st.session_key
@@ -98,11 +106,11 @@ export function resolveParentSession(db: ReadDb, req: SubagentContextRequest): P
 			 WHERE st.agent_id = ?
 			   AND st.harness = ?
 			   AND st.project = ?
-			   AND st.session_key != ?
+			   AND st.session_key != ?${readable.sql}
 			 ORDER BY ${seen} DESC, st.created_at DESC, st.rowid DESC
 			 LIMIT 1`,
 		)
-		.get(req.agentId, req.harness, req.project, current) as { session_key: string } | undefined;
+		.get(req.agentId, req.harness, req.project, current, ...readable.args) as { session_key: string } | undefined;
 
 	return row?.session_key ? { sessionKey: row.session_key, agentId: req.agentId, source: "claude-code" } : null;
 }
@@ -121,26 +129,24 @@ function parseJsonStringArray(raw: string | null | undefined): string[] {
 function latestCheckpoint(
 	db: ReadDb,
 	parent: ParentSessionRef,
+	scope: ReadScope,
 ): {
 	readonly digest: string;
 	readonly focal_entity_ids: string | null;
 	readonly focal_entity_names: string | null;
 } | null {
 	if (!tableExists(db, "session_checkpoints")) return null;
-	const hasAgentId = columnExists(db, "session_checkpoints", "agent_id");
-	if (!hasAgentId && parent.agentId !== "default") return null;
-	const where = hasAgentId ? "session_key = ? AND agent_id = ?" : "session_key = ?";
-	const args = hasAgentId ? [parent.sessionKey, parent.agentId] : [parent.sessionKey];
+	const readable = evidenceScopeSql("cp", scope, { checkpoint: true });
 	return (
 		(db
 			.prepare(
-				`SELECT digest, focal_entity_ids, focal_entity_names
-				 FROM session_checkpoints
-				 WHERE ${where}
-				 ORDER BY created_at DESC, rowid DESC
+				`SELECT cp.digest, cp.focal_entity_ids, cp.focal_entity_names
+				 FROM session_checkpoints cp
+				 WHERE cp.session_key = ? AND cp.agent_id = ?${readable.sql}
+				 ORDER BY cp.created_at DESC, cp.rowid DESC
 				 LIMIT 1`,
 			)
-			.get(...args) as
+			.get(parent.sessionKey, parent.agentId, ...readable.args) as
 			| {
 					readonly digest: string;
 					readonly focal_entity_ids: string | null;
@@ -150,11 +156,14 @@ function latestCheckpoint(
 	);
 }
 
-function transcriptTail(db: ReadDb, parent: ParentSessionRef, tailChars: number): string {
+function transcriptTail(db: ReadDb, parent: ParentSessionRef, tailChars: number, scope: ReadScope): string {
 	if (tailChars <= 0 || !tableExists(db, "session_transcripts")) return "";
+	const readable = evidenceScopeSql("st", scope, transcriptColumns);
 	const row = db
-		.prepare("SELECT content FROM session_transcripts WHERE agent_id = ? AND session_key = ? LIMIT 1")
-		.get(parent.agentId, parent.sessionKey) as { readonly content: string } | undefined;
+		.prepare(
+			`SELECT st.content FROM session_transcripts st WHERE st.agent_id = ? AND st.session_key = ?${readable.sql} LIMIT 1`,
+		)
+		.get(parent.agentId, parent.sessionKey, ...readable.args) as { readonly content: string } | undefined;
 	const trimmed = row?.content?.trim();
 	if (!trimmed) return "";
 	const content = redactCredentials(trimmed);
@@ -166,6 +175,7 @@ function activeConstraints(
 	agentId: string,
 	entityIds: readonly string[],
 	entityNames: readonly string[],
+	scope: ReadScope,
 ): Array<{ readonly entityName: string; readonly content: string }> {
 	if (entityIds.length === 0 && entityNames.length === 0) return [];
 	if (!tableExists(db, "entities") || !tableExists(db, "entity_aspects") || !tableExists(db, "entity_attributes")) {
@@ -184,6 +194,9 @@ function activeConstraints(
 		args.push(...entityNames, ...entityNames);
 	}
 
+	const entity = derivedScopeSql("e", scope, { memory: null, session: null, source: "source_id" });
+	const aspect = derivedScopeSql("asp", scope, { memory: null, session: null, source: null });
+	const attribute = derivedScopeSql("ea", scope, { memory: "memory_id", session: null, source: "source_id" });
 	return db
 		.prepare(
 			`SELECT e.name AS entityName, ea.content
@@ -193,27 +206,31 @@ function activeConstraints(
 			 WHERE e.agent_id = ?
 			   AND (${clauses.join(" OR ")})
 			   AND ea.kind = 'constraint'
-			   AND COALESCE(ea.status, 'active') = 'active'
+			   AND COALESCE(ea.status, 'active') = 'active'${entity.sql}${aspect.sql}${attribute.sql}
 			 ORDER BY COALESCE(ea.importance, 0) DESC, ea.updated_at DESC
 			 LIMIT 8`,
 		)
-		.all(...args) as Array<{ readonly entityName: string; readonly content: string }>;
+		.all(...args, ...entity.args, ...aspect.args, ...attribute.args) as Array<{
+		readonly entityName: string;
+		readonly content: string;
+	}>;
 }
 
 export function assembleInheritedContextBlock(
 	db: ReadDb,
 	parent: ParentSessionRef,
 	cfg: SubagentContextConfig,
+	scope: ReadScope,
 ): string | null {
 	if (!cfg.inheritContext) return null;
 
-	const checkpoint = latestCheckpoint(db, parent);
-	const tail = transcriptTail(db, parent, Math.max(0, Math.trunc(cfg.tailChars))).trim();
+	const checkpoint = latestCheckpoint(db, parent, scope);
+	const tail = transcriptTail(db, parent, Math.max(0, Math.trunc(cfg.tailChars)), scope).trim();
 	if (!checkpoint && tail.length === 0) return null;
 
 	const focalEntityIds = parseJsonStringArray(checkpoint?.focal_entity_ids);
 	const focalEntityNames = parseJsonStringArray(checkpoint?.focal_entity_names);
-	const constraints = activeConstraints(db, parent.agentId, focalEntityIds, focalEntityNames);
+	const constraints = activeConstraints(db, parent.agentId, focalEntityIds, focalEntityNames, scope);
 	const lines = ["\n## Inherited from Parent Session\n", `Parent session: ${parent.sessionKey}`];
 
 	if (checkpoint?.digest) {

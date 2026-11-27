@@ -1,7 +1,8 @@
+import { compartmentForWrite } from "@signet/core";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import { normalizeAndHashContent } from "../content-normalization";
-import type { DbAccessor, WriteDb } from "../db-accessor";
-import { syncVecInsert, vectorToBlob } from "../db-helpers";
+import { type DbAccessor, type WriteDb, prepareTypedStatement } from "../db-accessor";
+import { evidenceCompartmentInTx, syncVecInsert, vectorToBlob } from "../db-helpers";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { ownerQueryOne } from "../db-owner-maintenance";
 import type { EmbeddingFetchOptions } from "../embedding-fetch";
@@ -10,7 +11,7 @@ import type { EmbeddingRole } from "../embedding-profile";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
-import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
+import { normalizePipelineCause, type PipelineCauseFamily, recordPipelineOperation } from "../pipeline-operation";
 import { isSystemPressureHigh } from "../system-pressure";
 import { txIngestEnvelope } from "../transactions";
 import { fetchUrlContent } from "./url-fetcher";
@@ -73,6 +74,8 @@ interface MutableDocumentOperation {
 }
 
 interface DocumentRow {
+	readonly author_user_id: string | null;
+	readonly compartment_id: number | null;
 	readonly id: string;
 	readonly source_url: string | null;
 	readonly source_type: string;
@@ -86,8 +89,9 @@ interface DocumentRow {
 }
 
 function readDocumentScope(doc: DocumentRow): { agentId: string; project: string | null } {
+	if (!doc.agent_id?.trim()) throw new Error("document_agent_required");
 	return {
-		agentId: doc.agent_id.trim() || "default",
+		agentId: doc.agent_id,
 		project: doc.project?.trim() || null,
 	};
 }
@@ -156,9 +160,11 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 	).run(nextStatus, error, now, now, jobId);
 }
 
+function readStoredDocument(db: WriteDb, docId: string): DocumentRow | undefined {
+	return prepareTypedStatement<DocumentRow>(db, "SELECT * FROM documents WHERE id = ?").get(docId);
+}
 function isDocumentDeleted(db: WriteDb, docId: string): boolean {
-	const row = db.prepare("SELECT status FROM documents WHERE id = ?").get(docId) as { status: string } | undefined;
-	return row?.status === "deleted";
+	return readStoredDocument(db, docId)?.status === "deleted";
 }
 
 function updateDocumentStatus(db: WriteDb, docId: string, status: string, error?: string): void {
@@ -236,7 +242,7 @@ async function processDocument(
 				async (db) => {
 					return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
 				},
-				{ siteToken: "pipeline/document-worker.ts:235" },
+				{ siteToken: "db:pipeline.document-worker.site.236" },
 			);
 
 	if (!doc) {
@@ -363,6 +369,14 @@ async function processDocument(
 				operation.cancelled = true;
 				return;
 			}
+			const storedDocument = readStoredDocument(db, docId);
+			if (!storedDocument || storedDocument.agent_id !== documentScope.agentId)
+				throw new Error("document_scope_changed");
+			const compartment = compartmentForWrite(db, {
+				agentId: documentScope.agentId,
+				sourceId: docId,
+				parentCompartment: storedDocument.compartment_id,
+			});
 			const normalized = normalizeAndHashContent(chunkText);
 			const canStoreVector = vector !== null && isActiveEmbeddingConfig(db, embeddingCfg);
 			const existingLink = db
@@ -390,14 +404,24 @@ async function processDocument(
 					   AND visibility = 'private'
 					   AND type = 'document_chunk'
 					   AND source_type = 'document'
+					   AND compartment_id IS ?
+					   AND author_user_id IS ?
 					   AND is_deleted = 0
 					 LIMIT 1`,
 				)
-				.get(normalized.contentHash, documentScope.agentId, documentScope.project) as { id: string } | undefined;
+				.get(
+					normalized.contentHash,
+					documentScope.agentId,
+					documentScope.project,
+					compartment,
+					storedDocument.author_user_id,
+				) as { id: string } | undefined;
 			const memId = existingScopedMemory?.id ?? crypto.randomUUID();
 
 			if (!existingScopedMemory) {
 				txIngestEnvelope(db, {
+					author: { userId: storedDocument.author_user_id, credential: `document:${doc.id}` },
+					parentCompartment: compartment,
 					id: memId,
 					content: normalized.storageContent,
 					normalizedContent: normalized.normalizedContent,
@@ -435,24 +459,26 @@ async function processDocument(
 						documentId: docId,
 					});
 				} else {
-					const embId = crypto.randomUUID();
+					const compartment = evidenceCompartmentInTx(db, documentScope.agentId, [{ kind: "memory", id: memId }]);
+					const previous = db
+						.prepare(
+							"SELECT id FROM embeddings WHERE source_type='memory' AND source_id=? AND agent_id=? AND compartment_id IS ?",
+						)
+						.get(memId, documentScope.agentId, compartment);
+					const embId = typeof previous?.id === "string" ? previous.id : crypto.randomUUID();
 					const blob = vectorToBlob(vector);
 					const embeddingHash = `memory:${documentScope.agentId}:${memId}:${normalized.contentHash}`;
 					db.prepare(
 						`INSERT INTO embeddings
 						 (id, content_hash, vector, dimensions, source_type,
-						  source_id, chunk_text, created_at, agent_id)
-						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
-						 ON CONFLICT(content_hash) DO UPDATE SET
+						  source_id, chunk_text, created_at, agent_id, compartment_id)
+						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?)
+						 ON CONFLICT(id) DO UPDATE SET
 						   vector = excluded.vector,
-						   dimensions = excluded.dimensions`,
-					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId);
-					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embeddingHash) as
-						| { id: string }
-						| undefined;
-					if (actualEmbRow) {
-						syncVecInsert(db, actualEmbRow.id, vector);
-					}
+						   dimensions = excluded.dimensions,
+						   compartment_id = excluded.compartment_id`,
+					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId, compartment);
+					syncVecInsert(db, embId, vector);
 				}
 			}
 
@@ -533,7 +559,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					| undefined;
 				return row?.status ?? null;
 			},
-			{ siteToken: "pipeline/document-worker.ts:529" },
+			{ siteToken: "db:pipeline.document-worker.site.531" },
 		);
 	}
 
@@ -559,7 +585,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 								| { chunk_count?: number | null; memory_count?: number | null }
 								| undefined,
-						{ siteToken: "pipeline/document-worker.ts:557" },
+						{ siteToken: "db:pipeline.document-worker.site.559" },
 					);
 			const durableLinks = deps.ownerMaintenance
 				? await ownerQueryOne<{ count?: number | null }>(
@@ -573,7 +599,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db
 								.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?")
 								.get(job.document_id) as { count?: number | null } | undefined,
-						{ siteToken: "pipeline/document-worker.ts:571" },
+						{ siteToken: "db:pipeline.document-worker.site.573" },
 					);
 			if (durable) {
 				const accepted =
@@ -612,7 +638,8 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 	async function tick(): Promise<void> {
 		if (!running) return;
 		if (isSystemPressureHigh()) return;
-		if (!admission.acquire()) return;
+		const release = admission.tryAcquire("document-worker");
+		if (!release) return;
 
 		try {
 			const leasedAt = Date.now();
@@ -664,7 +691,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 				}
 			}
 		} finally {
-			admission.release();
+			release();
 		}
 	}
 

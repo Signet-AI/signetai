@@ -1,3 +1,4 @@
+import { configureEvidencePurgeConnection } from "@signet/core";
 import { createRequire } from "node:module";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
@@ -16,6 +17,7 @@ type WorkerMessage = {
 
 function quickCheck(dbPath: string): IntegrityCheckStatus {
 	const db = new Database(dbPath, { readonly: true });
+	configureEvidencePurgeConnection(db);
 	try {
 		const rows = db.prepare("PRAGMA quick_check").all() as Array<{ quick_check?: unknown }>;
 		const messages = rows.map((row) => String(row.quick_check ?? ""));

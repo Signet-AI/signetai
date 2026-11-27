@@ -9,6 +9,9 @@ import { registerQueueDiagnosticsRoutes } from "./queue-diagnostics";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
+		async withReadDbAsync<T>(fn: (readDb: ReadDb) => T | Promise<T>): Promise<T> {
+			return await fn(db);
+		},
 		withReadDb<T>(fn: (readDb: ReadDb) => T): T {
 			return fn(db as unknown as ReadDb);
 		},

@@ -1,257 +1,179 @@
 ---
 title: "Remote Harness Connectors"
-description: "Connect Claude Code, Codex, Pi, OpenCode, and other harnesses on one machine to a Signet daemon on another."
+description: "Sign in once and connect each harness without putting credentials in its configuration."
 ---
 
-Use remote harness connectors when Signet is running on one trusted machine and
-your agent harness runs somewhere else: a laptop, desktop, server, VM, or
-Tailscale peer.
+A harness connects to one Signet daemon. Its target and credential live in the
+Signet connector registry, not in hook commands, MCP configuration, or harness
+environment assignments. A remote connection never silently switches to the
+local daemon when the remote daemon is unavailable.
 
-The setup model is:
+At harness runtime, the registry target takes precedence over
+`SIGNET_DAEMON_URL`, then `SIGNET_HOST`/`SIGNET_PORT`, then the loopback default.
+An explicit CLI URL flag remains a manual override. Credentials associated with
+one origin are not borrowed for an override to another origin. Hermes freezes
+these inputs when its client starts; later environment changes do not retarget it.
 
-> Run one Signet daemon. Point every harness connector at it with
-> `SIGNET_DAEMON_URL` and `SIGNET_API_KEY`.
+## Sign in and connect
 
-The daemon keeps ownership of memory, sources, sessions, identity, auth, and
-policy. The connector on the remote machine is a small adapter that installs
-into the harness, forwards lifecycle events, and exposes Signet tools inside
-that harness.
-
-## What you need
-
-- A Signet daemon running on the machine that owns your Signet workspace.
-- Network reachability from the remote machine to that daemon.
-- A named Signet API key for each remote connector.
-- The target harness installed on the remote machine.
-
-Examples below use a tailnet/LAN URL such as `http://signet-home:3850`. Replace
-it with your daemon URL, for example:
-
-```text
-http://100.107.87.47:3850
-http://signet-home.tailnet:3850
-https://signet.example.com
-```
-
-Do not paste real API keys into chat, issues, logs, screenshots, or shell
-history you plan to share. The raw key is shown once when created.
-
-## 1. Prepare the Signet daemon machine
-
-On the machine that already has your Signet workspace:
+Your administrator supplies the URL of a reachable team daemon and authorizes
+your account. Use HTTPS outside a trusted private network. Install the Signet
+CLI and your harness on the client machine, then run:
 
 ```bash
-signet --version
-signet daemon status --json
-curl http://127.0.0.1:3850/health
+signet login --url https://signet.example.com
+signet whoami
+signet connect codex --agent alice
+signet connector list --json
 ```
 
-The daemon must be reachable from the remote machine, not only from localhost.
-For a trusted tailnet or private LAN, set the daemon network mode to `tailscale`
-so it binds to `0.0.0.0`:
+`login` prints a user code and opens the approval page in your browser. On a
+headless machine, add `--device-code` and open the printed URL on another device.
+Signet saves the refresh credential through its login store; it never prints it.
+Approval links must use the same origin as the selected daemon. Signet rejects
+codes outside the bounded uppercase-letter, digit, and hyphen format before
+printing them or opening a browser.
 
-```yaml
-# $SIGNET_WORKSPACE/agent.yaml
-network:
-  mode: tailscale
-```
+`connect` uses your signed-in session to request a separate device-bound key for
+the harness. The key goes in an owner-only key file. The registry records its
+path, URL, agent, and key/device identifiers, never the key itself. Unix private
+directories use `0700` and credential files use `0600`; Windows uses private ACLs.
+Restart the harness to load its integration. No second daemon or local copy of
+the remote workspace is needed.
 
-Then restart the daemon:
+Supported IDs: `claude-code`, `codex`, `forge`, `gemini`, `hermes-agent` (alias
+`hermes`), `kimi`, `muse-code`, `opencode`, `openclaw`, `oh-my-pi`, and `pi`.
+The default local daemon still works without a login:
+
+A loopback URL without a credential remains local, including an explicitly
+configured URL or registry entry. Local capture passes the transcript path to
+the daemon rather than uploading its contents. Claude session-end dispatch is
+detached: a stalled daemon does not keep the harness process alive. Dispatch
+acceptance reports `status: "dispatched"`, not confirmation that the daemon has stored the evidence.
 
 ```bash
-signet daemon restart
+signet connect claude-code
 ```
 
-You can also use an explicit environment override when you manage the daemon
-service yourself:
+## Rotate or disconnect
 
 ```bash
-SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850 signet daemon start
+signet connector rotate codex
+signet disconnect codex
 ```
 
-Check the reported bind mode:
+Reconnecting or rotating refreshes the managed integration and removes legacy
+inline Signet credentials. Rotation issues a replacement, installs the integration,
+swaps the protected key file and registry entry, and only then revokes the old key.
+A failed installation restores the saved configuration and previous credential;
+an unused newly issued key is revoked or recorded for cleanup.
+
+Disconnect uninstalls the integration, removes its registry entry and key file,
+and revokes the server-side key last. If revocation fails, local cleanup stays
+complete and a protected pending-revocation record survives. The command reports
+the pending revocation and exits nonzero; `connector doctor` retries it after you
+restore connectivity or sign in again. Already-revoked keys do not prevent cleanup.
+
+Session evidence is kept by default. To explicitly delete this harness target's
+pending and quarantined outbox entries, run `signet disconnect codex --purge-outbox`.
+Other harnesses' outboxes are untouched. If already disconnected, also provide the
+original `--url` to select the retained outbox.
+
+Never pass a key in argv or save it in a harness config. Automation that already
+holds a connector key can pipe it through `signet connect codex --api-key-stdin`.
+Signet first asks the daemon to confirm that it is a connector key bound to Codex;
+personal keys, user-session tokens, unbound keys, and other-harness keys are
+rejected without writing a key file. Ordinary `connect` provisions a new key using
+your signed-in user session.
+
+## Hermes profiles
 
 ```bash
-signet daemon status --json
+signet connect hermes-agent --profile work --agent alice
+signet connector rotate hermes-agent --profile work
+signet disconnect hermes-agent --profile work
 ```
 
-Look for `bindHost: "0.0.0.0"` and `networkMode: "tailscale"` in the daemon
-status output.
+Hermes supplies the active profile's `HERMES_HOME` to its plugin. Each non-default
+home has a separate registry partition, key file, and durable outbox. Switching
+profiles does not retarget an existing client. Profile entries appear as
+`hermes-agent.<profile-home-hash>` in listings. A profile name is not a substitute
+for the Signet agent authorized by the daemon.
 
-## 2. Choose an auth mode
-
-Use `hybrid` or `team` mode for remote connectors.
-
-```yaml
-# $SIGNET_WORKSPACE/agent.yaml
-auth:
-  mode: hybrid
-```
-
-- `hybrid` keeps local CLI/dashboard requests convenient while requiring a
-  valid bearer key from remote machines.
-- `team` requires auth for every request, including localhost.
-- `local` has no auth. Only use it on a private, trusted network while
-  testing, never on an exposed interface.
-
-Restart after changing auth:
+## Inspect and recover
 
 ```bash
-signet daemon restart
+signet connector list --json
+signet connector doctor --json
+signet auth devices
+signet auth sessions
+signet auth devices revoke <device-id>
+signet auth sessions revoke <session-id>
+signet logout
+signet logout --all
 ```
 
-Verify remote unauthenticated requests are rejected in `hybrid` or `team` mode
-from the remote machine:
+`list` reports each target, agent, validity or availability, expiry, and last-use
+metadata when your session can read it. Unavailable metadata is marked rather
+than presented as a verified last-use time.
 
-```bash
-curl -i http://signet-home:3850/api/memories
-```
+`doctor` flags leftover inline keys, unsafe key-file permissions, credential
+failures, and pending or quarantined outbox entries. It reports whether it could
+inspect unassigned legacy keys. Its configuration scan is bounded and reports
+incomplete scans; unavailable inspection is not proof that nothing is wrong.
+Doctor scans each declared configuration file and its bounded directory tree, without following symbolic links or walking the entire home directory.
+Each connector declares its configuration paths, including Claude’s global
+`~/.claude.json` MCP configuration. Pending revocations are reported and retried;
+an active registry credential is never revoked by that retry.
 
-A `401 Unauthorized` response is expected for a remote request without a key.
-`/health`, `/api/mode`, and `/api/auth/whoami` stay reachable without a key so
-clients can check health and sign in; `whoami` answers `200` with
-`"authenticated": false`.
+A `401` prints "Signet session expired, run `signet login`". Rejected session-end
+evidence stays in that harness's durable outbox. Sign in to the same instance
+and reconnect or run doctor to trigger replay. Permission denials never trigger a retry under another agent. Outbox status
+reports quarantine and permanent-rejection counters separately.
 
-Connectors that persist daemon credentials check `/api/mode` once at install or
-sync time, with a one-second timeout. Codex, Kimi, pi, Oh My Pi, Muse Code,
-ForgeCode, OpenCode, and Hermes Agent persist a key only when `requiresAuth` is
-`true`. When it is `false`, regeneration removes stale Signet-owned credentials
-even if a key is still present in the installer's environment. If the check
-fails or returns an invalid response, the connector omits the key and warns you
-to check the daemon URL and connectivity, then rerun installation or `signet sync`.
+Remote file capture is recorded in the outbox before the client reads the
+transcript. The Node SDK and Hermes Python transport send files above the
+4 MiB inline limit through a resumable upload, then hand its reference to the
+normal session-end handler. A process exit or lost acknowledgement does not
+restart the transfer: replay reads the daemon's durable offset and continues
+from there without rereading the earlier client-file bytes.
 
-For container-exported launchers, see [Installed hook and MCP launchers](/hooks/#installed-hook-and-mcp-launchers).
-`SIGNET_HOOK_COMMAND` and `SIGNET_CLI_PATH` override an existing launcher without
-requiring the host path to exist inside the container. `SIGNET_HOOK_COMMAND`
-wins when both are set; use its JSON argv form for paths with whitespace or
-launchers requiring arguments.
+Keep the original transcript file until handoff is acknowledged. A changed
+file is rejected and its outbox reference stays pending; replacement contents
+are not silently sent as the original evidence. Unconsumed server uploads expire
+after 24 hours without progress. If a saved upload ID returns `404` or `410`,
+replay clears that checkpoint, re-hashes the original file, and declares a new
+upload. A process exit after clearing the ID does not skip that re-hash on the
+next replay. A checksum rejection (`422`) gets one re-hash and redeclaration attempt.
+Changed files are never substituted, and a repeated rejection leaves the
+original reference pending for inspection rather than discarding evidence.
+Capture failures exit `1` and include a reason with `--json`. A queued capture
+receipt means accepted work, not completed processing. See the hook-upload
+protocol in the API reference for transfer bounds and receipt polling.
 
-## 3. Create a connector API key
+`logout` revokes your current login session; `logout --all` revokes your sessions
+on other devices too. Use disconnect to remove an installed integration and its
+connector key.
 
-Create one key per machine/harness pair. This makes revocation and audit trails
-clear.
+Logout is idempotent: an absent or already-expired session exits `0`. A `401` during logout does not ask you to sign in again. This does not confirm revocation of other devices; `revocationConfirmed` remains `false`.
 
-```bash
-signet api-key create \
-  --name "work laptop pi" \
-  --connector pi \
-  --agent-id pi-work-laptop
-```
+If the daemon cannot be reached, logout still clears the local login credential.
+It exits nonzero and reports that server revocation was not confirmed;
+`--json` includes `authenticated: false` and `revocationConfirmed: false`.
+For `--all`, sessions on other devices might still be active until revocation
+can be completed from an authenticated client.
 
-The command prints the raw `sig_sk_...` key once. Save it in your password
-manager or pass it directly to the remote installer. Do not commit it.
+## Troubleshooting
 
-If you create the key with `--agent-id`, Signet stores that agent in the key's
-auth scope. Remote requests authenticated by that key default to that agent and
-scope checks reject requests for a different agent. Pass the same `--agent-id`
-when the connector installer supports it so connector attribution and the
-auth-enforced scope stay aligned.
-
-For Codex, the API key scope is the important part. Create the key for the exact
-agent that should own the Codex session data:
-
-```bash
-signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
-```
-
-Then install Codex with that key:
-
-```bash
-npx -y @signetai/codex-plugin install \
-  --url http://signet-home.tailnet:3850 \
-  --api-key sig_sk_...
-```
-
-Codex hook and MCP calls authenticated with that key resolve to the scoped
-agent unless a route explicitly asks for another agent; a different `agentId` is rejected as a
-scope violation.
-
-For other harnesses, change `--connector` and the name:
-
-```bash
-signet api-key create --name "work laptop codex" --connector codex --agent-id codex-work-laptop
-signet api-key create --name "work laptop opencode" --connector opencode --agent-id opencode-work-laptop
-```
-
-List keys without revealing secrets:
-
-```bash
-signet api-key list
-```
-
-The last-used time of a key updates at most once a minute.
-
-Revoke a key if a machine is retired or the key was exposed:
-
-```bash
-signet api-key revoke <id-or-prefix>
-```
-
-## 4. Install the connector on the remote machine
-
-There are two install paths.
-
-### Option A: Signet CLI installed on the remote machine
-
-Use this if the remote machine already has the `signet` CLI:
-
-```bash
-signet connector install pi \
-  --url http://signet-home:3850 \
-  --api-key sig_sk_... \
-  --agent-id pi-work-laptop
-```
-
-`signet connect <harness>` is a short alias:
-
-```bash
-signet connect codex \
-  --url http://signet-home:3850 \
-  --api-key sig_sk_...
-```
-
-### Option B: connector-only npm installers
-
-Use this if you only want to configure one harness and do not want to install
-the full Signet CLI first:
-
-```bash
-npx -y @signetai/connector-pi install \
-  --url http://signet-home:3850 \
-  --api-key sig_sk_... \
-  --agent-id pi-work-laptop
-```
-
-Available connector packages:
-
-| Harness | Package | Binary |
-|---|---|---|
-| Claude Code | `@signetai/connector-claude-code` | `signet-connector-claude-code` |
-| Codex | `@signetai/connector-codex` | `signet-connector-codex` |
-| Codex native plugin UX | `@signetai/codex-plugin` | `signet-codex-plugin` |
-| Gemini | `@signetai/connector-gemini` | `signet-connector-gemini` |
-| Hermes Agent | `@signetai/connector-hermes-agent` | `signet-connector-hermes-agent` |
-| Oh My Pi | `@signetai/connector-oh-my-pi` | `signet-connector-oh-my-pi` |
-| OpenClaw | `@signetai/connector-openclaw` | `signet-connector-openclaw` |
-| OpenCode | `@signetai/connector-opencode` | `signet-connector-opencode` |
-| Pi | `@signetai/connector-pi` | `signet-connector-pi` |
-
-Codex users should usually prefer the native-plugin-oriented package name:
-
-```bash
-npx -y @signetai/codex-plugin install \
-  --url http://signet-home:3850 \
-  --api-key sig_sk_...
-```
-
-The installer writes the daemon URL and API key into the harness config it
-manages. Any file it writes that contains the API key is readable only by your
-user: new files get mode `0600`, and an existing file loses its group and other
-permissions. If the installer cannot tighten an existing file, it fails instead
-of writing the key. Reinstalling also tightens an unchanged file that already
-holds the key. It uses `SIGNET_DAEMON_URL` and `SIGNET_API_KEY` at runtime.
-`SIGNET_TOKEN` remains a backwards-compatible alias, but new installs should
-use `SIGNET_API_KEY`.
+- **Unavailable:** check the registered URL, server, TLS, firewall, and private
+  network. Do not start a replacement local daemon.
+- **401:** sign in again. CLI authentication failures exit with code `3`.
+- **403:** inspect the JSON reason and ask an administrator to check your agent
+  assignment or permissions. CLI permission failures exit with code `4`.
+- **No tools:** restart the harness and inspect its managed hooks, plugin, or
+  `signet connector mcp <harness>` launcher. Keys do not belong in that config.
+- **Exposed key:** have it revoked, reconnect, and run doctor. Removing a string
+  from a local file does not revoke the server credential.
 
 ## Dashboard connector status and recovery
 
@@ -302,207 +224,9 @@ then runs the connector's canonical initialization path; both actions return
 their result or the actionable failure message, and clients should run the
 health endpoint immediately afterward.
 
-## 5. Verify the connection before first run
-
-From the remote machine:
-
-```bash
-curl http://signet-home:3850/health
-```
-
-Then check the installed connector status:
-
-```bash
-npx -y @signetai/connector-pi status
-npx -y @signetai/codex-plugin status
-npx -y @signetai/connector-opencode status
-```
-
-If you installed through the Signet CLI, the harness-specific status commands
-are still available through the package installers. `signet connector install`
-only installs; it does not currently have a separate `status` subcommand.
-
-For an authenticated route smoke test without printing the key, run this from a
-shell where `SIGNET_API_KEY` is set:
-
-```bash
-export SIGNET_DAEMON_URL=http://signet-home:3850
-export SIGNET_API_KEY=sig_sk_...
-
-curl -fsS "$SIGNET_DAEMON_URL/api/auth/whoami" \
-  -H "Authorization: Bearer $SIGNET_API_KEY"
-```
-
-You should get JSON describing the authenticated connector role/scope. For an
-agent-scoped key, confirm the response includes that agent in the scope, for
-example `"scope":{"agent":"<agent-name>"}`. If you get `401`, check the key, auth
-mode, and daemon URL. If a request for a different `agentId` returns `403`, the
-agent scope is working.
-
-## 6. Start the harness and run a first check
-
-Open a fresh session in the target harness after installing or updating a
-connector. Most harnesses load extensions, plugins, MCP servers, or hooks at
-process/session startup; an already-running session may still have the old tool
-list.
-
-Good first checks:
-
-- Ask the harness to recall a harmless preference or project fact.
-- Ask it to search source-backed context if the connector exposes
-  `signet_source_search`.
-- Ask it to search transcript/session history if the connector exposes
-  `signet_session_search`.
-- Save a harmless test memory, then revoke/delete it if you do not want to keep
-  it.
-
-For Pi and Oh My Pi, restart the Pi session after installing so the extension
-bundle is reloaded. A refreshed install can be correct on disk while the current
-session still shows the old tool list.
-
-## Common setups
-
-### One desktop daemon, laptop connectors over Tailscale
-
-On the desktop:
-
-```yaml
-# $SIGNET_WORKSPACE/agent.yaml
-network:
-  mode: tailscale
-auth:
-  mode: hybrid
-```
-
-```bash
-signet daemon restart
-signet api-key create --name "laptop codex" --connector codex --agent-id <agent-name>
-```
-
-On the laptop:
-
-```bash
-npx -y @signetai/codex-plugin install \
-  --url http://100.107.87.47:3850 \
-  --api-key sig_sk_...
-```
-
-Start a new Codex session and use the Signet MCP tools from that session.
-
-### Remote OpenCode connector
-
-On the daemon machine:
-
-```bash
-signet api-key create --name "mini pc opencode" --connector opencode --agent-id opencode-mini-pc
-```
-
-On the OpenCode machine:
-
-```bash
-npx -y @signetai/connector-opencode install \
-  --url http://signet-home.tailnet:3850 \
-  --api-key sig_sk_... \
-  --agent-id opencode-mini-pc
-```
-
-No local Signet workspace or identity files are required on the OpenCode
-machine. The installer registers the bundled lifecycle plugin in the effective
-OpenCode config and configures `http://signet-home.tailnet:3850/mcp` as a
-remote MCP server with bearer authentication. The API key is stored in a
-mode-0600 connector-managed file rather than embedded in the config or plugin.
-
-Start a new OpenCode session so it picks up the new plugin/config.
-
-### Remote Pi connector
-
-On the daemon machine:
-
-```bash
-signet api-key create --name "work laptop pi" --connector pi --agent-id pi-work-laptop
-```
-
-On the Pi machine:
-
-```bash
-npx -y @signetai/connector-pi install \
-  --url http://signet-home.tailnet:3850 \
-  --api-key sig_sk_... \
-  --agent-id pi-work-laptop
-```
-
-Start a new Pi session. The Pi connector should expose Signet tools such as
-`signet_recall`, `signet_remember`, `signet_source_search`, and
-`signet_session_search`.
-
-## Troubleshooting
-
-### `curl /health` fails from the remote machine
-
-- Confirm the daemon is running: `signet daemon status --json`.
-- Confirm it is not bound only to localhost. Use `network.mode: tailscale` or
-  `SIGNET_BIND=0.0.0.0`.
-- Confirm firewall, tailnet ACLs, or security-group rules allow TCP port 3850.
-- Try the daemon machine's tailnet IP directly instead of a hostname.
-
-### Authenticated requests return `401 Unauthorized`
-
-- Make sure the remote connector uses `SIGNET_API_KEY`, not a placeholder.
-- Confirm the key was not revoked: `signet api-key list`.
-- Create a fresh key and reinstall the connector if the original key may have
-  been copied incorrectly.
-- Confirm the daemon URL points to the Signet daemon origin only, not a nested
-  path.
-
-### The harness starts but no Signet tools appear
-
-- Restart the harness session after installing the connector.
-- Re-run the connector install command to refresh managed config.
-- Check the package status command, for example
-  `npx -y @signetai/connector-pi status`.
-- For MCP-based harnesses, inspect the harness MCP config and confirm the
-  Signet server entry is present.
-
-### Local CLI works but remote connector fails in `hybrid` mode
-
-That usually means auth is working: localhost is allowed without a key, while
-remote requests require one. Verify with:
-
-```bash
-curl -i http://signet-home:3850/api/memories
-curl -i http://signet-home:3850/api/memories \
-  -H "Authorization: Bearer $SIGNET_API_KEY"
-```
-
-The first remote request should be `401`; the second should succeed. To see
-why a key is rejected, call `/api/auth/whoami` with it and read `error`.
-
-### You exposed a key accidentally
-
-Revoke it immediately:
-
-```bash
-signet api-key revoke <id-or-prefix>
-```
-
-Then create a new key and rerun the connector installer on the affected
-machine.
-
-## Security notes
-
-- Prefer Tailscale, WireGuard, a private LAN, or HTTPS through a reverse proxy.
-- Do not expose a `local` auth-mode daemon to the public internet.
-- Use one named key per connector/machine so revocation is precise.
-- Store API keys in the target harness config or a local secret manager, not in
-  shell scripts committed to a repo.
-- If the daemon is reachable from untrusted networks, use `auth.mode: team` and
-  terminate TLS with a reverse proxy. See [Self-Hosting](/self-hosting/) and
-  [Authentication](/auth/).
-
 ## Related docs
 
-- [Authentication](/auth/) — auth modes, API-key records, roles, and revocation.
-- [Harnesses](/harnesses/) — harness-specific files and runtime behavior.
-- [CLI Reference](/cli/) — exact CLI command reference.
-- [Self-Hosting](/self-hosting/) — service deployment, reverse proxy, TLS, and
-  production hardening.
+- [Authentication](/auth/)
+- [Harnesses](/harnesses/)
+- [CLI integrations and security](/cli/integrations-security/)
+- [Self-Hosting](/self-hosting/)

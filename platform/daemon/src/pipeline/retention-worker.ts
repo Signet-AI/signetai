@@ -1,3 +1,6 @@
+import { classificationRequest } from "../classifications";
+import { pruneSessionRecallEventsInTx } from "../db-helpers";
+import { withWritePrincipal } from "@signet/core";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { startDependencyHistoryCompaction } from "../dependency-history-compaction";
@@ -45,6 +48,7 @@ export interface RetentionConfig {
 	readonly completedJobRetentionMs: number;
 	readonly deadJobRetentionMs: number;
 	readonly batchLimit: number;
+	readonly telemetryRetentionMs?: number;
 }
 
 export const DEFAULT_RETENTION: RetentionConfig = {
@@ -54,6 +58,7 @@ export const DEFAULT_RETENTION: RetentionConfig = {
 	completedJobRetentionMs: 14 * 24 * 60 * 60 * 1000,
 	deadJobRetentionMs: 30 * 24 * 60 * 60 * 1000,
 	batchLimit: 500,
+	telemetryRetentionMs: 90 * 24 * 60 * 60 * 1000,
 };
 
 export interface RetentionHandle {
@@ -71,6 +76,7 @@ export interface RetentionSweepResult {
 	deadJobsPurged: number;
 	completedTranscriptCaptureJobsPurged: number;
 	deadTranscriptCaptureJobsPurged: number;
+	sessionRecallEventsPurged: number;
 }
 
 const EMPTY_RETENTION_RESULT: RetentionSweepResult = {
@@ -82,6 +88,7 @@ const EMPTY_RETENTION_RESULT: RetentionSweepResult = {
 	deadJobsPurged: 0,
 	completedTranscriptCaptureJobsPurged: 0,
 	deadTranscriptCaptureJobsPurged: 0,
+	sessionRecallEventsPurged: 0,
 };
 
 function purgeGraphLinks(db: WriteDb, cutoff: string, limit: number): number {
@@ -261,6 +268,12 @@ function clampNumber(value: number, fallback: number, min: number, max: number):
 
 function normalizeRetentionConfig(cfg: RetentionConfig): RetentionConfig {
 	return {
+		telemetryRetentionMs: clampNumber(
+			cfg.telemetryRetentionMs ?? 90 * 24 * 60 * 60 * 1000,
+			90 * 24 * 60 * 60 * 1000,
+			0,
+			3650 * 24 * 60 * 60 * 1000,
+		),
 		intervalMs: clampNumber(cfg.intervalMs, DEFAULT_RETENTION.intervalMs, 60_000, 7 * 24 * 60 * 60 * 1000),
 		tombstoneRetentionMs: clampNumber(
 			cfg.tombstoneRetentionMs,
@@ -290,13 +303,31 @@ function normalizeRetentionConfig(cfg: RetentionConfig): RetentionConfig {
 	};
 }
 
-export async function runRetentionSweepOnce(
+export function runRetentionSweepOnce(
+	...args: Parameters<typeof executeRetentionSweep>
+): ReturnType<typeof executeRetentionSweep> {
+	return withWritePrincipal(undefined, () => executeRetentionSweep(...args));
+}
+
+async function executeRetentionSweep(
 	accessor: DbAccessor,
 	cfg: RetentionConfig = DEFAULT_RETENTION,
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<RetentionSweepResult> {
 	if (ownerMaintenance && !(await ownerMaintenance.queueIsHealthy())) return EMPTY_RETENTION_RESULT;
 	const normalizedCfg = normalizeRetentionConfig(cfg);
+	if (ownerMaintenance) {
+		const pending = await classificationRequest<{ jobs: string[] }>({ op: "recover" }, ownerMaintenance.owner);
+		for (const jobId of pending.jobs.slice(0, 4)) {
+			try {
+				await classificationRequest({ op: "execute", jobId }, ownerMaintenance.owner);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				await classificationRequest({ op: "record-error", jobId, error: message }, ownerMaintenance.owner);
+				logger.warn("retention", "Recompute batch failed; continuing retention", { jobId, error: message });
+			}
+		}
+	}
 	const now = Date.now();
 	const tombstoneCutoff = new Date(now - normalizedCfg.tombstoneRetentionMs).toISOString();
 	const historyCutoff = new Date(now - normalizedCfg.historyRetentionMs).toISOString();
@@ -308,6 +339,12 @@ export async function runRetentionSweepOnce(
 		const tombstones = purgeTombstones(db, tombstoneCutoff, normalizedCfg.batchLimit);
 		return { graphLinksPurged: graphLinks, embeddingsPurged: embeddings, tombstonesPurged: tombstones };
 	});
+	const telemetryCutoff = new Date(
+		now - (normalizedCfg.telemetryRetentionMs ?? 90 * 24 * 60 * 60 * 1000),
+	).toISOString();
+	const sessionRecallEventsPurged = await writeTx(accessor, (db) =>
+		pruneSessionRecallEventsInTx(db, telemetryCutoff, normalizedCfg.batchLimit),
+	);
 	const steps = [
 		{ table: "memory_history", where: "created_at < ?", cutoff: historyCutoff, allowMissingTable: false },
 		{
@@ -361,6 +398,7 @@ export async function runRetentionSweepOnce(
 	}
 
 	return {
+		sessionRecallEventsPurged,
 		graphLinksPurged,
 		embeddingsPurged,
 		tombstonesPurged,
@@ -391,7 +429,8 @@ export function startRetentionWorker(
 			result.completedJobsPurged +
 			result.deadJobsPurged +
 			result.completedTranscriptCaptureJobsPurged +
-			result.deadTranscriptCaptureJobsPurged;
+			result.deadTranscriptCaptureJobsPurged +
+			result.sessionRecallEventsPurged;
 
 		if (total > 0) {
 			logger.info("retention", "Sweep completed", { ...result });

@@ -1,3 +1,4 @@
+import "../../../../../tests/support/connector-safety.js";
 import { expect, it } from "bun:test";
 import { posix } from "node:path";
 import { CUDA_LIBRARIES } from "./manifest.js";

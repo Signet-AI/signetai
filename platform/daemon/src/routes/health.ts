@@ -46,7 +46,9 @@ interface EmbeddingCheck {
 	readonly checkedAt?: string;
 	readonly migration?: ReturnType<typeof readEmbeddingIndexMigrationProgress>;
 }
-async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; reason: string | null }> {
+async function checkEmbedding(
+	includeMigration = true,
+): Promise<{ ok: boolean; detail: EmbeddingCheck; reason: string | null }> {
 	let cfg: ReturnType<typeof loadMemoryConfig>["embedding"];
 	try {
 		cfg = loadMemoryConfig(getCurrentAgentsDir()).embedding;
@@ -60,10 +62,11 @@ async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; 
 	}
 	let migration: ReturnType<typeof readEmbeddingIndexMigrationProgress> = null;
 	try {
-		migration =
-			(await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
-				ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
-			)) ?? null;
+		migration = !includeMigration
+			? null
+			: ((await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
+					ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
+				)) ?? null);
 	} catch {}
 	const migrationDetail = migration === null ? {} : { migration };
 
@@ -162,7 +165,7 @@ export function mountHealthRoutes(app: Hono): void {
 			try {
 				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
 					try {
-						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:165", "SELECT 1", [], { deadlineMs: 500 });
+						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:168", "SELECT 1", [], { deadlineMs: 500 });
 						dbOk = true;
 					} catch {}
 					return ownerMaintenance.health();
@@ -278,7 +281,7 @@ export function mountHealthRoutes(app: Hono): void {
 		if (dbOk && !migrationsOk) {
 			reasons.push("pending migrations");
 		}
-		const queueHealth = dbResult?.queueHealth ?? null;
+		const queueHealth = c.get("organization") ? null : (dbResult?.queueHealth ?? null);
 		if (queueHealth !== null) {
 			if (queueHealth.depth > QUEUE_MAX_DEPTH) {
 				reasons.push(`queue backlog depth ${queueHealth.depth} exceeds ${QUEUE_MAX_DEPTH}`);
@@ -292,9 +295,11 @@ export function mountHealthRoutes(app: Hono): void {
 				);
 			}
 		}
-		const queue: QueueHealth | { readonly error: string } = queueHealth ?? { error: "database unavailable" };
+		const queue = c.get("organization")
+			? { status: "unavailable", reason: "Use scoped queue diagnostics" }
+			: (queueHealth ?? { error: "database unavailable" });
 
-		const embedding = await checkEmbedding();
+		const embedding = await checkEmbedding(!c.get("organization"));
 		if (embedding.reason !== null) reasons.push(embedding.reason);
 
 		const inference = checkInference();

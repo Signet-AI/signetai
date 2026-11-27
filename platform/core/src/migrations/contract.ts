@@ -21,4 +21,5 @@ export interface Migration {
 	readonly name: string;
 	readonly up: (db: MigrationDb) => void;
 	readonly artifacts?: MigrationArtifacts;
+	readonly foreignKeysOff?: boolean;
 }

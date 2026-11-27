@@ -1,5 +1,16 @@
+import type { ReadScope } from "@signet/core";
+import type { CaptureEnqueueInput } from "./transcript-capture-owner";
 import type { AgentRemovalInput } from "./agent-removal";
-import type { MemoryHeadCommitInput } from "./memory-head";
+import type { WriteAuthor } from "./auth/audit-owner";
+import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
+import type { ReflectionAnswerInput } from "./reflection-owner";
+import type {
+	TranscriptCaptureInput,
+	TranscriptDeleteInput,
+	TranscriptLifecycleInput,
+} from "./session-transcript-lifecycle";
+import type { CompactionSummaryInput, SessionTranscriptWriteInput } from "./session-transcripts";
+import type { InventoryRecord, TranscriptCheckpoint } from "./transcript-import-scan";
 
 export type DbOwnerLane = "read" | "write" | "maintenance" | "verify";
 export type DbOwnerWorkloadClass = "foreground" | "maintenance";
@@ -16,7 +27,17 @@ export const VECTOR_REPAIR_MAX_WORK_UNITS_PER_BATCH = 100;
 export type DbOwnerCancellation = "pending" | "requested" | "started";
 export type DbOwnerOutcome = "completed" | "cancelled" | "timed_out" | "failed" | "owner_died";
 
-export type DbOwnerParameter = string | number | boolean | null | { readonly type: "bytes"; readonly base64: string };
+export type DbOwnerParameter =
+	| string
+	| number
+	| boolean
+	| null
+	| { readonly type: "bytes"; readonly base64: string }
+	| {
+			readonly type: "compartment";
+			readonly scope: import("@signet/core").CompartmentWriteScope;
+			readonly parentMemoryId?: string;
+	  };
 
 export interface DbOwnerStatement {
 	readonly sql: string;
@@ -59,6 +80,7 @@ export interface DbOwnerSourceSnapshotArtifact {
 }
 
 export interface DbOwnerSourceSnapshotImport {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourceId: string;
 	readonly sourceRoot: string;
@@ -110,6 +132,7 @@ export interface DbOwnerSourceArtifactIndex {
 	readonly content: string;
 }
 export interface DbOwnerNativeMemoryIndex {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceHash: string;
@@ -162,6 +185,7 @@ export interface DbOwnerNativeMemoryIndex {
 }
 
 export interface DbOwnerSourceArtifactFields {
+	readonly author?: WriteAuthor;
 	readonly agentId: string;
 	readonly sourcePath: string;
 	readonly sourceSha256: string;
@@ -199,8 +223,8 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
-import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 import type { EpisodicSourceKind } from "./episodic-sources";
+import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 
 export interface DbOwnerDreamingEvidenceCoverageCursor {
 	readonly capturedAt: string;
@@ -324,6 +348,7 @@ export type DbOwnerDreamingEvidenceCoverageResult =
 	  };
 
 export interface DbOwnerTranscriptBulkCommit {
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly jobId: string;
 	readonly generation: number;
@@ -333,14 +358,36 @@ export interface DbOwnerTranscriptBulkCommit {
 	readonly commits: readonly CompletedTranscriptCommit[];
 	readonly inventory?: {
 		readonly fileId: string;
-		readonly records: readonly import("./transcript-import-scan").InventoryRecord[];
+		readonly records: readonly InventoryRecord[];
 		readonly previousByteOffset: number;
-		readonly checkpoint: import("./transcript-import-scan").TranscriptCheckpoint;
+		readonly checkpoint: TranscriptCheckpoint;
 		readonly complete: boolean;
 	};
 }
 export type DbOwnerRequest =
-	| { readonly kind: "memory_head"; readonly request: import("./memory-head").MemoryHeadRequest }
+	| {
+			readonly kind: "filesystem_document_write";
+			readonly input: Parameters<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>[1];
+	  }
+	| {
+			readonly kind: "session_checkpoint_write";
+			readonly input: import("./session-checkpoints").WriteCheckpointParams;
+			readonly maxPerSession: number;
+	  }
+	| { readonly kind: "session_finalizer_author"; readonly agentId: string; readonly sessionKey: string }
+	| { readonly kind: "content_read"; readonly request: import("./content-read").ContentReadRequest }
+	| { readonly kind: "transcript_capture_enqueue"; readonly input: CaptureEnqueueInput }
+	| {
+			readonly kind: "transcript_capture_transition";
+			readonly input: import("./transcript-capture-owner").CaptureTransitionInput;
+	  }
+	| { readonly kind: "fts_partition"; readonly action: "ensure" | "rebuild" }
+	| {
+			readonly kind: "embedding_projection";
+			readonly request: import("./embedding-projection").EmbeddingProjectionRequest;
+	  }
+	| { readonly kind: "classification"; readonly request: import("./classifications").ClassificationRequest }
+	| { readonly kind: "memory_head"; readonly request: MemoryHeadRequest }
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
@@ -348,6 +395,7 @@ export type DbOwnerRequest =
 			readonly kind: "batch";
 			readonly statements: readonly DbOwnerStatement[];
 			readonly requireChanges?: boolean;
+			readonly embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest;
 	  }
 	| {
 			readonly kind: "recall";
@@ -364,6 +412,42 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
+	| {
+			readonly kind: "reflection_list";
+			readonly scope: import("./read-scope").ReadScope;
+			readonly input: import("./reflection-owner").ReflectionListInput;
+	  }
+	| {
+			readonly kind: "dreaming_reviewed_read";
+			readonly agentId: string;
+			readonly scope?: import("./read-scope").ReadScope;
+	  }
+	| { readonly kind: "reflection_get"; readonly scope: import("./read-scope").ReadScope; readonly id: string }
+	| { readonly kind: "diagnostics_schema"; readonly scope?: import("./read-scope").ReadScope }
+	| {
+			readonly kind: "diagnostics_sample";
+			readonly table: string;
+			readonly limit: number;
+			readonly offset: number;
+			readonly scope?: import("./read-scope").ReadScope;
+	  }
+	| {
+			readonly kind: "search_telemetry_export_page";
+			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
+			readonly cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor;
+	  }
+	| {
+			readonly kind: "search_telemetry_read";
+			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
+	  }
+	| { readonly kind: "queue_diagnostics_read"; readonly scope: import("./read-scope").ReadScope }
+	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
+	| { readonly kind: "reflection_generate"; readonly input: import("./reflection-owner").CreateDailyReflectionsInput }
+	| {
+			readonly kind: "organization_memory_purge";
+			readonly userId: string;
+			readonly author: WriteAuthor;
+	  }
 	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
 	| { readonly kind: "source_native_memory_index"; readonly input: DbOwnerNativeMemoryIndex }
 	| { readonly kind: "source_artifact_purge"; readonly input: DbOwnerSourceArtifactPurge }
@@ -372,37 +456,51 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_evidence_eligibility"; readonly input: DbOwnerSourceEvidenceEligibility }
 	| {
 			readonly kind: "session_transcript_lifecycle";
-			readonly input: import("./session-transcript-lifecycle").TranscriptLifecycleInput;
+			readonly input: TranscriptLifecycleInput;
 	  }
 	| {
 			readonly kind: "session_transcript_capture";
-			readonly input: import("./session-transcript-lifecycle").TranscriptCaptureInput;
+			readonly input: TranscriptCaptureInput;
 	  }
 	| {
 			readonly kind: "session_transcript_delete";
-			readonly input: import("./session-transcript-lifecycle").TranscriptDeleteInput;
+			readonly input: TranscriptDeleteInput;
 	  }
 	| { readonly kind: "dreaming_evidence_coverage"; readonly input: DbOwnerDreamingEvidenceCoverage }
 	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
 	| {
 			readonly kind: "session_transcript_write";
-			readonly input: import("./session-transcripts").SessionTranscriptWriteInput;
+			readonly input: SessionTranscriptWriteInput;
 	  }
 	| {
 			readonly kind: "session_compaction_summary";
-			readonly input: import("./session-transcripts").CompactionSummaryInput;
+			readonly input: CompactionSummaryInput;
 	  }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }
 	| { readonly kind: "dreaming_episodic_backlog_probe"; readonly input: DbOwnerDreamingEpisodicBacklogProbe }
 	| { readonly kind: "dreaming_episodic_backlog_exists"; readonly input: DbOwnerDreamingEpisodicBacklogExists }
+	| { readonly kind: "dreaming_read_scope"; readonly input: { readonly agentId: string; readonly passId?: string } }
+	| { readonly kind: "dreaming_graph_read"; readonly input: DbOwnerDreamingGraphRead }
 	| { readonly kind: "dreaming_evidence_search"; readonly input: DbOwnerDreamingEvidenceSearch }
+	| { readonly kind: "dreaming_evidence_prepare"; readonly input: DbOwnerDreamingEvidencePreparation }
+	| { readonly kind: "dreaming_imported_source_attention"; readonly agentId: string; readonly sourceId: string }
 	| { readonly kind: "dreaming_evidence_source"; readonly input: DbOwnerDreamingEvidenceSource }
 	| { readonly kind: "dreaming_evidence_review"; readonly input: DbOwnerDreamingEvidenceReview }
 	| { readonly kind: "dreaming_pass_finalize"; readonly input: DbOwnerDreamingPassFinalize }
 	| { readonly kind: "dreaming_review_due"; readonly input: DbOwnerDreamingReviewDue }
 	| { readonly kind: "dreaming_evidence_classify"; readonly input: DbOwnerDreamingEvidenceClassify }
+	| {
+			readonly kind: "dreaming_evidence_manual_requeue";
+			readonly input: {
+				readonly agentId: string;
+				readonly sourceKind: "memory" | "artifact" | "transcript" | "summary";
+				readonly sourceId: string;
+				readonly readScope: import("./read-scope").ReadScope;
+				readonly reviewed: boolean;
+			};
+	  }
 	| { readonly kind: "dreaming_evidence_requeue"; readonly input: DbOwnerDreamingEvidenceRequeue }
 	| { readonly kind: "embedding_migration_progress"; readonly configuredBaseUrl?: string }
 	| { readonly kind: "health_ready" }
@@ -427,11 +525,13 @@ export interface DbOwnerRecallPayload {
 
 export interface DbOwnerVectorSearchPayload {
 	readonly queryEmbedding: readonly number[];
-	readonly options?: {
+	readonly options: {
 		readonly limit?: number;
 		readonly type?: string;
 		readonly excludeAggregateRecall?: boolean;
 		readonly maxScanRows?: number;
+		readonly readScope: ReadScope;
+		readonly shardNames?: readonly string[];
 	};
 }
 
@@ -481,6 +581,7 @@ export interface DbOwnerVectorRepairResult {
 
 export interface DbOwnerDreamingHygieneAttention {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly limit?: number;
 	readonly caps?: {
 		readonly maxAspectsPerEntity: number;
@@ -490,6 +591,7 @@ export interface DbOwnerDreamingHygieneAttention {
 
 export interface DbOwnerDreamingSurprisalAttention {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly config: {
 		readonly enabled: boolean;
 		readonly sampleSize: number;
@@ -502,18 +604,40 @@ export interface DbOwnerDreamingSurprisalAttention {
 }
 export interface DbOwnerDreamingEpisodicBacklog {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 }
 export interface DbOwnerDreamingEpisodicBacklogProbe {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
 	readonly tokenThreshold: number;
 	readonly maxSources: number;
 }
 export interface DbOwnerDreamingEpisodicBacklogExists {
 	readonly agentId: string;
+	readonly compartmentId?: number | null;
+}
+
+export interface DbOwnerDreamingGraphRead {
+	readonly readScope?: ReadScope;
+	readonly tool: "search_entities" | "get_entity" | "list_aspect_claims" | "validate_proposal";
+	readonly agentId: string;
+	readonly passId?: string;
+	readonly query?: string;
+	readonly type?: string;
+	readonly entityId?: string;
+	readonly aspectId?: string;
+	readonly include?: readonly string[];
+	readonly direction?: "incoming" | "outgoing" | "both";
+	readonly limit?: number;
+	readonly offset?: number;
+	readonly name?: string;
+	readonly value?: string;
 }
 
 export interface DbOwnerDreamingEvidenceSearch {
+	readonly readScope?: ReadScope;
 	readonly agentId: string;
+	readonly evidenceLeaseMs?: number;
 	readonly query?: string;
 	readonly since?: string;
 	readonly before?: string;
@@ -526,8 +650,15 @@ export interface DbOwnerDreamingEvidenceSearch {
 	readonly evidenceChars?: number;
 }
 
+export type DbOwnerDreamingEvidencePreparation = {
+	readonly agentId: string;
+	readonly passId: string;
+	readonly sourceRefs: readonly string[];
+} & ({ readonly action: "lease"; readonly ttlMs: number } | { readonly action: "speakers" });
+
 export interface DbOwnerDreamingEvidenceSource {
 	readonly agentId: string;
+	readonly passId?: string;
 	readonly sourceRef: string;
 }
 
@@ -565,6 +696,7 @@ export interface DbOwnerDreamingPassFinalize {
 
 export interface DbOwnerDreamingReviewDue {
 	readonly agentId?: string;
+	readonly readScope?: import("./read-scope").ReadScope;
 	readonly nowMs: number;
 	readonly limit: number;
 }
@@ -575,6 +707,7 @@ export interface DbOwnerDreamingEvidenceOperation {
 
 export interface DbOwnerDreamingEvidenceClassify {
 	readonly agentId: string;
+	readonly passId?: string;
 	readonly result: unknown;
 	readonly operations: readonly DbOwnerDreamingEvidenceOperation[];
 }
@@ -596,6 +729,7 @@ export interface DbOwnerProviderTrackerStats {
 }
 
 export interface DbOwnerJob {
+	readonly writePrincipal?: import("@signet/core").WritePrincipal;
 	readonly id: string;
 	readonly operation: string;
 	readonly lane: DbOwnerLane;

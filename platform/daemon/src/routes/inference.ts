@@ -1,30 +1,27 @@
-import { retrievalEvent } from "../assistant-retrieval";
-import * as Type from "typebox";
-import { z } from "zod";
-import { type AssistantChatEvent, buildRecallRequestBody, redactCredentialsDeep } from "@signet/core";
-import { resolveScopedAgent } from "../request-scope";
-import { resolveDaemonAgentId } from "../agent-id";
-import { getDbAccessor } from "../db-accessor";
-import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
-import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
-import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
-
-import { MODEL_DEFAULTS } from "@signet/core";
 import {
 	getBuiltinModels as getModels,
 	getBuiltinProviders as getProviders,
 } from "@earendil-works/pi-ai/providers/all";
 import {
+	type AssistantChatEvent,
+	buildRecallRequestBody,
+	MODEL_DEFAULTS,
+	parseRoutingTargetRef,
 	ROUTING_COST_TIERS,
 	ROUTING_OPERATION_KINDS,
 	ROUTING_PRIVACY_TIERS,
 	type RouteRequest,
-	parseRoutingTargetRef,
+	redactCredentialsDeep,
 } from "@signet/core";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import * as Type from "typebox";
+import { z } from "zod";
+import { resolveDaemonAgentId } from "../agent-id";
+import { retrievalEvent } from "../assistant-retrieval";
 import type { AuthMode, TokenClaims } from "../auth/index.js";
 import { checkScope } from "../auth/index.js";
+import { getDbAccessor } from "../db-accessor";
 import {
 	completeOAuthInteraction,
 	disconnectOAuthProvider,
@@ -33,8 +30,15 @@ import {
 	startOAuthLogin,
 } from "../inference-oauth.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
-import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
+import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
+import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
+import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
+import { jsonBody } from "../request-body";
+import { resolveReadAgent } from "../auth/agent-access";
+import { resolveScopedAgent } from "../request-scope";
+import { resolveKnowledgeReadScope } from "./read-scope";
 import { openBoundedSse } from "../sse-stream.js";
+import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
 
 const MAX_EXPLAIN_BYTES = 128 * 1024;
 const MAX_EXECUTE_BYTES = 512 * 1024;
@@ -216,10 +220,7 @@ function parseExplicitTargets(value: unknown): ValidationResult<readonly string[
 	return valid(refs.length > 0 ? refs : undefined);
 }
 
-async function readJsonObject(
-	c: { req: { header: (name: string) => string | undefined; text: () => Promise<string> } },
-	maxBytes: number,
-): Promise<ValidationResult<Record<string, unknown>>> {
+async function readJsonObject(c: Context, maxBytes: number): Promise<ValidationResult<Record<string, unknown>>> {
 	const contentLength = parseTrimmedString(c.req.header("content-length"));
 	if (contentLength) {
 		const bytes = Number(contentLength);
@@ -237,7 +238,7 @@ async function readJsonObject(
 
 	let value: unknown;
 	try {
-		value = JSON.parse(raw);
+		value = await jsonBody(c)();
 	} catch {
 		return invalid("request body must be valid JSON");
 	}
@@ -866,12 +867,21 @@ const recallRowSchema = z.object({
 
 export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}): void {
 	app.get("/api/assistant/models", async (c) => {
-		const scope = resolveScopedAgent(
+		let scope = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			getAuthMode(opts),
 			c.req.query("agentId"),
 			resolveDaemonAgentId(),
 		);
+		if (c.get("organization")) {
+			const resolved = resolveReadAgent(
+				c.get("principal"),
+				c.get("requestedOrganizationAgent") ?? c.req.query("agentId"),
+			);
+			if (!resolved.ok)
+				return c.json({ error: resolved.error.error, reason: resolved.error.reason }, resolved.error.status);
+			scope = { agentId: resolved.value };
+		}
 		if (scope.error) return c.json({ error: scope.error }, 403);
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: "Inference is unavailable" }, 503);
@@ -890,13 +900,20 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 				400,
 			);
 		const body = parsed.data;
-		const scope = resolveScopedAgent(
+		let scope = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			getAuthMode(opts),
 			body.agentId,
 			resolveDaemonAgentId(),
 		);
+		if (c.get("organization")) {
+			const resolved = resolveReadAgent(c.get("principal"), c.get("requestedOrganizationAgent") ?? body.agentId);
+			if (!resolved.ok)
+				return c.json({ error: resolved.error.error, reason: resolved.error.reason }, resolved.error.status);
+			scope = { agentId: resolved.value };
+		}
 		if (scope.error) return c.json({ error: scope.error }, 403);
+		const readScope = await resolveKnowledgeReadScope(c, scope.agentId);
 		const slot = acquireConcurrencySlot("execute", opts);
 		if (!slot.ok) return c.json({ error: slot.message }, slot.status);
 		const controller = new AbortController();
@@ -965,6 +982,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								accessor: getDbAccessor(),
 								agentId: scope.agentId,
 								actor: "dashboard-chat",
+								readScope,
 								allowedAgentIds: [scope.agentId],
 								onToolCall(trace) {
 									const retrieval = retrievalEvent(trace.tool, trace.output);
@@ -1032,7 +1050,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									return row.success ? [row.data] : [];
 								});
 								const evidence = getDreamingCapability(
-									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat" },
+									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat", readScope },
 									"search_evidence",
 								);
 								const candidates = rows.filter((row) => !row.id.includes(":")).slice(0, 20);
@@ -1139,11 +1157,9 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								signal: controller.signal,
 								timeoutMs: 90_000,
 								modelSelection: body.modelSelection,
-								persistentSessionKey: JSON.stringify([
-									c.get("auth")?.claims?.sub ?? "local",
-									scope.agentId,
-									body.conversationId,
-								]),
+								persistentSessionKey: c.get("organization")
+									? undefined
+									: JSON.stringify([c.get("auth")?.claims?.sub ?? "local", scope.agentId, body.conversationId]),
 								continuationPrompt: JSON.stringify({
 									agentId: scope.agentId,
 									selectedEntityId: body.selectedEntityId,

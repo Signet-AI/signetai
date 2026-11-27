@@ -146,6 +146,7 @@ export function startPipeline(
 	_analytics?: AnalyticsCollector,
 	_telemetry?: TelemetryCollector,
 	ownerMaintenance?: DbOwnerMaintenance,
+	retentionConfig: RetentionConfig = DEFAULT_RETENTION,
 ): void {
 	if (retentionHandle || documentWorkerHandle || synthesisWorkerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");
@@ -162,7 +163,7 @@ export function startPipeline(
 	configureLlmConcurrency(pipelineCfg.worker.maxLlmConcurrency);
 
 	const provider = getLlmProvider();
-	ensureRetentionWorker(accessor, DEFAULT_RETENTION, ownerMaintenance);
+	ensureRetentionWorker(accessor, retentionConfig, ownerMaintenance);
 	if (!maintenanceHandle && providerTracker) {
 		maintenanceHandle = startMaintenanceWorker(
 			accessor,

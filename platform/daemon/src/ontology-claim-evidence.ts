@@ -1,3 +1,5 @@
+import { knowledgeReadDb, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
+import type { ReadScope } from "./read-scope";
 import {
 	ATTRIBUTE_KINDS,
 	ATTRIBUTE_STATUSES,
@@ -133,28 +135,32 @@ function attributeEvidenceRefs(attribute: EntityAttribute): OntologyEvidenceRef[
 export async function getOntologyClaimEvidence(
 	accessor: DbAccessor,
 	params: GetOntologyClaimEvidenceParams,
+	readScope?: ReadScope,
 ): Promise<OntologyClaimEvidenceResult> {
 	const limit = Math.min(Math.max(params.limit ?? 20, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	const result = await listEntityAttributesByPath(accessor, {
-		agentId: params.agentId,
-		entity: params.entity,
-		aspect: params.aspect,
-		group: params.group,
-		claim: params.claim,
-		kind: params.kind,
-		status: params.status,
-		limit,
-		offset,
-	});
+	const result = await listEntityAttributesByPath(
+		accessor,
+		{
+			agentId: params.agentId,
+			entity: params.entity,
+			aspect: params.aspect,
+			group: params.group,
+			claim: params.claim,
+			kind: params.kind,
+			status: params.status,
+			limit,
+			offset,
+		},
+		readScope,
+	);
 	if (result === null) throw new OntologyClaimEvidenceError("Claim path not found", 404);
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const items = accessor.withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
-			result.items.map((attribute) => {
-				const evidence = attributeEvidenceRefs(attribute).map((ref) =>
-					resolveOntologyEvidenceRef(db, params.agentId, ref),
+	const items = await (async (db: KnowledgeReadDb) =>
+		Promise.all(
+			result.items.map(async (attribute) => {
+				const evidence = await Promise.all(
+					attributeEvidenceRefs(attribute).map((ref) => resolveOntologyEvidenceRef(db, params.agentId, ref, readScope)),
 				);
 				return {
 					attribute,
@@ -162,8 +168,7 @@ export async function getOntologyClaimEvidence(
 					evidenceCount: evidence.length,
 				};
 			}),
-		"ontology-claim-evidence.ts:153",
-	);
+		))(knowledgeReadDb(readScope));
 
 	return {
 		entity: result.entity,

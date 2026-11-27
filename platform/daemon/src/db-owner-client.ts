@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
+import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
+import {
+	spawnHidden as spawn,
+	type ChildProcess,
+	currentWritePrincipal,
+	recordClassifiedDestination,
+} from "@signet/core";
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -261,7 +267,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let lastError: string | null = null;
 	let initialization: DbOwnerInitializationState = "not_started";
 	let sequence = 0;
-	let input = "";
+	const input = new DbOwnerLineBuffer();
 	let stderr = "";
 	let writeBlocked = false;
 	const migrationControl =
@@ -383,7 +389,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (retiredClose !== null) retiredChildClose = retiredClose;
 		pid = null;
 		activeJobId = null;
-		input = "";
+		input.reset();
 		startPromise = null;
 		state = closed ? "closed" : nextState;
 		lastError = error.message;
@@ -446,7 +452,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		settle(event.jobId, (job) => {
 			if (job.settled) return;
 			job.settled = true;
-			if (event.outcome === "completed") {
+			if (event.outcome === "completed" && job.job.lane === "read" && dbOwnerWallClockNow() >= job.job.deadlineAt) {
+				job.reject(new DbOwnerDeadlineError(event.jobId));
+			} else if (event.outcome === "completed") {
 				job.resolve(event.result as never);
 			} else if (event.outcome === "cancelled") {
 				job.reject(new DbOwnerCancelledError(event.jobId));
@@ -464,9 +472,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	function handleStdout(owner: ChildProcess, chunk: string): void {
 		if (child !== owner) return;
-		input += chunk;
-		const lines = input.split("\n");
-		input = lines.pop() ?? "";
+		const lines = input.read(chunk);
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {
@@ -491,7 +497,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			child = null;
 			pid = null;
 			activeJobId = null;
-			input = "";
+			input.reset();
 			startPromise = null;
 			state = "closed";
 			lastError = null;
@@ -704,6 +710,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		};
 		const now = dbOwnerWallClockNow();
 		const job: DbOwnerJob = {
+			writePrincipal: currentWritePrincipal(),
 			id: `db-owner-${process.pid}-${++sequence}`,
 			operation: submitOptions.operation,
 			lane: submitOptions.lane,
@@ -759,7 +766,15 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			if (request.kind === "initialize") initialization = "running";
 			dispatch(job.id);
 		});
-		return { job, result, metrics, cancel: () => cancel(job.id) };
+		return {
+			job,
+			result: result.catch((error: unknown) => {
+				recordClassifiedDestination(error);
+				throw error;
+			}),
+			metrics,
+			cancel: () => cancel(job.id),
+		};
 	}
 
 	function cancel(jobId: string): void {

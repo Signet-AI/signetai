@@ -1,4 +1,5 @@
 import { createMemoriesFts } from "./fts-schema";
+import { runMigrations, type MigrationDb } from "./migrations/index";
 
 export type SchemaType = "python" | "cli-v1" | "core" | "unknown";
 
@@ -396,6 +397,19 @@ function migrateFromCliV1(
 
 	return migrated;
 }
+export function initializeDatabaseSchema(
+	db: MigrationDb & {
+		transaction<T>(operation: () => T): () => T;
+	},
+): MigrationResult {
+	return db.transaction(() => {
+		const result = ensureUnifiedSchema(db);
+		if (result.errors.length > 0) throw new Error(result.errors.join("; "));
+		runMigrations(db);
+		return result;
+	})();
+}
+
 export function ensureUnifiedSchema(db: {
 	exec(sql: string): void;
 	prepare(sql: string): {

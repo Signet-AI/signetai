@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { createConcurrencyAdmission } from "./concurrency-admission";
+import { legacyPrincipal } from "./auth/principal";
 import { setFtsIndexIncomplete } from "./fts-index-state";
 import {
 	__setPromptSubmitAdmissionForTests,
@@ -14,6 +15,7 @@ import {
 	preferHookRecallCause,
 } from "./routes/hooks-routes";
 import { claimRecallItemsAsync } from "./session-recall-dedupe";
+import { localTestReadScope } from "./test-support/local-read-scope";
 import {
 	clearSessionStartDedupe,
 	hasSessionStartDedupe,
@@ -145,6 +147,7 @@ memory:
 			const first = await claimRecallItemsAsync({
 				sessionKey: sessionRecallKey,
 				agentId: "default",
+				readScope: localTestReadScope("default"),
 				surface: "test",
 				mode: "automatic",
 				items: [{ id: "compaction-recall-memory" }],
@@ -166,6 +169,7 @@ memory:
 			const second = await claimRecallItemsAsync({
 				sessionKey: sessionRecallKey,
 				agentId: "default",
+				readScope: localTestReadScope("default"),
 				surface: "test",
 				mode: "automatic",
 				items: [{ id: "compaction-recall-memory" }],
@@ -184,8 +188,8 @@ memory:
 		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
 		await getDbAccessor?.().withWriteTxAsync((db) => {
 			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('entity-kestrel', 'Kestrel', 'kestrel', 'project', 'default', 10, ?, ?)`,
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('entity-kestrel', 'Kestrel', 'kestrel', 'project', 'default', 10, 1, ?, ?)`,
 			).run(now, now);
 			db.prepare(
 				`INSERT INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
@@ -230,8 +234,8 @@ memory:
 		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
 		await getDbAccessor?.().withWriteTxAsync((db) => {
 			db.prepare(
-				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('entity-osprey', 'Osprey', 'osprey', 'project', 'default', 10, ?, ?)`,
+				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('entity-osprey', 'Osprey', 'osprey', 'project', 'default', 10, 1, ?, ?)`,
 			).run(now, now);
 			db.prepare(
 				`INSERT OR IGNORE INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
@@ -273,8 +277,8 @@ memory:
 		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
 		await getDbAccessor?.().withWriteTxAsync((db) => {
 			db.prepare(
-				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('entity-falcon', 'Falcon', 'falcon', 'project', 'default', 10, ?, ?)`,
+				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('entity-falcon', 'Falcon', 'falcon', 'project', 'default', 10, 1, ?, ?)`,
 			).run(now, now);
 			const memory = db.prepare(
 				`INSERT OR IGNORE INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
@@ -820,6 +824,14 @@ memory:
 		const { registerHooksRoutes } = await import("./routes/hooks-routes");
 		const { Hono } = await import("hono");
 		const routes = new Hono();
+		routes.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			if (claims) {
+				c.set("principal", legacyPrincipal(claims));
+				c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+			}
+			await next();
+		});
 		registerHooksRoutes(routes);
 		const sessionKey = `muse-unauthorized-${crypto.randomUUID()}`;
 		const previousMode = authConfig.mode;
@@ -836,7 +848,7 @@ memory:
 				}),
 			});
 
-			expect(resp.status).toBe(403);
+			expect(resp.status).toBe(401);
 			const row = getSyncDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?").get(sessionKey),
 			);
@@ -897,7 +909,7 @@ memory:
 			body: "{",
 		});
 		expect(badBody.status).toBe(400);
-		expect(await badBody.json()).toEqual({ error: "invalid request body" });
+		expect(await badBody.json()).toEqual({ error: "invalid_request", reason: "invalid_request" });
 
 		const sessionKey = `claude-stop-rejected-${crypto.randomUUID()}`;
 		const rejected = [
@@ -958,7 +970,7 @@ memory:
 				agent: "stop-reader",
 				role: "readonly",
 				agentId: "stop-reader",
-				error: "role 'readonly' lacks 'remember' permission",
+				error: "credential lacks 'remember' permission",
 			},
 			{
 				agent: "stop-writer",
@@ -979,6 +991,14 @@ memory:
 					});
 					await next();
 				});
+				routes.use("*", async (c, next) => {
+					const claims = c.get("auth")?.claims;
+					if (claims) {
+						c.set("principal", legacyPrincipal(claims));
+						c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+					}
+					await next();
+				});
 				registerHooksRoutes(routes);
 				const sessionKey = `claude-stop-denied-${crypto.randomUUID()}`;
 				const resp = await postStop(
@@ -987,7 +1007,9 @@ memory:
 				);
 
 				expect(resp.status).toBe(403);
-				expect(await resp.json()).toEqual({ error });
+				expect(await resp.json()).toEqual(
+					role === "readonly" ? { error, reason: "permission", required: "remember" } : { error },
+				);
 				expect(storedTranscript(sessionKey)).toBeNull();
 				expect(stopRecords(sessionKey)).toEqual([]);
 			}
@@ -1007,6 +1029,14 @@ memory:
 				authenticated: true,
 				claims: { sub: "stop-admin", scope: { agent: "stop-admin-agent" }, role: "admin", iat: now, exp: now + 3600 },
 			});
+			await next();
+		});
+		routes.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			if (claims) {
+				c.set("principal", legacyPrincipal(claims));
+				c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+			}
 			await next();
 		});
 		registerHooksRoutes(routes);
@@ -1234,6 +1264,14 @@ memory:
 					exp: now + 3600,
 				},
 			});
+			await next();
+		});
+		routes.use("*", async (c, next) => {
+			const claims = c.get("auth")?.claims;
+			if (claims) {
+				c.set("principal", legacyPrincipal(claims));
+				c.set("author", { userId: claims.scope.user ?? null, credential: `token:${claims.sub}` });
+			}
 			await next();
 		});
 		registerHooksRoutes(routes);
@@ -1572,34 +1610,124 @@ memory:
 		expect(body.memories).toEqual(body.results);
 		expect(body.count).toBe(body.results.length);
 	});
-});
 
-describe("/api/hooks/user-prompt-submit admission cap (#1059)", () => {
-	it("acquires up to the cap, rejects past it, and re-acquires after release", () => {
-		const admission = createPromptSubmitAdmission(2);
-		expect(admission.acquire()).toBe(true);
-		expect(admission.acquire()).toBe(true);
-		expect(admission.acquire()).toBe(false);
-		expect(admission.inFlight()).toBe(2);
-		admission.release();
-		expect(admission.inFlight()).toBe(1);
-		expect(admission.acquire()).toBe(true);
-		expect(admission.inFlight()).toBe(2);
-	});
-
-	it("rejects with 503 while the cap is saturated and recovers after release", async () => {
-		__setPromptSubmitAdmissionForTests(createPromptSubmitAdmission(0));
-		try {
-			const resp = await app.request("/api/hooks/user-prompt-submit", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+	describe("/api/hooks/user-prompt-submit admission cap (#1059)", () => {
+		it("waits for remember capacity then durably captures the memory", async () => {
+			const { Hono } = await import("hono");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const admission = createConcurrencyAdmission(1);
+			const release = await admission.acquire("local");
+			if (typeof release !== "function") throw new Error("expected grant");
+			const routes = new Hono();
+			(await import("./middleware")).registerGlobalMiddleware(routes);
+			registerMemoryRoutes(routes, { memoryCaptureAdmission: admission, fetchEmbedding: async () => null });
+			let settled = false;
+			const content = `Remember admission durable receipt ${crypto.randomUUID()}`;
+			const request = Promise.resolve(
+				routes.request("/api/memory/remember", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ content, type: "fact" }),
+				}),
+			).then((response) => {
+				settled = true;
+				return response;
 			});
-			expect(resp.status).toBe(503);
-			const body = (await resp.json()) as { error?: string };
-			expect(body.error).toContain("concurrent prompt submissions");
-		} finally {
-			__setPromptSubmitAdmissionForTests(null);
-		}
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				expect(settled).toBe(false);
+				release();
+				const response = await request;
+				expect(response.status).toBe(200);
+				const row = await getDbAccessor?.().withReadDbAsync((db) =>
+					db.prepare("SELECT content FROM memories WHERE content = ?").get(content),
+				);
+				expect(row).toEqual({ content });
+				expect(admission.inFlight()).toBe(0);
+			} finally {
+				release();
+			}
+		});
+
+		it("skips prompt and stop work when cancellation races a queued grant", async () => {
+			for (const [path, body, setAdmission] of [
+				[
+					"/api/hooks/user-prompt-submit",
+					{ harness: "codex", userMessage: "hello" },
+					__setPromptSubmitAdmissionForTests,
+				],
+				["/api/hooks/stop", { harness: "codex", sessionKey: crypto.randomUUID() }, __setStopAdmissionForTests],
+			] as const) {
+				const admission = createConcurrencyAdmission(1);
+				const release = await admission.acquire("local");
+				if (typeof release !== "function") throw new Error("expected grant");
+				setAdmission(admission);
+				const controller = new AbortController();
+				try {
+					const request = app.request(path, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(body),
+						signal: controller.signal,
+					});
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					release();
+					controller.abort();
+					const response = await request;
+					expect(response.status).toBe(503);
+					expect(await response.json()).toMatchObject({ reason: "admission" });
+					expect(admission.inFlight()).toBe(0);
+				} finally {
+					release();
+					setAdmission(null);
+				}
+			}
+		});
+
+		it("waits for prompt capacity then succeeds", async () => {
+			const admission = createPromptSubmitAdmission(1);
+			const release = await admission.acquire("local");
+			if (typeof release !== "function") throw new Error("expected grant");
+			__setPromptSubmitAdmissionForTests(admission);
+			try {
+				let settled = false;
+				const request = Promise.resolve(
+					app.request("/api/hooks/user-prompt-submit", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+					}),
+				).then((response) => {
+					settled = true;
+					return response;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				expect(settled).toBe(false);
+				release();
+				expect((await request).status).toBe(200);
+				expect(admission.inFlight()).toBe(0);
+			} finally {
+				release();
+				__setPromptSubmitAdmissionForTests(null);
+			}
+		});
+
+		it("rejects with 503 while the cap is saturated and recovers after release", async () => {
+			__setPromptSubmitAdmissionForTests(createPromptSubmitAdmission(0));
+			try {
+				const resp = await app.request("/api/hooks/user-prompt-submit", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ harness: "codex", userMessage: "hello" }),
+				});
+				expect(resp.status).toBe(503);
+				const body = (await resp.json()) as { error?: string };
+				expect(body.error).toContain("concurrent prompt submissions");
+				expect(resp.headers.get("Retry-After")).toBe("1");
+				expect(body).toMatchObject({ reason: "admission" });
+			} finally {
+				__setPromptSubmitAdmissionForTests(null);
+			}
+		});
 	});
 });

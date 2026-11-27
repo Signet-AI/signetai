@@ -375,7 +375,9 @@ fail explicitly; they do not fall back to another model.
 The response is an SSE stream of JSON `data` events: `delta`, `tool`, `citation`,
 `retrieval` (`nodeIds` and `evidenceRefs`, at most 100 identifiers each), `focus`, `saved`, `dream`, `done`, or `error`. `done` ends a successful turn;
 `error` ends a failed turn. Disconnecting cancels the current turn and awaits its
-cleanup while retaining the idle session. Output is bounded to 1 MiB and agent execution to 90 seconds.
+cleanup. Local-mode conversations retain their idle session; organization-mode
+turns dispose their provider session instead. Output is bounded to 1 MiB and
+agent execution to 90 seconds.
 
 The daemon uses the shared Pi agent worker boundary also used by Dreaming.
 The Pi worker pool holds the shared LLM limit (`worker.maxLlmConcurrency`) plus three retained chat sessions.
@@ -387,7 +389,11 @@ the new user message; request history seeds a session when it is first created o
 has expired. Switching models updates the existing Pi session. A session has no
 total tool-call budget; at most eight of its tool calls run at once, and further
 calls wait for a slot. Shutdown disposes all workers. Dreaming sessions remain bounded
-to their pass lifecycle.
+to their pass lifecycle. In a claimed organization, each turn starts with a fresh
+provider context and re-resolves the caller's read reach and classification
+audiences. The request's bounded message history seeds that turn; previously
+retrieved server-side tool output is not retained across turns, so audience
+revocation applies on the next request.
 The worker owns model execution and the agent loop; tools execute through
 existing daemon capabilities and the asynchronous database owner protocol.
 No shell, coding, ambient extension, or direct semantic mutation tools are

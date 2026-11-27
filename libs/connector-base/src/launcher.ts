@@ -72,6 +72,13 @@ export function isSignetCliLauncher(launcher: ResolvedCommand | undefined): bool
 	);
 }
 
+function proxyCli(launcher: ResolvedCommand): ResolvedCommand | undefined {
+	const suffix = launcher.args.slice(-3);
+	if (suffix[0] !== "connector" || suffix[1] !== "mcp" || !/^[a-z][a-z0-9-]{0,63}$/.test(suffix[2] ?? ""))
+		return undefined;
+	const cli = { command: launcher.command, args: launcher.args.slice(0, -3) };
+	return isSignetCliLauncher(cli) ? cli : undefined;
+}
 export function readMcpLauncher(value: unknown): ResolvedCommand | undefined {
 	if (!isJsonObject(value) || typeof value.command !== "string" || !value.command) return undefined;
 	const args = value.args ?? [];
@@ -84,6 +91,7 @@ export function readMcpLauncher(value: unknown): ResolvedCommand | undefined {
 	}
 	const launcher = { command: value.command, args, ...(Object.keys(env).length ? { env } : {}) };
 	const name = win32.basename(launcher.command);
+	if (proxyCli(launcher)) return launcher;
 	if (/^signet-mcp(?:\.exe)?$/i.test(name)) return launcher;
 	if (/^signet(?:\.(?:exe|cmd|bat|ps1))?$/i.test(name) && env.SIGNET_MCP_STDIO_WORKER === "1") return launcher;
 	if (
@@ -121,6 +129,13 @@ function override(): ResolvedCommand | undefined {
 
 export function cliFromMcp(launcher: ResolvedCommand | undefined): ResolvedCommand | undefined {
 	if (!launcher) return undefined;
+	const proxy = proxyCli(launcher);
+	if (proxy) return proxy;
+	if (
+		/^signet(?:\.(?:exe|cmd|bat|ps1))?$/i.test(win32.basename(launcher.command)) &&
+		launcher.env?.SIGNET_MCP_STDIO_WORKER === "1"
+	)
+		return { command: launcher.command, args: [] };
 	if (
 		isSignetCliLauncher(launcher) &&
 		(launcher.env?.SIGNET_MCP_STDIO_WORKER === "1" ||

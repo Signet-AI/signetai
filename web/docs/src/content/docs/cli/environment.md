@@ -29,10 +29,17 @@ Workspace status is `fresh` for an unconfigured default, `ready` when the config
 | `SIGNET_BIND` | daemon | Explicit listen-address override. Without it, `network.mode: localhost` binds `127.0.0.1`; `network.mode: tailscale` binds `0.0.0.0`. |
 | `SIGNET_DAEMON_URL` | CLI and connector clients | Remote daemon origin. It takes precedence over the local host/port client URL. |
 | `SIGNET_API_KEY` | CLI and connector clients | Bearer credential for protected daemon calls. |
-| `SIGNET_TOKEN` | CLI and connector clients | Backwards-compatible bearer-credential alias. |
+| `SIGNET_API_KEY_FILE` | SDK-backed CLI clients | Private credential-file override. Connectors normally use their registry entry. |
 | `SIGNET_LOG_FILE` | daemon | Explicit log file path. |
 | `SIGNET_LOG_DIR` | daemon | Daemon log-directory override. |
 | `SIGNET_BYPASS` | harness hooks | Skip hook processing for that process. |
+
+Harness integrations resolve their target and key through the Signet registry.
+Do not write `SIGNET_API_KEY`, `SIGNET_TOKEN`, or bearer headers into installed
+hooks, MCP configs, or process arguments. Hermes snapshots the active profile
+from `HERMES_HOME`; it does not use process-global URL/key variables as its
+connection authority.
+
 
 `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, and `SIGNET_ADMIN_USERNAME` configure the optional dashboard password login. They are credential inputs, not general shell configuration; use a secret manager or service-environment mechanism and do not commit them. See [Authentication](/auth/).
 
@@ -50,5 +57,7 @@ Workspace status is `fresh` for an unconfigured default, `ready` when the config
 |---:|---|
 | `0` | Command completed successfully. |
 | `1` | General command, validation, daemon, or request error. |
+| `3` | Authentication required or expired (`401`); `--json` includes the reason. |
+| `4` | Permission denied (`403`); `--json` includes the reason. |
 
 Scripts should inspect both the exit code and structured `--json` output when a command supports it. Do not treat a successful process launch as proof that a remote daemon accepted an authenticated request.

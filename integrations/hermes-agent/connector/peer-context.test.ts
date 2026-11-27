@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -40,6 +41,7 @@ const PRELUDE = [
 	"calls = []",
 	"class FakeClient:",
 	"    _agent_id = 'agent-a'",
+	"    agent_id = 'agent-a'",
 	"    def request_result(self, method, path, body=None, **kw):",
 	"        calls.append(['http', method, path, body])",
 	"        return {'ok': True, 'data': {'ok': True}}",

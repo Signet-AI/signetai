@@ -1,3 +1,5 @@
+import { readScopeSql, type ReadScope } from "../read-scope";
+
 export interface ReviewDueMemory {
 	readonly id: string;
 	readonly content: string;
@@ -19,6 +21,7 @@ export interface ReviewWindowOptions {
 	readonly expiringSoonMs?: number;
 	readonly limit?: number;
 	readonly agentId?: string;
+	readonly readScope?: ReadScope;
 }
 
 interface ReviewDueRow {
@@ -62,6 +65,10 @@ function toReviewDueMemory(row: ReviewDueRow): ReviewDueMemory {
 }
 
 function reviewDueQuery(options: ReviewWindowOptions): { readonly sql: string; readonly params: unknown[] } {
+	if (options.readScope) {
+		const scope = readScopeSql("m", options.readScope);
+		return { sql: scope.sql, params: scope.args };
+	}
 	return options.agentId
 		? {
 				sql: "AND m.agent_id = ?",
@@ -84,6 +91,29 @@ const REVIEW_DUE_SELECT = `
 	 WHERE m.review_after IS NOT NULL
 	   AND m.superseded_by IS NULL
 	   AND m.is_deleted = 0`;
+function reviewDueSelect(options: ReviewWindowOptions): { sql: string; params: unknown[] } {
+	if (!options.readScope) return { sql: REVIEW_DUE_SELECT, params: [] };
+	const params: unknown[] = [];
+	const predicate = (alias: string) => {
+		if (options.readScope === undefined) throw new Error("read_scope_required");
+		if (options.readScope.projects !== null) return " AND 0";
+		const clause = readScopeSql(alias, options.readScope, {
+			visibility: null,
+			memory: null,
+			session: null,
+			source: null,
+		});
+		params.push(...clause.args);
+		return clause.sql;
+	};
+	return {
+		sql: REVIEW_DUE_SELECT.replace("AND ea.status = 'active'", `AND ea.status = 'active' ${predicate("ea")}`)
+			.replace("a.agent_id = ea.agent_id", `a.agent_id = ea.agent_id ${predicate("a")}`)
+			.replace("e.agent_id = ea.agent_id", `e.agent_id = ea.agent_id ${predicate("e")}`),
+		params,
+	};
+}
+
 export function findExpiredReviewDueMemories(
 	accessor: ReviewDueAccessor,
 	now = new Date(),
@@ -91,12 +121,14 @@ export function findExpiredReviewDueMemories(
 ): readonly ReviewDueMemory[] {
 	const limit = opts.limit ?? 50;
 	const query = reviewDueQuery(opts);
+	const select = reviewDueSelect(opts);
 	const rows = accessor.all<ReviewDueRow>(
-		`${REVIEW_DUE_SELECT}
+		`${select.sql}
 		    AND m.review_after < ?
 		    ${query.sql}
 		  ORDER BY review_after ASC
 		  LIMIT ?`,
+		...select.params,
 		now.toISOString(),
 		...query.params,
 		limit,
@@ -111,14 +143,16 @@ export function findApproachingReviewDueMemories(
 	const windowMs = opts.expiringSoonMs ?? 7 * 24 * 60 * 60 * 1000;
 	const limit = opts.limit ?? 50;
 	const query = reviewDueQuery(opts);
+	const select = reviewDueSelect(opts);
 	const horizon = new Date(now.getTime() + windowMs);
 	const rows = accessor.all<ReviewDueRow>(
-		`${REVIEW_DUE_SELECT}
+		`${select.sql}
 		    AND m.review_after >= ?
 		    AND m.review_after <= ?
 		    ${query.sql}
 		  ORDER BY review_after ASC
 		  LIMIT ?`,
+		...select.params,
 		now.toISOString(),
 		horizon.toISOString(),
 		...query.params,

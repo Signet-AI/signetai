@@ -1,3 +1,4 @@
+import "../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import {
 	readMcpLauncher,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 } from "./src/index";
 
 const keys = ["SIGNET_HOOK_COMMAND", "SIGNET_CLI_PATH", "SIGNET_DIR", "SIGNET_WRAPPER_DIR"];
@@ -28,6 +30,19 @@ afterEach(() => {
 		if (value === undefined) Reflect.deleteProperty(process.env, key);
 		if (value !== undefined) process.env[key] = value;
 	}
+});
+
+test("reinstall preserves a credential-free MCP proxy launcher and unrelated environment", () => {
+	const command = join(root, "signet");
+	writeFileSync(command, "");
+	const first = resolveHarnessMcpCommand("codex", {
+		command,
+		args: [],
+		env: { SIGNET_MCP_STDIO_WORKER: "1", SIGNET_API_KEY: "legacy-key", CUSTOM: "keep" },
+	});
+	expect(first).toEqual({ command, args: ["connector", "mcp", "codex"], env: { CUSTOM: "keep" } });
+	const second = resolveHarnessMcpCommand("codex", readMcpLauncher(first));
+	expect(second).toEqual(first);
 });
 
 test.each([

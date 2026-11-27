@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { createIdentityMiddleware } from "../auth/identity-middleware";
 import type { DbAccessor } from "../db-accessor";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 
@@ -13,7 +14,6 @@ let registerMemoryRoutes: typeof import("./memory-routes").registerMemoryRoutes;
 let initDbAccessor: typeof import("../db-accessor").initDbAccessor;
 let closeDbAccessor: typeof import("../db-accessor").closeDbAccessor;
 let getDbAccessor: typeof import("../db-accessor").getDbAccessor;
-let createAuthMiddleware: typeof import("../auth").createAuthMiddleware;
 let createToken: typeof import("../auth").createToken;
 let loadMemoryConfig: typeof import("../memory-config").loadMemoryConfig;
 let startDocumentWorker: typeof import("../pipeline/document-worker").startDocumentWorker;
@@ -87,15 +87,15 @@ function seedDocument(
 	});
 }
 
-async function makeApp(mode: "local" | "team"): Promise<Hono> {
+async function makeApp(
+	mode: "local" | "team",
+	fetchEmbedding: import("./memory-routes").MemoryRoutesDeps["fetchEmbedding"] = async () => null,
+): Promise<Hono> {
 	writeAuthConfig(mode);
 	state.reloadAuthState(agentsDir);
 	const app = new appFactory();
-	if (mode === "team") {
-		if (!state.authSecret) throw new Error("expected auth secret in team mode");
-		app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
-	}
-	registerMemoryRoutes(app, { fetchEmbedding: async () => null });
+	app.use("*", createIdentityMiddleware(state.authConfig, state.authSecret));
+	registerMemoryRoutes(app, { fetchEmbedding });
 	return app;
 }
 
@@ -158,7 +158,7 @@ beforeAll(async () => {
 	appFactory = hono.Hono;
 	({ initDbAccessor, closeDbAccessor, getDbAccessor } = await import("../db-accessor"));
 	({ registerMemoryRoutes } = await import("./memory-routes"));
-	({ createAuthMiddleware, createToken } = await import("../auth"));
+	({ createToken } = await import("../auth"));
 	({ loadMemoryConfig } = await import("../memory-config"));
 	({ startDocumentWorker } = await import("../pipeline/document-worker"));
 	state = await import("./state.js");
@@ -168,6 +168,7 @@ beforeAll(async () => {
 beforeEach(() => {
 	setActiveTelemetry(undefined);
 	getDbAccessor().withWriteTx((db) => {
+		db.prepare("DELETE FROM embeddings").run();
 		db.prepare("DELETE FROM document_memories").run();
 		db.prepare("DELETE FROM documents").run();
 		db.prepare("DELETE FROM memory_jobs").run();
@@ -187,6 +188,56 @@ afterAll(async () => {
 });
 
 describe("document routes", () => {
+	for (const chunked of [false, true]) {
+		it(`inherits request session classifications on documents and ${chunked ? "chunked" : "inline"} memories, vectors and hints`, async () => {
+			const app = await makeApp("local", async (_text, cfg) => Array.from({ length: cfg.dimensions }, () => 0.1));
+			const classification = `cls_request_${chunked}`;
+			const session = `request-session-${chunked}`;
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("INSERT INTO classifications(id,name,created_at,updated_at) VALUES (?,?,'now','now')").run(
+					classification,
+					classification,
+				);
+				db.prepare(
+					"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_at) VALUES ('session',?,'default',?,'now')",
+				).run(session, classification);
+			});
+			const content = chunked
+				? Array.from({ length: 40 }, (_, i) => `Classified evidence number ${i} belongs to this request session.`).join(
+						" ",
+					)
+				: "Classified user memory evidence";
+			for (const [path, body] of [
+				["/api/documents", { source_type: "text", content: "Classified document evidence" }],
+				["/api/memory/remember", { content, sourceType: "user", hints: ["Where is the classified evidence?"] }],
+			] as const) {
+				const response = await app.request(path, {
+					method: "POST",
+					headers: { "content-type": "application/json", "x-signet-session-key": session },
+					body: JSON.stringify(body),
+				});
+				expect(response.status).toBe(path === "/api/documents" ? 201 : 200);
+			}
+			getDbAccessor().withReadDb((db) => {
+				const compartment = db.prepare("SELECT id FROM compartments WHERE key = ?").get(classification)?.id;
+				expect(compartment).toBeNumber();
+				expect(db.prepare("SELECT compartment_id FROM documents").get()).toEqual({ compartment_id: compartment });
+				const memories = db.prepare("SELECT compartment_id FROM memories").all();
+				expect(memories.length).toBeGreaterThan(chunked ? 1 : 0);
+				for (const row of memories) expect(row).toEqual({ compartment_id: compartment });
+				const embeddings = db.prepare("SELECT agent_id,compartment_id FROM embeddings").all();
+				expect(embeddings.length).toBe(memories.length);
+				for (const row of embeddings) expect(row).toEqual({ agent_id: "default", compartment_id: compartment });
+				expect(db.prepare("SELECT count(*) n FROM vec_embeddings").get()).toEqual({ n: 0 });
+				expect(db.prepare(`SELECT count(*) n FROM vec_embeddings__c${compartment}`).get()).toEqual({
+					n: memories.length,
+				});
+				if (!chunked)
+					expect(db.prepare("SELECT compartment_id FROM memory_hints").get()).toEqual({ compartment_id: compartment });
+			});
+		});
+	}
+
 	it("emits extraction parse-failure telemetry for empty document content", async () => {
 		const telemetry = captureTelemetry();
 		setActiveTelemetry(telemetry.collector);

@@ -1,52 +1,62 @@
+import { purgeHookUploadSessionBatchInTx } from "./transcript-capture-owner";
 import { createHash } from "node:crypto";
-import { attempt } from "@signet/core";
-import { normalizeSessionTranscript } from "./transcript-normalization";
-import { upsertThreadHead } from "./thread-heads";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { compartmentForWrite } from "@signet/core";
 import { dirname, join } from "node:path";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { attempt, resolveWorkspaceLayout, redactCredentials } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
-import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
-import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
-import { writeTranscriptAudit } from "./transcript-audit";
+import {
+	evidenceCompartmentInTx,
+	recordEvidenceCitationsInTx,
+	readSessionFinalizerAuthorInTx,
+	type CitationEvidence,
+} from "./db-helpers";
+import type { WriteCheckpointParams } from "./session-checkpoints";
+import { auditAuthoredWriteInTx, requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
+import { type DbAccessor, getDbAccessor, prepareTypedStatement, type ReadDb, type WriteDb } from "./db-accessor";
+import {
+	dbOwnerSessionFinalizerAuthor,
+	dbOwnerCommitCompactionSummary,
+	dbOwnerWriteSessionTranscript,
+	getDbOwnerForAccessor,
+} from "./db-owner-runtime";
+import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
+import { logger } from "./logger";
+import { sanitizeFtsQuery } from "./memory-search";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
-import { txForgetMemory } from "./transactions";
-import { markDerivedMemoriesStaleForSourceInTx, linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
+import { normalizeSessionKey } from "./session-end-state";
 import {
 	redactTranscriptFileBatch,
 	removeTranscriptDeletionTemp,
 	type TranscriptFileCheckpoint,
 } from "./session-transcript-files";
-import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
-import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import type {
+	TranscriptBypass,
 	TranscriptCaptureInput,
 	TranscriptDeleteInput,
 	TranscriptDeleteResult,
 	TranscriptLifecycleInput,
 	TranscriptLifecycleResult,
-	TranscriptBypass,
 } from "./session-transcript-lifecycle";
+import { captureTranscriptOwned, type TranscriptCaptureAdmission } from "./session-transcript-lifecycle";
+import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
+import { upsertThreadHead } from "./thread-heads";
+import { txForgetMemory } from "./transactions";
+import { writeTranscriptAudit } from "./transcript-audit";
+import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
 import {
-	dbOwnerWriteSessionTranscript,
-	dbOwnerCommitCompactionSummary,
-	getDbOwnerForAccessor,
-} from "./db-owner-runtime";
-import { logger } from "./logger";
-import { normalizeSessionKey } from "./session-end-state";
-import { sanitizeFtsQuery } from "./memory-search";
-import {
-	type TranscriptIdentity,
-	type TranscriptSessionKeyClassification,
 	canonicalTranscriptPath,
-	transcriptPrefix,
 	digestTranscriptTurns,
 	legacyTranscriptTurns,
 	readCanonicalTranscriptSessionKeys,
 	sanitizeHarnessPath,
 	sessionSeqCacheKey,
+	type TranscriptIdentity,
+	type TranscriptSessionKeyClassification,
+	transcriptPrefix,
 	transcriptTextToTurns,
 } from "./transcript-jsonl";
+import { normalizeSessionTranscript } from "./transcript-normalization";
 
 interface EvidenceTurn {
 	readonly role: string;
@@ -138,6 +148,7 @@ export async function commitCompactionSummary(accessor: DbAccessor, input: Compa
 }
 
 export interface CompactionSummaryInput {
+	readonly author: WriteAuthor;
 	readonly agentId: string;
 	readonly sessionKey: string | null;
 	readonly harness: string;
@@ -146,6 +157,51 @@ export interface CompactionSummaryInput {
 	readonly summaryId: string;
 	readonly now: string;
 	readonly capturedAt?: string;
+}
+
+export async function sessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<WriteAuthor> {
+	return await dbOwnerSessionFinalizerAuthor(accessor, agentId, sessionKey);
+}
+
+export function writeSessionCheckpointInTx(db: WriteDb, params: WriteCheckpointParams, maxPerSession: number): void {
+	const admittedAuthor = requireWriteAuthor(params.author);
+	const author =
+		params.trigger === "ttl_expired" && admittedAuthor.credential === "system"
+			? readSessionFinalizerAuthorInTx(db, params.agentId, params.sessionKey)
+			: admittedAuthor;
+	const compartment = compartmentForWrite(db, { agentId: params.agentId, sessionKey: params.sessionKey });
+	const now = new Date().toISOString();
+	const json = (values: readonly string[] | undefined) => (values?.length ? JSON.stringify(values) : null);
+	db.prepare(`INSERT INTO session_checkpoints
+		(id,session_key,harness,project,project_normalized,trigger,digest,prompt_count,memory_queries,recent_remembers,focal_entity_ids,focal_entity_names,active_aspect_ids,surfaced_constraint_count,traversal_memory_count,created_at,agent_id,compartment_id,author_user_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+		crypto.randomUUID(),
+		params.sessionKey,
+		params.harness,
+		params.project ?? null,
+		params.projectNormalized ?? null,
+		params.trigger,
+		redactCredentials(params.digest),
+		params.promptCount,
+		json(params.memoryQueries),
+		json(params.recentRemembers.map((text) => redactCredentials(text))),
+		json(params.focalEntityIds),
+		json(params.focalEntityNames),
+		json(params.activeAspectIds),
+		params.surfacedConstraintCount ?? null,
+		params.traversalMemoryCount ?? null,
+		now,
+		params.agentId,
+		compartment,
+		author.userId,
+	);
+	db.prepare(`DELETE FROM session_checkpoints WHERE id IN (
+		SELECT id FROM session_checkpoints WHERE session_key=? AND agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET ?
+	)`).run(params.sessionKey, params.agentId, maxPerSession);
 }
 
 export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummaryInput): boolean {
@@ -157,13 +213,27 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		})
 	)
 		return false;
+	const evidence: CitationEvidence[] =
+		input.sessionKey &&
+		prepareTypedStatement<{ session_key: string }>(
+			db,
+			"SELECT session_key FROM session_transcripts WHERE agent_id=? AND session_key=?",
+		).get(input.agentId, input.sessionKey)
+			? [{ kind: "transcript", id: input.sessionKey }]
+			: [];
+	const compartmentId = compartmentForWrite(db, {
+		agentId: input.agentId,
+		sessionKey: input.sessionKey,
+		memoryId: input.summaryId,
+		parentCompartment: evidenceCompartmentInTx(db, input.agentId, evidence),
+	});
 	db.prepare(
 		`INSERT INTO memories (
 			id, content, type, importance, source_id, source_type,
 			who, tags, project, agent_id, created_at, updated_at, updated_by,
-			memory_kind
+			memory_kind, compartment_id, author_user_id
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		input.summaryId,
 		input.summary,
@@ -179,19 +249,22 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		input.now,
 		"system",
 		null,
+		compartmentId,
+		input.author.userId,
 	);
 
+	auditAuthoredWriteInTx(db, input.author, "summary.created", "memory", input.summaryId, input.agentId);
 	const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
 	if (!table) return true;
 	const nodeId = input.sessionKey
 		? `${JSON.stringify([input.agentId, input.sessionKey])}:compaction:${Date.parse(input.now)}`
 		: crypto.randomUUID();
 	db.prepare(
-		`INSERT OR REPLACE INTO session_summaries (
+		`INSERT INTO session_summaries (
 			id, project, depth, kind, content, token_count,
 			earliest_at, latest_at, session_key, harness,
-			agent_id, source_type, source_ref, meta_json, created_at
-		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?)`,
+			agent_id, source_type, source_ref, meta_json, created_at, compartment_id, author_user_id
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,token_count=excluded.token_count,latest_at=excluded.latest_at,compartment_id=excluded.compartment_id,author_user_id=excluded.author_user_id`,
 	).run(
 		nodeId,
 		input.project,
@@ -205,7 +278,15 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		input.sessionKey,
 		JSON.stringify({ source: "compaction-complete" }),
 		input.now,
+		compartmentId,
+		input.author.userId,
 	);
+	recordEvidenceCitationsInTx(db, {
+		agentId: input.agentId,
+		derivedKind: "memory",
+		derivedId: input.summaryId,
+		evidence: [...evidence, { kind: "summary", id: nodeId }],
+	});
 	upsertThreadHead(db, {
 		agentId: input.agentId,
 		nodeId,
@@ -385,7 +466,7 @@ export async function captureSessionTranscriptOwned(
 	db: ReadDb,
 	input: TranscriptCaptureInput,
 	basePath: string,
-): Promise<import("./session-transcript-lifecycle").TranscriptCaptureAdmission> {
+): Promise<TranscriptCaptureAdmission> {
 	if (input.kind === "promotion") {
 		const replacements = input.input.replacements
 			.filter((entry) => admitSessionTranscriptInDb(db, entry.identity))
@@ -609,18 +690,10 @@ export function deleteSessionTranscriptInTx(
 			"SELECT outcome FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND generation = ? AND kind = 'memory' AND id = ?",
 		).get(...scope, memory.id);
 		if (outcome !== "deleted") {
-			if (outcome === "mixed" && memory.source_id !== null && sourceKind !== null && !otherProvenance)
-				linkDerivedMemorySourcesInTx(db, {
-					agentId: input.agentId,
-					derivedMemoryId: memory.id,
-					sources: [{ sourceKind, sourceId: memory.source_id }],
-					createdAt: row.watermark,
-				});
 			if (memory.source_id !== null && !otherProvenance)
-				db.prepare("UPDATE memories SET source_id = NULL, source_type = NULL WHERE id = ? AND agent_id = ?").run(
-					memory.id,
-					input.agentId,
-				);
+				db.prepare(
+					"UPDATE memories SET source_id = NULL, source_type = NULL, stale_at=CASE WHEN ?='mixed' THEN COALESCE(stale_at,?) ELSE stale_at END WHERE id = ? AND agent_id = ?",
+				).run(outcome, row.watermark, memory.id, input.agentId);
 			if (outcome === "mixed") {
 				const sources = prepareTypedStatement<{ source_kind: string; source_id: string }>(
 					db,
@@ -688,6 +761,11 @@ export function deleteSessionTranscriptInTx(
 	}
 	if (Date.now() >= deadlineAt - 100) budget = 0;
 	if (phase === "cleanup" && budget > 0) {
+		const hookRows = purgeHookUploadSessionBatchInTx(db, input.agentId, input.sessionKey);
+		if (hookRows > 0) {
+			add("hookUploadRows", hookRows);
+			budget = 0;
+		}
 		const redacted = redactSessionTranscriptUploadBatchInTx(db, input.agentId, input.sessionKey);
 		if (redacted !== 0) {
 			add("uploadedBytes", Math.max(0, redacted));
@@ -968,6 +1046,7 @@ export interface StoredTranscriptInfo {
 }
 
 export interface SessionTranscriptUpsertOptions {
+	readonly author?: WriteAuthor;
 	readonly rawTranscript?: string;
 	readonly completedAt?: string;
 	readonly preserveExistingContent?: boolean;
@@ -1043,10 +1122,7 @@ function diagnoseCompletedMismatch(
 function tableExists(name: string): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb(
-			(db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name),
-			"db:transcript.table.exists",
-		);
+		return getDbAccessor().withReadDb((db: ReadDb) => tableExistsInDatabase(db, name), "db:transcript.table.exists");
 	} catch {
 		return false;
 	}
@@ -1055,8 +1131,8 @@ function tableExists(name: string): boolean {
 function sessionTranscriptsHasColumn(column: string): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+		return getDbAccessor().withReadDb((db: ReadDb) => {
+			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 			return cols.some((col) => col.name === column);
 		}, "db:transcript.column.exists");
 	} catch {
@@ -1203,7 +1279,7 @@ async function backfillDatabaseTranscripts(
 		let offset = 0;
 		while (true) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+			const rows = getDbAccessor().withReadDb((db: ReadDb) => {
 				const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
 					Record<string, unknown>
 				>;
@@ -1398,8 +1474,8 @@ function writeMarker(markerPath: string, agentId?: string): boolean {
 function hasUpdatedAt(): boolean {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+		return getDbAccessor().withReadDb((db: ReadDb) => {
+			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 			return cols.some((col) => col.name === "updated_at");
 		}, "db:transcript.updated-at.exists");
 	} catch {
@@ -1452,7 +1528,7 @@ export function upsertSessionTranscript(
 
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
+		return (accessor ?? getDbAccessor()).withWriteTx((db: WriteDb) => {
 			return (
 				writeSessionTranscriptRow(db, { sessionKey, transcript, harness, project, agentId, capturedAt, ...options }) ===
 				"written"
@@ -1501,19 +1577,37 @@ export function writeSessionTranscriptRow(
 		? [existing?.trimEnd(), transcript.trim()].filter((part) => part && part.trim().length > 0).join("\n")
 		: mergeTranscriptContent(existing ?? "", transcript);
 	const now = capturedAt ?? new Date().toISOString();
-	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 	const hasUpdated = cols.some((col) => col.name === "updated_at");
 	const hasCompleted = cols.some((col) => col.name === "completed_at");
 	const hasHash = cols.some((col) => col.name === "content_hash");
 	const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
-	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
-	const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
+	const previous = prepareTypedStatement<{ speaker_user_id: string | null }>(
+		db,
+		"SELECT speaker_user_id FROM session_transcripts WHERE agent_id=? AND session_key=?",
+	).get(agentId, sessionKey);
+	if (input.author && previous?.speaker_user_id && previous.speaker_user_id !== input.author.userId) return "conflict";
+	const speakerUserId = input.author?.userId ?? previous?.speaker_user_id ?? null;
+	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at", "compartment_id"];
+	const values: unknown[] = [
+		sessionKey,
+		retainedTranscript,
+		harness,
+		project,
+		agentId,
+		now,
+		compartmentForWrite(db, { agentId, sessionKey }),
+	];
 	const updates = [
 		"content = excluded.content",
 		"harness = excluded.harness",
 		"project = COALESCE(excluded.project, session_transcripts.project)",
 		"agent_id = excluded.agent_id",
+		"compartment_id = excluded.compartment_id",
 	];
+	insertColumns.push("speaker_user_id");
+	values.push(speakerUserId);
+	updates.push("speaker_user_id = COALESCE(session_transcripts.speaker_user_id,excluded.speaker_user_id)");
 	const sameContent = hasHash
 		? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"
 		: "session_transcripts.content = excluded.content";
@@ -1575,6 +1669,7 @@ export async function upsertSessionTranscriptAsync(
 
 export async function appendSessionTranscriptAsync(
 	input: {
+		readonly author: WriteAuthor;
 		readonly sessionKey: string;
 		readonly agentId: string;
 		readonly harness: string;
@@ -1583,8 +1678,9 @@ export async function appendSessionTranscriptAsync(
 	},
 	accessor: DbAccessor = getDbAccessor(),
 ): Promise<void> {
+	const author = requireWriteAuthor(input.author);
 	const written = await writeSessionTranscriptAsync(
-		{ ...input, append: true, capturedAt: new Date().toISOString() },
+		{ ...input, author, append: true, capturedAt: new Date().toISOString() },
 		accessor,
 	);
 	if (!written) throw new Error("Transcript append did not write a row");
@@ -1623,7 +1719,7 @@ export function markSessionTranscriptCompletedInTx(
 	completedAt: string,
 ): boolean {
 	updateTranscriptLifecycleInTx(db, { agentId, sessionKey, action: "end" });
-	const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const columns = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 	if (!columns.some((column) => column.name === "completed_at")) return false;
 	const hasUpdated = columns.some((column) => column.name === "updated_at");
 	const set = hasUpdated ? "completed_at = ?, updated_at = ?" : "completed_at = ?";
@@ -1642,7 +1738,7 @@ export function markSessionTranscriptCompleted(
 	if (sessionKey.trim().length === 0 || agentId.trim().length === 0) return false;
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
+		return (accessor ?? getDbAccessor()).withWriteTx((db: WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
 		}, "db:transcript.row.complete");
@@ -1674,7 +1770,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 	const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT session_key, agent_id, content, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
@@ -1721,7 +1817,7 @@ function readStoredSessionTranscriptInfo(
 ): StoredTranscriptInfo | undefined {
 	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
 	const placeholders = aliases.map(() => "?").join(", ");
-	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all<Record<string, unknown>>();
 	const hasUpdated = cols.some((col) => col.name === "updated_at");
 	const hasCompleted = cols.some((col) => col.name === "completed_at");
 	const hasHash = cols.some((col) => col.name === "content_hash");
@@ -1794,7 +1890,7 @@ export function getSessionTranscriptContent(
 	const placeholders = aliases.map(() => "?").join(", ");
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT content FROM session_transcripts
@@ -1827,7 +1923,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 	const lastActivity = hasUpdatedAt() ? "updated_at" : "created_at";
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return getDbAccessor().withReadDb((db: ReadDb) => {
 			const rows = db
 				.prepare(
 					`SELECT session_key, agent_id, harness, project, content, ${lastActivity} AS last_activity
@@ -1882,7 +1978,7 @@ export function searchTranscriptFallback(params: {
 		const keyPredicates = [`st.session_key IN (${placeholders})`];
 		if (hasSessionId) keyPredicates.push(`st.session_id IN (${placeholders})`);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: ReadDb) => {
 			const args: unknown[] = [
 				params.agentId,
 				...aliases,
@@ -1927,7 +2023,7 @@ export function searchTranscriptFallback(params: {
 				try {
 					const rows: TranscriptRow[] =
 						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-						getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+						getDbAccessor().withReadDb((db: ReadDb) => {
 							const parts = [
 								`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
 								`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
@@ -1991,7 +2087,7 @@ export function searchTranscriptFallback(params: {
 	try {
 		const rows: TranscriptRow[] =
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+			getDbAccessor().withReadDb((db: ReadDb) => {
 				const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
 				const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
 				const parts = [

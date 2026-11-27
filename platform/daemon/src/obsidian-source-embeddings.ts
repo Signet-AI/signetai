@@ -1,3 +1,4 @@
+import { compartmentForWrite } from "@signet/core";
 import {
 	buildObsidianSourceChunks,
 	hash,
@@ -207,11 +208,11 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 		statements.push(
 			ownerStatement(
 				`INSERT INTO embeddings
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
+				 ON CONFLICT(id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
 				 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
-				 created_at = excluded.created_at, agent_id = excluded.agent_id`,
+				 created_at = excluded.created_at, agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 				[
 					embeddingId,
 					contentHash,
@@ -222,22 +223,20 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 					chunk.chunkText,
 					new Date().toISOString(),
 					input.agentId,
+					{ type: "compartment", scope: { agentId: input.agentId, sourceId: chunk.id } },
 				],
 			),
 		);
-		if (vecAvailable && vecDimensions === vector.length)
-			statements.push(
-				ownerStatement(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`, [
-					embeddingId,
-					{ type: "bytes", base64: vectorToBlob(vector).toString("base64") },
-				]),
-			);
+
 		await dbOwnerBatch(statements, {
 			operation: "sources.embeddings.owner.write",
 			lane: "write",
 			workloadClass: "maintenance",
 			estimatedWorkUnits: statements.length,
 			signal: input.signal,
+			...(vecAvailable && vecDimensions === vector.length
+				? { embeddingProjection: { store: "embeddings", projection: vecTable, ids: [embeddingId] } }
+				: {}),
 		});
 		embedded++;
 	}
@@ -412,7 +411,7 @@ export async function indexObsidianSourceEmbeddings(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const embeddingConfig = getDbAccessor().withReadDb(
 		(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-		"obsidian-source-embeddings.ts:413",
+		"db:obsidian-source.initial-profile",
 	);
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
@@ -453,7 +452,7 @@ export async function indexObsidianSourceEmbeddings(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const writeConfig = getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-			"obsidian-source-embeddings.ts:454",
+			"db:obsidian-source.write-profile",
 		);
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
@@ -495,16 +494,16 @@ export async function indexObsidianSourceEmbeddings(
 			}
 			db.prepare(
 				`INSERT INTO embeddings
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id,compartment_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
+				 ON CONFLICT(id) DO UPDATE SET
 				   vector = excluded.vector,
 				   dimensions = excluded.dimensions,
 				   source_type = excluded.source_type,
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text,
 				   created_at = excluded.created_at,
-				   agent_id = excluded.agent_id`,
+				   agent_id = excluded.agent_id,compartment_id=excluded.compartment_id`,
 			).run(
 				embId,
 				contentHash,
@@ -515,13 +514,12 @@ export async function indexObsidianSourceEmbeddings(
 				chunk.chunkText,
 				now,
 				input.agentId,
+				compartmentForWrite(db, { agentId: input.agentId, sourceId: chunk.id }),
 			);
-			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-				| { id: string }
-				| undefined;
+			const stored = db.prepare("SELECT id FROM embeddings WHERE id = ?").get(embId) as { id: string } | undefined;
 			syncVecInsert(db, stored?.id ?? embId, vector);
 			return true;
-		}, "obsidian-source-embeddings.ts:485");
+		}, "db:obsidian-source.persist-chunk");
 		if (!stored) {
 			skipped++;
 			await yielder();
@@ -559,7 +557,7 @@ export async function indexObsidianSourceEmbeddings(
 				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 				for (const id of staleIds) stmt.run(id);
 			}
-		}, "obsidian-source-embeddings.ts:538");
+		}, "db:obsidian-source.prune-chunks");
 
 	return {
 		chunks: chunks.length,
@@ -588,7 +586,7 @@ function existingChunkEmbedding(agentId: string, chunkId: string): { id: string;
 					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
 				)
 				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
-		"obsidian-source-embeddings.ts:584",
+		"db:obsidian-source.existing-chunk",
 	) as { id: string; content_hash: string } | undefined;
 	return row ?? null;
 }
@@ -627,7 +625,7 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			changes += result.changes;
 		}
 		return changes;
-	}, "obsidian-source-embeddings.ts:607");
+	}, "db:obsidian-source.purge-prefix");
 }
 
 function prefixUpperBound(prefix: string): string {

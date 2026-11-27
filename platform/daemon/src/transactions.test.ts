@@ -1,9 +1,10 @@
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
 import type { WriteDb } from "./db-accessor";
 import { beginEmbeddingIndexBuild, ensureEmbeddingIndexState } from "./embedding-index-state";
-import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "./transactions";
+import { insertHistoryEvent, txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "./transactions";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -23,6 +24,8 @@ function insertMemory(
 ): void {
 	const now = new Date().toISOString();
 	txIngestEnvelope(asWriteDb(db), {
+		author: { userId: null, credential: "system" },
+		agentId: "default",
 		id: input.id,
 		content: input.content,
 		normalizedContent: input.content.toLowerCase(),
@@ -57,6 +60,106 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		db.close();
 	});
 
+	it("reuses a parent hash embedding when an edit keeps its hash", () => {
+		insertMemory(db, { id: "same-hash-edit", content: "Original", contentHash: "same-hash" });
+		insertMemory(db, { id: "other-parent", content: "Independent", contentHash: "other-memory-hash" });
+		const insert = db.prepare(
+			"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,agent_id,created_at,chunk_text) VALUES(?,'same-hash',?,3,'memory',?,'default','now','Original')",
+		);
+		insert.run("existing-vector", new Uint8Array(new Float32Array([1, 0, 0]).buffer), "same-hash-edit");
+		insert.run("other-vector", new Uint8Array(new Float32Array([0, 1, 0]).buffer), "other-parent");
+		const result = txModifyMemory(asWriteDb(db), {
+			memoryId: "same-hash-edit",
+			patch: { content: "Original normalized", contentHash: "same-hash" },
+			reason: "normalize",
+			changedBy: "test",
+			changedAt: new Date().toISOString(),
+			ctx: { author: SYSTEM_AUTHOR },
+			embeddingVector: [0, 0, 1],
+		});
+		expect(result.status).toBe("updated");
+		expect(db.prepare("SELECT id,source_id FROM embeddings ORDER BY id").all()).toEqual([
+			{ id: "existing-vector", source_id: "same-hash-edit" },
+			{ id: "other-vector", source_id: "other-parent" },
+		]);
+		expect(db.prepare("SELECT hex(vector) vector FROM embeddings WHERE id='existing-vector'").get()).toEqual({
+			vector: Buffer.from(new Float32Array([0, 0, 1]).buffer)
+				.toString("hex")
+				.toUpperCase(),
+		});
+	});
+
+	it("rejects missing modify authors before metadata mutation or duplicate lookup", () => {
+		insertMemory(db, { id: "author-required", content: "Original evidence", contentHash: "original" });
+		insertMemory(db, { id: "duplicate", content: "Duplicate evidence", contentHash: "duplicate" });
+		for (const patch of [{ importance: 0.2 }, { content: "Duplicate evidence", contentHash: "duplicate" }]) {
+			expect(() =>
+				Reflect.apply(txModifyMemory, undefined, [
+					asWriteDb(db),
+					{
+						memoryId: "author-required",
+						patch,
+						reason: "correction",
+						changedBy: "caller",
+						changedAt: new Date().toISOString(),
+					},
+				]),
+			).toThrow("A write requires an explicit author");
+		}
+		expect(db.prepare("SELECT content, importance, version FROM memories WHERE id = ?").get("author-required")).toEqual(
+			{ content: "Original evidence", importance: 0.6, version: 1 },
+		);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM memory_history WHERE memory_id = ?").get("author-required")).toEqual({
+			n: 0,
+		});
+	});
+
+	it("audits the modifying credential while preserving the evidence author", () => {
+		insertMemory(db, { id: "authored", content: "Original evidence", contentHash: "authored" });
+		db.prepare("UPDATE memories SET author_user_id = ? WHERE id = ?").run("usr_original", "authored");
+		const result = txModifyMemory(asWriteDb(db), {
+			memoryId: "authored",
+			patch: { importance: 0.2 },
+			reason: "correction",
+			changedBy: "caller",
+			changedAt: new Date().toISOString(),
+			ctx: { author: { userId: "usr_editor", credential: "session:ses_editor" } },
+		});
+		expect(result.status).toBe("updated");
+		expect(db.prepare("SELECT author_user_id FROM memories WHERE id = ?").get("authored")).toEqual({
+			author_user_id: "usr_original",
+		});
+		expect(
+			db
+				.prepare(
+					"SELECT actor_user_id, actor_credential FROM audit_events WHERE target_id = ? AND action = 'memory.updated'",
+				)
+				.get("authored"),
+		).toEqual({ actor_user_id: "usr_editor", actor_credential: "session:ses_editor" });
+	});
+
+	it("requires explicit workspace audit scope and never substitutes it for pass history", () => {
+		const input = {
+			memoryId: "system",
+			event: "none",
+			oldContent: null,
+			newContent: null,
+			changedBy: "daemon",
+			reason: "Repair",
+			metadata: null,
+			createdAt: "now",
+		};
+		expect(() => insertHistoryEvent(asWriteDb(db), input)).toThrow("history_memory_scope_missing");
+		insertHistoryEvent(asWriteDb(db), { ...input, workspaceAudit: true });
+		expect(db.query("SELECT memory_id,agent_id,compartment_id FROM memory_history").all()).toEqual([
+			{ memory_id: "system", agent_id: null, compartment_id: null },
+		]);
+		expect(() =>
+			insertHistoryEvent(asWriteDb(db), { ...input, workspaceAudit: true, passId: "pass", agentId: "default" }),
+		).toThrow("invalid_workspace_audit_scope");
+		expect(db.query("SELECT count(*) AS n FROM memory_history").get()).toEqual({ n: 1 });
+	});
+
 	it("updates content + embedding and writes history in one transaction closure", () => {
 		insertMemory(db, {
 			id: "mem-1",
@@ -73,6 +176,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 
 		const changedAt = new Date().toISOString();
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "mem-1",
 			patch: {
 				content: "User prefers dark theme",
@@ -195,6 +299,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		).run("Signet is a memory system.", "signet is a memory system.");
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "semantic-claim",
 			patch: {
 				content: "Signet is a search engine.",
@@ -224,6 +329,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		});
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "mem-b",
 			patch: {
 				content: "Fact A duplicate",
@@ -254,6 +360,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		});
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "mem-version",
 			patch: { tags: "new-tags" },
 			reason: "stale write",
@@ -274,6 +381,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		});
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "mem-nochange",
 			patch: {},
 			reason: "noop",
@@ -587,6 +695,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		insertMemory(db, { id: "mem-race", content: "original content", contentHash: "hash-race-old" });
 
 		const result = txModifyMemory(asWriteDb(db), {
+			ctx: { author: SYSTEM_AUTHOR },
 			memoryId: "mem-race",
 			patch: {
 				content: "updated content",

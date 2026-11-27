@@ -1,14 +1,19 @@
 import { stat } from "node:fs/promises";
-import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
+import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
+import { requireReadScope, resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
+import type { CaptureEnqueueInput } from "./transcript-capture-owner";
+import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
+import type { WriteAuthor } from "./auth/audit-owner";
+import { type PurgeBatchResult, purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { getDbAccessorPath, hasDbAccessor, resolveSqliteAgentsDir } from "./db-accessor";
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
 import {
 	createDbOwnerClient,
 	DbOwnerAdmissionError,
-	DbOwnerDiedError,
 	type DbOwnerClient,
 	type DbOwnerClientOptions,
+	DbOwnerDiedError,
 	type DbOwnerJobHandle,
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
@@ -19,30 +24,34 @@ import {
 	submitRegisteredDbOwnerJob,
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
-import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
-import type { CompactionSummaryInput } from "./session-transcripts";
-import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
-import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
-import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type {
+	DbOwnerDreamingEvidenceCoverage,
+	DbOwnerDreamingEvidenceCoverageResult,
 	DbOwnerJob,
+	DbOwnerNativeMemoryIndex,
 	DbOwnerParameter,
 	DbOwnerRequest,
+	DbOwnerSourceArtifactIndex,
+	DbOwnerSourceArtifactPurge,
+	DbOwnerSourceArtifactUpsert,
 	DbOwnerSourceEvidenceEligibility,
-	DbOwnerDreamingEvidenceCoverage,
 	DbOwnerSourceGraphFilePurge,
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
 	DbOwnerSourcePurge,
 	DbOwnerSourceSnapshotImport,
-	DbOwnerSourceArtifactIndex,
-	DbOwnerNativeMemoryIndex,
-	DbOwnerSourceArtifactPurge,
-	DbOwnerSourceArtifactUpsert,
 	DbOwnerStatement,
+	DbOwnerTranscriptBulkCommit,
 	DbOwnerWorkloadClass,
-	DbOwnerDreamingEvidenceCoverageResult,
 } from "./db-owner-protocol";
+import { type ReflectionAnswerInput, txAnswerReflection } from "./reflection-owner";
+import type {
+	CompactionSummaryInput,
+	SessionTranscriptWriteInput,
+	writeSessionTranscriptRow,
+} from "./session-transcripts";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
+import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -72,13 +81,21 @@ function invokeAccessorAsync<Result>(
 	return method.call(accessor, callback) as Promise<Result>;
 }
 
-function inlineParameter(value: DbOwnerParameter): string | number | boolean | null | Uint8Array {
+function inlineParameter(
+	value: DbOwnerParameter,
+	db: ReadDb | WriteDb,
+	writeTransaction: boolean,
+): string | number | boolean | null | Uint8Array {
 	if (typeof value !== "object" || value === null) return value;
+	if (value.type === "compartment") {
+		if (!writeTransaction || !("exec" in db)) throw new Error("compartment_parameter_requires_owner");
+		return resolveWriteCompartmentParameterInTx(db, value);
+	}
 	return Uint8Array.from(Buffer.from(value.base64, "base64"));
 }
 
-function inlineStatement(db: ReadDb | WriteDb, statement: DbOwnerStatement): unknown {
-	const params = (statement.params ?? []).map(inlineParameter);
+function inlineStatement(db: ReadDb | WriteDb, statement: DbOwnerStatement, writeTransaction = false): unknown {
+	const params = (statement.params ?? []).map((value) => inlineParameter(value, db, writeTransaction));
 	const prepared = db.prepare(statement.sql);
 	if (statement.result === "all") return prepared.all(...params);
 	if (statement.result === "get") return prepared.get(...params);
@@ -137,10 +154,10 @@ async function executeInlineOwnerRequest(
 	}
 	if (request.kind === "transaction") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
-			const results = request.transaction.statements.map((statement) => inlineStatement(db, statement));
-			for (let i = 0; i < results.length; i++) {
-				const statement = request.transaction.statements[i];
-				const result = results[i];
+			const results: unknown[] = [];
+			for (const statement of request.transaction.statements) {
+				const result = inlineStatement(db, statement, true);
+				results.push(result);
 				if (
 					statement?.requireChanges === true &&
 					typeof result === "object" &&
@@ -156,7 +173,7 @@ async function executeInlineOwnerRequest(
 	}
 	if (request.kind === "batch") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
-			const results = request.statements.map((statement) => inlineStatement(db, statement));
+			const results = request.statements.map((statement) => inlineStatement(db, statement, true));
 			if (
 				request.requireChanges === true ||
 				request.statements.some((statement) => statement.requireChanges === true)
@@ -204,6 +221,26 @@ async function executeInlineOwnerRequest(
 			deadlineAt,
 		);
 	}
+	if (request.kind === "filesystem_document_write") {
+		const { writeFilesystemDocumentInTx } = await import("./embedding-projection-owner");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Filesystem documents require owner write access");
+			return writeFilesystemDocumentInTx(db, request.input);
+		});
+	}
+	if (request.kind === "session_finalizer_author") {
+		const { readSessionFinalizerAuthorInTx } = await import("./db-helpers");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readSessionFinalizerAuthorInTx(db, request.agentId, request.sessionKey),
+		);
+	}
+	if (request.kind === "session_checkpoint_write") {
+		const { writeSessionCheckpointInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Checkpoints require owner write access");
+			return writeSessionCheckpointInTx(db, request.input, request.maxPerSession);
+		});
+	}
 	if (request.kind === "session_transcript_write") {
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
@@ -231,14 +268,83 @@ async function executeInlineOwnerRequest(
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
 		});
+	if (request.kind === "reflection_generate") {
+		const { txCreateDailyReflections } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Reflection generation requires owner write access");
+			return txCreateDailyReflections(db, request.input);
+		});
+	}
+	if (request.kind === "diagnostics_schema")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readDatabaseSchemaAsync(db, request.scope),
+		);
+	if (request.kind === "diagnostics_sample")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readTableSampleAsync(
+				db,
+				request.table,
+				request.limit,
+				request.offset,
+				request.scope,
+			),
+		);
+	if (request.kind === "search_telemetry_export_page")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readSearchTelemetryExportPage(request.query, request.cursor, db),
+		);
+	if (request.kind === "search_telemetry_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics")).readScopedSearchTelemetry(request.query, db),
+		);
+	if (request.kind === "queue_diagnostics_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./diagnostics-queue")).getQueueDiagnosticsSnapshot(db, { scope: request.scope, fresh: true }),
+		);
+
+	if (request.kind === "dreaming_reviewed_read")
+		return invokeAccessorAsync(accessor, "withReadDbAsync", async (db) =>
+			(await import("./content-read-owner")).readDreamingReviewedEvidenceInOwner(db, request.agentId, request.scope),
+		);
+	if (request.kind === "reflection_list") {
+		const { readReflectionsInOwner } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readReflectionsInOwner(db, request.scope, request.input),
+		);
+	}
+	if (request.kind === "reflection_get") {
+		const { readReflectionInOwner } = await import("./reflection-owner");
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			readReflectionInOwner(db, request.scope, request.id),
+		);
+	}
+	if (request.kind === "reflection_answer")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Reflection requires writer");
+			return txAnswerReflection(db, request.input);
+		});
+	if (request.kind === "organization_memory_purge")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Purge requires writer");
+			return purgeAuthoredMemoryBatchInTx(db, request.userId, request.author);
+		});
 	if (request.kind === "agent_remove")
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
 	if (request.kind === "vector_search") {
 		return invokeAccessor(accessor, "withReadDb", (db) =>
-			vectorSearchWithMetadata(db as never, new Float32Array(request.payload.queryEmbedding), request.payload.options),
+			vectorSearchWithMetadata(db, new Float32Array(request.payload.queryEmbedding), {
+				...request.payload.options,
+				readScope: requireReadScope(request.payload.options.readScope),
+			}),
 		);
 	}
 	switch (request.kind) {
+		case "content_read":
+		case "transcript_capture_transition":
+		case "transcript_capture_enqueue":
+		case "fts_partition":
+		case "classification":
+		case "embedding_projection":
 		case "initialize":
 		case "recall":
 		case "source_snapshot_import":
@@ -255,13 +361,18 @@ async function executeInlineOwnerRequest(
 		case "dreaming_episodic_backlog":
 		case "dreaming_episodic_backlog_probe":
 		case "dreaming_episodic_backlog_exists":
+		case "dreaming_read_scope":
+		case "dreaming_graph_read":
 		case "dreaming_evidence_search":
+		case "dreaming_evidence_prepare":
+		case "dreaming_imported_source_attention":
 		case "dreaming_evidence_source":
 		case "dreaming_evidence_review":
 		case "memory_head":
 		case "dreaming_pass_finalize":
 		case "dreaming_review_due":
 		case "dreaming_evidence_classify":
+		case "dreaming_evidence_manual_requeue":
 		case "dreaming_evidence_requeue":
 		case "embedding_migration_progress":
 		case "health_ready":
@@ -483,6 +594,7 @@ export async function getDbOwnerForAccessor(accessor: DbAccessor): Promise<DbOwn
 export const DB_OWNER_READ_DEADLINE_MS = 15_000;
 
 export interface DbOwnerSqlOptions {
+	readonly embeddingProjection?: import("./embedding-projection").EmbeddingProjectionRequest;
 	readonly operation: string;
 	readonly lane?: "read" | "write" | "maintenance";
 	readonly workloadClass?: DbOwnerWorkloadClass;
@@ -551,6 +663,28 @@ export async function dbOwnerQuery<Row = unknown>(
 	);
 }
 
+export async function dbOwnerCaptureTransition(
+	owner: DbOwnerClient,
+	input: import("./transcript-capture-owner").CaptureTransitionInput,
+	options: DbOwnerSqlOptions,
+): Promise<number> {
+	return submitWithAdmission(
+		owner,
+		{ kind: "transcript_capture_transition", input },
+		{ ...options, lane: "write", estimatedWorkUnits: 4096 },
+	);
+}
+export async function dbOwnerEnqueueTranscriptCapture(
+	owner: DbOwnerClient,
+	input: CaptureEnqueueInput,
+	options: DbOwnerSqlOptions,
+): Promise<string | null> {
+	return submitWithAdmission(
+		owner,
+		{ kind: "transcript_capture_enqueue", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
 export async function dbOwnerTranscriptOperation<Result>(
 	owner: DbOwnerClient,
 	request: Extract<
@@ -591,7 +725,11 @@ export async function dbOwnerBatch(
 	options: DbOwnerSqlOptions,
 ): Promise<readonly unknown[]> {
 	const owner = await getDbOwner();
-	return await submitWithAdmission<readonly unknown[]>(owner, { kind: "batch", statements }, options);
+	return await submitWithAdmission<readonly unknown[]>(
+		owner,
+		{ kind: "batch", statements, embeddingProjection: options.embeddingProjection },
+		options,
+	);
 }
 
 export async function dbOwnerVacuumConversion(
@@ -655,7 +793,7 @@ export async function dbOwnerSourceSnapshotImport(
 }
 
 export async function dbOwnerTranscriptBulkCommit(
-	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	input: DbOwnerTranscriptBulkCommit,
 	options: DbOwnerSqlOptions,
 ): Promise<readonly unknown[]> {
 	const owner = await getDbOwner();
@@ -681,6 +819,106 @@ export async function dbOwnerSourcePurge(
 	);
 }
 
+export async function dbOwnerDiagnosticSchema(
+	scope?: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): Promise<import("./diagnostics").DatabaseSchemaResponse> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "diagnostics_schema", scope },
+		{ operation: "diagnostics.schema", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerDiagnosticSample(
+	table: string,
+	limit: number,
+	offset: number,
+	scope?: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readTableSampleAsync> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "diagnostics_sample", scope, table, limit, offset },
+		{ operation: "diagnostics.sample", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerSearchTelemetry(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readScopedSearchTelemetry> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "search_telemetry_read", query },
+		{ operation: "telemetry.memory-search.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerSearchTelemetryExportPage(
+	query: import("./memory-search-telemetry").MemorySearchTelemetryQuery,
+	cursor?: import("./memory-search-telemetry").MemorySearchTelemetryCursor,
+	accessor?: DbAccessor,
+): ReturnType<typeof import("./diagnostics").readSearchTelemetryExportPage> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "search_telemetry_export_page", query, cursor },
+		{ operation: "telemetry.memory-search.export-page", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+
+export async function dbOwnerQueueDiagnostics(
+	scope: import("./read-scope").ReadScope,
+	accessor?: DbAccessor,
+): Promise<import("./diagnostics-queue").QueueDiagnosticsSnapshot> {
+	return submitWithAdmission(
+		accessor ? await getDbOwnerForAccessor(accessor) : await getDbOwner(),
+		{ kind: "queue_diagnostics_read", scope },
+		{ operation: "diagnostics.queue.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerReviewedEvidence(
+	accessor: DbAccessor,
+	agentId: string,
+	scope?: import("./read-scope").ReadScope,
+): Promise<readonly import("./content-read-owner").DreamingReviewedEvidence[]> {
+	return submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "dreaming_reviewed_read", agentId, scope },
+		{ operation: "dreaming.reviewed.read", lane: "read", deadlineMs: DB_OWNER_READ_DEADLINE_MS },
+	);
+}
+export async function dbOwnerReflectionList(
+	scope: import("./read-scope").ReadScope,
+	input: import("./reflection-owner").ReflectionListInput,
+): Promise<readonly import("./reflection-owner").ReflectionRow[]> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "reflection_list", scope, input },
+		{ operation: "reflection.list", lane: "read", deadlineMs: 3000 },
+	);
+}
+export async function dbOwnerReflectionGet(
+	scope: import("./read-scope").ReadScope,
+	id: string,
+): Promise<import("./reflection-owner").ReflectionRow | null> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "reflection_get", scope, id },
+		{ operation: "reflection.get", lane: "read", deadlineMs: 3000 },
+	);
+}
+export async function dbOwnerReflectionAnswer(input: ReflectionAnswerInput, accessor: DbAccessor): Promise<boolean> {
+	return submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "reflection_answer", input },
+		{ operation: "reflection.answer", lane: "write", deadlineMs: 10000 },
+	);
+}
+export async function dbOwnerOrganizationPurge(userId: string, author: WriteAuthor): Promise<PurgeBatchResult> {
+	return submitWithAdmission(
+		await getDbOwner(),
+		{ kind: "organization_memory_purge", userId, author },
+		{ operation: "organization.purge-memory", lane: "write", deadlineMs: 60_000 },
+	);
+}
 export async function dbOwnerAgentRemove(
 	input: AgentRemovalInput,
 	options: DbOwnerSqlOptions,
@@ -841,5 +1079,50 @@ export async function dbOwnerDreamingEvidenceCoverage(
 		owner,
 		{ kind: "dreaming_evidence_coverage", input },
 		{ ...options, lane: "read" },
+	);
+}
+
+export async function dbOwnerFilesystemDocument(
+	accessor: DbAccessor,
+	input: Parameters<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>[1],
+): Promise<ReturnType<typeof import("./embedding-projection-owner").writeFilesystemDocumentInTx>> {
+	return await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "filesystem_document_write", input },
+		{
+			operation: "documents.filesystem.write",
+			lane: "write",
+			workloadClass: "maintenance",
+			deadlineMs: 5000,
+			estimatedWorkUnits: 1,
+		},
+	);
+}
+export async function dbOwnerSessionFinalizerAuthor(
+	accessor: DbAccessor,
+	agentId: string,
+	sessionKey: string,
+): Promise<import("./auth/audit-owner").WriteAuthor> {
+	return await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "session_finalizer_author", agentId, sessionKey },
+		{ operation: "session.finalizer.author", lane: "read", deadlineMs: 5000, estimatedWorkUnits: 1 },
+	);
+}
+export async function dbOwnerCheckpoint(
+	accessor: DbAccessor,
+	input: import("./session-checkpoints").WriteCheckpointParams,
+	maxPerSession: number,
+): Promise<void> {
+	await submitWithAdmission(
+		await getDbOwnerForAccessor(accessor),
+		{ kind: "session_checkpoint_write", input, maxPerSession },
+		{
+			operation: "sessions.checkpoint.write",
+			lane: "write",
+			workloadClass: "foreground",
+			deadlineMs: 5000,
+			estimatedWorkUnits: 1,
+		},
 	);
 }

@@ -1,11 +1,19 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenClawConnector } from "../src/index";
+import { ConnectorRegistry, writeKeyFile } from "../../../../libs/sdk/src/node";
 
 let tmpRoot = "";
 const envKeys = [
+	"SIGNET_DAEMON_URL",
+	"SIGNET_HOOK_COMMAND",
+	"SIGNET_PATH",
+	"SIGNET_API_KEY",
+	"SIGNET_TOKEN",
+	"SIGNET_RUNTIME_PATH",
 	"OPENCLAW_CONFIG_PATH",
 	"CLAWDBOT_CONFIG_PATH",
 	"OPENCLAW_STATE_DIR",
@@ -43,6 +51,71 @@ afterEach(() => {
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
 	}
+});
+
+it("legacy commands use the registry key through the canonical CLI transport", async () => {
+	const secret = `sig_sk_${crypto.randomUUID()}`;
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(request) {
+			if (request.headers.get("authorization") !== `Bearer ${secret}`)
+				return Response.json({ reason: "missing_credential" }, { status: 401 });
+			expect(new URL(request.url).pathname).toBe("/api/hooks/recall");
+			expect(await request.json()).toMatchObject({ harness: "openclaw", agentId: "alice", query: "fixture question" });
+			return Response.json({ message: "fixture recall" });
+		},
+	});
+	try {
+		process.env.SIGNET_DAEMON_URL = server.url.origin;
+		process.env.SIGNET_HOOK_COMMAND = JSON.stringify([
+			process.execPath,
+			join(import.meta.dir, "../../../../surfaces/cli/src/cli.ts"),
+		]);
+		process.env.SIGNET_PATH = join(tmpRoot, "agents");
+		delete process.env.SIGNET_API_KEY;
+		delete process.env.SIGNET_TOKEN;
+		delete process.env.SIGNET_RUNTIME_PATH;
+		const env = { HOME: tmpRoot };
+		const keyFile = await writeKeyFile(server.url.origin, "openclaw", secret, { env });
+		await new ConnectorRegistry({ env }).set("openclaw", { url: server.url.origin, keyFile, agentId: "alice" });
+		const files = new OpenClawConnector().installHookFiles(process.env.SIGNET_PATH);
+		const path = files.find((file) => file.endsWith("handler.js"));
+		if (!path) throw new Error("No installed legacy hook");
+		const installed: {
+			default: (event: {
+				type: string;
+				action: string;
+				context: { args: string };
+				messages: string[];
+			}) => Promise<void>;
+		} = await import(path);
+		const event = { type: "command", action: "recall", context: { args: "fixture question" }, messages: [] };
+		await installed.default(event);
+		expect(event.messages).toEqual(["fixture recall"]);
+		expect(readFileSync(path, "utf8")).not.toContain(secret);
+	} finally {
+		server.stop(true);
+	}
+});
+
+it("reinstall removes legacy inline credentials from config and its managed backup", async () => {
+	const configPath = join(tmpRoot, "openclaw.json");
+	const secret = `sig_sk_${crypto.randomUUID()}`;
+	process.env.OPENCLAW_CONFIG_PATH = configPath;
+	writeFileSync(
+		configPath,
+		JSON.stringify({
+			plugins: { entries: { "signet-memory-openclaw": { enabled: true, config: { apiKey: secret, token: secret } } } },
+		}),
+	);
+	const result = await new OpenClawConnector().install(join(tmpRoot, "agents"), {
+		configureWorkspace: false,
+		runtimePath: "plugin",
+	});
+	expect(result.success).toBe(true);
+	expect(readFileSync(configPath, "utf8")).not.toContain(secret);
+	expect(readFileSync(configPath + ".signet-backup", "utf8")).not.toContain(secret);
 });
 
 describe("OpenClawConnector config patching", () => {

@@ -1,6 +1,7 @@
 import { type ContinuityState, type StructuralSnapshot, getState } from "./continuity-state";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
+import { SYSTEM_AUTHOR, type WriteAuthor } from "./auth/audit-owner";
 import { type WriteCheckpointParams, writeCheckpointAsync } from "./session-checkpoints";
 import type { EvictedSessionInfo, SessionEvictionHandler } from "./session-tracker";
 import { markSessionTranscriptCompletedInTx } from "./session-transcripts";
@@ -10,10 +11,17 @@ export interface TtlFinalizerDeps {
 	readonly maxCheckpointsPerSession: number;
 }
 
-function snapshotToCheckpoint(snap: ContinuityState, sessionKey: string): WriteCheckpointParams {
+function snapshotToCheckpoint(
+	snap: ContinuityState,
+	sessionKey: string,
+	agentId: string,
+	author: WriteAuthor,
+): WriteCheckpointParams {
 	const structural = snap.structuralSnapshot as StructuralSnapshot | undefined;
 	return {
 		sessionKey,
+		agentId,
+		author,
 		harness: snap.harness,
 		project: snap.project,
 		projectNormalized: snap.projectNormalized,
@@ -37,7 +45,7 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 			try {
 				await writeCheckpointAsync(
 					deps.accessor,
-					snapshotToCheckpoint(snap, info.sessionKey),
+					snapshotToCheckpoint(snap, info.sessionKey, info.agentId, SYSTEM_AUTHOR),
 					deps.maxCheckpointsPerSession,
 				);
 				logger.info("session-tracker", "TTL-evicted session checkpointed", {
@@ -64,13 +72,13 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 						.get(info.sessionKey, info.agentId) as { completed_at?: string | null } | undefined;
 					return row?.completed_at != null;
 				},
-				{ siteToken: "session-ttl-finalizer.ts:56" },
+				{ siteToken: "db:session-ttl-finalizer.site.56" },
 			);
 			transcriptFinalized =
 				alreadyCompleted ||
 				(await deps.accessor.withWriteTxAsync(
 					(db) => markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
-					{ siteToken: "session-ttl-finalizer.ts:71" },
+					{ siteToken: "db:session-ttl-finalizer.site.71" },
 				));
 		} catch (err) {
 			logger.warn("session-tracker", "TTL-eviction transcript completion failed (non-fatal)", {

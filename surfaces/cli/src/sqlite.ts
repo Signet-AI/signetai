@@ -1,4 +1,7 @@
+import { configureEvidencePurgeConnection } from "@signet/core";
+
 interface SQLiteDatabase {
+	transaction<T>(operation: () => T): () => T;
 	pragma(pragma: string): void;
 	exec(sql: string): void;
 	prepare(sql: string): {
@@ -10,13 +13,11 @@ interface SQLiteDatabase {
 }
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const createDatabase = (dbPath: string, options?: { readonly?: boolean }): SQLiteDatabase => {
-	if (isBun) {
-		const { Database } = require("bun:sqlite");
-		return new Database(dbPath, options);
-	} else {
-		const BetterSqlite3 = require("better-sqlite3");
-		return new BetterSqlite3(dbPath, options);
-	}
+	const db: SQLiteDatabase = isBun
+		? new (require("bun:sqlite").Database)(dbPath, options)
+		: new (require("better-sqlite3"))(dbPath, options);
+	configureEvidencePurgeConnection(db);
+	return db;
 };
 
 export { createDatabase };

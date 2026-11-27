@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { activeVectorProjectionTable } from "@signet/core";
+import { missingCompartmentVectorSql, syncEmbeddingCompartment, activeVectorProjectionTable } from "@signet/core";
 import type {
 	DbOwnerVectorRepairInput,
 	DbOwnerVectorRepairOperation,
@@ -10,12 +10,13 @@ import { VECTOR_REPAIR_MAX_BYTES_PER_BATCH } from "./db-owner-protocol";
 import { boundedBatchSize, boundedVectorBytes, normalizeAgentId } from "./vector-repair-policy";
 
 interface SqliteStatement {
-	all(...params: readonly unknown[]): unknown[];
-	get(...params: readonly unknown[]): unknown;
+	all(...params: readonly unknown[]): Record<string, unknown>[];
+	get(...params: readonly unknown[]): Record<string, unknown> | undefined;
 	run(...params: readonly unknown[]): { readonly changes?: number };
 }
 
 export interface VectorRepairDb {
+	exec(sql: string): void;
 	prepare(sql: string): SqliteStatement;
 }
 
@@ -152,7 +153,7 @@ function missingVectorWhere(
 			FROM embeddings e
 			LEFT JOIN ${vectorTable} v ON v.id = e.id
 			${quarantineJoin}
-			WHERE v.id IS NULL
+			WHERE ${missingCompartmentVectorSql(db, vectorTable, "e")}
 			${quarantinePredicate}
 			  AND COALESCE(NULLIF(e.agent_id, ''), 'default') = ?
 			${keyset.sql}`,
@@ -169,17 +170,11 @@ function orphanEmbeddingWhere(
 		sql: `
 			FROM embeddings e
 			LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
-			LEFT JOIN memories m2
-				ON e.source_type = 'memory'
-				AND e.content_hash = m2.content_hash
-				AND m2.is_deleted = 0
-				AND COALESCE(NULLIF(m2.agent_id, ''), 'default') = COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default')
 			WHERE e.source_type = 'memory'
-			  AND (m.id IS NULL OR m.is_deleted = 1)
-			  AND m2.id IS NULL
-			  AND COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default') = ?
+			  AND (m.id IS NULL OR m.is_deleted = 1 OR (e.agent_id IS NOT NULL AND e.agent_id<>m.agent_id))
+			  AND (e.agent_id = ? OR (e.agent_id IS NULL AND m.agent_id = ?))
 			${keyset.sql}`,
-		params: [agentId, ...keyset.params],
+		params: [agentId, agentId, ...keyset.params],
 	};
 }
 
@@ -372,7 +367,18 @@ function listMissingVectors(
 	const query = missingVectorWhere(db, agentId, cursor);
 	return db
 		.prepare(`SELECT e.id, length(e.vector) AS vector_bytes, e.dimensions ${query.sql} ORDER BY e.id LIMIT ?`)
-		.all(...query.params, limit) as CandidateRow[];
+		.all(...query.params, limit)
+		.flatMap((row) =>
+			typeof row.id === "string"
+				? [
+						{
+							id: row.id,
+							...(typeof row.vector_bytes === "number" ? { vector_bytes: row.vector_bytes } : {}),
+							...(typeof row.dimensions === "number" ? { dimensions: row.dimensions } : {}),
+						},
+					]
+				: [],
+		);
 }
 
 function processMissingVectors(
@@ -388,7 +394,6 @@ function processMissingVectors(
 	const dimensions = vectorTableDimensions(db);
 	let cursor = row.cursor;
 	let lastError: string | null = null;
-	const insert = db.prepare(`INSERT INTO ${activeVectorProjectionTable(db)} (id, embedding) VALUES (?, ?)`);
 
 	for (const candidate of candidates) {
 		guard(options);
@@ -438,7 +443,7 @@ function processMissingVectors(
 
 		try {
 			guard(options);
-			const changed = changes(insert.run(candidate.id, blob));
+			const changed = syncEmbeddingCompartment(db, "embeddings", candidate.id, activeVectorProjectionTable(db));
 			cursor = candidate.id;
 			counters.batchRows += 1;
 			counters.batchProcessed += 1;
@@ -523,7 +528,20 @@ function listOrphanEmbeddings(
 	limit: number,
 ): readonly CandidateRow[] {
 	const query = orphanEmbeddingWhere(agentId, cursor);
-	return db.prepare(`SELECT e.id ${query.sql} ORDER BY e.id LIMIT ?`).all(...query.params, limit) as CandidateRow[];
+	return db
+		.prepare(`SELECT e.id ${query.sql} ORDER BY e.id LIMIT ?`)
+		.all(...query.params, limit)
+		.flatMap((row) =>
+			typeof row.id === "string"
+				? [
+						{
+							id: row.id,
+							...(typeof row.vector_bytes === "number" ? { vector_bytes: row.vector_bytes } : {}),
+							...(typeof row.dimensions === "number" ? { dimensions: row.dimensions } : {}),
+						},
+					]
+				: [],
+		);
 }
 
 function processOrphanEmbeddings(

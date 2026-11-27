@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { isJsonObject } from "@signet/connector-base";
@@ -288,7 +289,8 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(existsSync(configPath)).toBe(true);
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).toContain("command = 'signet'");
+		expect(content).toContain("args = ['connector', 'mcp', 'codex']");
 		expect(content).not.toContain("disabled_tools");
 		expect(content).not.toContain("command = [");
 	});
@@ -299,7 +301,8 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		await connector().install(tempHome);
 
 		const content = readFileSync(configPath, "utf-8");
-		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).toContain("command = 'signet'");
+		expect(content).toContain("args = ['connector', 'mcp', 'codex']");
 		expect(content).not.toContain("command = [");
 	});
 
@@ -316,7 +319,8 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain('name = "gpt-4o"');
 		expect(content).toContain("[history]");
 		expect(content).toContain("enabled = true");
-		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).toContain("command = 'signet'");
+		expect(content).toContain("args = ['connector', 'mcp', 'codex']");
 		expect(content).not.toContain("command = [");
 	});
 
@@ -343,7 +347,8 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[model]");
 		expect(content).toContain("[history]");
-		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).toContain("command = 'signet'");
+		expect(content).toContain("args = ['connector', 'mcp', 'codex']");
 		expect(content).not.toContain("disabled_tools");
 	});
 
@@ -355,7 +360,8 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[model]");
 		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).toContain("command = 'signet'");
+		expect(content).toContain("args = ['connector', 'mcp', 'codex']");
 	});
 
 	test("idempotent: re-running install produces identical config.toml", async () => {
@@ -409,39 +415,40 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content.match(new RegExp(userPromptState.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))?.length).toBe(1);
 	});
 
-	test("uses remote HTTP MCP URL when SIGNET_DAEMON_URL is configured", async () => {
+	test("uses a registry MCP proxy when a remote daemon is configured", async () => {
 		process.env.SIGNET_DAEMON_URL = "http://daemon.example.test:3850";
 
 		await connector().install(tempHome);
 
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).toContain("url = 'http://daemon.example.test:3850/mcp'");
-		expect(content).toContain("startup_timeout_sec = 10");
-		expect(content).toContain("tool_timeout_sec = 30");
+		expect(content).not.toContain("url = 'http://daemon.example.test:3850/mcp'");
+		expect(content).toContain("args = ['connector', 'mcp', 'codex']");
+
 		expect(content).not.toContain("disabled_tools");
 		expect(content).not.toContain("command = 'signet-mcp'");
 	});
 
-	test("removes stale remote MCP auth header tables on reinstall without an API key", async () => {
-		process.env.SIGNET_DAEMON_URL = authServer.url.origin;
-		process.env.SIGNET_API_KEY = "sig_sk_codex_old_secret";
+	test.each([true, false])(
+		"removes noncontiguous legacy MCP credentials on reinstall; base table=%s",
+		async (rootPresent) => {
+			process.env.SIGNET_DAEMON_URL = authServer.url.origin;
+			mkdirSync(join(configPath, ".."), { recursive: true });
+			writeFileSync(
+				configPath,
+				`${rootPresent ? `[mcp_servers.signet]\nurl = '${authServer.url.origin}/mcp'\n` : ""}[profiles.dev]\nmodel = 'fixture-model'\n[mcp_servers.signet.http_headers]\nAuthorization = 'Bearer sig_sk_codex_old_secret'\n`,
+			);
+			await connector().install(tempHome);
+			const content = readFileSync(configPath, "utf8");
+			expect(content).toContain("[mcp_servers.signet]");
+			expect(content).toContain("'connector', 'mcp', 'codex'");
+			expect(content).toContain("model = 'fixture-model'");
+			expect(content).not.toContain("[mcp_servers.signet.http_headers]");
+			expect(content).not.toContain("sig_sk_codex_old_secret");
+		},
+	);
 
-		await connector().install(tempHome);
-		let content = readFileSync(configPath, "utf-8");
-		expect(content).toContain("[mcp_servers.signet.http_headers]");
-		expect(content).toContain("Authorization = 'Bearer sig_sk_codex_old_secret'");
-
-		Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
-		await connector().install(tempHome);
-
-		content = readFileSync(configPath, "utf-8");
-		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).not.toContain("[mcp_servers.signet.http_headers]");
-		expect(content).not.toContain("sig_sk_codex_old_secret");
-	});
-
-	test.skipIf(process.platform === "win32")("keeps Codex files that hold the API key private", async () => {
+	test.skipIf(process.platform === "win32")("never stores API keys in Codex configuration or hooks", async () => {
 		process.env.SIGNET_DAEMON_URL = authServer.url.origin;
 		process.env.SIGNET_API_KEY = "sig_sk_codex_private_secret";
 		mkdirSync(join(configPath, ".."), { recursive: true });
@@ -450,10 +457,8 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 
 		await connector().install(tempHome);
 
-		expect(readFileSync(configPath, "utf-8")).toContain("sig_sk_codex_private_secret");
-		expect(statSync(configPath).mode & 0o777).toBe(0o600);
-		expect(readFileSync(hooksPath, "utf-8")).toContain("sig_sk_codex_private_secret");
-		expect(statSync(hooksPath).mode & 0o777).toBe(0o600);
+		expect(readFileSync(configPath, "utf-8")).not.toContain("sig_sk_codex_private_secret");
+		expect(readFileSync(hooksPath, "utf-8")).not.toContain("sig_sk_codex_private_secret");
 	});
 
 	test("still writes Codex lifecycle hooks when remote HTTP MCP is configured", async () => {
@@ -481,19 +486,15 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 			}
 			const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 			expect(wrapper).toBeDefined();
-			expect(readFileSync(wrapper as string, "utf-8")).toContain(
-				'set "SIGNET_DAEMON_URL=http://daemon.example.test:3850"',
-			);
+			if (typeof wrapper !== "string") throw new Error("Codex Windows hook wrapper was not written");
+			const command = readFileSync(wrapper, "utf-8");
+			expect(command).toContain("signet %*");
+			expect(command).not.toContain("SIGNET_DAEMON_URL");
+			expect(command).not.toContain("daemon.example.test");
 		} else {
-			expect(selectedHookCommand(startHandler)).toBe(
-				"SIGNET_DAEMON_URL='http://daemon.example.test:3850' signet hook session-start -H codex --codex-json",
-			);
-			expect(selectedHookCommand(promptHandler)).toBe(
-				"SIGNET_DAEMON_URL='http://daemon.example.test:3850' signet hook user-prompt-submit -H codex --codex-json",
-			);
-			expect(selectedHookCommand(stopHandler)).toBe(
-				"SIGNET_DAEMON_URL='http://daemon.example.test:3850' signet hook session-end -H codex",
-			);
+			expect(selectedHookCommand(startHandler)).toBe("signet hook session-start -H codex --codex-json");
+			expect(selectedHookCommand(promptHandler)).toBe("signet hook user-prompt-submit -H codex --codex-json");
+			expect(selectedHookCommand(stopHandler)).toBe("signet hook session-end -H codex");
 		}
 	});
 
@@ -1133,7 +1134,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(result.success).toBe(true);
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain(`command = '${runtime}'`);
-		expect(content).toContain(`args = ['${mcpEntry}']`);
+		expect(content).toContain(`args = ['${signetEntry}', 'connector', 'mcp', 'codex']`);
 		if (process.platform === "win32") {
 			const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 			if (!wrapper) throw new Error("Windows hook wrapper missing");
@@ -1185,7 +1186,9 @@ describe("CodexConnector.install — hooks.json schema", () => {
 			}
 		}
 		expect(readFileSync(configPath, "utf-8")).toContain("command = '/old/Codex.app/Contents/Resources/node'");
-		expect(readFileSync(configPath, "utf-8")).toContain("args = ['/old/package/dist/mcp-stdio.js']");
+		expect(readFileSync(configPath, "utf-8")).toContain(
+			"args = ['/old/package/bin/signet.js', 'connector', 'mcp', 'codex']",
+		);
 	});
 
 	test("uses the wrapper entry when an optional native binary runs without postinstall", async () => {
@@ -1223,7 +1226,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		}
 		const config = readFileSync(configPath, "utf-8");
 		expect(config).toContain(`command = '${runtime}'`);
-		expect(config).toContain(`args = ['${mcpEntry}']`);
+		expect(config).toContain(`args = ['${signetEntry}', 'connector', 'mcp', 'codex']`);
 	});
 
 	test("discovers nested Codex Desktop runtimes", async () => {
@@ -1356,8 +1359,8 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		const config = readFileSync(configPath, "utf-8");
 		expect(config).toContain(`command = '${nativeBinary}'`);
-		expect(config).toContain("[mcp_servers.signet.env]");
-		expect(config).toContain("SIGNET_MCP_STDIO_WORKER = '1'");
+		expect(config).toContain("args = ['connector', 'mcp', 'codex']");
+		expect(config).not.toContain("SIGNET_MCP_STDIO_WORKER");
 	});
 
 	test("installs with malformed but valid hooks.json", async () => {
@@ -1616,7 +1619,7 @@ describe("CodexConnector.uninstall — hooks.json cleanup", () => {
 });
 
 describe("CodexConnector.install — launcher and auth", () => {
-	test.each([false, true, null])("persists credentials only when requiresAuth is true: %s", async (requiresAuth) => {
+	test.each([false, true, null])("never persists credentials regardless of requiresAuth: %s", async (requiresAuth) => {
 		const key = "sig_sk_fixture_not_a_secret";
 		let probes = 0;
 		const server = Bun.serve({
@@ -1652,17 +1655,16 @@ describe("CodexConnector.install — launcher and auth", () => {
 			const result = await connector().install(tempHome);
 			const hooks = readFileSync(hooksPath, "utf-8");
 			expect(hooks).not.toContain("stale-fixture");
-			expect(hooks.includes(key)).toBe(requiresAuth === true);
-			expect(readFileSync(configPath, "utf-8").includes(key)).toBe(requiresAuth === true);
-			expect(probes).toBe(1);
+			expect(hooks.includes(key)).toBe(false);
+			expect(readFileSync(configPath, "utf-8").includes(key)).toBe(false);
+			expect(probes).toBe(0);
 			expectStartTrust();
-			if (requiresAuth === null) expect(result.warnings?.join(" ")).toMatch(/auth.*undetermined|determine.*auth/i);
 		} finally {
 			server.stop(true);
 		}
 	});
 
-	test("regenerates native plugin and Windows wrapper credentials from daemon mode", async () => {
+	test("keeps native plugin and Windows wrappers key-free across daemon modes", async () => {
 		let requiresAuth: boolean | null = true;
 		let probes = 0;
 		const server = Bun.serve({
@@ -1691,17 +1693,17 @@ describe("CodexConnector.install — launcher and auth", () => {
 				const hooks = readFileSync(join(root, "hooks", "hooks.json"), "utf-8");
 				const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf-8"));
 				expect(mcp.mcpServers.signet.command).toBe("C:\\Host Tools\\signet.exe");
-				expect(mcp.mcpServers.signet.env.SIGNET_MCP_STDIO_WORKER).toBe("1");
-				expect(hooks.includes(key)).toBe(mode === true);
+				expect(mcp.mcpServers.signet.args).toEqual(["connector", "mcp", "codex"]);
+				expect(mcp.mcpServers.signet.env?.SIGNET_MCP_STDIO_WORKER).toBeUndefined();
+				expect(hooks.includes(key)).toBe(false);
 				const wrapper = result.filesWritten.find((path) => path.endsWith(".cmd"));
 				if (!wrapper) throw new Error("Windows hook wrapper missing");
 				const script = readFileSync(wrapper, "utf-8");
 				expect(script).toContain('"C:\\Host Tools\\signet.exe"');
-				expect(script.includes(key)).toBe(mode === true);
-				expect(readFileSync(hooksPath, "utf-8").includes(key)).toBe(mode === true);
-				if (mode === null) expect(result.warnings?.join(" ")).toContain("HTTP 503");
+				expect(script.includes(key)).toBe(false);
+				expect(readFileSync(hooksPath, "utf-8").includes(key)).toBe(false);
 			}
-			expect(probes).toBe(3);
+			expect(probes).toBe(0);
 		} finally {
 			Reflect.set(process, "platform", platform);
 			server.stop(true);
@@ -1729,7 +1731,7 @@ describe("CodexConnector.install — launcher and auth", () => {
 		expect(result.success).toBe(true);
 		expect(result.warnings?.join("\n")).toContain("Could not read existing Signet MCP launcher");
 		expect(Bun.TOML.parse(readFileSync(configPath, "utf-8"))).toMatchObject({
-			mcp_servers: { signet: { command: "signet-mcp" } },
+			mcp_servers: { signet: { command: "signet", args: ["connector", "mcp", "codex"] } },
 		});
 	});
 

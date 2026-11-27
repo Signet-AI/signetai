@@ -1,7 +1,7 @@
 import type { DbOwnerClient } from "./db-owner-client";
 import type { DbOwnerParameter } from "./db-owner-protocol";
 import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
-import type { VectorSearchOptions, VectorSearchResponse } from "@signet/core";
+import { type VectorSearchOptions, type VectorSearchResponse, requireReadScope } from "@signet/core";
 import type { RecallParams, RecallResponse } from "./memory-search";
 import type { ResolvedMemoryConfig } from "./memory-config";
 import { effectiveRecallLimit, recordRecallPerformed } from "./recall-telemetry";
@@ -48,8 +48,9 @@ export async function hybridRecallThroughDbOwner(
 export async function vectorSearchThroughDbOwner(
 	client: DbOwnerClient,
 	queryEmbedding: readonly number[],
-	options: VectorSearchOptions = {},
+	options: VectorSearchOptions,
 ): Promise<VectorSearchResponse> {
+	requireReadScope(options.readScope);
 	const maxScanRows = Math.max(1, Math.min(options.maxScanRows ?? DB_OWNER_MAX_WORK_UNITS, DB_OWNER_MAX_WORK_UNITS));
 	const handle = client.submit<VectorSearchResponse>(
 		{

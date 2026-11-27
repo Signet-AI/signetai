@@ -1,25 +1,32 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { DaemonRuntime } from "@signet/core";
 import {
 	networkModeFromBindHost,
 	normalizeLoopbackHost,
 	resolveDaemonRuntime,
 	resolveDefaultBasePath,
-	resolveWorkspaceLayout,
 	resolveNetworkBinding,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import { createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
-import { getDbAccessor } from "../db-accessor";
-import { type DiagnosticsOptions, type DiagnosticsReport, createProviderTracker, getDiagnostics } from "../diagnostics";
+import { DEVELOPMENT_ORIGINS } from "../auth/origins";
+import { getDbAccessor, type ReadDb } from "../db-accessor";
+import {
+	createProviderTracker,
+	type DiagnosticsOptions,
+	type DiagnosticsReport,
+	getDiagnostics,
+	type OpenClawHealth,
+} from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
 import { logger } from "../logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig, readRuntimeConfig } from "../memory-config";
+import { loadMemoryConfig, type ResolvedMemoryConfig, readRuntimeConfig } from "../memory-config";
 import { createRateLimiter } from "../repair-actions";
 import type { TelemetryCollector } from "../telemetry";
 import { getUpdateState } from "../update-system";
-import type { DaemonRuntime } from "@signet/core";
 
 export let restartPipelineRuntimeRef:
 	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
@@ -163,13 +170,7 @@ export const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? NET.h
 export const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? NET.bind);
 export const NETWORK_MODE = networkModeFromBindHost(BIND_HOST);
 export const INTERNAL_SELF_HOST = BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
-const _ALLOWED_ORIGINS = new Set([
-	"http://localhost:3850",
-	"http://127.0.0.1:3850",
-	"http://localhost:5173",
-	"http://127.0.0.1:5173",
-	"app://signet",
-]);
+const _ALLOWED_ORIGINS = new Set(DEVELOPMENT_ORIGINS);
 export const ALLOWED_ORIGINS = _ALLOWED_ORIGINS;
 
 export function isAllowedOrigin(origin: string | undefined): boolean {
@@ -311,6 +312,7 @@ export const OPENCLAW_STALE_MS = 10 * 60 * 1000;
 export const projectionInFlight = new Map<number, Promise<void>>();
 export const projectionErrors = new Map<number, { message: string; expires: number }>();
 export const PROJECTION_ERROR_TTL_MS = 30_000;
+
 export let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
 export let authSecret: Buffer | null = null;
 export let authForgetLimiter = new AuthRateLimiter(60_000, 30);
@@ -357,7 +359,7 @@ export function invalidateDiagnosticsCache(): void {
 	diagnosticsCache = null;
 }
 
-export function buildOpenClawHealth(): import("../diagnostics").OpenClawHealth {
+export function buildOpenClawHealth(): OpenClawHealth {
 	if (!openClawHeartbeat) {
 		return {
 			status: "never-seen",
@@ -409,8 +411,7 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	const diagnosticsOptions = getDiagnosticsOptions();
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const report = getDbAccessor().withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
-			getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth(), diagnosticsOptions),
+		(db: ReadDb) => getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth(), diagnosticsOptions),
 		"db:diagnostics.cached.read",
 	);
 	diagnosticsCache = {
@@ -483,9 +484,7 @@ export function reloadAuthState(agentsDir: string): void {
 export function setOpenClawHeartbeat(value: { timestamp: string; data: OpenClawHeartbeatData } | null): void {
 	openClawHeartbeat = value;
 }
-export { AGENTS_DIR as default };
-
-export { getUpdateState };
+export { AGENTS_DIR as default, getUpdateState };
 
 function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 	if (!cfg.enabled) return "disabled";

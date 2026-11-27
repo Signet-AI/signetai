@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import { compartmentFor, findSqliteVecExtension } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
+import { ensureEmbeddingIndexState } from "../embedding-index-state";
 import { createConcurrencyAdmission } from "../concurrency-admission";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
@@ -103,12 +105,63 @@ function jobStatus(db: Database, id: string): string {
 }
 
 describe("document worker admission", () => {
+	it("inherits the stored document compartment and author on chunk evidence", async () => {
+		const db = freshDb();
+		const extension = findSqliteVecExtension();
+		if (!extension) throw new Error("sqlite-vec required");
+		db.loadExtension(extension);
+		db.exec(
+			"DROP TABLE IF EXISTS vec_embeddings; CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+		);
+		const classifiedEmbeddingCfg = {
+			provider: "ollama" as const,
+			model: "classified-test",
+			dimensions: 3,
+			base_url: "http://localhost:11434",
+		};
+		const accessor = asAccessor(db);
+		accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, classifiedEmbeddingCfg));
+		const userId = `usr_${crypto.randomUUID().replaceAll("-", "")}`;
+		db.prepare("INSERT INTO users(id,username,display_name,role) VALUES (?,'author','Author','member')").run(userId);
+		insertDocumentJob(db, "authored-doc", "agent-author", "Authored chunk evidence");
+		db.prepare(
+			"INSERT INTO classifications(id,name,created_at,updated_at) VALUES ('cls_doc','Document','now','now')",
+		).run();
+		const compartment = compartmentFor(db, ["cls_doc"]);
+		db.prepare("UPDATE documents SET author_user_id = ?, compartment_id = ? WHERE id = 'authored-doc'").run(
+			userId,
+			compartment,
+		);
+		const worker = startDocumentWorker({
+			accessor,
+			embeddingCfg: classifiedEmbeddingCfg,
+			fetchEmbedding: async () => [1, 0, 0],
+			pipelineCfg: workerConfig(),
+		});
+		try {
+			await waitFor(() => jobStatus(db, "authored-doc-job") === "completed");
+			expect(
+				db
+					.prepare("SELECT author_user_id,agent_id,compartment_id FROM memories WHERE source_id = 'authored-doc'")
+					.all(),
+			).toEqual([{ author_user_id: userId, agent_id: "agent-author", compartment_id: compartment }]);
+			expect(db.prepare("SELECT agent_id,compartment_id FROM embeddings").all()).toEqual([
+				{ agent_id: "agent-author", compartment_id: compartment },
+			]);
+			expect(db.prepare("SELECT count(*) n FROM vec_embeddings").get()).toEqual({ n: 0 });
+			expect(db.prepare(`SELECT count(*) n FROM vec_embeddings__c${compartment}`).get()).toEqual({ n: 1 });
+		} finally {
+			await worker.stop();
+			db.close();
+		}
+	});
+
 	it("shares the cap across worker instances before leasing another job", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		insertDocumentJob(db, "doc-a", "agent-a", "slow");
 		insertDocumentJob(db, "doc-b", "agent-b", "other");
-		const admission = createConcurrencyAdmission(1);
+		const admission = createConcurrencyAdmission(1, { maxWaiters: 1 });
 		const started: string[] = [];
 		let unblock = (): void => {};
 		const blocked = new Promise<number[] | null>((resolve) => {
@@ -139,7 +192,11 @@ describe("document worker admission", () => {
 			expect(jobStatus(db, "doc-a-job")).toBe("leased");
 			expect(jobStatus(db, "doc-b-job")).toBe("pending");
 
+			const waitingRequest = admission.acquire("request");
 			unblock();
+			const release = await waitingRequest;
+			if (typeof release !== "function") throw new Error("skipped worker ticks occupied the wait queue");
+			release();
 			await waitFor(() => jobStatus(db, "doc-a-job") === "completed" && jobStatus(db, "doc-b-job") === "completed");
 		} finally {
 			unblock();

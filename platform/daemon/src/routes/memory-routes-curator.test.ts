@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { createMcpServer } from "../mcp/tools";
+import { createIdentityMiddleware } from "../auth/identity-middleware";
+import { parseAuthConfig } from "../auth/config";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-memory-routes-"));
@@ -18,6 +20,8 @@ writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: none\n");
 
 beforeAll(async () => {
 	registerMemoryRoutes = (await import("./memory-routes")).registerMemoryRoutes;
+	const { reloadAuthState } = await import("./state");
+	reloadAuthState(agentsDir);
 });
 
 function ensureMemorySupersessionColumns(): void {
@@ -55,6 +59,7 @@ afterAll(async () => {
 function makeApp(): Hono {
 	if (!registerMemoryRoutes) throw new Error("memory routes were not loaded");
 	const app = new Hono();
+	app.use("*", createIdentityMiddleware(parseAuthConfig({ mode: "local" }, agentsDir), null));
 	registerMemoryRoutes(app, { fetchEmbedding: async () => undefined });
 	return app;
 }
@@ -261,12 +266,12 @@ describe("memory curator routes", () => {
 
 		expect(body.agentId).toBe("curator");
 		expect(body.injectedNeverUsed).toEqual([
-			{ id: "mem-stale", content: "injected repeatedly but never used", sessions: 2 },
+			{ id: "mem-stale", content: "injected repeatedly but never used", sessions: 2, authorUserId: null },
 		]);
 		expect(body.contradicted).toEqual([
-			{ id: "mem-contradicted", content: "contradicted memory", contradicted_count: 1 },
+			{ id: "mem-contradicted", content: "contradicted memory", contradicted_count: 1, authorUserId: null },
 		]);
-		expect(body.highUsed).toEqual([{ id: "mem-used", content: "useful memory", used_count: 1 }]);
+		expect(body.highUsed).toEqual([{ id: "mem-used", content: "useful memory", used_count: 1, authorUserId: null }]);
 	});
 	it("marks the supersedes target superseded atomically with the new memory", async () => {
 		seedMemory("mem-v1", "original claim");

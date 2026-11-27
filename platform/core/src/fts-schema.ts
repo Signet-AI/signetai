@@ -1,5 +1,11 @@
+import { rebuildCompartmentFtsShards } from "./compartment-shards";
 export interface FtsSchemaExecDb {
 	exec(sql: string): void;
+	prepare?(sql: string): {
+		get?(...args: unknown[]): unknown;
+		all?(...args: unknown[]): unknown[];
+		run?(...args: unknown[]): unknown;
+	};
 }
 
 export interface FtsSchemaQueryDb {
@@ -47,7 +53,29 @@ function ensureMemoriesFtsState(db: FtsSchemaExecDb): void {
 }
 
 function createMemoriesFtsTriggers(db: FtsSchemaExecDb): void {
-	db.exec(`
+	const sql = hasCompartments(db)
+		? `
+   DROP TRIGGER IF EXISTS memories_ai;
+   DROP TRIGGER IF EXISTS memories_ad;
+   DROP TRIGGER IF EXISTS memories_au;
+   DROP TRIGGER IF EXISTS memories_fts_ai;
+   DROP TRIGGER IF EXISTS memories_fts_ad;
+   DROP TRIGGER IF EXISTS memories_fts_au;
+   CREATE TRIGGER memories_ai AFTER INSERT ON memories WHEN new.compartment_id IS NULL BEGIN
+    INSERT INTO memories_fts(rowid,content) VALUES(new.rowid,new.content);
+    UPDATE memories_fts_state SET memory_count=CASE WHEN memory_count<0 THEN -1 ELSE memory_count+1 END,indexed_count=indexed_count+1 WHERE id=1;
+   END;
+   CREATE TRIGGER memories_ad AFTER DELETE ON memories WHEN old.compartment_id IS NULL BEGIN
+    UPDATE memories_fts_state SET memory_count=CASE WHEN memory_count<0 THEN -1 ELSE MAX(0,memory_count-1) END,indexed_count=MAX(0,indexed_count-CASE WHEN EXISTS(SELECT 1 FROM memories_fts_docsize WHERE id=old.rowid) THEN 1 ELSE 0 END) WHERE id=1;
+    INSERT INTO memories_fts(memories_fts,rowid,content) VALUES('delete',old.rowid,old.content);
+   END;
+   CREATE TRIGGER memories_au AFTER UPDATE OF content,compartment_id ON memories BEGIN
+    UPDATE memories_fts_state SET memory_count=CASE WHEN memory_count<0 THEN -1 ELSE memory_count+(new.compartment_id IS NULL)-(old.compartment_id IS NULL) END,indexed_count=MAX(0,indexed_count-CASE WHEN old.compartment_id IS NULL AND EXISTS(SELECT 1 FROM memories_fts_docsize WHERE id=old.rowid) THEN 1 ELSE 0 END)+(new.compartment_id IS NULL) WHERE id=1;
+    INSERT INTO memories_fts(memories_fts,rowid,content) SELECT 'delete',old.rowid,old.content WHERE old.compartment_id IS NULL;
+    INSERT INTO memories_fts(rowid,content) SELECT new.rowid,new.content WHERE new.compartment_id IS NULL;
+   END;
+  `
+		: `
 		DROP TRIGGER IF EXISTS memories_ai;
 		DROP TRIGGER IF EXISTS memories_ad;
 		DROP TRIGGER IF EXISTS memories_au;
@@ -90,7 +118,32 @@ function createMemoriesFtsTriggers(db: FtsSchemaExecDb): void {
 			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
 			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
 		END;
-	`);
+	`;
+	const expected = new Map<string, string>();
+	for (const match of sql.matchAll(/CREATE TRIGGER (memories_a[iud])[\s\S]*?END;/g)) {
+		const name = match[1];
+		if (typeof name === "string") expected.set(name, normalizeSql(match[0]).replace(/;$/, ""));
+	}
+	const existing = db
+		.prepare?.(
+			"SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND name IN ('memories_ai', 'memories_ad', 'memories_au', 'memories_fts_ai', 'memories_fts_ad', 'memories_fts_au')",
+		)
+		.all?.();
+	if (
+		existing?.length === expected.size &&
+		existing.every(
+			(row) =>
+				typeof row === "object" &&
+				row !== null &&
+				"name" in row &&
+				"sql" in row &&
+				typeof row.name === "string" &&
+				typeof row.sql === "string" &&
+				expected.get(row.name) === normalizeSql(row.sql).replace(/;$/, ""),
+		)
+	)
+		return;
+	db.exec(sql);
 }
 
 export function recreateMemoriesFtsSchema(db: FtsSchemaExecDb): void {
@@ -102,16 +155,22 @@ export function recreateMemoriesFtsSchema(db: FtsSchemaExecDb): void {
 	createMemoriesFts(db);
 }
 
-export function recreateMemoriesFts(db: FtsSchemaExecDb): void {
+function hasCompartments(db: Pick<FtsSchemaExecDb, "prepare">): boolean {
+	return db.prepare?.("SELECT 1 FROM pragma_table_info('memories') WHERE name='compartment_id'").get?.() != null;
+}
+export function recreateMemoriesFts(db: FtsSchemaExecDb & import("./migrations/contract").MigrationDb): void {
 	recreateMemoriesFtsSchema(db);
-	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+	db.exec(
+		`INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}`,
+	);
 	refreshMemoriesFtsState(db);
+	rebuildCompartmentFtsShards(db);
 }
 export function refreshMemoriesFtsState(db: FtsSchemaExecDb): void {
 	ensureMemoriesFtsState(db);
 	db.exec(`
 		UPDATE ${FTS_STATE_TABLE}
-		 SET memory_count = (SELECT COUNT(*) FROM memories),
+		 SET memory_count = (SELECT COUNT(*) FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}),
 		     indexed_count = (SELECT COUNT(*) FROM memories_fts_docsize),
 		     updated_at = datetime('now')
 		 WHERE id = 1;
@@ -136,13 +195,13 @@ export function readMemoriesFtsIntegrity(db: FtsSchemaQueryDb): MemoriesFtsInteg
 				memory_count,
 				indexed_count,
 				EXISTS(SELECT 1 FROM memories_fts_docsize LIMIT 1) AS has_indexed_rows,
-				CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+				CASE WHEN NOT EXISTS(SELECT 1 FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}) THEN 1 ELSE EXISTS(
 					SELECT 1 FROM memories_fts_docsize
-					WHERE id = (SELECT rowid FROM memories ORDER BY rowid LIMIT 1)
+					WHERE id = (SELECT rowid FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""} ORDER BY rowid LIMIT 1)
 				) END AS first_memory_indexed,
-				CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+				CASE WHEN NOT EXISTS(SELECT 1 FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}) THEN 1 ELSE EXISTS(
 					SELECT 1 FROM memories_fts_docsize
-					WHERE id = (SELECT rowid FROM memories ORDER BY rowid DESC LIMIT 1)
+					WHERE id = (SELECT rowid FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""} ORDER BY rowid DESC LIMIT 1)
 				) END AS last_memory_indexed
 			FROM ${FTS_STATE_TABLE}
 			WHERE id = 1
@@ -197,4 +256,11 @@ export function readMemoriesFtsIndexRowCount(db: FtsSchemaQueryDb): number | nul
 export function memoriesFtsNeedsTokenizerRepair(sql: string | null): boolean {
 	if (sql === null) return false;
 	return !normalizeSql(sql).includes(`tokenize='${MEMORIES_FTS_TOKENIZER}'`);
+}
+
+export function readMemoriesFtsCanonicalRowCount(db: FtsSchemaQueryDb): number {
+	const row = db
+		.prepare(`SELECT COUNT(*) n FROM memories ${hasCompartments(db) ? "WHERE compartment_id IS NULL" : ""}`)
+		.get();
+	return typeof row === "object" && row !== null && "n" in row && typeof row.n === "number" ? row.n : 0;
 }

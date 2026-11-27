@@ -1,38 +1,36 @@
 ---
 title: "SDK quickstart"
-description: "Install, configure, and make the first typed Signet SDK calls."
+description: "Resolve a Signet target and make the first typed SDK calls."
 ---
 
-## Basic Usage
+## Node and Bun
 
 ```typescript
-import { SignetClient } from "@signet/sdk";
+import { createNodeClient, resolveTarget } from "@signetai/sdk/node";
 
-const signet = new SignetClient({ daemonUrl: "http://localhost:3850" });
-
-await signet.remember("User prefers dark mode");
-const results = await signet.recall("user preferences");
+const target = await resolveTarget({ harness: "hermes", env: process.env });
+const signet = createNodeClient(target);
+await signet.remember("The project uses Bun");
+const results = await signet.recall("package manager", { limit: 5 });
 ```
 
-All methods return promises and throw typed errors on failure. The client
-is safe to instantiate once and reuse across the lifetime of your process.
+Resolve once, then reuse the client. The node layer reads the connector registry, OS keychain, or protected credential file. It never falls back from an unavailable organization daemon to a local daemon.
 
-## Configuration
-
-`SignetClient` accepts an optional config object:
+## Browser or embedded host
 
 ```typescript
-interface SignetClientConfig {
-  daemonUrl?: string;    // Default: "http://localhost:3850"
-  timeoutMs?: number;    // Per-request timeout in ms. Default: 10000
-  retries?: number;      // Retry attempts for GET requests. Default: 2
-  token?: string;        // Bearer token for authenticated daemon modes
-  actor?: string;        // Sets x-signet-actor header (e.g. agent name)
-  actorType?: string;    // Sets x-signet-actor-type header
-}
+import { SignetClient } from "@signetai/sdk";
+
+const signet = new SignetClient({
+  daemonUrl: window.location.origin,
+  cookieAuth: true,
+});
+await signet.recall("project context", undefined, {
+  deadline: Date.now() + 5000,
+  signal: controller.signal,
+});
 ```
 
-`token`, `actor`, and `actorType` are sent as request headers on every
-call (see [Auth](/auth/) for token details). Only GET requests are retried;
-POST/PATCH/DELETE are not, since they are not idempotent by default. Retry backoff is linear at 500ms
-intervals.
+A URL is required unless you supply a transport. Browser cookie mode includes cookies and CSRF. A bearer-authenticated host supplies `credentialProvider: async () => currentCredential`, not a raw key in the config object.
+
+All methods return promises, throw typed errors, and accept an optional final control argument. See [Core client](/sdk/core-client/) for precedence, storage, retries, deadlines, login refresh, and durable delivery.

@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -26,6 +27,7 @@ test("uninstall preserves a replacement entry swapped after the descriptor ident
 	const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 	const originalEnv = {
 		HOME: process.env.HOME,
+		SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
 		HERMES_HOME: process.env.HERMES_HOME,
 		HERMES_REPO: process.env.HERMES_REPO,
 		PYTHON: process.env.PYTHON,
@@ -38,7 +40,9 @@ test("uninstall preserves a replacement entry swapped after the descriptor ident
 	const target = join(hermesHome, "plugins", "signet");
 	const raceEntry = join(target, "a-race-entry.txt");
 	const markerPath = join(target, "signet.install.json");
+	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ agentId: "default" }) });
 	try {
+		process.env.SIGNET_DAEMON_URL = server.url.origin;
 		mkdirSync(target, { recursive: true });
 		process.env.HOME = fixture;
 		process.env.HERMES_HOME = hermesHome;
@@ -97,6 +101,7 @@ test("uninstall preserves a replacement entry swapped after the descriptor ident
 		expect(existsSync(markerPath)).toBe(true);
 		expect(readdirSync(target).sort()).toEqual(["a-race-entry.txt", "signet.install.json"]);
 	} finally {
+		server.stop(true);
 		if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
 		for (const [name, value] of Object.entries(originalEnv)) {
 			if (value === undefined) delete process.env[name];

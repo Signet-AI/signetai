@@ -1,7 +1,10 @@
-import { redactCredentials } from "@signet/core";
+import { type ReadScope, redactCredentials } from "@signet/core";
 import type { ContinuityState, StructuralSnapshot } from "./continuity-state";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
+import type { WriteAuthor } from "./auth/audit-owner";
+import { dbOwnerCheckpoint } from "./db-owner-runtime";
+import { evidenceScopeSql } from "./read-scope-tables";
 
 export type CheckpointTrigger =
 	| "periodic"
@@ -32,6 +35,8 @@ export interface CheckpointRow {
 }
 
 export interface WriteCheckpointParams {
+	readonly agentId: string;
+	readonly author: WriteAuthor;
 	readonly sessionKey: string;
 	readonly harness: string;
 	readonly project: string | undefined;
@@ -47,7 +52,11 @@ export interface WriteCheckpointParams {
 	readonly surfacedConstraintCount?: number;
 	readonly traversalMemoryCount?: number;
 }
-export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
+export type CheckpointReadRow = Omit<CheckpointRow, "session_key"> & { readonly session_key: string | null };
+
+export function redactCheckpointRow(row: CheckpointRow): CheckpointRow;
+export function redactCheckpointRow(row: CheckpointReadRow): CheckpointReadRow;
+export function redactCheckpointRow(row: CheckpointReadRow): CheckpointReadRow {
 	return {
 		...row,
 		digest: redactCredentials(row.digest),
@@ -62,137 +71,7 @@ export async function writeCheckpointAsync(
 	params: WriteCheckpointParams,
 	maxPerSession: number,
 ): Promise<void> {
-	const id = crypto.randomUUID();
-	const now = new Date().toISOString();
-	const digest = redactCredentials(params.digest);
-
-	await db.withWriteTxAsync(
-		(wdb) => {
-			wdb
-				.prepare(
-					`INSERT INTO session_checkpoints
-			 (id, session_key, harness, project, project_normalized,
-			  trigger, digest, prompt_count, memory_queries,
-			  recent_remembers, focal_entity_ids, focal_entity_names,
-			  active_aspect_ids, surfaced_constraint_count,
-			  traversal_memory_count, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
-				.run(
-					id,
-					params.sessionKey,
-					params.harness,
-					params.project ?? null,
-					params.projectNormalized ?? null,
-					params.trigger,
-					digest,
-					params.promptCount,
-					params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
-					params.recentRemembers.length > 0
-						? JSON.stringify(params.recentRemembers.map((text) => redactCredentials(text)))
-						: null,
-					params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
-					params.focalEntityNames && params.focalEntityNames.length > 0
-						? JSON.stringify(params.focalEntityNames)
-						: null,
-					params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
-					typeof params.surfacedConstraintCount === "number" ? params.surfacedConstraintCount : null,
-					typeof params.traversalMemoryCount === "number" ? params.traversalMemoryCount : null,
-					now,
-				);
-
-			const count = wdb
-				.prepare("SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?")
-				.get(params.sessionKey) as { cnt: number };
-			if (count.cnt > maxPerSession) {
-				const excess = count.cnt - maxPerSession;
-				wdb
-					.prepare(
-						`DELETE FROM session_checkpoints
-				 WHERE id IN (
-					 SELECT id FROM session_checkpoints
-					 WHERE session_key = ?
-					 ORDER BY created_at ASC, rowid ASC
-					 LIMIT ?
-				 )`,
-					)
-					.run(params.sessionKey, excess);
-			}
-		},
-		{ siteToken: "session-checkpoints.ts:69" },
-	);
-
-	logger.info("checkpoints", "Checkpoint written", {
-		id,
-		sessionKey: params.sessionKey,
-		trigger: params.trigger,
-		promptCount: params.promptCount,
-	});
-}
-
-export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, maxPerSession: number): void {
-	const id = crypto.randomUUID();
-	const now = new Date().toISOString();
-	const digest = redactCredentials(params.digest);
-
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	db.withWriteTx((wdb: WriteDb) => {
-		wdb
-			.prepare(
-				`INSERT INTO session_checkpoints
-			 (id, session_key, harness, project, project_normalized,
-			  trigger, digest, prompt_count, memory_queries,
-			  recent_remembers, focal_entity_ids, focal_entity_names,
-			  active_aspect_ids, surfaced_constraint_count,
-			  traversal_memory_count, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				id,
-				params.sessionKey,
-				params.harness,
-				params.project ?? null,
-				params.projectNormalized ?? null,
-				params.trigger,
-				digest,
-				params.promptCount,
-				params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
-				params.recentRemembers.length > 0
-					? JSON.stringify(params.recentRemembers.map((text) => redactCredentials(text)))
-					: null,
-				params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
-				params.focalEntityNames && params.focalEntityNames.length > 0 ? JSON.stringify(params.focalEntityNames) : null,
-				params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
-				typeof params.surfacedConstraintCount === "number" ? params.surfacedConstraintCount : null,
-				typeof params.traversalMemoryCount === "number" ? params.traversalMemoryCount : null,
-				now,
-			);
-		const count = wdb
-			.prepare("SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?")
-			.get(params.sessionKey) as { cnt: number };
-
-		if (count.cnt > maxPerSession) {
-			const excess = count.cnt - maxPerSession;
-			wdb
-				.prepare(
-					`DELETE FROM session_checkpoints
-				 WHERE id IN (
-					 SELECT id FROM session_checkpoints
-					 WHERE session_key = ?
-					 ORDER BY created_at ASC, rowid ASC
-					 LIMIT ?
-				 )`,
-				)
-				.run(params.sessionKey, excess);
-		}
-	}, "session-checkpoints.ts:139");
-
-	logger.info("checkpoints", "Checkpoint written", {
-		id,
-		sessionKey: params.sessionKey,
-		trigger: params.trigger,
-		promptCount: params.promptCount,
-	});
+	await dbOwnerCheckpoint(db, params, maxPerSession);
 }
 
 function parseJsonArray(raw: string | null): string[] {
@@ -239,37 +118,44 @@ export function getLatestCheckpoint(
 	db: DbAccessor,
 	projectNormalized: string | undefined,
 	withinMs: number,
+	scope: ReadScope,
 ): CheckpointRow | undefined {
 	if (!projectNormalized) return undefined;
 	const cutoff = new Date(Date.now() - withinMs).toISOString();
+	const readable = evidenceScopeSql("cp", scope, { checkpoint: true });
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
-				`SELECT * FROM session_checkpoints
-				 WHERE project_normalized = ?
-				   AND created_at > ?
-				 ORDER BY created_at DESC, rowid DESC
+				`SELECT cp.* FROM session_checkpoints cp
+				 WHERE cp.project_normalized = ?
+				   AND cp.created_at > ?${readable.sql}
+				 ORDER BY cp.created_at DESC, cp.rowid DESC
 				 LIMIT 1`,
 			)
-			.get(projectNormalized, cutoff) as unknown as CheckpointRow | null;
+			.get(projectNormalized, cutoff, ...readable.args) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:247");
+	}, "db:session-checkpoints.site.247");
 }
-export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string): CheckpointRow | undefined {
+export function getLatestCheckpointBySession(
+	db: DbAccessor,
+	sessionKey: string,
+	scope: ReadScope,
+): CheckpointRow | undefined {
+	const readable = evidenceScopeSql("cp", scope, { checkpoint: true });
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
-				`SELECT * FROM session_checkpoints
-				 WHERE session_key = ?
-				 ORDER BY created_at DESC, rowid DESC
+				`SELECT cp.* FROM session_checkpoints cp
+				 WHERE cp.session_key = ?${readable.sql}
+				 ORDER BY cp.created_at DESC, cp.rowid DESC
 				 LIMIT 1`,
 			)
-			.get(sessionKey) as unknown as CheckpointRow | null;
+			.get(sessionKey, ...readable.args) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:262");
+	}, "db:session-checkpoints.site.262");
 }
 export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): ReadonlyArray<CheckpointRow> {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -281,7 +167,7 @@ export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): Rea
 				 ORDER BY created_at DESC, rowid DESC`,
 			)
 			.all(sessionKey) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:276");
+	}, "db:session-checkpoints.site.276");
 }
 export async function getCheckpointsBySessionAsync(
 	db: DbAccessor,
@@ -296,7 +182,7 @@ export async function getCheckpointsBySessionAsync(
 					 ORDER BY created_at DESC, rowid DESC`,
 				)
 				.all(sessionKey) as unknown as CheckpointRow[],
-		{ siteToken: "session-checkpoints.ts:290", operation: "http.checkpoints-by-session" },
+		{ siteToken: "db:session-checkpoints.site.290", operation: "http.checkpoints-by-session" },
 	);
 }
 export function getCheckpointsByProject(
@@ -314,7 +200,7 @@ export function getCheckpointsByProject(
 				 LIMIT ?`,
 			)
 			.all(projectNormalized, limit) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:308");
+	}, "db:session-checkpoints.site.308");
 }
 export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -331,7 +217,7 @@ export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number 
 			});
 		}
 		return deleted;
-	}, "session-checkpoints.ts:323");
+	}, "db:session-checkpoints.site.323");
 }
 export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -342,7 +228,7 @@ export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: numbe
 			if (deleted > 0) logger.info("checkpoints", "Pruned old checkpoints", { deleted, retentionDays });
 			return deleted;
 		},
-		{ siteToken: "session-checkpoints.ts:338", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
+		{ siteToken: "db:session-checkpoints.site.338", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
 	);
 }
 
@@ -512,7 +398,8 @@ export function initCheckpointFlush(db: DbAccessor): void {
 	dbRef = db;
 }
 export function queueCheckpointWrite(params: WriteCheckpointParams, maxPerSession: number): void {
-	const existing = pendingWrites.get(params.sessionKey);
+	const key = JSON.stringify([params.agentId, params.sessionKey, params.author.userId]);
+	const existing = pendingWrites.get(key);
 	if (existing) {
 		const mergedQueries = [...existing.params.memoryQueries, ...params.memoryQueries].slice(-20);
 		const mergedRemembers = [...existing.params.recentRemembers, ...params.recentRemembers].slice(-10);
@@ -527,7 +414,7 @@ export function queueCheckpointWrite(params: WriteCheckpointParams, maxPerSessio
 			...(existing.params.activeAspectIds ?? []),
 			...(params.activeAspectIds ?? []),
 		].filter((value, index, array) => array.indexOf(value) === index);
-		pendingWrites.set(params.sessionKey, {
+		pendingWrites.set(key, {
 			params: {
 				...params,
 				promptCount: existing.params.promptCount + params.promptCount,
@@ -545,7 +432,7 @@ export function queueCheckpointWrite(params: WriteCheckpointParams, maxPerSessio
 			maxPerSession,
 		});
 	} else {
-		pendingWrites.set(params.sessionKey, { params, maxPerSession });
+		pendingWrites.set(key, { params, maxPerSession });
 	}
 
 	if (flushTimer === null) {

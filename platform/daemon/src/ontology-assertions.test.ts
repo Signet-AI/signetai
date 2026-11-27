@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { extractOntologyProposals } from "./ontology-extraction";
 import {
-	OntologyAssertionError,
 	archiveEpistemicAssertion,
 	createEpistemicAssertion,
 	getEpistemicAssertion,
 	linkEpistemicAssertionClaim,
 	listEpistemicAssertions,
+	OntologyAssertionError,
 	supersedeEpistemicAssertion,
 } from "./ontology-assertions";
+import { extractOntologyProposals } from "./ontology-extraction";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
 
 describe("epistemic assertions", () => {
@@ -85,7 +85,7 @@ describe("epistemic assertions", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("creates, lists, and reads a source-attributed assertion", () => {
+	it("creates, lists, and reads a source-attributed assertion", async () => {
 		const assertion = createEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
@@ -105,16 +105,16 @@ describe("epistemic assertions", () => {
 		expect(assertion.confidence).toBeCloseTo(0.91);
 		expect(assertion.evidence).toEqual([{ quote: "who believes what" }]);
 
-		const list = listEpistemicAssertions(getDbAccessor(), { agentId: "ant", speaker: "Nicholai" });
+		const list = await listEpistemicAssertions(getDbAccessor(), { agentId: "ant", speaker: "Nicholai" });
 		expect(list.items).toHaveLength(1);
 		expect(list.items[0]?.id).toBe(assertion.id);
-		expect(getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: assertion.id })?.content).toContain(
+		expect((await getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: assertion.id }))?.content).toContain(
 			"believes what",
 		);
-		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "dot", status: "all" }).items).toHaveLength(0);
+		expect((await listEpistemicAssertions(getDbAccessor(), { agentId: "dot", status: "all" })).items).toHaveLength(0);
 	});
 
-	it("keeps directional beliefs separate by the agent-scoped observer", () => {
+	it("keeps directional beliefs separate by the agent-scoped observer", async () => {
 		const ant = createEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
 			observerId: "ant",
@@ -136,13 +136,13 @@ describe("epistemic assertions", () => {
 
 		expect(ant.observerId).toBe("ant");
 		expect(dot.observerId).toBe("dot");
-		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant", observerId: "ant" }).items).toEqual(
+		expect((await listEpistemicAssertions(getDbAccessor(), { agentId: "ant", observerId: "ant" })).items).toEqual(
 			expect.arrayContaining([expect.objectContaining({ id: ant.id, content: ant.content })]),
 		);
-		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "dot", observerId: "dot" }).items).toEqual(
+		expect((await listEpistemicAssertions(getDbAccessor(), { agentId: "dot", observerId: "dot" })).items).toEqual(
 			expect.arrayContaining([expect.objectContaining({ id: dot.id, content: dot.content })]),
 		);
-		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(1);
+		expect((await listEpistemicAssertions(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(1);
 	});
 
 	it("exposes observer-scoped assertion queries through the API", async () => {
@@ -226,11 +226,13 @@ describe("epistemic assertions", () => {
 		});
 
 		const extractedAnt = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "shared-conversation-ant",
 			writeAssertions: true,
 		});
 		const extractedDot = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "dot",
 			from: "shared-conversation-dot",
 			writeAssertions: true,
@@ -261,7 +263,7 @@ describe("epistemic assertions", () => {
 		expect(antPayload.items[0]?.content).not.toBe(dotPayload.items[0]?.content);
 	});
 
-	it("rejects a peer observer and cross-scope semantic premise", () => {
+	it("rejects a peer observer and cross-scope semantic premise", async () => {
 		expect(() =>
 			createEpistemicAssertion(getDbAccessor(), {
 				agentId: "ant",
@@ -286,7 +288,7 @@ describe("epistemic assertions", () => {
 			}),
 		).toThrow(OntologyAssertionError);
 
-		expect(() => listEpistemicAssertions(getDbAccessor(), { agentId: "ant", observerId: "dot" })).toThrow(
+		await expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant", observerId: "dot" })).rejects.toThrow(
 			OntologyAssertionError,
 		);
 
@@ -358,7 +360,7 @@ describe("epistemic assertions", () => {
 		).toThrow(OntologyAssertionError);
 	});
 
-	it("archives and supersedes assertions without deleting evidence", () => {
+	it("archives and supersedes assertions without deleting evidence", async () => {
 		const first = createEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
@@ -379,7 +381,7 @@ describe("epistemic assertions", () => {
 		});
 
 		expect(next.supersedesAssertionId).toBe(first.id);
-		expect(getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: first.id })?.status).toBe("superseded");
+		expect((await getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: first.id }))?.status).toBe("superseded");
 
 		const archived = archiveEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
@@ -391,7 +393,7 @@ describe("epistemic assertions", () => {
 		expect(archived.evidence).toEqual([{ quote: "who believes what" }]);
 	});
 
-	it("rejects supersede requests that change the subject entity", () => {
+	it("rejects supersede requests that change the subject entity", async () => {
 		const first = createEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
@@ -413,7 +415,7 @@ describe("epistemic assertions", () => {
 			}),
 		).toThrow(OntologyAssertionError);
 
-		expect(getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: first.id })?.status).toBe("active");
+		expect((await getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: first.id }))?.status).toBe("active");
 	});
 
 	it("preserves the old predicate when route supersede omits a replacement predicate", async () => {

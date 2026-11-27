@@ -1,36 +1,38 @@
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-	PIPELINE_CONFIG_FILES,
 	findPipelineConfigFile,
+	PIPELINE_CONFIG_FILES,
 	parseSimpleYaml,
 	readPipelinePauseState,
 	resolveAgentMemoryPolicy,
 } from "@signet/core";
 import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
+import type { AgentRemovalResult } from "../agent-removal.js";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
-import type { AgentRemovalResult } from "../agent-removal.js";
 import { DB_OWNER_READ_DEADLINE_MS, dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
+
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
+import { jsonBody } from "../request-body";
 import { openBoundedSse } from "../sse-stream.js";
 import {
-	MAX_UPDATE_INTERVAL_SECONDS,
-	MIN_UPDATE_INTERVAL_SECONDS,
 	checkForUpdates as checkForUpdatesImpl,
 	getUpdateState,
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
 	parseBooleanFlag,
 	parseUpdateChannel,
 	parseUpdateInterval,
 	runUpdate as runUpdateImpl,
 	setUpdateConfig,
 } from "../update-system.js";
+import { isRetryableWritePressure, WRITE_PRESSURE_RETRY_AFTER_SECONDS } from "../write-pressure";
 import { loadDashboardIdentity } from "./dashboard-identity.js";
 import { AGENTS_DIR, authConfig } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, toRecord } from "./utils.js";
-import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
 
@@ -57,6 +59,16 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
+	app.use("*", async (c, next) => {
+		if (
+			c.get("organization") &&
+			["/api/logs", "/api/logs/stream", "/api/config", "/api/identity"].includes(c.req.path) &&
+			c.req.method === "GET"
+		) {
+			return c.json({ error: "This diagnostic has no content read scope", reason: "org_policy" }, 403);
+		}
+		return next();
+	});
 	app.use("/api/config", async (c, next) => {
 		if (c.req.method === "POST") {
 			const cl = c.req.header("content-length");
@@ -130,10 +142,10 @@ export function registerMiscRoutes(app: Hono): void {
 
 	app.post("/api/config", async (c) => {
 		try {
-			const { file, content: rawContent } = await c.req.json();
+			const { file, content: rawContent } = await jsonBody(c)();
 			const content = rawContent;
 
-			if (!file || typeof content !== "string") {
+			if (typeof file !== "string" || !file || typeof content !== "string") {
 				return c.json({ error: "Invalid request" }, 400);
 			}
 
@@ -250,7 +262,7 @@ export function registerMiscRoutes(app: Hono): void {
 	app.post("/api/agents", async (c) => {
 		const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 		if (denied) return denied;
-		const body = toRecord(await c.req.json().catch(() => null));
+		const body = toRecord(await jsonBody(c)().catch(() => null));
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const name = parseOptionalString(body.name);
 		if (!name) return c.json({ error: "name is required" }, 400);
@@ -311,7 +323,7 @@ export function registerMiscRoutes(app: Hono): void {
 		if (denied) return denied;
 		const name = c.req.param("name");
 		if (name === "default") return c.json({ error: "Cannot modify the default agent" }, 400);
-		const body = toRecord(await c.req.json().catch(() => null));
+		const body = toRecord(await jsonBody(c)().catch(() => null));
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const existing = await dbOwnerQuery<{ id: string; read_policy: string; policy_group: string | null } | undefined>(
 			{
@@ -443,7 +455,7 @@ export function registerMiscRoutes(app: Hono): void {
 			channel: string;
 		}>;
 
-		const body = (await c.req.json()) as UpdateConfigBody;
+		const body = (await jsonBody(c)()) as UpdateConfigBody;
 		const autoInstallRaw = body.autoInstall ?? body.auto_install;
 		const checkIntervalRaw = body.checkInterval ?? body.check_interval;
 		const channelRaw = body.channel;
@@ -505,7 +517,7 @@ export function registerMiscRoutes(app: Hono): void {
 		let targetVersion: string | undefined;
 
 		try {
-			const body = await c.req.json<{ targetVersion?: string }>();
+			const body = await jsonBody(c)<{ targetVersion?: string }>();
 			if (body.targetVersion && typeof body.targetVersion === "string") {
 				targetVersion = body.targetVersion;
 			}

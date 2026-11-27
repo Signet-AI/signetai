@@ -1,3 +1,5 @@
+import "../../../tests/support/connector-safety.js";
+import { ConnectorRegistry } from "../../../libs/sdk/src/node";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -187,7 +189,7 @@ function writeHermesMemoryFixture(hermesRepo: string): void {
 			"    )",
 			"    module = importlib.util.module_from_spec(spec)",
 			"    sys.modules[module_name] = module",
-			"    spec.loader.exec_module(module)",
+			"    __import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(module)",
 			"    ctx = _Context()",
 			"    module.register(ctx)",
 			"    return ctx.provider",
@@ -196,6 +198,7 @@ function writeHermesMemoryFixture(hermesRepo: string): void {
 	);
 }
 
+let daemonFixture: ReturnType<typeof Bun.serve>;
 const authFetch = globalThis.fetch;
 let auth: ReturnType<typeof spyOn>;
 beforeEach(() => {
@@ -213,7 +216,7 @@ afterEach(() => {
 	auth.mockRestore();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
 	tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "signet-hermes-connector-")));
 	process.env.HOME = tmpRoot;
 	delete process.env.PYTHON;
@@ -221,9 +224,24 @@ beforeEach(() => {
 	delete process.env.HERMES_HOME;
 	delete process.env.SIGNET_AGENT_ID;
 	delete process.env.SIGNET_AGENT_WORKSPACE;
-	delete process.env.SIGNET_DAEMON_URL;
+	daemonFixture = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request) {
+			const path = new URL(request.url).pathname;
+			if (path === "/health") return Response.json({ status: "ok" });
+			if (path === "/api/status") return Response.json({ agentId: "default" });
+			return Response.json({ reason: "not_found" }, { status: 404 });
+		},
+	});
+	process.env.SIGNET_DAEMON_URL = daemonFixture.url.origin;
+	await new ConnectorRegistry({ env: { HOME: tmpRoot } }).set("hermes-agent", {
+		url: daemonFixture.url.origin,
+		agentId: "default",
+	});
 	delete process.env.SIGNET_TRUSTED_DAEMON_ORIGINS;
 	delete process.env.SIGNET_TOKEN;
+	delete process.env.SIGNET_API_KEY;
 	delete process.env.SIGNET_AGENT_READ_POLICY;
 	delete process.env.SIGNET_AGENT_MEMORY_POLICY;
 	delete process.env.SIGNET_AGENT_POLICY_GROUP;
@@ -233,6 +251,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	daemonFixture.stop(true);
 	restoreEnv("HOME");
 	restoreEnv("PATH");
 	restoreEnv("PYTHON");
@@ -243,6 +262,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_DAEMON_URL");
 	restoreEnv("SIGNET_TRUSTED_DAEMON_ORIGINS");
 	restoreEnv("SIGNET_TOKEN");
+	restoreEnv("SIGNET_API_KEY");
 	restoreEnv("SIGNET_AGENT_READ_POLICY");
 	restoreEnv("SIGNET_AGENT_MEMORY_POLICY");
 	restoreEnv("SIGNET_AGENT_POLICY_GROUP");
@@ -766,7 +786,7 @@ describe("HermesAgentConnector.install()", () => {
 		expect(envContent).toContain("SIGNET_TRUSTED_DAEMON_ORIGINS=https://daemon.example.test:8443");
 	});
 
-	it("derives trusted daemon origin when persisting SIGNET_API_KEY", async () => {
+	it("removes legacy inline credentials instead of persisting SIGNET_API_KEY", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
 		const hermesHome = join(tmpRoot, ".hermes");
@@ -774,6 +794,8 @@ describe("HermesAgentConnector.install()", () => {
 		process.env.HERMES_HOME = hermesHome;
 		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:8443";
 		process.env.SIGNET_API_KEY = " sig_sk_hermes_test_secret \n";
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, ".env"), "SIGNET_API_KEY=sig_sk_hermes_test_secret\nSIGNET_TOKEN=legacy-token\n");
 
 		const result = await new HermesAgentConnector().install(tmpRoot);
 
@@ -781,29 +803,32 @@ describe("HermesAgentConnector.install()", () => {
 		expect(result.configsPatched).toContain(envPath);
 		const envContent = await Bun.file(envPath).text();
 		expect(envContent).toContain("SIGNET_DAEMON_URL=https://daemon.example.test:8443");
-		expect(envContent).toContain("SIGNET_API_KEY=sig_sk_hermes_test_secret");
-		expect(envContent).toContain("SIGNET_TRUSTED_DAEMON_ORIGINS=https://daemon.example.test:8443");
+		expect(envContent).not.toContain("SIGNET_API_KEY=");
+		expect(envContent).not.toContain("sig_sk_hermes_test_secret");
 	});
 
-	it.skipIf(process.platform === "win32")("keeps the .env that holds the API key owner-only", async () => {
-		const hermesRepo = join(tmpRoot, "hermes-agent");
-		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
-		const hermesHome = join(tmpRoot, ".hermes");
-		mkdirSync(hermesHome, { recursive: true });
-		const envPath = join(hermesHome, ".env");
-		writeFileSync(envPath, "OPENAI_API_KEY=other-secret\n");
-		chmodSync(envPath, 0o644);
-		process.env.HERMES_REPO = hermesRepo;
-		process.env.HERMES_HOME = hermesHome;
-		process.env.SIGNET_API_KEY = "sig_sk_hermes_private";
+	it.skipIf(process.platform === "win32")(
+		"removes Signet credentials while preserving other provider secrets privately",
+		async () => {
+			const hermesRepo = join(tmpRoot, "hermes-agent");
+			mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+			const hermesHome = join(tmpRoot, ".hermes");
+			mkdirSync(hermesHome, { recursive: true });
+			const envPath = join(hermesHome, ".env");
+			writeFileSync(envPath, "OPENAI_API_KEY=other-secret\n");
+			chmodSync(envPath, 0o644);
+			process.env.HERMES_REPO = hermesRepo;
+			process.env.HERMES_HOME = hermesHome;
+			process.env.SIGNET_API_KEY = "sig_sk_hermes_private";
 
-		await new HermesAgentConnector().install(tmpRoot);
+			await new HermesAgentConnector().install(tmpRoot);
 
-		const envContent = await Bun.file(envPath).text();
-		expect(envContent).toContain("OPENAI_API_KEY=other-secret");
-		expect(envContent).toContain("SIGNET_API_KEY=sig_sk_hermes_private");
-		expect(statSync(envPath).mode & 0o777).toBe(0o600);
-	});
+			const envContent = await Bun.file(envPath).text();
+			expect(envContent).toContain("OPENAI_API_KEY=other-secret");
+			expect(envContent).not.toContain("SIGNET_API_KEY=");
+			expect(statSync(envPath).mode & 0o777).toBe(0o600);
+		},
+	);
 
 	it("derives SIGNET_AGENT_WORKSPACE for named agents", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
@@ -826,7 +851,7 @@ describe("HermesAgentConnector.install()", () => {
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
 			if (String(url).endsWith("/api/status")) {
-				return new Response(JSON.stringify({ agentId: "research" }), { status: 200 });
+				return Response.json({ agentId: "research" });
 			}
 			return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
 		}) as typeof fetch;
@@ -879,7 +904,7 @@ describe("HermesAgentConnector.install()", () => {
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
 			if (String(url).endsWith("/api/status")) {
-				return new Response(JSON.stringify({ agentId: "research" }), { status: 200 });
+				return Response.json({ agentId: "research" });
 			}
 			return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
 		}) as typeof fetch;
@@ -904,16 +929,18 @@ describe("HermesAgentConnector.install()", () => {
 		}
 	});
 
-	it("uses SIGNET_TOKEN and configured read policy when registering named agents", async () => {
+	it("uses SDK credentials and verifies named-agent registration with its configured read policy", async () => {
 		const originalFetch = globalThis.fetch;
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		let created = false;
 		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			if (String(url).endsWith("/api/mode")) return Response.json({ requiresAuth: true });
 			calls.push({ url: String(url), init });
 			if (String(url).endsWith("/api/agents/dot")) {
-				return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+				return created ? Response.json({ id: "dot" }) : Response.json({ error: "not found" }, { status: 404 });
 			}
-			return new Response(JSON.stringify({ id: "dot" }), { status: 201 });
+			created = true;
+			return Response.json({ id: "dot" }, { status: 201 });
 		}) as typeof fetch;
 
 		try {
@@ -924,14 +951,14 @@ describe("HermesAgentConnector.install()", () => {
 			process.env.HERMES_HOME = hermesHome;
 			process.env.SIGNET_AGENT_ID = "dot";
 			delete process.env.SIGNET_API_KEY;
-			process.env.SIGNET_TOKEN = " test-token \n";
+			process.env.SIGNET_API_KEY = "test-token";
 			process.env.SIGNET_AGENT_READ_POLICY = "isolated";
 			delete process.env.SIGNET_SKIP_AGENT_REGISTER;
 
 			const result = await new HermesAgentConnector().install(tmpRoot);
 
 			expect(result.success).toBe(true);
-			expect(calls).toHaveLength(2);
+			expect(calls.filter((call) => call.init?.method === "POST")).toHaveLength(1);
 			for (const call of calls) {
 				expect(new Headers(call.init?.headers).get("Authorization")).toBe("Bearer test-token");
 			}
@@ -1000,7 +1027,7 @@ import sys
 
 spec = importlib.util.spec_from_file_location("signet_client", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+__import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(module)
 with open(sys.argv[2], encoding="utf-8") as handle:
     contract = json.load(handle)
 
@@ -1092,13 +1119,14 @@ import sys
 
 spec = importlib.util.spec_from_file_location("signet_client", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-os.environ["SIGNET_DAEMON_URL"] = "http://localhost:3850"
-assert module.SignetClient().base_url == "http://127.0.0.1:3850"
-os.environ.pop("SIGNET_DAEMON_URL")
+__import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(module)
+expected_url = os.environ["SIGNET_DAEMON_URL"]
+module.ConnectorRegistry().set("hermes-agent", {"url": expected_url.replace("127.0.0.1", "localhost"), "agentId": "default"})
+assert module.SignetClient().base_url == expected_url
+os.environ["SIGNET_DAEMON_URL"] = "http://127.0.0.1:1"
 os.environ["SIGNET_HOST"] = "::1"
 os.environ["SIGNET_PORT"] = "3850"
-assert module.SignetClient().base_url == "http://127.0.0.1:3850"
+assert module.SignetClient().base_url == expected_url
 `;
 
 		const result = spawnSync(process.env.PYTHON?.trim() || resolveTestPythonPath(), ["-c", script, clientPath], {
@@ -1116,7 +1144,8 @@ import sys
 
 spec = importlib.util.spec_from_file_location("signet_client", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+__import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(module)
+module.ConnectorRegistry().set("hermes-agent",{"url":__import__("os").environ["SIGNET_DAEMON_URL"],"agentId":"agent-a"})
 client = module.SignetClient(agent_id="agent-a", harness="hermes-agent")
 calls = []
 def post(path, body, **kwargs):
@@ -1451,7 +1480,7 @@ assert calls == [{
 					"spec = importlib.util.spec_from_file_location('_hermes_user_memory.signet', provider_dir / '__init__.py', submodule_search_locations=[str(provider_dir)])",
 					"mod = importlib.util.module_from_spec(spec)",
 					"sys.modules['_hermes_user_memory.signet'] = mod",
-					"spec.loader.exec_module(mod)",
+					"__import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(mod)",
 					"assert mod.SignetClient is not None",
 					"provider = mod.SignetMemoryProvider()",
 					"assert any(schema['name'] == 'memory_search' for schema in provider.get_tool_schemas())",
@@ -1471,49 +1500,6 @@ assert calls == [{
 		expect(client).toContain('agent_id=self._agent_id if agent_scoped else ""');
 		expect(client).toContain('"agentId": agent_id');
 		expect(client).not.toContain('"agentId": self._agent_id,\\n        }\\n        if min_score');
-	});
-
-	it("only forwards SIGNET_TOKEN to trusted daemon origins", () => {
-		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
-		const result = spawnSync(
-			resolveTestPythonPath(),
-			[
-				"-c",
-				[
-					"import importlib.util, json, os",
-					"from pathlib import Path",
-					`client_path = Path(${JSON.stringify(clientPath)})`,
-					"spec = importlib.util.spec_from_file_location('signet_client', client_path)",
-					"mod = importlib.util.module_from_spec(spec)",
-					"spec.loader.exec_module(mod)",
-					"def headers_for(url='', trusted=''):",
-					"    for key in ['SIGNET_DAEMON_URL', 'SIGNET_HOST', 'SIGNET_PORT', 'SIGNET_TOKEN', 'SIGNET_TRUSTED_DAEMON_ORIGINS']:",
-					"        os.environ.pop(key, None)",
-					"    if url:",
-					"        os.environ['SIGNET_DAEMON_URL'] = url",
-					"    os.environ['SIGNET_TOKEN'] = 'review-token'",
-					"    if trusted:",
-					"        os.environ['SIGNET_TRUSTED_DAEMON_ORIGINS'] = trusted",
-					"    client = mod.SignetClient()",
-					"    return {'base': client.base_url, 'auth': client._headers().get('Authorization')}",
-					"print(json.dumps({",
-					"    'default': headers_for(),",
-					"    'loopback': headers_for('http://127.0.0.1:3850/'),",
-					"    'remote': headers_for('https://daemon.example.test:8443/'),",
-					"    'trusted_remote': headers_for('https://daemon.example.test:8443/', 'https://daemon.example.test:8443'),",
-					"}, sort_keys=True))",
-				].join("\n"),
-			],
-			{ encoding: "utf-8" },
-		);
-
-		expect(result.status).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual({
-			default: { auth: "Bearer review-token", base: "http://127.0.0.1:3850" },
-			loopback: { auth: "Bearer review-token", base: "http://127.0.0.1:3850" },
-			remote: { auth: null, base: "https://daemon.example.test:8443" },
-			trusted_remote: { auth: "Bearer review-token", base: "https://daemon.example.test:8443" },
-		});
 	});
 
 	it("lets explicit recall requests opt into agent scoping", () => {
@@ -1553,7 +1539,8 @@ assert calls == [{
 					`root = Path(${JSON.stringify(fixture)})`,
 					"spec = importlib.util.spec_from_file_location('signet_client', root / 'plugins' / 'signet' / 'client.py')",
 					"mod = importlib.util.module_from_spec(spec)",
-					"spec.loader.exec_module(mod)",
+					"__import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(mod)",
+					"mod.ConnectorRegistry().set('hermes-agent', {'url': __import__('os').environ['SIGNET_DAEMON_URL'], 'agentId': 'research-agent'})",
 					"client = mod.SignetClient(agent_id='research-agent', harness='hermes-agent')",
 					"calls = []",
 					"def fake_post(path, body, **kwargs):",
@@ -1581,7 +1568,8 @@ import importlib.util
 
 spec = importlib.util.spec_from_file_location("signet_client", __import__("sys").argv[1])
 module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+__import__('sys').path.insert(0, str(__import__('pathlib').Path(spec.origin).parent)); spec.loader.exec_module(module)
+module.ConnectorRegistry().set("hermes-agent",{"url":__import__("os").environ["SIGNET_DAEMON_URL"],"agentId":"research-agent"})
 client = module.SignetClient(agent_id="research-agent", harness="hermes-agent")
 posts = []
 deletes = []
@@ -1703,9 +1691,6 @@ assert gets[0][0] == "/api/memory/search?q=new%20preference&limit=10&tags=hermes
 		expect(client).toContain('body["transcript"] = transcript');
 		expect(client).toContain('body["structured"] = structured');
 		expect(client).toContain('body["reviewAfter"] = review_after');
-		expect(client).toContain("def _read_json_response");
-		expect(client).toContain("if not body:");
-		expect(client).toContain("TimeoutError, ValueError");
 		expect(client).toContain('_safe_score(row.get("score"))');
 		expect(client).toContain('"noHits": len(kept) == 0');
 		expect(plugin).toContain('agent_id not in ("default",)');

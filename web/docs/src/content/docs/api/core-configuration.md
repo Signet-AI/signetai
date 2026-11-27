@@ -7,6 +7,9 @@ Auth, config, and identity endpoints.
 
 [Back to HTTP API overview](/api/).
 
+In organization mode, `GET /api/config` and `GET /api/identity` return `403`
+with `reason: "org_policy"`: workspace files do not carry content read scopes.
+
 ## Auth
 
 ### GET /api/auth/whoami

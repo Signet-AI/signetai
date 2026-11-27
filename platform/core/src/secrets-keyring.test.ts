@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSyncHidden } from "./child-process";
 import { linuxKeyringAvailability } from "./secrets-keyring-child";
 import {
+	credentialKeyring,
 	getSecretKeyring,
 	resetSecretKeyringModuleForTests,
 	setSecretKeyringHelperForTests,
@@ -74,6 +75,38 @@ async function useNativeModule(directory: string, modulePath: string): Promise<v
 }
 
 describe("native secret keyring containment", () => {
+	test("bounds concurrent native helper processes across login origins", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-login-admission-"));
+		directories.push(directory);
+		const helperPath = join(directory, "read.ts");
+		await writeFile(
+			helperPath,
+			`await Bun.stdin.text(); await Bun.sleep(250); process.stdout.write(JSON.stringify({ok:true,result:{state:'missing'}}));`,
+		);
+		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 1000 });
+		const reads = Array.from({ length: 40 }, (_, i) =>
+			credentialKeyring("signet-login", `https://h${i}.example`).get(),
+		);
+		const results = await Promise.all(reads);
+		expect(
+			results.filter((result) => result.state === "unavailable" && result.message?.includes("admission")),
+		).toHaveLength(8);
+	});
+	test("login credentials use the bounded helper without master-key decoding", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-login-keyring-"));
+		directories.push(directory);
+		const helperPath = join(directory, "login.ts");
+		await writeFile(
+			helperPath,
+			`const request = JSON.parse(await Bun.stdin.text());
+if (request.service !== 'signet-login' || request.account !== 'https://org.example') process.exit(3);
+process.stdout.write(JSON.stringify({ok:true,result:{state:'found',value:request.op==='set'?request.value:'login-json'}}));`,
+		);
+		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 1000 });
+		const keyring = credentialKeyring("signet-login", "https://org.example");
+		expect(await keyring.get()).toMatchObject({ state: "found", value: "login-json" });
+		expect(await keyring.set("rotated-login")).toMatchObject({ state: "found", value: "rotated-login" });
+	});
 	test("kills and reaps a helper that blocks native keyring work without blocking timers", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-helper-"));
 		directories.push(directory);

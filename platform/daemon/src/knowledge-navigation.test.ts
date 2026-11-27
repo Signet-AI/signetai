@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { getDbOwner } from "./db-owner-runtime";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DbAccessor, ReadAdmissionOptions, ReadDb } from "./db-accessor";
+import type { DbAccessor, ReadDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	getEntityAspectsByName,
@@ -65,35 +66,6 @@ function seedAttribute(input: {
 			updatedAt,
 		);
 	});
-}
-
-function countPreparedStatements(accessor: DbAccessor): {
-	readonly accessor: DbAccessor;
-	readonly count: () => number;
-	readonly statements: () => readonly string[];
-} {
-	let count = 0;
-	const statements: string[] = [];
-	return {
-		accessor: {
-			...accessor,
-			async withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
-				return await accessor.withReadDbAsync(
-					(db) =>
-						fn({
-							prepare(sql) {
-								count += 1;
-								statements.push(sql);
-								return db.prepare(sql);
-							},
-						}),
-					options,
-				);
-			},
-		},
-		count: () => count,
-		statements: () => statements,
-	};
 }
 
 function rejectNestedReads(accessor: DbAccessor): DbAccessor {
@@ -349,9 +321,10 @@ describe("knowledge graph navigation", () => {
 		seedAttribute({ id: "attr-food-b", groupKey: "dietary", claimKey: "allergy", content: "B" });
 		seedAttribute({ id: "attr-food-c", groupKey: "cafes", claimKey: "favorite_cafe", content: "C" });
 		seedAttribute({ id: "attr-food-d", groupKey: "groceries", claimKey: "favorite_market", content: "D" });
-		const counted = countPreparedStatements(getDbAccessor());
+		const owner = await getDbOwner();
+		const submit = spyOn(owner, "submit");
 
-		const tree = await getEntityKnowledgeTree(counted.accessor, {
+		const tree = await getEntityKnowledgeTree(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			maxAspects: 20,
@@ -364,9 +337,13 @@ describe("knowledge graph navigation", () => {
 		expect(tree?.items).toHaveLength(1);
 		expect(tree?.items[0]?.groups).toHaveLength(4);
 		expect(tree?.items.flatMap((item) => item.groups.flatMap((group) => group.claims))).toHaveLength(4);
-		expect(counted.count()).toBeLessThanOrEqual(3);
+		const statements = submit.mock.calls.flatMap(([request]) =>
+			request.kind === "query" ? [request.statement.sql] : [],
+		);
+		submit.mockRestore();
+		expect(statements.length).toBeLessThanOrEqual(4);
 
-		const groupQuery = counted.statements().find((sql) => sql.includes("claim_stats AS"));
+		const groupQuery = statements.find((sql) => sql.includes("claim_stats AS"));
 		if (!groupQuery) throw new Error("Batched tree query was not captured");
 		const plan = await getDbAccessor().withReadDbAsync(
 			(db) =>

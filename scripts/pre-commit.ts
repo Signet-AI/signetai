@@ -241,12 +241,6 @@ export function buildOrder(closure: ReadonlySet<string>, workspaces: readonly Wo
 	return order;
 }
 
-function buildFilterArgs(names: readonly string[]): readonly string[] {
-	const args: string[] = [];
-	for (const name of names) args.push("--filter", name);
-	return args;
-}
-
 async function run(label: string, command: readonly string[]): Promise<number> {
 	console.log(`\n${label}`);
 	const child = Bun.spawn([...command], {
@@ -297,21 +291,20 @@ async function main(): Promise<void> {
 	);
 	const closure = buildClosure(targets, workspaces);
 	const builds = buildOrder(closure, workspaces);
-	if (builds.length > 0) {
-		const label = `Building ${builds.length} required workspace package${builds.length === 1 ? "" : "s"}`;
-		const build = await run(label, ["bun", "run", ...buildFilterArgs(builds), "build"]);
+	for (const name of builds) {
+		const build = await run(`Building ${name}`, ["bun", "run", "--filter", name, "build"]);
 		if (build !== 0) {
-			console.error("Required workspace build failed; fix the build before committing.");
 			process.exitCode = build;
 			return;
 		}
 	}
-	process.exitCode = await run("Running affected workspace typechecks", [
-		"bun",
-		"run",
-		...buildFilterArgs(targets),
-		"typecheck",
-	]);
+	for (const name of targets) {
+		const checked = await run(`Typechecking ${name}`, ["bun", "run", "--filter", name, "typecheck"]);
+		if (checked !== 0) {
+			process.exitCode = checked;
+			return;
+		}
+	}
 }
 
 if (import.meta.main) await main();

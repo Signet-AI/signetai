@@ -9,6 +9,7 @@ import {
 	atomicWriteJson,
 	keepSignetApiKeyFilePrivate,
 	resolveSignetMcpCommand,
+	resolveHarnessMcpCommand,
 	resolveSignetCliCommand,
 	resolveInstallApiKey,
 	renderCommand,
@@ -79,19 +80,7 @@ function withRemoteDaemonEnv(
 	remoteDaemonUrl: string | null,
 	apiKey: string | null | undefined,
 ): string {
-	if (!remoteDaemonUrl && !apiKey) return command;
-	if (process.platform === "win32") {
-		const vars = [
-			...(remoteDaemonUrl ? [`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`] : []),
-			...(apiKey ? [`set "SIGNET_API_KEY=${cmdEnvQuote(apiKey)}"`] : []),
-		];
-		return `${vars.join(" && ")} && ${command}`;
-	}
-	return [
-		...(remoteDaemonUrl ? [`SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)}`] : []),
-		...(apiKey ? [`SIGNET_API_KEY=${shellQuote(apiKey)}`] : []),
-		command,
-	].join(" ");
+	return command;
 }
 
 const SIGNET_HOOK_COMMENT = "# Signet lifecycle hook (managed by signet)";
@@ -310,6 +299,9 @@ export class KimiConnector extends BaseConnector {
 	getConfigPath(): string {
 		return join(this.getKimiHome(), "config.toml");
 	}
+	getConfigPaths(): readonly string[] {
+		return [this.getConfigPath(), this.getMcpJsonPath()];
+	}
 
 	protected getMcpJsonPath(): string {
 		return join(this.getKimiHome(), "mcp.json");
@@ -322,7 +314,7 @@ export class KimiConnector extends BaseConnector {
 		const existing = readMcpLauncher(readMcpJson(mcpPath)?.mcpServers?.signet);
 		const hook = readHookLauncher(configPath, warnings);
 		const launcher = resolveSignetCliCommand(hook ?? cliFromMcp(existing));
-		const mcp = resolveSignetMcpCommand(existing ?? mcpFromCli(hook));
+		const mcp = resolveHarnessMcpCommand("kimi", existing ?? mcpFromCli(hook));
 		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];

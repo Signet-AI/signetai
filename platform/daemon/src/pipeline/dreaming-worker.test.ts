@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { DreamingConfig } from "@signet/core";
-import { runMigrations } from "../../../core/src/migrations";
+import { MIGRATIONS, runMigrations } from "../../../core/src/migrations";
 import { configureLlmConcurrency, getLlmConcurrencyLimit } from "./provider";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor, type WriteDb } from "../db-accessor";
 import {
@@ -28,11 +28,14 @@ import {
 	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	registerDbOwnerMaintenance,
+	ownerRunStatement,
+	ownerTransaction,
 	type DbOwnerMaintenance,
 } from "../db-owner-maintenance";
 import type { DbOwnerRequest } from "../db-owner-protocol";
 import { recallThroughDbOwner } from "../db-owner-recall";
 import { reportEventLoopLag, resetPressureState } from "../system-pressure";
+import { leaseDreamingEvidence } from "./dreaming-evidence-leases";
 import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 import {
 	type DreamingAgentExecutor,
@@ -46,6 +49,7 @@ import {
 	type DreamingWorkerOptions,
 	createAgentScopeSnapshot,
 	getDreamingWorkerAgentIds,
+	getDreamingWorkerPartitions,
 	partitionDreamingScopes,
 	selectDreamingCheckMode,
 	shouldDeferDreamingSweep,
@@ -68,38 +72,16 @@ function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
 }
 
 function wrapDb(db: Database): DbAccessor {
-	return {
-		withReadDb<T>(fn: (db: Database) => T): T {
-			return fn(db);
-		},
-		withReadDbAsync<T>(fn: (db: Database) => Promise<T>): Promise<T> {
-			return fn(db);
-		},
-		withWriteTx<T>(fn: (db: Database) => T): T {
-			db.exec("BEGIN IMMEDIATE");
-			try {
-				const result = fn(db);
-				db.exec("COMMIT");
-				return result;
-			} catch (e) {
-				db.exec("ROLLBACK");
-				throw e;
-			}
-		},
-		withWriteTxAsync<T>(fn: (db: Database) => T): Promise<T> {
-			return Promise.resolve().then(() => {
-				db.exec("BEGIN IMMEDIATE");
-				try {
-					const result = fn(db);
-					db.exec("COMMIT");
-					return result;
-				} catch (e) {
-					db.exec("ROLLBACK");
-					throw e;
-				}
-			});
-		},
-	} as unknown as DbAccessor;
+	const transaction = <T>(fn: (connection: WriteDb) => T): T => db.transaction(() => fn(db))();
+	const accessor = {
+		withReadDb: <T>(fn: (connection: Database) => T): T => fn(db),
+		withReadDbAsync: async <T>(fn: (connection: Database) => T | Promise<T>): Promise<T> => await fn(db),
+		withWriteTx: transaction,
+		withWriteTxAsync: async <T>(fn: (connection: WriteDb) => T): Promise<T> => transaction(fn),
+		withWriteDbAsync: async <T>(fn: (connection: WriteDb) => T): Promise<T> => fn(db),
+		close: () => {},
+	};
+	return accessor;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
@@ -307,6 +289,7 @@ async function createRealOwnerTriggerFixture(
 		const accessor = getDbAccessor();
 		const now = new Date().toISOString();
 		await accessor.withWriteTxAsync((db) => {
+			for (const migration of MIGRATIONS.filter((migration) => migration.version > 177)) migration.up(db);
 			db.prepare(
 				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
 				 VALUES ('owner-recall-fixture', 'isolated recall control row', 'fact', 'default', ?, ?, 'fixture')`,
@@ -420,7 +403,7 @@ describe("dreaming worker agent scope", () => {
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		runMigrations(db);
 		accessor = wrapDb(db);
 		agentsDir = mkdtempSync(join(tmpdir(), "dreaming-worker-"));
 	});
@@ -429,6 +412,532 @@ describe("dreaming worker agent scope", () => {
 		resetPressureState();
 		rmSync(agentsDir, { recursive: true, force: true });
 		db.close();
+	});
+
+	it("O1 keeps public start order and timing independent of classified backlog and progress", async () => {
+		async function starts(secret: boolean): Promise<string[]> {
+			if (secret) {
+				db.close();
+				db = new Database(":memory:");
+				runMigrations(db);
+				accessor = wrapDb(db);
+			}
+			db.exec("INSERT OR IGNORE INTO agents(id,name,created_at,updated_at) VALUES ('aaa','aaa','now','now')");
+			db.exec("INSERT OR IGNORE INTO classifications(id,name) VALUES ('cls_secret','Secret')");
+			db.exec("INSERT OR IGNORE INTO compartments(id,key) VALUES (1,'cls_secret')");
+			db.exec("INSERT OR IGNORE INTO compartment_members VALUES (1,'cls_secret')");
+			db.exec("DELETE FROM session_transcripts");
+			db.exec(`INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at)
+				VALUES ('public','default','Public evidence backlog','pi','now','now','now')`);
+			if (secret)
+				db.exec(`INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id)
+				VALUES ('secret','aaa','Secret evidence backlog','pi','now','now','now',1)`);
+			const seen: string[] = [];
+			let release = (): void => {};
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const worker = startDreamingWorker(
+				accessor,
+				defaultCfg({ tokenThreshold: 1, maxConcurrentPasses: 1 }),
+				agentsDir,
+				"default",
+				{
+					checkIntervalMs: 10,
+					executorFactory: () => ({
+						async run(input) {
+							const row = db
+								.query<{ agent_id: string; compartment_id: number | null }, [string]>(
+									"SELECT agent_id,compartment_id FROM dreaming_passes WHERE id=?",
+								)
+								.get(input.passId);
+							if (!row) throw new Error("Missing pass");
+							seen.push(`${row.agent_id}:${row.compartment_id ?? "public"}`);
+							await held;
+							return { text: "Done", inputTokens: 1, outputTokens: 1 };
+						},
+					}),
+				},
+			);
+			try {
+				await waitFor(() => seen.length >= (secret ? 2 : 1), 2000);
+				return [...seen];
+			} finally {
+				worker.stop();
+				release();
+				await worker.activePass;
+			}
+		}
+		const without = await starts(false);
+		const withSecret = await starts(true);
+		expect(withSecret.filter((start) => start.endsWith(":public"))).toEqual(without);
+		expect(withSecret[0]).toBe("default:public");
+		expect(withSecret).toContain("aaa:1");
+		async function publicStartAfterProgress(secret: boolean): Promise<number> {
+			db.close();
+			db = new Database(":memory:");
+			runMigrations(db);
+			accessor = wrapDb(db);
+			db.exec(
+				"INSERT INTO agents(id,name,created_at,updated_at) VALUES('aaa','aaa','now','now'); INSERT INTO classifications(id,name) VALUES('cls_secret','Secret'); INSERT INTO compartments(id,key) VALUES(1,'cls_secret'); INSERT INTO compartment_members VALUES(1,'cls_secret')",
+			);
+			db.exec(
+				"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at) VALUES('timing-public','default','Public timing evidence','pi','now','now','now')",
+			);
+			if (secret)
+				db.exec(
+					"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id) VALUES('timing-secret','aaa','Hidden progress project exists.','pi','now','now','now',1)",
+				);
+			let started: number | undefined;
+			let release = (): void => {};
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const began = Date.now();
+			const worker = startDreamingWorker(
+				accessor,
+				defaultCfg({ tokenThreshold: 1, maxConcurrentPasses: 1 }),
+				agentsDir,
+				"default",
+				{
+					checkIntervalMs: 400,
+					executorFactory: () => ({
+						async run(input) {
+							const row = db
+								.query<{ agent_id: string; compartment_id: number | null }, [string]>(
+									"SELECT agent_id,compartment_id FROM dreaming_passes WHERE id=?",
+								)
+								.get(input.passId);
+							if (!row) throw new Error("Missing timing pass");
+							if (row.compartment_id === null) {
+								started = Date.now() - began;
+								await held;
+								return { summary: "Held public timing pass" };
+							}
+							for (const [name, args] of [
+								[
+									"apply_ontology_ops",
+									{
+										agentId: "aaa",
+										operations: [
+											{
+												operation: "create_entity",
+												payload: { name: "Hidden progress project", type: "project" },
+												reason: "The evidence names the project.",
+												confidence: 1,
+												evidence: [
+													{ source_ref: "transcript:timing-secret", quote: "Hidden progress project exists." },
+												],
+											},
+										],
+									},
+								],
+							] as const) {
+								const tool = input.tools.find((item) => item.name === name);
+								if (!tool) throw new Error(`Missing ${name}`);
+								const reply = await tool.execute(name, args);
+								const first = reply.content[0];
+								if (first?.type !== "text") throw new Error("Missing timing tool response");
+								expect(JSON.parse(first.text)).toMatchObject({ ok: true });
+							}
+							return { summary: "Classified progress" };
+						},
+					}),
+				},
+			);
+			try {
+				if (secret) {
+					const id = await worker.triggerAsync("incremental", "aaa", undefined, undefined, 1);
+					await waitFor(
+						() => db.query("SELECT status FROM dreaming_passes WHERE id=?").get(id)?.status === "completed",
+						2_000,
+					);
+					expect(db.query("SELECT mutations_applied FROM dreaming_passes WHERE id=?").get(id)).toEqual({
+						mutations_applied: 1,
+					});
+				}
+				await waitFor(() => started !== undefined, 3_000);
+				if (started === undefined) throw new Error("Public timing pass never started");
+				return started;
+			} finally {
+				worker.stop();
+				release();
+				await worker.activePass;
+			}
+		}
+		const publicOnlyTime = await publicStartAfterProgress(false);
+		const classifiedProgressTime = await publicStartAfterProgress(true);
+		expect(Math.abs(classifiedProgressTime - publicOnlyTime)).toBeLessThan(300);
+	});
+
+	it("keeps classified hygiene out of public rotation and its exclusive slot", async () => {
+		db.exec(
+			"INSERT INTO classifications(id,name) VALUES('cls_secret','Secret'); INSERT INTO compartments(id,key) VALUES(1,'cls_secret'); INSERT INTO compartment_members VALUES(1,'cls_secret')",
+		);
+		db.exec(
+			"INSERT INTO dreaming_state(agent_id,consecutive_failures,last_failure_at) VALUES('default',10,datetime('now'))",
+		);
+		db.exec(`INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id)
+			VALUES('public','default','Public backlog','pi','now','now','now',NULL),('secret','default','Secret backlog','pi','now','now','now',1)`);
+		db.exec(`INSERT INTO dreaming_attention(id,agent_id,kind,subject_ref,details_json,priority,compartment_id)
+			VALUES('public','default','hygiene','public','{}',1,NULL),('secret','default','hygiene','secret','{}',1,1)`);
+		const started: Array<{ compartment_id: number | null; mode: string }> = [];
+		let release = (): void => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const worker = startDreamingWorker(
+			accessor,
+			defaultCfg({ tokenThreshold: 1, maxConcurrentPasses: 1 }),
+			agentsDir,
+			"default",
+			{
+				checkIntervalMs: 10,
+				executorFactory: () => ({
+					async run(input) {
+						const row = db
+							.query<{ compartment_id: number | null; mode: string }, [string]>(
+								"SELECT compartment_id,mode FROM dreaming_passes WHERE id=?",
+							)
+							.get(input.passId);
+						if (!row) throw new Error("Missing pass");
+						started.push(row);
+						await held;
+						return { text: "Done", inputTokens: 1, outputTokens: 1 };
+					},
+				}),
+			},
+		);
+		try {
+			await waitFor(() => started.length === 1, 2000);
+			expect(started[0]).toEqual({ compartment_id: 1, mode: "incremental-hygiene" });
+			db.exec("UPDATE dreaming_state SET consecutive_failures=0 WHERE agent_id='default' AND compartment_id IS NULL");
+			await waitFor(() => started.length === 2, 2000);
+			expect(started[1]).toEqual({ compartment_id: null, mode: "incremental-hygiene" });
+		} finally {
+			worker.stop();
+			release();
+			await worker.activePass;
+		}
+	});
+
+	it("resolves manual modes to personal scopes before creating pass or failure state", async () => {
+		db.exec("UPDATE organization SET claimed_at='now',agent_model='personal' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
+		db.exec("INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES ('alice','Alice','personal','now','now')");
+		const seen: string[] = [];
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: (agent) => ({
+				async run() {
+					seen.push(agent);
+					return { text: "Done", inputTokens: 1, outputTokens: 1 };
+				},
+			}),
+		});
+		try {
+			for (const mode of ["incremental", "compact", "incremental-content", "incremental-hygiene"] as const) {
+				await worker.triggerAsync(mode);
+				await worker.activePass;
+				await expect(worker.triggerAsync(mode, "default")).rejects.toThrow("org_policy");
+				await worker.trigger(mode);
+				await worker.activePass;
+				await expect(worker.trigger(mode, "default")).rejects.toThrow("org_policy");
+			}
+			expect(seen.length).toBeGreaterThan(0);
+			expect(seen.every((agent) => agent === "alice")).toBe(true);
+			expect(db.query("SELECT agent_id,mode FROM dreaming_passes ORDER BY rowid").all()).toEqual(
+				["incremental", "compact", "incremental-content", "incremental-hygiene"]
+					.flatMap((mode) => [mode, mode])
+					.map((mode) => ({ agent_id: "alice", mode })),
+			);
+			expect(db.query("SELECT id FROM dreaming_passes WHERE agent_id='default'").all()).toEqual([]);
+			expect(
+				db.query("SELECT agent_id FROM dreaming_state WHERE agent_id='default' AND consecutive_failures>0").all(),
+			).toEqual([]);
+		} finally {
+			worker.stop();
+			await worker.activePass;
+		}
+	});
+
+	it("excludes a claimed organization aggregator in personal mode and admits it in single mode", async () => {
+		db.exec("UPDATE organization SET claimed_at='now', agent_model='personal' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
+		expect(await getDreamingWorkerAgentIds(accessor, "default")).toEqual([]);
+		db.exec("UPDATE organization SET agent_model='single' WHERE id=1");
+		expect(await getDreamingWorkerAgentIds(accessor, "default")).toEqual(["default"]);
+	});
+
+	it("admits the same single-model agent concurrently in distinct compartments", async () => {
+		db.exec("UPDATE organization SET claimed_at='now', agent_model='single' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
+		db.exec("INSERT INTO classifications (id,name) VALUES ('cls_secret','Secret')");
+		db.exec("INSERT INTO compartments (id,key) VALUES (1,'cls_secret')");
+		db.exec("INSERT INTO compartment_members (compartment_id,classification_id) VALUES (1,'cls_secret')");
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id)
+		VALUES ('public','default','Public evidence','pi','now','now','now',NULL),('secret','default','Secret evidence','pi','now','now','now',1)`);
+		db.exec(
+			"INSERT INTO users (id,username,display_name,role) VALUES ('usr_public','public','Public User','member'),('usr_secret','secret','Secret User','member')",
+		);
+		db.exec(
+			"UPDATE session_transcripts SET speaker_user_id=CASE session_key WHEN 'public' THEN 'usr_public' ELSE 'usr_secret' END",
+		);
+		expect(await getDreamingWorkerPartitions(accessor, "default")).toEqual([
+			{ agentId: "default", compartmentId: null },
+			{ agentId: "default", compartmentId: 1 },
+		]);
+		const seen: Array<{ compartmentId: unknown; evidence: string }> = [];
+		let release = (): void => {};
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 2 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run(input) {
+					const row = db.query("SELECT compartment_id FROM dreaming_passes WHERE id=?").get(input.passId);
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					const result = await search.execute("queue", { agentId: "default" });
+					seen.push({
+						compartmentId: row && typeof row === "object" ? Reflect.get(row, "compartment_id") : undefined,
+						evidence: JSON.stringify(result),
+					});
+					await barrier;
+					return { summary: "Partition inspected" };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => seen.length === 2, 2_000);
+			expect(worker.activePasses.map((pass) => pass.compartmentId).sort()).toEqual([null, 1].sort());
+			expect(seen.find((entry) => entry.compartmentId === null)?.evidence).toContain("Public evidence");
+			expect(seen.find((entry) => entry.compartmentId === null)?.evidence).not.toContain("Secret evidence");
+			expect(seen.find((entry) => entry.compartmentId === 1)?.evidence).toContain("Secret evidence");
+			expect(seen.find((entry) => entry.compartmentId === 1)?.evidence).not.toContain("Public evidence");
+		} finally {
+			release();
+			worker.stop();
+			await worker.activePass;
+		}
+	});
+
+	it("compacts history under the completed pass's compartment", async () => {
+		db.exec("INSERT INTO classifications (id,name) VALUES ('cls_secret','Secret')");
+		db.exec("INSERT INTO compartments (id,key) VALUES (1,'cls_secret')");
+		db.exec("INSERT INTO compartment_members (compartment_id,classification_id) VALUES (1,'cls_secret')");
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id)
+		VALUES ('secret','default','Secret evidence for history','pi','now','now','now',1)`);
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute("queue", { agentId: "default", limit: 1 });
+					return { summary: "Classified history pass" };
+				},
+			}),
+			historyCompleterFactory: () => ({
+				async complete() {
+					return { text: "Classified evidence reviewed" };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental", "default", undefined, undefined, 1);
+			await worker.activePass;
+			expect(db.query("SELECT status,error FROM dreaming_passes").all()).toEqual([
+				{ status: "completed", error: null },
+			]);
+			expect(db.query("SELECT compartment_id,text FROM dreaming_history_nodes").all()).toEqual([
+				{ compartment_id: 1, text: "Classified evidence reviewed" },
+			]);
+		} finally {
+			worker.stop();
+			await worker.activePass;
+		}
+	});
+
+	it("runs a claimed personal organization's evidence under its personal agent", async () => {
+		db.exec("UPDATE organization SET claimed_at='now', agent_model='personal' WHERE id=1");
+		db.exec("UPDATE agents SET kind='organization' WHERE id='default'");
+		db.exec("INSERT INTO agents (id,name,kind,created_at,updated_at) VALUES ('alice','Alice','personal','now','now')");
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at)
+		VALUES ('alice-source','alice','Alice evidence','pi','now','now','now'),('org-source','default','Aggregator evidence','pi','now','now','now')`);
+		const owners: string[] = [];
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: (agentId) => ({
+				async run() {
+					owners.push(agentId);
+					return { summary: "Personal pass" };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await worker.activePass;
+			expect(owners).toEqual(["alice"]);
+			expect(db.query("SELECT agent_id,status FROM dreaming_passes").all()).toEqual([
+				{ agent_id: "alice", status: "completed" },
+			]);
+		} finally {
+			worker.stop();
+			await worker.activePass;
+		}
+	});
+
+	it("shares a deep scope up to its cap and transfers attention ownership after settlement", async () => {
+		const originalConcurrency = getLlmConcurrencyLimit();
+		configureLlmConcurrency(3);
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at)
+		VALUES ('deep','default','Substantial unreviewed evidence for concurrent passes','pi','now','now','now')`);
+		db.exec(`INSERT INTO dreaming_attention (id,agent_id,kind,subject_ref,details_json)
+		VALUES ('attention','default','hygiene','entity:attention-owner-marker','{}')`);
+		const prompts: string[] = [];
+		const releases: Array<() => void> = [];
+		const worker = startDreamingWorker(
+			accessor,
+			defaultCfg({ maxConcurrentPasses: 3, maxPassesPerScope: 3, tokenThreshold: 1 }),
+			agentsDir,
+			"default",
+			{
+				checkIntervalMs: 60_000,
+				executorFactory: () => ({
+					async run(input) {
+						prompts.push(input.prompt);
+						const hold = new Promise<void>((resolve) => {
+							releases.push(resolve);
+						});
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						if (!search) throw new Error("Missing search_evidence");
+						await search.execute("queue", { agentId: "default", limit: 1 });
+						await hold;
+						return { summary: "Shared pass" };
+					},
+				}),
+			},
+		);
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => prompts.length === 3, 2_000);
+			expect(prompts.filter((prompt) => prompt.includes("entity:attention-owner-marker"))).toHaveLength(1);
+			await expect(worker.triggerAsync("incremental")).rejects.toBeInstanceOf(AlreadyRunningError);
+			const firstRelease = releases[0];
+			if (!firstRelease) throw new Error("Missing first pass");
+			firstRelease();
+			await waitFor(() => worker.activePasses.length === 2, 2_000);
+			await worker.triggerAsync("incremental");
+			await waitFor(() => prompts.length === 4, 2_000);
+			expect(prompts[3]).toContain("entity:attention-owner-marker");
+		} finally {
+			worker.stop();
+			for (const release of releases) release();
+			await worker.activePass;
+			configureLlmConcurrency(originalConcurrency);
+		}
+	});
+
+	it("does not back off public work for unrelated changes or classification fences", async () => {
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_secret','Secret')");
+		db.exec(
+			"INSERT INTO session_transcripts(session_key,agent_id,content,harness,created_at,updated_at,completed_at) VALUES('public','default','Public evidence','pi','now','now','now')",
+		);
+		const releases: Array<() => void> = [];
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run() {
+					await new Promise<void>((resolve) => {
+						releases.push(resolve);
+					});
+					return { text: "Done", inputTokens: 1, outputTokens: 1 };
+				},
+			}),
+		});
+		try {
+			const unaffected = await worker.triggerAsync("incremental", "default");
+			await waitFor(() => releases.length === 1, 2000);
+			db.exec(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent','bob','bob','cls_secret')",
+			);
+			releases[0]?.();
+			await worker.activePass;
+			expect(db.query("SELECT status FROM dreaming_passes WHERE id=?").get(unaffected)).toEqual({
+				status: "completed",
+			});
+			const fenced = await worker.triggerAsync("incremental", "default");
+			await waitFor(() => releases.length === 2, 2000);
+			db.exec(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent','default','default','cls_secret')",
+			);
+			releases[1]?.();
+			await worker.activePass;
+			expect(db.query("SELECT status FROM dreaming_passes WHERE id=?").get(fenced)).toEqual({ status: "failed" });
+			expect(db.query("SELECT agent_id FROM dreaming_state WHERE consecutive_failures>0").all()).toEqual([]);
+		} finally {
+			worker.stop();
+			for (const release of releases) release();
+			await worker.activePass;
+		}
+	});
+
+	it("records a classified pass failure only in that partition", async () => {
+		db.exec("INSERT INTO classifications (id,name) VALUES ('cls_secret','Secret')");
+		db.exec("INSERT INTO compartments (id,key) VALUES (1,'cls_secret')");
+		db.exec("INSERT INTO compartment_members (compartment_id,classification_id) VALUES (1,'cls_secret')");
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id)
+		VALUES ('secret','default','Classified evidence','pi','now','now','now',1)`);
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run() {
+					throw new Error("classified provider failure");
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental", "default", undefined, undefined, 1);
+			await worker.activePass;
+			await waitFor(() => db.query("SELECT 1 FROM dreaming_state WHERE consecutive_failures>0").get() !== null, 2_000);
+			expect(db.query("SELECT compartment_id,consecutive_failures FROM dreaming_state").all()).toEqual([
+				{ compartment_id: 1, consecutive_failures: 1 },
+			]);
+		} finally {
+			worker.stop();
+			await worker.activePass;
+		}
+	});
+
+	it("continues classified scheduling while the public partition is halted", async () => {
+		db.exec("INSERT INTO classifications (id,name) VALUES ('cls_secret','Secret')");
+		db.exec("INSERT INTO compartments (id,key) VALUES (1,'cls_secret')");
+		db.exec("INSERT INTO compartment_members (compartment_id,classification_id) VALUES (1,'cls_secret')");
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at,compartment_id)
+		VALUES ('secret','default','Classified evidence','pi','now','now','now',1)`);
+		db.exec(`INSERT INTO dreaming_state (agent_id,compartment_id,consecutive_failures,last_failure_at)
+		VALUES ('default',NULL,10,datetime('now'))`);
+		const labels: unknown[] = [];
+		const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			executorFactory: () => ({
+				async run(input) {
+					const row = db.query("SELECT compartment_id FROM dreaming_passes WHERE id=?").get(input.passId);
+					labels.push(row && typeof row === "object" ? Reflect.get(row, "compartment_id") : undefined);
+					return { summary: "Classified work admitted" };
+				},
+			}),
+		});
+		try {
+			await waitFor(() => labels.length > 0, 2_000);
+			expect(labels.every((label) => label === 1)).toBe(true);
+		} finally {
+			worker.stop();
+			await worker.activePass;
+		}
 	});
 
 	it("discovers registered and data-bearing agents for periodic checks", async () => {
@@ -488,7 +997,7 @@ describe("dreaming worker agent scope", () => {
 				queries.push(request.statement.sql);
 				return {
 					job: {} as never,
-					result: Promise.resolve([{ id: "owner-agent" }, { id: null }]),
+					result: Promise.resolve([{ id: "default" }, { id: "owner-agent" }, { id: null }]),
 					cancel: (): void => {},
 				};
 			},
@@ -1249,9 +1758,19 @@ describe("dreaming worker agent scope", () => {
 		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
 		seed.run("gamma-session", "gamma", "Gamma evidence. ".repeat(200));
 		const allowedOf = (tools: ReadonlyArray<{ parameters: unknown }>): string[] => {
-			const agentId = (tools[0]?.parameters as { properties?: { agentId?: { const?: string; enum?: string[] } } })
-				.properties?.agentId;
-			return agentId?.enum ?? (agentId?.const ? [agentId.const] : []);
+			const parameters = tools[0]?.parameters;
+			const properties: unknown =
+				typeof parameters === "object" && parameters !== null ? Reflect.get(parameters, "properties") : null;
+			const agentId: unknown =
+				typeof properties === "object" && properties !== null ? Reflect.get(properties, "agentId") : null;
+			if (typeof agentId !== "object" || agentId === null) return [];
+			const values: unknown = Reflect.get(agentId, "enum");
+			const value: unknown = Reflect.get(agentId, "const");
+			return Array.isArray(values)
+				? values.filter((item): item is string => typeof item === "string")
+				: typeof value === "string"
+					? [value]
+					: [];
 		};
 		const groups: string[][] = [];
 		const crossGroupErrors: string[] = [];
@@ -1433,6 +1952,18 @@ describe("dreaming worker agent scope", () => {
 		expect(await selectDreamingCheckMode(accessor, ["default"], focus)).toBe("incremental-hygiene");
 	});
 
+	it("chooses scheduled attention and backlog from the exact compartment", async () => {
+		db.exec("INSERT INTO classifications (id,name) VALUES ('cls_secret','Secret')");
+		db.exec("INSERT INTO compartments (id,key) VALUES (1,'cls_secret')");
+		db.exec("INSERT INTO compartment_members (compartment_id,classification_id) VALUES (1,'cls_secret')");
+		db.exec(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at)
+		VALUES ('public','default','Public queued evidence','pi','now','now','now')`);
+		db.exec(`INSERT INTO dreaming_attention (id,agent_id,kind,subject_ref,details_json,compartment_id)
+		VALUES ('secret-hygiene','default','hygiene','entity:secret','{}',1)`);
+		expect(await selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
+		expect(await selectDreamingCheckMode(accessor, ["default"], null, undefined, 1)).toBe("incremental-hygiene");
+	});
+
 	it("routes pending surprisal hints to a content pass without an evidence backlog", async () => {
 		db.prepare(
 			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
@@ -1480,7 +2011,7 @@ describe("dreaming worker agent scope", () => {
 			 VALUES ('summary-beta', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run(BETA, betaEvidence);
 		const seenPrompts: string[] = [];
-		const executorFactory = (agentId: string) => ({
+		const executorFactory = () => ({
 			async run(input: {
 				prompt: string;
 				tools: ReadonlyArray<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }>;
@@ -1598,6 +2129,52 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 		await closeRealOwnerTriggerFixture(fixture);
 		fixture = null;
 	}, 30_000);
+
+	it("arbitrates lease races and source-label guards in the actual DB owner", async () => {
+		const current = fixture;
+		if (current === null) throw new Error("Missing owner fixture");
+		const { maintenance, accessor, owner, dbPath } = current;
+		await ownerTransaction(maintenance.owner, "dreaming.test.lease-fixture", [
+			ownerRunStatement(`INSERT INTO session_transcripts (session_key,agent_id,content,harness,created_at,updated_at,completed_at)
+			VALUES ('race-source','default','Race evidence','pi','now','now','now')`),
+			...["a", "b"].map((id) =>
+				ownerRunStatement(
+					`INSERT INTO dreaming_passes (id,agent_id,mode,status,created_at)
+			VALUES (?,'default','incremental','running','now')`,
+					[id],
+				),
+			),
+		]);
+		const [a, b] = await Promise.all(
+			["a", "b"].map((passId) =>
+				leaseDreamingEvidence(accessor, {
+					agentId: "default",
+					passId,
+					sourceRefs: ["transcript:race-source"],
+					ttlMs: 60_000,
+				}),
+			),
+		);
+		expect(Number(a.has("transcript:race-source")) + Number(b.has("transcript:race-source"))).toBe(1);
+		await expect(
+			leaseDreamingEvidence(accessor, {
+				agentId: "default",
+				passId: "a",
+				sourceRefs: ["transcript:race-source"],
+				ttlMs: 60_000,
+				compartmentId: 999,
+			}),
+		).rejects.toThrow("compartment_mismatch");
+		expect(
+			await recallThroughDbOwner(maintenance.owner, "SELECT COUNT(*) AS n FROM dreaming_evidence_leases", []),
+		).toEqual([{ n: 1 }]);
+		const pid = owner.health().pid;
+		if (pid === null) throw new Error("Missing owner PID");
+		if (process.platform === "linux") {
+			expect(processHasPathDescriptor(process.pid, dbPath)).toBe(false);
+			expect(processHasPathDescriptor(pid, dbPath)).toBe(true);
+		}
+	});
 
 	it("holds a timed-out scope trigger until owner work settles, then permits a completed pass", async () => {
 		const current = fixture;
@@ -2099,4 +2676,15 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 		expect(recoveryOutcome.kind).toBe("resolved");
 		expect(recoveredRows).toEqual([{ id: expect.any(String), status: "completed" }]);
 	}, 30_000);
+});
+
+describe("shared Dreaming scope partitioning", () => {
+	it("fans out deep scope work within the per-scope allowance and token budget", () => {
+		expect(partitionDreamingScopes([{ scope: "alice", tokens: 100_000, passes: 3 }], 4, 120_000)).toEqual([
+			["alice"],
+			["alice"],
+			["alice"],
+		]);
+		expect(partitionDreamingScopes([{ scope: "alice", tokens: 100_000, passes: 0 }], 4, 120_000)).toEqual([]);
+	});
 });

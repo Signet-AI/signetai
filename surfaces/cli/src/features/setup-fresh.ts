@@ -6,10 +6,9 @@ import {
 	addObsidianSource,
 	buildAgentMemoryConfig,
 	disableGraphiqState,
-	ensureUnifiedSchema,
+	initializeDatabaseSchema,
 	formatYaml,
 	resolvePrimaryPackageManager,
-	runMigrations,
 	createFreshWorkspaceV2,
 	findExistingWorkspaceDatabase,
 	resolveWorkspaceLayoutAs,
@@ -295,8 +294,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		const dbPath = workspaceLayout.database;
 		const db = Database(dbPath);
 		try {
-			ensureUnifiedSchema(db);
-			runMigrations(db);
+			initializeDatabaseSchema(db);
 		} finally {
 			db.close();
 		}

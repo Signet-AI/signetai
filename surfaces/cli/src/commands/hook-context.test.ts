@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

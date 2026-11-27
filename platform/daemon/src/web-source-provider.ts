@@ -1,3 +1,4 @@
+import { sourceWriteAuthor } from "./auth/audit-owner";
 import { lookup } from "node:dns/promises";
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
@@ -107,6 +108,7 @@ async function syncWebSource(context: SourceProviderSyncContext): Promise<Source
 		const sourceParentPath = `web://${new URL(extracted.finalUrl).host}`;
 		const content = webMarkdownContent(extracted, fetched);
 		await indexExternalMemoryArtifact({
+			author: sourceWriteAuthor(context.source),
 			agentId: context.agentId,
 			harness: WEB_HARNESS,
 			sourceId: context.source.id,
@@ -641,6 +643,7 @@ async function writeFailureArtifact(
 	failure: SourceFailureState,
 ): Promise<number> {
 	await indexExternalMemoryArtifact({
+		author: sourceWriteAuthor(source),
 		agentId,
 		harness: WEB_HARNESS,
 		sourceId: source.id,

@@ -1,5 +1,7 @@
-import { getDbOwnerForAccessor } from "../db-owner-runtime";
-import { ownerReadAll, ownerReadOne } from "../db-owner-sql";
+import type { DreamingReviewedEvidence } from "../content-read-owner";
+import type { ReadScope } from "../read-scope";
+import { dreamingReadPredicate } from "./dreaming-read-scope";
+import { dreamingPassPartitionInDb, dreamingReadScopeInDb } from "../classification-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { runWriteTxAsync } from "../db-accessor";
 import { type EpisodicSourceKind, readEpisodicSource } from "../episodic-sources";
@@ -18,18 +20,6 @@ export interface DreamingReviewedExcludedEvidenceEntry {
 	readonly reason: string;
 }
 
-export interface DreamingReviewedEvidence {
-	readonly agentId: string;
-	readonly sourceKind: EpisodicSourceKind;
-	readonly sourceId: string;
-	readonly sourceCapturedAt: string;
-	readonly sourceEntryId: string;
-	readonly sourceRevision: string;
-	readonly reason: string;
-	readonly passId: string;
-	readonly reviewedAt: string;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -39,8 +29,8 @@ function sourceRef(value: string): { readonly kind: EpisodicSourceKind; readonly
 	if (separator <= 0) return null;
 	const kind = value.slice(0, separator);
 	const id = value.slice(separator + 1);
-	if (!id || !["memory", "artifact", "transcript", "summary"].includes(kind)) return null;
-	return { kind: kind as EpisodicSourceKind, id };
+	if (!id || (kind !== "memory" && kind !== "artifact" && kind !== "transcript" && kind !== "summary")) return null;
+	return { kind, id };
 }
 
 function sourceEntryId(source: { readonly sourceEntryId: string | null }): string {
@@ -124,9 +114,9 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 	const insert = db.prepare(
 		`INSERT INTO dreaming_evidence_reviews
 		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
-		  reason, pass_id, reviewed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision) DO UPDATE SET
+		  reason, pass_id, reviewed_at, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, COALESCE(compartment_id,0)) DO UPDATE SET
 		   reason = excluded.reason,
 		   pass_id = excluded.pass_id,
 		   reviewed_at = excluded.reviewed_at`,
@@ -138,9 +128,15 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 	for (const entry of params.entries) {
 		const agentId = entry.agentId;
 		if (!params.scopeIds.has(agentId)) continue;
+		const partition = dreamingPassPartitionInDb(db, params.passId, agentId);
 		const parsed = sourceRef(entry.sourceRef);
 		if (!parsed) continue;
-		const source = readEpisodicSource(db, { agentId, from: entry.sourceRef });
+		const source = readEpisodicSource(db, {
+			agentId,
+			from: entry.sourceRef,
+			readScope: dreamingReadScopeInDb(db, agentId, partition.compartmentId),
+			preferredCompartment: partition.compartmentId,
+		});
 		if (source === null) continue;
 		if (
 			params.deferredEvidence.has(`${agentId}\u0000${entry.sourceRef}`) ||
@@ -158,7 +154,7 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 				source.capturedAt,
 				sourceEntryId(source),
 				revision,
-				deliveredOffsetForSource(db, agentId, source),
+				deliveredOffsetForSource(db, agentId, source, partition.compartmentId),
 				renderDreamingEvidence(source).length,
 			)
 		)
@@ -175,6 +171,7 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 			revision,
 			entry.reason,
 			params.passId,
+			partition.compartmentId,
 		);
 		if (attention) resolveStalledEvidenceAttentionInTx(db, params.passId, agentId, `${source.kind}:${source.id}`);
 		recorded += 1;
@@ -185,54 +182,53 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 export async function getDreamingReviewedEvidence(
 	accessor: DbAccessor,
 	agentId: string,
+	readScope?: ReadScope,
 ): Promise<readonly DreamingReviewedEvidence[]> {
-	const owner = await getDbOwnerForAccessor(accessor);
-	const exists = await ownerReadOne<{ readonly present: number }>(
-		owner,
-		"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
-		["dreaming_evidence_reviews"],
-		{ operation: "dreaming.evidence-reviews-table", workloadClass: "foreground" },
-	);
-	if (exists === null) return [];
-	return await ownerReadAll<DreamingReviewedEvidence>(
-		owner,
-		`SELECT agent_id AS agentId, source_kind AS sourceKind, source_id AS sourceId,
-		        source_captured_at AS sourceCapturedAt, source_entry_id AS sourceEntryId,
-		        source_revision AS sourceRevision, reason, pass_id AS passId,
-		        reviewed_at AS reviewedAt
-		 FROM dreaming_evidence_reviews
-		 WHERE agent_id = ?
-		 ORDER BY reviewed_at DESC, source_kind ASC, source_id ASC`,
-		[agentId],
-		{ operation: "dreaming.evidence-reviews-read", workloadClass: "foreground" },
-	);
+	const { dbOwnerReviewedEvidence } = await import("../db-owner-runtime");
+	return dbOwnerReviewedEvidence(accessor, agentId, readScope);
 }
 export async function requestDreamingReviewedEvidenceRequeue(
 	accessor: DbAccessor,
 	agentId: string,
 	sourceKind: EpisodicSourceKind,
 	sourceId: string,
+	callerReadScope?: ReadScope,
 ): Promise<boolean> {
 	return await runWriteTxAsync(
 		accessor,
-		(db) => {
-			if (!tableExists(db)) return false;
-			const result = db
-				.prepare("DELETE FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ?")
-				.run(agentId, sourceKind, sourceId) as { changes: number };
-			if (result.changes === 0) return false;
-			db.prepare(
-				"DELETE FROM dreaming_evidence_consumption WHERE agent_id = ? AND source_kind = ? AND source_id = ?",
-			).run(agentId, sourceKind, sourceId);
-			enqueueDreamingAttentionInTx(db, {
-				agentId,
-				kind: "evidence_requeue",
-				subjectRef: `${sourceKind}:${sourceId}`,
-				details: { sourceKind, sourceId, reviewedExcluded: "true" },
-				priority: 80,
-			});
-			return true;
-		},
-		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:236" },
+		(db) => requestDreamingReviewedEvidenceRequeueInTx(db, agentId, sourceKind, sourceId, callerReadScope),
+		{ siteToken: "db:dreaming.evidence.reviewed-requeue" },
 	);
+}
+
+export function requestDreamingReviewedEvidenceRequeueInTx(
+	db: WriteDb,
+	agentId: string,
+	sourceKind: EpisodicSourceKind,
+	sourceId: string,
+	callerReadScope?: ReadScope,
+): boolean {
+	if (!tableExists(db)) return false;
+	const scope: ReadScope = callerReadScope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null };
+	const source = readEpisodicSource(db, { agentId, from: `${sourceKind}:${sourceId}`, readScope: scope });
+	if (!source) return false;
+	const compartmentId = source.compartmentId ?? null;
+	const result = db
+		.prepare(
+			"DELETE FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND compartment_id IS ?",
+		)
+		.run(agentId, source.kind, source.id, compartmentId);
+	if (result.changes === 0) return false;
+	db.prepare(
+		"DELETE FROM dreaming_evidence_consumption WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND compartment_id IS ?",
+	).run(agentId, source.kind, source.id, compartmentId);
+	enqueueDreamingAttentionInTx(db, {
+		agentId,
+		compartmentId,
+		kind: "evidence_requeue",
+		subjectRef: `${source.kind}:${source.id}`,
+		details: { sourceKind: source.kind, sourceId: source.id, reviewedExcluded: "true" },
+		priority: 80,
+	});
+	return true;
 }

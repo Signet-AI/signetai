@@ -1,3 +1,4 @@
+import "../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import SignetOhMyPiExtension from "./src/index.js";
 

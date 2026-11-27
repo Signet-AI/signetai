@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
+import { selectShardTables } from "./compartment-shards";
+import { readScopeSql, type ReadScope } from "./read-scope";
 import { redactCredentials } from "./credential-detection";
 import type { Memory } from "./types";
 let native: typeof import("@signet/native") | null = null;
@@ -18,6 +20,7 @@ function safeParseTags(raw: string | null): string[] {
 }
 
 export interface SearchOptions {
+	readScope: ReadScope;
 	query: string;
 	limit?: number;
 	alpha?: number;
@@ -27,6 +30,8 @@ export interface SearchOptions {
 }
 
 export interface VectorSearchOptions {
+	readonly shardNames?: readonly string[];
+	readScope: ReadScope;
 	limit?: number;
 	type?: string;
 	excludeAggregateRecall?: boolean;
@@ -34,6 +39,7 @@ export interface VectorSearchOptions {
 }
 
 export interface HybridSearchOptions {
+	readScope: ReadScope;
 	limit?: number;
 	alpha?: number;
 	minScore?: number;
@@ -54,7 +60,7 @@ interface SQLiteDatabase {
 	exec?(sql: string): void;
 	prepare(sql: string): {
 		run(...args: unknown[]): void;
-		get(...args: unknown[]): Record<string, unknown> | undefined;
+		get(...args: unknown[]): Record<string, unknown> | null | undefined;
 		all(...args: unknown[]): Record<string, unknown>[];
 	};
 }
@@ -166,6 +172,14 @@ function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
 	}
 }
 
+function embeddingReadPredicate(scope: ReadScope): { sql: string; args: unknown[] } {
+	return readScopeSql(
+		"e",
+		{ ...scope, reach: scope.reach.kind === "own" ? scope.reach : { kind: "all" }, projects: null },
+		{ visibility: null, memory: "source_id", source: "source_id", session: null },
+	);
+}
+
 function boundedCosineFallback(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
@@ -183,6 +197,9 @@ function boundedCosineFallback(
 	if (options.excludeAggregateRecall) {
 		predicates.push("COALESCE(m.source_type, '') != 'aggregate-recall'");
 	}
+	const scope = readScopeSql("m", options.readScope);
+	const embeddingScope = embeddingReadPredicate(options.readScope);
+	params.push(...scope.args, ...embeddingScope.args);
 	params.push(maxScanRows + 1);
 
 	const rows = db
@@ -190,7 +207,7 @@ function boundedCosineFallback(
 			`SELECT e.source_id, e.vector
 			 FROM ${searchTables.embeddings} e
 			 JOIN memories m ON e.source_id = m.id
-			 WHERE ${predicates.join(" AND ")}
+			 WHERE ${predicates.join(" AND ")}${scope.sql}${embeddingScope.sql}
 			 ORDER BY e.rowid DESC
 			 LIMIT ?`,
 		)
@@ -214,117 +231,153 @@ function boundedCosineFallback(
 	};
 }
 
+function searchShardNames(db: SQLiteDatabase, scope: ReadScope): string[] {
+	if (scope.compartments !== "all" && scope.compartments.length === 0) return [];
+	return db
+		.prepare("SELECT name FROM sqlite_master WHERE type='table'")
+		.all()
+		.flatMap((row) => (typeof row.name === "string" ? [row.name] : []));
+}
+
+function selectedSearchTables(base: string, scope: ReadScope, names: readonly string[]): string[] {
+	if (scope.compartments !== "all" && scope.compartments.length === 0) return [base];
+	return selectShardTables(names, scope.compartments).filter((name) => name === base || name.startsWith(`${base}__c`));
+}
+
 export function vectorSearchWithMetadata(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
-	options?: VectorSearchOptions,
+	options: VectorSearchOptions,
 ): VectorSearchResponse {
-	const effectiveOptions = options ?? {};
-	const limit = effectiveOptions.limit ?? 20;
+	if (!options?.readScope) throw new Error("readScope is required for vector search");
+	const limit = options.limit ?? 20;
+	if (limit <= 0) return { results: [], completeness: "complete" };
 	const results: Array<{ id: string; score: number }> = [];
-
+	const maxKnnWindow = 4096;
 	try {
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
-			const queryBlob = new Float32Array(queryVector);
-			const maxK = effectiveOptions.excludeAggregateRecall ? Math.max(limit, Math.min(limit * 8, 1000)) : limit;
-			let k = limit;
-
-			while (true) {
-				const params: unknown[] = [queryBlob, k];
-				let typeFilter = "";
-				if (effectiveOptions.type) {
-					typeFilter = " AND m.type = ?";
-					params.push(effectiveOptions.type);
+			const scope = readScopeSql("m", options.readScope);
+			const embeddingScope = embeddingReadPredicate(options.readScope);
+			const names = options.shardNames ?? searchShardNames(db, options.readScope);
+			const shards = selectedSearchTables(searchTables.projection, options.readScope, names);
+			if (shards.length === 0) throw new Error("Vector projection unavailable");
+			let projectionRows = 0;
+			for (const table of shards) {
+				const size = db.prepare(`SELECT COUNT(*) AS count FROM ${table}_rowids`).get()?.count;
+				if (typeof size !== "number") throw new Error("Vector shard size unavailable");
+				projectionRows += size;
+				if (limit > maxKnnWindow) throw new Error("Requested vector window exceeds KNN admission");
+				let requested = Math.min(size, limit * 4, maxKnnWindow);
+				while (requested > 0) {
+					const params: unknown[] = [new Float32Array(queryVector), requested];
+					let filter = "";
+					if (options.type) {
+						filter += " AND m.type = ?";
+						params.push(options.type);
+					}
+					if (options.excludeAggregateRecall) filter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
+					params.push(...scope.args, ...embeddingScope.args, limit);
+					let rows = db
+						.prepare(`WITH hits AS MATERIALIZED (
+						SELECT id,distance FROM ${table} WHERE embedding MATCH ? AND k=?
+					) SELECT e.source_id,hits.distance FROM hits
+					CROSS JOIN ${searchTables.embeddings} e ON e.id=hits.id
+					CROSS JOIN memories m ON m.id=e.source_id
+					WHERE 1=1${filter}${scope.sql}${embeddingScope.sql} ORDER BY hits.distance,m.id LIMIT ?`)
+						.all(...params);
+					const selectiveAtBackendLimit = rows.length < limit && requested === maxKnnWindow && requested < size;
+					if (selectiveAtBackendLimit) {
+						params[1] = limit;
+						rows = db
+							.prepare(`SELECT e.source_id,v.distance FROM ${table} v
+							JOIN ${searchTables.embeddings} e ON e.id=v.id
+							WHERE v.embedding MATCH ? AND k=? AND v.id IN (
+								SELECT eligible.id FROM ${table} eligible
+								JOIN ${searchTables.embeddings} e ON e.id=eligible.id JOIN memories m ON m.id=e.source_id
+								WHERE 1=1${filter}${scope.sql}${embeddingScope.sql}
+							) ORDER BY v.distance,e.source_id LIMIT ?`)
+							.all(...params);
+					}
+					if (selectiveAtBackendLimit || rows.length >= limit || requested >= size) {
+						for (const row of rows)
+							if (typeof row.source_id === "string" && typeof row.distance === "number")
+								results.push({ id: row.source_id, score: Math.max(0, 1 - row.distance) });
+						break;
+					}
+					requested = Math.min(size, requested * 2, maxKnnWindow);
 				}
-				if (effectiveOptions.excludeAggregateRecall) {
-					typeFilter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
-				}
-				const rows = db
-					.prepare(`
-      SELECT
-        e.source_id,
-        v.distance
-      FROM ${searchTables.projection} v
-						JOIN ${searchTables.embeddings} e ON v.id = e.id
-      JOIN memories m ON e.source_id = m.id
-      WHERE v.embedding MATCH ? AND k = ?${typeFilter}
-      ORDER BY v.distance
-    `)
-					.all(...params) as Array<{ source_id: string; distance: number }>;
-
-				results.length = 0;
-				for (const row of rows.slice(0, limit)) {
-					const similarity = 1 - row.distance;
-					results.push({ id: row.source_id, score: Math.max(0, similarity) });
-				}
-				if (results.length >= limit || k >= maxK || (!effectiveOptions.excludeAggregateRecall && rows.length < k))
-					break;
-				k = Math.min(k * 2, maxK);
 			}
+			if (projectionRows === 0) throw new Error("Vector projection is empty");
+			results.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+			results.splice(limit);
 		});
-	} catch (e) {
+	} catch (error) {
 		try {
-			let fallbackResponse: VectorSearchResponse | undefined;
+			let fallback: VectorSearchResponse | undefined;
 			withReadTransaction(db, () => {
-				const searchTables = activeVectorSearchTables(db);
-				fallbackResponse = boundedCosineFallback(db, queryVector, searchTables, effectiveOptions);
+				fallback = boundedCosineFallback(db, queryVector, activeVectorSearchTables(db), options);
 			});
-			return fallbackResponse ?? { results: [], completeness: "unavailable" };
+			return fallback ?? { results: [], completeness: "unavailable" };
 		} catch (fallbackError) {
-			console.warn("Vector search failed, including bounded cosine fallback:", fallbackError, e);
+			console.warn("Vector search failed, including bounded cosine fallback:", fallbackError, error);
 			return { results: [], completeness: "unavailable" };
 		}
 	}
-
 	return { results, completeness: "complete" };
 }
 
 export function vectorSearch(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
-	options?: VectorSearchOptions,
+	options: VectorSearchOptions,
 ): Array<{ id: string; score: number }> {
 	return vectorSearchWithMetadata(db, queryVector, options).results;
 }
-export function keywordSearch(db: SQLiteDatabase, query: string, limit?: number): Array<{ id: string; score: number }> {
-	const effectiveLimit = limit ?? 20;
-	const results: Array<{ id: string; score: number }> = [];
-	const matchQuery = buildFtsMatchQuery(query);
-	if (matchQuery === null) return results;
-
-	try {
+export function keywordSearch(
+	db: SQLiteDatabase,
+	query: string,
+	limit = 20,
+	readScope: ReadScope,
+	shardNames?: readonly string[],
+): Array<{ id: string; score: number }> {
+	const match = buildFtsMatchQuery(query);
+	if (match === null) return [];
+	if (!readScope) throw new Error("readScope is required for keyword search");
+	const scope = readScopeSql("m", readScope);
+	const names = shardNames ?? searchShardNames(db, readScope);
+	const candidates: Array<{ id: string; raw: number }> = [];
+	for (const table of selectedSearchTables("memories_fts", readScope, names)) {
 		const rows = db
-			.prepare(`
-      SELECT m.id, bm25(memories_fts) AS raw_score
-      FROM memories_fts
-      JOIN memories m ON memories_fts.rowid = m.rowid
-      WHERE memories_fts MATCH ?
-      ORDER BY raw_score
-      LIMIT ?
-    `)
-			.all(matchQuery, effectiveLimit) as Array<{ id: string; raw_score: number }>;
-
-		for (const row of rows) {
-			const normalized = 1 / (1 + Math.abs(row.raw_score));
-			results.push({ id: row.id, score: normalized });
-		}
-	} catch {}
-
-	return results;
+			.prepare(`SELECT m.id,bm25(${table}) AS raw_score FROM ${table}
+			JOIN memories m ON ${table}.rowid=m.rowid WHERE ${table} MATCH ?${scope.sql}
+			ORDER BY raw_score,m.id LIMIT ?`)
+			.all(match, ...scope.args, limit);
+		for (const row of rows)
+			if (typeof row.id === "string" && typeof row.raw_score === "number")
+				candidates.push({ id: row.id, raw: row.raw_score });
+	}
+	return candidates
+		.sort((a, b) => a.raw - b.raw || a.id.localeCompare(b.id))
+		.slice(0, limit)
+		.map((row) => ({ id: row.id, score: 1 / (1 + Math.abs(row.raw)) }));
 }
 export function hybridSearch(
 	db: SQLiteDatabase,
 	queryVector: Float32Array | null,
 	queryText: string,
-	options?: HybridSearchOptions,
+	options: HybridSearchOptions,
 ): SearchResult[] {
-	const alpha = options?.alpha ?? DEFAULT_HYBRID_ALPHA;
+	if (!options?.readScope) throw new Error("readScope is required for hybrid search");
+	const shardNames = searchShardNames(db, options.readScope);
+	const alpha = options.alpha ?? DEFAULT_HYBRID_ALPHA;
 	const limit = options?.limit ?? 10;
 	const topK = options?.topK ?? 50;
 	const minScore = options?.minScore ?? 0.1;
-	const vectorResults = queryVector ? vectorSearch(db, queryVector, { limit: topK, type: options?.type }) : [];
-	const keywordResults = keywordSearch(db, queryText, topK);
+	const vectorResults = queryVector
+		? vectorSearch(db, queryVector, { limit: topK, type: options?.type, readScope: options.readScope, shardNames })
+		: [];
+	const keywordResults = keywordSearch(db, queryText, topK, options.readScope, shardNames);
 	let scored: Array<{
 		id: string;
 		score: number;
@@ -399,14 +452,16 @@ export function hybridSearch(
 	for (let offset = 0; offset < candidateIds.length; offset += 400) {
 		const batch = candidateIds.slice(offset, offset + 400);
 		const placeholders = batch.map(() => "?").join(", ");
+		const scope = readScopeSql("", options.readScope);
 		const params: unknown[] = [...batch];
 		const typeFilter = options?.type ? " AND type = ?" : "";
 		if (options?.type) params.push(options.type);
+		params.push(...scope.args);
 		const rows = db
 			.prepare(`
     SELECT id, content, type, tags, confidence
     FROM memories
-    WHERE id IN (${placeholders})${typeFilter}
+    WHERE id IN (${placeholders})${typeFilter}${scope.sql}
   `)
 			.all(...params) as Array<{
 			id: string;
@@ -438,6 +493,66 @@ export function hybridSearch(
 		})
 		.filter((r): r is NonNullable<typeof r> => r !== null);
 }
+const PROMPT_ENTITY_MAX_TEXT_BYTES = 256;
+
+const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
+		   AND LOWER(e.entity_type) IN ('person', 'project')
+		   AND TYPEOF(e.id) = 'text'
+		   AND TYPEOF(e.name) = 'text'
+		   AND LENGTH(CAST(e.id AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND LENGTH(CAST(e.name AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}`;
+
+const promptEntityCounts = (
+	global: boolean,
+) => `${global ? "CAST(COALESCE(e.mentions, 0) AS INTEGER)" : "0"} AS mentions,
+		   CAST(COALESCE(e.pinned, 0) AS INTEGER) AS pinned`;
+
+const promptEntityNames = (scope: string, global: boolean) => `SELECT
+		   e.rowid AS cursor,
+		   e.id AS entity_id,
+		   e.name AS entity_name,
+		   COALESCE(e.entity_type, 'unknown') AS entity_type,
+		   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
+		   'name' AS match_source,
+		   ${promptEntityCounts(global)}
+		 FROM entities e
+		 WHERE e.rowid > ?${scope}
+		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		   AND TYPEOF(COALESCE(e.canonical_name, LOWER(e.name))) = 'text'
+		   AND LENGTH(CAST(COALESCE(e.canonical_name, LOWER(e.name)) AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		 ORDER BY e.rowid
+		 LIMIT ?`;
+
+const promptEntityAliases = (scope: string, global: boolean) => `SELECT
+		   a.canonical_alias AS cursor,
+		   e.id AS entity_id,
+		   e.name AS entity_name,
+		   COALESCE(e.entity_type, 'unknown') AS entity_type,
+		   a.alias AS matched_text,
+		   'alias' AS match_source,
+		   ${promptEntityCounts(global)}
+		 FROM entity_aliases a
+		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
+		 WHERE a.status = 'active'
+		   AND a.canonical_alias > ?${scope}
+		   AND TYPEOF(a.canonical_alias) = 'text'
+		   AND TYPEOF(a.alias) = 'text'
+		   AND LENGTH(CAST(a.canonical_alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND LENGTH(CAST(a.alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		 ORDER BY a.canonical_alias
+		 LIMIT ?`;
+
+export function promptEntityPageSql(kind: "names" | "aliases", readScope: ReadScope, predicate: string): string {
+	if (!readScope) throw new Error("readScope is required for entity search");
+	const global =
+		readScope.reach.kind === "all" &&
+		readScope.compartments === "all" &&
+		readScope.projects === null &&
+		readScope.inFlightUserId === undefined;
+	return kind === "names" ? promptEntityNames(predicate, global) : promptEntityAliases(predicate, global);
+}
+
 function hasPrepareMethod(db: unknown): db is SQLiteDatabase {
 	return (
 		typeof db === "object" && db !== null && "prepare" in db && typeof (db as SQLiteDatabase).prepare === "function"
@@ -462,28 +577,11 @@ export async function search(db: SQLiteDatabase | DatabaseWrapper, options: Sear
 			minScore,
 			topK,
 			type: options.type,
+			readScope: options.readScope,
 		});
 		if (results.length > 0) {
 			return results;
 		}
 	}
-	try {
-		const wrapper = db as DatabaseWrapper;
-		const memories = typeof wrapper.getMemories === "function" ? wrapper.getMemories(options.type) : [];
-
-		return memories
-			.filter((m: Memory) => m.content.toLowerCase().includes(query.toLowerCase()))
-			.slice(0, limit)
-			.map((m: Memory) => ({
-				id: m.id,
-				content: redactCredentials(m.content),
-				score: 1.0,
-				type: m.type,
-				source: "keyword" as const,
-				tags: m.tags,
-				confidence: m.confidence,
-			}));
-	} catch {
-		return [];
-	}
+	return [];
 }

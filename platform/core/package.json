@@ -31,6 +31,18 @@
 			"import": "./dist/assistant-chat.js",
 			"types": "./dist/assistant-chat.d.ts"
 		},
+		"./remember": {
+			"import": "./dist/remember.js",
+			"types": "./dist/remember.d.ts"
+		},
+		"./daemon-url": {
+			"import": "./dist/daemon-url.js",
+			"types": "./dist/daemon-url.d.ts"
+		},
+		"./secrets-keyring": {
+			"import": "./dist/secrets-keyring.js",
+			"types": "./dist/secrets-keyring.d.ts"
+		},
 		"./attempt": {
 			"import": "./dist/attempt.js",
 			"types": "./dist/attempt.d.ts"
@@ -42,7 +54,7 @@
 		"!dist/**/__tests__/**"
 	],
 	"scripts": {
-		"build": "bun build ./src/index.ts ./src/pipeline-providers.ts ./src/llm-model-catalog.ts ./src/recall.ts ./src/secrets-keyring-child.ts --outdir ./dist --target node --external better-sqlite3 --external @napi-rs/keyring && bun build ./src/assistant-chat.ts ./src/telemetry-consent.ts ./src/attempt.ts --outdir ./dist --target browser && bun run build:types",
+		"build": "bun build ./src/index.ts ./src/pipeline-providers.ts ./src/llm-model-catalog.ts ./src/secrets-keyring-child.ts ./src/secrets-keyring.ts ./src/daemon-url.ts --outdir ./dist --target node --external better-sqlite3 --external @napi-rs/keyring && bun build ./src/recall.ts ./src/assistant-chat.ts ./src/telemetry-consent.ts ./src/attempt.ts ./src/remember.ts --outdir ./dist --target browser && bun run build:types",
 		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
 		"dev": "bun --watch src/index.ts",
 		"test": "bun test",

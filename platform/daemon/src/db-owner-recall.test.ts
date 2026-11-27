@@ -8,6 +8,7 @@ import { vectorSearchThroughDbOwner, hybridRecallThroughDbOwner } from "./db-own
 import { getDbRecallOwner } from "./db-owner-runtime";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall, type RecallResponse } from "./memory-search";
+import { localTestReadScope } from "./test-support/local-read-scope";
 import { setActiveTelemetry } from "./telemetry";
 
 let directory: string | null = null;
@@ -114,6 +115,7 @@ describe("DB owner recall lane", () => {
 					keywordQuery: "owner recall fixture",
 					limit: 5,
 					agentId: "agent-a",
+					readScope: localTestReadScope("agent-a"),
 					readPolicy: "isolated",
 					trackRecallAccess: false,
 					claimRecallResults: false,
@@ -143,6 +145,7 @@ describe("DB owner recall lane", () => {
 			keywordQuery: "owner recall fixture",
 			limit: 5,
 			agentId: "agent-a",
+			readScope: localTestReadScope("agent-a"),
 			readPolicy: "isolated" as const,
 			trackRecallAccess: false,
 			claimRecallResults: false,
@@ -185,6 +188,7 @@ describe("DB owner recall lane", () => {
 					keywordQuery: "owner recall fixture",
 					limit,
 					agentId: "agent-a",
+					readScope: localTestReadScope("agent-a"),
 					readPolicy: "isolated",
 					trackRecallAccess: false,
 					claimRecallResults: false,
@@ -237,6 +241,7 @@ describe("DB owner recall lane", () => {
 					query: "owner recall fixture",
 					limit: 5,
 					agentId: "agent-a",
+					readScope: localTestReadScope("agent-a"),
 					readPolicy: "isolated",
 					trackRecallAccess: false,
 					claimRecallResults: false,
@@ -274,6 +279,7 @@ describe("DB owner recall lane", () => {
 					keywordQuery: "owner recall fixture",
 					limit: 5,
 					agentId: "agent-a",
+					readScope: localTestReadScope("agent-a"),
 					readPolicy: "isolated",
 					trackRecallAccess: false,
 					claimRecallResults: false,
@@ -301,20 +307,77 @@ describe("DB owner recall lane", () => {
 				 VALUES (?, ?, 'fact', 'agent-a', 'global', datetime('now'), datetime('now'), 'test')`,
 			).run("owner-vector-fact", "owner vector fixture");
 			db.prepare(
-				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, created_at) VALUES (?, ?, 'memory', ?, ?, '', datetime('now'))",
+				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, agent_id, created_at) VALUES (?, ?, 'memory', ?, ?, '', 'agent-a', datetime('now'))",
 			).run("owner-vector-hash", "owner-vector-fact", new Float32Array([1, 0, 0]), 3);
 		});
 		await closeDbAccessor();
 
 		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
 		try {
-			const result = await vectorSearchThroughDbOwner(client, [1, 0, 0], { limit: 1, maxScanRows: 10 });
+			const result = await vectorSearchThroughDbOwner(client, [1, 0, 0], {
+				limit: 1,
+				maxScanRows: 10,
+				readScope: localTestReadScope("agent-a"),
+			});
 			expect(result.results).toEqual([{ id: "owner-vector-fact", score: 1 }]);
 			expect(["complete", "recent-window"]).toContain(result.completeness);
 		} finally {
 			await client.close();
 		}
 	});
+
+	test.each(["worker", "inline"] as const)(
+		"applies the request ReadScope inside the %s owner vector search",
+		async (lane) => {
+			directory = mkdtempSync(join(tmpdir(), `signet-db-owner-vector-scope-${lane}-`));
+			previousSignetPath = process.env.SIGNET_PATH;
+			mkdirSync(join(directory, "memory"), { recursive: true });
+			writeFileSync(join(directory, "agent.yaml"), "name: DbOwnerVectorScopeTest\n");
+			process.env.SIGNET_PATH = directory;
+			const databasePath = join(directory, "memory", "memories.db");
+			initDbAccessor(databasePath);
+			getDbAccessor().withWriteTx((db) => {
+				const memory = db.prepare(
+					`INSERT INTO memories (id, content, type, agent_id, visibility, compartment_id, created_at, updated_at, updated_by)
+					 VALUES (?, ?, 'fact', ?, 'global', ?, datetime('now'), datetime('now'), 'test')`,
+				);
+				const embedding = db.prepare(
+					"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, compartment_id, agent_id, created_at) VALUES (?, ?, 'memory', ?, 3, '', ?, ?, datetime('now'))",
+				);
+				for (const [id, agent, compartment] of [
+					["scope-own", "agent-a", null],
+					["scope-peer", "agent-b", null],
+					["scope-hidden", "agent-a", 7],
+				] as const) {
+					memory.run(id, `vector scope ${id}`, agent, compartment);
+					embedding.run(`hash-${id}`, id, new Float32Array([1, 0, 0]), compartment, agent);
+				}
+			});
+			const readScope = { reach: { kind: "own" as const, agentId: "agent-a" }, compartments: [], projects: null };
+			const search = async () => {
+				if (lane === "inline") {
+					const previousOwnerWorker = process.env.SIGNET_DB_OWNER_WORKER;
+					process.env.SIGNET_DB_OWNER_WORKER = "1";
+					try {
+						const owner = await getDbRecallOwner(databasePath);
+						return await vectorSearchThroughDbOwner(owner, [1, 0, 0], { limit: 5, maxScanRows: 10, readScope });
+					} finally {
+						if (previousOwnerWorker === undefined) delete process.env.SIGNET_DB_OWNER_WORKER;
+						else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerWorker;
+					}
+				}
+				await closeDbAccessor();
+				const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+				try {
+					return await vectorSearchThroughDbOwner(client, [1, 0, 0], { limit: 5, maxScanRows: 10, readScope });
+				} finally {
+					await client.close();
+				}
+			};
+			const result = await search();
+			expect(result.results.map((row) => row.id)).toEqual(["scope-own"]);
+		},
+	);
 
 	test("nested recall-owner vector search does not reject its own isolated request", async () => {
 		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-nested-vector-search-"));
@@ -330,7 +393,7 @@ describe("DB owner recall lane", () => {
 				 VALUES (?, ?, 'fact', 'agent-a', 'global', datetime('now'), datetime('now'), 'test')`,
 			).run("nested-owner-vector-fact", "nested owner vector fixture");
 			db.prepare(
-				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, created_at) VALUES (?, ?, 'memory', ?, ?, '', datetime('now'))",
+				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, agent_id, created_at) VALUES (?, ?, 'memory', ?, ?, '', 'agent-a', datetime('now'))",
 			).run("nested-owner-vector-hash", "nested-owner-vector-fact", new Float32Array([1, 0, 0]), 3);
 		});
 
@@ -338,7 +401,11 @@ describe("DB owner recall lane", () => {
 		process.env.SIGNET_DB_OWNER_WORKER = "1";
 		try {
 			const owner = await getDbRecallOwner(databasePath);
-			const result = await vectorSearchThroughDbOwner(owner, [1, 0, 0], { limit: 1, maxScanRows: 10 });
+			const result = await vectorSearchThroughDbOwner(owner, [1, 0, 0], {
+				limit: 1,
+				maxScanRows: 10,
+				readScope: localTestReadScope("agent-a"),
+			});
 			expect(result.results).toEqual([{ id: "nested-owner-vector-fact", score: 1 }]);
 		} finally {
 			if (previousOwnerWorker === undefined) delete process.env.SIGNET_DB_OWNER_WORKER;
@@ -422,6 +489,7 @@ inference:
 			keywordQuery: "owner recall fixture",
 			limit: 2,
 			agentId: "agent-a",
+			readScope: localTestReadScope("agent-a"),
 			readPolicy: "isolated" as const,
 			trackRecallAccess: false,
 			claimRecallResults: false,
@@ -510,6 +578,7 @@ inference:
 			keywordQuery: "owner recall fixture",
 			limit: 2,
 			agentId: "agent-a",
+			readScope: localTestReadScope("agent-a"),
 			readPolicy: "isolated" as const,
 			trackRecallAccess: false,
 			claimRecallResults: false,

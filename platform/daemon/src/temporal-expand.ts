@@ -1,5 +1,5 @@
 import { redactCredentials } from "@signet/core";
-import { getDbAccessor } from "./db-accessor";
+import { readScopeSql, type ReadScope } from "./read-scope";
 
 type TemporalQuery = {
 	get(...args: ReadonlyArray<unknown>): unknown;
@@ -8,10 +8,6 @@ type TemporalQuery = {
 
 type TemporalDb = {
 	prepare(sql: string): TemporalQuery;
-};
-
-type TemporalAccessor = {
-	withReadDb<T>(fn: (db: TemporalDb) => T): T;
 };
 
 interface RawNode {
@@ -142,129 +138,139 @@ function resolveTranscriptKey(node: TemporalExpandNode): string | null {
 	return null;
 }
 
-export function expandTemporalNode(
+export interface TemporalExpandOptions {
+	readonly includeTranscript?: boolean;
+	readonly project?: string;
+	readonly transcriptCharLimit?: number;
+	readonly scope?: ReadScope;
+}
+export function expandTemporalNodeInDb(
+	db: TemporalDb,
 	id: string,
 	agentId: string,
-	opts?: {
-		readonly includeTranscript?: boolean;
-		readonly project?: string;
-		readonly transcriptCharLimit?: number;
-		readonly accessor?: TemporalAccessor;
-	},
+	opts?: TemporalExpandOptions,
 ): TemporalExpandResult | null {
-	const accessor = opts?.accessor ?? getDbAccessor();
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const table = db
-			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
-			.get();
-		if (!table) return null;
+	const options = { visibility: null, memory: null, session: "session_key", source: null } as const;
+	const nodeScope = opts?.scope ? readScopeSql("", opts.scope, options) : { sql: " AND agent_id=?", args: [agentId] };
+	const summaryScope = opts?.scope
+		? readScopeSql("ss", opts.scope, options)
+		: { sql: " AND ss.agent_id=?", args: [agentId] };
+	const memoryScope = opts?.scope ? readScopeSql("m", opts.scope) : { sql: "", args: [] };
+	const transcriptScope = opts?.scope
+		? readScopeSql("", opts.scope, { ...options, source: "source_id" })
+		: { sql: " AND agent_id=?", args: [agentId] };
+	const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
+	if (!table) return null;
 
-		const projectClause = opts?.project ? " AND project = ?" : "";
-		const projectArgs = opts?.project ? [opts.project] : [];
-		const node = db
-			.prepare(
-				`SELECT id, project, depth, kind, content, token_count,
+	const projectClause = opts?.project ? " AND project = ?" : "";
+	const projectArgs = opts?.project ? [opts.project] : [];
+	const node = db
+		.prepare(
+			`SELECT id, project, depth, kind, content, token_count,
 				        earliest_at, latest_at, session_key, harness, agent_id,
 				        source_type, source_ref, meta_json, created_at
 				 FROM session_summaries
-				 WHERE id = ? AND agent_id = ?${projectClause}`,
-			)
-			.get(id, agentId, ...projectArgs) as RawNode | undefined;
-		if (!node) return null;
+				 WHERE id = ?${nodeScope.sql}${projectClause}`,
+		)
+		.get(id, ...nodeScope.args, ...projectArgs) as RawNode | undefined;
+	if (!node) return null;
 
-		const parentRows = db
-			.prepare(
-				`SELECT ss.id, ss.project, ss.depth, ss.kind, ss.content, ss.token_count,
+	const parentRows = db
+		.prepare(
+			`SELECT ss.id, ss.project, ss.depth, ss.kind, ss.content, ss.token_count,
 				        ss.earliest_at, ss.latest_at, ss.session_key, ss.harness, ss.agent_id,
 				        ss.source_type, ss.source_ref, ss.meta_json, ss.created_at,
 				        rel.ordinal
 				 FROM session_summary_children rel
 				 JOIN session_summaries ss ON ss.id = rel.parent_id
-				 WHERE rel.child_id = ? AND ss.agent_id = ?${projectClause}
+				 WHERE rel.child_id = ?${summaryScope.sql}${projectClause}
 				 ORDER BY rel.ordinal ASC, ss.latest_at DESC`,
-			)
-			.all(id, agentId, ...projectArgs) as Array<RawNode & RawLink>;
+		)
+		.all(id, ...summaryScope.args, ...projectArgs) as Array<RawNode & RawLink>;
 
-		const childRows = db
-			.prepare(
-				`SELECT ss.id, ss.project, ss.depth, ss.kind, ss.content, ss.token_count,
+	const childRows = db
+		.prepare(
+			`SELECT ss.id, ss.project, ss.depth, ss.kind, ss.content, ss.token_count,
 				        ss.earliest_at, ss.latest_at, ss.session_key, ss.harness, ss.agent_id,
 				        ss.source_type, ss.source_ref, ss.meta_json, ss.created_at,
 				        rel.ordinal
 				 FROM session_summary_children rel
 				 JOIN session_summaries ss ON ss.id = rel.child_id
-				 WHERE rel.parent_id = ? AND ss.agent_id = ?${projectClause}
+				 WHERE rel.parent_id = ?${summaryScope.sql}${projectClause}
 				 ORDER BY rel.ordinal ASC, ss.latest_at DESC`,
-			)
-			.all(id, agentId, ...projectArgs) as Array<RawNode & RawLink>;
+		)
+		.all(id, ...summaryScope.args, ...projectArgs) as Array<RawNode & RawLink>;
 
-		const memories = db
-			.prepare(
-				`SELECT ssm.memory_id AS id,
-				        COALESCE(m.content, '[deleted memory]') AS content,
+	const memories = db
+		.prepare(
+			`SELECT ssm.memory_id AS id,
+				        CASE WHEN m.id IS NULL OR COALESCE(m.is_deleted,0)=1 THEN '[deleted memory]' ELSE m.content END AS content,
 				        COALESCE(m.type, 'unknown') AS type,
 				        COALESCE(m.created_at, ss.created_at) AS created_at,
 				        CASE WHEN m.id IS NULL OR COALESCE(m.is_deleted, 0) = 1 THEN 1 ELSE 0 END AS is_deleted
 				 FROM session_summary_memories ssm
 				 JOIN session_summaries ss ON ss.id = ssm.summary_id
 				 LEFT JOIN memories m ON m.id = ssm.memory_id
-				 WHERE ssm.summary_id = ? AND ss.agent_id = ?${
+				 WHERE ssm.summary_id = ?${summaryScope.sql} AND (m.id IS NULL OR (1=1${memoryScope.sql}))${
 						opts?.project ? " AND ss.project = ? AND (m.id IS NULL OR COALESCE(m.project, ss.project) = ?)" : ""
 }
 				 ORDER BY created_at DESC
 				 LIMIT 25`,
-			)
-			.all(id, agentId, ...(opts?.project ? [opts.project, opts.project] : [])) as RawMemory[];
+		)
+		.all(
+			id,
+			...summaryScope.args,
+			...memoryScope.args,
+			...(opts?.project ? [opts.project, opts.project] : []),
+		) as RawMemory[];
 
-		const mapped = mapNode(node);
-		const transcriptKey = resolveTranscriptKey(mapped);
-		let transcript: TemporalExpandTranscript | undefined;
-		if (opts?.includeTranscript !== false && transcriptKey) {
-			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
-			const hasUpdated = cols.some((col) => col.name === "updated_at");
-			const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
-			const row = db
-				.prepare(
-					`SELECT session_key, harness, project, content, ${seenExpr} AS seen_at
+	const mapped = mapNode(node);
+	const transcriptKey = resolveTranscriptKey(mapped);
+	let transcript: TemporalExpandTranscript | undefined;
+	if (opts?.includeTranscript !== false && transcriptKey) {
+		const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+		const hasUpdated = cols.some((col) => col.name === "updated_at");
+		const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
+		const row = db
+			.prepare(
+				`SELECT session_key, harness, project, content, ${seenExpr} AS seen_at
 					 FROM session_transcripts
-					 WHERE session_key = ? AND agent_id = ?${opts?.project ? " AND project = ?" : ""}`,
-				)
-				.get(transcriptKey, agentId, ...(opts?.project ? [opts.project] : [])) as
-				| {
-						session_key: string;
-						harness: string | null;
-						project: string | null;
-						content: string;
-						seen_at: string;
-				  }
-				| undefined;
-			if (row) {
-				const limit = Math.max(400, Math.min(opts?.transcriptCharLimit ?? 2000, 12000));
-				const raw = clean(redactCredentials(row.content));
-				transcript = {
-					sessionKey: row.session_key,
-					harness: row.harness,
-					project: row.project,
-					updatedAt: row.seen_at,
-					excerpt: excerpt(raw, mapped.content),
-					content: raw.length <= limit ? raw : `${raw.slice(0, Math.max(1, limit - 3))}...`,
-				};
-			}
+					 WHERE session_key = ?${transcriptScope.sql}${opts?.project ? " AND project = ?" : ""}`,
+			)
+			.get(transcriptKey, ...transcriptScope.args, ...(opts?.project ? [opts.project] : [])) as
+			| {
+					session_key: string;
+					harness: string | null;
+					project: string | null;
+					content: string;
+					seen_at: string;
+			  }
+			| undefined;
+		if (row) {
+			const limit = Math.max(400, Math.min(opts?.transcriptCharLimit ?? 2000, 12000));
+			const raw = clean(redactCredentials(row.content));
+			transcript = {
+				sessionKey: row.session_key,
+				harness: row.harness,
+				project: row.project,
+				updatedAt: row.seen_at,
+				excerpt: excerpt(raw, mapped.content),
+				content: raw.length <= limit ? raw : `${raw.slice(0, Math.max(1, limit - 3))}...`,
+			};
 		}
+	}
 
-		return {
-			node: mapped,
-			parents: parentRows.map(mapNode),
-			children: childRows.map(mapNode),
-			linkedMemories: memories.map((row) => ({
-				id: row.id,
-				content: redactCredentials(row.content),
-				type: row.type,
-				createdAt: row.created_at,
-				deleted: row.is_deleted === 1,
-			})),
-			...(transcript ? { transcript } : {}),
-		};
-	}, "temporal-expand.ts:157");
+	return {
+		node: mapped,
+		parents: parentRows.map(mapNode),
+		children: childRows.map(mapNode),
+		linkedMemories: memories.map((row) => ({
+			id: row.id,
+			content: redactCredentials(row.content),
+			type: row.type,
+			createdAt: row.created_at,
+			deleted: row.is_deleted === 1,
+		})),
+		...(transcript ? { transcript } : {}),
+	};
 }

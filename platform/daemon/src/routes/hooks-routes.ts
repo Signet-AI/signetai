@@ -1,17 +1,29 @@
+import type { ReadScope } from "../read-scope";
+import { principalMessageReadScope } from "../auth/message-read-scope";
+import {
+	getHookUploadForSessionEnd,
+	hookUploadResult,
+	HookUploadMissing,
+	type HookUploadEndState,
+} from "../hook-transcript-uploads";
+import { registerHookUploadRoutes, isHookUploadCallerError, hookUploadErrorResponse } from "./hook-upload-routes";
+import { withStopAdmission } from "../stop-admission";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
-import type { Context } from "hono";
-import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { commitCompactionSummary } from "../session-transcripts";
-import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
-
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
-import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
+import { requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
+import { resolveHookReadScope } from "../hook-read-scope";
+import { publicRecallResponse } from "../recall-public-response";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
-import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
+import {
+	boardAuthorAudience,
+	claimBoardActivityNotices,
+	createBoardEventVisibility,
+	resolveBoardViewer,
+} from "../board";
+import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import {
 	type AcpDeliveryAttempt,
 	type AgentMessage,
@@ -21,10 +33,9 @@ import {
 	acknowledgeAgentMessage,
 	claimAcpMessageDelivery,
 	completeAcpMessageDelivery,
-	createAgentMessage,
+	createAgentMessageAsync,
 	getAgentPresenceForSession,
 	getAgentPresenceForSessionAgent,
-	isMessageVisibleToAgent,
 	listAgentMessagePage,
 	listAgentMessages,
 	listAgentPresence,
@@ -34,28 +45,30 @@ import {
 	touchAgentPresence,
 	upsertAgentPresence,
 } from "../cross-agent";
-import { boardAuthorAudience, createBoardEventVisibility, resolveBoardViewer } from "../board";
-import { contextFromProject, parsePresenceContext, type AgentPresenceContextPatch } from "../cross-agent-context";
+import { type AgentPresenceContextPatch, contextFromProject, parsePresenceContext } from "../cross-agent-context";
 import {
+	canViewSessionOf,
 	INSPECT_DEFAULT_MESSAGES,
 	INSPECT_MAX_MESSAGES,
-	canViewSessionOf,
-	resolvePresenceAudience,
 	readTranscriptTail,
+	resolvePresenceAudience,
 } from "../cross-agent-inspect";
-import { getDbAccessor } from "../db-accessor";
+import {
+	consumeSessionEndWake,
+	MAX_WAKE_RELEASE_IDS,
+	MAX_WAKE_WAIT_MS,
+	releaseDirectMessageWakes,
+	releaseWakeClaimsWithRetry,
+	waitForDirectMessageWake,
+	wasWokenSince,
+} from "../cross-agent-wake";
+import { getDbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
+import { DbOwnerAdmissionError, DbOwnerDiedError, DbOwnerError } from "../db-owner-client";
+import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { fetchEmbedding } from "../embedding-fetch";
 import type { EmbeddingRole } from "../embedding-profile";
 import {
 	type CheckpointExtractRequest,
-	type PreCompactionRequest,
-	type RecallRequest,
-	type RememberRequest,
-	type SessionEndRequest,
-	type SessionStartRequest,
-	type StopResponse,
-	type SynthesisRequest,
-	type UserPromptSubmitRequest,
 	handleCheckpointExtract,
 	handlePreCompaction,
 	handleSessionEnd,
@@ -63,31 +76,38 @@ import {
 	handleStop,
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
+	type PreCompactionRequest,
+	type RecallRequest,
+	type RememberRequest,
 	resetSessionStartDedupe,
+	type SessionEndRequest,
+	type SessionStartRequest,
+	type StopResponse,
+	type SynthesisRequest,
+	type UserPromptSubmitRequest,
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
-import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { hybridRecall, type RecallParams } from "../memory-search";
 import {
-	type BoardActivityNotice,
-	type HookNotificationsBlock,
 	appendNotificationInject,
+	type BoardActivityNotice,
 	collectCrossAgentNotifications,
+	type HookNotificationsBlock,
 	isNotificationCompatibleHook,
 } from "../notifications/cross-agent-notifications";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
-import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
-import { openBoundedSse } from "../sse-stream.js";
+import { normalizePipelineCause, type PipelineCauseFamily, recordPipelineOperation } from "../pipeline-operation";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
+import { jsonBody } from "../request-body";
+import { reportReadResult } from "../request-read";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
 import { recallSessionKey } from "../session-start-state";
 import {
-	type RuntimePath,
 	claimSession,
 	clearEndedSession,
 	getActiveSessions,
@@ -97,28 +117,21 @@ import {
 	isSessionBypassed,
 	markSessionEnded,
 	normalizeSessionKey,
+	type RuntimePath,
 	releaseSession,
 	renewSession,
 } from "../session-tracker.js";
+import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
+import { commitCompactionSummary } from "../session-transcripts";
 import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
+import { openBoundedSse } from "../sse-stream.js";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
-import { claimBoardActivityNotices } from "../board";
-import {
-	MAX_WAKE_RELEASE_IDS,
-	MAX_WAKE_WAIT_MS,
-	consumeSessionEndWake,
-	releaseDirectMessageWakes,
-	releaseWakeClaimsWithRetry,
-	waitForDirectMessageWake,
-	wasWokenSince,
-} from "../cross-agent-wake";
+import { isRetryableWritePressure, WRITE_PRESSURE_RETRY_AFTER_SECONDS } from "../write-pressure";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
-	INTERNAL_SELF_HOST,
-	PORT,
 	authConfig,
 	authCrossAgentMessageLimiter,
 	authRecallLlmLimiter,
@@ -137,7 +150,6 @@ import {
 	validateSessionAgentBinding,
 	validateSessionControl,
 } from "./utils";
-import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 async function checkTranscriptLifecycle(input: Parameters<typeof updateTranscriptLifecycle>[0]): Promise<void> {
 	try {
@@ -365,7 +377,11 @@ function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?:
 	return isSessionBypassed(key, resolveAgentId({ agentId: body?.agentId, sessionKey: key }));
 }
 
+async function messageReadScope(c: Context): Promise<ReadScope> {
+	return principalMessageReadScope(c.get("principal"), Boolean(c.get("organization")));
+}
 interface HookNotificationContext {
+	readonly readScope: ReadScope;
 	readonly harness: string;
 	readonly hook: string;
 	readonly agentId: string;
@@ -462,7 +478,7 @@ function registerSessionStart(app: Hono): void {
 		let recallAttempted = false;
 		let recallOutcomeRecorded = false;
 		try {
-			const body = (await c.req.json()) as SessionStartRequest;
+			const body = (await jsonBody(c)()) as SessionStartRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -541,8 +557,12 @@ function registerSessionStart(app: Hono): void {
 
 			recordRecallAttempt("prompt_injection");
 			recallAttempted = true;
-			const result = await handleSessionStart(body);
+			const result = await handleSessionStart(
+				{ ...body, author: c.get("author") },
+				await resolveHookReadScope(c, scopedAgent.agentId, { useDefaultReadAgent: true }),
+			);
 			const response = await withCrossAgentNotifications(result, {
+				readScope: await messageReadScope(c),
 				harness: body.harness,
 				hook: "SessionStart",
 				agentId: scopedAgent.agentId,
@@ -582,7 +602,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			return c.json({ inject: "", dynamicContext: "", memoryCount: 0 });
 		}
 		try {
-			const body = (await c.req.json()) as UserPromptSubmitRequest;
+			const body = (await jsonBody(c)()) as UserPromptSubmitRequest;
 
 			const hasUserMessage = typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
 			const hasUserPrompt = typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
@@ -659,21 +679,27 @@ function registerUserPromptSubmit(app: Hono): void {
 				return c.json({ inject: "", dynamicContext: "", memoryCount: 0, bypassed: true });
 			}
 
-			if (!promptSubmitAdmission.acquire()) {
+			const release = await promptSubmitAdmission.acquire(admissionKey(c), c.req.raw.signal);
+			if (typeof release !== "function" || c.req.raw.signal.aborted) {
+				if (typeof release === "function") release();
+				c.header("Retry-After", String(typeof release === "function" ? 1 : release.retryAfter));
 				return c.json(
 					{
-						error: `Too many concurrent prompt submissions (max ${PROMPT_SUBMIT_MAX_IN_FLIGHT}); retry shortly`,
+						error: `Too many concurrent prompt submissions (max ${promptSubmitAdmission.maxInFlight}); retry shortly`,
+						reason: "admission",
 					},
 					503,
 				);
 			}
 			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
 			try {
-				result = await handleUserPromptSubmit(body, undefined, {
+				result = await handleUserPromptSubmit({ ...body, author: c.get("author") }, undefined, {
+					principal: c.get("principal"),
 					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
+					readScope: await resolveHookReadScope(c, agentId, { useDefaultReadAgent: true }),
 				});
 			} finally {
-				promptSubmitAdmission.release();
+				release();
 			}
 			return c.json(
 				await withCrossAgentNotifications(
@@ -681,6 +707,7 @@ function registerUserPromptSubmit(app: Hono): void {
 					{
 						harness: body.harness,
 						hook: "UserPromptSubmit",
+						readScope: await messageReadScope(c),
 						agentId,
 						sessionKey,
 					},
@@ -740,6 +767,7 @@ function registerNotifications(app: Hono): void {
 			stampHarness(harness);
 
 			const notifications = collectCrossAgentNotifications({
+				readScope: await messageReadScope(c),
 				harness,
 				hook,
 				agentId: scopedAgent.agentId,
@@ -794,6 +822,7 @@ function registerDirectMessageWake(app: Hono): void {
 
 		try {
 			const result = await waitForDirectMessageWake({
+				readScope: () => messageReadScope(c),
 				agentId: scopedAgent.agentId,
 				sessionKey,
 				harness,
@@ -853,27 +882,19 @@ function registerDirectMessageWakeRelease(app: Hono): void {
 }
 
 const MAX_STOP_REPLY_CHARS = 262_144;
-const STOP_MAX_IN_FLIGHT = 8;
-let stopAdmission: ConcurrencyAdmission = createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
-export function __setStopAdmissionForTests(admission: ConcurrencyAdmission | null): void {
-	stopAdmission = admission ?? createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
-}
+export { __setStopAdmissionForTests } from "../stop-admission";
 
 function registerStop(app: Hono): void {
 	app.post(
 		"/api/hooks/stop",
-		async (c, next) => {
-			if (!stopAdmission.acquire()) {
-				c.header("Retry-After", "1");
-				return c.json({ error: `Too many concurrent stop hooks (max ${STOP_MAX_IN_FLIGHT}); retry shortly` }, 503);
-			}
-			try {
-				await next();
-			} finally {
-				stopAdmission.release();
-			}
-		},
-		bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+		(c, next) => withStopAdmission(c, next),
+		(c, next) =>
+			c.get("jsonBodyParsed")
+				? next()
+				: bodyLimit({ maxSize: 2 * 1_048_576, onError: (ctx) => ctx.json({ error: "payload too large" }, 413) })(
+						c,
+						next,
+					),
 		async (c) => {
 			if (isInternalCall(c)) return c.json({ recorded: false });
 			try {
@@ -939,6 +960,7 @@ function registerStop(app: Hono): void {
 				}
 				return c.json(
 					await handleStop({
+						author: c.get("author"),
 						harness,
 						sessionKey,
 						agentId,
@@ -970,7 +992,7 @@ function registerSessionEnd(app: Hono): void {
 		}
 		const requestStartedAt = performance.now();
 		try {
-			const body = (await c.req.json()) as SessionEndRequest;
+			const body = (await jsonBody(c)()) as SessionEndRequest;
 
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
@@ -992,17 +1014,41 @@ function registerSessionEnd(app: Hono): void {
 			if (endScope.error) return c.json({ error: endScope.error }, 403);
 			const agentId = endScope.agentId;
 			body.agentId = agentId;
+			let resolvedUpload: HookUploadEndState | undefined;
+			if (body.transcriptUpload !== undefined) {
+				const ref: unknown = body.transcriptUpload;
+				if (
+					typeof ref !== "object" ||
+					ref === null ||
+					!("uploadId" in ref) ||
+					typeof ref.uploadId !== "string" ||
+					body.transcript !== undefined ||
+					body.transcriptPath !== undefined
+				)
+					return c.json({ error: "Provide transcriptUpload instead of transcript or transcriptPath" }, 400);
+				resolvedUpload = await getHookUploadForSessionEnd(c.get("principal"), ref.uploadId);
+				if (
+					resolvedUpload.agent_id !== agentId ||
+					resolvedUpload.harness !== body.harness ||
+					resolvedUpload.session_key !== sessionKey
+				)
+					throw new HookUploadMissing();
+			}
 			const bindingError = await validateSessionControl(c, sessionKey, agentId, {
 				context: "sessionKey",
 			});
 			if (bindingError) return c.json({ error: bindingError }, 403);
+
+			const upload = resolvedUpload?.kind === "upload" ? resolvedUpload : undefined;
+			const cachedUploadResult = resolvedUpload ? hookUploadResult(resolvedUpload) : null;
+			if (cachedUploadResult) return c.json(cachedUploadResult);
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
 			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, body.harness, "session-end", {
 				memoriesSaved: 0,
 			});
-			if (duplicate) return c.json(duplicate);
+			if (duplicate && !upload) return c.json(duplicate);
 
 			if (sessionKey)
 				await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "status" });
@@ -1014,7 +1060,7 @@ function registerSessionEnd(app: Hono): void {
 			}
 
 			try {
-				const result = await handleSessionEnd(body);
+				const result = await handleSessionEnd({ ...body, author: c.get("author") }, upload);
 				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken = (): boolean =>
 					sessionKey !== undefined &&
@@ -1055,6 +1101,8 @@ function registerSessionEnd(app: Hono): void {
 				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
 				return c.json({ error: "Write pressure; retry the session end", retryable: true }, 503);
 			}
+			if (isHookUploadCallerError(e)) return hookUploadErrorResponse(c, e);
+			if (e instanceof RangeError) return c.json({ error: e.message }, 400);
 			logger.error("hooks", "Session end hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
 		}
@@ -1079,7 +1127,7 @@ function registerSkillInvocation(app: Hono): void {
 			return c.json({ recorded: false });
 		}
 		try {
-			const body = toRecord(await c.req.json()) ?? {};
+			const body = toRecord(await jsonBody(c)()) ?? {};
 			const harness = parseOptionalString(body.harness);
 			const skillName = parseOptionalString(body.skillName ?? body.skill);
 			if (!harness) return c.json({ error: "harness is required" }, 400);
@@ -1144,7 +1192,7 @@ function registerCheckpointExtract(app: Hono): void {
 			return c.json({ skipped: true });
 		}
 		try {
-			const body = (await c.req.json()) as CheckpointExtractRequest;
+			const body = (await jsonBody(c)()) as CheckpointExtractRequest;
 
 			if (!body.harness || !body.sessionKey) {
 				return c.json({ error: "harness and sessionKey are required" }, 400);
@@ -1183,7 +1231,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			renewSession(body.sessionKey, agentId);
 
-			const result = await handleCheckpointExtract(body);
+			const result = await handleCheckpointExtract({ ...body, author: c.get("author") });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Checkpoint extract hook failed", e as Error);
@@ -1197,7 +1245,7 @@ function registerRemember(app: Hono): void {
 			return c.json({ success: true, memories: [] });
 		}
 		try {
-			const body = (await c.req.json()) as RememberRequest;
+			const body = (await jsonBody(c)()) as RememberRequest;
 
 			if (!body.harness || !body.content) {
 				return c.json({ error: "harness and content are required" }, 400);
@@ -1218,16 +1266,19 @@ function registerRemember(app: Hono): void {
 				return c.json({ success: true, memories: [], bypassed: true });
 			}
 
-			const headers: Record<string, string> = { "Content-Type": "application/json" };
-			const auth = c.req.header("authorization");
-			if (auth) headers.Authorization = auth;
+			const headers = new Headers(c.req.raw.headers);
+			headers.set("content-type", "application/json");
+			const payload = JSON.stringify(body);
+			headers.set("content-length", String(new TextEncoder().encode(payload).byteLength));
 			const sessionKey = c.req.header("x-signet-session-key") ?? body.sessionKey;
-			if (sessionKey) headers["x-signet-session-key"] = sessionKey;
-			return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-			});
+			if (sessionKey) headers.set("x-signet-session-key", sessionKey);
+			const target = new URL(c.req.url);
+			target.pathname = "/api/memory/remember";
+			return app.request(
+				target.toString(),
+				{ method: "POST", headers, body: payload, signal: c.req.raw.signal },
+				c.env,
+			);
 		} catch (e) {
 			logger.error("hooks", "Remember hook failed", e as Error);
 			return c.json({ error: "Hook execution failed" }, 500);
@@ -1243,7 +1294,7 @@ function registerRecall(app: Hono): void {
 		const recallSurface = "tool_call" as const;
 		return recordHookRecallOperation(async () => {
 			try {
-				const body = (await c.req.json()) as RecallRequest;
+				const body = (await jsonBody(c)()) as RecallRequest;
 
 				if (!body.harness || !body.query) {
 					return c.json({ error: "harness and query are required" }, 400);
@@ -1279,10 +1330,12 @@ function registerRecall(app: Hono): void {
 					if (denied) return denied;
 				}
 
-				const agentId = resolveAgentId({
-					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-					sessionKey: body.sessionKey,
-				});
+				const scopedRecall = resolveScopedAgentId(
+					c,
+					resolveAgentId({ agentId: body.agentId ?? c.req.header("x-signet-agent-id"), sessionKey: body.sessionKey }),
+				);
+				if (scopedRecall.error) return c.json({ error: scopedRecall.error }, 403);
+				const agentId = scopedRecall.agentId;
 				if (aggregateSaveRequested) {
 					const aggAuth = c.get("auth");
 					if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
@@ -1301,7 +1354,7 @@ function registerRecall(app: Hono): void {
 					}
 				}
 
-				const agentScope = await getAgentScope(agentId);
+				const readScope = await resolveHookReadScope(c, agentId);
 				const cfg = loadMemoryConfig(AGENTS_DIR);
 				const recallSurface = "tool_call" as const;
 				if (body.aggregate === true && authConfig.mode !== "local") {
@@ -1337,8 +1390,7 @@ function registerRecall(app: Hono): void {
 					time: body.time as RecallParams["time"],
 					expand: body.expand,
 					agentId,
-					readPolicy: agentScope.readPolicy,
-					policyGroup: agentScope.policyGroup,
+					readScope,
 					sessionKey: recallSessionKey({ harness: body.harness, sessionKey: body.sessionKey }) ?? undefined,
 					includeRecalled: body.includeRecalled === true,
 					recallSurface: "api.hooks.recall",
@@ -1358,10 +1410,12 @@ function registerRecall(app: Hono): void {
 				const result =
 					body.aggregate === true
 						? await aggregateRecall(params, cfg, {
+								author: c.get("author"),
 								router: getInferenceRouterOrNull(),
 								embedFn,
 							})
 						: await hybridRecall(params, cfg, embedFn);
+				reportReadResult(c, agentId, result.results.length);
 				if (result.meta.partial === true || result.aggregate?.partial === true || embeddingDegraded) {
 					c.header("x-signet-operation-degraded", "1");
 					if (result.meta.partial === true) {
@@ -1381,7 +1435,7 @@ function registerRecall(app: Hono): void {
 					truncated: result.results.length >= effectiveRecallLimit(params.limit),
 					delivery: "returned",
 				});
-				return c.json(withHookRecallCompat(result));
+				return c.json(withHookRecallCompat(publicRecallResponse(result)));
 			} catch (e) {
 				if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 				logger.error("hooks", "Recall hook failed", e as Error);
@@ -1394,7 +1448,7 @@ function registerRecall(app: Hono): void {
 function registerPreCompaction(app: Hono): void {
 	app.post("/api/hooks/pre-compaction", async (c) => {
 		try {
-			const rawBody = toRecord(await c.req.json()) ?? {};
+			const rawBody = toRecord(await jsonBody(c)()) ?? {};
 			const transcriptPath =
 				parseOptionalString(rawBody.transcriptPath) ?? parseOptionalString(rawBody.transcript_path);
 			const body = rawBody as unknown as PreCompactionRequest;
@@ -1435,7 +1489,10 @@ function registerPreCompaction(app: Hono): void {
 				return c.json({ instructions: "", bypassed: true });
 			}
 
-			const result = handlePreCompaction(body);
+			const result = await handlePreCompaction(
+				{ ...body, author: c.get("author") },
+				await resolveHookReadScope(c, agentId, { useDefaultReadAgent: true }),
+			);
 			if (transcriptPath) {
 				setImmediate(() =>
 					recordSkillsFromTranscript({
@@ -1457,7 +1514,7 @@ function registerPreCompaction(app: Hono): void {
 function registerCompactionComplete(app: Hono): void {
 	app.post("/api/hooks/compaction-complete", async (c) => {
 		try {
-			const body = (await c.req.json()) as {
+			const body = (await jsonBody(c)()) as {
 				harness: string;
 				summary: string;
 				sessionKey?: string;
@@ -1515,7 +1572,7 @@ function registerCompactionComplete(app: Hono): void {
 			const transcriptRow = body.sessionKey
 				? // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 					getDbAccessor().withReadDb(
-						(db: import("../db-accessor").ReadDb) =>
+						(db: ReadDb) =>
 							db
 								.prepare(
 									`SELECT project
@@ -1544,6 +1601,7 @@ function registerCompactionComplete(app: Hono): void {
 			const summaryId = noise ? null : crypto.randomUUID();
 			if (summaryId) {
 				const admitted = await commitCompactionSummary(getDbAccessor(), {
+					author: c.get("author"),
 					agentId,
 					sessionKey: body.sessionKey ?? null,
 					harness: body.harness,
@@ -1557,6 +1615,7 @@ function registerCompactionComplete(app: Hono): void {
 
 				try {
 					await writeCompactionArtifact({
+						author: c.get("author"),
 						agentId,
 						sessionId,
 						sessionKey: body.sessionKey ?? null,
@@ -1593,37 +1652,6 @@ function registerCompactionComplete(app: Hono): void {
 				cwd: cwd ?? undefined,
 				sessionKey: body.sessionKey,
 			});
-
-			if (body.sessionKey) {
-				try {
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
-						const hasTx = db
-							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
-							.get();
-						if (hasTx) {
-							db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(
-								body.sessionKey,
-								agentId,
-							);
-						}
-						const hasCur = db
-							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'")
-							.get();
-						if (hasCur) {
-							db.prepare("DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?").run(
-								body.sessionKey,
-								agentId,
-							);
-						}
-					}, "db:hooks.compaction.transcript-state.delete");
-				} catch (err) {
-					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
-						error: err instanceof Error ? err.message : String(err),
-						sessionKey: body.sessionKey,
-					});
-				}
-			}
 
 			void getSynthesisWorker()
 				?.triggerNow({
@@ -1873,7 +1901,7 @@ async function relayClaimedAcpMessage(attempt: AcpDeliveryAttempt): Promise<Agen
 }
 
 function registerCrossAgentMessages(app: Hono): void {
-	app.get("/api/cross-agent/messages", (c) => {
+	app.get("/api/cross-agent/messages", async (c) => {
 		const scope = c.req.query("scope");
 		if (scope !== undefined && scope !== "all") return c.json({ error: "scope must be 'all' when provided" }, 400);
 		const operator = scope === "all";
@@ -1902,6 +1930,7 @@ function registerCrossAgentMessages(app: Hono): void {
 		}
 
 		const page = listAgentMessagePage({
+			readScope: await messageReadScope(c),
 			allAgents: operator,
 			agentId: scopedAgent.agentId,
 			sessionKey,
@@ -1940,6 +1969,7 @@ function registerCrossAgentMessages(app: Hono): void {
 		try {
 			return c.json(
 				acknowledgeAgentMessage({
+					readScope: await messageReadScope(c),
 					messageId,
 					agentId: scopedAgent.agentId,
 					sessionKey,
@@ -1970,6 +2000,7 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		try {
 			const attempt = claimAcpMessageDelivery({
+				readScope: await messageReadScope(c),
 				messageId,
 				agentId: scopedAgent.agentId,
 				retryIndeterminate: true,
@@ -2060,7 +2091,8 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		let message: AgentMessage;
 		try {
-			message = createAgentMessage({
+			message = await createAgentMessageAsync({
+				author: c.get("author"),
 				fromAgentId: scopedSender.agentId,
 				fromSessionKey,
 				toAgentId,
@@ -2085,7 +2117,11 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		if (acpRequest) {
 			try {
-				const attempt = claimAcpMessageDelivery({ messageId: message.id, agentId: scopedSender.agentId });
+				const attempt = claimAcpMessageDelivery({
+					readScope: await messageReadScope(c),
+					messageId: message.id,
+					agentId: scopedSender.agentId,
+				});
 				message = await relayClaimedAcpMessage(attempt);
 			} catch (error) {
 				logger.error(
@@ -2129,6 +2165,7 @@ function registerCrossAgentStream(app: Hono): void {
 			logger.error("hooks", "Presence stream scope failed", error instanceof Error ? error : new Error(String(error)));
 			return c.json({ error: "Failed to resolve presence visibility" }, 500);
 		}
+		const streamReadScope = await messageReadScope(c);
 		let presenceQueue: Promise<void> = Promise.resolve();
 
 		const sse = openBoundedSse({
@@ -2164,6 +2201,7 @@ function registerCrossAgentStream(app: Hono): void {
 						allowedAgentIds: snapshotAudience,
 					}),
 					messages: listAgentMessages({
+						readScope: streamReadScope,
 						agentId,
 						sessionKey,
 						includeSent,
@@ -2176,17 +2214,27 @@ function registerCrossAgentStream(app: Hono): void {
 
 				const nextUnsubscribe = subscribeCrossAgentEvents((event) => {
 					if (event.type === "message") {
-						if (
-							!isMessageVisibleToAgent(event.message, {
-								agentId,
-								sessionKey,
-								includeBroadcast: true,
+						presenceQueue = presenceQueue
+							.then(async () => {
+								if (producer.isClosed) return;
+								const page = listAgentMessagePage({
+									readScope: await messageReadScope(c),
+									agentId,
+									sessionKey,
+									includeSent,
+									includeBroadcast: true,
+									messageId: event.message.id,
+									limit: 1,
+								});
+								const message = page.items[0];
+								if (message) writeEvent({ ...event, message });
 							})
-						) {
-							if (!(includeSent && event.message.fromAgentId === agentId)) {
-								return;
-							}
-						}
+							.catch((error: unknown) => {
+								logger.warn("hooks", "Message stream visibility failed", {
+									error: error instanceof Error ? error.message : String(error),
+								});
+							});
+						return;
 					}
 
 					if (event.type === "presence" && !includeSelf && event.presence.agentId === agentId) {
@@ -2228,7 +2276,7 @@ function registerSynthesis(app: Hono): void {
 	});
 	app.post("/api/hooks/synthesis", async (c) => {
 		try {
-			const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
+			const body = (await jsonBody(c)()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
 			const scopedAgent = resolveScopedAgentId(
 				c,
 				resolveAgentId({
@@ -2305,6 +2353,15 @@ const SESSION_LIFECYCLE_HOOKS = [
 ] as const;
 
 export function registerHooksRoutes(app: Hono): void {
+	for (const path of ["/api/hooks/*", "/api/cross-agent", "/api/cross-agent/*"]) {
+		app.use(path, async (c, next) => {
+			if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) && !c.get("author")) {
+				c.header("WWW-Authenticate", "Bearer");
+				return c.json({ error: "A write requires an explicit author", reason: "missing_credential" }, 401);
+			}
+			await next();
+		});
+	}
 	for (const path of SESSION_LIFECYCLE_HOOKS) {
 		app.use(path, async (c, next) => requirePermission("remember", authConfig)(c, next));
 	}
@@ -2333,6 +2390,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerNotifications(app);
 	registerDirectMessageWake(app);
 	registerDirectMessageWakeRelease(app);
+	registerHookUploadRoutes(app);
 	registerSessionEnd(app);
 	registerStop(app);
 	registerSkillInvocation(app);

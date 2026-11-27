@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
 import { SignetClient } from "../index.js";
@@ -70,6 +71,16 @@ afterEach(() => {
 });
 
 describe("SignetClient", () => {
+	test("high-level calls carry cancellation without serializing control into evidence", async () => {
+		const { client } = mockDaemon();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(client.remember("cancelled", undefined, { signal: controller.signal })).rejects.toThrow();
+		await expect(
+			client.sessionEnd({ sessionKey: "session", harness: "test" }, { signal: controller.signal }),
+		).rejects.toThrow();
+		expect(recorded).toHaveLength(0);
+	});
 	test.each([
 		{ chunked: true, chunk_count: 2, ids: ["only-one"], group_id: "group" },
 		{ chunked: true, chunk_count: 0, ids: [], group_id: "group" },
@@ -106,7 +117,7 @@ describe("SignetClient", () => {
 		expect(result.embedded).toBeUndefined();
 	});
 
-	test("uses IPv4 loopback for the implicit daemon URL", async () => {
+	test("requires an explicit daemon URL in the browser-safe client", async () => {
 		const originalFetch = globalThis.fetch;
 		let requestedUrl = "";
 		globalThis.fetch = async (input) => {
@@ -115,12 +126,12 @@ describe("SignetClient", () => {
 		};
 
 		try {
-			await new SignetClient({ retries: 0 }).remember("loopback regression");
+			expect(() => new SignetClient({ retries: 0 })).toThrow("daemonUrl");
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
 
-		expect(requestedUrl).toBe("http://127.0.0.1:3850/api/memory/remember");
+		expect(requestedUrl).toBe("");
 	});
 
 	test("waitForAgentWake outlives the default request deadline for long polls", async () => {

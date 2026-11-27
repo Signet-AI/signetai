@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, MAX_READ_CONNECTIONS } from "./db-accessor";
+import { searchEpisodicSources } from "./episodic-sources";
 import { getDbOwner } from "./db-owner-runtime";
 import {
 	getAttributesForAspectFiltered,
@@ -18,9 +19,8 @@ import {
 } from "./knowledge-graph";
 import { applyOntologyOperation } from "./ontology-proposals";
 import { getDreamingEpisodicTokenBacklog } from "./pipeline/dreaming";
-import { countTokens } from "./pipeline/tokenizer";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
-import { searchEpisodicSources } from "./episodic-sources";
+import { countTokens } from "./pipeline/tokenizer";
 
 function makeDbPath(): string {
 	const dir = join(tmpdir(), `signet-kg-list-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -178,6 +178,29 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 		}
 		dbPath = "";
+	});
+
+	test("read scope hides classified entities before pagination and aggregate counts", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity("scope-visible", "Visible");
+		seedAspect("scope-aspect", "scope-visible", "details");
+		const scope = { reach: { kind: "own", agentId: "default" }, compartments: [], projects: null } as const;
+		const params = { agentId: "default", limit: 1, offset: 0, readScope: scope };
+		const before = await listKnowledgeEntities(getDbAccessor(), params, scope);
+		seedEntity("scope-hidden", "A hidden", { pinned: true });
+		seedAttribute("scope-hidden-attribute", "scope-aspect");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (99, 'scope-test', '2026-11-25')").run();
+			db.prepare("UPDATE entities SET compartment_id = 99 WHERE id = 'scope-hidden'").run();
+			db.prepare("UPDATE entity_attributes SET compartment_id = 99 WHERE id = 'scope-hidden-attribute'").run();
+		});
+		expect(await listKnowledgeEntities(getDbAccessor(), params, scope)).toEqual(before);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET name = 'Changed hidden', mentions = 900 WHERE id = 'scope-hidden'").run();
+		});
+		expect(await listKnowledgeEntities(getDbAccessor(), params, scope)).toEqual(before);
+		expect(await listKnowledgeEntities(getDbAccessor(), params, { ...scope, compartments: [99] })).toHaveLength(1);
 	});
 
 	test("returns entities in the documented order (pinned, pinned_at, mentions, updated_at, name)", async () => {
@@ -343,6 +366,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedEntity("e-signet", "Signet");
 		seedEntity("e-other", "Other");
 		const created = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "create_entity_alias",
@@ -353,6 +377,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "test",
 				operation: "archive_entity_alias",
@@ -362,6 +387,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(await listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(1);
 
 		const archived = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "test",
 			operation: "archive_entity_alias",

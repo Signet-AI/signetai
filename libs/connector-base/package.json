@@ -25,11 +25,13 @@
 		"!dist/**/__tests__/**"
 	],
 	"scripts": {
+		"prebuild": "bun run --filter '@signet/sdk' build",
 		"build": "bun build ./src/index.ts ./src/agent-dir.ts ./src/lenient-json.ts --outdir ./dist --target node --external better-sqlite3 --external @napi-rs/keyring && bun run build:types",
 		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@signet/sdk": "workspace:*",
 		"@signet/core": "1.0.1",
 		"json5": "^2.2.3",
 		"jsonc-parser": "3.3.1"

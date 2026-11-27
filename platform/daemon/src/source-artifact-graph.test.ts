@@ -15,14 +15,15 @@ import type { DreamingConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { runDreamingAgentPass } from "./pipeline/dreaming";
 import { applyDreamingOperations } from "./pipeline/dreaming-operations";
+import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 import {
 	indexSourceArtifactStructure,
 	indexSourceArtifactStructureAsync,
 	purgeSourceArtifactStructure,
 } from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
+import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { txIngestEnvelope } from "./transactions";
-import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
 it("routes transcript source purge through the DB owner boundary", () => {
 	const source = readFileSync(new URL("./source-purge.ts", import.meta.url), "utf8");
@@ -80,6 +81,89 @@ describe("source artifact graph structure", () => {
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("inherits classified source labels and artifact citations in structural rows", async () => {
+		const agentId = "default";
+		const sourceId = "classified-provider";
+		const sourcePath = "notion://page/secret";
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO classifications(id,name) VALUES('cls_source','Source'),('cls_agent','Agent'); INSERT INTO classification_assignments VALUES('source','classified-provider','default','cls_source','carol','now'),('agent','default','default','cls_agent','carol','now')",
+			);
+		});
+		await indexExternalMemoryArtifact({
+			author: { userId: "alice", credential: "session:alice" },
+			agentId,
+			sourceId,
+			sourcePath,
+			sourceKind: "source_notion_page",
+			harness: "notion",
+			content: "classified source text",
+			sourceMtimeMs: Date.now(),
+		});
+		await indexSourceArtifactStructureAsync({
+			agentId,
+			sourceId,
+			sourceKind: "source_notion_page",
+			sourceRoot: "notion://root",
+			sourcePath,
+			content: "classified source text",
+		});
+		indexSourceArtifactStructure({
+			agentId,
+			sourceId,
+			sourceKind: "source_notion_page",
+			sourceRoot: "notion://root",
+			sourcePath,
+			content: "classified source text",
+		});
+		getDbAccessor().withReadDb((db) => {
+			const artifact = db
+				.prepare("SELECT compartment_id,author_user_id FROM memory_artifacts WHERE agent_id=? AND source_path=?")
+				.get(agentId, sourcePath);
+			const compartment = artifact?.compartment_id;
+			expect(typeof compartment).toBe("number");
+			expect(artifact?.author_user_id).toBe("alice");
+			if (typeof compartment !== "number") throw new Error("missing artifact compartment");
+			expect(db.prepare("SELECT count(*) n FROM compartment_members WHERE compartment_id=?").get(compartment)).toEqual({
+				n: 2,
+			});
+			expect(
+				db
+					.prepare(
+						`SELECT count(*) n FROM memory_artifacts_fts__c${compartment} WHERE memory_artifacts_fts__c${compartment} MATCH 'classified'`,
+					)
+					.get(),
+			).toEqual({ n: 1 });
+			for (const table of ["entities", "entity_dependencies"]) {
+				const rows = db
+					.prepare(`SELECT compartment_id FROM ${table} WHERE agent_id=? AND source_id=?`)
+					.all(agentId, sourceId);
+				expect(rows.length).toBeGreaterThan(0);
+				for (const row of rows) expect(row).toEqual({ compartment_id: compartment });
+			}
+			const citations = db
+				.prepare(
+					"SELECT derived_kind,evidence_id FROM evidence_citations WHERE agent_id=? AND evidence_kind='artifact'",
+				)
+				.all(agentId);
+			expect(citations).toContainEqual({ derived_kind: "entity", evidence_id: sourcePath });
+			expect(citations).toContainEqual({ derived_kind: "dependency", evidence_id: sourcePath });
+			expect(
+				db.prepare("SELECT count(*) n FROM memory_artifacts_fts WHERE memory_artifacts_fts MATCH 'classified'").get(),
+			).toEqual({ n: 0 });
+		});
+		purgeSourceArtifactStructure({ agentId, sourceId, sourcePath });
+		getDbAccessor().withReadDb((db) => {
+			expect(
+				db
+					.prepare(
+						"SELECT count(*) n FROM evidence_citations WHERE agent_id=? AND evidence_kind='artifact' AND evidence_id=?",
+					)
+					.get(agentId, sourcePath),
+			).toEqual({ n: 0 });
+		});
 	});
 
 	it("projects provider artifacts into source topology without aspects, claims, or memories", () => {
@@ -407,6 +491,7 @@ describe("source artifact graph structure", () => {
 				)
 				.run();
 			txIngestEnvelope(write, {
+				author: { userId: null, credential: "system" },
 				id: "derived-claim",
 				content: "dreaming-derived claim",
 				normalizedContent: "dreaming-derived claim",

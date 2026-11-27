@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
+import { localPrincipal } from "../auth/principal";
+import { LOCAL_AUTHOR } from "../auth/audit-owner";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { IMPORT_MAX_BATCH_BYTES } from "../import-normalizer";
 import { purgeSourceArtifactStructureInTx } from "../source-artifact-graph";
@@ -43,7 +45,7 @@ describe("import routes", () => {
 	});
 
 	function app(): Hono {
-		const instance = new Hono();
+		const instance = admittedLocalApp();
 		registerImportRoutes(instance, {
 			durableImportAdmission: {
 				admit: async ({ fileName, bytes }) => ({
@@ -69,7 +71,7 @@ describe("import routes", () => {
 			begin: async () => {},
 			complete: async () => {},
 		};
-		const instance = new Hono();
+		const instance = admittedLocalApp();
 		registerImportRoutes(instance, { durableImportAdmission: admission });
 		const response = await instance.request("/api/sources/import", {
 			method: "POST",
@@ -89,7 +91,7 @@ describe("import routes", () => {
 			begin: async () => {},
 			complete: async () => {},
 		};
-		const instance = new Hono();
+		const instance = admittedLocalApp();
 		registerImportRoutes(instance, { durableImportAdmission: admission });
 		const form = new FormData();
 		form.append("files", new File(["a"], "a.txt"));
@@ -446,7 +448,7 @@ describe("import routes", () => {
 	it("maps an explicit idempotency conflict to 409 without beginning publication", async () => {
 		let began = false;
 		let completed = false;
-		const instance = new Hono();
+		const instance = admittedLocalApp();
 		registerImportRoutes(instance, {
 			durableImportAdmission: {
 				admit: async ({ idempotencyKey }) => {
@@ -503,3 +505,13 @@ describe("import routes", () => {
 		expect(await response.json()).toEqual({ error: "Import batch exceeds the 104857600 byte limit" });
 	});
 });
+
+function admittedLocalApp(): Hono {
+	const app = new Hono();
+	app.use("*", async (c, next) => {
+		c.set("principal", localPrincipal());
+		c.set("author", LOCAL_AUTHOR);
+		await next();
+	});
+	return app;
+}

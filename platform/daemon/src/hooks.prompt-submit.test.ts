@@ -1,3 +1,5 @@
+import { audienceSubjectFromPrincipal, resolveReadScope } from "./read-scope";
+import { localPrincipal } from "./auth/principal";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -8,6 +10,7 @@ import { formatPromptClockContext, handleSessionEnd, handleUserPromptSubmit } fr
 import { hybridRecall } from "./memory-search";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 import { setActiveTelemetry } from "./telemetry";
+import { localTestReadScope } from "./test-support/local-read-scope";
 
 type PromptDeps = Required<NonNullable<Parameters<typeof handleUserPromptSubmit>[1]>>;
 
@@ -21,9 +24,21 @@ const warnMock = mock((..._args: unknown[]) => {});
 const errorMock = mock((..._args: unknown[]) => {});
 type RecallRow = { readonly id: string; readonly content: string; readonly score: number };
 let recallRows: readonly RecallRow[] = [];
-const hybridRecallMock = mock(async (..._args: Parameters<PromptDeps["hybridRecall"]>) => ({
-	results: recallRows.map((row) => ({ ...row, source: "hybrid", type: "fact", pinned: false, importance: 0.8 })),
-}));
+async function seedRecallRows(rows: readonly RecallRow[]): Promise<void> {
+	await getDbAccessor().withWriteTxAsync((db) => {
+		for (const row of rows) {
+			db.prepare(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES(?,?,'default',?,?) ON CONFLICT(id) DO NOTHING",
+			).run(row.id, row.content, new Date().toISOString(), new Date().toISOString());
+		}
+	});
+}
+const hybridRecallMock = mock(async (..._args: Parameters<PromptDeps["hybridRecall"]>) => {
+	await seedRecallRows(recallRows);
+	return {
+		results: recallRows.map((row) => ({ ...row, source: "hybrid", type: "fact", pinned: false, importance: 0.8 })),
+	};
+});
 const fetchEmbeddingMock = mock(
 	async (..._args: Parameters<PromptDeps["fetchEmbedding"]>): ReturnType<PromptDeps["fetchEmbedding"]> => null,
 );
@@ -101,6 +116,7 @@ function seedEntity(id: string, name: string, canonical: string, type: string, m
 
 function seedEntityContext(): void {
 	seedEntity("entity-signet", "Signet", "signet", "project");
+	getSyncDbAccessor().withWriteTx((db) => db.prepare("UPDATE entities SET pinned=1 WHERE id='entity-signet'").run());
 	getSyncDbAccessor().withWriteTx((db) => {
 		const now = "2026-05-27T00:00:00.000Z";
 		db.prepare(
@@ -117,7 +133,14 @@ const SIGNET_RECALL: readonly RecallRow[] = [
 ];
 
 async function submit(userMessage: string, sessionKey: string, deps = makeDeps()) {
-	return await handleUserPromptSubmit({ harness: "codex", userMessage, sessionKey }, deps);
+	return await handleUserPromptSubmit(
+		{ author: { userId: null, credential: "local" }, harness: "codex", userMessage, sessionKey },
+		deps,
+		{
+			principal: localPrincipal(),
+			readScope: localTestReadScope("default"),
+		},
+	);
 }
 
 describe("handleUserPromptSubmit entity-gated recall", () => {
@@ -151,6 +174,54 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		} else {
 			process.env.SIGNET_PATH = originalSignetPath;
 		}
+	});
+
+	it("uses the trusted principal for alias lookup and reports missing identity", async () => {
+		seedEntityContext();
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`INSERT INTO classifications(id,name) VALUES ('hook-secret','Hook Secret');
+				INSERT INTO compartments(id,key) VALUES (9102,'hook-secret');
+				INSERT INTO compartment_members(compartment_id,classification_id) VALUES (9102,'hook-secret');
+				INSERT INTO classification_audience(classification_id,principal_kind,principal_id)
+				VALUES ('hook-secret','user','hook-audience');
+				UPDATE entity_aliases SET compartment_id=9102 WHERE id='alias-signetai'`);
+		});
+		const principal = (userId: string) => ({
+			...localPrincipal(),
+			kind: "user" as const,
+			userId,
+			credential: { kind: "api_key" as const, id: `credential-${userId}` },
+		});
+		const req = {
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey: "principal-alias",
+			userMessage: "Tell me about SignetAI architecture",
+		};
+		const audience = await handleUserPromptSubmit(req, makeDeps(), {
+			principal: principal("hook-audience"),
+			readScope: await resolveReadScope(
+				{ reach: { kind: "own", agentId: "default" }, projects: null },
+				audienceSubjectFromPrincipal(principal("hook-audience")),
+			),
+		});
+		expect(audience.memoryCount).toBeGreaterThan(0);
+		expect(audience.inject).toContain("Relevant Memory: Signet");
+		const reader = await handleUserPromptSubmit(req, makeDeps(), {
+			principal: principal("hook-reader"),
+			readScope: await resolveReadScope(
+				{ reach: { kind: "own", agentId: "default" }, projects: null },
+				audienceSubjectFromPrincipal(principal("hook-reader")),
+			),
+		});
+		expect(reader).toMatchObject({ engine: "no-entity", inject: "", memoryCount: 0 });
+		await expect(
+			Reflect.apply(handleUserPromptSubmit, undefined, [
+				{ ...req, context: { userId: "hook-audience", role: "admin" } },
+				makeDeps(),
+				{},
+			]),
+		).rejects.toThrow("read scope required");
 	});
 
 	it("computes one clock per request without changing the memory context hash", async () => {
@@ -228,6 +299,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 
 		const result = await handleUserPromptSubmit(
 			{
+				author: { userId: null, credential: "local" },
 				harness: "codex",
 				userMessage: "hi",
 				sessionKey: "session-bookkeeping",
@@ -235,6 +307,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 				transcript: "User: hi",
 			},
 			makeDeps({ recordPrompt, appendSessionTranscriptAsync }),
+			{ readScope: localTestReadScope("default") },
 		);
 
 		expect(recordPrompt).toHaveBeenCalledWith("session-bookkeeping", undefined, "hi");
@@ -271,7 +344,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			query: "How should Signet architecture handle prompt context?",
 			limit: 10,
 			agentId: "default",
-			readPolicy: "isolated",
+			readScope: { reach: { kind: "own", agentId: "default" }, compartments: "all", projects: null },
 			recallSurface: "api.hooks.user-prompt-submit",
 			recallMode: "automatic",
 			claimRecallResults: false,
@@ -536,6 +609,7 @@ for await (const _ of Bun.stdin.stream()) {
 
 	it("injects source memories instead of an unattributed model summary", async () => {
 		seedEntityContext();
+		await seedRecallRows(SIGNET_RECALL);
 		const deps = makeDeps({
 			hybridRecall: (async () => ({
 				results: [
@@ -568,7 +642,13 @@ for await (const _ of Bun.stdin.stream()) {
 
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "deduped", memoryCount: 0 });
-		await handleSessionEnd({ harness: "codex", sessionKey: "session-cleared", cwd: "/repo", reason: "clear" });
+		await handleSessionEnd({
+			author: { userId: null, credential: "local" },
+			harness: "codex",
+			sessionKey: "session-cleared",
+			cwd: "/repo",
+			reason: "clear",
+		});
 
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 	});

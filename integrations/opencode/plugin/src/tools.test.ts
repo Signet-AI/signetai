@@ -1,3 +1,4 @@
+import "../../../../tests/support/connector-safety.js";
 import { describe, expect, test } from "bun:test";
 import { createDaemonClient } from "./daemon-client.js";
 import type { DaemonClient } from "./daemon-client.js";

@@ -1,23 +1,30 @@
 #!/usr/bin/env node
 import { workspaceLayoutStartup } from "./workspace-layout-startup";
-import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
+import { localAllReadScope } from "@signet/core";
+import { stopProjectionWorkers } from "./projection-worker-client";
+import { purgeExpiredHookUploads } from "./hook-transcript-uploads";
+import type { Server } from "node:net";
+import { SYSTEM_AUTHOR } from "./auth/audit-owner";
+import { startClassificationRecovery } from "./classifications";
 import { requestMemoryHead } from "./memory-head";
+import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 
 import "./bun-socket-polyfill";
-import { spawnHidden as spawn } from "@signet/core";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { realpathSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { opendir, readFile as readFileAsync, stat as statAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
-	DAEMON_RUNTIME_ENV,
 	type AgentDefinition,
+	activeVectorProjectionTable,
 	buildArchitectureDoc,
 	configuredRoutingTargetRefs,
+	DAEMON_RUNTIME_ENV,
+	findSqliteVecExtension,
+	formatWorkspacePreflightError,
 	identityModeManagesFiles,
 	loadConfiguredHarnesses,
 	loadIdentityMode,
@@ -27,19 +34,23 @@ import {
 	parseRoutingTargetRef,
 	parseSimpleYaml,
 	preflightWorkspace,
-	formatWorkspacePreflightError,
+	redactCredentials,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
 	routingTargetLocality,
-	redactCredentials,
+	spawnHidden as spawn,
 	stripSignetBlock,
-	activeVectorProjectionTable,
 } from "@signet/core";
 import { watch } from "chokidar";
 import { Hono } from "hono";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { createToken, requirePermission } from "./auth";
+import {
+	pauseOrganizationRuntime,
+	startOrganizationRuntime,
+	stopOrganizationRuntime,
+} from "./auth/organization-runtime";
 import { bindWithRetry } from "./bind-with-retry";
 import {
 	migrateConfig,
@@ -50,21 +61,15 @@ import {
 	migrateRetiredMemoryPipelineRoutingV9,
 	migrateSessionSynthesisRoute,
 } from "./config-migration";
-import { findSqliteVecExtension } from "@signet/core";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
-import {
-	MIGRATION_VERIFY_FAILED_STATUS,
-	MIGRATION_VERIFY_PARKED_STATUS,
-	nextIncrementalIntegrityRetryDelay,
-	readMigrationVerifyCheckpoint,
-	runIncrementalDatabaseIntegrityCheck,
-} from "./incremental-database-integrity";
-import {
-	createMigrationVerifySetupRetry,
-	migrationVerifyCheckpointKey,
-	runMigrationIntegrityVerifyGate,
-} from "./migration-integrity-verify";
 import { readRetainedMigrationVerifyStatus } from "./daemon-migration-startup";
+import { resolveDaemonRestartMode } from "./daemon-restart";
+import {
+	closeDbOwnerDuringShutdown,
+	createShutdownRequestGate,
+	forceExitDuringShutdownFlush,
+	runShutdownCleanup,
+} from "./daemon-shutdown";
 import {
 	getDatabaseIntegrityStatus,
 	publishDatabaseIntegrityStatus,
@@ -75,16 +80,15 @@ import {
 	DatabaseIntegrityCorruptError,
 	getDbAccessor,
 	getVectorRuntimeStatus,
-	VEC_EMBEDDING_POST_READY_BUDGET_MS,
-	pendingMigrationBackupPath,
 	initDbAccessorLite,
 	initDbAccessorReadOnly,
 	isVectorRuntimeUsable,
+	pendingMigrationBackupPath,
 	pruneMigrationBackupsAfterIntegrity,
 	resolveSqliteRuntimeConfig,
 	setDatabaseIntegrityWritesBlocked,
+	VEC_EMBEDDING_POST_READY_BUDGET_MS,
 } from "./db-accessor";
-import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
 import {
 	createDbOwnerClient,
 	DB_OWNER_SURVIVABLE_CODES,
@@ -92,31 +96,35 @@ import {
 	type DbOwnerClientOptions,
 	DbOwnerError,
 } from "./db-owner-client";
-import type { DbOwnerParameter } from "./db-owner-protocol";
 import {
-	type DbOwnerMaintenance,
 	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
+	type DbOwnerMaintenance,
 	ownerQueryAll,
 	ownerQueryOne,
 	ownerRunStatement,
 	ownerTransaction,
 	registerDbOwnerMaintenance,
 } from "./db-owner-maintenance";
+import type { DbOwnerParameter } from "./db-owner-protocol";
+import {
+	closeDbOwner,
+	dbOwnerBatch,
+	dbOwnerQuery,
+	dbOwnerTransaction,
+	getDbOwnerForAccessor,
+	ownerStatement,
+} from "./db-owner-runtime";
+import { ownerReadOne } from "./db-owner-sql";
+import { startVacuumConversionWorker, type VacuumConversionHandle } from "./db-vacuum-worker";
 import {
 	createDeferredRuntimeGate,
 	createDeferredRuntimeScheduler,
 	releaseDeferredRuntimeGateIfSafe,
 } from "./deferred-runtime-gate";
-import {
-	closeDbOwnerDuringShutdown,
-	createShutdownRequestGate,
-	forceExitDuringShutdownFlush,
-	runShutdownCleanup,
-} from "./daemon-shutdown";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
-import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
+import { importDocument } from "./document-import-service";
+import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
 import {
@@ -124,21 +132,36 @@ import {
 	parseEmbeddingIndexStateRow,
 	resolveActiveEmbeddingConfigFromState,
 } from "./embedding-index-state";
-import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
-import { createSignetHttpServer } from "./http-server";
-import { syncAgentWorkspaces } from "./identity-sync";
+import { completeFtsStartupRecovery } from "./fts-startup-recovery";
+import { stopHarnessHealth } from "./harness-health";
 import {
-	type InferenceStatusSummary,
+	getSynthesisWorker as getSynthesisRenderWorker,
+	setSynthesisWorker as setSynthesisRenderWorker,
+	sweepStaleSessions,
+} from "./hooks";
+import { closeSignetHttpServer, createSignetHttpServer } from "./http-server";
+import { syncAgentWorkspaces } from "./identity-sync";
+import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
+import { admitImport } from "./import-inbox";
+import {
+	MIGRATION_VERIFY_FAILED_STATUS,
+	MIGRATION_VERIFY_PARKED_STATUS,
+	nextIncrementalIntegrityRetryDelay,
+	readMigrationVerifyCheckpoint,
+	runIncrementalDatabaseIntegrityCheck,
+} from "./incremental-database-integrity";
+import {
 	getOrCreateInferenceRouter,
+	type InferenceStatusSummary,
 	isInferenceRouterConfigPath,
 } from "./inference-router.js";
 import { fetchInternal } from "./internal-fetch";
 import {
-	type DaemonLifecycle,
 	classifyPreviousDaemonExit,
+	type DaemonLifecycle,
 	previousExitTelemetryProperties,
 	readDaemonLifecycle,
 	terminalLifecycleFields,
@@ -146,17 +169,24 @@ import {
 } from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
+import { type ManualInboxAdmission, type ManualInboxWorkerHandle, startManualInboxWorker } from "./manual-inbox-worker";
+import { mountMcpRoute } from "./mcp";
 import {
-	type ResolvedMemoryConfig,
 	graphWriteCaps,
 	loadMemoryConfig,
+	type ResolvedMemoryConfig,
 	readRuntimeConfig,
 	retiredDreamingIdentityFiles,
 } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
-	type NativeMemoryBridgeHandle,
+	createMigrationVerifySetupRetry,
+	migrationVerifyCheckpointKey,
+	runMigrationIntegrityVerifyGate,
+} from "./migration-integrity-verify";
+import {
 	configuredNativeMemorySources,
+	type NativeMemoryBridgeHandle,
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
@@ -169,11 +199,7 @@ import {
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
-import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
-import { importedSourceAttentionUpsert } from "./pipeline/dreaming-evidence-consumption";
-import { dbOwnerTransaction } from "./db-owner-runtime";
-import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -181,6 +207,7 @@ import { stopModelRegistry } from "./pipeline/model-registry";
 import { configureLlmConcurrency } from "./pipeline/provider";
 import { type ReflectionWorkerHandle, startReflectionWorker } from "./pipeline/reflection-worker";
 import { startReconciler } from "./pipeline/skill-reconciler";
+import { mountProtectionRoutes } from "./protection.js";
 import {
 	getResourceSnapshot,
 	logFdSnapshot,
@@ -189,27 +216,71 @@ import {
 	stopResourceMonitors,
 } from "./resource-monitor";
 import { buildResourceUtilizationTelemetry } from "./resource-telemetry";
+import { registerAuthRoutes } from "./routes/auth-routes.js";
+import { registerBoardRoutes } from "./routes/board-routes.js";
+import { mountChangelogRoutes } from "./routes/changelog.js";
+import { registerConnectorRoutes } from "./routes/connectors-routes.js";
+import { setupDashboardRoutes } from "./routes/dashboard.js";
+import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
+import {
+	ensureWorkspaceGitignore,
+	getGitStatus,
+	gitConfig,
+	gitPull,
+	gitPush,
+	gitSync,
+	scheduleAutoCommit,
+	setGitMigrationControl,
+	startGitSyncTimer,
+	stopGitSyncTimer,
+} from "./routes/git-sync.js";
+import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
+import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
+import { mountHealthRoutes } from "./routes/health.js";
+import { registerHooksRoutes } from "./routes/hooks-routes.js";
+import { registerImportRoutes } from "./routes/import-routes.js";
+import { mountInferenceRoutes } from "./routes/inference.js";
+import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
+import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
+import { registerMemoryRoutes } from "./routes/memory-routes.js";
+import { registerMiscRoutes } from "./routes/misc-routes.js";
+import { registerOntologyRoutes } from "./routes/ontology-routes.js";
+import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
+import { registerPluginRoutes } from "./routes/plugins-routes.js";
+import { registerQueueDiagnosticsRoutes } from "./routes/queue-diagnostics.js";
+import { registerReflectionRoutes } from "./routes/reflection-routes.js";
+import { registerRepairRoutes } from "./routes/repair-routes.js";
+import { registerSecretRoutes } from "./routes/secrets-routes.js";
+import { registerSessionRoutes } from "./routes/session-routes.js";
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
+import {
+	cleanupSourceDeletionTombstones,
+	finalizeCancelledSourceIndexJob,
+	registerSourcesRoutes,
+	stopSourceIndexJobs,
+} from "./routes/sources-routes.js";
 import {
 	AGENTS_DIR,
+	analyticsCollector,
+	authConfig,
+	authSecret,
 	BIND_HOST,
+	bindAbort,
 	CURRENT_VERSION,
 	DAEMON_DIR,
 	DAEMON_RUNTIME,
 	HOST,
 	INTERNAL_SELF_HOST,
+	invalidateDiagnosticsCache,
 	LOG_DIR,
 	MEMORY_DB,
 	PID_FILE,
 	PORT,
-	type RuntimeProviderName,
-	type RuntimeSynthesisProviderName,
-	analyticsCollector,
-	authConfig,
-	authSecret,
-	bindAbort,
-	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
 	providerTracker,
+	type RuntimeProviderName,
+	type RuntimeSynthesisProviderName,
 	reloadAuthState,
 	setCheckpointPruneTimer,
 	setEmbeddingTrackerHandle,
@@ -220,15 +291,17 @@ import {
 	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
 	shuttingDown,
 } from "./routes/state.js";
+import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
+import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
+import { checkEmbeddingProvider } from "./routes/utils.js";
 import {
-	type PressureRecoveryOutcome,
 	buildRuntimePressureEnvelope,
 	countActiveWorkers,
+	type PressureRecoveryOutcome,
 	setRuntimePressureEnvelope,
 } from "./runtime-pressure";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpointsAsync } from "./session-checkpoints";
 import { createSessionClaimStore } from "./session-claims";
-import { restoreTranscriptBypasses } from "./session-transcript-lifecycle";
 import {
 	releaseAllSessions,
 	restorePersistedSessionsAsync,
@@ -237,6 +310,7 @@ import {
 	startSessionCleanup,
 	stopSessionCleanup,
 } from "./session-tracker";
+import { restoreTranscriptBypasses } from "./session-transcript-lifecycle";
 import { createTtlEvictionHandler } from "./session-ttl-finalizer";
 import { createSingleFlightRunner } from "./single-flight-runner";
 import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance-lock";
@@ -260,94 +334,35 @@ import {
 	sourceFailureClass,
 	trackSourceLifecycleWrite,
 } from "./source-lifecycle-telemetry";
-import { getStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
+import { getStartupRecoveryCompletion, observeStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
+import { isReadyResponse } from "./synthesis-worker-protocol";
 import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
 import {
-	type TelemetryCollector,
-	type TelemetryConfigSnapshot,
 	createTelemetryCollector,
 	defaultTelemetryLogPath,
 	discardUnsentTelemetry,
 	sanitizeCrashError,
 	setActiveTelemetry,
 	stopActiveTelemetry,
+	type TelemetryCollector,
+	type TelemetryConfigSnapshot,
 	telemetryDisabledByEnv,
 } from "./telemetry";
-import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
-import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
-import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
-import { MigrationControlBoundary } from "./workspace-writer-barrier";
-import { createOwnerTranscriptImportStore } from "./transcript-import-store";
-import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
-import { admitImport } from "./import-inbox";
-import { startManualInboxWorker, type ManualInboxAdmission, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
-import { importDocument } from "./document-import-service";
+import { startTranscriptCaptureWorker, type TranscriptCaptureWorkerHandle } from "./transcript-capture-worker";
 import { stageTranscriptImport } from "./transcript-import-admission";
-
-import { resolveDaemonRestartMode } from "./daemon-restart";
-import {
-	getSynthesisWorker as getSynthesisRenderWorker,
-	setSynthesisWorker as setSynthesisRenderWorker,
-	sweepStaleSessions,
-} from "./hooks";
-import { mountMcpRoute } from "./mcp";
-import { registerAuthRoutes } from "./routes/auth-routes.js";
-import { mountChangelogRoutes } from "./routes/changelog.js";
-import { stopHarnessHealth } from "./harness-health";
-import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
-import { registerConnectorRoutes } from "./routes/connectors-routes.js";
-import { setupDashboardRoutes } from "./routes/dashboard.js";
-import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
-import {
-	ensureWorkspaceGitignore,
-	getGitStatus,
-	gitConfig,
-	gitPull,
-	gitPush,
-	gitSync,
-	scheduleAutoCommit,
-	startGitSyncTimer,
-	stopGitSyncTimer,
-	setGitMigrationControl,
-} from "./routes/git-sync.js";
-import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
-import { mountHealthRoutes } from "./routes/health.js";
-import { mountProtectionRoutes } from "./protection.js";
-import { registerHooksRoutes } from "./routes/hooks-routes.js";
-import { registerBoardRoutes } from "./routes/board-routes.js";
-import { registerImportRoutes } from "./routes/import-routes.js";
-import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
-import { mountInferenceRoutes } from "./routes/inference.js";
-import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
-import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
-import { registerMemoryRoutes } from "./routes/memory-routes.js";
-import { registerMiscRoutes } from "./routes/misc-routes.js";
-import { registerOntologyRoutes } from "./routes/ontology-routes.js";
-import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
-import { registerPluginRoutes } from "./routes/plugins-routes.js";
-import { registerQueueDiagnosticsRoutes } from "./routes/queue-diagnostics.js";
-import { registerReflectionRoutes } from "./routes/reflection-routes.js";
-import { registerRepairRoutes } from "./routes/repair-routes.js";
-import { registerSecretRoutes } from "./routes/secrets-routes.js";
-import { registerSessionRoutes } from "./routes/session-routes.js";
-import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
-import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-import {
-	cleanupSourceDeletionTombstones,
-	finalizeCancelledSourceIndexJob,
-	registerSourcesRoutes,
-	stopSourceIndexJobs,
-} from "./routes/sources-routes.js";
-import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
-import { checkEmbeddingProvider } from "./routes/utils.js";
-import { isReadyResponse } from "./synthesis-worker-protocol";
+import { nextTranscriptImportAgent } from "./transcript-import-commit";
+import { registerClassificationRoutes } from "./routes/classification-routes";
+import { createOwnerTranscriptImportStore } from "./transcript-import-store";
+import { startTranscriptImportWorker, type TranscriptImportWorkerHandle } from "./transcript-import-worker";
+import { startTranscriptRecoveryWorker, type TranscriptRecoveryWorkerHandle } from "./transcript-recovery-worker";
 import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-let httpServer: import("node:net").Server | null = null;
+let httpServer: Server | null = null;
 let dbOwnerClient: DbOwnerClient | null = null;
 let dbOwnerMaintenanceHandle: DbOwnerMaintenance | null = null;
 let globalVerifyInFlight = false;
@@ -548,6 +563,7 @@ mountHealthRoutes(app);
 mountProtectionRoutes(app, { workspacePath: process.env.SIGNET_PATH });
 mountMcpRoute(app);
 registerAuthRoutes(app);
+registerClassificationRoutes(app);
 
 registerMemoryRoutes(app, { recallOwner });
 registerHooksRoutes(app);
@@ -806,6 +822,7 @@ ${fileList}
 						name === "MEMORY.md" &&
 						(
 							await requestMemoryHead<{ generated: boolean }>({
+								readScope: localAllReadScope({ kind: "own", agentId: "default" }),
 								action: "inspect",
 								agentId: "default",
 								content: fileContent,
@@ -1497,9 +1514,17 @@ function stopMemoryImportPoller(): void {
 function startStaleSessionSweeper(): void {
 	if (staleSessionSweepTimer !== null) return;
 	staleSessionSweepTimer = setInterval(() => {
-		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }).catch((e) => {
-			logger.error("daemon", "Stale session sweep failed", undefined, {
-				message: e instanceof Error ? e.message : String(e),
+		void Promise.allSettled([
+			sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }),
+			purgeExpiredHookUploads(),
+		]).then((results) => {
+			results.forEach((result, index) => {
+				if (result.status !== "rejected") return;
+				const error: unknown = result.reason;
+				logger.error("daemon", "Session maintenance failed", undefined, {
+					task: index === 0 ? "stale-session-sweep" : "hook-upload-expiry",
+					message: error instanceof Error ? error.message : String(error),
+				});
 			});
 		});
 	}, STALE_SESSION_SWEEP_INTERVAL_MS);
@@ -2046,6 +2071,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	}
 
+	const retentionConfig = {
+		...DEFAULT_RETENTION,
+		telemetryRetentionMs: memoryCfg.pipelineV2.telemetry.retentionDays * 86400000,
+	};
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
 			getDbAccessor(),
@@ -2058,6 +2087,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			analyticsCollector,
 			telemetry,
 			dbOwnerMaintenanceHandle ?? undefined,
+			retentionConfig,
 		);
 		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
 			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
@@ -2068,7 +2098,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			});
 		}
 	} else {
-		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
+		ensureRetentionWorker(getDbAccessor(), retentionConfig, dbOwnerMaintenanceHandle ?? undefined);
 	}
 
 	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
@@ -2131,35 +2161,31 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
 
 async function cleanup() {
+	let organizationShutdownError: Error | null = null;
 	const vacuumConversionWorker = vacuumConversionHandle;
 	vacuumConversionHandle = null;
 	const vacuumConversionStop = vacuumConversionWorker?.stop() ?? Promise.resolve();
 	setShuttingDown(true);
-	daemonMigrationControl.beginDrain();
-	const writerDrain = await daemonMigrationControl.close();
-	if (!writerDrain.closed) logger.warn("daemon", "Workspace writer drain timed out", writerDrain);
+	if (authConfig.mode === "team") pauseOrganizationRuntime();
 	bindAbort.abort();
 	await stopHarnessInstall();
 	await stopHarnessHealth();
 	logger.info("daemon", "Shutting down");
 
 	if (httpServer) {
-		const srv = httpServer;
-		await new Promise<void>((resolve) => {
-			const timeout = setTimeout(() => {
-				logger.warn("daemon", "HTTP server drain timed out, forcing close");
-				if ("closeAllConnections" in srv && typeof srv.closeAllConnections === "function") {
-					srv.closeAllConnections();
-				}
-				resolve();
-			}, 15_000);
-			srv.close(() => {
-				clearTimeout(timeout);
-				resolve();
-			});
-		});
+		if (await closeSignetHttpServer(httpServer)) logger.warn("daemon", "HTTP server drain timed out, forcing close");
 		httpServer = null;
 	}
+	if (authConfig.mode === "team") {
+		try {
+			await stopOrganizationRuntime();
+		} catch (error) {
+			organizationShutdownError = error instanceof Error ? error : new Error(String(error));
+		}
+	}
+	daemonMigrationControl.beginDrain();
+	const writerDrain = await daemonMigrationControl.close();
+	if (!writerDrain.closed) logger.warn("daemon", "Workspace writer drain timed out", writerDrain);
 
 	if (syncTimer) {
 		clearTimeout(syncTimer);
@@ -2189,6 +2215,7 @@ async function cleanup() {
 		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
+	await stopProjectionWorkers();
 	await stopPiAgentWorkers(true);
 	stopResourceMonitors();
 	logFdSnapshot("cleanup-start");
@@ -2276,7 +2303,8 @@ async function cleanup() {
 
 	await recallDbOwner?.close();
 	recallDbOwner = null;
-	closeDbAccessor();
+	await closeDbOwner();
+	await closeDbAccessor();
 
 	if (watcher) {
 		logFdSnapshot("pre-cleanup-watcher");
@@ -2289,6 +2317,7 @@ async function cleanup() {
 			unlinkSync(PID_FILE);
 		} catch {}
 	}
+	if (organizationShutdownError) throw organizationShutdownError;
 }
 
 let lifecycleStartedAt = "";
@@ -2609,7 +2638,12 @@ async function main() {
 	startFdPollMonitor();
 
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+	if (authConfig.mode === "team" && !migrationIntegrityWritesBlocked)
+		await startOrganizationRuntime(`http://127.0.0.1:${PORT}`);
+	if (!migrationIntegrityWritesBlocked) {
+		runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+		void startClassificationRecovery(dbOwnerClient);
+	}
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
@@ -2711,7 +2745,7 @@ async function main() {
 			platform: process.platform,
 			uptimeMs: 0,
 		});
-		void getStartupRecoveryCompletion().then((recovery) => {
+		void observeStartupRecoveryCompletion((recovery) => {
 			if (recovery.recoveryPhase !== "complete") return;
 			for (let index = 0; index < Math.min(recovery.orphanedPassesSwept, 100); index++) {
 				recordDreamingPassTelemetry({
@@ -2896,13 +2930,19 @@ async function main() {
 			transcriptImportWorkerHandle = startTranscriptImportWorker({
 				store: createOwnerTranscriptImportStore(),
 				agentId: resolveDaemonAgentId(),
+				nextAgentId: nextTranscriptImportAgent,
 				workspaceRoot: AGENTS_DIR,
-				onBatch: async (_jobId, sourceId) => {
-					const nudge = importedSourceAttentionUpsert(resolveDaemonAgentId(), sourceId);
-					await dbOwnerTransaction([{ sql: nudge.sql, params: nudge.params, result: "run" }], {
-						operation: "sources.import.dreaming-attention",
-						lane: "write",
-					});
+				onBatch: async (_jobId, sourceId, agentId) => {
+					const owner = await getDbOwnerForAccessor(getDbAccessor());
+					await owner.submit(
+						{ kind: "dreaming_imported_source_attention", agentId, sourceId },
+						{
+							operation: "sources.import.dreaming-attention",
+							lane: "write",
+							deadlineMs: 5000,
+							estimatedWorkUnits: 200,
+						},
+					).result;
 				},
 			});
 		}
@@ -2954,6 +2994,7 @@ async function main() {
 				dispatchDocument: async (row) => {
 					if (!row.bytes) throw new Error("managed import original is unavailable");
 					const result = await importDocument({
+						author: SYSTEM_AUTHOR,
 						fileName: row.fileName,
 						bytes: row.bytes,
 						agentId,
@@ -2965,6 +3006,7 @@ async function main() {
 				dispatchTranscript: async (row) => {
 					if (!row.bytes) throw new Error("managed transcript original is unavailable");
 					const staged = await stageTranscriptImport({
+						author: SYSTEM_AUTHOR,
 						agentId,
 						fileName: row.fileName,
 						bytes: row.bytes,

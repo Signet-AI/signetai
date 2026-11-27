@@ -1,24 +1,26 @@
-import type { Context, Hono, Next } from "hono";
 import { randomBytes } from "node:crypto";
+import type { Context, Hono, Next } from "hono";
 import {
+	checkPermission,
+	createApiKey,
+	createToken,
+	getClientAddress,
+	listApiKeys,
 	PERMISSIONS,
 	type Permission,
+	requirePermissionWithRateLimit,
+	revokeApiKey,
 	type TokenClaims,
 	type TokenRole,
 	type TokenScope,
-	createApiKey,
-	checkPermission,
-	createToken,
-	getPeerAddress,
-	listApiKeys,
-	requirePermissionWithRateLimit,
-	revokeApiKey,
 	verifyPasswordHash,
 	verifyPlainPassword,
 } from "../auth";
+import { hybridProxyDetected } from "../auth/middleware";
 import { getDbAccessor } from "../db-accessor.js";
-import { readEnvTrimmed } from "./state.js";
-import { authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./state.js";
+import { jsonBody } from "../request-body";
+import { registerOrganizationRoutes } from "./organization-routes";
+import { AGENTS_DIR, authAdminLimiter, authConfig, authLoginLimiter, authSecret, readEnvTrimmed } from "./state.js";
 
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 1024;
@@ -111,6 +113,7 @@ function authProviderResponse() {
 }
 
 export function registerAuthRoutes(app: Hono): void {
+	registerOrganizationRoutes(app, () => authConfig, AGENTS_DIR);
 	app.get("/api/auth/whoami", (c) => {
 		const auth = c.get("auth");
 		const effectiveAccess = authConfig.mode === "local" || auth?.authenticated === true || auth?.trustedLocal === true;
@@ -123,7 +126,13 @@ export function registerAuthRoutes(app: Hono): void {
 		return c.json({
 			authenticated: auth?.authenticated ?? false,
 			trustedLocal: auth?.trustedLocal === true,
-			effectiveAccess,
+			effectiveAccess:
+				authConfig.mode === "local" || auth?.trustedLocal ? "open" : effectiveAccess ? "authenticated" : "none",
+			organization: null,
+			user: null,
+			credential: c.get("principal")?.credential ?? null,
+			agents: { defaultRead: "default", defaultWrite: "default" },
+			hybridProxyDetected,
 			claims: auth?.claims ?? null,
 			error: auth?.error ?? null,
 			permissions,
@@ -135,7 +144,12 @@ export function registerAuthRoutes(app: Hono): void {
 	app.get("/api/auth/methods", (c) => c.json(authProviderResponse()));
 
 	app.post("/api/auth/login", async (c) => {
-		const limitKey = `login:${getPeerAddress(c) ?? "anonymous"}`;
+		const payload = (await jsonBody(c)().catch(() => null)) as Record<string, unknown> | null;
+		if (!payload) return c.json({ error: "invalid request body" }, 400);
+		const limitKey = JSON.stringify([
+			typeof payload.username === "string" ? payload.username.trim().toLowerCase() : "",
+			getClientAddress(c),
+		]);
 		const check = authLoginLimiter.check(limitKey);
 		if (!check.allowed) {
 			c.status(429);
@@ -147,9 +161,6 @@ export function registerAuthRoutes(app: Hono): void {
 		if (!authSecret) {
 			return c.json({ error: "auth secret not available" }, 400);
 		}
-
-		const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
-		if (!payload) return c.json({ error: "invalid request body" }, 400);
 
 		if (!isValidLoginString(payload.username, MAX_USERNAME_LENGTH)) {
 			return c.json({ error: "username is required" }, 400);
@@ -206,14 +217,14 @@ export function registerAuthRoutes(app: Hono): void {
 	});
 
 	app.post("/api/auth/handoff/redeem", async (c) => {
-		const limitKey = `handoff:${getPeerAddress(c) ?? "anonymous"}`;
+		const limitKey = `handoff:${getClientAddress(c) ?? "anonymous"}`;
 		const check = authLoginLimiter.check(limitKey);
 		if (!check.allowed) {
 			c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
 			return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
 		}
 		authLoginLimiter.record(limitKey);
-		const payload: unknown = await c.req.json().catch(() => null);
+		const payload: unknown = await jsonBody(c)().catch(() => null);
 		const code =
 			typeof payload === "object" && payload !== null && !Array.isArray(payload)
 				? Reflect.get(payload, "code")
@@ -243,7 +254,7 @@ export function registerAuthRoutes(app: Hono): void {
 			return c.json({ error: "auth secret not available (local mode?)" }, 400);
 		}
 
-		const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const payload = (await jsonBody(c)().catch(() => null)) as Record<string, unknown> | null;
 		if (!payload) {
 			return c.json({ error: "invalid request body" }, 400);
 		}
@@ -270,7 +281,7 @@ export function registerAuthRoutes(app: Hono): void {
 	});
 
 	app.post("/api/auth/api-keys", async (c) => {
-		const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const payload = (await jsonBody(c)().catch(() => null)) as Record<string, unknown> | null;
 		if (!payload) return c.json({ error: "invalid request body" }, 400);
 		const name = typeof payload.name === "string" ? payload.name.trim() : "";
 		if (!name) return c.json({ error: "name is required" }, 400);

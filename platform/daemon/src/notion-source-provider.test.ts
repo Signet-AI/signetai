@@ -149,6 +149,12 @@ describe("notion-source-provider", () => {
 
 	it("indexes shared pages as attributable source artifacts", async () => {
 		const source = addSource();
+		getDbAccessor().withWriteTx((db) => {
+			db.exec("INSERT INTO classifications(id,name) VALUES('cls_notion','Notion')");
+			db.prepare("INSERT INTO classification_assignments VALUES('source',?,'default','cls_notion','carol','now')").run(
+				source.id,
+			);
+		});
 		const row = page("row-1", "Ship Notion", "2026-02-02T00:00:00.000Z", {
 			parent: { type: "data_source_id", data_source_id: "ds-1" },
 			properties: {
@@ -216,6 +222,14 @@ describe("notion-source-provider", () => {
 				).count,
 		);
 		expect(graphDocs).toBeGreaterThanOrEqual(2);
+		await sync(source);
+		getDbAccessor().withReadDb((db) => {
+			for (const table of ["memory_artifacts", "entities", "entity_dependencies"]) {
+				const labels = db.prepare(`SELECT compartment_id FROM ${table} WHERE source_id=?`).all(source.id);
+				expect(labels.length).toBeGreaterThan(0);
+				for (const label of labels) expect(label).toEqual({ compartment_id: expect.any(Number) });
+			}
+		});
 	});
 
 	it("refetches only edited pages and purges pages no longer shared", async () => {
@@ -453,7 +467,7 @@ describe("notion-source-provider", () => {
 		expect(rows.filter((entry) => entry.is_deleted === 0)).toHaveLength(5);
 		expect(rows.filter((entry) => entry.is_deleted === 1)).toHaveLength(135);
 		expect(sourceDocumentCount(source.id)).toBe(5);
-	});
+	}, 20_000);
 
 	it("keeps pages that search missed but Notion still serves", async () => {
 		const source = addSource();

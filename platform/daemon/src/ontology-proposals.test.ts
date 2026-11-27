@@ -1,9 +1,11 @@
+import { up as upgradeDreamingPartitions } from "../../core/src/migrations/179-dreaming-evidence-leases";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { executeClassification } from "./classification-owner";
 import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { listEpistemicAssertions } from "./ontology-assertions";
 import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
@@ -11,7 +13,6 @@ import { consolidateOntologyProposals } from "./ontology-consolidation";
 import { extractOntologyProposals } from "./ontology-extraction";
 import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
-	OntologyProposalError,
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
@@ -24,12 +25,24 @@ import {
 	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
+	OntologyProposalError,
 	proposeDuplicateEntityMerges,
 	rejectOntologyProposal,
 } from "./ontology-proposals";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
-import { resolveTemporalRecall } from "./temporal-recall";
+import { resolveTemporalRecall as scopedResolveTemporalRecall } from "./temporal-recall";
 import { txIngestEnvelope } from "./transactions";
+import { type LocalScopeHint, withLocalReadScope } from "./test-support/local-read-scope";
+import type { TemporalRecallParams } from "./temporal-recall";
+
+type ScopedResolveTemporalRecallRest =
+	Parameters<typeof scopedResolveTemporalRecall> extends [unknown, ...infer Rest] ? Rest : never;
+function resolveTemporalRecall(
+	params: Omit<TemporalRecallParams, "readScope"> & LocalScopeHint,
+	...rest: ScopedResolveTemporalRecallRest
+): ReturnType<typeof scopedResolveTemporalRecall> {
+	return scopedResolveTemporalRecall(withLocalReadScope(params), ...rest);
+}
 
 describe("ontology proposals", () => {
 	let dir = "";
@@ -38,6 +51,7 @@ describe("ontology proposals", () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-ontology-proposals-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		getDbAccessor().withWriteTx((db) => upgradeDreamingPartitions(db));
 	});
 
 	afterEach(async () => {
@@ -73,8 +87,1234 @@ describe("ontology proposals", () => {
 		});
 	}
 
+	function partitionFixture(): void {
+		getDbAccessor().withWriteTx((db) => {
+			for (const id of ["cls_alpha", "cls_beta"])
+				db.prepare("INSERT INTO classifications (id, name, created_at) VALUES (?, ?, datetime('now'))").run(id, id);
+			for (const [id, key] of [
+				[91, "cls_alpha"],
+				[92, "cls_beta"],
+				[93, "cls_alpha,cls_beta"],
+			])
+				db.prepare("INSERT INTO compartments (id, key, created_at) VALUES (?, ?, datetime('now'))").run(id, key);
+			for (const [compartment, classification] of [
+				[91, "cls_alpha"],
+				[92, "cls_beta"],
+				[93, "cls_alpha"],
+				[93, "cls_beta"],
+			])
+				db.prepare("INSERT INTO compartment_members (compartment_id, classification_id) VALUES (?, ?)").run(
+					compartment,
+					classification,
+				);
+			for (const [id, compartment] of [
+				["pass-alpha", 91],
+				["pass-both", 93],
+			])
+				db.prepare(
+					"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES (?, 'ant', 'ant', ?)",
+				).run(id, compartment);
+		});
+	}
+
+	for (const operation of ["rename_entity", "archive_entity", "merge_entities", "pin_entity", "unpin_entity"] as const)
+		it(`rejects ${operation} of structural people before proposal or graph side effects`, async () => {
+			insertEntity("identity-person", "Alice", "alice", "ant", 0, false, "person");
+			insertEntity("ordinary", "Other", "other", "ant", 0, false, "person");
+			getDbAccessor().withWriteTx((db) =>
+				db.prepare("UPDATE entities SET person_user_id='alice' WHERE id='identity-person'").run(),
+			);
+			getDbAccessor().withWriteTx((db) =>
+				db
+					.prepare(
+						"INSERT INTO entity_aliases(id, entity_id, agent_id, alias, canonical_alias, status, created_at, updated_at) VALUES ('person-alias', 'identity-person', 'ant', 'Alice account', 'alice account', 'active', datetime('now'), datetime('now'))",
+					)
+					.run(),
+			);
+			const aliases = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entity_aliases").all());
+			const before = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities ORDER BY id").all());
+			await expect(
+				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
+					actor: "dreaming",
+					agentId: "ant",
+					operation,
+					payload: {
+						entity: "identity-person",
+						selector: "identity-person",
+						target_entity: "ordinary",
+						sources: ["identity-person"],
+						name: "Renamed",
+						new_name: "Renamed",
+						alias: "Alice alias",
+						alias_id: "person-alias",
+					},
+				}),
+			).rejects.toThrow("person_identity_immutable");
+			expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities ORDER BY id").all())).toEqual(
+				before,
+			);
+			expect(
+				getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM ontology_proposals").get()),
+			).toEqual({ n: 0 });
+			expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entity_aliases").all())).toEqual(aliases);
+		});
+
+	it.each([false, true])(
+		"O6 labels aliases on structural people, reports typed duplicates, and archives only its partition (public first: %s)",
+		async (publicFirst) => {
+			partitionFixture();
+			insertEntity("alias-person", "Alice", "person:alias-alice", "ant", 0, false, "person");
+			getDbAccessor().withWriteTx((db) => {
+				db.exec("UPDATE entities SET person_user_id='alias-alice' WHERE id='alias-person'");
+				db.exec(
+					"INSERT INTO memories(id,content,agent_id,memory_kind,created_at,updated_at) VALUES('alias-source','Call me Night Owl.','ant','episodic','now','now')",
+				);
+			});
+			const before = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT * FROM entities WHERE id='alias-person'").get(),
+			);
+			const apply = (operation: string, payload: Readonly<Record<string, unknown>>, passId?: string) =>
+				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
+					agentId: "ant",
+					actor: "dreaming",
+					passId,
+					operation,
+					payload,
+					evidence: [{ source_ref: "memory:alias-source", quote: "Call me Night Owl." }],
+				});
+			const createAlias = (passId?: string) =>
+				apply("create_entity_alias", { entity_id: "alias-person", alias: "Night Owl" }, passId);
+			const first = await createAlias(publicFirst ? undefined : "pass-alpha");
+			const second = await createAlias(publicFirst ? "pass-alpha" : undefined);
+			await expect(createAlias("pass-alpha")).rejects.toMatchObject({
+				name: "OntologyProposalError",
+				status: 409,
+				message: "duplicate_entity_alias",
+			});
+			const classified = publicFirst ? second : first;
+			const publicAlias = publicFirst ? first : second;
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT compartment_id FROM entity_aliases ORDER BY compartment_id").all(),
+				),
+			).toEqual([{ compartment_id: null }, { compartment_id: 91 }]);
+			expect(
+				getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities WHERE id='alias-person'").get()),
+			).toEqual(before);
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db
+						.prepare(
+							"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='alias' AND derived_id=?",
+						)
+						.all(classified.result?.aliasId),
+				),
+			).toEqual([{ evidence_kind: "memory", evidence_id: "alias-source" }]);
+			await getDbAccessor().withWriteDbAsync((db) => executeClassification(db, { op: "rebuild", agentId: "ant" }));
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT compartment_id FROM entity_aliases ORDER BY compartment_id").all(),
+				),
+			).toEqual([{ compartment_id: null }, { compartment_id: 91 }]);
+			await expect(
+				apply(
+					"archive_entity_alias",
+					{ entity_id: "alias-person", alias_id: publicAlias.result?.aliasId },
+					"pass-alpha",
+				),
+			).rejects.toThrow("compartment_mismatch");
+			await apply(
+				"archive_entity_alias",
+				{ entity_id: "alias-person", alias_id: classified.result?.aliasId },
+				"pass-alpha",
+			);
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT status,compartment_id FROM entity_aliases ORDER BY compartment_id").all(),
+				),
+			).toEqual([
+				{ status: "active", compartment_id: null },
+				{ status: "archived", compartment_id: 91 },
+			]);
+			expect(
+				getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities WHERE id='alias-person'").get()),
+			).toEqual(before);
+		},
+	);
+
+	it("recovers legacy alias labels and citations from their persisted creating proposal", async () => {
+		partitionFixture();
+		insertEntity("legacy-alias-root", "Legacy Alias", "legacy alias", "ant", 0);
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				"INSERT INTO memories(id,content,agent_id,memory_kind,created_at,updated_at) VALUES('legacy-alias-source','A retained alias disclosure.','ant','episodic','now','now')",
+			),
+		);
+		const created = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			actor: "dreaming",
+			agentId: "ant",
+			passId: "pass-alpha",
+			operation: "create_entity_alias",
+			payload: { entity_id: "legacy-alias-root", alias: "Legacy Night Owl" },
+			evidence: [{ source_ref: "memory:legacy-alias-source", quote: "A retained alias disclosure." }],
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.exec("DELETE FROM evidence_citations WHERE derived_kind='alias'");
+			db.exec("UPDATE entity_aliases SET compartment_id=NULL,dreaming_pass_id=NULL");
+			upgradeDreamingPartitions(db);
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id,dreaming_pass_id FROM entity_aliases").all(),
+			),
+		).toEqual([{ compartment_id: 91, dreaming_pass_id: "pass-alpha" }]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='alias' AND derived_id=?",
+					)
+					.all(created.result?.aliasId),
+			),
+		).toEqual([{ evidence_kind: "memory", evidence_id: "legacy-alias-source" }]);
+	});
+
+	it("merges ordinary entities without writing a neighboring structural person's columns", async () => {
+		insertEntity("neighbor-person", "Neighbor Person", "neighbor person", "ant", 0, false, "person");
+		insertEntity("neighbor-source", "Neighbor source", "neighbor source", "ant", 1);
+		insertEntity("neighbor-target", "Neighbor target", "neighbor target", "ant", 1);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET person_user_id = 'usr_neighbor' WHERE id = 'neighbor-person'").run();
+			db.prepare(
+				"INSERT INTO relations(id, source_entity_id, target_entity_id, relation_type, created_at, agent_id) VALUES ('neighbor-relation', 'neighbor-source', 'neighbor-person', 'knows', datetime('now'), 'ant')",
+			).run();
+		});
+		const before = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT * FROM entities WHERE id = 'neighbor-person'").get(),
+		);
+		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "merge_entities",
+			payload: { target_entity_id: "neighbor-target", source_entity_ids: ["neighbor-source"], force: true },
+		});
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities WHERE id = 'neighbor-person'").get()),
+		).toEqual(before);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT source_entity_id, target_entity_id FROM relations WHERE id = 'neighbor-relation'").get(),
+			),
+		).toEqual({ source_entity_id: "neighbor-target", target_entity_id: "neighbor-person" });
+	});
+
+	it("B1 a public pass cannot squat a future group member's structural identity", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"INSERT INTO users(id,username,display_name,role) VALUES('alice','alice','Alex','member'); INSERT INTO groups(id,name) VALUES('team-group','Team'); INSERT INTO agents(id,name,kind,owner_group_id,created_at,updated_at) VALUES('team','Team','team','team-group','now','now'); INSERT INTO dreaming_passes(id,agent_id,scope_key,status) VALUES('team-pass','team','team','running')",
+			);
+		});
+		const create = () =>
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "team",
+				actor: "dreaming",
+				passId: "team-pass",
+				operation: "create_entity",
+				payload: { name: "Alex (alice)", entity_type: "project" },
+			});
+		const ordinary = await create();
+		const before = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM entities WHERE id=?").get(ordinary.result?.entityId),
+		);
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db.exec("INSERT INTO group_members(group_id,user_id,role) VALUES('team-group','alice','member')"),
+		);
+		const person = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM entities WHERE agent_id='team' AND person_user_id='alice'").get(),
+		);
+		expect(person?.name).toBe("Alex (alice)");
+		const resolved = await create();
+		expect(resolved.result?.entityId).toBe(person?.id);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT * FROM entities WHERE id=?").get(ordinary.result?.entityId),
+			),
+		).toEqual(before);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT * FROM entities WHERE id=?").get(person?.id)),
+		).toEqual(person);
+	});
+
+	it("B1 classified name resolution prefers a structural person over an exact-label ordinary entity", async () => {
+		partitionFixture();
+		insertEntity("preferred-person", "Alex (alice)", "person:alice", "ant", 0, false, "person");
+		insertEntity("name-squatter", "Other ordinary", "other ordinary", "ant", 0);
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.exec(
+				"UPDATE entities SET person_user_id='alice' WHERE id='preferred-person'; UPDATE entities SET name='Alex (alice)',canonical_name='alex (alice)',compartment_id=91 WHERE id='name-squatter'",
+			);
+		});
+		const before = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM entities ORDER BY id").all(),
+		);
+		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_entity",
+			payload: { name: "Alex (alice)", entity_type: "project" },
+		});
+		expect(applied.result?.entityId).toBe("preferred-person");
+		const child = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_aspect",
+			payload: { entity: "Alex (alice)", name: "Preferences" },
+		});
+		expect(child.result?.entityId).toBe("preferred-person");
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT entity_id,compartment_id FROM entity_aspects WHERE id=?").get(child.result?.aspectId),
+			),
+		).toEqual({ entity_id: "preferred-person", compartment_id: 91 });
+		expect(
+			await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT * FROM entities ORDER BY id").all()),
+		).toEqual(before);
+	});
+
+	it.each([null, 91])(
+		"B1 rename_entity rejects a person destination with new_name in compartment %s before side effects",
+		async (compartmentId: number | null) => {
+			partitionFixture();
+			insertEntity("rename-person", "Alex (alice)", "person:alice", "ant", 0, false, "person");
+			insertEntity("rename-source", "Ordinary source", "ordinary source", "ant", 0);
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.exec("UPDATE entities SET person_user_id='alice' WHERE id='rename-person'");
+				db.prepare("UPDATE entities SET compartment_id=? WHERE id='rename-source'").run(compartmentId);
+				db.exec(
+					"INSERT INTO dreaming_passes(id,agent_id,scope_key,status) VALUES('public-rename','ant','ant','running')",
+				);
+			});
+			const before = await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT * FROM entities ORDER BY id").all(),
+			);
+			await expect(
+				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
+					agentId: "ant",
+					actor: "dreaming",
+					passId: compartmentId === null ? "public-rename" : "pass-alpha",
+					operation: "rename_entity",
+					payload: { entity_id: "rename-source", new_name: "Alex (alice)" },
+				}),
+			).rejects.toThrow("person_identity_immutable");
+			expect(
+				await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT * FROM entities ORDER BY id").all()),
+			).toEqual(before);
+			expect(
+				await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT COUNT(*) AS n FROM ontology_proposals").get()),
+			).toEqual({ n: 0 });
+		},
+	);
+
+	for (const first of ["pass-alpha", "pass-public"] as const)
+		it(`keeps equal canonical entity names independent when ${first} creates first`, async () => {
+			partitionFixture();
+			getDbAccessor().withWriteTx((db) =>
+				db.exec(
+					"INSERT INTO dreaming_passes(id,agent_id,scope_key,status) VALUES('pass-public','ant','ant','running')",
+				),
+			);
+			for (const passId of [first, first === "pass-alpha" ? "pass-public" : "pass-alpha"])
+				await applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
+					agentId: "ant",
+					actor: "dreaming",
+					passId,
+					operation: "create_entity",
+					payload: { name: "Project Falcon", entity_type: "project" },
+				});
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db
+						.prepare(
+							"SELECT compartment_id FROM entities WHERE agent_id='ant' AND name='Project Falcon' ORDER BY compartment_id",
+						)
+						.all(),
+				),
+			).toEqual([{ compartment_id: null }, { compartment_id: 91 }]);
+		});
+
+	it.each(["add_claim_value", "create_policy"] as const)(
+		"allows classified %s children on a readable public person without changing any parent column",
+		async (operation) => {
+			partitionFixture();
+			insertEntity("person-root", "Alice", "person:alice", "ant", 0, false, "person");
+			getDbAccessor().withWriteTx((db) => {
+				db.exec("UPDATE entities SET person_user_id='alice' WHERE id='person-root'");
+				db.exec(
+					"INSERT INTO memories(id,content,agent_id,memory_kind,created_at,updated_at) VALUES('child-source','I prefer tea.','ant','episodic','now','now')",
+				);
+			});
+			const before = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT * FROM entities WHERE id='person-root'").get(),
+			);
+			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				passId: "pass-alpha",
+				operation,
+				payload:
+					operation === "create_policy"
+						? { entity: "person-root", kind: "preference", content: "I prefer tea." }
+						: { entity: "person-root", aspect: "preferences", claim_key: "drink", value: "I prefer tea." },
+				evidence: [{ source_ref: "memory:child-source", quote: "I prefer tea." }],
+			});
+			expect(
+				getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities WHERE id='person-root'").get()),
+			).toEqual(before);
+			expect(
+				getDbAccessor().withReadDb((db) => db.prepare("SELECT compartment_id FROM entity_attributes").all()),
+			).toEqual([{ compartment_id: 91 }]);
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT * FROM evidence_citations WHERE derived_kind='entity'").all(),
+				),
+			).toEqual([]);
+		},
+	);
+
+	it("labels every pass claim projection and its copy edges with the durable partition", async () => {
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(`INSERT INTO memories
+			(id, content, agent_id, memory_kind, created_at, updated_at, author_user_id)
+			VALUES ('pass-source', 'A launch on March 19', 'ant', 'episodic', datetime('now'), datetime('now'), 'alice')`)
+				.run(),
+		);
+		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Partition project",
+				aspect: "timeline",
+				claim_key: "launch",
+				value: "A launch on March 19",
+				occurred_at: "2023-03-19",
+			},
+			evidence: [{ source_ref: "memory:pass-source", quote: "A launch on March 19" }],
+		});
+		for (const table of ["memory_entity_mentions", "derived_memory_sources"] as const) {
+			const children = getDbAccessor().withReadDb((db) => db.prepare(`SELECT * FROM ${table}`).all());
+			expect(children.length).toBeGreaterThan(0);
+			for (const child of children) expect(child.compartment_id).toBe(91);
+		}
+		const rows = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(`
+			SELECT 'entity' AS kind, compartment_id FROM entities
+			UNION ALL SELECT 'aspect', compartment_id FROM entity_aspects
+			UNION ALL SELECT 'attribute', compartment_id FROM entity_attributes
+			UNION ALL SELECT 'memory', compartment_id FROM memories WHERE memory_kind = 'derived'
+			UNION ALL SELECT 'proposal', compartment_id FROM ontology_proposals
+			UNION ALL SELECT 'temporal_edge', compartment_id FROM temporal_edges ORDER BY kind`)
+				.all(),
+		);
+		expect(rows).toEqual(
+			["aspect", "attribute", "entity", "memory", "proposal", "temporal_edge"].map((kind) => ({
+				kind,
+				compartment_id: 91,
+			})),
+		);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare("SELECT dreaming_pass_id, author_user_id FROM ontology_proposals WHERE id = ?")
+					.get(applied.proposal.id),
+			),
+		).toEqual({ dreaming_pass_id: "pass-alpha", author_user_id: "alice" });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT evidence_kind FROM evidence_citations WHERE derived_kind = 'temporal_edge' ORDER BY evidence_id",
+					)
+					.all(),
+			),
+		).toEqual([{ evidence_kind: "memory" }, { evidence_kind: "memory" }]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT e.proposal_id AS entity_proposal_id, a.proposal_id AS aspect_proposal_id FROM entities e JOIN entity_aspects a ON a.entity_id = e.id WHERE e.agent_id = 'ant'",
+					)
+					.get(),
+			),
+		).toEqual({ entity_proposal_id: applied.proposal.id, aspect_proposal_id: applied.proposal.id });
+	});
+
+	it("admits subset evidence and rejects sibling labels, stale passes, and cross-agent citations atomically", async () => {
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, agent, compartment] of [
+				["subset", "ant", 91],
+				["sibling", "ant", 92],
+				["foreign", "bee", 91],
+			])
+				db.prepare(`INSERT INTO memories (id, content, agent_id, compartment_id, memory_kind, created_at, updated_at)
+				VALUES (?, 'Partition evidence', ?, ?, 'episodic', datetime('now'), datetime('now'))`).run(
+					id,
+					agent,
+					compartment,
+				);
+		});
+		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			passId: "pass-both",
+			operation: "create_entity",
+			payload: { name: "Subset target" },
+			evidence: [{ source_ref: "memory:subset" }],
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id FROM ontology_proposals WHERE id = ?").get(proposal.id),
+			),
+		).toEqual({ compartment_id: 93 });
+		for (const [source, error] of [
+			["sibling", "compartment_mismatch"],
+			["foreign", "authorized agent scope"],
+		])
+			await expect(
+				createOntologyProposal(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
+					agentId: "ant",
+					passId: "pass-alpha",
+					operation: "create_entity",
+					payload: { name: "Rejected target" },
+					evidence: [{ source_ref: `memory:${source}` }],
+				}),
+			).rejects.toThrow(error);
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO dreaming_classification_epoch(agent_id, epoch) VALUES ('ant', 1) ON CONFLICT(agent_id) DO UPDATE SET epoch = epoch + 1",
+				)
+				.run(),
+		);
+		await expect(
+			applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				id: proposal.id,
+			}),
+		).rejects.toThrow("compartment_mismatch");
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status FROM ontology_proposals WHERE id = ?").get(proposal.id),
+			),
+		).toEqual({ status: "pending" });
+		expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM entities").get())).toEqual({
+			count: 0,
+		});
+	});
+
+	it("supersedes only the exact-label claim stream and preserves a lower-label sibling", async () => {
+		const apply = (value: string) =>
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				operation: "add_claim_value",
+				payload: { entity: "Sibling project", aspect: "facts", claim_key: "choice", value },
+			});
+		const first = await apply("First choice");
+		const second = await apply("Second choice");
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET compartment_id = 91").run();
+			db.prepare("UPDATE entity_aspects SET compartment_id = 91").run();
+			db.prepare("UPDATE entity_attributes SET compartment_id = 91 WHERE id = ?").run(first.result?.attributeId);
+			db.prepare("UPDATE memories SET compartment_id = 91 WHERE id = ?").run(first.result?.memoryId);
+		});
+		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "supersede_claim_value",
+			payload: {
+				entity: "Sibling project",
+				aspect: "facts",
+				claim_key: "choice",
+				attribute_id: first.result?.attributeId,
+				new_value: "Third choice",
+			},
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status FROM entity_attributes WHERE id = ?").get(second.result?.attributeId),
+			),
+		).toEqual({ status: "active" });
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM ontology_proposals").get()),
+		).toEqual({ count: 3 });
+	});
+
+	it("rejects an archive that would stale a differently labeled materialized-memory child", async () => {
+		const claim = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "add_claim_value",
+			payload: { entity: "Cascade project", aspect: "facts", claim_key: "choice", value: "A supported choice" },
+		});
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET compartment_id = 91").run();
+			db.prepare("UPDATE entity_aspects SET compartment_id = 91").run();
+			db.prepare("UPDATE entity_attributes SET compartment_id = 91").run();
+			db.prepare("UPDATE memories SET compartment_id = 91").run();
+			db.prepare(
+				"INSERT INTO memories (id, content, agent_id, memory_kind, created_at, updated_at) VALUES ('copied-child', 'A copied choice', 'ant', 'derived', datetime('now'), datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO derived_memory_sources (derived_memory_id, source_kind, source_id, agent_id, created_at) VALUES ('copied-child', 'memory', ?, 'ant', datetime('now'))",
+			).run(claim.result?.memoryId);
+		});
+		await expect(
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				passId: "pass-alpha",
+				operation: "archive_claim_value",
+				payload: { attribute_id: claim.result?.attributeId },
+			}),
+		).rejects.toThrow("compartment_mismatch");
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT stale_at FROM memories WHERE id = 'copied-child'").get()),
+		).toEqual({ stale_at: null });
+	});
+
+	it("preserves evidence on both the merged target and archived structural source", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (const id of ["merge-source-proof", "merge-target-proof"])
+				db.prepare(
+					"INSERT INTO memories (id, content, agent_id, memory_kind, created_at, updated_at) VALUES (?, 'Merge evidence', 'ant', 'episodic', datetime('now'), datetime('now'))",
+				).run(id);
+		});
+		const source = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "create_entity",
+			payload: { name: "Evidence source project" },
+			evidence: [{ source_ref: "memory:merge-source-proof" }],
+		});
+		const target = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "create_entity",
+			payload: { name: "Evidence target project" },
+			evidence: [{ source_ref: "memory:merge-target-proof" }],
+		});
+		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "merge_entities",
+			payload: { target_entity_id: target.result?.entityId, source_entity_ids: [source.result?.entityId], force: true },
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT evidence_id FROM evidence_citations WHERE derived_kind = 'entity' AND derived_id = ? ORDER BY evidence_id",
+					)
+					.all(target.result?.entityId),
+			),
+		).toEqual([{ evidence_id: "merge-source-proof" }, { evidence_id: "merge-target-proof" }]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare("SELECT COUNT(*) AS count FROM evidence_citations WHERE derived_kind = 'entity' AND derived_id = ?")
+					.get(source.result?.entityId),
+			),
+		).toEqual({ count: 1 });
+	});
+
+	it("rejects an entity merge whose aspect deletion would change a differently labeled dependency", async () => {
+		for (const [id, name] of [
+			["merge-source", "Merge source"],
+			["merge-target", "Merge target"],
+			["external-source", "External source"],
+			["external-target", "External target"],
+		]) {
+			if (id === undefined || name === undefined) throw new Error("Invalid fixture entity");
+			insertEntity(id, name, name.toLowerCase(), "ant", 1);
+		}
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET compartment_id = 91").run();
+			for (const [id, entity] of [
+				["merge-source-aspect", "merge-source"],
+				["merge-target-aspect", "merge-target"],
+			])
+				db.prepare(
+					"INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, compartment_id) VALUES (?, ?, 'ant', 'facts', 'facts', 91)",
+				).run(id, entity);
+			db.prepare(
+				"INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, aspect_id, agent_id, dependency_type) VALUES ('aspect-dependent', 'external-source', 'external-target', 'merge-source-aspect', 'ant', 'supports')",
+			).run();
+		});
+		await expect(
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				passId: "pass-alpha",
+				operation: "merge_entities",
+				payload: { target_entity_id: "merge-target", source_entity_ids: ["merge-source"], force: true },
+			}),
+		).rejects.toThrow("compartment_mismatch");
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT aspect_id FROM entity_dependencies WHERE id = 'aspect-dependent'").get(),
+			),
+		).toEqual({ aspect_id: "merge-source-aspect" });
+	});
+
+	it("keeps claim and dependency streams exact-label on readable public parents", async () => {
+		partitionFixture();
+		insertEntity("stream-parent", "Stream parent", "stream parent", "ant", 0);
+		insertEntity("stream-target", "Stream target", "stream target", "ant", 0);
+		const apply = (operation: string, payload: Readonly<Record<string, unknown>>, passId?: string) =>
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				operation,
+				payload,
+				passId,
+			});
+		const publicClaim = await apply("set_claim_value", {
+			entity: "stream-parent",
+			aspect: "facts",
+			claim_key: "choice",
+			value: "Public choice",
+		});
+		const publicLink = await apply("create_link", {
+			source_entity_id: "stream-parent",
+			target_entity_id: "stream-target",
+			link_type: "uses",
+			reason: "Public support",
+		});
+		const before = getDbAccessor().withReadDb((db) => ({
+			parents: db.prepare("SELECT * FROM entities ORDER BY id").all(),
+			aspect: db.prepare("SELECT * FROM entity_aspects").all(),
+			claim: db.prepare("SELECT * FROM entity_attributes WHERE id = ?").get(publicClaim.result?.attributeId),
+			memory: db.prepare("SELECT * FROM memories WHERE id = ?").get(publicClaim.result?.memoryId),
+			link: db.prepare("SELECT * FROM entity_dependencies WHERE id = ?").get(publicLink.result?.dependencyId),
+		}));
+		const first = await apply(
+			"set_claim_value",
+			{ entity: "stream-parent", aspect: "facts", claim_key: "choice", value: "Classified first" },
+			"pass-alpha",
+		);
+		await apply(
+			"set_claim_value",
+			{ entity: "stream-parent", aspect: "facts", claim_key: "choice", value: "Classified second" },
+			"pass-alpha",
+		);
+		await apply("restore_claim_version", { attribute_id: first.result?.attributeId }, "pass-alpha");
+		const history = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare("SELECT agent_id,compartment_id,dreaming_pass_id,event FROM memory_history WHERE memory_id=?")
+				.all(first.result?.memoryId),
+		);
+		expect(history.some((row) => row.event === "recovered")).toBe(true);
+		for (const row of history)
+			expect(row).toMatchObject({ agent_id: "ant", compartment_id: 91, dreaming_pass_id: "pass-alpha" });
+		const privateLink = await apply(
+			"create_link",
+			{
+				source_entity_id: "stream-parent",
+				target_entity_id: "stream-target",
+				link_type: "uses",
+				reason: "Private support",
+			},
+			"pass-alpha",
+		);
+		expect(privateLink.result?.dependencyId).not.toBe(publicLink.result?.dependencyId);
+		await expect(
+			apply("archive_claim_value", { attribute_id: publicClaim.result?.attributeId }, "pass-alpha"),
+		).rejects.toThrow("compartment_mismatch");
+		await expect(apply("archive_link", { id: publicLink.result?.dependencyId }, "pass-alpha")).rejects.toThrow(
+			"compartment_mismatch",
+		);
+		expect(
+			getDbAccessor().withReadDb((db) => ({
+				parents: db.prepare("SELECT * FROM entities ORDER BY id").all(),
+				aspect: db.prepare("SELECT * FROM entity_aspects").all(),
+				claim: db.prepare("SELECT * FROM entity_attributes WHERE id = ?").get(publicClaim.result?.attributeId),
+				memory: db.prepare("SELECT * FROM memories WHERE id = ?").get(publicClaim.result?.memoryId),
+				link: db.prepare("SELECT * FROM entity_dependencies WHERE id = ?").get(publicLink.result?.dependencyId),
+			})),
+		).toEqual(before);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id, status FROM entity_attributes WHERE id = ?").get(first.result?.attributeId),
+			),
+		).toEqual({ compartment_id: 91, status: "active" });
+	});
+
+	it("labels claim archive and restore history with the pass rather than the public structural parent", async () => {
+		partitionFixture();
+		const apply = (operation: string, payload: Readonly<Record<string, unknown>>) =>
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				passId: "pass-alpha",
+				operation,
+				payload,
+			});
+		const claim = await apply("add_claim_value", {
+			entity: "History project",
+			aspect: "facts",
+			claim_key: "choice",
+			value: "Private choice",
+		});
+		await apply("archive_claim_value", { attribute_id: claim.result?.attributeId, force: true });
+		await apply("restore_claim_version", { attribute_id: claim.result?.attributeId });
+		const rows = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT * FROM memory_history WHERE memory_id=? ORDER BY created_at,id").all(claim.result?.memoryId),
+		);
+		expect(rows.map((row) => row.event).sort()).toEqual(["deleted", "recovered"]);
+		for (const row of rows)
+			expect(row).toMatchObject({ agent_id: "ant", compartment_id: 91, dreaming_pass_id: "pass-alpha" });
+	});
+
+	it("keeps hidden merge edges and their structural source while public merge impact stays unchanged", async () => {
+		partitionFixture();
+		insertEntity("hidden-edge-source", "Hidden edge source", "hidden edge source", "ant", 0);
+		insertEntity("hidden-edge-target", "Hidden edge target", "hidden edge target", "ant", 0);
+		const plan = {
+			agentId: "ant",
+			sourceEntityIds: ["hidden-edge-source"],
+			targetEntityId: "hidden-edge-target",
+			writeProposal: false,
+			force: true,
+		};
+		const before = await createEntityMergePlan(getDbAccessor(), plan);
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				"INSERT INTO memories(id,content,agent_id,created_at,updated_at) VALUES('hidden-edge-memory','Public memory','ant','now','now')",
+			);
+			db.exec(
+				"INSERT INTO memory_entity_mentions(memory_id,entity_id,agent_id,compartment_id,dreaming_pass_id) VALUES('hidden-edge-memory','hidden-edge-source','ant',91,'pass-alpha')",
+			);
+			db.exec(
+				"INSERT INTO relations(id,source_entity_id,target_entity_id,relation_type,agent_id,compartment_id,created_at) VALUES('hidden-edge','hidden-edge-source','hidden-edge-target','uses','ant',91,'now')",
+			);
+		});
+		expect(await createEntityMergePlan(getDbAccessor(), plan)).toEqual(before);
+		const children = getDbAccessor().withReadDb((db) => ({
+			mentions: db.prepare("SELECT * FROM memory_entity_mentions").all(),
+			relations: db.prepare("SELECT * FROM relations").all(),
+		}));
+		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "merge_entities",
+			payload: { target_entity_id: "hidden-edge-target", source_entity_ids: ["hidden-edge-source"], force: true },
+		});
+		expect(
+			getDbAccessor().withReadDb((db) => ({
+				mentions: db.prepare("SELECT * FROM memory_entity_mentions").all(),
+				relations: db.prepare("SELECT * FROM relations").all(),
+			})),
+		).toEqual(children);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id='hidden-edge-source'").get()),
+		).toEqual({ status: "archived" });
+	});
+
+	it("rejects a merge that would mutate a readable lower-label relation before graph changes", async () => {
+		partitionFixture();
+		insertEntity("edge-source", "Edge source", "edge source", "ant", 0);
+		insertEntity("edge-target", "Edge target", "edge target", "ant", 0);
+		getDbAccessor().withWriteTx((db) => {
+			db.exec("UPDATE entities SET compartment_id=91 WHERE id IN ('edge-source','edge-target')");
+			db.exec(
+				"INSERT INTO relations(id,source_entity_id,target_entity_id,relation_type,agent_id,compartment_id,created_at) VALUES('lower-edge','edge-source','edge-target','uses','ant',NULL,'now')",
+			);
+		});
+		const before = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM relations").all());
+		await expect(
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				passId: "pass-alpha",
+				operation: "merge_entities",
+				payload: { target_entity_id: "edge-target", source_entity_ids: ["edge-source"], force: true },
+			}),
+		).rejects.toThrow("compartment_mismatch");
+		expect(getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM relations").all())).toEqual(before);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id='edge-source'").get()),
+		).toEqual({ status: "active" });
+	});
+
+	it("keeps merge-plan resolution and impact independent of hidden matching names and children", async () => {
+		insertEntity("plan-source", "Plan source", "plan source", "ant", 1);
+		insertEntity("plan-target", "Plan target", "plan target", "ant", 1);
+		const params = {
+			agentId: "ant",
+			sourceEntities: ["Plan source"],
+			targetEntity: "Plan target",
+			writeProposal: false,
+		};
+		const before = await createEntityMergePlan(getDbAccessor(), params);
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT INTO entities(id, agent_id, name, canonical_name, entity_type, compartment_id, created_at, updated_at) VALUES ('hidden-plan-target', 'ant', 'Plan target', 'plan target', 'project', 91, datetime('now'), datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO entity_aspects(id, entity_id, agent_id, name, canonical_name, compartment_id, created_at, updated_at) VALUES ('hidden-plan-aspect', 'plan-source', 'ant', 'private', 'private', 91, datetime('now'), datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO memories(id, agent_id, content, compartment_id, created_at, updated_at) VALUES ('hidden-plan-memory', 'ant', 'Hidden supporting evidence', 91, datetime('now'), datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO memory_entity_mentions(memory_id, entity_id, agent_id, compartment_id) VALUES ('hidden-plan-memory', 'plan-source', 'ant', 91)",
+			).run();
+		});
+		expect(await createEntityMergePlan(getDbAccessor(), params)).toEqual(before);
+	});
+
+	it("reactivates only an exact-label archived aspect and leaves lower-label archived columns untouched", async () => {
+		partitionFixture();
+		insertEntity("archived-parent", "Archived parent", "archived parent", "ant", 0);
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO entity_aspects(id, entity_id, agent_id, name, canonical_name, status, archived_at, created_at, updated_at) VALUES ('public-archived', 'archived-parent', 'ant', 'facts', 'facts', 'archived', '2026-01-01', datetime('now'), datetime('now'))",
+				)
+				.run(),
+		);
+		const before = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT * FROM entity_aspects WHERE id = 'public-archived'").get(),
+		);
+		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_aspect",
+			payload: { entity_id: "archived-parent", name: "facts" },
+		});
+		expect(result.result?.aspectId).not.toBe("public-archived");
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entity_aspects WHERE id = 'public-archived'").get()),
+		).toEqual(before);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id, status FROM entity_aspects WHERE id = ?").get(result.result?.aspectId),
+			),
+		).toEqual({ compartment_id: 91, status: "active" });
+	});
+
+	it("adds a classified policy to a public parent without mutating the parent", async () => {
+		insertEntity("policy-target", "Policy target", "policy target", "ant", 1);
+		partitionFixture();
+		const before = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT * FROM entities WHERE id = 'policy-target'").get(),
+		);
+		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_policy",
+			payload: { target_entity: "Policy target", kind: "security", content: "Keep evidence scoped" },
+		});
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM entities WHERE id = 'policy-target'").get()),
+		).toEqual(before);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT compartment_id FROM entity_attributes").all()),
+		).toEqual([{ compartment_id: 91 }]);
+	});
+
+	it.each(["aspect", "attribute"])("excludes unreadable %s rows from pass graph write caps", async (child) => {
+		insertEntity("cap-parent", "Partition cap project", "partition cap project", "ant", 1);
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET compartment_id = 91 WHERE id = 'cap-parent'").run();
+			db.prepare(
+				"INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, compartment_id) VALUES ('cap-aspect', 'cap-parent', 'ant', 'facts', 'facts', ?)",
+			).run(child === "aspect" ? 93 : 91);
+			if (child === "attribute")
+				db.prepare(
+					"INSERT INTO entity_attributes (id, aspect_id, agent_id, kind, content, normalized_content, claim_key, compartment_id) VALUES ('hidden-cap-attribute', 'cap-aspect', 'ant', 'attribute', 'Hidden claim', 'hidden claim', 'hidden-slot', 93)",
+				).run();
+		});
+		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: child === "aspect" ? "create_aspect" : "add_claim_value",
+			payload:
+				child === "aspect"
+					? { entity_id: "cap-parent", name: "Public facts" }
+					: { entity: "Partition cap project", aspect: "facts", claim_key: "new-slot", value: "Visible claim" },
+			writeCaps: { maxAspectsPerEntity: 1, maxAttributesPerAspect: 1 },
+		});
+		expect(result.proposal.status).toBe("applied");
+	});
+
+	it.each(["pass-alpha", "pass-delegated"])(
+		"preserves the durable pass label when rebuilding a semantic row supported by ordinary evidence (%s)",
+		async (passId) => {
+			partitionFixture();
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					"INSERT INTO memories (id, content, agent_id, memory_kind, created_at, updated_at) VALUES ('rebuild-source', 'Rebuild evidence', 'ant', 'episodic', datetime('now'), datetime('now'))",
+				).run();
+				if (passId === "pass-delegated")
+					db.prepare(
+						"INSERT INTO dreaming_passes (id, agent_id, scope_key, compartment_id) VALUES ('pass-delegated', 'runner', 'ant', 91)",
+					).run();
+			});
+			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "dreaming",
+				passId,
+				operation: "create_entity",
+				payload: { name: "Rebuild partition project" },
+				evidence: [{ source_ref: "memory:rebuild-source" }],
+			});
+			await getDbAccessor().withWriteDbAsync((db) => executeClassification(db, { op: "rebuild", agentId: "ant" }));
+			await getDbAccessor().withWriteDbAsync((db) => executeClassification(db, { op: "rebuild", agentId: "ant" }));
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT compartment_id FROM entities WHERE name = 'Rebuild partition project'").get(),
+				),
+			).toEqual({ compartment_id: 91 });
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db.prepare("SELECT compartment_id FROM dreaming_passes WHERE id = ?").get(passId),
+				),
+			).toEqual({ compartment_id: 91 });
+		},
+	);
+
+	it("does not mutate or consult an unrelated hidden contradiction during an entity rename", async () => {
+		insertEntity("rename-partition", "Rename partition project", "rename partition project", "ant", 1);
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET compartment_id = 91 WHERE id = 'rename-partition'").run();
+			db.prepare(`INSERT INTO ontology_contradictions
+				(id, agent_id, entity_id, entity_name, aspect_name, claim_key, left_content, right_content,
+				detector, reason, detected_at, created_at, updated_at, compartment_id)
+				VALUES ('unrelated-hidden', 'ant', 'rename-partition', 'Rename partition project', 'Hidden facts', 'hidden', 'Enabled', 'Disabled', 'lexical', 'Hidden conflict', datetime('now'), datetime('now'), datetime('now'), 93)`).run();
+		});
+		const renamed = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "rename_entity",
+			payload: { entity_id: "rename-partition", new_name: "Renamed partition project" },
+		});
+		expect(renamed.proposal.status).toBe("applied");
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status, compartment_id FROM ontology_contradictions WHERE id = 'unrelated-hidden'").get(),
+			),
+		).toEqual({ status: "active", compartment_id: 93 });
+	});
+
+	it("records proposal copy edges to the semantic claim it mutates", async () => {
+		const claim = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "add_claim_value",
+			payload: { entity: "Proposal copy project", aspect: "facts", claim_key: "copy", value: "A copied claim" },
+		});
+		const archived = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "archive_claim_value",
+			payload: { attribute_id: claim.result?.attributeId },
+		});
+		const citations = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					"SELECT evidence_kind, evidence_id FROM evidence_citations WHERE derived_kind = 'proposal' AND derived_id = ?",
+				)
+				.all(archived.proposal.id),
+		);
+		expect(citations).toContainEqual({ evidence_kind: "attribute", evidence_id: claim.result?.attributeId });
+		expect(citations).toContainEqual({ evidence_kind: "memory", evidence_id: claim.result?.memoryId });
+	});
+
+	it("updates an existing entity's pass provenance when a wider current partition mutates it", async () => {
+		partitionFixture();
+		const created = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-alpha",
+			operation: "create_entity",
+			payload: { name: "Pass provenance project" },
+		});
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare("UPDATE entities SET dreaming_pass_id = 'pass-alpha', compartment_id = 93 WHERE id = ?")
+				.run(created.result?.entityId),
+		);
+		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			passId: "pass-both",
+			operation: "rename_entity",
+			payload: { entity_id: created.result?.entityId, new_name: "Updated pass provenance project" },
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT compartment_id, dreaming_pass_id FROM entities WHERE id = ?").get(created.result?.entityId),
+			),
+		).toEqual({ compartment_id: 93, dreaming_pass_id: "pass-both" });
+	});
+
+	it("attributes a proposal to the unambiguous author of its summary evidence", async () => {
+		partitionFixture();
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO session_summaries (id, depth, kind, content, earliest_at, latest_at, agent_id, author_user_id, created_at) VALUES ('authored-summary', 0, 'session', 'A summary attributed to Alice.', datetime('now'), datetime('now'), 'ant', 'alice', datetime('now'))",
+				)
+				.run(),
+		);
+		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			passId: "pass-alpha",
+			operation: "create_entity",
+			payload: { name: "Summary authorship project" },
+			evidence: [{ source_ref: "summary:authored-summary", quote: "A summary attributed to Alice." }],
+		});
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT author_user_id FROM ontology_proposals WHERE id = ?").get(proposal.id),
+			),
+		).toEqual({ author_user_id: "alice" });
+	});
+
+	it("records canonical proposal and materialized claim citations atomically", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(`INSERT INTO memories
+				(id, content, agent_id, memory_kind, created_at, updated_at, author_user_id)
+				VALUES ('citation-source', 'A durable claim', 'ant', 'episodic', datetime('now'), datetime('now'), 'alice')`).run();
+		});
+		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			actor: "dreaming",
+			operation: "add_claim_value",
+			payload: { entity: "Citation project", aspect: "facts", claim_key: "durable", value: "A durable claim" },
+			evidence: [{ source_ref: "memory:citation-source", quote: "A durable claim" }],
+		});
+		const stored = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					"SELECT derived_kind FROM evidence_citations WHERE evidence_kind = 'memory' AND evidence_id = 'citation-source' ORDER BY derived_kind",
+				)
+				.all(),
+		);
+		expect(stored).toEqual([
+			{ derived_kind: "aspect" },
+			{ derived_kind: "attribute" },
+			{ derived_kind: "entity" },
+			{ derived_kind: "memory" },
+			{ derived_kind: "proposal" },
+		]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT author_user_id FROM ontology_proposals WHERE id = ?").get(applied.proposal.id),
+			),
+		).toEqual({ author_user_id: "alice" });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT actor_user_id, actor_credential FROM audit_events WHERE action = 'memory.created'").get(),
+			),
+		).toEqual({ actor_user_id: null, actor_credential: "system" });
+
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT author_user_id FROM memories WHERE id = ?").get(applied.result?.memoryId),
+			),
+		).toEqual({ author_user_id: "alice" });
+	});
+
+	it("rejects foreign episodic provenance without leaving partial source links", () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, agent] of [
+				["derived-target", "ant"],
+				["own-source", "ant"],
+				["foreign-source", "bee"],
+			]) {
+				db.prepare(`INSERT INTO memories (id, content, agent_id, created_at, updated_at)
+					VALUES (?, 'Evidence', ?, datetime('now'), datetime('now'))`).run(id, agent);
+			}
+		});
+		expect(() =>
+			getDbAccessor().withWriteTx((db) =>
+				linkDerivedMemorySourcesInTx(db, {
+					derivedMemoryId: "derived-target",
+					agentId: "ant",
+					createdAt: "2026-11-25T00:00:00.000Z",
+					sources: [
+						{ sourceKind: "memory", sourceId: "own-source" },
+						{ sourceKind: "memory", sourceId: "foreign-source" },
+					],
+				}),
+			),
+		).toThrow("authorized agent scope");
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM derived_memory_sources").get()),
+		).toEqual({ count: 0 });
+	});
+
 	it("applies an add_claim_value proposal into a grouped claim slot with provenance", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -97,6 +1337,7 @@ describe("ontology proposals", () => {
 		expect(proposal.status).toBe("pending");
 
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: proposal.id,
 			actor: "ant",
@@ -190,6 +1431,7 @@ describe("ontology proposals", () => {
 			).run("2026-08-04T00:00:00.000Z", "2026-08-04T00:00:00.000Z");
 		});
 		const initial = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -213,10 +1455,11 @@ describe("ontology proposals", () => {
 			sourceId: "episodic-source",
 		});
 		const claimId = initial.result?.attributeId;
-		expect(typeof claimId).toBe("string");
+		if (typeof claimId !== "string") throw new Error("Missing claim id");
 
 		getDbAccessor().withWriteTx((db) => {
 			txIngestEnvelope(db, {
+				author: { userId: null, credential: "system" },
 				id: "aggregate-snapshot",
 				content: "Signet is a local-first memory system.",
 				contentHash: "aggregate-snapshot",
@@ -236,7 +1479,7 @@ describe("ontology proposals", () => {
 			linkDerivedMemorySourcesInTx(db, {
 				derivedMemoryId: "aggregate-snapshot",
 				agentId: "ant",
-				sources: [{ sourceKind: "ontology_claim", sourceId: claimId as string }],
+				sources: [{ sourceKind: "ontology_claim", sourceId: claimId }],
 				createdAt: "2026-08-04T00:00:00.000Z",
 			});
 		});
@@ -252,6 +1495,7 @@ describe("ontology proposals", () => {
 		expect(lineage).toEqual([{ source_kind: "memory", source_id: "episodic-source" }]);
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -268,7 +1512,7 @@ describe("ontology proposals", () => {
 					source_ref: "memory:episodic-source",
 					source_kind: "manual",
 					source_id: "episodic-source",
-					quote: "Signet is a local-first memory system with a semantic layer.",
+					quote: "Signet is a local-first memory system.",
 				},
 			],
 			sourceKind: "manual",
@@ -322,6 +1566,7 @@ describe("ontology proposals", () => {
 			);
 
 		const valid = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -339,6 +1584,7 @@ describe("ontology proposals", () => {
 		).toEqual({ source_kind: "memory", source_id: "valid-source" });
 
 		const deduped = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -352,6 +1598,7 @@ describe("ontology proposals", () => {
 		const beforeRejectedWrites = counts();
 		await expect(
 			createOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				operation: "set_claim_value",
 				payload: payload("missing"),
@@ -360,6 +1607,7 @@ describe("ontology proposals", () => {
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
 		await expect(
 			createOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				operation: "set_claim_value",
 				payload: payload("cross_scope"),
@@ -368,6 +1616,7 @@ describe("ontology proposals", () => {
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409));
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "set_claim_value",
@@ -378,6 +1627,7 @@ describe("ontology proposals", () => {
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref must name a canonical episodic source", 409));
 		await expect(
 			applyOntologyOperationBatch(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				propose: true,
@@ -397,6 +1647,7 @@ describe("ontology proposals", () => {
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "set_claim_value",
@@ -407,6 +1658,7 @@ describe("ontology proposals", () => {
 		expect(counts()).toEqual(beforeRejectedWrites);
 
 		const pending = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload: payload("deleted_before_apply"),
@@ -417,7 +1669,12 @@ describe("ontology proposals", () => {
 		});
 		const beforeDeletedSourceApply = counts();
 		await expect(
-			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
+			applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				id: pending.id,
+				actor: "test",
+			}),
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:pending-source", 409));
 		expect(counts()).toEqual(beforeDeletedSourceApply);
 		expect((await getOntologyProposal(getDbAccessor(), pending.id, "ant"))?.status).toBe("pending");
@@ -425,6 +1682,9 @@ describe("ontology proposals", () => {
 
 	it("rejects fabricated and cross-agent semantic premise links before persistence (#1343)", async () => {
 		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"INSERT OR IGNORE INTO memories (id, content, agent_id, created_at, updated_at) VALUES ('derived-premise-target', 'Derived target', 'ant', datetime('now'), datetime('now'))",
+			).run();
 			db.prepare(
 				`INSERT INTO entities
 				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
@@ -484,6 +1744,7 @@ describe("ontology proposals", () => {
 		};
 
 		const first = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -494,6 +1755,7 @@ describe("ontology proposals", () => {
 		expect(first.result?.attributeId).toBeTypeOf("string");
 
 		const pending = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload,
@@ -515,7 +1777,12 @@ describe("ontology proposals", () => {
 			return { attributeCount, derivedCount };
 		});
 		await expect(
-			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
+			applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				id: pending.id,
+				actor: "test",
+			}),
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:dedupe-gone", 409));
 
 		const after = getDbAccessor().withReadDb((db) => {
@@ -543,6 +1810,7 @@ describe("ontology proposals", () => {
 		});
 
 		const pending = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "create_entity",
 			payload: { name: "Orphaned Evidence Entity", entity_type: "concept" },
@@ -552,7 +1820,12 @@ describe("ontology proposals", () => {
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ? AND agent_id = ?").run("entity-gone", "ant");
 		});
 		await expect(
-			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
+			applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				id: pending.id,
+				actor: "test",
+			}),
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:entity-gone", 409));
 		expect(
 			getDbAccessor().withReadDb(
@@ -568,6 +1841,7 @@ describe("ontology proposals", () => {
 	it("rejects generic entity labels before creating ontology entities", async () => {
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_entity",
@@ -584,6 +1858,7 @@ describe("ontology proposals", () => {
 	it("creates an unnamed user as a person but not as an untyped label", async () => {
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_entity",
@@ -591,6 +1866,7 @@ describe("ontology proposals", () => {
 			}),
 		).rejects.toThrow("Entity name rejected: metadata_role");
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -608,6 +1884,7 @@ describe("ontology proposals", () => {
 
 	it("does not archive an aspect that has an active constraint without force", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -623,6 +1900,7 @@ describe("ontology proposals", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "archive_aspect",
@@ -630,6 +1908,7 @@ describe("ontology proposals", () => {
 			}),
 		).rejects.toThrow("Refusing to archive aspect with active constraint attributes without force");
 		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "archive_aspect",
@@ -640,6 +1919,7 @@ describe("ontology proposals", () => {
 
 	it("rejects a pending proposal without mutating graph state", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			operation: "create_entity",
 			payload: { name: "Temporary Entity", entity_type: "concept" },
@@ -665,6 +1945,7 @@ describe("ontology proposals", () => {
 
 	it("awaits failure status persistence before rethrowing an apply error", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			operation: "unsupported_operation",
 			payload: { unsupported: true },
@@ -672,6 +1953,7 @@ describe("ontology proposals", () => {
 
 		await expect(
 			applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				id: proposal.id,
 				actor: "operator",
@@ -687,11 +1969,16 @@ describe("ontology proposals", () => {
 
 	it("returns the rejected proposal body from the HTTP route", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			operation: "create_entity",
 			payload: { name: "Route Rejection", entity_type: "project" },
 		});
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("author", { userId: null, credential: "local" });
+			await next();
+		});
 		registerOntologyRoutes(app);
 
 		const response = await app.request(`/api/ontology/proposals/${proposal.id}/reject?agent_id=default`, {
@@ -707,6 +1994,7 @@ describe("ontology proposals", () => {
 	it("rejects empty proposal operations before storage", async () => {
 		await expect(
 			createOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				operation: "   ",
 				payload: { name: "Missing Operation" },
@@ -790,6 +2078,7 @@ describe("ontology proposals", () => {
 		});
 
 		const dryRun = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "transcript:extract",
 		});
@@ -800,6 +2089,7 @@ describe("ontology proposals", () => {
 		expect(dryRun.proposals.map((proposal) => proposal.operation)).toEqual(["add_claim_value", "create_link"]);
 
 		const written = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "transcript:extract",
 			writeProposals: true,
@@ -842,6 +2132,7 @@ describe("ontology proposals", () => {
 		});
 
 		const result = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "transcript:assertion-extract",
 			writeAssertions: true,
@@ -897,6 +2188,7 @@ describe("ontology proposals", () => {
 
 		await expect(
 			extractOntologyProposals(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				from: "transcript:invalid-assertion-extract",
 				writeProposals: true,
@@ -926,6 +2218,7 @@ describe("ontology proposals", () => {
 		});
 
 		const result = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "transcript:plain-extract",
 		});
@@ -955,6 +2248,7 @@ describe("ontology proposals", () => {
 		});
 
 		const result = await extractOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "transcript:provider-extract",
 			useProvider: true,
@@ -1001,6 +2295,7 @@ describe("ontology proposals", () => {
 
 	it("consolidates pending proposals through an inference provider without direct mutation", async () => {
 		await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1014,6 +2309,7 @@ describe("ontology proposals", () => {
 			rationale: "Raw extraction candidate.",
 		});
 		await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1028,6 +2324,7 @@ describe("ontology proposals", () => {
 		});
 
 		const dryRun = await consolidateOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			useProvider: true,
 			provider: {
@@ -1067,6 +2364,7 @@ describe("ontology proposals", () => {
 		expect(dryRun.rejections).toHaveLength(1);
 
 		const written = await consolidateOntologyProposals(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			useProvider: true,
 			writeProposals: true,
@@ -1136,6 +2434,7 @@ describe("ontology proposals", () => {
 			);
 		});
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1199,6 +2498,7 @@ describe("ontology proposals", () => {
 			);
 		});
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1214,7 +2514,12 @@ describe("ontology proposals", () => {
 			sourceId: "transcript:claim",
 			sourcePath: "memory/codex/transcripts/claim.jsonl",
 		});
-		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "ant" });
+		await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: proposal.id,
+			actor: "ant",
+		});
 
 		const evidence = await getOntologyClaimEvidence(getDbAccessor(), {
 			agentId: "ant",
@@ -1241,6 +2546,7 @@ describe("ontology proposals", () => {
 
 	it("falls back to embedded quotes when source rows are not present", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			operation: "create_entity",
 			payload: { name: "Quoted Evidence" },
@@ -1256,6 +2562,7 @@ describe("ontology proposals", () => {
 
 	it("falls back to an embedded quote when a referenced ontology proposal is missing", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			operation: "create_entity",
 			payload: { name: "Missing Proposal Evidence" },
@@ -1277,6 +2584,7 @@ describe("ontology proposals", () => {
 
 	it("applies supersede_claim_value by preserving old values and adding replacements", async () => {
 		const initial = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1290,6 +2598,7 @@ describe("ontology proposals", () => {
 			confidence: 0.4,
 		});
 		const initialApplied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: initial.id,
 			actor: "test",
@@ -1298,6 +2607,7 @@ describe("ontology proposals", () => {
 		if (typeof oldId !== "string") throw new Error("initial attribute id was not returned");
 
 		const supersede = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "supersede_claim_value",
 			payload: {
@@ -1314,6 +2624,7 @@ describe("ontology proposals", () => {
 		});
 
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: supersede.id,
 			actor: "test",
@@ -1369,6 +2680,7 @@ describe("ontology proposals", () => {
 
 	it("applies semantic create_link proposal roles from ontology extraction", async () => {
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "create_link",
 			payload: {
@@ -1385,6 +2697,7 @@ describe("ontology proposals", () => {
 		});
 
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: proposal.id,
 			actor: "test",
@@ -1460,6 +2773,7 @@ describe("ontology proposals", () => {
 			);
 		});
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "create_link",
 			payload: {
@@ -1474,7 +2788,12 @@ describe("ontology proposals", () => {
 			sourceId: "transcript:link",
 			sourcePath: "memory/codex/transcripts/link.jsonl",
 		});
-		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: proposal.id,
+			actor: "test",
+		});
 		const dependencyId = applied.result?.dependencyId;
 		expect(typeof dependencyId).toBe("string");
 
@@ -1546,6 +2865,7 @@ describe("ontology proposals", () => {
 
 	it("applies merge_entities by moving aspects and deleting duplicate sources", async () => {
 		const target = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1557,9 +2877,15 @@ describe("ontology proposals", () => {
 				value: "Agent-first ontology",
 			},
 		});
-		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: target.id,
+			actor: "test",
+		});
 
 		const duplicate = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1571,9 +2897,15 @@ describe("ontology proposals", () => {
 				value: "Proposal-first mutation loop",
 			},
 		});
-		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: duplicate.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: duplicate.id,
+			actor: "test",
+		});
 
 		const merge = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1583,7 +2915,12 @@ describe("ontology proposals", () => {
 			rationale: "Both names refer to the same product entity.",
 		});
 
-		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: merge.id,
+			actor: "test",
+		});
 
 		expect(applied.status).toBe("applied");
 		expect(applied.result?.mergedEntities).toHaveLength(1);
@@ -1602,9 +2939,9 @@ describe("ontology proposals", () => {
 		);
 		const duplicateEntity = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Signet AI") as
-					| { id: string }
-					| undefined,
+				db
+					.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ? AND status='active'")
+					.get("ant", "Signet AI") as { id: string } | undefined,
 		);
 
 		expect(duplicateEntity).toBeNull();
@@ -1637,22 +2974,28 @@ describe("ontology proposals", () => {
 			assertion.run("assertion-source", "ant", "entity-signet-ai", "Source claim", "source claim");
 			assertion.run("assertion-dot", "dot", "entity-dot", "Dot claim", "dot claim");
 			const relation = db.prepare(
-				`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, created_at)
-				 VALUES (?, ?, ?, 'related_to', '2026-05-06T00:00:00.000Z')`,
+				`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, created_at, agent_id)
+				 SELECT ?, ?, ?, 'related_to', '2026-05-06T00:00:00.000Z',agent_id FROM entities WHERE id=?`,
 			);
-			relation.run("relation-source-target", "entity-signet-ai", "entity-signet");
-			relation.run("relation-target-source", "entity-signet", "entity-signet-ai");
-			relation.run("relation-source-daemon", "entity-signet-ai", "entity-daemon");
-			relation.run("relation-target-self", "entity-signet", "entity-signet");
-			relation.run("relation-dot-self", "entity-dot", "entity-dot");
+			relation.run("relation-source-target", "entity-signet-ai", "entity-signet", "entity-signet-ai");
+			relation.run("relation-target-source", "entity-signet", "entity-signet-ai", "entity-signet");
+			relation.run("relation-source-daemon", "entity-signet-ai", "entity-daemon", "entity-signet-ai");
+			relation.run("relation-target-self", "entity-signet", "entity-signet", "entity-signet");
+			relation.run("relation-dot-self", "entity-dot", "entity-dot", "entity-dot");
 		});
 
 		const merge = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: { target_entity_id: "entity-signet", source_entity_ids: ["entity-signet-ai"] },
 		});
-		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: merge.id,
+			actor: "test",
+		});
 
 		expect(applied.status).toBe("applied");
 		const state = getDbAccessor().withReadDb((db) => ({
@@ -1693,6 +3036,7 @@ describe("ontology proposals", () => {
 
 	it("applies ID-first merge_entities when entity names are ambiguous", async () => {
 		const target = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1704,9 +3048,15 @@ describe("ontology proposals", () => {
 				value: "Context substrate",
 			},
 		});
-		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: target.id,
+			actor: "test",
+		});
 
 		const source = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1718,7 +3068,12 @@ describe("ontology proposals", () => {
 				value: "Proposal-first maintenance.",
 			},
 		});
-		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: source.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: source.id,
+			actor: "test",
+		});
 
 		const ids = getDbAccessor().withWriteTx((db) => {
 			const targetRow = db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Signet") as {
@@ -1745,6 +3100,7 @@ describe("ontology proposals", () => {
 		});
 
 		const merge = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1755,7 +3111,12 @@ describe("ontology proposals", () => {
 			},
 		});
 
-		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: merge.id,
+			actor: "test",
+		});
 
 		expect(applied.status).toBe("applied");
 		expect(applied.result?.targetEntityId).toBe(ids.targetId);
@@ -1795,6 +3156,7 @@ describe("ontology proposals", () => {
 		});
 
 		const proposal = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1802,7 +3164,12 @@ describe("ontology proposals", () => {
 				source_entity_ids: ["entity-source"],
 			},
 		});
-		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: proposal.id,
+			actor: "test",
+		});
 
 		expect(applied.status).toBe("applied");
 		const edges = getDbAccessor().withReadDb(
@@ -1828,6 +3195,7 @@ describe("ontology proposals", () => {
 		insertEntity("entity-target", "Target", "target", "ant", 8);
 		insertEntity("entity-source", "Source", "source", "ant", 4);
 		const first = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1836,9 +3204,15 @@ describe("ontology proposals", () => {
 				source_entity_ids: ["entity-source"],
 			},
 		});
-		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: first.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: first.id,
+			actor: "test",
+		});
 
 		const retry = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1847,13 +3221,19 @@ describe("ontology proposals", () => {
 				source_entity_ids: ["entity-source"],
 			},
 		});
-		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: retry.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
+			agentId: "ant",
+			id: retry.id,
+			actor: "test",
+		});
 
 		expect(applied.status).toBe("applied");
 		expect(applied.result?.mergedEntities).toEqual([]);
 		expect(applied.result?.alreadyMergedEntities).toEqual(["Source"]);
 
 		const nameOnlyRetry = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1862,6 +3242,7 @@ describe("ontology proposals", () => {
 			},
 		});
 		const nameOnlyApplied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: nameOnlyRetry.id,
 			actor: "test",
@@ -1878,6 +3259,7 @@ describe("ontology proposals", () => {
 		insertEntity("entity-alias", "Signet Alias", "signet alias", "ant", 1);
 
 		const merge = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1888,7 +3270,12 @@ describe("ontology proposals", () => {
 		});
 
 		await expect(
-			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" }),
+			applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				id: merge.id,
+				actor: "test",
+			}),
 		).rejects.toThrow(OntologyProposalError);
 	});
 
@@ -1899,6 +3286,7 @@ describe("ontology proposals", () => {
 		insertEntity("entity-other", "Other Project", "other project", "ant", 4);
 
 		const result = await proposeDuplicateEntityMerges(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			limit: 10,
 		});
@@ -1920,6 +3308,7 @@ describe("ontology proposals", () => {
 		insertEntity("entity-signet-skill", "signet", "signet", "ant", 3, false, "skill");
 
 		const result = await proposeDuplicateEntityMerges(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			limit: 10,
 			writeProposals: true,
@@ -1940,12 +3329,14 @@ describe("ontology proposals", () => {
 		insertEntity("entity-signet-upper", "SIGNET", "signet", "ant", 3);
 
 		const result = await proposeDuplicateEntityMerges(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			limit: 10,
 			writeProposals: true,
 			createdBy: "repair-test",
 		});
 		const second = await proposeDuplicateEntityMerges(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			limit: 10,
 			writeProposals: true,
@@ -1971,6 +3362,7 @@ describe("ontology proposals", () => {
 		insertEntity("entity-alias", "Signet Alias", "signet alias", "ant", 2);
 
 		const preview = await createEntityMergePlan(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			targetEntityId: "entity-signet",
 			sourceEntityIds: ["entity-alias"],
@@ -1982,6 +3374,7 @@ describe("ontology proposals", () => {
 		expect(preview.payload.source_entity_ids).toEqual(["entity-alias"]);
 
 		const written = await createEntityMergePlan(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			targetEntityId: "entity-signet",
 			sourceEntityIds: ["entity-alias"],
@@ -2000,6 +3393,7 @@ describe("ontology proposals", () => {
 		insertEntity("entity-signet-skill", "signet", "signet", "ant", 2, false, "skill");
 
 		const result = await createEntityMergePlan(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			targetEntityId: "entity-signet",
 			sourceEntityIds: ["entity-signet-skill"],
@@ -2028,11 +3422,13 @@ describe("ontology proposals", () => {
 
 	it("keeps proposal listing scoped to agent_id", async () => {
 		await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "create_entity",
 			payload: { name: "Ant Project" },
 		});
 		await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "dot",
 			operation: "create_entity",
 			payload: { name: "Dot Project" },
@@ -2049,6 +3445,7 @@ describe("ontology proposals", () => {
 
 	it("applies policy, action, and interface operations through existing graph primitives", async () => {
 		const policy = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "operator",
 			operation: "create_policy",
@@ -2060,18 +3457,21 @@ describe("ontology proposals", () => {
 		});
 		expect(policy.proposal.status).toBe("applied");
 		const action = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "operator",
 			operation: "create_action_type",
 			payload: { action_type: "Deploy release" },
 		});
 		const iface = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "operator",
 			operation: "create_interface",
 			payload: { name: "Memory provider" },
 		});
 		const attachment = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "default",
 			actor: "operator",
 			operation: "attach_interface",
@@ -2106,6 +3506,7 @@ describe("ontology proposals", () => {
 
 	it("applies direct operations by creating an applied proposal and graph mutation atomically", async () => {
 		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2142,6 +3543,7 @@ describe("ontology proposals", () => {
 
 	it("dry-runs direct operations without writing proposals or graph state", async () => {
 		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_entity",
@@ -2200,6 +3602,7 @@ describe("ontology proposals", () => {
 			value: "Ontology control-plane mutations apply first with provenance.",
 		};
 		const dryRun = await applyOntologyOperationBatch(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			dryRun: true,
@@ -2209,6 +3612,7 @@ describe("ontology proposals", () => {
 		expect((await listOntologyProposals(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(0);
 
 		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2219,6 +3623,7 @@ describe("ontology proposals", () => {
 			evidence: [{ source_kind: "memory_artifact", source_path: sourcePath, quote: "apply first with provenance" }],
 		});
 		const proposed = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_entity",
@@ -2254,6 +3659,7 @@ describe("ontology proposals", () => {
 
 	it("proposes direct operations without mutating graph state", async () => {
 		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_entity",
@@ -2281,18 +3687,21 @@ describe("ontology proposals", () => {
 			claim_key: "versioned_claim",
 		};
 		const v1 = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Version one." },
 		});
 		const v2 = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Version two." },
 		});
 		const v3 = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2323,6 +3732,7 @@ describe("ontology proposals", () => {
 		expect(shown?.content).toBe("Version two.");
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "restore_claim_version",
@@ -2362,7 +3772,13 @@ describe("ontology proposals", () => {
 			group_key: "ontology",
 		};
 		const apply = (operation: string, payload: Record<string, unknown>) =>
-			applyOntologyOperation(getDbAccessor(), { agentId: "ant", actor: "operator", operation, payload });
+			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				actor: "operator",
+				operation,
+				payload,
+			});
 
 		const added = await apply("add_claim_value", { ...claim, claim_key: "added", value: "Added value." });
 		const first = await apply("set_claim_value", { ...claim, claim_key: "set", value: "First value." });
@@ -2415,6 +3831,7 @@ describe("ontology proposals", () => {
 
 	it("archives claim values and hides them from default active reads", async () => {
 		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2429,6 +3846,7 @@ describe("ontology proposals", () => {
 		});
 		const attributeId = applied.result?.attributeId as string;
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_claim_value",
@@ -2461,6 +3879,7 @@ describe("ontology proposals", () => {
 
 	it("restores an archived semantic claim memory and honors an explicit force", async () => {
 		const applied = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2478,12 +3897,14 @@ describe("ontology proposals", () => {
 			db.prepare("UPDATE memories SET pinned = 1 WHERE id = ?").run(attributeId);
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_claim_value",
 			payload: { attribute_id: attributeId, force: true },
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "restore_claim_version",
@@ -2511,18 +3932,21 @@ describe("ontology proposals", () => {
 			claim_key: "archived_chain",
 		};
 		const first = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Archived first version." },
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_claim_value",
 			payload: { attribute_id: first.result?.attributeId, reason: "retired" },
 		});
 		const second = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2546,6 +3970,7 @@ describe("ontology proposals", () => {
 
 	it("preserves original claim provenance when repeated writes dedupe", async () => {
 		const first = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload: {
@@ -2560,11 +3985,13 @@ describe("ontology proposals", () => {
 			createdBy: "first",
 		});
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: first.id,
 			actor: "operator",
 		});
 		const repeated = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload: {
@@ -2580,6 +4007,7 @@ describe("ontology proposals", () => {
 		});
 
 		const second = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: repeated.id,
 			actor: "operator",
@@ -2601,6 +4029,7 @@ describe("ontology proposals", () => {
 
 	it("preserves original additive claim provenance when repeated values dedupe", async () => {
 		const first = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -2615,11 +4044,13 @@ describe("ontology proposals", () => {
 			createdBy: "first",
 		});
 		const applied = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: first.id,
 			actor: "operator",
 		});
 		const repeated = await createOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -2635,6 +4066,7 @@ describe("ontology proposals", () => {
 		});
 
 		const second = await applyOntologyProposal(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			id: repeated.id,
 			actor: "operator",
@@ -2658,12 +4090,14 @@ describe("ontology proposals", () => {
 
 	it("records the applying actor when pending archive proposals are applied", async () => {
 		const entity = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "creator",
 			operation: "create_entity",
 			payload: { name: "Archive Actor Entity", entity_type: "project" },
 		});
 		const claim = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "creator",
 			operation: "set_claim_value",
@@ -2677,6 +4111,7 @@ describe("ontology proposals", () => {
 			},
 		});
 		const link = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "creator",
 			operation: "create_link",
@@ -2690,6 +4125,7 @@ describe("ontology proposals", () => {
 			},
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "creator",
 			operation: "set_claim_value",
@@ -2732,6 +4168,7 @@ describe("ontology proposals", () => {
 
 		for (const proposal of proposals.items) {
 			await applyOntologyProposal(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				id: proposal.id,
 				actor: "reviewer",
@@ -2785,6 +4222,7 @@ describe("ontology proposals", () => {
 
 	it("reactivates archived aspects when creating claims for the same aspect slot", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2798,12 +4236,14 @@ describe("ontology proposals", () => {
 			},
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_aspect",
 			payload: { entity: "Aspect Restore", selector: "architecture", reason: "retired" },
 		});
 		const recreated = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2837,6 +4277,7 @@ describe("ontology proposals", () => {
 
 	it("reactivates archived links when creating the same link again", async () => {
 		const created = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_link",
@@ -2850,12 +4291,14 @@ describe("ontology proposals", () => {
 			},
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_link",
 			payload: { id: created.result?.dependencyId, reason: "retired" },
 		});
 		const recreated = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_link",
@@ -2888,6 +4331,7 @@ describe("ontology proposals", () => {
 
 	it("keeps claim version history readable after archiving its parent entity", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2901,6 +4345,7 @@ describe("ontology proposals", () => {
 			},
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_entity",
@@ -3005,6 +4450,7 @@ describe("ontology proposals", () => {
 	it("rolls back an operation batch when one operation is invalid", async () => {
 		await expect(
 			applyOntologyOperationBatch(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operations: [
@@ -3025,6 +4471,7 @@ describe("ontology proposals", () => {
 
 	it("returns per-line dry-run batch validation errors without writing", async () => {
 		const result = await applyOntologyOperationBatch(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "operator",
 			dryRun: true,
@@ -3063,6 +4510,7 @@ describe("ontology proposals", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "operator",
 				operation: "rename_entity",
@@ -3080,6 +4528,7 @@ describe("ontology proposals", () => {
 
 		for (let i = 0; i < 2; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				...common,
 				payload: {
 					entity: "Capped",
@@ -3094,6 +4543,7 @@ describe("ontology proposals", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				...common,
 				payload: {
 					entity: "Capped",
@@ -3110,6 +4560,7 @@ describe("ontology proposals", () => {
 	it("does not enforce attribute cap when writeCaps is omitted (backward compat)", async () => {
 		for (let i = 0; i < 5; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "add_claim_value",
@@ -3135,6 +4586,7 @@ describe("ontology proposals", () => {
 	it("rejects create_aspect past the aspect cap with a teaching error", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3143,6 +4595,7 @@ describe("ontology proposals", () => {
 
 		for (let i = 0; i < 2; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3153,6 +4606,7 @@ describe("ontology proposals", () => {
 
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3166,6 +4620,7 @@ describe("ontology proposals", () => {
 		const cap = { maxAspectsPerEntity: 1, maxAttributesPerAspect: 25 };
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3173,6 +4628,7 @@ describe("ontology proposals", () => {
 		});
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_aspect",
@@ -3180,6 +4636,7 @@ describe("ontology proposals", () => {
 			writeCaps: cap,
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_aspect",
@@ -3192,6 +4649,7 @@ describe("ontology proposals", () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 1 };
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "add_claim_value",
@@ -3205,6 +4663,7 @@ describe("ontology proposals", () => {
 			writeCaps: cap,
 		});
 		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "add_claim_value",
@@ -3222,6 +4681,7 @@ describe("ontology proposals", () => {
 	async function seedAspectClaims(entity: string, aspect: string, count: number): Promise<void> {
 		for (let i = 0; i < count; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "add_claim_value",
@@ -3258,6 +4718,7 @@ describe("ontology proposals", () => {
 
 	it("merges aspects by moving attributes into the target and archiving sources", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3267,6 +4728,7 @@ describe("ontology proposals", () => {
 		await seedAspectClaims("MergeEnt", "changelog", 4);
 
 		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "merge_aspects",
@@ -3291,6 +4753,7 @@ describe("ontology proposals", () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 5 };
 
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3299,6 +4762,7 @@ describe("ontology proposals", () => {
 		await seedAspectClaims("FatEnt", "a", 5);
 		await seedAspectClaims("FatEnt", "b", 5);
 		const result = await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "merge_aspects",
@@ -3312,6 +4776,7 @@ describe("ontology proposals", () => {
 	it("rejects merge_aspects without entity, target, or sources", async () => {
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "merge_aspects",
@@ -3322,6 +4787,7 @@ describe("ontology proposals", () => {
 	it("does not bypass the aspect cap via add_claim_value with a new aspect name (E1)", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3329,6 +4795,7 @@ describe("ontology proposals", () => {
 		});
 		for (let i = 0; i < 2; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3338,6 +4805,7 @@ describe("ontology proposals", () => {
 		}
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "add_claim_value",
@@ -3355,6 +4823,7 @@ describe("ontology proposals", () => {
 	it("does not bypass the attribute cap via set_claim_value with a new claim_key (E2)", async () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 2 };
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3362,6 +4831,7 @@ describe("ontology proposals", () => {
 		});
 		for (let i = 0; i < 2; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "set_claim_value",
@@ -3371,6 +4841,7 @@ describe("ontology proposals", () => {
 		}
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "set_claim_value",
@@ -3383,6 +4854,7 @@ describe("ontology proposals", () => {
 	it("allows reactivating an archived aspect within cap but rejects a new aspect at cap (E3)", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -3390,6 +4862,7 @@ describe("ontology proposals", () => {
 		});
 		for (let i = 0; i < 2; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3401,12 +4874,14 @@ describe("ontology proposals", () => {
 			db.prepare("SELECT id FROM entity_aspects WHERE agent_id = ? AND name = ?").get("ant", "aspect_1"),
 		) as { id: string };
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "archive_aspect",
 			payload: { entity: "E3Ent", selector: aspect.id },
 		});
 		await applyOntologyOperation(getDbAccessor(), {
+			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			actor: "test",
 			operation: "create_aspect",
@@ -3415,6 +4890,7 @@ describe("ontology proposals", () => {
 		});
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3456,6 +4932,7 @@ describe("ontology proposals", () => {
 
 		it("stores event time on the claim and derives occurred edges that temporal recall can find", async () => {
 			const applied = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "set_claim_value",
@@ -3499,6 +4976,7 @@ describe("ontology proposals", () => {
 
 		it("spans an approximate claim time across its day so a day query still finds it", async () => {
 			const applied = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "set_claim_value",
@@ -3545,6 +5023,7 @@ describe("ontology proposals", () => {
 			const followers = { ...slot, aspect: "social media", claim_key: "instagram_followers" };
 			const file = async (sourceId: string, value: string) =>
 				await applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
 					agentId: "default",
 					actor: "dreaming",
 					operation: "set_claim_value",
@@ -3568,6 +5047,7 @@ describe("ontology proposals", () => {
 		it("keeps the newer claim current when an older claim arrives later", async () => {
 			const residence = { ...slot, aspect: "home", claim_key: "city" };
 			const newer = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "set_claim_value",
@@ -3579,6 +5059,7 @@ describe("ontology proposals", () => {
 				},
 			});
 			const older = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "set_claim_value",
@@ -3603,6 +5084,7 @@ describe("ontology proposals", () => {
 			expect(olderMemory?.superseded_by).toBe(newerId);
 
 			const latest = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "set_claim_value",
@@ -3617,12 +5099,14 @@ describe("ontology proposals", () => {
 		it("forwards review time and event time through supersede_claim_value", async () => {
 			const plan = { ...slot, aspect: "plans", claim_key: "marathon" };
 			await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "set_claim_value",
 				payload: { ...plan, value: "The user plans to run a marathon in 2024." },
 			});
 			const replaced = await applyOntologyOperation(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
 				agentId: "default",
 				actor: "dreaming",
 				operation: "supersede_claim_value",
@@ -3648,6 +5132,7 @@ describe("ontology proposals", () => {
 		it("rejects malformed claim time", async () => {
 			const attempt = (extra: Record<string, unknown>) =>
 				applyOntologyOperation(getDbAccessor(), {
+					author: { userId: null, credential: "system" },
 					agentId: "default",
 					actor: "dreaming",
 					operation: "set_claim_value",
