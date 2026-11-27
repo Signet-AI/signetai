@@ -1325,8 +1325,18 @@ export function runDbOwnerWorker(): void {
 						: operation === "INSERT"
 							? readable("NEW")
 							: `((${readable("OLD")}) OR (${readable("NEW")}))`;
+				const evidenceChanged =
+					operation === "UPDATE"
+						? ` AND (${columns
+								.filter((column) => !["last_accessed", "access_count"].includes(column))
+								.map((column) => {
+									const name = `"${column.replaceAll('"', '""')}"`;
+									return `OLD.${name} IS NOT NEW.${name}`;
+								})
+								.join(" OR ")})`
+						: "";
 				db.exec(
-					`CREATE TEMP TRIGGER IF NOT EXISTS signet_head_${table}_${operation} AFTER ${operation} ON main.${table} BEGIN INSERT INTO signet_head_dirty SELECT DISTINCT d.cache_key FROM signet_head_dependencies d JOIN signet_head_scopes s ON s.cache_key=d.cache_key WHERE d.kind='${kind}' AND (${changed}) AND NOT EXISTS(SELECT 1 FROM signet_head_dirty WHERE cache_key=d.cache_key); END`,
+					`CREATE TEMP TRIGGER IF NOT EXISTS signet_head_${table}_${operation} AFTER ${operation} ON main.${table} BEGIN INSERT INTO signet_head_dirty SELECT DISTINCT d.cache_key FROM signet_head_dependencies d JOIN signet_head_scopes s ON s.cache_key=d.cache_key WHERE d.kind='${kind}' AND (${changed})${evidenceChanged} AND NOT EXISTS(SELECT 1 FROM signet_head_dirty WHERE cache_key=d.cache_key); END`,
 				);
 			}
 		}
