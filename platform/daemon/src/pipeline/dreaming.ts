@@ -953,7 +953,9 @@ async function withDreamPassReview<T extends { readonly id: string }>(
 	scope?: ReadScope,
 	signal?: AbortSignal,
 ): Promise<readonly T[]> {
-	if (!scope?.organizationMode || !rows.length) return rows;
+	if (!rows.length) return rows;
+	if (!scope?.organizationMode)
+		return rows.map((row) => ({ ...row, author: { kind: "system" as const, name: "Dreaming" as const } }));
 	const { contentRead } = await import("../content-read");
 	const metadata = await contentRead<readonly import("../content-read").DreamPassReview[]>(
 		{ op: "dream_pass_review", scope, ids: rows.map((row) => row.id) },
@@ -975,7 +977,7 @@ export async function getDreamingPasses(
 	const rows = await ownerQueryAll<DreamingPassRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.list",
-		`SELECT id, mode, status, started_at AS startedAt,
+		`SELECT agent_id AS agentId, id, mode, status, started_at AS startedAt,
 		        completed_at AS completedAt, tokens_consumed AS tokensConsumed,
 		        tokens_input AS tokensInput, tokens_output AS tokensOutput,
 		        tokens_cache_read AS tokensCacheRead, tokens_cache_write AS tokensCacheWrite,

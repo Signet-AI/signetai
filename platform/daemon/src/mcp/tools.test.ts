@@ -227,6 +227,9 @@ describe("createMcpServer", () => {
 		).toBe(true);
 		expect(capture.url).toBe("http://localhost:3850/api/org/sso");
 		expect(capture.method).toBe("POST");
+		expect((await callTool(server, "signet_result_attribution", { authors: ["usr_alice"] })).isError).toBe(true);
+		expect(capture.url).toBe("http://localhost:3850/api/result-attribution");
+		expect(capture.method).toBe("POST");
 		mockFetch(200, { actAs: [] }, capture);
 		await callTool(server, "signet_agent_purge", { agentId: "agent-purge", confirm: true });
 		expect(capture.url).toBe("http://localhost:3850/api/org/agents/agent-purge/purge");

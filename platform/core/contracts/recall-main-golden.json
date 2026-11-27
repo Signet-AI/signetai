@@ -1,0 +1,81 @@
+{
+	"main": "ad5a3839e66bc787916fec3ae7feb09d0c2090e1",
+	"cases": [
+		{
+			"input": {
+				"results": [
+					{
+						"id": "legacy-memory",
+						"content": "personal memory",
+						"type": "fact",
+						"source": "manual",
+						"created_at": "2026-01-02T03:04:05Z"
+					}
+				]
+			},
+			"output": "Found 1 memory.\n\nPrimary matches:\n- id: legacy-memory; personal memory (fact, manual, 2026-01-02)"
+		},
+		{
+			"input": {
+				"results": [
+					{
+						"id": "legacy-memory",
+						"content": "personal memory",
+						"type": "fact",
+						"source": "manual",
+						"created_at": "2026-01-02T03:04:05Z",
+						"who": "nicholai"
+					}
+				]
+			},
+			"output": "Found 1 memory.\n\nPrimary matches:\n- id: legacy-memory; personal memory (fact, manual, 2026-01-02, by nicholai)"
+		},
+		{
+			"input": {
+				"results": []
+			},
+			"output": "No matching memories found."
+		},
+		{
+			"input": {
+				"results": [
+					{
+						"id": "legacy-memory",
+						"content": "personal memory",
+						"type": "fact",
+						"source": "manual",
+						"created_at": "2026-01-02T03:04:05Z",
+						"score": 0.8
+					},
+					{
+						"id": "support",
+						"content": "personal memory",
+						"type": "fact",
+						"source": "manual",
+						"created_at": "2026-01-02T03:04:05Z",
+						"supplementary": true
+					}
+				]
+			},
+			"output": "Found 2 memories.\n\nPrimary matches:\n- [80%] id: legacy-memory; personal memory (fact, manual, 2026-01-02)\n\nSupporting context:\n- id: support; personal memory (fact, manual, 2026-01-02)"
+		},
+		{
+			"input": {
+				"results": [
+					{
+						"id": "legacy-memory",
+						"content": "personal memory",
+						"type": "fact",
+						"source": "manual",
+						"created_at": "2026-01-02T03:04:05Z"
+					}
+				],
+				"aggregate": {
+					"partial": true,
+					"message": "Partial answer"
+				}
+			},
+			"output": "Partial answer\n\nFound 1 memory.\n\nPrimary matches:\n- id: legacy-memory; personal memory (fact, manual, 2026-01-02)"
+		}
+	]
+}

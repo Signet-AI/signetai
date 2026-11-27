@@ -6,6 +6,8 @@ import {
 	parseRecallPayload,
 	parseRememberResponse,
 } from "@signet/core";
+import { attributed } from "./result-attribution.js";
+import { printResultAttribution } from "../lib/result-attribution.js";
 import { cliTarget } from "../lib/organization-target.js";
 import { runOrganizationOperatorJob } from "./organization-jobs.js";
 import chalk from "chalk";
@@ -34,6 +36,60 @@ interface MemoryDeps {
 }
 
 export function registerMemoryCommands(program: Command, deps: MemoryDeps): void {
+	const memory = program.command("memory").description("Read visible memories");
+	const readMemory = async (path: string, json = false) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const result = await deps.secretApiCall("GET", path);
+		if (!result.ok) throw new Error("Memory read failed");
+		if (json) {
+			console.log(JSON.stringify(result.data, null, 2));
+			return;
+		}
+		const raw: unknown = result.data;
+		const values =
+			typeof raw === "object" && raw !== null && Array.isArray(Reflect.get(raw, "memories"))
+				? Reflect.get(raw, "memories")
+				: Array.isArray(raw)
+					? raw
+					: [raw];
+		const objects: object[] = Array.isArray(values)
+			? values.filter((row: unknown): row is object => typeof row === "object" && row !== null)
+			: [];
+		const rows = await attributed(objects, deps.secretApiCall, true);
+		for (const row of rows) {
+			const content: unknown = Reflect.get(row, "content");
+			if (typeof content !== "string") throw new Error("Invalid memory content");
+			console.log(content);
+			printResultAttribution(row);
+		}
+	};
+	memory
+		.command("list")
+		.option("--json")
+		.option("--agent <id>")
+		.action(async (options) => readMemory("/api/memories?limit=100", options.json));
+	memory
+		.command("show <id>")
+		.option("--json")
+		.option("--agent <id>")
+		.action(async (id: string, options) => readMemory(`/api/memory/${encodeURIComponent(id)}`, options.json));
+	program
+		.command("search <query>")
+		.option("--json")
+		.option("--agent <id>")
+		.action(async (query: string, options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const result = await deps.secretApiCall("POST", "/api/memory/recall", { query });
+			if (!result.ok) throw new Error("Search failed");
+			if (options.json) {
+				console.log(JSON.stringify(result.data, null, 2));
+				return;
+			}
+			const parsed = parseRecallPayload(result.data);
+			const rows = await attributed(parsed.rows, deps.secretApiCall, true);
+			console.log(formatRecallText(Object.assign({}, result.data, { results: rows })));
+		});
+
 	program
 		.command("remember <content>")
 		.description("Save a memory (auto-embedded for vector search)")
@@ -197,7 +253,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				return;
 			}
 
-			console.log(`\n${formatRecallText(filtered)}\n`);
+			const rows = await attributed(parsed.rows, deps.secretApiCall, true);
+			console.log(`\n${formatRecallText(Object.assign({}, filtered, { results: rows }))}\n`);
 		});
 
 	const embedCmd = program.command("embed").description("Embedding management (audit, backfill)");

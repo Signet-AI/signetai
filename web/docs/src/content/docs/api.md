@@ -429,6 +429,12 @@ deciding whether onboarding is still needed must gate on `configuredHarnesses`
 (the field is absent on older daemons; treat absence as unknown and fall back
 without hiding setup affordances).
 
+### Canonical result attribution
+
+| Method | Path | Behavior |
+|---|---|---|
+| POST | `/api/result-attribution` | Requires recall; accepts `authors`, `agents`, and `memories` identifier arrays and `artifactPaths`, each capped at 100. Memory identities are resolved inside the caller’s read scope. Returns canonical display names and handles; other people are omitted unless the credential has unrestricted administrator or compliance directory access. Missing and inaccessible identities are indistinguishable. |
+
 ### Organization setup and operations
 
 | Method | Path | Behavior |

@@ -406,3 +406,7 @@ instructions and browser-unavailable notices on stderr, leaving one final JSON
 result on stdout. JSON onboarding detects harnesses without changing them;
 connection remains an explicit choice. Use explicit classification flags for
 scripted imports and `--confirm --wait` for destructive organization jobs.
+
+## Names in terminal results
+
+Recall, memory list/show, search, sessions, sources, Dreaming passes, and audit text show canonical author and agent names. A different user handle follows the display name. Authors outside your directory access appear as **Another person**, never an inferred identity from a harness name. `--json` retains identifiers for scripts. Local results without attribution keep their previous text format.

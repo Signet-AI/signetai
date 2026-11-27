@@ -9,7 +9,7 @@ import type { MigrationDb } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { gatherProjectionRows } from "./umap-projection";
 import type { ContentReadRequest } from "./content-read";
-import { readScopeSql, type ReadScope } from "./read-scope";
+import { inFlightClassificationSql, readScopeSql, type ReadScope } from "./read-scope";
 import { exportSourceSnapshotInDb } from "./source-snapshots";
 import { expandTemporalNodeInDb } from "./temporal-expand";
 import { sourceHasEligibleUnconsumedEvidence } from "./pipeline/dreaming-evidence-consumption";
@@ -168,6 +168,129 @@ export function executeContentRead(
 	check: () => void = () => {},
 ): unknown {
 	check();
+	if (request.op === "result_attribution") {
+		if ([request.authors, request.agents, request.memories, request.artifactPaths].some((ids) => ids.length > 100))
+			throw new Error("Attribution admission limit exceeded");
+		const placeholders = (ids: readonly string[]) => ids.map(() => "?").join(",");
+		const predicate = readScopeSql("m", request.scope);
+		const memories: {
+			id: string;
+			authorUserId: string | null;
+			agentId: string;
+			authorKind?: "system";
+			sourcePath?: string;
+		}[] = request.memories.length
+			? db
+					.prepare(
+						`SELECT m.id,m.author_user_id AS authorUserId,m.agent_id AS agentId FROM memories m WHERE m.id IN (${placeholders(request.memories)})${predicate.sql} LIMIT 100`,
+					)
+					.all(...request.memories, ...predicate.args)
+					.flatMap((row) =>
+						typeof row.id === "string" &&
+						typeof row.agentId === "string" &&
+						(typeof row.authorUserId === "string" || row.authorUserId === null)
+							? [{ id: row.id, authorUserId: row.authorUserId, agentId: row.agentId }]
+							: [],
+					)
+			: [];
+		check();
+
+		const attributes = request.memories
+			.filter((id) => id.startsWith("ontology-claim:"))
+			.map((id) => id.slice("ontology-claim:".length));
+		if (attributes.length) {
+			const access = readScopeSql("m", request.scope, {
+				visibility: null,
+				memory: "memory_id",
+				session: null,
+				source: "source_id",
+			});
+			const rows =
+				request.scope.projects !== null
+					? []
+					: db
+							.prepare(
+								`SELECT m.id,m.agent_id AS agentId FROM entity_attributes m WHERE m.id IN (${placeholders(attributes)})${access.sql} LIMIT 100`,
+							)
+							.all(...attributes, ...access.args);
+			for (const row of rows)
+				if (typeof row.id === "string" && typeof row.agentId === "string")
+					memories.push({
+						id: `ontology-claim:${row.id}`,
+						agentId: row.agentId,
+						authorUserId: null,
+						authorKind: "system",
+					});
+		}
+		if (request.artifactPaths.length) {
+			const access = readScopeSql("m", request.scope, {
+				visibility: null,
+				memory: null,
+				session: "session_key",
+				source: "source_id",
+			});
+			const rows = db
+				.prepare(
+					`SELECT MIN(m.id) AS id,m.source_path AS sourcePath,m.agent_id AS agentId,m.author_user_id AS authorUserId FROM memory_artifacts m WHERE m.source_path IN (${placeholders(request.artifactPaths)})${access.sql} GROUP BY m.source_path HAVING COUNT(DISTINCT m.agent_id)=1 AND COUNT(DISTINCT COALESCE(m.author_user_id,''))=1 LIMIT 100`,
+				)
+				.all(...request.artifactPaths, ...access.args);
+			for (const row of rows)
+				if (
+					typeof row.id === "string" &&
+					typeof row.sourcePath === "string" &&
+					typeof row.agentId === "string" &&
+					(row.authorUserId === null || typeof row.authorUserId === "string")
+				)
+					memories.push({
+						id: row.id,
+						sourcePath: row.sourcePath,
+						agentId: row.agentId,
+						authorUserId: row.authorUserId,
+					});
+		}
+
+		const authorIds = [
+			...new Set([...request.authors, ...memories.flatMap((row) => (row.authorUserId ? [row.authorUserId] : []))]),
+		];
+		const agentIds = [...new Set([...request.agents, ...memories.map((row) => row.agentId)])];
+		const authors = authorIds.length
+			? db
+					.prepare(
+						`SELECT id,display_name AS name,username AS handle FROM users WHERE id IN (${placeholders(authorIds)}) AND (?=1 OR id=?) LIMIT 400`,
+					)
+					.all(...authorIds, request.directory ? 1 : 0, request.subject.userId)
+			: [];
+		const reach = request.scope.reach;
+		const restricted =
+			reach.kind === "own"
+				? " AND a.id=?"
+				: reach.kind === "group"
+					? " AND (a.id=? OR (a.read_policy='group' AND a.policy_group=?))"
+					: reach.kind === "shared"
+						? " AND (a.id=? OR a.read_policy='shared')"
+						: "";
+		const reachArgs =
+			reach.kind === "all" ? [] : reach.kind === "group" ? [reach.agentId, reach.group] : [reach.agentId];
+		const audience = request.subject.local
+			? ""
+			: " AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.target_kind='agent' AND ca.target_id=a.id AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?)))))";
+		check();
+		const agents = agentIds.length
+			? db
+					.prepare(
+						`SELECT a.id,a.name FROM agents a WHERE a.id IN (${placeholders(agentIds)})${restricted}${audience}${request.subject.local ? "" : ` AND NOT EXISTS(SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} AND json_extract(j.params_json,'$.target.kind')='agent' AND json_extract(j.params_json,'$.target.agentId')=a.id)`} LIMIT 400`,
+					)
+					.all(
+						...agentIds,
+						...reachArgs,
+						...(request.subject.local
+							? []
+							: [request.subject.userId, request.subject.userId, request.subject.userId, request.subject.userId]),
+					)
+			: [];
+		return { authors, agents, memories, organizationMode: request.scope.organizationMode === true };
+	}
+
 	if (request.op === "dream_pass_review") {
 		if (request.ids.length > 100) throw new Error("Dream pass review admission limit exceeded");
 		if (request.scope.projects !== null) return [];

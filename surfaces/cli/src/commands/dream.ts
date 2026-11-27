@@ -1,3 +1,4 @@
+import { attributeResults, printResultAttribution } from "../lib/result-attribution.js";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetch, DaemonFetchFailure, DaemonFetchResult, DaemonStreamResult } from "../lib/daemon.js";
@@ -116,6 +117,16 @@ function formatTokenUsage(pass: DreamPass): string | null {
 
 export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 	const dream = program.command("dream").description("Manage dreaming memory consolidation");
+	const decorate = <T extends object>(rows: readonly T[]) =>
+		attributeResults(rows, async (body) => {
+			const result = await deps.fetchDaemonResult("/api/result-attribution", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			if (!result.ok) throw new Error("Canonical attribution is unavailable");
+			return result.data;
+		});
 
 	dream
 		.command("capabilities")
@@ -193,7 +204,8 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 	dream
 		.command("status")
 		.description("Show dreaming worker status and recent passes")
-		.action(async () => {
+		.option("--json", "Output as JSON")
+		.action(async (options: { json?: boolean }) => {
 			const result = await deps.fetchDaemonResult<DreamStatus>("/api/dream/status");
 			if (!result.ok) {
 				if (result.reason === "http" && result.error) {
@@ -204,6 +216,10 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				process.exit(1);
 			}
 			const data = result.data;
+			if (options.json) {
+				console.log(JSON.stringify(data, null, 2));
+				return;
+			}
 
 			console.log(chalk.bold("\n  Dreaming Status\n"));
 
@@ -231,7 +247,8 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				console.log(
 					`  ${chalk.dim("STATUS".padEnd(12))}${chalk.dim("MODE".padEnd(14))}${chalk.dim("MUTATIONS".padEnd(24))}${chalk.dim("STARTED")}`,
 				);
-				for (const pass of data.passes) {
+				for (const pass of await decorate(data.passes)) {
+					printResultAttribution(pass);
 					const status =
 						pass.status === "completed"
 							? chalk.green(pass.status)
@@ -245,6 +262,7 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 					console.log(
 						`  ${status.padEnd(12 + (status.length - pass.status.length))}${pass.mode.padEnd(14)}${mutations.padEnd(24)}${pass.startedAt}`,
 					);
+
 					const usage = formatTokenUsage(pass);
 					if (usage) console.log(`  ${chalk.dim("Tokens:")}    ${usage}`);
 					if (pass.summary) {
@@ -465,11 +483,14 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				process.exit(1);
 			}
 
+			const attributedPass = (await decorate([pass]))[0];
+			if (attributedPass) printResultAttribution(attributedPass);
 			console.log(chalk.green("  Dreaming pass complete"));
 			console.log(`  ${chalk.dim("Pass ID:")}    ${pass.id}`);
 			console.log(`  ${chalk.dim("Applied:")}    ${pass.mutationsApplied ?? 0} mutations`);
 			console.log(`  ${chalk.dim("Skipped:")}    ${pass.mutationsSkipped ?? 0} mutations`);
 			console.log(`  ${chalk.dim("Failed:")}     ${pass.mutationsFailed ?? 0} mutations`);
+
 			const usage = formatTokenUsage(pass);
 			if (usage) console.log(`  ${chalk.dim("Tokens:")}    ${usage}`);
 			if (pass.summary) console.log(`  ${chalk.dim("Summary:")}    ${pass.summary}`);
