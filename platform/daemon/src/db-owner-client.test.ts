@@ -37,6 +37,7 @@ import {
 	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	registerDbOwnerMaintenance,
+	ownerHasPendingVecBackfill,
 	runOwnerMaintenanceWithRetry,
 } from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
@@ -773,6 +774,7 @@ describe("DB owner client", () => {
 					{ operation: "maintenance.vector-backfill-regression", lane: "maintenance", deadlineMs: 10_000 },
 				).result,
 			).toEqual({ completed: true });
+			expect(await ownerHasPendingVecBackfill(client, 2)).toBe(iteration < 2);
 			const maintenance = client.health();
 			expect(maintenance).toMatchObject({
 				state: "ready",

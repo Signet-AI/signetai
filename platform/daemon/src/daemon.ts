@@ -19,7 +19,6 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
 	type AgentDefinition,
-	activeVectorProjectionTable,
 	buildArchitectureDoc,
 	configuredRoutingTargetRefs,
 	DAEMON_RUNTIME_ENV,
@@ -106,8 +105,8 @@ import {
 	ownerRunStatement,
 	ownerTransaction,
 	registerDbOwnerMaintenance,
+	ownerHasPendingVecBackfill,
 } from "./db-owner-maintenance";
-import type { DbOwnerParameter } from "./db-owner-protocol";
 import {
 	closeDbOwner,
 	dbOwnerBatch,
@@ -485,42 +484,6 @@ async function ownerQueuePressureSnapshot(owner: DbOwnerClient): Promise<QueuePr
 		summaryQueueDepth: summary?.depth,
 		oldestJobAgeSec: ages.length === 0 ? undefined : Math.max(...ages),
 	};
-}
-
-async function ownerHasPendingVecBackfill(owner: DbOwnerClient, expectedDimensions: number): Promise<boolean> {
-	const read = async <Row>(
-		sql: string,
-		params: readonly DbOwnerParameter[],
-		operation: string,
-	): Promise<Row | undefined> =>
-		await owner.awaitResult(
-			owner.submit<Row | undefined>(
-				{ kind: "query", statement: { sql, params: [...params], result: "get", transactional: false, readonly: true } },
-				{ operation, lane: "read", deadlineMs: 5_000 },
-			),
-			5_000,
-		);
-	const indexState = await read<{ readonly active_profile_json?: unknown }>(
-		"SELECT active_profile_json FROM embedding_index_state WHERE id = 1",
-		[],
-		"maintenance.vec-backfill-probe-slot",
-	).catch(() => undefined);
-	const activeTable = activeVectorProjectionTable({ prepare: () => ({ get: () => indexState }) });
-	const rowids = await read<{ readonly present?: number }>(
-		"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-		[`${activeTable}_rowids`],
-		"maintenance.vec-backfill-probe-schema",
-	);
-	const targetTable = rowids === undefined ? activeTable : `${activeTable}_rowids`;
-	const pending = await read<{ readonly present?: number }>(
-		`SELECT 1 AS present FROM embeddings e
-		 LEFT JOIN ${targetTable} v ON v.id = e.id
-		 LEFT JOIN vec_embeddings_quarantine q ON q.rowid = e.id
-		 WHERE v.id IS NULL AND q.rowid IS NULL AND e.dimensions = ? LIMIT 1`,
-		[expectedDimensions],
-		"maintenance.vec-backfill-probe",
-	);
-	return pending !== undefined;
 }
 
 export function countConnectorsActive(connectors: readonly { readonly status: string }[]): number {
