@@ -294,7 +294,7 @@ export function vectorSearchWithMetadata(
 							.prepare(`SELECT e.source_id,v.distance FROM ${table} v
 							JOIN ${searchTables.embeddings} e ON e.id=v.id
 							WHERE v.embedding MATCH ? AND k=? AND v.id IN (
-								SELECT eligible.id FROM ${table} eligible
+								SELECT eligible.id FROM ${table}_rowids eligible
 								JOIN ${searchTables.embeddings} e ON e.id=eligible.id JOIN memories m ON m.id=e.source_id
 								WHERE 1=1${filter}${scope.sql}${embeddingScope.sql}
 							) ORDER BY v.distance,e.source_id LIMIT ?`)
