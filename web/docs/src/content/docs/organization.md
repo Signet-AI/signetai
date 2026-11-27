@@ -410,3 +410,5 @@ scripted imports and `--confirm --wait` for destructive organization jobs.
 ## Names in terminal results
 
 Recall, memory list/show, search, sessions, sources, Dreaming passes, and audit text show canonical author and agent names. A different user handle follows the display name. Authors outside your directory access appear as **Another person**, never an inferred identity from a harness name. `--json` retains identifiers for scripts. Local results without attribution keep their previous text format.
+
+Running `signet setup` interactively without options asks whether to create a personal workspace, host an organization, or join one. Personal continues the existing setup wizard. Host asks for its public URL; join asks for the instance URL and uses the existing sign-in flow. Explicit configuration flags, including `--skip-git`, and headless `--non-interactive`, `--file`, `--json`, `--schema`, and `--dry-run` paths do not enter the chooser. Cancelling the entry choice changes no workspace.
