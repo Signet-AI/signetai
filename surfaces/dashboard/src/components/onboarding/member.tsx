@@ -1,3 +1,4 @@
+import { PersonalMemoryCopy } from "./personal-copy";
 import { type ReactNode, useEffect, useState } from "react";
 import { AuthField, AuthPage } from "@/components/shell/auth-entry";
 import { Panel } from "@/components/shell/panel";
@@ -155,10 +156,11 @@ export function MemberOnboarding({
 						Your sessions write to your personal agent. Organization memory is your default for reading. Classifications
 						control access, including for administrators.
 					</p>
-					<p>
-						No personal memories were copied. To bring any over later, explicitly select evidence for a scoped export
-						and import into your organization personal agent.
-					</p>
+					{whoami.agents.defaultWrite ? (
+						<PersonalMemoryCopy agentId={whoami.agents.defaultWrite} />
+					) : (
+						<p>Your personal agent must be provisioned before copying evidence.</p>
+					)}
 					<Button className="self-start" disabled={busy} onClick={() => void finish()}>
 						Open dashboard
 					</Button>

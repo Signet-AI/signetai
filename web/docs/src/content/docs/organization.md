@@ -60,6 +60,14 @@ Run the displayed `signet login` and `signet connect` commands on your own compu
 
 **First memory** is optional. Ask your connected harness to remember something and watch the new memory appear in the dashboard. This screen only reads your write agent; it does not create a sample memory for you. Continue to **Summary**, then open the dashboard. Members are not asked to configure organization providers or embeddings. Personal-mode onboarding is unchanged.
 
+## Copy selected personal memories
+
+On the member onboarding **Summary**, optionally choose the `memories.jsonl` file from `signet --local export` on your own computer. The browser accepts at most 4 MiB and 1,000 records. Choose the original agent, select individual memories, and choose a destination classification. Nothing is selected by default.
+
+**Preview selected copy** is a local dry run: it shows the selected records, evidence size, and your organization write agent without uploading anything. Changing the selection, original agent, or classification clears the preview. **Copy selected memories** then submits only that selection to the existing document importer. The daemon rechecks write scope and classification admission before creating evidence. Preview does not reserve access or promise a successful import.
+
+The import preserves each selected export record, including its original ID, agent, author fields, source fields, and timestamps, as source evidence. Those fields do not become organization identity or restored semantic claims; the importing organization user is the recorded author, and Dreaming derives memory from the evidence. The original export and local workspace are never modified or deleted. Remove the resulting imported source through Sources to purge its evidence and derived state.
+
 ## Roles and teams
 
 - **Admin** manages people, policy, agents, credentials, and audit. Admin does not include the `classify` permission.
