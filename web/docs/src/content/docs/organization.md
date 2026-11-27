@@ -30,6 +30,12 @@ The token is consumed once. Claiming marks the existing `default` agent as the o
 
 Upgrading also repairs legacy child ownership, including memory embeddings, from each unambiguous parent in bounded batches. This restores vectors that previously had no recorded agent without assigning them to `default`. Missing or conflicting parents remain unresolved; the local database records repair counts in `legacy_child_scope_repairs`. Unknown historical authors stay unknown. A NULL compartment is still public, not an indication that an author or classification should be guessed.
 
+Vector search shards are repaired by the database owner in resumable batches, including while derivation is paused; this maintenance does not generate embeddings or start a model migration. A vector stage whose shard repair is not ready, or whose admitted fan-out exceeds its bound, reports unavailable rather than a complete empty result.
+
+Classification jobs prepare and verify their new vector membership while the previous read rules remain in effect. The new read fence and prepared membership become visible in one transaction; remaining derived rows are then updated in batches. A queued or running job is not a completed reclassification.
+
+Compliance callers with unrestricted project access can cancel a pending or running apply job with `POST /api/classifications/jobs/:jobId/cancel` or the `signet_classify_cancel` MCP tool. An agent-bound credential can cancel only its own agent’s jobs. Cancellation is tracked: wait for `cancelled`, not merely acceptance. Before publication, cleanup discards only the unpublished generation in bounded pages. After publication, cancellation atomically withdraws the read fence and any assignment introduced by that job, then resumes the existing removal operation to restore effective membership. Restarting resumes cleanup; it does not delete evidence. Completed jobs, and older started jobs without recorded prior-assignment state, require explicit classification removal instead of a guessed reversal.
+
 Use HTTPS for a network-facing server. Set `publicUrl` through `PATCH /api/org/settings` to the externally reachable origin before configuring SSO or distributing device-approval links.
 
 ## Classified imports

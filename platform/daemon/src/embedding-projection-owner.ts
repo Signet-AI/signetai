@@ -2,11 +2,16 @@ import {
 	compartmentForWrite,
 	syncEmbeddingCompartment,
 	resetCompartmentVectorShards,
+	repairVectorAdmissionStepInTx,
+	activeVectorSearchTables,
 	type MigrationDb,
 } from "@signet/core";
-import type { EmbeddingProjectionRequest } from "./embedding-projection";
+import type { EmbeddingProjectionRequest, EmbeddingProjectionResult } from "./embedding-projection";
 
-export function executeEmbeddingProjection(db: MigrationDb, request: EmbeddingProjectionRequest): { updated: number } {
+export function executeEmbeddingProjection(
+	db: MigrationDb,
+	request: EmbeddingProjectionRequest,
+): EmbeddingProjectionResult {
 	if (request.ids.length > 100) throw new Error("projection_admission_limit");
 	const dims = request.resetDimensions;
 	if (dims !== undefined && (!Number.isSafeInteger(dims) || dims < 1 || dims > 65536))
@@ -24,7 +29,18 @@ export function executeEmbeddingProjection(db: MigrationDb, request: EmbeddingPr
 export function executeEmbeddingProjectionInTx(
 	db: MigrationDb,
 	request: EmbeddingProjectionRequest,
-): { updated: number } {
+): EmbeddingProjectionResult {
+	if (request.repair) {
+		if (request.ids.length !== 0 || request.resetDimensions !== undefined) throw new Error("invalid_repair_request");
+		const active = activeVectorSearchTables(db);
+		const store =
+			request.projection === active.projection
+				? active.embeddings
+				: active.embeddings === "embeddings"
+					? "embeddings_staging"
+					: "embeddings";
+		return repairVectorAdmissionStepInTx(db, request.projection, store);
+	}
 	const dims = request.resetDimensions;
 	if (request.ids.length > 100) throw new Error("projection_admission_limit");
 	if (dims !== undefined && (!Number.isSafeInteger(dims) || dims < 1 || dims > 65536))

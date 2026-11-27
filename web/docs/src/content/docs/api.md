@@ -103,6 +103,7 @@ missing definition return the same `404` body: `{ "error": "Not found" }`.
 | POST | `/api/classifications/:id/preview` | `{ target }`; returns caller-readable `{ evidence, derived }` counts |
 | POST | `/api/classifications/:id/apply` | `{ target }`; returns `202 { jobId }` |
 | POST | `/api/classifications/:id/remove` | `{ target }`; compliance; returns `202 { jobId }` |
+| POST | `/api/classifications/jobs/:jobId/cancel` | Compliance with unrestricted project access; requests cancellation of a pending/running apply job. Returns `202 { jobId, status }`, or `200` after durable cancellation with `?wait=1`. An agent-bound credential remains limited to its agent. Completed jobs and legacy jobs lacking prior-assignment state require explicit removal (`409`). |
 | GET | `/api/classifications/:id/items` | `{ items, nextCursor }`; up to 100 assignments; opaque cursor |
 
 A target is `{ kind: "memory" | "session" | "source" | "agent", id, agentId }`.

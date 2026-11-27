@@ -6,6 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { AUTHORITY_TABLES } from "./auth/authority-epoch";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { ownerAdmittedScan } from "./db-owner-native";
+
 import { resolveWriteCompartmentParameterInTx } from "./db-helpers";
 import { dirname, resolve } from "node:path";
 import {
@@ -16,11 +18,13 @@ import {
 	deleteCompartmentVectors,
 	activeVectorProjectionTable,
 	inFlightClassificationSql,
+	activeVectorSearchTables,
 	findSqliteVecExtension,
 	requireReadScope,
 	readScopeSql,
 	resolveWorkspaceLayout,
 	vectorSearchWithMetadata,
+	bindVectorAdmissionWriters,
 } from "@signet/core";
 import { removeAgentInTx } from "./agent-removal";
 import type { ReadDb, WriteDb } from "./db-accessor";
@@ -105,6 +109,7 @@ class DbOwnerCancellationRequested extends Error {
 }
 
 const require = createRequire(import.meta.url);
+
 const Database = (
 	typeof (globalThis as Record<string, unknown>).Bun !== "undefined"
 		? require("bun:sqlite").Database
@@ -232,7 +237,8 @@ export function runDbOwnerWorker(): void {
 		db.exec("PRAGMA busy_timeout = 5000");
 		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
-		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
+		if (vecExtension !== null && loadSqliteVecIfAvailable(db, vecExtension))
+			bindVectorAdmissionWriters(db, activeVectorSearchTables(db), false);
 		installAuthorityEpoch();
 		installHeadInvalidation();
 	} catch (error) {
@@ -1201,10 +1207,15 @@ export function runDbOwnerWorker(): void {
 		const { getDbAccessor } = await import("./db-accessor");
 		return await getDbAccessor().withReadDbAsync(
 			(db) =>
-				vectorSearchWithMetadata(db, new Float32Array(payload.queryEmbedding), {
-					...payload.options,
-					readScope: requireReadScope(payload.options.readScope),
-				}),
+				vectorSearchWithMetadata(
+					db,
+					new Float32Array(payload.queryEmbedding),
+					{
+						...payload.options,
+						readScope: requireReadScope(payload.options.readScope),
+					},
+					ownerAdmittedScan(),
+				),
 			{ siteToken: "db:recall.vector.search.read", operation: "recall.vector-search" },
 		);
 	}

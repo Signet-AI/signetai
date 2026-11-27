@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compartmentFor, ensureCompartmentShards, type ReadScope } from "@signet/core";
+import { compartmentFor, ensureCompartmentShards, repairVectorAdmissionStepInTx, type ReadScope } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, type WriteDb } from "./db-accessor";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
@@ -287,6 +287,114 @@ describe("hybridRecall read scope", () => {
 			async () => queryVector,
 		);
 	}
+
+	describe("vector fan-out degradation", () => {
+		let template = "";
+		let config: ResolvedMemoryConfig | undefined;
+		beforeAll(async () => {
+			const previous = process.env.SIGNET_PATH,
+				previousDir = dir;
+			template = mkdtempSync(join(tmpdir(), "signet-cap-template-"));
+			dir = template;
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				"name: ScopeTest\nembedding:\n  provider: ollama\n  model: fixture\n  dimensions: 3\n  base_url: http://127.0.0.1:11434\n",
+			);
+			process.env.SIGNET_PATH = dir;
+			try {
+				initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
+				const base = cfg(true);
+				config = { ...base, embedding: { ...base.embedding, dimensions: 3 } };
+				const prepared = config;
+				await getDbAccessor().withWriteTxAsync((db) => {
+					db.exec(
+						"DELETE FROM embedding_index_state;DROP TABLE IF EXISTS vec_embeddings;CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+					);
+					ensureEmbeddingIndexState(db, prepared.embedding);
+					repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings");
+					for (const row of db
+						.prepare(
+							"SELECT name FROM temp.sqlite_master WHERE type='trigger' AND name GLOB 'vec_embeddings_admission_*'",
+						)
+						.all())
+						if (typeof row === "object" && row !== null && "name" in row && typeof row.name === "string")
+							db.exec(`DROP TRIGGER temp.${row.name}`);
+					db.exec("UPDATE vector_shard_repairs SET phase='pending' WHERE projection='vec_embeddings'");
+					memory(db, { id: "keyword-hit", content: QUERY });
+					memory(db, { id: "graph-side", content: "Unrelated guideline" });
+					db.exec(
+						"INSERT INTO entities(id,name,canonical_name,entity_type,agent_id,created_at,updated_at) VALUES('atlas-entity','Atlas','atlas','project','default','2020','2020');INSERT INTO entity_aspects(id,entity_id,agent_id,name,canonical_name,created_at,updated_at) VALUES('atlas-aspect','atlas-entity','default','overview','overview','2020','2020');INSERT INTO entity_attributes(id,aspect_id,agent_id,memory_id,kind,content,normalized_content,confidence,importance,status,created_at,updated_at) VALUES('atlas-attribute','atlas-aspect','default','graph-side','attribute','Unrelated guideline','unrelated guideline',1,1,'active','2020','2020')",
+					);
+					const insert = db.prepare(
+						"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id) VALUES(?,?,?,3,'memory',?,'','2020','default')",
+					);
+					for (let i = 0; i < 4097; i++) {
+						const id = `cap-${i}`;
+						memory(db, { id, content: "Unrelated vector candidate", project: id });
+						insert.run(id, id, blob([1, 0, 0]), id);
+					}
+					let repaired = false;
+					for (let page = 0; page < 100; page++) {
+						const r = repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings");
+						if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='vec_embeddings__admission_1_chunks'").get())
+							db.exec(
+								"CREATE INDEX IF NOT EXISTS fixture_partition_lookup ON vec_embeddings__admission_1_chunks(partition00)",
+							);
+						if (r.phase === "ready") {
+							repaired = true;
+							break;
+						}
+					}
+					if (!repaired) throw Error("fixture_repair_incomplete");
+				});
+			} finally {
+				await closeDbAccessor();
+				dir = previousDir;
+				if (previous === undefined) delete process.env.SIGNET_PATH;
+				else process.env.SIGNET_PATH = previous;
+			}
+		});
+		afterAll(() => rmSync(template, { recursive: true, force: true }));
+		it("retains keyword and graph evidence with explicit vector degradation", async () => {
+			const active = config;
+			if (!active) throw Error("fixture_config_missing");
+			await closeDbAccessor();
+			copyFileSync(join(template, "memory", "memories.db"), join(dir, "memory", "memories.db"));
+			copyFileSync(join(template, "agent.yaml"), join(dir, "agent.yaml"));
+			initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
+			const perform = (scope: ReadScope) =>
+				hybridRecall(
+					{
+						query: QUERY,
+						keywordQuery: QUERY,
+						agentId: "default",
+						readPolicy: "isolated",
+						readScope: scope,
+						trackRecallAccess: false,
+						limit: 10,
+					},
+					active,
+					async () => [1, 0, 0],
+				);
+			const below = await perform({ ...outsider(), projects: ["cap-0"] });
+			expect(below.meta.vectorCompleteness).toBe("complete");
+			expect(below.meta.degraded).toBeUndefined();
+			expect(below.results.map((r) => r.id)).toContain("cap-0");
+			const over = await perform(outsider());
+			expect(over.meta).toMatchObject({
+				degraded: ["vector_fanout_cap"],
+				partial: true,
+				vectorCompleteness: "unavailable",
+			});
+			expect(over.method).toBe("keyword");
+			expect(over.results.map((r) => r.id)).toContain("keyword-hit");
+			expect(over.results.map((r) => r.id)).toContain("graph-side");
+			expect(
+				over.results.every((r) => r.source !== "vector" && r.source !== "hybrid" && !r.id.startsWith("source-chunk:")),
+			).toBe(true);
+		});
+	});
 
 	it("never dedupes a readable artifact against a hidden content-hash mirror", async () => {
 		const content = "atlas deploy pipeline public native mirror";

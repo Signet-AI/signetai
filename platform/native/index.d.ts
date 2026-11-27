@@ -1,3 +1,26 @@
+export interface AdmittedVectorChunk {
+	vectors: Buffer;
+	rowids: Buffer;
+	validity: Buffer;
+	eligibility: Buffer;
+	identities?: Buffer;
+}
+export interface AdmittedVectorHit {
+	rowid: string;
+	distance: number;
+}
+export interface AdmittedVectorResult {
+	rows: AdmittedVectorHit[];
+	scannedRows: number;
+	eligibleRows: number;
+	heapPeak: number;
+}
+export function scanAdmittedVectors(
+	query: Float32Array,
+	chunks: AdmittedVectorChunk[],
+	limit: number,
+): AdmittedVectorResult;
+
 export interface NormalizedMemoryContent {
 	storageContent: string;
 	normalizedContent: string;

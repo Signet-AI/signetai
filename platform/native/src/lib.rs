@@ -1,3 +1,4 @@
+mod admitted_vector;
 mod knn;
 mod normalization;
 mod search;

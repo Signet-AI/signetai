@@ -1286,6 +1286,12 @@ describe("hybridRecall", () => {
 					id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id
 				) VALUES (?, ?, ?, 768, 'transcript', ?, '', ?, 'default')`,
 			).run("emb-2-transcript", "hash-2-transcript", vectorBlob(vectorFor(5)), "mem-vector-2", now);
+			db.prepare(
+				`WITH RECURSIVE corpus(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM corpus WHERE n<6020)
+				 INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id)
+				 SELECT 'unrelated-'||n,'unrelated-hash-'||n,?,768,'memory','unrelated-memory-'||n,'',?,'default' FROM corpus`,
+			).run(vectorBlob(vectorFor(0)), now);
+			db.exec("ANALYZE");
 		});
 		const owner = await getDbOwner(getDbAccessorPath());
 		const pages: number[] = [];
@@ -1294,6 +1300,18 @@ describe("hybridRecall", () => {
 			sourceIds,
 			768,
 			async (sql, params, pageRows) => {
+				const bindings = params.map((param) => {
+					if (typeof param === "string" || typeof param === "number") return param;
+					throw new Error("unexpected vector page binding");
+				});
+				const plan = getDbAccessor().withReadDb((db) =>
+					db
+						.prepare(`EXPLAIN QUERY PLAN ${sql}`)
+						.all(...bindings)
+						.flatMap((row) => (typeof row === "object" && row !== null && "detail" in row ? [String(row.detail)] : [])),
+				);
+				expect(plan.filter((detail) => /(?:SCAN e\b|SEARCH e USING INTEGER PRIMARY KEY)/.test(detail))).toEqual([]);
+				expect(plan.some((detail) => /SEARCH e USING INDEX .*source_id=/.test(detail))).toBe(true);
 				const rows = await ownerReadAll<{ rowid: number; source_id: string; vector_hex: string | null }>(
 					owner,
 					sql,

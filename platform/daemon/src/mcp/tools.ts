@@ -608,6 +608,18 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 	registerMcpTool(
 		server,
+		"signet_classify_cancel",
+		{
+			title: "Cancel Classification Job",
+			description:
+				"Request tracked cancellation of a pending or running classification job. Requires compliance authority; completed jobs use explicit classification removal.",
+			inputSchema: z.object({ jobId: z.string().min(1).max(200) }).strict(),
+		},
+		async ({ jobId }) =>
+			organizationResult(`/api/classifications/jobs/${encodeURIComponent(jobId)}/cancel`, "POST", {}),
+	);
+	registerMcpTool(
+		server,
 		"signet_classify",
 		{
 			title: "Classify Material",

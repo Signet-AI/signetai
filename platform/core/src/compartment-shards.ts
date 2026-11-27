@@ -1,4 +1,10 @@
 import type { MigrationDb } from "./migrations/contract";
+import {
+	inFlightClassificationJobsSql,
+	classificationLabelsForJobsSql,
+	readScopeSql,
+	type ReadScope,
+} from "./read-scope";
 import { ClassifiedDestinationError, currentWritePrincipal } from "./write-principal";
 
 export const FTS_BASES = [
@@ -367,6 +373,7 @@ export function syncEmbeddingCompartment(
 	if (typeof changes?.n !== "number") throw new Error("vector_projection_count_missing");
 	if (columns.has("projection_compartment_id"))
 		db.prepare(`UPDATE ${store} SET projection_compartment_id=? WHERE id=?`).run(c, id);
+	syncVectorAdmission(db, base, store, id, vector);
 	return changes.n;
 }
 export function inheritEmbeddingCompartment(
@@ -414,8 +421,17 @@ export function inheritEmbeddingCompartment(
 		db.prepare(`UPDATE ${store} SET compartment_id=?,agent_id=? WHERE id=?`).run(c, agent, id);
 }
 
+export function resetVectorAdmissionProjection(db: MigrationDb, base: VectorProjectionBase): void {
+	if (!shardSchema(db).tables.has("vector_shard_repairs")) return;
+	const state = db.prepare("SELECT job_id FROM vector_shard_repairs WHERE projection=?").get(base);
+	if (state?.job_id != null) throw new Error("vector_projection_repair_busy");
+	db.prepare(
+		"UPDATE vector_shard_repairs SET phase='pending',building_generation=NULL,cursor='',job_id=NULL WHERE projection=?",
+	).run(base);
+}
 export function resetCompartmentVectorShards(db: MigrationDb, base: string): void {
 	if (base !== "vec_embeddings" && base !== "vec_embeddings_staging") throw new Error("Invalid vector base");
+	resetVectorAdmissionProjection(db, base);
 	for (const row of db
 		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB ?")
 		.all(`${base}__c[0-9]*`))
@@ -426,10 +442,28 @@ export function deleteCompartmentVectors(db: MigrationDb, ids: readonly string[]
 	for (const row of db
 		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'vec_embeddings*'")
 		.all()) {
-		if (typeof row.name !== "string" || !/^vec_embeddings(?:_staging)?(?:__c[1-9][0-9]*)?$/.test(row.name)) continue;
-		const remove = db.prepare(`DELETE FROM ${row.name} WHERE id=?`);
-		for (const id of ids) remove.run(id);
+		if (
+			typeof row.name !== "string" ||
+			!/^vec_embeddings(?:_staging)?(?:(?:__c[1-9][0-9]*)|(?:__admission_[01]))?$/.test(row.name)
+		)
+			continue;
+		if (/__admission_[01]$/.test(row.name)) {
+			const projection = row.name.replace(/__admission_[01]$/, "");
+			const members = db.prepare(
+				"SELECT json_array(embedding_id,generation) id FROM vector_shard_members WHERE projection=? AND embedding_id=?",
+			);
+			const remove = db.prepare(`DELETE FROM ${row.name} WHERE id=?`);
+			for (const id of ids) for (const member of members.all(projection, id)) remove.run(member.id);
+		} else {
+			const remove = db.prepare(`DELETE FROM ${row.name} WHERE id=?`);
+			for (const id of ids) remove.run(id);
+		}
 	}
+	if (shardSchema(db).tables.has("vector_shard_members"))
+		for (const id of ids)
+			db.prepare(
+				"DELETE FROM vector_shard_members WHERE projection IN ('vec_embeddings','vec_embeddings_staging') AND embedding_id=?",
+			).run(id);
 }
 
 export function missingCompartmentVectorSql(db: MigrationDb, base: string, alias: string): string {
@@ -506,4 +540,596 @@ export function vectorShardSwapStatements(names: readonly string[], active: stri
 		if (existing.has(old)) statements.push(`ALTER TABLE ${temp} RENAME TO vec_embeddings_staging__c${c}`);
 	}
 	return statements;
+}
+
+export type VectorProjectionBase = "vec_embeddings" | "vec_embeddings_staging";
+function vectorAdmissionRowsSql(
+	store: "embeddings" | "embeddings_staging",
+	wanted: string,
+	preparingBase?: VectorProjectionBase,
+): string {
+	const preparingJob = preparingBase ? "_vector_build.job_id" : undefined;
+	const memoryLabels = inFlightClassificationJobsSql("m", undefined, preparingJob);
+	const embeddingLabels = inFlightClassificationJobsSql(
+		"e",
+		{
+			memory: "source_id",
+			source: "source_id",
+			session: null,
+		},
+		preparingJob,
+	);
+	const preparation = preparingBase
+		? ` JOIN vector_shard_repairs _vector_build ON _vector_build.projection='${preparingBase}'`
+		: "";
+	return `SELECT e.id,e.agent_id,CASE WHEN e.source_type='memory' THEN 1 ELSE 0 END recall_kind,CASE WHEN m.id IS NULL OR m.visibility='global' THEN 'global' WHEN m.visibility='archived' THEN 'archived' ELSE 'private' END visibility,m.project,CASE WHEN m.id IS NOT NULL THEN m.compartment_id ELSE e.compartment_id END compartment_id,e.compartment_id embedding_compartment_id,(SELECT json_group_array(value) FROM (SELECT value FROM json_each(${memoryLabels}) UNION SELECT value FROM json_each(${embeddingLabels}) ORDER BY value)) in_flight_jobs FROM ${store} e${preparation} LEFT JOIN memories m ON m.id=e.source_id AND e.source_type='memory' WHERE e.id=${wanted} AND e.agent_id IS NOT NULL AND length(e.agent_id)>0 AND (e.source_type!='memory' OR (m.id IS NOT NULL AND m.agent_id=e.agent_id))`;
+}
+function vectorAdmissionFingerprint(alias: string): string {
+	return `json_array(${alias}.agent_id,${alias}.visibility,${alias}.project,${alias}.compartment_id,${alias}.embedding_compartment_id,json(${alias}.in_flight_jobs),${alias}.recall_kind)`;
+}
+function vectorRecallRowsSql(
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+	condition: string,
+): string {
+	const members = `SELECT s.partition_id,e.id FROM ${store} e CROSS JOIN vector_shard_members s ON s.projection='${base}' AND s.embedding_id=e.id WHERE ${condition}`;
+	return `DELETE FROM vector_shard_recall_rows WHERE (partition_id,embedding_id) IN (${members});
+	INSERT INTO vector_shard_recall_rows(partition_id,embedding_id,memory_id,memory_scope,is_current,is_aggregate) SELECT s.partition_id,e.id,m.id,m.scope,CASE WHEN m.id IS NOT NULL AND m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL THEN 1 ELSE 0 END,CASE WHEN m.source_type='aggregate-recall' THEN 1 ELSE 0 END FROM ${store} e CROSS JOIN vector_shard_members s ON s.projection='${base}' AND s.embedding_id=e.id LEFT JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id WHERE ${condition};`;
+}
+function vectorAdmissionRemoveSql(base: VectorProjectionBase, ids: string): string {
+	const queue = `_vector_admission_remove_${base}`;
+	return `DELETE FROM ${queue};INSERT INTO ${queue}(id) ${ids};DELETE FROM ${queue};`;
+}
+function vectorAdmissionMoveSql(
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+	table: string,
+	wanted: string,
+	generation: number,
+	preparing = false,
+	fallbackTable: string = base,
+	vectorBytes?: number,
+): string {
+	const rows = vectorAdmissionRowsSql(store, wanted, preparing ? base : undefined);
+	const fingerprint = vectorAdmissionFingerprint("r");
+	const live = `SELECT m.generation FROM vector_shard_members m JOIN vector_shard_keys k ON k.id=m.partition_id WHERE m.projection='${base}' AND m.embedding_id=${wanted} AND k.retired_generation IS NULL AND k.generation<=(SELECT active_generation FROM vector_shard_repairs WHERE projection='${base}')`;
+	const fallbackId = fallbackTable === base ? "e.id" : `(SELECT json_array(e.id,generation) FROM (${live}) LIMIT 1)`;
+	const removal = preparing
+		? `DELETE FROM ${table} WHERE id=json_array(${wanted},${generation}); DELETE FROM vector_shard_members WHERE projection='${base}' AND generation=${generation} AND embedding_id=${wanted};`
+		: `${vectorAdmissionRemoveSql(base, `SELECT json_array(${wanted},generation) FROM (${live})`)} DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=${wanted} AND EXISTS(SELECT 1 FROM vector_shard_keys k WHERE k.id=vector_shard_members.partition_id AND k.projection='${base}' AND k.retired_generation IS NULL AND k.generation<=${generation});`;
+	return `
+	DELETE FROM _vector_admission_transfer;
+	INSERT INTO _vector_admission_transfer(id,vector) SELECT e.id,COALESCE((SELECT vector FROM _vector_admission_override WHERE id=e.id),e.vector,(SELECT embedding FROM ${fallbackTable} WHERE id=${fallbackId}),(SELECT embedding FROM ${base} WHERE id=e.id)) FROM ${store} e WHERE e.id=${wanted};
+	${removal}
+	INSERT OR IGNORE INTO vector_shard_keys(projection,generation,fingerprint,agent_id,visibility,project,compartment_id,embedding_compartment_id,in_flight_jobs,recall_kind) SELECT '${base}',${generation},${fingerprint},r.agent_id,r.visibility,r.project,r.compartment_id,r.embedding_compartment_id,r.in_flight_jobs,r.recall_kind FROM (${rows}) r;
+	INSERT INTO ${table}(id,admission,embedding) SELECT json_array(r.id,${generation}),k.id,t.vector FROM (${rows}) r JOIN vector_shard_keys k ON k.projection='${base}' AND k.generation=${generation} AND k.fingerprint=${fingerprint} JOIN _vector_admission_transfer t ON t.id=r.id WHERE t.vector IS NOT NULL${vectorBytes === undefined ? "" : ` AND length(t.vector)=${vectorBytes}`};
+	INSERT INTO vector_shard_members(projection,generation,embedding_id,partition_id) SELECT '${base}',${generation},json_extract(v.id,'$[0]'),v.admission FROM ${table} v WHERE v.id=json_array(${wanted},${generation});
+	INSERT OR REPLACE INTO vector_shard_singletons(partition_id,vector) SELECT k.id,t.vector FROM vector_shard_members m CROSS JOIN vector_shard_keys k ON k.id=m.partition_id CROSS JOIN _vector_admission_transfer t ON t.id=m.embedding_id WHERE m.projection='${base}' AND m.generation=${generation} AND m.embedding_id=${wanted} AND k.row_count=1;
+	${vectorRecallRowsSql(base, store, `e.id=${wanted}`)}
+	DELETE FROM _vector_admission_transfer;`;
+}
+const vectorAdmissionWriters = new WeakMap<MigrationDb, Map<string, unknown>>();
+export function prepareVectorAdmissionWriter(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+	initialize = true,
+): boolean {
+	if (!shardSchema(db).tables.has("vector_shard_repairs")) return false;
+	let state = db
+		.prepare(
+			"SELECT phase,store,source_root,job_id,active_slot,active_generation,building_generation FROM vector_shard_repairs WHERE projection=?",
+		)
+		.get(base);
+	if (typeof state?.active_generation !== "number") return false;
+	const sourceRoot = db
+		.prepare("SELECT rootpage FROM sqlite_master WHERE name=? AND type='table'")
+		.get(store)?.rootpage;
+	if (typeof sourceRoot !== "number") return false;
+	if (state.store !== store || state.source_root !== sourceRoot) {
+		if (!initialize) return false;
+		resetVectorAdmissionProjection(db, base);
+		db.prepare("UPDATE vector_shard_repairs SET store=?,source_root=? WHERE projection=?").run(store, sourceRoot, base);
+		state = db
+			.prepare(
+				"SELECT phase,store,source_root,job_id,active_slot,active_generation,building_generation FROM vector_shard_repairs WHERE projection=?",
+			)
+			.get(base);
+		if (typeof state?.active_generation !== "number") throw new Error("vector_repair_marker_missing");
+	}
+	const definition = shardSchema(db).tables.get(base);
+	const dimensions = definition ? /embedding\s+FLOAT\[(\d+)\]/i.exec(definition)?.[1] : undefined;
+	if (!dimensions) return false;
+	const slot = state.active_slot === 1 ? 1 : 0;
+	const table = `${base}__admission_${slot}`;
+	if (
+		initialize &&
+		state.phase === "ready" &&
+		!shardSchema(db).tables.has(table) &&
+		db.prepare(`SELECT 1 FROM ${store} LIMIT 1`).get()
+	) {
+		resetVectorAdmissionProjection(db, base);
+		return prepareVectorAdmissionWriter(db, base, store, initialize);
+	}
+	if (initialize && state.phase === "ready" && !shardSchema(db).tables.has(table))
+		db.exec(
+			`CREATE VIRTUAL TABLE ${table} USING vec0(id TEXT PRIMARY KEY,admission INTEGER partition key,embedding FLOAT[${dimensions}] distance_metric=cosine,chunk_size=64)`,
+		);
+	let nativeDimensions = shardSchema(db)
+		.tables.get(table)
+		?.match(/embedding\s+FLOAT\[(\d+)\]/i)?.[1];
+	if (initialize && state.phase === "copying" && state.job_id === null && nativeDimensions !== dimensions) {
+		db.exec(`DROP TABLE IF EXISTS ${table}`);
+		db.exec(
+			`CREATE VIRTUAL TABLE ${table} USING vec0(id TEXT PRIMARY KEY,admission INTEGER partition key,embedding FLOAT[${dimensions}] distance_metric=cosine,chunk_size=64)`,
+		);
+		nativeDimensions = dimensions;
+	}
+	const available = nativeDimensions === dimensions && state.active_generation > 0 && state.phase !== "pending";
+	const version = () =>
+		JSON.stringify([
+			db.prepare("PRAGMA schema_version").get()?.schema_version,
+			db.prepare("PRAGMA temp.schema_version").get()?.schema_version,
+			state.phase,
+			state.active_slot,
+			state.active_generation,
+			state.building_generation,
+		]);
+	let cache = vectorAdmissionWriters.get(db);
+	if (!cache) {
+		cache = new Map();
+		vectorAdmissionWriters.set(db, cache);
+	}
+	if (cache.get(base) === version()) return available;
+	db.exec(
+		"CREATE TEMP TABLE IF NOT EXISTS _vector_admission_transfer(id TEXT PRIMARY KEY,vector BLOB);CREATE TEMP TABLE IF NOT EXISTS _vector_admission_override(id TEXT PRIMARY KEY,vector BLOB)",
+	);
+	for (const event of ["ai", "au", "ad", "parent_au", "parent_ad", "job_ai", "recall_au", "remove_ai"] as const)
+		db.exec(`DROP TRIGGER IF EXISTS temp.${base}_admission_${event}`);
+	if (available)
+		db.exec(`CREATE TEMP TABLE IF NOT EXISTS _vector_admission_remove_${base}(id TEXT PRIMARY KEY);
+		CREATE TEMP TRIGGER ${base}_admission_remove_ai AFTER INSERT ON _vector_admission_remove_${base} BEGIN DELETE FROM ${table} WHERE id=new.id; END`);
+	const journal = (wanted: string) => {
+		const rows = vectorAdmissionRowsSql(store, wanted, base);
+		return `INSERT OR IGNORE INTO vector_shard_repair_partitions SELECT b.projection,b.building_generation,m.partition_id FROM vector_shard_repairs b JOIN org_jobs j ON j.id=b.job_id JOIN ${store} candidate ON candidate.id=${wanted} AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') JOIN vector_shard_members m ON m.projection=b.projection AND m.embedding_id=candidate.id JOIN vector_shard_keys k ON k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=b.active_generation WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=b.job_id);
+		UPDATE vector_shard_repairs SET phase='copying',cursor='' WHERE projection='${base}' AND job_id IS NOT NULL AND changes()>0;
+		INSERT OR IGNORE INTO vector_shard_dirty(projection,generation,embedding_id) SELECT b.projection,b.building_generation,${wanted} FROM vector_shard_repairs b WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND (b.job_id IS NULL OR EXISTS(SELECT 1 FROM vector_shard_members m JOIN vector_shard_repair_partitions p ON p.partition_id=m.partition_id AND p.projection=b.projection AND p.generation=b.building_generation WHERE m.projection=b.projection AND m.embedding_id=${wanted}));`;
+	};
+	const move = available
+		? vectorAdmissionMoveSql(
+				base,
+				store,
+				table,
+				"new.id",
+				state.active_generation,
+				false,
+				table,
+				Number(dimensions) * 4,
+			)
+		: "";
+	const remove = available
+		? `${vectorAdmissionRemoveSql(base, `SELECT json_array(embedding_id,generation) FROM vector_shard_members WHERE projection='${base}' AND embedding_id=old.id`)} DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=old.id;`
+		: "";
+	db.exec(`CREATE TEMP TRIGGER ${base}_admission_ai AFTER INSERT ON ${store} BEGIN ${move} ${journal("new.id")} END`);
+	db.exec(
+		`CREATE TEMP TRIGGER ${base}_admission_au AFTER UPDATE OF id,vector,agent_id,compartment_id,source_id,source_type,dimensions ON ${store} BEGIN ${journal("old.id")} ${move} ${journal("new.id")} END`,
+	);
+	db.exec(`CREATE TEMP TRIGGER ${base}_admission_ad AFTER DELETE ON ${store} BEGIN ${journal("old.id")} ${remove} END`);
+	db.exec(
+		`CREATE TEMP TRIGGER ${base}_admission_recall_au AFTER UPDATE OF is_deleted,superseded_by,stale_at,scope,source_type ON memories BEGIN ${vectorRecallRowsSql(base, store, "e.source_type='memory' AND e.source_id=new.id")} END`,
+	);
+	for (const event of ["UPDATE OF id,agent_id,visibility,project,compartment_id,source_id", "DELETE"] as const) {
+		const suffix = event === "DELETE" ? "parent_ad" : "parent_au";
+		db.exec(
+			`CREATE TEMP TRIGGER ${base}_admission_${suffix} AFTER ${event} ON memories BEGIN UPDATE ${store} SET id=id WHERE source_type='memory' AND source_id=old.id; END`,
+		);
+	}
+	db.exec(
+		`CREATE TEMP TRIGGER ${base}_admission_job_ai AFTER INSERT ON org_jobs WHEN new.kind='classify' AND new.status IN ('pending','running') AND json_extract(new.params_json,'$.target.kind')='memory' BEGIN UPDATE ${store} SET id=id WHERE source_type='memory' AND source_id=json_extract(new.params_json,'$.target.id') AND agent_id=json_extract(new.params_json,'$.target.agentId'); END`,
+	);
+	cache.set(base, version());
+	return available;
+}
+function syncVectorAdmission(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+	id: string,
+	vector?: Float32Array,
+): void {
+	if (!prepareVectorAdmissionWriter(db, base, store)) return;
+	if (vector !== undefined) db.prepare("INSERT OR REPLACE INTO _vector_admission_override VALUES(?,?)").run(id, vector);
+	try {
+		db.prepare(`UPDATE ${store} SET id=id WHERE id=?`).run(id);
+	} finally {
+		db.prepare("DELETE FROM _vector_admission_override WHERE id=?").run(id);
+	}
+}
+export function bindVectorAdmissionWriters(
+	db: MigrationDb,
+	selection?: { readonly projection: VectorProjectionBase; readonly embeddings: "embeddings" | "embeddings_staging" },
+	initialize = true,
+): void {
+	if (!shardSchema(db).tables.has("vector_shard_repairs")) return;
+	for (const row of db.prepare("SELECT projection,store FROM vector_shard_repairs ORDER BY projection LIMIT 3").all()) {
+		if (
+			(row.projection !== "vec_embeddings" && row.projection !== "vec_embeddings_staging") ||
+			(row.store !== "embeddings" && row.store !== "embeddings_staging")
+		)
+			throw new Error("vector_projection_binding_invalid");
+		const store =
+			selection === undefined
+				? row.store
+				: row.projection === selection.projection
+					? selection.embeddings
+					: selection.embeddings === "embeddings"
+						? "embeddings_staging"
+						: "embeddings";
+		prepareVectorAdmissionWriter(db, row.projection, store, initialize);
+	}
+}
+
+export class VectorAdmissionLimitError extends Error {}
+export function admittedVectorPartitions(
+	db: Pick<MigrationDb, "prepare">,
+	base: VectorProjectionBase,
+	scope: ReadScope,
+	store?: "embeddings" | "embeddings_staging",
+): { table: string; ids: number[]; groups: number[][]; sizes: ReadonlyMap<number, number> } | undefined {
+	if (!shardSchema(db).tables.has("vector_shard_repairs")) return undefined;
+	const state = db
+		.prepare(
+			"SELECT phase,store,source_root,job_id,active_slot,active_generation FROM vector_shard_repairs WHERE projection=?",
+		)
+		.get(base);
+	if (
+		!state ||
+		typeof state.active_generation !== "number" ||
+		state.active_generation < 1 ||
+		state.phase === "pending" ||
+		(state.phase !== "ready" && state.job_id === null)
+	)
+		throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+	if (
+		store !== undefined &&
+		(state.store !== store ||
+			state.source_root !==
+				db.prepare("SELECT rootpage FROM sqlite_master WHERE name=? AND type='table'").get(store)?.rootpage)
+	)
+		throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+	const table = `${base}__admission_${state.active_slot === 1 ? 1 : 0}`;
+	if (!shardSchema(db).tables.has(table)) throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+	const parent = readScopeSql("k", scope, { inFlightJobs: "in_flight_jobs" });
+	const child = readScopeSql(
+		"k",
+		{ ...scope, projects: null, reach: scope.reach.kind === "own" ? scope.reach : { kind: "all" } },
+		{ visibility: null, compartment: "embedding_compartment_id", inFlightJobs: "in_flight_jobs" },
+	);
+	const rows = db
+		.prepare(
+			`SELECT k.id,k.row_count,json_array(k.agent_id,k.visibility,k.project,k.compartment_id,k.embedding_compartment_id,json(${classificationLabelsForJobsSql("k", "in_flight_jobs")})) admission_key FROM vector_shard_keys k WHERE k.projection=? AND k.generation<=? AND k.retired_generation IS NULL AND k.row_count>0${parent.sql}${child.sql} ORDER BY k.id LIMIT 4097`,
+		)
+		.all(base, state.active_generation, ...parent.args, ...child.args);
+	if (rows.length > 4096) throw new VectorAdmissionLimitError("vector_shard_fanout_limit");
+	const groups = new Map<string, number[]>();
+	const sizes = new Map<number, number>();
+	for (const row of rows) {
+		if (
+			typeof row.id !== "number" ||
+			!Number.isSafeInteger(row.id) ||
+			typeof row.row_count !== "number" ||
+			!Number.isSafeInteger(row.row_count) ||
+			row.row_count < 1 ||
+			typeof row.admission_key !== "string"
+		)
+			throw new Error("invalid_vector_admission_key");
+		sizes.set(row.id, row.row_count);
+		const group = groups.get(row.admission_key) ?? [];
+		group.push(row.id);
+		groups.set(row.admission_key, group);
+	}
+	return {
+		table,
+		ids: rows.flatMap((row) => (typeof row.id === "number" ? [row.id] : [])),
+		groups: [...groups.values()],
+		sizes,
+	};
+}
+
+export function beginVectorAdmissionRepairInTx(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+	jobId: string | null = null,
+): void {
+	const state = db
+		.prepare("SELECT phase,active_slot,active_generation,job_id FROM vector_shard_repairs WHERE projection=?")
+		.get(base);
+	if (!state || typeof state.active_generation !== "number") throw new Error("vector_repair_marker_missing");
+	if (state.phase !== "ready" && state.phase !== "pending") {
+		if (state.job_id === jobId) return;
+		throw new Error("vector_repair_busy");
+	}
+	const definition = shardSchema(db).tables.get(base);
+	const dims = definition ? /embedding\s+FLOAT\[(\d+)\]/i.exec(definition)?.[1] : undefined;
+	if (!dims) throw new Error("vector_projection_unavailable");
+	if (jobId !== null && (state.phase !== "ready" || state.active_generation < 1)) throw new Error("vector_repair_busy");
+	if (jobId !== null) prepareVectorAdmissionWriter(db, base, store);
+	const slot = state.active_slot === 1 ? 1 : 0;
+	const table = `${base}__admission_${jobId === null ? 1 - slot : slot}`;
+	if (jobId === null) {
+		db.exec(`DROP TABLE IF EXISTS ${table}`);
+		db.exec(
+			`CREATE VIRTUAL TABLE ${table} USING vec0(id TEXT PRIMARY KEY,admission INTEGER partition key,embedding FLOAT[${dims}] distance_metric=cosine,chunk_size=64)`,
+		);
+	}
+	db.prepare(
+		"UPDATE vector_shard_repairs SET phase='copying',store=?,active_generation=MAX(active_generation,1),building_generation=MAX(active_generation,last_generation)+1,last_generation=MAX(active_generation,last_generation)+1,cursor='',job_id=? WHERE projection=?",
+	).run(store, jobId, base);
+	if (jobId !== null) {
+		const rows = vectorAdmissionRowsSql(store, "candidate.id", base);
+		const parts = db
+			.prepare(
+				`SELECT DISTINCT m.partition_id FROM org_jobs j CROSS JOIN ${store} candidate CROSS JOIN vector_shard_members m CROSS JOIN vector_shard_keys k WHERE j.id=? AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') AND m.projection=? AND m.embedding_id=candidate.id AND k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=? AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=j.id) LIMIT 4097`,
+			)
+			.all(jobId, base, state.active_generation);
+		if (parts.length > 4096) throw new VectorAdmissionLimitError("vector_shard_fanout_limit");
+		for (const part of parts)
+			db.prepare(
+				"INSERT OR IGNORE INTO vector_shard_repair_partitions SELECT projection,building_generation,? FROM vector_shard_repairs WHERE projection=?",
+			).run(part.partition_id, base);
+	}
+	prepareVectorAdmissionWriter(db, base, store);
+}
+export function stepVectorAdmissionRepairInTx(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	limit = 100,
+): { phase: string; updated: number } {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("vector_repair_batch_limit");
+	const state = db.prepare("SELECT * FROM vector_shard_repairs WHERE projection=?").get(base);
+	if (
+		!state ||
+		(state.store !== "embeddings" && state.store !== "embeddings_staging") ||
+		typeof state.building_generation !== "number" ||
+		typeof state.cursor !== "string"
+	)
+		throw new Error("vector_repair_not_started");
+	const store = state.store;
+	const generation = state.building_generation;
+	prepareVectorAdmissionWriter(db, base, store);
+	const slot = state.active_slot === 1 ? 1 : 0;
+	const table = `${base}__admission_${state.job_id === null ? 1 - slot : slot}`;
+	const previous = `${base}__admission_${slot}`;
+	const fallback = shardSchema(db).tables.has(previous) ? previous : base;
+	db.exec("CREATE TEMP TABLE IF NOT EXISTS _vector_admission_wanted(id TEXT PRIMARY KEY)");
+	const move = (id: string) => {
+		if (
+			state.job_id !== null &&
+			!db
+				.prepare(
+					"SELECT 1 FROM vector_shard_members m JOIN vector_shard_repair_partitions p ON p.partition_id=m.partition_id JOIN vector_shard_keys k ON k.id=m.partition_id WHERE p.projection=? AND p.generation=? AND m.embedding_id=? AND k.retired_generation IS NULL LIMIT 1",
+				)
+				.get(base, generation, id)
+		) {
+			db.prepare(`DELETE FROM ${table} WHERE id=json_array(?,?)`).run(id, generation);
+			db.prepare("DELETE FROM vector_shard_members WHERE projection=? AND generation=? AND embedding_id=?").run(
+				base,
+				generation,
+				id,
+			);
+			db.prepare("DELETE FROM vector_shard_unresolved WHERE projection=? AND generation=? AND embedding_id=?").run(
+				base,
+				generation,
+				id,
+			);
+			return;
+		}
+		db.exec("DELETE FROM _vector_admission_wanted");
+		db.prepare("INSERT INTO _vector_admission_wanted VALUES(?)").run(id);
+		db.exec(
+			vectorAdmissionMoveSql(
+				base,
+				store,
+				table,
+				"(SELECT id FROM _vector_admission_wanted)",
+				generation,
+				true,
+				fallback,
+			),
+		);
+		const member = db
+			.prepare("SELECT 1 found FROM vector_shard_members WHERE projection=? AND generation=? AND embedding_id=?")
+			.get(base, state.building_generation, id);
+		if (!member) {
+			const valid = db.prepare(`SELECT 1 found FROM (${vectorAdmissionRowsSql(store, "?", base)})`).get(id);
+			if (valid) throw new Error("vector_repair_payload_missing");
+			db.prepare("INSERT OR IGNORE INTO vector_shard_unresolved VALUES(?,?,?)").run(
+				base,
+				state.building_generation,
+				id,
+			);
+		} else
+			db.prepare("DELETE FROM vector_shard_unresolved WHERE projection=? AND generation=? AND embedding_id=?").run(
+				base,
+				state.building_generation,
+				id,
+			);
+	};
+	const readPage = () =>
+		state.job_id === null
+			? db.prepare(`SELECT id FROM ${store} WHERE id>? ORDER BY id LIMIT ?`).all(state.cursor, limit)
+			: db
+					.prepare(
+						`SELECT DISTINCT m.embedding_id id FROM vector_shard_repair_partitions p CROSS JOIN vector_shard_members m JOIN vector_shard_keys k ON k.id=m.partition_id JOIN ${store} e ON e.id=m.embedding_id WHERE p.projection=? AND p.generation=? AND m.partition_id=p.partition_id AND k.retired_generation IS NULL AND m.embedding_id>? ORDER BY m.embedding_id LIMIT ?`,
+					)
+					.all(base, generation, state.cursor, limit);
+	if (state.phase === "copying") {
+		const page = readPage();
+		for (const row of page) if (typeof row.id === "string") move(row.id);
+		const cursor = page.at(-1)?.id;
+		const phase = page.length < limit ? "verify" : "copying";
+		db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(
+			phase,
+			phase === "verify" ? "" : cursor,
+			base,
+		);
+		return { phase, updated: page.length };
+	}
+	const dirty = db
+		.prepare(
+			"SELECT embedding_id FROM vector_shard_dirty WHERE projection=? AND generation=? ORDER BY embedding_id LIMIT ?",
+		)
+		.all(base, state.building_generation, limit);
+	if (dirty.length) {
+		for (const row of dirty)
+			if (typeof row.embedding_id === "string") {
+				move(row.embedding_id);
+				db.prepare("DELETE FROM vector_shard_dirty WHERE projection=? AND generation=? AND embedding_id=?").run(
+					base,
+					state.building_generation,
+					row.embedding_id,
+				);
+			}
+		db.prepare("UPDATE vector_shard_repairs SET phase='verify',cursor='' WHERE projection=?").run(base);
+		return { phase: "verify", updated: dirty.length };
+	}
+	if (state.phase === "prepared") return { phase: "prepared", updated: 0 };
+	if (state.phase !== "verify") throw new Error("vector_repair_invalid_phase");
+	const page = readPage();
+	for (const row of page)
+		if (typeof row.id === "string") {
+			const fingerprint = vectorAdmissionFingerprint("r");
+			const valid = db
+				.prepare(`SELECT ${fingerprint} fingerprint FROM (${vectorAdmissionRowsSql(store, "?", base)}) r`)
+				.get(row.id);
+			if (!valid) continue;
+			const projected = db
+				.prepare(
+					`SELECT k.fingerprint FROM vector_shard_members m JOIN vector_shard_keys k ON k.id=m.partition_id JOIN ${table}_rowids v ON v.id=json_array(m.embedding_id,m.generation) WHERE m.projection=? AND m.generation=? AND m.embedding_id=?`,
+				)
+				.get(base, state.building_generation, row.id);
+			if (projected?.fingerprint !== valid.fingerprint) throw new Error("vector_repair_verification_failed");
+		}
+	const phase = page.length < limit ? "prepared" : "verify";
+	db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(
+		phase,
+		page.at(-1)?.id ?? state.cursor,
+		base,
+	);
+	return { phase, updated: page.length };
+}
+export function cancelVectorAdmissionRepairInTx(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	jobId: string,
+): { phase: "cancelling" | "ready"; updated: number } {
+	const state = db
+		.prepare(
+			"SELECT store,active_slot,active_generation,building_generation FROM vector_shard_repairs WHERE projection=? AND job_id=?",
+		)
+		.get(base, jobId);
+	if (!state) return { phase: "ready", updated: 0 };
+	if (
+		(state.store !== "embeddings" && state.store !== "embeddings_staging") ||
+		typeof state.building_generation !== "number" ||
+		typeof state.active_generation !== "number" ||
+		state.building_generation <= state.active_generation
+	)
+		throw Error("vector_cancel_generation_invalid");
+	const generation = state.building_generation,
+		table = `${base}__admission_${state.active_slot === 1 ? 1 : 0}`;
+	const rows = db
+		.prepare(
+			"SELECT embedding_id FROM vector_shard_members WHERE projection=? AND generation=? ORDER BY embedding_id LIMIT 100",
+		)
+		.all(base, generation);
+	for (const row of rows) {
+		if (typeof row.embedding_id !== "string") throw Error("vector_cancel_member_invalid");
+		db.prepare(`DELETE FROM ${table} WHERE id=json_array(?,?)`).run(row.embedding_id, generation);
+		db.prepare("DELETE FROM vector_shard_members WHERE projection=? AND generation=? AND embedding_id=?").run(
+			base,
+			generation,
+			row.embedding_id,
+		);
+	}
+	for (const journal of ["vector_shard_dirty", "vector_shard_unresolved"] as const)
+		db.prepare(
+			`DELETE FROM ${journal} WHERE projection=? AND generation=? AND embedding_id IN(SELECT embedding_id FROM ${journal} WHERE projection=? AND generation=? LIMIT 100)`,
+		).run(base, generation, base, generation);
+	db.prepare(
+		"DELETE FROM vector_shard_repair_partitions WHERE projection=? AND generation=? AND partition_id IN(SELECT partition_id FROM vector_shard_repair_partitions WHERE projection=? AND generation=? LIMIT 100)",
+	).run(base, generation, base, generation);
+	db.prepare(
+		"DELETE FROM vector_shard_keys WHERE id IN(SELECT id FROM vector_shard_keys WHERE projection=? AND generation=? AND row_count=0 LIMIT 100)",
+	).run(base, generation);
+	for (const remaining of [
+		"vector_shard_members",
+		"vector_shard_dirty",
+		"vector_shard_unresolved",
+		"vector_shard_repair_partitions",
+		"vector_shard_keys",
+	] as const)
+		if (db.prepare(`SELECT 1 FROM ${remaining} WHERE projection=? AND generation=? LIMIT 1`).get(base, generation))
+			return { phase: "cancelling", updated: rows.length };
+	db.prepare(
+		"UPDATE vector_shard_repairs SET phase='ready',building_generation=NULL,job_id=NULL,cursor='' WHERE projection=? AND job_id=?",
+	).run(base, jobId);
+	prepareVectorAdmissionWriter(db, base, state.store);
+	return { phase: "ready", updated: rows.length };
+}
+
+export function publishVectorAdmissionRepairInTx(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	jobId: string | null = null,
+): void {
+	const state = db.prepare("SELECT * FROM vector_shard_repairs WHERE projection=?").get(base);
+	if (
+		state?.phase !== "prepared" ||
+		state.job_id !== jobId ||
+		typeof state.building_generation !== "number" ||
+		(state.store !== "embeddings" && state.store !== "embeddings_staging")
+	)
+		throw new Error("vector_repair_not_prepared");
+	if (
+		db
+			.prepare("SELECT 1 FROM vector_shard_dirty WHERE projection=? AND generation=? LIMIT 1")
+			.get(base, state.building_generation)
+	)
+		throw new Error("vector_repair_changed_after_verification");
+	db.prepare(
+		"UPDATE vector_shard_keys SET retired_generation=? WHERE projection=? AND generation<? AND retired_generation IS NULL AND (? IS NULL OR id IN(SELECT partition_id FROM vector_shard_repair_partitions WHERE projection=? AND generation=?))",
+	).run(state.building_generation, base, state.building_generation, jobId, base, state.building_generation);
+	if (jobId !== null)
+		db.prepare(
+			"UPDATE org_jobs SET kind=CASE kind WHEN 'classify-preparing' THEN 'classify' WHEN 'unclassify-preparing' THEN 'unclassify' ELSE kind END WHERE id=?",
+		).run(jobId);
+	db.prepare(
+		"UPDATE vector_shard_repairs SET phase='ready',active_slot=CASE WHEN job_id IS NULL THEN 1-active_slot ELSE active_slot END,active_generation=building_generation,building_generation=NULL,cursor='',job_id=NULL WHERE projection=?",
+	).run(base);
+	prepareVectorAdmissionWriter(db, base, state.store);
+}
+
+export function repairVectorAdmissionStepInTx(
+	db: MigrationDb,
+	base: VectorProjectionBase,
+	store: "embeddings" | "embeddings_staging",
+): { phase: string; updated: number } {
+	if (!shardSchema(db).tables.has("vector_shard_repairs") || !shardSchema(db).tables.has(base))
+		return { phase: "unavailable", updated: 0 };
+	prepareVectorAdmissionWriter(db, base, store);
+	const state = db.prepare("SELECT phase,job_id FROM vector_shard_repairs WHERE projection=?").get(base);
+	if (!state) throw new Error("vector_repair_marker_missing");
+	if (state.job_id !== null) return { phase: "busy", updated: 0 };
+	if (state.phase === "ready") return { phase: "ready", updated: 0 };
+	if (state.phase === "pending") {
+		beginVectorAdmissionRepairInTx(db, base, store);
+		return { phase: "copying", updated: 0 };
+	}
+	if (state.phase === "prepared") {
+		publishVectorAdmissionRepairInTx(db, base);
+		return { phase: "ready", updated: 0 };
+	}
+	return stepVectorAdmissionRepairInTx(db, base);
 }

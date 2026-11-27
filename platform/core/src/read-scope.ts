@@ -58,10 +58,71 @@ function identifier(value: string): string {
 function jobValue(alias: string, key: string): string {
 	return `json_extract(CASE WHEN json_valid(${alias}.params_json) THEN ${alias}.params_json ELSE '{}' END,'$.${key}')`;
 }
+function activeClassificationSql(j: string): string {
+	return `${j}.kind='classify' AND ${j}.status IN ('pending','running','failed') AND (${j}.status!='failed' OR EXISTS(SELECT 1 FROM classification_assignments a WHERE a.agent_id=${jobValue(j, "target.agentId")} AND a.target_kind=${jobValue(j, "target.kind")} AND a.target_id=${jobValue(j, "target.id")} AND a.classification_id=${jobValue(j, "id")}))`;
+}
+function missingClassificationAudienceSql(classification: string): string {
+	return `NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=${classification} AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))`;
+}
 export function inFlightClassificationSql(alias: string): string {
-	const j = identifier(alias),
-		classification = jobValue(j, "id");
-	return `${j}.kind='classify' AND ${j}.status IN ('pending','running','failed') AND (${j}.status!='failed' OR EXISTS(SELECT 1 FROM classification_assignments a WHERE a.agent_id=${jobValue(j, "target.agentId")} AND a.target_kind=${jobValue(j, "target.kind")} AND a.target_id=${jobValue(j, "target.id")} AND a.classification_id=${classification})) AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=${classification} AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))`;
+	const j = identifier(alias);
+	return `${activeClassificationSql(j)} AND ${missingClassificationAudienceSql(jobValue(j, "id"))}`;
+}
+interface ClassificationColumns {
+	agent?: string;
+	checkpoint?: boolean;
+	memory?: string | null;
+	session?: string | null;
+	source?: string | null;
+}
+function matchingClassificationJobsSql(
+	alias: string,
+	cols?: ClassificationColumns,
+	preparingJob?: string,
+	cacheFailed = false,
+): string {
+	if (preparingJob !== undefined && !/^[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*$/.test(preparingJob))
+		throw new Error("Invalid preparation column");
+	const prefix = alias ? `${identifier(alias)}.` : "";
+	const col = (name: string) => `${prefix}${identifier(name)}`;
+	const agent = col(cols?.agent ?? "agent_id");
+	const j = alias === "_signet_classification_job" ? "__signet_classification_job" : "_signet_classification_job";
+	const target = jobValue(j, "target.id"),
+		kind = jobValue(j, "target.kind"),
+		jobAgent = jobValue(j, "target.agentId");
+	const own = (column: string | null) => (column === null ? "NULL" : col(column));
+	const memory = own(cols?.memory === undefined ? (cols?.checkpoint ? null : "id") : cols.memory);
+	const session = own(cols?.session === undefined ? (cols?.checkpoint ? "session_key" : "source_id") : cols.session);
+	const source = own(cols?.source === undefined ? (cols?.checkpoint ? null : "source_id") : cols.source);
+	const matchesAgent = cols?.checkpoint
+		? `(${jobAgent}=${agent} OR (${agent} IS NULL AND ${jobAgent} IN (SELECT agent_id FROM session_transcripts WHERE session_key=${col("session_key")} UNION SELECT agent_id FROM session_claims WHERE session_key=${col("session_key")})))`
+		: `${jobAgent}=${agent}`;
+	const applicable = cacheFailed
+		? `(${activeClassificationSql(j)} OR (${j}.kind='classify' AND ${j}.status='failed'))`
+		: activeClassificationSql(j);
+	const active = preparingJob
+		? `(${applicable} OR (${j}.id=${preparingJob} AND ${j}.kind='classify-preparing'))`
+		: applicable;
+	return `SELECT DISTINCT ${j}.id job_id,${jobValue(j, "id")} classification_id FROM org_jobs ${j} WHERE ${active} AND ${matchesAgent} AND (${kind}='agent' OR (${kind}='memory' AND ${target}=${memory}) OR (${kind}='session' AND (${target}=${session} OR 'session:'||${target}=${session} OR ${target}='session:'||${session})) OR (${kind}='source' AND (${target}=${source} OR substr(${source},1,length(${target})+1)=${target}||':'))) ORDER BY job_id`;
+}
+export function inFlightClassificationLabelsSql(
+	alias: string,
+	cols?: ClassificationColumns,
+	preparingJob?: string,
+): string {
+	return `(SELECT json_group_array(classification_id) FROM (SELECT DISTINCT classification_id FROM (${matchingClassificationJobsSql(alias, cols, preparingJob)}) ORDER BY classification_id))`;
+}
+export function inFlightClassificationJobsSql(
+	alias: string,
+	cols?: ClassificationColumns,
+	preparingJob?: string,
+): string {
+	return `(SELECT json_group_array(job_id) FROM (${matchingClassificationJobsSql(alias, cols, preparingJob, true)}))`;
+}
+export function classificationLabelsForJobsSql(alias: string, field: string): string {
+	const jobs = `${identifier(alias)}.${identifier(field)}`;
+	const j = "_vector_classification_job";
+	return `(CASE WHEN ${jobs}='[]' THEN '[]' ELSE (SELECT json_group_array(classification_id) FROM (SELECT DISTINCT ${jobValue(j, "id")} classification_id FROM org_jobs ${j} WHERE ${activeClassificationSql(j)} AND ${j}.id IN (SELECT value FROM json_each(${jobs})) ORDER BY classification_id)) END)`;
 }
 export function readScopeSql(
 	alias: string,
@@ -76,6 +137,7 @@ export function readScopeSql(
 		memory?: string | null;
 		session?: string | null;
 		source?: string | null;
+		inFlightJobs?: string;
 	},
 ): { sql: string; args: (string | number)[] } {
 	requireReadScope(scope);
@@ -128,19 +190,11 @@ export function readScopeSql(
 		args.push(...scope.projects);
 	}
 	if (scope.inFlightUserId) {
-		const j = alias === "_signet_classification_job" ? "__signet_classification_job" : "_signet_classification_job";
-		const target = jobValue(j, "target.id"),
-			kind = jobValue(j, "target.kind"),
-			jobAgent = jobValue(j, "target.agentId");
-		const own = (column: string | null) => (column === null ? "NULL" : col(column));
-		const memory = own(cols?.memory === undefined ? (cols?.checkpoint ? null : "id") : cols.memory);
-		const session = own(cols?.session === undefined ? (cols?.checkpoint ? "session_key" : "source_id") : cols.session);
-		const source = own(cols?.source === undefined ? (cols?.checkpoint ? null : "source_id") : cols.source);
-		const matchesAgent = cols?.checkpoint
-			? `(${jobAgent}=${agent} OR (${agent} IS NULL AND ${jobAgent} IN (SELECT agent_id FROM session_transcripts WHERE session_key=${col("session_key")} UNION SELECT agent_id FROM session_claims WHERE session_key=${col("session_key")})))`
-			: `${jobAgent}=${agent}`;
+		const labels = cols?.inFlightJobs
+			? classificationLabelsForJobsSql(alias, cols.inFlightJobs)
+			: inFlightClassificationLabelsSql(alias, cols);
 		clauses.push(
-			`NOT EXISTS(SELECT 1 FROM org_jobs ${j} WHERE ${inFlightClassificationSql(j)} AND ${matchesAgent} AND (${kind}='agent' OR (${kind}='memory' AND ${target}=${memory}) OR (${kind}='session' AND (${target}=${session} OR 'session:'||${target}=${session} OR ${target}='session:'||${session})) OR (${kind}='source' AND (${target}=${source} OR substr(${source},1,length(${target})+1)=${target}||':'))))`,
+			`NOT EXISTS(SELECT 1 FROM json_each(${labels}) _read_classification WHERE ${missingClassificationAudienceSql("_read_classification.value")})`,
 		);
 		args.push(scope.inFlightUserId, scope.inFlightUserId);
 	}

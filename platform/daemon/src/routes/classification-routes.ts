@@ -94,6 +94,7 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				"name_conflict",
 				"job_not_pending",
 				"classification_pending_timeout",
+				"classification_reversal_required",
 			].includes(reason)
 		)
 			return reply({ error: reason }, 409);
@@ -108,6 +109,22 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				400,
 			);
 		throw error;
+	});
+	app.post("/api/classifications/jobs/:jobId/cancel", async (c) => {
+		const principal = actor(c);
+		if (!principal.canClassify) throw Error("permission");
+		const input = {
+			op: "cancel",
+			actor: principal.actor,
+			jobId: z.string().min(1).max(200).parse(c.req.param("jobId")),
+		} as const;
+		const receipt = z.object({ jobId: z.string(), status: z.string() }).parse(await request(input));
+		if (c.req.query("wait") === "1") {
+			await executeClassificationJob(receipt.jobId, request);
+			return reply(await request(input));
+		}
+		void attemptAsync(() => executeClassificationJob(receipt.jobId, request));
+		return reply(receipt, 202);
 	});
 	app.get("/api/classifications", async (c) => {
 		const principal = actor(c);

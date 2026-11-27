@@ -43,6 +43,40 @@ function routeFixture(eager = false) {
 	});
 	return { db, app, json };
 }
+test("HTTP classification cancellation enforces authority and waits for cleanup", async () => {
+	const { db, app, json } = routeFixture();
+	try {
+		db.exec("INSERT INTO classifications(id,name) VALUES('cls_cancel','Cancel')");
+		const actor = {
+			userId: "carol",
+			groupIds: [],
+			local: false,
+			compliance: true,
+			boundAgentId: null,
+			allowedProjects: null,
+			credential: "session:carol",
+		};
+		const queued = executeClassification(db, {
+			op: "enqueue",
+			actor,
+			id: "cls_cancel",
+			target: { kind: "memory", id: "m", agentId: "default" },
+			remove: false,
+		});
+		const { jobId } = await import("zod").then(({ z }) => z.object({ jobId: z.string() }).parse(queued));
+		for (const who of ["alice", "bob"])
+			for (const id of [jobId, "missing"])
+				expect((await app.request(`/api/classifications/jobs/${id}/cancel`, json(who, {}))).status).toBe(403);
+		expect((await app.request(`/api/classifications/jobs/${jobId}/cancel`, json("carol", {}, false))).status).toBe(403);
+		const response = await app.request(`/api/classifications/jobs/${jobId}/cancel?wait=1`, json("carol", {}));
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ jobId, status: "cancelled" });
+		expect(db.query("SELECT status FROM org_jobs WHERE id=?").get(jobId)).toEqual({ status: "cancelled" });
+	} finally {
+		db.close();
+	}
+});
+
 test("HTTP hides definitions, compliance classifies without content access and owners cannot remove", async () => {
 	const { db, app, json } = routeFixture();
 	const deniedCreation = json("carol", { name: "Blocked", audience: [] }, false);

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { activeVectorProjectionTable } from "@signet/core";
 import {
 	DbOwnerAdmissionError,
 	DbOwnerDeadlineError,
@@ -32,6 +33,35 @@ import type { EmbeddingIndexMigrationProgress } from "./embedding-index-state";
 import type { DiagnosticsReport, ProviderTracker, QueueHealth } from "./diagnostics";
 import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
 import type { DreamingSurprisalSelection } from "./pipeline/dreaming-surprisal";
+
+export async function ownerHasPendingVecBackfill(owner: DbOwnerClient, expectedDimensions: number): Promise<boolean> {
+	const tables = await ownerQueryAll<{ readonly name: string }>(
+		owner,
+		"maintenance.vec-backfill-probe-schema",
+		"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('embedding_index_state','vec_embeddings_rowids','vec_embeddings_staging_rowids')",
+	);
+	const indexState = tables.some((row) => row.name === "embedding_index_state")
+		? await ownerQueryOne<{ readonly active_profile_json?: unknown }>(
+				owner,
+				"maintenance.vec-backfill-probe-slot",
+				"SELECT active_profile_json FROM embedding_index_state WHERE id=1",
+			)
+		: undefined;
+	const activeTable = activeVectorProjectionTable({ prepare: () => ({ get: () => indexState }) });
+	const targetTable = tables.some((row) => row.name === `${activeTable}_rowids`)
+		? `${activeTable}_rowids`
+		: activeTable;
+	const pending = await ownerQueryOne<{ readonly present: number }>(
+		owner,
+		"maintenance.vec-backfill-probe",
+		`SELECT 1 AS present FROM embeddings e
+		 LEFT JOIN ${targetTable} v ON v.id=e.id
+		 LEFT JOIN vec_embeddings_quarantine q ON q.rowid=e.id
+		 WHERE v.id IS NULL AND q.rowid IS NULL AND e.dimensions=? LIMIT 1`,
+		[expectedDimensions],
+	);
+	return pending !== undefined;
+}
 
 export interface DbOwnerMaintenanceOptions {
 	readonly deadlineMs?: number;

@@ -17,6 +17,7 @@ import {
 	readScopeSql,
 	requireReadScope,
 	type VectorSearchCompleteness,
+	type VectorSearchResponse,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, getDbAccessorPath, runWriteTxAsync } from "./db-accessor";
@@ -277,6 +278,7 @@ export interface RecallResponse {
 		hasSupplementary: boolean;
 		noHits: boolean;
 		vectorCompleteness?: VectorSearchCompleteness;
+		degraded?: VectorSearchResponse["degraded"];
 		searchedWindow?: number;
 		sourceVectorSearch?: SourceChunkVectorDiagnostics;
 		reranker?: RerankOutcome;
@@ -701,6 +703,7 @@ async function authorizeScoredCandidates(
 
 interface AuthorizedVectorCandidates {
 	readonly results: ReadonlyArray<{ readonly id: string; readonly score: number }>;
+	readonly degraded?: VectorSearchResponse["degraded"];
 	readonly completeness: VectorSearchCompleteness;
 	readonly searchedWindow?: number;
 }
@@ -720,56 +723,42 @@ async function findAuthorizedVectorCandidates(
 		readScope.compartments !== "all" && readScope.compartments.length === 0
 			? []
 			: await readShardCatalogue(owner, "foreground");
-	const discovered = new Set<string>();
-	const authorized = new Map<string, { readonly id: string; readonly score: number }>();
-	let usedWork = 0;
-	let requested = Math.max(1, targetCount);
-	let completeness: VectorSearchCompleteness = "complete";
-	let searchedWindow = 0;
-	let exhausted = false;
-
-	while (usedWork < maxWork) {
-		checkRecallCancellation(execution);
-		const vectorResult = await vectorSearchThroughDbOwner(owner, [...queryVector], {
-			limit: requested,
-			type: params.type,
-			currentOnly: true,
-			memoryScope: params.scope ?? null,
-			excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
-			maxScanRows: requested,
-			readScope,
-			shardNames,
-		});
-		usedWork += requested;
-		completeness = vectorResult.completeness;
-		searchedWindow = Math.max(searchedWindow, vectorResult.searchedWindow ?? vectorResult.results.length);
-		if (completeness === "unavailable") return { results: [], completeness, searchedWindow };
-
-		const fresh = vectorResult.results.flatMap((row) => {
-			if (discovered.has(row.id) || !Number.isFinite(row.score) || row.score <= 0) return [];
-			const candidate = { id: row.id, score: row.score, source: "vector" };
-			discovered.add(row.id);
-			return [candidate];
-		});
-		const scoped = await authorizeScoredCandidates(fresh, filter, owner);
-		for (const row of scoped) authorized.set(row.id, { id: row.id, score: row.score });
-		if (authorized.size >= targetCount) break;
-
-		if (vectorResult.completeness === "complete" && vectorResult.results.length < requested) {
-			exhausted = true;
-			break;
-		}
-		const remainingWork = maxWork - usedWork;
-		if (remainingWork <= 0) {
-			completeness = "recent-window";
-			break;
-		}
-		requested = Math.min(requested * 2, remainingWork);
-	}
-
-	if (!exhausted && authorized.size < targetCount && usedWork >= maxWork) completeness = "recent-window";
-	const results = [...authorized.values()].sort((left, right) => right.score - left.score).slice(0, targetCount);
-	return { results, completeness, searchedWindow };
+	checkRecallCancellation(execution);
+	const vectorResult = await vectorSearchThroughDbOwner(owner, [...queryVector], {
+		limit: Math.max(1, targetCount),
+		type: params.type,
+		currentOnly: true,
+		memoryScope: params.scope ?? null,
+		excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
+		tags: params.tags,
+		who: params.who,
+		pinned: params.pinned,
+		importanceMin: params.importance_min,
+		since: params.since,
+		until: params.until,
+		project: params.project,
+		maxScanRows: Math.max(1, targetCount),
+		readScope,
+		shardNames,
+	});
+	const searchedWindow = vectorResult.searchedWindow ?? vectorResult.results.length;
+	if (vectorResult.completeness === "unavailable")
+		return {
+			results: [],
+			completeness: vectorResult.completeness,
+			searchedWindow,
+			...(vectorResult.degraded ? { degraded: vectorResult.degraded } : {}),
+		};
+	const candidates = vectorResult.results
+		.filter((row) => Number.isFinite(row.score) && row.score > 0)
+		.map((row) => ({ id: row.id, score: row.score, source: "vector" }));
+	const scoped = await authorizeScoredCandidates(candidates, filter, owner);
+	const unique = new Map(scoped.map((row) => [row.id, { id: row.id, score: row.score }]));
+	return {
+		results: [...unique.values()].sort((left, right) => right.score - left.score).slice(0, targetCount),
+		completeness: vectorResult.completeness,
+		searchedWindow,
+	};
 }
 
 async function loadObservedScores(
@@ -1015,15 +1004,22 @@ export async function readOwnerVectorsBySource(
 	const vectors: Array<{ source_id: string; vector: Float32Array }> = [];
 	for (let offset = 0; offset < sourceIds.length; offset += pageRows) {
 		const pageIds = sourceIds.slice(offset, offset + pageRows);
-		const placeholders = pageIds.map(() => "?").join(", ");
 		let cursor = 0;
 		for (;;) {
 			const rows = await read(
-				`SELECT e.rowid, e.source_id, hex(e.vector) AS vector_hex FROM embeddings e
-				 WHERE e.source_type = 'memory' AND e.source_id IN (${placeholders})
-				   AND e.dimensions = ? AND length(e.vector) = ? AND e.rowid > ?${scope.sql}
+				`WITH requested AS MATERIALIZED (SELECT DISTINCT value AS id FROM json_each(?))
+				 SELECT e.rowid, e.source_id, hex(e.vector) AS vector_hex
+				 FROM requested CROSS JOIN embeddings e ON e.source_type='memory' AND e.source_id=requested.id
+				 WHERE e.dimensions = ? AND length(e.vector) = ? AND e.rowid > ?${scope.sql}
 				 ORDER BY e.rowid LIMIT ?`,
-				[...pageIds, dimensions, dimensions * Float32Array.BYTES_PER_ELEMENT, cursor, ...scope.args, pageRows],
+				[
+					JSON.stringify(pageIds),
+					dimensions,
+					dimensions * Float32Array.BYTES_PER_ELEMENT,
+					cursor,
+					...scope.args,
+					pageRows,
+				],
 				pageRows,
 			);
 			for (const row of rows) {
@@ -2314,6 +2310,7 @@ async function scopedHybridRecall(
 		activeDevice: nativeRerankActiveDevice,
 		requestedDevice: crossEncoderRuntime.device,
 	});
+	let vectorDegraded: VectorSearchResponse["degraded"];
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
 		checkRecallCancellation(execution);
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
@@ -2391,6 +2388,7 @@ async function scopedHybridRecall(
 		response.results = deduped.items;
 		response.meta = {
 			...response.meta,
+			...(vectorDegraded ? { degraded: vectorDegraded, partial: true } : {}),
 			totalReturned: response.results.length,
 			hasSupplementary: response.results.some((row) => row.supplementary === true),
 			noHits: response.results.length === 0,
@@ -2811,6 +2809,12 @@ async function scopedHybridRecall(
 					);
 					vectorCompleteness = vectorResult.completeness;
 					searchedWindow = vectorResult.searchedWindow;
+					if (vectorResult.degraded?.includes("vector_fanout_cap")) {
+						vectorDegraded = vectorResult.degraded;
+						queryVecF32 = null;
+						comparableQueryVector = null;
+						logger.warn("memory", "Vector recall skipped: vector_fanout_cap");
+					}
 					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
 				});
 			} catch (e) {

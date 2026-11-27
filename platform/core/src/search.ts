@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
-import { selectShardTables } from "./compartment-shards";
+import { selectShardTables, admittedVectorPartitions, VectorAdmissionLimitError } from "./compartment-shards";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { redactCredentials } from "./credential-detection";
 import type { Memory } from "./types";
@@ -38,6 +38,13 @@ export interface VectorSearchOptions {
 	currentOnly?: boolean;
 	memoryScope?: string | null;
 	maxScanRows?: number;
+	readonly tags?: string;
+	readonly who?: string;
+	readonly pinned?: boolean;
+	readonly importanceMin?: number;
+	readonly since?: string;
+	readonly until?: string;
+	readonly project?: string;
 }
 
 export interface HybridSearchOptions {
@@ -124,6 +131,7 @@ export interface VectorSearchResponse {
 	readonly results: Array<{ id: string; score: number }>;
 	readonly completeness: VectorSearchCompleteness;
 	readonly searchedWindow?: number;
+	readonly degraded?: readonly "vector_fanout_cap"[];
 }
 
 function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
@@ -144,34 +152,35 @@ function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
 export function activeVectorProjectionTable(db: {
 	prepare(sql: string): { get(...args: unknown[]): unknown };
 }): "vec_embeddings" | "vec_embeddings_staging" {
-	try {
-		const row = db.prepare("SELECT active_profile_json FROM embedding_index_state WHERE id = 1").get() as
-			| { active_profile_json?: unknown }
-			| undefined;
-		if (typeof row?.active_profile_json !== "string") return "vec_embeddings";
-		const active = JSON.parse(row.active_profile_json) as { projectionSlot?: unknown };
-		return active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
-	} catch {
-		return "vec_embeddings";
-	}
+	return activeVectorSearchTables(db).projection;
 }
-
-function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
-	try {
-		const row = db
-			.prepare("SELECT active_profile_json, state, staging_profile_json FROM embedding_index_state WHERE id = 1")
-			.get() as { active_profile_json?: unknown; state?: unknown; staging_profile_json?: unknown } | undefined;
-		if (!row) return { projection: "vec_embeddings", embeddings: "embeddings" };
-		const activeProjection = activeVectorProjectionTable(db);
-		if (row.state !== "building" || typeof row.staging_profile_json !== "string") {
-			return { projection: activeProjection, embeddings: "embeddings" };
-		}
-		const staging = JSON.parse(row.staging_profile_json) as { projectionRebuild?: unknown };
-		if (staging.projectionRebuild === true) return { projection: activeProjection, embeddings: "embeddings_staging" };
-		return { projection: activeProjection, embeddings: "embeddings" };
-	} catch {
+export function activeVectorSearchTables(db: {
+	prepare(sql: string): { get(...args: unknown[]): unknown };
+}): VectorSearchTables {
+	if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedding_index_state'").get())
 		return { projection: "vec_embeddings", embeddings: "embeddings" };
-	}
+	const row = db
+		.prepare("SELECT active_profile_json,state,staging_profile_json FROM embedding_index_state WHERE id=1")
+		.get();
+	if (row == null) return { projection: "vec_embeddings", embeddings: "embeddings" };
+	if (typeof row !== "object") throw new Error("invalid_embedding_index_state");
+	const encoded: unknown = Reflect.get(row, "active_profile_json");
+	if (typeof encoded !== "string") throw new Error("invalid_embedding_index_profile");
+	const active: unknown = JSON.parse(encoded);
+	if (typeof active !== "object" || active === null || Array.isArray(active))
+		throw new Error("invalid_embedding_index_profile");
+	const slot: unknown = Reflect.get(active, "projectionSlot");
+	if (slot !== undefined && slot !== "active" && slot !== "staging") throw new Error("invalid_vector_projection_slot");
+	const projection = slot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+	if (Reflect.get(row, "state") !== "building") return { projection, embeddings: "embeddings" };
+	const building: unknown = Reflect.get(row, "staging_profile_json");
+	if (typeof building !== "string") throw new Error("invalid_embedding_index_profile");
+	const staged: unknown = JSON.parse(building);
+	if (typeof staged !== "object" || staged === null || Array.isArray(staged))
+		throw new Error("invalid_embedding_index_profile");
+	const rebuild: unknown = Reflect.get(staged, "projectionRebuild");
+	if (rebuild !== undefined && typeof rebuild !== "boolean") throw new Error("invalid_embedding_index_profile");
+	return { projection, embeddings: rebuild === true ? "embeddings_staging" : "embeddings" };
 }
 
 function embeddingReadPredicate(scope: ReadScope): { sql: string; args: unknown[] } {
@@ -259,10 +268,250 @@ function selectedSearchTables(base: string, scope: ReadScope, names: readonly st
 	return selectShardTables(names, scope.compartments).filter((name) => name === base || name.startsWith(`${base}__c`));
 }
 
+function admittedVectorSearch(
+	db: SQLiteDatabase,
+	query: Float32Array,
+	options: VectorSearchOptions,
+	partitioned: NonNullable<ReturnType<typeof admittedVectorPartitions>>,
+	store: string,
+	projection: string,
+	limit: number,
+	scan: typeof import("@signet/native").scanAdmittedVectors | undefined,
+): Array<{ id: string; score: number }> {
+	let rowCount = 0;
+	for (const ids of partitioned.groups) {
+		let candidates = 0;
+		for (const id of ids) {
+			const size = partitioned.sizes.get(id);
+			if (size === undefined) throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+			rowCount += size;
+			candidates += Math.min(size, limit);
+		}
+		if (candidates > 4096) throw new VectorAdmissionLimitError("vector_shard_candidate_limit");
+	}
+	if (rowCount > 1048576 || limit > 4096) throw new VectorAdmissionLimitError("vector_shard_scan_limit");
+	const clauses: string[] = [];
+	const args: unknown[] = [];
+	if (options.type) {
+		clauses.push("m.type=?");
+		args.push(options.type);
+	}
+	if (options.excludeAggregateRecall) clauses.push("COALESCE(m.source_type,'')!='aggregate-recall'");
+	if (options.currentOnly) clauses.push("m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL");
+	if (options.memoryScope === null) clauses.push("m.scope IS NULL");
+	else if (options.memoryScope !== undefined) {
+		clauses.push("m.scope=?");
+		args.push(options.memoryScope);
+	}
+	if (options.tags) {
+		const tags = options.tags
+			.split(",")
+			.map((tag) => tag.trim())
+			.filter(Boolean);
+		if (options.tags.length > 4096 || tags.length > 64)
+			throw new VectorAdmissionLimitError("vector_shard_filter_limit");
+		for (const tag of tags) {
+			clauses.push("m.tags LIKE ? ESCAPE '\\'");
+			args.push(`%${tag.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
+		}
+	}
+	if (options.who !== undefined) {
+		clauses.push("m.who=?");
+		args.push(options.who);
+	}
+	if (options.pinned) clauses.push("m.pinned=1");
+	if (options.importanceMin !== undefined) {
+		if (!Number.isFinite(options.importanceMin)) throw new VectorAdmissionLimitError("vector_shard_invalid_filter");
+		clauses.push("m.importance>=?");
+		args.push(options.importanceMin);
+	}
+	if (options.since !== undefined) {
+		clauses.push("m.created_at>=?");
+		args.push(options.since);
+	}
+	if (options.until !== undefined) {
+		clauses.push("m.created_at<=?");
+		args.push(options.until);
+	}
+	if (options.project !== undefined) {
+		clauses.push("m.project=?");
+		args.push(options.project);
+	}
+	const predicate = clauses.length ? clauses.join(" AND ") : "1";
+	const standard =
+		options.currentOnly === true &&
+		options.memoryScope === null &&
+		!options.type &&
+		!options.tags &&
+		options.who === undefined &&
+		!options.pinned &&
+		options.importanceMin === undefined &&
+		options.since === undefined &&
+		options.until === undefined &&
+		options.project === undefined;
+	if (partitioned.ids.some((id) => (partitioned.sizes.get(id) ?? 0) > 64)) {
+		const results = new Map<string, number>();
+		for (const partition of partitioned.ids) {
+			const statistics = db
+				.prepare(
+					"SELECT row_count,recall_indexed_count,recall_eligible_count,recall_kind FROM vector_shard_keys WHERE id=?",
+				)
+				.get(partition);
+			if (statistics?.recall_indexed_count !== partitioned.sizes.get(partition))
+				throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+			if (statistics.recall_kind === 0) continue;
+			const eligible = standard
+				? `SELECT json_array(f.embedding_id,s.generation) native_id,f.memory_id source_id FROM vector_shard_recall_rows f CROSS JOIN vector_shard_members s ON s.partition_id=f.partition_id AND s.embedding_id=f.embedding_id WHERE f.partition_id=? AND s.projection=? AND f.is_current=1 AND f.memory_scope IS NULL${options.excludeAggregateRecall ? " AND f.is_aggregate=0" : ""}`
+				: `SELECT r.id native_id,e.source_id FROM vector_shard_members s CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) WHERE s.partition_id=? AND s.projection=? AND e.source_type='memory' AND ${predicate}`;
+			const eligibleArgs = standard ? [] : args;
+			const headroom = db
+				.prepare(`SELECT COUNT(*)-COUNT(DISTINCT source_id) n FROM (${eligible})`)
+				.get(partition, projection, ...eligibleArgs)?.n;
+			if (typeof headroom !== "number" || headroom + limit > 4096)
+				throw new VectorAdmissionLimitError("vector_shard_candidate_limit");
+			const padded =
+				standard && typeof statistics.row_count === "number" && typeof statistics.recall_eligible_count === "number"
+					? Math.min(statistics.row_count, limit + headroom + statistics.row_count - statistics.recall_eligible_count)
+					: 4097;
+			const hits =
+				padded <= 4096
+					? db
+							.prepare(
+								`WITH hits AS MATERIALIZED(SELECT id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission=?) SELECT e.source_id,MIN(h.distance) distance FROM hits h CROSS JOIN ${store} e ON e.id=json_extract(h.id,'$[0]') CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id WHERE e.source_type='memory' AND ${predicate} GROUP BY e.source_id ORDER BY distance,e.source_id LIMIT ?`,
+							)
+							.all(new Float32Array(query), padded, partition, ...args, limit)
+					: db
+							.prepare(
+								`WITH eligible AS MATERIALIZED(${eligible}),hits AS MATERIALIZED(SELECT id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission=? AND id IN(SELECT native_id FROM eligible)) SELECT e.source_id,MIN(h.distance) distance FROM hits h CROSS JOIN ${store} e ON e.id=json_extract(h.id,'$[0]') GROUP BY e.source_id ORDER BY distance,e.source_id LIMIT ?`,
+							)
+							.all(partition, projection, ...eligibleArgs, new Float32Array(query), limit + headroom, partition, limit);
+			for (const hit of hits) {
+				if (typeof hit.source_id !== "string" || typeof hit.distance !== "number")
+					throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+				const score = Math.max(0, 1 - hit.distance);
+				results.set(hit.source_id, Math.max(results.get(hit.source_id) ?? 0, score));
+			}
+		}
+		return [...results]
+			.map(([id, score]) => ({ id, score }))
+			.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+			.slice(0, limit);
+	}
+	if (!scan) throw new VectorAdmissionLimitError("vector_shard_native_unavailable");
+	const rows = standard
+		? db
+				.prepare(
+					`WITH admitted AS MATERIALIZED(SELECT value id FROM json_each(?)) SELECT CAST(r.rowid AS TEXT) native_rowid,r.chunk_id,r.chunk_offset,f.memory_id source_id,CASE WHEN f.is_current=1 AND f.memory_scope IS NULL${options.excludeAggregateRecall ? " AND f.is_aggregate=0" : ""} THEN 1 ELSE 0 END eligible,c.vector singleton FROM admitted a CROSS JOIN vector_shard_members s ON s.partition_id=a.id AND s.projection=? CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) CROSS JOIN vector_shard_keys k ON k.id=s.partition_id CROSS JOIN vector_shard_recall_rows f ON f.partition_id=s.partition_id AND f.embedding_id=s.embedding_id LEFT JOIN vector_shard_singletons c ON k.row_count=1 AND c.partition_id=k.id`,
+				)
+				.all(JSON.stringify(partitioned.ids), projection)
+		: db
+				.prepare(
+					`WITH admitted AS MATERIALIZED(SELECT value id FROM json_each(?)),members AS MATERIALIZED(SELECT r.rowid native_rowid,r.chunk_id,r.chunk_offset,s.partition_id,k.row_count,e.source_id,e.source_type,e.agent_id FROM admitted a CROSS JOIN vector_shard_members s ON s.partition_id=a.id AND s.projection=? CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN vector_shard_keys k ON k.id=s.partition_id),memory_rows AS MATERIALIZED(SELECT * FROM members WHERE source_type='memory'),eligible AS MATERIALIZED(SELECT p.native_rowid FROM memory_rows p CROSS JOIN memories m ON m.id=p.source_id AND m.agent_id=p.agent_id WHERE ${predicate}) SELECT CAST(p.native_rowid AS TEXT) native_rowid,p.chunk_id,p.chunk_offset,p.source_id,CASE WHEN eligible.native_rowid IS NULL THEN 0 ELSE 1 END eligible,c.vector singleton FROM members p LEFT JOIN eligible ON eligible.native_rowid=p.native_rowid LEFT JOIN vector_shard_singletons c ON p.row_count=1 AND c.partition_id=p.partition_id`,
+				)
+				.all(JSON.stringify(partitioned.ids), projection, ...args);
+	if (rows.length !== rowCount) throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+	const buffer = (value: unknown): Buffer => {
+		if (!(value instanceof Uint8Array)) throw new VectorAdmissionLimitError("vector_shard_invalid_payload");
+		return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+	};
+	const chunks: import("@signet/native").AdmittedVectorChunk[] = [];
+	const bulk = new Map<number, Array<{ rowid: string; offset: number; eligible: number; identity: number }>>();
+	let bytes = 0;
+	const identities = new Map<string, number>();
+	for (const row of rows) {
+		if (
+			typeof row.native_rowid !== "string" ||
+			!/^[1-9][0-9]*$/.test(row.native_rowid) ||
+			typeof row.chunk_id !== "number" ||
+			!Number.isSafeInteger(row.chunk_id) ||
+			typeof row.chunk_offset !== "number" ||
+			!Number.isSafeInteger(row.chunk_offset) ||
+			row.chunk_offset < 0 ||
+			(row.eligible !== 0 && row.eligible !== 1)
+		)
+			throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+		let identity = 0;
+		if (row.eligible === 1) {
+			if (typeof row.source_id !== "string") throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+			identity = identities.get(row.source_id) ?? identities.size + 1;
+			identities.set(row.source_id, identity);
+		}
+		if (row.singleton instanceof Uint8Array) {
+			if (row.eligible === 0) continue;
+			const vectors = buffer(row.singleton);
+			const rowids = Buffer.alloc(8);
+			rowids.writeBigInt64LE(BigInt(row.native_rowid));
+			const identityBuffer = Buffer.alloc(4);
+			identityBuffer.writeUInt32LE(identity);
+			chunks.push({
+				vectors,
+				rowids,
+				validity: Buffer.from([1]),
+				eligibility: Buffer.from([1]),
+				identities: identityBuffer,
+			});
+			bytes += vectors.length;
+		} else {
+			const values = bulk.get(row.chunk_id) ?? [];
+			values.push({ rowid: row.native_rowid, offset: row.chunk_offset, eligible: row.eligible, identity });
+			bulk.set(row.chunk_id, values);
+		}
+	}
+	const ids = [...bulk].filter(([, members]) => members.some((row) => row.eligible === 1)).map(([id]) => id);
+	const requested = JSON.stringify(ids);
+	const total = db
+		.prepare(
+			`WITH wanted AS MATERIALIZED(SELECT value id FROM json_each(?)) SELECT COALESCE(SUM(length(v.vectors)),0) bytes FROM wanted a CROSS JOIN ${partitioned.table}_vector_chunks00 v ON v.rowid=a.id`,
+		)
+		.get(requested)?.bytes;
+	if (typeof total !== "number" || total + bytes > 256 * 1024 * 1024)
+		throw new VectorAdmissionLimitError("vector_shard_scan_limit");
+	const payloads = db
+		.prepare(
+			`WITH wanted AS MATERIALIZED(SELECT value id FROM json_each(?)) SELECT c.chunk_id,c.validity,c.rowids,v.vectors FROM wanted a CROSS JOIN ${partitioned.table}_chunks c ON c.chunk_id=a.id CROSS JOIN ${partitioned.table}_vector_chunks00 v ON v.rowid=c.chunk_id ORDER BY c.chunk_id`,
+		)
+		.all(requested);
+	if (payloads.length !== ids.length) throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+	for (const payload of payloads) {
+		if (typeof payload.chunk_id !== "number") throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+		const members = bulk.get(payload.chunk_id);
+		if (members === undefined) throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+		const rowids = buffer(payload.rowids),
+			validity = buffer(payload.validity);
+		const eligibility = Buffer.alloc(validity.length);
+		const identityBuffer = Buffer.alloc(rowids.length / 2);
+		for (const member of members) {
+			if (
+				(member.offset + 1) * 8 > rowids.length ||
+				(validity[member.offset >> 3] & (1 << (member.offset & 7))) === 0 ||
+				rowids.readBigInt64LE(member.offset * 8).toString() !== member.rowid
+			)
+				throw new VectorAdmissionLimitError("vector_shard_repair_pending");
+			if (member.eligible === 1) {
+				eligibility[member.offset >> 3] |= 1 << (member.offset & 7);
+				identityBuffer.writeUInt32LE(member.identity, member.offset * 4);
+			}
+		}
+		chunks.push({ rowids, validity, eligibility, vectors: buffer(payload.vectors), identities: identityBuffer });
+	}
+	const hits = scan(query, chunks, limit);
+	return db
+		.prepare(
+			`SELECT e.source_id,json_extract(k.value,'$.distance') distance FROM json_each(?) k CROSS JOIN ${partitioned.table}_rowids r ON r.rowid=json_extract(k.value,'$.rowid') CROSS JOIN ${store} e ON e.id=json_extract(r.id,'$[0]') WHERE e.source_type='memory' ORDER BY k.key`,
+		)
+		.all(JSON.stringify(hits.rows))
+		.flatMap((row) =>
+			typeof row.source_id === "string" && typeof row.distance === "number"
+				? [{ id: row.source_id, score: Math.max(0, 1 - row.distance) }]
+				: [],
+		);
+}
+
 export function vectorSearchWithMetadata(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
 	options: VectorSearchOptions,
+	scan: typeof import("@signet/native").scanAdmittedVectors | undefined = native?.scanAdmittedVectors,
 ): VectorSearchResponse {
 	if (!options?.readScope) throw new Error("readScope is required for vector search");
 	const limit = options.limit ?? 20;
@@ -272,6 +521,32 @@ export function vectorSearchWithMetadata(
 	try {
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
+			const partitioned = admittedVectorPartitions(
+				db,
+				searchTables.projection,
+				options.readScope,
+				searchTables.embeddings,
+			);
+			if (partitioned) {
+				try {
+					results.push(
+						...admittedVectorSearch(
+							db,
+							queryVector,
+							options,
+							partitioned,
+							searchTables.embeddings,
+							searchTables.projection,
+							limit,
+							scan,
+						),
+					);
+				} catch (error) {
+					if (error instanceof VectorAdmissionLimitError) throw error;
+					throw new VectorAdmissionLimitError("vector_shard_native_failed");
+				}
+				return;
+			}
 			const scope = vectorMemoryPredicate(options);
 			const embeddingScope = embeddingReadPredicate(options.readScope);
 			const names = options.shardNames ?? searchShardNames(db, options.readScope);
@@ -329,6 +604,12 @@ export function vectorSearchWithMetadata(
 			results.splice(limit);
 		});
 	} catch (error) {
+		if (error instanceof VectorAdmissionLimitError)
+			return {
+				results: [],
+				completeness: "unavailable",
+				...(error.message === "vector_shard_fanout_limit" ? { degraded: ["vector_fanout_cap"] as const } : {}),
+			};
 		try {
 			let fallback: VectorSearchResponse | undefined;
 			withReadTransaction(db, () => {

@@ -29,13 +29,15 @@ import {
 import type { DbOwnerRequest } from "./db-owner-protocol";
 import { getDreamingCapability } from "./pipeline/dreaming-capabilities";
 import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
-import { findSqliteVecExtension, runMigrations } from "@signet/core";
+import { findSqliteVecExtension, runMigrations, vectorSearchWithMetadata } from "@signet/core";
+import { startEmbeddingIndexMigration } from "./embedding-index-migration";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { closeDbOwnerDuringShutdown } from "./daemon-shutdown";
 import {
 	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	registerDbOwnerMaintenance,
+	ownerHasPendingVecBackfill,
 	runOwnerMaintenanceWithRetry,
 } from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
@@ -90,6 +92,74 @@ async function rejectedThrow(promise: Promise<unknown>): Promise<() => never> {
 }
 
 describe("DB owner client", () => {
+	test("paused embedding startup repairs legacy admission without starting a model build", async () => {
+		const fixture = await makeMigratedDb();
+		const extension = findSqliteVecExtension();
+		if (!extension) throw Error("vec_required");
+		const setup = new Database(fixture.path);
+		setup.loadExtension(extension);
+		const vector = new Float32Array(768);
+		vector[0] = 1;
+		setup.exec(
+			"INSERT INTO memories(id,content,created_at,updated_at,agent_id) VALUES('paused-memory','fixture','2020','2020','default')",
+		);
+		setup
+			.prepare(
+				"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text) VALUES('paused-vector','hash','memory','paused-memory',?,768,'2020','default','')",
+			)
+			.run(vector);
+		setup.prepare("INSERT INTO vec_embeddings(id,embedding) VALUES('paused-vector',?)").run(vector);
+		setup.exec("UPDATE vector_shard_repairs SET phase='pending',active_generation=0 WHERE projection='vec_embeddings'");
+		setup.close();
+		initDbAccessor(fixture.path);
+		const accessor = getDbAccessor();
+		const owned = createDbOwnerClient({ dbPath: fixture.path });
+		try {
+			const db = new Database(fixture.path, { readonly: true });
+			db.loadExtension(extension);
+			try {
+				const before = db.query("SELECT * FROM embedding_index_state").all();
+				const handle = await startEmbeddingIndexMigration({
+					accessor,
+					owner: owned,
+					paused: true,
+					configured: {
+						provider: "ollama",
+						model: "must-not-build",
+						dimensions: 768,
+						base_url: "http://127.0.0.1:11434",
+					},
+					fetchEmbedding: async () => {
+						throw Error("unexpected_derivation");
+					},
+					checkProvider: async () => {
+						throw Error("unexpected_provider");
+					},
+					pollMs: 1,
+					batchSize: 1,
+				});
+				try {
+					expect(handle).toBeNull();
+					expect(db.query("SELECT * FROM embedding_index_state").all()).toEqual(before);
+					expect(
+						vectorSearchWithMetadata(db, vector, {
+							limit: 1,
+							currentOnly: true,
+							readScope: { reach: { kind: "own", agentId: "default" }, projects: null, compartments: "all" },
+						}),
+					).toMatchObject({ completeness: "complete", results: [{ id: "paused-memory" }] });
+				} finally {
+					await handle?.stop();
+				}
+			} finally {
+				db.close();
+			}
+		} finally {
+			await owned.close();
+			await closeDbAccessor();
+			rmSync(fixture.directory, { recursive: true, force: true });
+		}
+	});
 	test("routes imported-source attention through the explicit agent and effective source label", async () => {
 		const fixture = await makeMigratedDb();
 		const setup = new Database(fixture.path);
@@ -704,6 +774,7 @@ describe("DB owner client", () => {
 					{ operation: "maintenance.vector-backfill-regression", lane: "maintenance", deadlineMs: 10_000 },
 				).result,
 			).toEqual({ completed: true });
+			expect(await ownerHasPendingVecBackfill(client, 2)).toBe(iteration < 2);
 			const maintenance = client.health();
 			expect(maintenance).toMatchObject({
 				state: "ready",
