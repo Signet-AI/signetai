@@ -32,9 +32,13 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
 
 ## Operator instance settings
 
-`GET /api/org/operator/settings` returns only `{ inference, embedding, sourcesDefaults, instructions, complete }`. It requires a claimed organization and an unrestricted administrator user session. API keys, members, compliance-only callers, bound-agent/project credentials and scope aliases are refused with HTTP 403. The general `/api/config` policy is unchanged.
+### GET /api/org/operator/settings
 
-`PATCH /api/org/operator/settings` accepts exactly one section per request:
+Returns only `{ inference, embedding, sourcesDefaults, instructions, complete }`. It requires a claimed organization and an unrestricted administrator user session. API keys, members, compliance-only callers, bound-agent/project credentials and scope aliases are refused with HTTP 403. The general `/api/config` policy is unchanged.
+
+### PATCH /api/org/operator/settings
+
+Accepts exactly one section per request:
 
 - `{ section: "inference", value: { provider, model, endpoint, credentialRef, allowRemote } }`. Providers: `none`, `openai-compatible`, `openai`, `anthropic`, `google`, `openrouter`. A configured provider needs a model; OpenAI-compatible targets need an endpoint. Non-loopback processing requires `allowRemote: true`.
 - `{ section: "embedding", value: { provider, model, dimensions, endpoint, credentialRef } }`. Providers: `none`, `native`, `ollama`, `llama-cpp`, `openai`; dimensions are integers from 1 through 65,536. Configured embedding providers need a model; non-native endpoints are explicit.
