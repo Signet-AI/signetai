@@ -42,6 +42,7 @@ let lastSessionSearchBody: unknown = null;
 let lastCheckpointBody: unknown = null;
 let lastHeartbeatBody: unknown = null;
 let transcriptUploadRoute = false;
+let transcriptUploadFails = false;
 let uploadRequests: Array<{ method: string; query: Record<string, string> }> = [];
 let warnMessages: string[] = [];
 let testDir = "";
@@ -146,6 +147,7 @@ beforeEach(() => {
 	lastCheckpointBody = null;
 	lastHeartbeatBody = null;
 	transcriptUploadRoute = false;
+	transcriptUploadFails = false;
 	uploadRequests = [];
 	checkpointResponse = null;
 	notificationInject = null;
@@ -245,6 +247,7 @@ beforeEach(() => {
 					});
 				case "/api/hooks/transcript-upload": {
 					if (!transcriptUploadRoute) return jsonResponse({ error: "not found" }, 404);
+					if (transcriptUploadFails) return jsonResponse({ error: "upload broke" }, 500);
 					const method = init?.method ?? "GET";
 					uploadRequests.push({ method, query: Object.fromEntries(new URL(url).searchParams) });
 					if (method !== "PATCH") return jsonResponse({ committedOffset: 0, generation: null, tailSha256: null });
@@ -1802,6 +1805,32 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(uploadRequests[0]?.query).toMatchObject({ sessionKey: "checkpoint-upload", agentId: "agent-1" });
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 		expect(lastCheckpointBody).not.toHaveProperty("transcriptPath");
+	});
+
+	it("still runs checkpoint extract and warns when the session file upload fails", async () => {
+		transcriptUploadRoute = true;
+		transcriptUploadFails = true;
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+		const sessionFile = join(testDir, "checkpoint-failed.jsonl");
+		writeFileSync(sessionFile, '{"type":"user"}\n');
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const ctx = { sessionKey: "checkpoint-failed", agentId: "agent-1", sessionFile };
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.({ prompt: `Turn ${i + 1}` }, ctx);
+		}
+		for (let i = 0; i < 100 && getHits("/api/hooks/session-checkpoint-extract") === 0; i++) await Bun.sleep(5);
+
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+		expect(lastCheckpointBody).not.toHaveProperty("transcriptPath");
+		expect(
+			warnMessages.some(
+				(message) =>
+					message.startsWith("signet-memory: transcript upload failed (") &&
+					message.endsWith("); the daemon keeps the lines it already has"),
+			),
+		).toBe(true);
 	});
 
 	it("sends the checkpoint path to a daemon without the upload route", async () => {

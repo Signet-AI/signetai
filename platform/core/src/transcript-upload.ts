@@ -81,8 +81,13 @@ export function transcriptUploadRanges(offset: number, end: number): readonly Tr
 	return ranges;
 }
 
-export async function transcriptSourceEnd(source: TranscriptSource, floor: number): Promise<number> {
+export async function transcriptSourceEnd(
+	source: TranscriptSource,
+	floor: number,
+	signal?: AbortSignal,
+): Promise<number> {
 	for (let end = source.size; end > floor; end -= TRANSCRIPT_UPLOAD_TAIL_BYTES) {
+		signal?.throwIfAborted();
 		const start = Math.max(floor, end - TRANSCRIPT_UPLOAD_TAIL_BYTES);
 		const found = transcriptUploadEnd(await source.read(start, end));
 		if (found > 0) return start + found;
@@ -93,16 +98,17 @@ export async function transcriptSourceEnd(source: TranscriptSource, floor: numbe
 export async function transcriptUploadPlan(
 	state: TranscriptUploadStatus,
 	source: TranscriptSource,
+	signal?: AbortSignal,
 ): Promise<TranscriptUploadPlan> {
 	const offset = state.committedOffset;
 	if (state.generation !== null && offset <= source.size) {
 		const tail = await source.read(transcriptUploadTailStart(offset), offset);
 		if ((await sha256Hex(tail)) === state.tailSha256) {
-			return { generation: state.generation, offset, end: await transcriptSourceEnd(source, offset) };
+			return { generation: state.generation, offset, end: await transcriptSourceEnd(source, offset, signal) };
 		}
 	}
 	const generation = state.generation === null ? 0 : state.generation + 1;
-	return { generation, offset: 0, end: await transcriptSourceEnd(source, 0) };
+	return { generation, offset: 0, end: await transcriptSourceEnd(source, 0, signal) };
 }
 
 export async function uploadTranscript(
@@ -118,8 +124,11 @@ export async function uploadTranscript(
 	}
 	let state = transcriptUploadStatus(await readAnswer(answer));
 	for (let plans = 1; ; plans++) {
-		const plan = await transcriptUploadPlan(state, source);
-		if (plan.offset >= plan.end) return { status: "unchanged" };
+		const plan = await transcriptUploadPlan(state, source, client.signal);
+		if (plan.offset >= plan.end) {
+			client.signal?.throwIfAborted();
+			return { status: "unchanged" };
+		}
 		const sent = await sendRanges(client, url, source, plan);
 		if (sent.status !== "conflict") return sent;
 		if (plans >= MAX_UPLOAD_PLANS) {

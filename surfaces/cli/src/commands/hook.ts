@@ -518,11 +518,12 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson(deps.stdin);
 			const stdinProject = pickString(input?.cwd);
+			const agentId = declaredAgentId(input, options.harness);
 			const uploading = uploadHookTranscript(
 				deps,
 				input,
 				options.harness,
-				declaredAgentId(input, options.harness),
+				agentId,
 				PROMPT_SUBMIT_TIMEOUT_MS,
 				options.project,
 			);
@@ -537,7 +538,10 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(
 					withPeerContext(
-						buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject),
+						{
+							...buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject),
+							agentId: agentId || undefined,
+						},
 						await buildPeerContext(input, { project: options.project || stdinProject }),
 					),
 				),
@@ -1100,12 +1104,9 @@ function nativeAgentId(input: Record<string, unknown> | null, harness: string): 
 }
 
 function declaredAgentId(input: Record<string, unknown> | null, harness: string, explicit?: string): string {
-	return pickString(
-		explicit,
-		pickHookAgentId(input, harness),
-		readManagedTrimmedEnv("SIGNET_AGENT_ID"),
-		resolveSignetApiKey() ? "" : MANAGED_AGENT_ID_DEFAULT,
-	);
+	const named = pickString(explicit, pickHookAgentId(input, harness));
+	if (named || pickSessionKey(input).startsWith("agent:")) return named;
+	return pickString(readManagedTrimmedEnv("SIGNET_AGENT_ID"), resolveSignetApiKey() ? "" : MANAGED_AGENT_ID_DEFAULT);
 }
 
 function pickHookAgentId(input: Record<string, unknown> | null, harness: string): string {

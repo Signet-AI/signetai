@@ -1205,11 +1205,11 @@ describe("hook transcript upload", () => {
 			const program = new Command();
 			registerHookCommands(program, {
 				AGENTS_DIR: "/tmp/agents",
-				fetchDaemonResult: (async (path: string, opts?: RequestInit & { timeout?: number }) => {
+				fetchDaemonResult: async (path, opts) => {
 					events.push(`request ${path}`);
 					bodies.push(JSON.parse(typeof opts?.body === "string" ? opts.body : "{}"));
 					return { ok: true, data: {} };
-				}) as never,
+				},
 				uploadTranscriptFile: async (target, path, timeoutMs) => {
 					events.push("upload");
 					uploads.push({ target, path, timeoutMs });
@@ -1275,6 +1275,16 @@ describe("hook transcript upload", () => {
 		expect(run.bodies[0]).not.toHaveProperty("agentId");
 	});
 
+	test("session-end leaves the agent to an agent session key", async () => {
+		const run = await runHook(
+			["session-end", "-H", "claude-code"],
+			{ session_key: "agent:keyed:main", transcript_path: "/tmp/session.jsonl", cwd: "/repo" },
+			uploaded,
+		);
+		expect(run.uploads[0]?.target).not.toHaveProperty("agentId");
+		expect(run.bodies[0]).not.toHaveProperty("agentId");
+	});
+
 	test("session-end sends the path to a daemon without the upload route", async () => {
 		const run = await runHook(["session-end", "-H", "claude-code"], ending, unsupported);
 		expect(run.bodies[0]?.transcriptPath).toBe("/tmp/session.jsonl");
@@ -1316,6 +1326,17 @@ describe("hook transcript upload", () => {
 			cwd: "/repo",
 		});
 		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
+	});
+
+	test("user-prompt-submit names the upload's agent in the prompt request", async () => {
+		const run = await runHook(
+			["user-prompt-submit", "-H", "claude-code", "--project", "/repo"],
+			{ session_id: "sess-1", transcript_path: "/tmp/session.jsonl", cwd: "/repo", prompt: "hi" },
+			uploaded,
+			{ SIGNET_AGENT_ID: "agent-x" },
+		);
+		expect(run.uploads[0]?.target.agentId).toBe("agent-x");
+		expect(run.bodies[0]?.agentId).toBe("agent-x");
 	});
 
 	test("pre-compaction uploads the transcript before it asks for the summary prompt", async () => {

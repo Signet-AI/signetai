@@ -30,6 +30,10 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 const COMPACTION_HOOK_DEDUPE_MS = 1000;
 const SESSION_START_TIMEOUT = resolveSessionStartTimeoutFromEnv();
 
+function uploadFailureWarning(error: unknown): string {
+	return `signet-memory: transcript upload failed (${error instanceof Error ? error.message : String(error)}); the daemon keeps the lines it already has`;
+}
+
 type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 type DaemonFetchResult<T> =
@@ -1770,7 +1774,10 @@ const signetPlugin = {
 							daemonUrl,
 							{ harness: "openclaw", sessionKey, agentId: checkpointAgentId, cwd: project },
 							sessionFile,
-						)
+						).catch((error: unknown) => {
+							api.logger.warn(uploadFailureWarning(error));
+							return undefined;
+						})
 					: Promise.resolve(undefined);
 				void uploading
 					.then((transcriptPath) =>
@@ -2138,11 +2145,7 @@ const signetPlugin = {
 					sessionKey: resolved.sessionKey,
 					transcriptPath: resolved.sessionFile,
 					...(endTranscript && { transcript: endTranscript }),
-				}).catch((error) =>
-					api.logger.warn(
-						`signet-memory: transcript upload failed (${error instanceof Error ? error.message : String(error)}); the daemon keeps the lines it already has`,
-					),
-				);
+				}).catch((error) => api.logger.warn(uploadFailureWarning(error)));
 				if (scopedKey) {
 					claimedSessions.delete(scopedKey);
 					sessionStartContexts.delete(scopedKey);

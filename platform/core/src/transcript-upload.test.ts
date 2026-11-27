@@ -382,6 +382,29 @@ test("stops waiting to retry when the client signal aborts", async () => {
 	expect(daemon.patches().length).toBe(1);
 });
 
+test("stops scanning the source when the client signal aborts", async () => {
+	const daemon = new FakeDaemon();
+	const controller = new AbortController();
+	const all = bytes("x".repeat(200000));
+	const reads: { start: number; end: number }[] = [];
+	const scanned: TranscriptSource = {
+		size: all.byteLength,
+		async read(start: number, end: number) {
+			reads.push({ start, end });
+			controller.abort();
+			return all.slice(start, end);
+		},
+	};
+	const error = await uploadTranscript({ ...daemon.client(), signal: controller.signal }, target, scanned).then(
+		() => undefined,
+		(err: unknown) => err,
+	);
+	expect(error).toBeInstanceOf(DOMException);
+	expect(error instanceof DOMException ? error.name : "").toBe("AbortError");
+	expect(reads.length).toBe(1);
+	expect(daemon.patches()).toEqual([]);
+});
+
 test("fails after three busy answers", async () => {
 	const daemon = new FakeDaemon();
 	for (let i = 0; i < 3; i++) daemon.patchAnswers.push(Response.json({ error: "busy" }, { status: 503 }));
