@@ -259,6 +259,32 @@ describe("organization HTTP flows", () => {
 		);
 		expect(counts).toEqual({ jobs: 1000, audits: 10000 });
 	});
+	test("operator retention enforces count caps even for recent rows", async () => {
+		await claim();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		const { jobId } = await (await call("/api/org/operator/jobs", "POST", { action: "queue.requeue" })).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1100) INSERT INTO org_jobs(id,kind,status,created_by,params_json,created_at,finished_at) SELECT 'recent-'||x,kind,'complete',created_by,params_json,created_at,finished_at FROM n,org_jobs WHERE id=?",
+				[jobId],
+			),
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10100) INSERT INTO audit_events(id,at,action,outcome) SELECT 'recent-audit-'||x,?,'operator.logs_opened','ok' FROM n",
+				[new Date().toISOString()],
+			),
+		]);
+		for (let n = 0; n < 2; n++) expect((await call("/api/org/jobs")).status).toBe(200);
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT (SELECT count(*) FROM org_jobs WHERE kind='operator') AS jobs,(SELECT count(*) FROM audit_events WHERE action LIKE 'operator.%') AS audits",
+					[],
+					"get",
+				),
+			),
+		).toEqual({ jobs: 1000, audits: 10000 });
+	});
 	test("operator repairs are durable scoped jobs rather than unscoped dispatch", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
