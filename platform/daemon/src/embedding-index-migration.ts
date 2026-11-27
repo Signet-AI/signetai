@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { projectEmbeddingRows } from "./embedding-projection";
+import { projectEmbeddingRows, repairVectorAdmissionThroughOwner } from "./embedding-projection";
 import {
 	compartmentForWrite,
 	vectorShardSwapStatements,
@@ -1297,6 +1297,7 @@ export async function startEmbeddingIndexMigration(input: {
 	readonly onPromoted?: () => void;
 	readonly owner?: DbOwnerClient;
 }): Promise<EmbeddingIndexMigrationHandle | null> {
+	if (input.owner) await repairVectorAdmissionThroughOwner(input.owner);
 	if (input.configured.provider === "none") return null;
 	const migrationOwner = input.owner;
 	if (!migrationOwner) throw new Error("Embedding migration requires owner");
