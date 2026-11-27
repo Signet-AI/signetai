@@ -1176,6 +1176,25 @@ export function runDbOwnerWorker(): void {
 			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "session_compaction_summary")
 			return await executeSessionCompactionSummary(job.request, context);
+		if (job.request.kind === "session_transcript_upload_state") {
+			const { readTranscriptUploadScopeInDb } = await import("./session-transcripts");
+			return readTranscriptUploadScopeInDb(db, job.request.input.agentId, job.request.input.sessionKey);
+		}
+		if (job.request.kind === "session_transcript_upload_purge") {
+			const { drainTranscriptUploadPurgesOwned } = await import("./session-transcripts");
+			const input = { ...job.request.input, basePath: bindTranscriptWorkspace(job.request.input.basePath) };
+			return await drainTranscriptUploadPurgesOwned(db, input, async (operation) => withBusyRetry(operation, context));
+		}
+		if (job.request.kind === "session_transcript_upload_commit") {
+			const { commitTranscriptUploadInTx } = await import("./session-transcripts");
+			const input = job.request.input;
+			return withBusyRetry(() => commitTranscriptUploadInTx(db, input), context);
+		}
+		if (job.request.kind === "session_transcript_turn_backfill") {
+			const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
+			const input = job.request.input;
+			return withBusyRetry(() => backfillTranscriptTurnsFtsChunkInDb(db, input), context);
+		}
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);

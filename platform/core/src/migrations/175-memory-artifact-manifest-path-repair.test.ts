@@ -25,7 +25,7 @@ test("clears non-manifest manifest_path values idempotently and keeps manifest r
 			{ session_id: "s3", manifest_path: null },
 			{ session_id: "s4", manifest_path: null },
 		]);
-		expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 175 });
+		expect(db.prepare("SELECT version FROM schema_migrations WHERE version = 175").get()).toEqual({ version: 175 });
 	} finally {
 		db.close();
 	}

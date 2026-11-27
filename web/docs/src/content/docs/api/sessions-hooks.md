@@ -245,6 +245,74 @@ in this path. The response includes `transcriptCaptureJobId` when transcript
 capture was queued. Poll `GET /api/hooks/transcript-capture/:jobId?agentId=<agent>`
 until the status is `completed`; the receipt never exposes transcript content.
 
+### PATCH /api/hooks/transcript-upload
+
+Appends one range of the harness's raw JSONL transcript file at a byte offset.
+A connector uses it when the daemon cannot read the harness file itself. The
+daemon writes the bytes to a file it owns in the workspace, commits the new
+offset, and queues a capture of the committed bytes in the same transaction.
+Requires `remember` permission.
+
+**Query parameters**: `harness`, `sessionKey`, `agentId`, and `cwd`. `harness`
+and `sessionKey` are required. The agent comes from `agentId`, from an
+`agent:<id>:` session key, or from the token; with none of them the request
+fails with `400`. It never falls back to the default agent. `cwd` sets the
+transcript's project.
+
+**Headers**
+
+- `Upload-Generation`: a non-negative integer. Start at `0`. Send a higher
+  value, from offset `0`, when the harness rewrites the file instead of
+  appending to it.
+- `Upload-Offset`: the byte offset of this range. It must equal the committed
+  offset of the current generation.
+- `Upload-Checksum`: the SHA-256 hex digest of the body.
+
+The body holds whole JSONL records: at most 1 MiB, ending with a newline.
+
+**Response**: `{ "committedOffset": 16, "generation": 0, "tailSha256": "…",
+"jobId": "tcj_…" }`. `tailSha256` hashes the last 64 KiB of committed bytes, so
+a connector can check that its own file still matches before it sends the next
+range. A bypassed session or a session being deleted returns
+`{ "bypassed": true }` and commits nothing.
+
+A new generation keeps the bytes of the old one on disk. When the rewritten
+file drops turns that an earlier capture already stored, the capture job
+fails and the stored transcript stays as it was. Deleting the session, or
+purging its agent, removes every generation file.
+
+**Errors**
+
+- `400`: a missing parameter or header, an empty body, a body without a final
+  newline, a checksum mismatch, or no agent.
+- `403`: an agent scope, project scope, or session-binding violation, or a
+  session whose upload or stored transcript belongs to another project. The
+  first range that names a project fixes it for the session. A project-scoped
+  token also gets `403` for a session with no project. Without such a token, a
+  request with no `cwd` skips the project check.
+- `409`: `{ "error": "offset_mismatch", "committedOffset", "generation",
+  "tailSha256" }` when the offset or generation does not continue the
+  committed state, `{ "error": "harness_mismatch" }` when the session's
+  upload or stored transcript belongs to another harness, or
+  `{ "error": "session claimed by plugin path" }` when `x-signet-runtime-path`
+  names a runtime path that does not own the session. That range commits
+  nothing. A request without the header skips this check.
+- `413`: a body larger than 1 MiB.
+- `503`: more than 8 uploads in flight (`Retry-After: 1`), database write
+  pressure (`retryable: true` and a `Retry-After` header), or
+  `{ "error": "purge_pending" }` for a range whose request passed
+  authentication before a purge of its agent finished, even if its body was
+  still arriving. That range commits nothing; retry it, then call `GET` to
+  find where to resume.
+
+### GET /api/hooks/transcript-upload
+
+Returns the committed upload state for the same query parameters:
+`{ "committedOffset", "generation", "tailSha256" }`. Before the first range it
+returns `{ "committedOffset": 0, "generation": null, "tailSha256": null }`. A
+connector calls it after a restart or a `409` to find where to resume. It
+returns the same `403` and `409` errors as `PATCH`.
+
 ### POST /api/hooks/remember
 
 Explicit memory save from within a session. Requires `remember` permission.
@@ -799,10 +867,27 @@ Results are agent-scoped and require `recall` permission.
 }
 ```
 
-`query` is required. `limit` is clamped to `1..20`. If `sessionKey` is absent
-and `currentSessionKey` encodes OpenClaw sub-agent lineage, Signet defaults the
-search to the inferred parent session. Otherwise, Signet searches transcripts
-in the requested agent and project scope while excluding `currentSessionKey`.
+`query` is required and holds at most 2000 characters. `limit` is clamped to
+`1..20`. If `sessionKey` is absent and `currentSessionKey` encodes OpenClaw
+sub-agent lineage, Signet defaults the search to the inferred parent session.
+Otherwise, Signet searches transcripts in the requested agent and project scope
+while excluding `currentSessionKey`.
+
+A query that exactly matches a stored session key or session id returns that
+session with `rank` 0 when that session is inside the same agent, project, and
+session scope as full-text search. Otherwise full-text search runs, so a
+session outside the scope never appears. Signet indexes each
+transcript turn by turn and returns one hit per session. Signet ignores
+stopwords and one-letter words. When at most three search words remain, a
+session matches only when every word appears somewhere in it, even in different
+turns. `rank` is then the full-text score of
+the best matching turn, where lower is better.
+
+When full-text search finds nothing, Signet scans the transcript text for any
+query word of three or more characters, including inside longer words. For
+example, `deploy` also matches `deployment`. Scan hits count the matched words
+in `rank`, where higher is better. Search also uses the scan after an upgrade,
+while Signet indexes existing transcripts in the background.
 
 **Response**
 

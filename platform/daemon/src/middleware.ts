@@ -56,7 +56,8 @@ export function registerGlobalMiddleware(app: Hono): void {
 	});
 	app.use("*", (c, next) =>
 		(c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)) ||
-		(c.req.method === "POST" && c.req.path === "/api/hooks/stop")
+		(c.req.method === "POST" && c.req.path === "/api/hooks/stop") ||
+		(c.req.method === "PATCH" && c.req.path === "/api/hooks/transcript-upload")
 			? next()
 			: limitBody(c, next),
 	);

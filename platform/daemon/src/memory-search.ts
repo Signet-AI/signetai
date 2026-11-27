@@ -370,24 +370,26 @@ function normalizeRecallLimit(raw: number | undefined): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return 10;
 	return Math.max(1, Math.min(50, Math.floor(raw)));
 }
-export function sanitizeFtsQuery(raw: string): string {
-	const tokens = raw
-		.replace(/'/g, " ")
+export function ftsQueryTerms(raw: string): { readonly terms: readonly string[]; readonly requireAll: boolean } {
+	const terms = raw
+		.replace(/['\p{Cc}]/gu, " ")
 		.split(/\s+/)
 		.map((token) => {
 			const cleaned = token
 				.replace(/[":()^*?]/g, "")
 				.trim()
 				.toLowerCase();
-			if (!cleaned || cleaned.length < 2) return null;
+			if (!cleaned || cleaned.length < 2 || !/[\p{L}\p{N}]/u.test(cleaned)) return null;
 			if (FTS_STOP.has(cleaned)) return null;
 			return `"${cleaned}"`;
 		})
-		.filter(Boolean) as string[];
+		.filter((term): term is string => term !== null);
+	return { terms, requireAll: terms.length <= 3 };
+}
 
-	if (tokens.length === 0) return "";
-	if (tokens.length <= 3) return tokens.join(" ");
-	return tokens.join(" OR ");
+export function sanitizeFtsQuery(raw: string): string {
+	const { terms, requireAll } = ftsQueryTerms(raw);
+	return terms.join(requireAll ? " " : " OR ");
 }
 
 function normalizeExpansionToken(raw: string): string {

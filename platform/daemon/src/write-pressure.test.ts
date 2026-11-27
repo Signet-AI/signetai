@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { DbWriteQueueFullError } from "./db-accessor";
 import { DbOwnerAdmissionError, DbOwnerDeadlineError } from "./db-owner-client";
-import { TranscriptCaptureBacklogFullError } from "./transcript-capture-worker";
+import { TranscriptCaptureBacklogFullError } from "./transcript-capture-jobs";
 import { WorkspaceMigrationRetryableError } from "./workspace-writer-barrier";
 import { isRetryableWritePressure } from "./write-pressure";
 

@@ -188,6 +188,7 @@ describe("migration integrity verify gate", () => {
 		const warnings: number[] = [];
 		const giveUps: number[] = [];
 		let calls = 0;
+		let capsReached = 0;
 		const retry = createMigrationVerifySetupRetry({
 			run: async () => {
 				calls += 1;
@@ -199,18 +200,23 @@ describe("migration integrity verify gate", () => {
 			},
 			logWarn: (_message, details) => warnings.push(Number(details.attemptCount)),
 			logError: (_message, _error, details) => giveUps.push(Number(details.attemptCount)),
+			onRetryCapReached: () => {
+				capsReached += 1;
+			},
 		});
 
 		retry.run();
 		await Bun.sleep(0);
 		scheduled.shift()?.();
 		await Bun.sleep(0);
+		expect(capsReached).toBe(0);
 		scheduled.shift()?.();
 		await Bun.sleep(0);
 
 		expect(calls).toBe(3);
 		expect(warnings).toEqual([1, 2]);
 		expect(giveUps).toEqual([3]);
+		expect(capsReached).toBe(1);
 	});
 
 	test("prunes the rollback backup only after a pass result", async () => {

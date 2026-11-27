@@ -183,6 +183,30 @@ describe("deferred runtime startup contention (#1609)", () => {
 		expect(await gate.waitForVerifiedIntegrity()).toBe(false);
 	});
 
+	it("holds backup-dependent maintenance until migration verification settles the rollback backup", async () => {
+		const gate = createDeferredRuntimeGate();
+		let settled = false;
+		const result = gate.waitForMigrationBackupSettled().then((removed) => {
+			settled = true;
+			return removed;
+		});
+
+		gate.completeVerifiedIntegrity(true);
+		await Bun.sleep(0);
+		expect(settled).toBe(false);
+
+		gate.completeMigrationBackup(true);
+		gate.completeMigrationBackup(false);
+		expect(await result).toBe(true);
+	});
+
+	it("reports a retained rollback backup to backup-dependent maintenance", async () => {
+		const gate = createDeferredRuntimeGate();
+		gate.completeMigrationBackup(false);
+
+		expect(await gate.waitForMigrationBackupSettled()).toBe(false);
+	});
+
 	it("releases the gate and reports a rejected integrity callback", async () => {
 		const gate = createDeferredRuntimeGate();
 		const callbacks: Array<() => void> = [];

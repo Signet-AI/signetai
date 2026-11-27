@@ -40,6 +40,13 @@ test("HTTP bodies are bounded without draining streamed transcript uploads", asy
 		});
 		expect(wrongMethod.status).toBe(413);
 		await wrongMethod.text();
+		const hookUpload = await fetch(`${origin}/api/hooks/transcript-upload`, {
+			method: "PATCH",
+			body: chunked(11),
+			duplex: "half",
+		});
+		expect(hookUpload.status).toBe(200);
+		expect(await hookUpload.json()).toEqual({ bytes: 11 * 1_048_576 });
 		expect(globalThis.Response).toBe(NativeResponse);
 	} finally {
 		const closing = new Promise<void>((resolve, reject) =>

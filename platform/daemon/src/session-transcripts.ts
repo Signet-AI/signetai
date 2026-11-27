@@ -5,8 +5,14 @@ import { upsertThreadHead } from "./thread-heads";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
-import { extractAnchorTerms } from "./anchor-terms";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
+import { type TranscriptCaptureSource, upsertTranscriptCaptureJobInTx } from "./transcript-capture-jobs";
+import {
+	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
+	removeStaleTranscriptUploadEpochs,
+	transcriptUploadAgentRelativePath,
+	transcriptUploadSessionDirectory,
+} from "./transcript-upload-paths";
 import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
 import { writeTranscriptAudit } from "./transcript-audit";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
@@ -33,8 +39,8 @@ import {
 	getDbOwnerForAccessor,
 } from "./db-owner-runtime";
 import { logger } from "./logger";
+import { ftsQueryTerms } from "./memory-search";
 import { normalizeSessionKey } from "./session-end-state";
-import { sanitizeFtsQuery } from "./memory-search";
 import {
 	type TranscriptIdentity,
 	type TranscriptSessionKeyClassification,
@@ -218,15 +224,6 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 		harness: input.harness,
 	});
 	return true;
-}
-
-interface TranscriptRow {
-	readonly session_key: string;
-	readonly project: string | null;
-	readonly seen_at: string;
-	readonly excerpt?: string | null;
-	readonly content?: string;
-	readonly rank?: number | null;
 }
 
 interface StoredTranscriptBackfillRow {
@@ -473,7 +470,8 @@ export function deleteSessionTranscriptInTx(
 		(claim
 			? { harness: claim.harness ?? "unknown", project: stored?.project ?? previous?.project ?? null }
 			: undefined);
-	const found = stored ?? previous ?? live;
+	const upload = readTranscriptUploadStateInDb(db, input.agentId, input.sessionKey);
+	const found = stored ?? previous ?? live ?? upload;
 	if (!found || (input.project !== undefined && found.project !== input.project)) return { status: "not_found" };
 	const generation = previous?.generation ?? 1;
 	if (input.generation !== undefined && input.generation !== generation) return { status: "conflict", generation };
@@ -495,7 +493,7 @@ export function deleteSessionTranscriptInTx(
 			generation,
 			generation,
 			new Date().toISOString(),
-			stored?.harness ?? live?.harness ?? previous?.harness ?? null,
+			stored?.harness ?? live?.harness ?? previous?.harness ?? upload?.harness ?? null,
 			found.project,
 			Number(input.hard),
 			JSON.stringify(counts),
@@ -727,9 +725,25 @@ export function deleteSessionTranscriptInTx(
 			budget -= items.length;
 		}
 		if (budget > 0) {
-			db.prepare(
+			const queueFile = db.prepare(
 				"INSERT OR IGNORE INTO session_transcript_delete_files (agent_id,session_key,generation,path) VALUES (?,?,?,?)",
-			).run(...scope, canonicalTranscriptPath(basePath, row.harness ?? "unknown"));
+			);
+			queueFile.run(...scope, canonicalTranscriptPath(basePath, row.harness ?? "unknown"));
+			add(
+				"uploads",
+				db
+					.prepare("DELETE FROM session_transcript_uploads WHERE agent_id = ? AND session_key = ?")
+					.run(input.agentId, input.sessionKey).changes,
+			);
+			queueFile.run(
+				...scope,
+				transcriptUploadSessionDirectory(
+					basePath,
+					input.agentId,
+					readTranscriptUploadPurgeInDb(db, input.agentId)?.epoch ?? 0,
+					input.sessionKey,
+				),
+			);
 			phase = "files";
 		}
 	}
@@ -825,7 +839,7 @@ export async function deleteSessionTranscriptOwned(
 			deleteSessionTranscriptInTx(db, input, basePath, deadlineAt);
 		});
 	}
-	for (let batch = 0; batch < 4; batch++) {
+	for (let batch = 0; batch <= 4; batch++) {
 		const row = transcriptDeletion(db, input.agentId, input.sessionKey);
 		if (!row) throw new Error("Deletion state disappeared");
 		if (row.phase !== "files") return deletionResult(row);
@@ -843,6 +857,7 @@ export async function deleteSessionTranscriptOwned(
 			if (!completed) throw new Error("Completed deletion disappeared");
 			return deletionResult(completed);
 		}
+		if (batch === 4) break;
 		if (Date.now() >= deadlineAt - 350) return { ...deletionResult(row), pendingReason: "Owner job budget exhausted" };
 		try {
 			const result = await redactTranscriptFileBatch({
@@ -972,14 +987,6 @@ export interface SessionTranscriptUpsertOptions {
 	readonly completedAt?: string;
 	readonly preserveExistingContent?: boolean;
 	readonly signal?: AbortSignal;
-}
-
-export interface TranscriptHit {
-	readonly sessionKey: string;
-	readonly project: string | null;
-	readonly updatedAt: string;
-	readonly excerpt: string;
-	readonly rank: number;
 }
 
 interface BackfillSeen {
@@ -1407,37 +1414,6 @@ function hasUpdatedAt(): boolean {
 	}
 }
 
-function cleanExcerpt(text: string): string {
-	return text
-		.replace(/^(?:Human|User|Assistant):\s*/gim, "")
-		.replace(/\s+/g, " ")
-		.trim();
-}
-
-function buildExcerpt(content: string, query: string): string {
-	const base = cleanExcerpt(content);
-	if (base.length <= 220) return base;
-
-	const terms = query
-		.toLowerCase()
-		.split(/\W+/)
-		.filter((term) => term.length >= 3)
-		.slice(0, 8);
-	const lower = base.toLowerCase();
-
-	for (const term of terms) {
-		const idx = lower.indexOf(term);
-		if (idx === -1) continue;
-		const start = Math.max(0, idx - 90);
-		const end = Math.min(base.length, idx + 130);
-		const prefix = start > 0 ? "..." : "";
-		const suffix = end < base.length ? "..." : "";
-		return `${prefix}${base.slice(start, end).trim()}${suffix}`;
-	}
-
-	return `${base.slice(0, 217).trim()}...`;
-}
-
 export function upsertSessionTranscript(
 	sessionKey: string,
 	transcript: string,
@@ -1860,178 +1836,380 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 	}
 }
 
-export function searchTranscriptFallback(params: {
-	readonly query: string;
+const TRANSCRIPT_TURN_BACKFILL_ROWS = 50;
+const TRANSCRIPT_TURN_BACKFILL_BYTES = 8 * 1024 * 1024;
+const TRANSCRIPT_TURN_MAX_TERMS = 16;
+const TRANSCRIPT_TURN_MATCH = [
+	"SELECT turn.session_key FROM session_transcript_turns_fts",
+	"JOIN session_transcript_turns turn ON turn.id = session_transcript_turns_fts.rowid",
+	"WHERE session_transcript_turns_fts MATCH ? AND turn.agent_id = ?",
+].join(" ");
+
+export interface TranscriptTurnSearchHit {
+	readonly sessionKey: string;
+	readonly project: string | null;
+	readonly updatedAt: string;
+	readonly content: string;
+	readonly rank: number;
+}
+
+export interface TranscriptTurnBackfillChunk {
+	readonly complete: boolean;
+	readonly indexed: number;
+}
+
+export interface TranscriptTurnBackfillOptions {
+	readonly maxRows?: number;
+}
+
+export function transcriptTurnBackfillWorkUnits(options: TranscriptTurnBackfillOptions): number {
+	return options.maxRows ?? TRANSCRIPT_TURN_BACKFILL_ROWS;
+}
+
+function transcriptTurnIndexReady(db: ReadDb): boolean {
+	if (!tableExistsInDatabase(db, "session_transcript_turns_backfill")) return false;
+	const state = prepareTypedStatement<{ readonly ready: number }>(
+		db,
+		"SELECT cursor >= end_rowid AS ready FROM session_transcript_turns_backfill WHERE id = 1",
+	).get();
+	return state?.ready === 1;
+}
+
+export interface TranscriptSearchScope {
 	readonly agentId: string;
 	readonly sessionKey?: string;
+	readonly excludeSessionKey?: string;
 	readonly project?: string;
-	readonly limit: number;
-	readonly allowScanFallback?: boolean;
-}): TranscriptHit[] {
-	const limit = Math.max(1, Math.min(8, Math.trunc(params.limit)));
-	if (!tableExists("session_transcripts")) return [];
+}
 
-	const seenExpr = hasUpdatedAt() ? "COALESCE(st.updated_at, st.created_at)" : "st.created_at";
-	const sameProject = (project: string | null): number =>
-		params.project && project && params.project === project ? 0 : 1;
-	const exactQuery = params.query.trim();
-	if (exactQuery.length > 0) {
-		const aliases = [...new Set([exactQuery, canonicalizeTranscriptLookup(exactQuery)])];
-		const hasSessionId = sessionTranscriptsHasColumn("session_id");
-		const placeholders = aliases.map(() => "?").join(", ");
-		const keyPredicates = [`st.session_key IN (${placeholders})`];
-		if (hasSessionId) keyPredicates.push(`st.session_id IN (${placeholders})`);
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const args: unknown[] = [
-				params.agentId,
-				...aliases,
-				...(hasSessionId ? aliases : []),
-				exactQuery,
-				params.project ?? "",
-				limit,
-			];
-			return db
-				.prepare(
-					[
-						`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content, 0 AS rank`,
-						"FROM session_transcripts st",
-						"WHERE st.agent_id = ?",
-						`AND (${keyPredicates.join(" OR ")})`,
-						`ORDER BY CASE WHEN st.session_key = ? THEN 0 ELSE 1 END, CASE WHEN st.project = ? THEN 0 ELSE 1 END, ${seenExpr} DESC LIMIT ?`,
-					].join("\n"),
-				)
-				.all(...args) as unknown as TranscriptRow[];
-		}, "db:transcript.search.exact");
-		if (exactRows.length > 0) {
-			return exactRows
-				.map((row) => ({
-					sessionKey: row.session_key,
-					project: row.project,
-					updatedAt: row.seen_at,
-					excerpt: buildExcerpt(typeof row.content === "string" ? row.content : "", params.query),
-					rank: 0,
-				}))
-				.sort((a, b) => sameProject(a.project) - sameProject(b.project))
-				.slice(0, limit);
-		}
+export function transcriptScopeFilter(scope: TranscriptSearchScope): {
+	readonly sql: string[];
+	readonly args: string[];
+} {
+	const sql = ["WHERE st.agent_id = ?"];
+	const args = [scope.agentId];
+	if (scope.sessionKey) {
+		sql.push("AND st.session_key = ?");
+		args.push(scope.sessionKey);
+	} else if (scope.excludeSessionKey) {
+		sql.push("AND st.session_key != ?");
+		args.push(scope.excludeSessionKey);
 	}
+	if (scope.project) {
+		sql.push("AND st.project = ?");
+		args.push(scope.project);
+	}
+	return { sql, args };
+}
 
-	try {
-		if (tableExists("session_transcripts_fts")) {
-			const anchors = extractAnchorTerms(params.query)
-				.map((term) => term.replace(/[_:/.-]+/g, " "))
-				.join(" ");
-			const ftsQueries = [...new Set([sanitizeFtsQuery(params.query), sanitizeFtsQuery(anchors)].filter(Boolean))];
-			for (const fts of ftsQueries) {
-				try {
-					const rows: TranscriptRow[] =
-						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-						getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-							const parts = [
-								`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
-								`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
-								"bm25(session_transcripts_fts) AS rank",
-								"FROM session_transcripts_fts",
-								"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
-								"WHERE session_transcripts_fts MATCH ?",
-								"AND st.agent_id = ?",
-							];
-							const args: unknown[] = [fts, params.agentId];
-							if (params.sessionKey) {
-								parts.push("AND st.session_key != ?");
-								args.push(params.sessionKey);
-							}
-							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
-							args.push(limit * 2);
-							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "db:transcript.search.fts");
+export function searchTranscriptTurns(
+	db: ReadDb,
+	params: TranscriptSearchScope & { readonly query: string; readonly limit: number },
+): TranscriptTurnSearchHit[] {
+	const parsed = ftsQueryTerms(params.query);
+	const terms = parsed.terms.slice(0, TRANSCRIPT_TURN_MAX_TERMS);
+	if (terms.length === 0 || !transcriptTurnIndexReady(db)) return [];
+	const sessionKey = params.sessionKey || params.excludeSessionKey;
+	const sessionFilter = sessionKey ? `AND turn.session_key ${params.sessionKey ? "=" : "!="} ?` : "";
+	const scope = transcriptScopeFilter(params);
+	const sql = [
+		"WITH hits AS MATERIALIZED (SELECT turn.session_key AS session_key, bm25(session_transcript_turns_fts) AS rank",
+		"FROM session_transcript_turns_fts JOIN session_transcript_turns turn ON turn.id = session_transcript_turns_fts.rowid",
+		`WHERE session_transcript_turns_fts MATCH ? AND turn.agent_id = ? ${sessionFilter})`,
+		"SELECT st.session_key, st.project, COALESCE(st.updated_at, st.created_at) AS updated_at, st.content, MIN(hits.rank) AS rank",
+		"FROM hits JOIN session_transcripts st ON st.session_key = hits.session_key",
+		...scope.sql,
+	];
+	const args: unknown[] = [terms.join(" OR "), params.agentId, ...(sessionKey ? [sessionKey] : []), ...scope.args];
+	if (parsed.requireAll && terms.length > 1) {
+		sql.push(`AND st.session_key IN (${terms.map(() => TRANSCRIPT_TURN_MATCH).join(" INTERSECT ")})`);
+		for (const term of terms) args.push(term, params.agentId);
+	}
+	sql.push("GROUP BY st.rowid ORDER BY rank ASC, updated_at DESC LIMIT ?");
+	args.push(params.limit);
+	return prepareTypedStatement<{
+		readonly session_key: string;
+		readonly project: string | null;
+		readonly updated_at: string;
+		readonly content: string;
+		readonly rank: number;
+	}>(db, sql.join("\n"))
+		.all(...args)
+		.map((row) => ({
+			sessionKey: row.session_key,
+			project: row.project,
+			updatedAt: row.updated_at,
+			content: row.content,
+			rank: row.rank,
+		}));
+}
 
-					const hits = rows
-						.map((row) => ({
-							sessionKey: row.session_key,
-							project: row.project,
-							updatedAt: row.seen_at,
-							excerpt: buildExcerpt(typeof row.excerpt === "string" ? row.excerpt : "", params.query),
-							rank: typeof row.rank === "number" ? row.rank : 0,
-						}))
-						.filter((row) => row.excerpt.length > 0)
-						.sort((a, b) => sameProject(a.project) - sameProject(b.project) || a.rank - b.rank)
-						.slice(0, limit);
-					if (hits.length > 0) return hits;
-				} catch (error) {
-					logger.warn(
-						"transcripts",
-						params.allowScanFallback === false
-							? "Transcript FTS query failed, skipping scan fallback"
-							: "Transcript FTS query failed, falling back to LIKE",
-						{
-							error: error instanceof Error ? error.message : String(error),
-						},
-					);
-				}
-			}
+export function backfillTranscriptTurnsFtsChunkInDb(
+	db: WriteDb,
+	options: TranscriptTurnBackfillOptions = {},
+): TranscriptTurnBackfillChunk {
+	const state = prepareTypedStatement<{ readonly cursor: number | null; readonly end_rowid: number }>(
+		db,
+		"SELECT cursor, end_rowid FROM session_transcript_turns_backfill WHERE id = 1",
+	).get();
+	if (!state) throw new Error("Transcript turn backfill state is missing");
+	if (state.cursor !== null && state.cursor >= state.end_rowid) return { complete: true, indexed: 0 };
+	const maxRows = Math.max(1, Math.floor(options.maxRows ?? TRANSCRIPT_TURN_BACKFILL_ROWS));
+	const candidates = prepareTypedStatement<{ readonly rowid: number }>(
+		db,
+		"SELECT rowid FROM session_transcripts WHERE rowid >= COALESCE(CAST(?1 AS INTEGER) + 1, -9223372036854775808) AND rowid <= ?2 ORDER BY rowid LIMIT ?3",
+	).all(state.cursor, state.end_rowid, maxRows);
+	const rowBytes = prepareTypedStatement<{ readonly bytes: number }>(
+		db,
+		"SELECT length(CAST(content AS BLOB)) AS bytes FROM session_transcripts WHERE rowid = CAST(? AS INTEGER)",
+	);
+	const insert = db.prepare(
+		`INSERT INTO session_transcript_turns(agent_id, session_key, seq, byte_offset, text)
+		 SELECT st.agent_id, st.session_key, 1, 0, st.content FROM session_transcripts st
+		 WHERE st.rowid = CAST(? AS INTEGER) AND NOT EXISTS (
+			 SELECT 1 FROM session_transcript_turns turn
+			 WHERE turn.agent_id = st.agent_id AND turn.session_key = st.session_key
+		 )`,
+	);
+	let last = state.cursor;
+	let bytes = 0;
+	let indexed = 0;
+	let consumedAll = true;
+	for (const row of candidates) {
+		bytes += rowBytes.get(row.rowid)?.bytes ?? 0;
+		if (last !== state.cursor && bytes > TRANSCRIPT_TURN_BACKFILL_BYTES) {
+			consumedAll = false;
+			break;
 		}
-	} catch (error) {
-		logger.warn("transcripts", "Transcript FTS table check failed", {
-			error: error instanceof Error ? error.message : String(error),
+		if (insert.run(row.rowid).changes > 0) indexed += 1;
+		last = row.rowid;
+	}
+	const next = consumedAll && candidates.length < maxRows ? state.end_rowid : last;
+	if (next === null || next < state.end_rowid) {
+		db.prepare("UPDATE session_transcript_turns_backfill SET cursor = ? WHERE id = 1").run(next);
+		return { complete: false, indexed };
+	}
+	const unindexed = prepareTypedStatement<{ readonly cursor: number | null; readonly last: number }>(
+		db,
+		`SELECT CASE WHEN first > -9223372036854775808 THEN first - 1 END AS cursor,
+			(SELECT MAX(rowid) FROM session_transcripts) AS last
+		FROM (SELECT MIN(+st.rowid) AS first FROM session_transcripts st WHERE NOT EXISTS (
+			SELECT 1 FROM session_transcript_turns turn
+			WHERE turn.agent_id = st.agent_id AND turn.session_key = st.session_key
+		))
+		WHERE first IS NOT NULL`,
+	).get();
+	if (unindexed) {
+		db.prepare("UPDATE session_transcript_turns_backfill SET cursor = ?, end_rowid = ? WHERE id = 1").run(
+			unindexed.cursor,
+			unindexed.last,
+		);
+		return { complete: false, indexed };
+	}
+	db.prepare("UPDATE session_transcript_turns_backfill SET cursor = end_rowid WHERE id = 1").run();
+	return { complete: true, indexed };
+}
+
+export interface TranscriptUploadState {
+	readonly harness: string;
+	readonly project: string | null;
+	readonly generation: number;
+	readonly committedOffset: number;
+	readonly tailSha256: string;
+}
+
+export interface TranscriptUploadCommit {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly sessionId: string;
+	readonly harness: string;
+	readonly project: string | null;
+	readonly projectScoped: boolean;
+	readonly purgeEpoch: number;
+	readonly generation: number;
+	readonly expectedOffset: number;
+	readonly tailSha256: string;
+	readonly source: TranscriptCaptureSource;
+	readonly capturedAt: string;
+}
+
+export type TranscriptUploadCommitResult =
+	| { readonly status: "committed"; readonly state: TranscriptUploadState; readonly jobId: string }
+	| { readonly status: "bypassed" }
+	| { readonly status: "project_mismatch" }
+	| { readonly status: "harness_mismatch" }
+	| { readonly status: "purge_pending" }
+	| { readonly status: "offset_mismatch"; readonly state: TranscriptUploadState | null };
+
+export interface TranscriptUploadScope {
+	readonly state: TranscriptUploadState | null;
+	readonly stored: { readonly harness: string | null; readonly project: string | null } | null;
+	readonly purgeEpoch: number;
+}
+
+export function readTranscriptUploadStateInDb(
+	db: ReadDb,
+	agentId: string,
+	sessionKey: string,
+): TranscriptUploadState | null {
+	const row = prepareTypedStatement<{
+		harness: string;
+		project: string | null;
+		generation: number;
+		committed_offset: number;
+		tail_sha256: string;
+	}>(
+		db,
+		"SELECT harness, project, generation, committed_offset, tail_sha256 FROM session_transcript_uploads WHERE agent_id = ? AND session_key = ?",
+	).get(agentId, sessionKey);
+	if (!row) return null;
+	return {
+		harness: row.harness,
+		project: row.project,
+		generation: row.generation,
+		committedOffset: row.committed_offset,
+		tailSha256: row.tail_sha256,
+	};
+}
+
+function readTranscriptUploadPurgeInDb(db: ReadDb, agentId: string): { readonly epoch: number } | null {
+	return (
+		prepareTypedStatement<{ epoch: number }>(
+			db,
+			"SELECT epoch FROM session_transcript_upload_purges WHERE path = ?",
+		).get(transcriptUploadAgentRelativePath(agentId)) ?? null
+	);
+}
+
+export function readTranscriptUploadScopeInDb(db: ReadDb, agentId: string, sessionKey: string): TranscriptUploadScope {
+	const stored = prepareTypedStatement<{ harness: string | null; project: string | null }>(
+		db,
+		"SELECT harness, project FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
+	).get(agentId, sessionKey);
+	const purge = readTranscriptUploadPurgeInDb(db, agentId);
+	return {
+		state: readTranscriptUploadStateInDb(db, agentId, sessionKey),
+		stored: stored ?? null,
+		purgeEpoch: purge?.epoch ?? 0,
+	};
+}
+
+export function transcriptUploadScopeConflict(
+	scope: TranscriptUploadScope,
+	request: { readonly harness: string; readonly project: string | null; readonly projectScoped: boolean },
+): TranscriptUploadCommitResult | null {
+	const rows = [scope.state, scope.stored].flatMap((row) => (row ? [row] : []));
+	if (rows.some((row) => row.harness != null && row.harness !== request.harness)) return { status: "harness_mismatch" };
+	const outside = request.projectScoped
+		? rows.some((row) => row.project !== request.project)
+		: request.project !== null && rows.some((row) => row.project !== null && row.project !== request.project);
+	return outside ? { status: "project_mismatch" } : null;
+}
+
+export function transcriptUploadConflict(
+	scope: TranscriptUploadScope,
+	request: {
+		readonly harness: string;
+		readonly project: string | null;
+		readonly projectScoped: boolean;
+		readonly generation: number;
+		readonly offset: number;
+	},
+): TranscriptUploadCommitResult | null {
+	const conflict = transcriptUploadScopeConflict(scope, request);
+	if (conflict) return conflict;
+	const current = scope.state;
+	const advances =
+		current?.generation === request.generation
+			? current.committedOffset === request.offset
+			: request.offset === 0 && (current === null || request.generation > current.generation);
+	return advances ? null : { status: "offset_mismatch", state: current };
+}
+
+export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadCommit): TranscriptUploadCommitResult {
+	if (input.source.sizeBytes <= input.expectedOffset) throw new Error("Transcript upload range is empty");
+	if (!admitSessionTranscriptInDb(db, input)) return { status: "bypassed" };
+	const scope = readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey);
+	if (scope.purgeEpoch !== input.purgeEpoch) return { status: "purge_pending" };
+	const conflict = transcriptUploadConflict(scope, { ...input, offset: input.expectedOffset });
+	if (conflict) return conflict;
+	const project = input.project ?? scope.state?.project ?? scope.stored?.project ?? null;
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO session_transcript_uploads (agent_id, session_key, harness, project, generation, committed_offset, tail_sha256, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(agent_id, session_key) DO UPDATE SET project = excluded.project, generation = excluded.generation, committed_offset = excluded.committed_offset, tail_sha256 = excluded.tail_sha256, updated_at = excluded.updated_at`,
+	).run(
+		input.agentId,
+		input.sessionKey,
+		input.harness,
+		project,
+		input.generation,
+		input.source.sizeBytes,
+		input.tailSha256,
+		now,
+		now,
+	);
+	const jobId = upsertTranscriptCaptureJobInTx(db, {
+		input: {
+			agentId: input.agentId,
+			harness: input.harness,
+			sessionKey: input.sessionKey,
+			sessionId: input.sessionId,
+			project,
+			transcript: "",
+			capturedAt: input.capturedAt,
+			endedAt: null,
+		},
+		source: input.source,
+		sourceSha256: null,
+		storedAvailable: false,
+		createdAt: now,
+	});
+	return {
+		status: "committed",
+		state: {
+			harness: input.harness,
+			project,
+			generation: input.generation,
+			committedOffset: input.source.sizeBytes,
+			tailSha256: input.tailSha256,
+		},
+		jobId,
+	};
+}
+
+export async function drainTranscriptUploadPurgesOwned(
+	db: WriteDb,
+	input: { readonly basePath: string },
+	transact: (operation: () => void) => Promise<void>,
+): Promise<{ readonly pending: number; readonly progressed: boolean }> {
+	const basePath = input.basePath;
+	const budget = { remaining: TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES };
+	const intents = prepareTypedStatement<{ path: string; epoch: number }>(
+		db,
+		"SELECT path, epoch FROM session_transcript_upload_purges WHERE drained_at IS NULL ORDER BY requested_at, path LIMIT 16",
+	).all();
+	const removed: Array<{ path: string; epoch: number }> = [];
+	for (const intent of intents) {
+		if (!(await removeStaleTranscriptUploadEpochs(basePath, intent.path, intent.epoch, budget))) break;
+		removed.push(intent);
+	}
+	if (removed.length > 0) {
+		const drainedAt = new Date().toISOString();
+		await transact(() => {
+			const drained = db.prepare(
+				"UPDATE session_transcript_upload_purges SET drained_at = ? WHERE path = ? AND epoch = ? AND drained_at IS NULL",
+			);
+			for (const intent of removed) drained.run(drainedAt, intent.path, intent.epoch);
 		});
 	}
-	if (params.allowScanFallback === false) return [];
-
-	const words = params.query
-		.toLowerCase()
-		.split(/\W+/)
-		.filter((term) => term.length >= 3)
-		.slice(0, 5);
-	const anchors = extractAnchorTerms(params.query).slice(0, 5);
-	const terms = anchors.length > 0 ? anchors : words;
-	if (terms.length === 0) return [];
-
-	try {
-		const rows: TranscriptRow[] =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-				const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
-				const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
-				const parts = [
-					`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content, ${score} AS rank`,
-					"FROM session_transcripts st",
-					"WHERE st.agent_id = ?",
-				];
-				const args: unknown[] = [];
-				for (const term of terms) {
-					args.push(`%${term}%`);
-				}
-				args.push(params.agentId);
-				if (params.sessionKey) {
-					parts.push("AND st.session_key != ?");
-					args.push(params.sessionKey);
-				}
-				parts.push(`AND (${any})`);
-				for (const term of terms) {
-					args.push(`%${term}%`);
-				}
-				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
-				args.push(limit);
-				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "db:transcript.search.like");
-
-		return rows
-			.map((row) => ({
-				sessionKey: row.session_key,
-				project: row.project,
-				updatedAt: row.seen_at,
-				excerpt: buildExcerpt(typeof row.content === "string" ? row.content : "", params.query),
-				rank: typeof row.rank === "number" ? row.rank : 0,
-			}))
-			.filter((row) => row.excerpt.length > 0)
-			.sort((a, b) => sameProject(a.project) - sameProject(b.project) || b.rank - a.rank)
-			.slice(0, limit);
-	} catch (error) {
-		logger.warn("transcripts", "Transcript fallback search failed", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return [];
-	}
+	const left = prepareTypedStatement<{ count: number }>(
+		db,
+		"SELECT COUNT(*) AS count FROM session_transcript_upload_purges WHERE drained_at IS NULL",
+	).get();
+	return {
+		pending: left?.count ?? 0,
+		progressed: removed.length > 0 || budget.remaining < TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
+	};
 }

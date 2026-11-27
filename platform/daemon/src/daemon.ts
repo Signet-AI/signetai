@@ -114,7 +114,7 @@ import {
 	forceExitDuringShutdownFlush,
 	runShutdownCleanup,
 } from "./daemon-shutdown";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { dbOwnerBackfillTranscriptTurns, dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
@@ -274,6 +274,7 @@ import {
 	telemetryDisabledByEnv,
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
+import { drainTranscriptUploadPurges, stopTranscriptUploadPurges } from "./transcript-upload";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
@@ -628,6 +629,7 @@ let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 const ingestedMemoryFiles = new Map<string, string>();
 const LEGACY_MARKDOWN_IMPORTER_VERSION = 1;
 const MEMORY_IMPORT_POLL_MS = 30_000;
+const TRANSCRIPT_TURN_BACKFILL_MAX_FAILURES = 5;
 const STALE_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const ACP_DELIVERY_RECONCILIATION_INTERVAL_MS = 30_000;
 const STALE_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -1786,6 +1788,7 @@ function restartAfterEmbeddingPromotion(telemetry?: TelemetryCollector): void {
 }
 
 export async function stopDaemonRuntimeForTests(): Promise<void> {
+	await stopTranscriptUploadPurges();
 	await stopPipelineRuntime();
 }
 
@@ -2224,6 +2227,7 @@ async function cleanup() {
 		} catch {}
 		transcriptRecoveryWorkerHandle = null;
 	}
+	await stopTranscriptUploadPurges();
 	await stopPipelineRuntime();
 
 	const maintenanceHandle = dbOwnerMaintenanceHandle;
@@ -2881,6 +2885,7 @@ async function main() {
 		logFdSnapshot("post-pipeline");
 
 		initCheckpointFlush(getDbAccessor());
+		if (!shuttingDown) void drainTranscriptUploadPurges(AGENTS_DIR);
 
 		if (!transcriptCaptureWorkerHandle) {
 			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
@@ -3128,6 +3133,63 @@ async function main() {
 					vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner });
 				}
 			});
+			deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+				const integrityHealthy = await deferredRuntimeGate.waitForVerifiedIntegrity();
+				const migrationBackupRemoved = integrityHealthy && (await deferredRuntimeGate.waitForMigrationBackupSettled());
+				let indexed = 0;
+				let failures = 0;
+				for (;;) {
+					const owner = dbOwnerClient;
+					if (!migrationBackupRemoved || migrationIntegrityWritesBlocked || shuttingDown || owner === null) {
+						logger.warn(
+							"startup-recovery",
+							"Transcript turn index backfill stopped; search uses the scan fallback until restart",
+							{
+								indexed,
+								integrityHealthy,
+								migrationBackupRemoved,
+								migrationIntegrityWritesBlocked,
+								shuttingDown,
+								ownerAvailable: owner !== null,
+							},
+						);
+						return;
+					}
+					const chunk = await dbOwnerBackfillTranscriptTurns(
+						owner,
+						{},
+						{ operation: "maintenance.transcripts.turn-index.backfill", deadlineMs: 10_000 },
+					).then(
+						(value) => ({ ok: true as const, value }),
+						(failure: unknown) => ({ ok: false as const, failure }),
+					);
+					if (!chunk.ok) {
+						failures += 1;
+						const error = chunk.failure instanceof Error ? chunk.failure.message : String(chunk.failure);
+						if (failures >= TRANSCRIPT_TURN_BACKFILL_MAX_FAILURES) {
+							logger.error(
+								"startup-recovery",
+								"Transcript turn index backfill gave up; search uses the scan fallback until restart",
+								undefined,
+								{ indexed, failures, error },
+							);
+							return;
+						}
+						logger.warn("startup-recovery", "Transcript turn index backfill chunk failed; retrying", {
+							indexed,
+							failures,
+							error,
+						});
+						await sleep(1_000 * 2 ** failures);
+						continue;
+					}
+					failures = 0;
+					indexed += chunk.value.indexed;
+					if (chunk.value.complete) break;
+					await sleep(1_000);
+				}
+				if (indexed > 0) logger.info("daemon", "Transcript turn index backfill finished", { indexed });
+			});
 		}
 		let retainedCorruptMaintenanceLogged = false;
 		deferredRuntimeScheduler.scheduleIntegrity(async (): Promise<void> => {
@@ -3147,6 +3209,7 @@ async function main() {
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
 			const owner = dbOwnerClient;
 			const migrationBackupPath = pendingMigrationBackupPath(MEMORY_DB);
+			if (migrationBackupPath === null) deferredRuntimeGate.completeMigrationBackup(true);
 			let currentDatabaseSizeBytes = 0;
 			try {
 				currentDatabaseSizeBytes = (await statAsync(MEMORY_DB)).size;
@@ -3287,6 +3350,7 @@ async function main() {
 							},
 						});
 						if (result.phase === "pass") {
+							deferredRuntimeGate.completeMigrationBackup(true);
 							if (deferredMigrationVerification || migrationWritesDeferred) {
 								logger.info(
 									"startup-recovery",
@@ -3297,6 +3361,7 @@ async function main() {
 								}, 0);
 							}
 						} else if (result.phase === "parked" || result.phase === "failed" || result.phase === "terminal") {
+							deferredRuntimeGate.completeMigrationBackup(false);
 							logger.warn("startup-recovery", "Migration verification retained the rollback backup; VACUUM deferred", {
 								phase: result.phase,
 							});
@@ -3322,6 +3387,7 @@ async function main() {
 					publishStatus: publishMigrationVerifyStatus,
 					logWarn: (message, details): void => logger.warn("startup-recovery", message, details),
 					logError: (message, error, details): void => logger.error("startup-recovery", message, error, details),
+					onRetryCapReached: (): void => deferredRuntimeGate.completeMigrationBackup(false),
 				});
 				setupRetry.run();
 			}

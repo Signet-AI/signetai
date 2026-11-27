@@ -3,6 +3,8 @@ export interface DeferredRuntimeGate {
 	readonly completeIntegrity: () => void;
 	readonly waitForVerifiedIntegrity: () => Promise<boolean>;
 	readonly completeVerifiedIntegrity: (healthy: boolean) => void;
+	readonly waitForMigrationBackupSettled: () => Promise<boolean>;
+	readonly completeMigrationBackup: (removed: boolean) => void;
 }
 
 export interface DeferredRuntimeScheduleOptions {
@@ -48,6 +50,10 @@ export function createDeferredRuntimeGate(): DeferredRuntimeGate {
 		resolveVerifiedIntegrity = resolve;
 	});
 	let verifiedIntegrityCompleted = false;
+	let resolveMigrationBackup: (removed: boolean) => void = () => {};
+	const migrationBackupSettled = new Promise<boolean>((resolve) => {
+		resolveMigrationBackup = resolve;
+	});
 	return {
 		waitForIntegrity: async (): Promise<void> => await integrityComplete,
 		completeIntegrity: (): void => {
@@ -58,6 +64,10 @@ export function createDeferredRuntimeGate(): DeferredRuntimeGate {
 			if (verifiedIntegrityCompleted) return;
 			verifiedIntegrityCompleted = true;
 			resolveVerifiedIntegrity(healthy);
+		},
+		waitForMigrationBackupSettled: async (): Promise<boolean> => await migrationBackupSettled,
+		completeMigrationBackup: (removed): void => {
+			resolveMigrationBackup(removed);
 		},
 	};
 }
