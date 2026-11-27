@@ -421,6 +421,10 @@ result on stdout. JSON onboarding detects harnesses without changing them;
 connection remains an explicit choice. Use explicit classification flags for
 scripted imports and `--confirm --wait` for destructive organization jobs.
 
+## Local request profiling
+
+For local performance diagnosis, start the daemon with `SIGNET_DB_PROFILE=1`. Responses include an `x-signet-owner-profile` header with bounded per-request owner operation counts, completed owner busy time, and queue time. The profile records operation names and table names, never SQL parameters or credentials. A count without a matching measured operation means the operation had not reported completion when the response finished; its duration is unknown, not zero. Identity-denial responses omit the header. Profiling is off by default; enable it only for a controlled local diagnostic run.
+
 ## Names in terminal results
 
 Recall, memory list/show, search, sessions, sources, Dreaming passes, and audit text show canonical author and agent names. A different user handle follows the display name. Authors outside your directory access appear as **Another person**, never an inferred identity from a harness name. `--json` retains identifiers for scripts. Local results without attribution keep their previous text format.

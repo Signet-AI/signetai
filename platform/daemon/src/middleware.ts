@@ -1,4 +1,5 @@
 import "./request-read";
+import { ownerRequestProfiling } from "./db-request-profile";
 import { isIP } from "node:net";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -29,6 +30,7 @@ function isForeignBrowserWrite(c: Context): boolean {
 }
 
 export function registerGlobalMiddleware(app: Hono): void {
+	app.use("*", ownerRequestProfiling(process.env.SIGNET_DB_PROFILE === "1"));
 	app.use(
 		"*",
 		cors({

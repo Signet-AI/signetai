@@ -1,3 +1,4 @@
+import { observeRequestOwnerJob } from "./db-request-profile";
 import { randomUUID } from "node:crypto";
 import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 import {
@@ -766,6 +767,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			if (request.kind === "initialize") initialization = "running";
 			dispatch(job.id);
 		});
+		observeRequestOwnerJob(request, submitOptions.lane, submitOptions.operation, now, metrics);
 		return {
 			job,
 			result: result.catch((error: unknown) => {
