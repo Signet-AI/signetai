@@ -996,7 +996,22 @@ describe("organization HTTP flows", () => {
 				body: JSON.stringify({ name: "private-request-body" }),
 			});
 			expect(rejected.status).toBe(403);
+			if (i === 0) expect((await (await call(path, "GET", undefined, alice.token)).json()).errors).toHaveLength(1);
 		}
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM audit_events WHERE action='connector.error'", [], "get"),
+			),
+		).toEqual({ n: 0 });
+		expect(
+			await organizationQuery(
+				statement(
+					"SELECT COUNT(*) AS n FROM audit_events WHERE action='auth.failure' AND target_id=?",
+					[issued.key.id],
+					"get",
+				),
+			),
+		).toEqual({ n: 1 });
 		const result = await call(path, "GET", undefined, alice.token);
 		expect(result.status).toBe(200);
 		const summary = await result.json();

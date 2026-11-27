@@ -441,6 +441,7 @@ export type DbOwnerRequest =
 			readonly kind: "search_telemetry_read";
 			readonly query: import("./memory-search-telemetry").MemorySearchTelemetryQuery;
 	  }
+	| { readonly kind: "connector_errors"; readonly input: import("./auth/audit-owner").ConnectorErrorRequest }
 	| { readonly kind: "queue_diagnostics_read"; readonly scope: import("./read-scope").ReadScope }
 	| { readonly kind: "reflection_answer"; readonly input: ReflectionAnswerInput }
 	| { readonly kind: "reflection_generate"; readonly input: import("./reflection-owner").CreateDailyReflectionsInput }

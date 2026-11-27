@@ -343,6 +343,7 @@ async function executeInlineOwnerRequest(
 		case "transcript_capture_transition":
 		case "transcript_capture_enqueue":
 		case "fts_partition":
+		case "connector_errors":
 		case "organization_purge_plan":
 		case "operator_job":
 		case "classification":

@@ -685,13 +685,8 @@ export async function connectorErrors(p: Principal, keyId: string) {
 	const key = await readBoundKey(keyId);
 	if (!key || key.kind !== "connector" || key.user_id !== identity.userId) throw new IdentityError(403, "not_owner");
 	const since = new Date(Date.now() - 7 * 86400_000).toISOString();
-	const errors = await organizationQuery<{ at: string; status: number; reason: string }[]>(
-		statement(
-			"SELECT at,json_extract(detail_json,'$.status') AS status,json_extract(detail_json,'$.reason') AS reason FROM audit_events WHERE target_kind='key' AND target_id=? AND action='connector.error' AND at>=? ORDER BY at DESC,id DESC LIMIT 10",
-			[keyId, since],
-			"all",
-		),
-	);
+	const { connectorErrorHistory } = await import("./organization-store");
+	const errors = await connectorErrorHistory({ keyId });
 	return { keyId, since, limit: 10, errors };
 }
 

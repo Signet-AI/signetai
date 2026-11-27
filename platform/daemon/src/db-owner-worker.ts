@@ -1450,6 +1450,10 @@ export function runDbOwnerWorker(): void {
 			const input = job.request.input;
 			return withBusyRetry(() => txAnswerReflection(db, input), context);
 		}
+		if (job.request.kind === "connector_errors") {
+			const { connectorErrorsInOwner } = await import("./auth/audit-owner");
+			return connectorErrorsInOwner(db, ownerDbPath, job.request.input);
+		}
 		if (job.request.kind === "organization_purge_plan") {
 			const { planOffboardPurgeInTx } = await import("./auth/organization-purge");
 			return planOffboardPurgeInTx(db, job.request.userId, job.request.scope);

@@ -734,14 +734,22 @@ async function rotateSession(
 		user: userView(user),
 	};
 }
-export async function recordConnectorError(keyId: string, status: 401 | 403, reason: string): Promise<void> {
-	const safeReason = /^[a-z_]{1,64}$/.test(reason) ? reason : "request_denied";
-	await organizationWrite([
-		statement(
-			"INSERT INTO audit_events (id,at,actor_user_id,actor_credential,action,target_kind,target_id,outcome,detail_json) SELECT ?,?,user_id,?,'connector.error','key',id,'denied',? FROM api_keys WHERE id=? AND kind='connector'",
-			[id("aud"), new Date().toISOString(), `api_key:${keyId}`, JSON.stringify({ status, reason: safeReason }), keyId],
-		),
-	]);
+export async function connectorErrorHistory(
+	input: import("./audit-owner").ConnectorErrorRequest,
+): Promise<readonly { at: string; status: number; reason: string }[]> {
+	const { getDbOwner } = await import("../db-owner-runtime");
+	return (await getDbOwner()).submit<readonly { at: string; status: number; reason: string }[]>(
+		{ kind: "connector_errors", input },
+		{ operation: "organization.connector-errors", lane: "write", deadlineMs: 10_000, estimatedWorkUnits: 10 },
+	).result;
+}
+export async function recordConnectorError(
+	keyId: string,
+	status: 401 | 403,
+	reason: string,
+	requestId: string,
+): Promise<void> {
+	await connectorErrorHistory({ keyId, record: { status, reason, requestId } });
 }
 
 export interface BoundKeyRow {

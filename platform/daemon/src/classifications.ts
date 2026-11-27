@@ -174,7 +174,11 @@ export async function classificationRequest<Result>(
 ): Promise<Result> {
 	const owner = suppliedOwner ?? (await getDbOwnerForAccessor(getDbAccessor()));
 	const readonly = request.op === "readable" || request.op === "visibility" || request.op === "admit-write";
-	const importing = request.op === "import-create" || request.op === "import-bind" || request.op === "import-document";
+	const importing =
+		request.op === "import-identity" ||
+		request.op === "import-create" ||
+		request.op === "import-bind" ||
+		request.op === "import-document";
 	return owner.submit<Result>(
 		{ kind: "classification", request },
 		{
