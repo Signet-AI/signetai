@@ -7,6 +7,7 @@ import {
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutFromEnv,
 } from "@signet/core";
+import { MANAGED_AGENT_ID_DEFAULT, readManagedTrimmedEnv, resolveSignetApiKey } from "@signet/connector-base";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult, TranscriptFileUploader } from "../lib/daemon.js";
@@ -375,14 +376,14 @@ async function uploadHookTranscript(
 	deps: HookDeps,
 	input: Record<string, unknown> | null,
 	harness: string,
+	agentId: string,
 	timeoutMs: number,
-	options: { readonly agentId?: string; readonly project?: string } = {},
+	project?: string,
 ): Promise<string | undefined> {
 	const transcriptPath = pickTranscriptPath(input);
 	const sessionKey = pickSessionKey(input);
 	if (!transcriptPath || !sessionKey) return undefined;
-	const agentId = pickString(options.agentId, pickHookAgentId(input, harness));
-	const cwd = pickString(input?.cwd, options.project);
+	const cwd = pickString(input?.cwd, project);
 	try {
 		const outcome = await deps.uploadTranscriptFile(
 			{ harness, sessionKey, ...(agentId ? { agentId } : {}), ...(cwd ? { cwd } : {}) },
@@ -517,9 +518,14 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson(deps.stdin);
 			const stdinProject = pickString(input?.cwd);
-			const uploading = uploadHookTranscript(deps, input, options.harness, PROMPT_SUBMIT_TIMEOUT_MS, {
-				project: options.project,
-			});
+			const uploading = uploadHookTranscript(
+				deps,
+				input,
+				options.harness,
+				declaredAgentId(input, options.harness),
+				PROMPT_SUBMIT_TIMEOUT_MS,
+				options.project,
+			);
 			const data = await fetchHookData<{
 				inject?: string;
 				dynamicContext?: string;
@@ -650,11 +656,18 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson(deps.stdin);
 			const body = buildSessionEndBody(input, options.harness);
-			const transcriptPath = await uploadHookTranscript(deps, input, options.harness, SESSION_END_UPLOAD_TIMEOUT_MS);
+			const agentId = declaredAgentId(input, options.harness);
+			const transcriptPath = await uploadHookTranscript(
+				deps,
+				input,
+				options.harness,
+				agentId,
+				SESSION_END_UPLOAD_TIMEOUT_MS,
+			);
 			const data = await fetchHookData<{ memoriesSaved?: number }>(deps, "session-end", "/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ ...body, transcriptPath }),
+				body: JSON.stringify({ ...body, agentId: agentId || undefined, transcriptPath }),
 				timeout: 60_000,
 			});
 			if (!data) {
@@ -706,16 +719,14 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const input = await readJson(deps.stdin);
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
-			const agentId = pickString(options.agentId, pickHookAgentId(input, options.harness));
+			const agentId = declaredAgentId(input, options.harness, options.agentId);
 			const transcriptPath = await uploadHookTranscript(
 				deps,
 				input,
 				options.harness,
+				agentId,
 				PRE_COMPACTION_UPLOAD_TIMEOUT_MS,
-				{
-					agentId,
-					project: options.project,
-				},
+				options.project,
 			);
 			const data = await fetchHookData<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
 				deps,
@@ -1086,6 +1097,15 @@ export function buildStopBody(
 
 function nativeAgentId(input: Record<string, unknown> | null, harness: string): string {
 	return harness === "claude-code" ? pickString(input?.agent_id) : "";
+}
+
+function declaredAgentId(input: Record<string, unknown> | null, harness: string, explicit?: string): string {
+	return pickString(
+		explicit,
+		pickHookAgentId(input, harness),
+		readManagedTrimmedEnv("SIGNET_AGENT_ID"),
+		resolveSignetApiKey() ? "" : MANAGED_AGENT_ID_DEFAULT,
+	);
 }
 
 function pickHookAgentId(input: Record<string, unknown> | null, harness: string): string {

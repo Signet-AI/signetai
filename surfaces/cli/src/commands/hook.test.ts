@@ -1177,7 +1177,20 @@ describe("hook transcript upload", () => {
 	const uploaded: Uploader = async () => ({ status: "uploaded", committedOffset: 2, generation: 0 });
 	const unsupported: Uploader = async () => ({ status: "unsupported" });
 
-	async function runHook(args: string[], stdin: Record<string, unknown>, upload: Uploader) {
+	const AGENT_ENV = ["SIGNET_AGENT_ID", "SIGNET_API_KEY", "SIGNET_TOKEN"] as const;
+
+	async function runHook(
+		args: string[],
+		stdin: Record<string, unknown>,
+		upload: Uploader,
+		env: Partial<Record<(typeof AGENT_ENV)[number], string>> = {},
+	) {
+		const saved = AGENT_ENV.map((name) => [name, process.env[name]] as const);
+		for (const name of AGENT_ENV) {
+			const value = env[name];
+			if (value === undefined) Reflect.deleteProperty(process.env, name);
+			else process.env[name] = value;
+		}
 		const events: string[] = [];
 		const uploads: Upload[] = [];
 		const bodies: Record<string, unknown>[] = [];
@@ -1208,6 +1221,10 @@ describe("hook transcript upload", () => {
 			await program.parseAsync(["node", "test", "hook", ...args]);
 		} finally {
 			process.stderr.write = origWrite;
+			for (const [name, value] of saved) {
+				if (value === undefined) Reflect.deleteProperty(process.env, name);
+				else process.env[name] = value;
+			}
 		}
 		return { events, uploads, bodies, stderr };
 	}
@@ -1231,6 +1248,31 @@ describe("hook transcript upload", () => {
 			},
 		]);
 		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
+		expect(run.bodies[0]?.agentId).toBe("agent-7");
+	});
+
+	const anonymous = { session_id: "sess-1", transcript_path: "/tmp/session.jsonl", cwd: "/repo" };
+
+	test("session-end declares the default agent when nothing names one", async () => {
+		const run = await runHook(["session-end", "-H", "claude-code"], anonymous, uploaded);
+		expect(run.uploads[0]?.target.agentId).toBe("default");
+		expect(run.bodies[0]?.agentId).toBe("default");
+	});
+
+	test("session-end declares SIGNET_AGENT_ID when the harness names no agent", async () => {
+		const run = await runHook(["session-end", "-H", "claude-code"], anonymous, uploaded, {
+			SIGNET_AGENT_ID: "env-agent",
+		});
+		expect(run.uploads[0]?.target.agentId).toBe("env-agent");
+		expect(run.bodies[0]?.agentId).toBe("env-agent");
+	});
+
+	test("session-end leaves the agent to the token scope when an API key is set", async () => {
+		const run = await runHook(["session-end", "-H", "claude-code"], anonymous, uploaded, {
+			SIGNET_API_KEY: "sig_sk_test",
+		});
+		expect(run.uploads[0]?.target).not.toHaveProperty("agentId");
+		expect(run.bodies[0]).not.toHaveProperty("agentId");
 	});
 
 	test("session-end sends the path to a daemon without the upload route", async () => {
@@ -1267,7 +1309,12 @@ describe("hook transcript upload", () => {
 		);
 		expect(during).toContain("request /api/hooks/user-prompt-submit");
 		expect(run.uploads[0]?.timeoutMs).toBe(5000);
-		expect(run.uploads[0]?.target).toEqual({ harness: "claude-code", sessionKey: "sess-1", cwd: "/repo" });
+		expect(run.uploads[0]?.target).toEqual({
+			harness: "claude-code",
+			sessionKey: "sess-1",
+			agentId: "default",
+			cwd: "/repo",
+		});
 		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
 	});
 
@@ -1276,6 +1323,8 @@ describe("hook transcript upload", () => {
 		const run = await runHook(["pre-compaction", "-H", "claude-code", "--project", "/repo"], stdin, uploaded);
 		expect(run.events).toEqual(["upload", "request /api/hooks/pre-compaction"]);
 		expect(run.uploads[0]?.timeoutMs).toBe(3000);
+		expect(run.uploads[0]?.target.agentId).toBe("default");
+		expect(run.bodies[0]?.agentId).toBe("default");
 		expect(run.bodies[0]).not.toHaveProperty("transcriptPath");
 		const old = await runHook(["pre-compaction", "-H", "claude-code", "--project", "/repo"], stdin, unsupported);
 		expect(old.bodies[0]?.transcriptPath).toBe("/tmp/session.jsonl");
