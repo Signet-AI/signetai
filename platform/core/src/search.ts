@@ -346,7 +346,7 @@ export function vectorSearchWithMetadata(
 						}
 					}
 					pending = next;
-					window = Math.min(maximum, window * 2);
+					window = Math.min(maximum, window * 4);
 				}
 				results.sort((a, b) => b.score - a.score);
 				results.splice(limit);

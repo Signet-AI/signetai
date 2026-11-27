@@ -154,6 +154,22 @@ test("fully admitted public shard preserves main's plain KNN candidate window", 
 	}
 });
 
+test("current filtering resolves a fourfold cohort in at most two native windows", () => {
+	const db = fixture();
+	try {
+		for (let i = 0; i < 6; i++) add(db, `stale-${i}`, "default", i / 100);
+		add(db, "current-a", "default", 0.2);
+		add(db, "current-b", "default", 0.3);
+		db.exec("UPDATE memories SET stale_at='2020' WHERE id LIKE 'stale-%'");
+		const result = recall(db);
+		expect(result.response.results.map((row) => row.id)).toEqual(["current-a", "current-b"]);
+		expect(result.response.completeness).toBe("complete");
+		expect(result.windows.length).toBeLessThanOrEqual(2);
+	} finally {
+		db.close();
+	}
+});
+
 test("admitted fan-out batches 192 physical shards without losing the nearest hits", () => {
 	const db = fixture();
 	try {
