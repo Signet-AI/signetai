@@ -1038,7 +1038,9 @@ function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean
 function executeCancellation(db: MigrationDb, jobId: string): unknown {
 	const pending = transaction(db, () => {
 		const job = db
-			.prepare("SELECT status,progress_json FROM org_jobs WHERE id=? AND kind='classify-cancelling'")
+			.prepare(
+				"SELECT status,progress_json FROM org_jobs WHERE id=? AND (kind='classify-cancelling' OR (kind='classify' AND json_extract(progress_json,'$.cancelling')=1))",
+			)
 			.get(jobId);
 		if (!job) throw Error("job_not_pending");
 		if (job.status === "cancelled") return { done: true, reversal: null };
@@ -1081,7 +1083,13 @@ function cancelJob(db: MigrationDb, actor: ClassificationActor, jobId: string): 
 		if (!job) throw Error("not_found");
 		const request = enqueuedSchema.parse(JSON.parse(String(job.params_json)));
 		authorize(db, request.target, request.id, actor, true);
-		if (job.kind === "classify-cancelling") return { jobId, status: job.status };
+		if (
+			job.kind === "classify-cancelling" ||
+			z
+				.object({ cancelling: z.literal(true), reversal: z.string().nullable() })
+				.safeParse(attempt(() => JSON.parse(String(job.progress_json)))).success
+		)
+			return { jobId, status: job.status };
 		if (
 			job.status !== "pending" &&
 			job.status !== "running" &&
@@ -1092,7 +1100,6 @@ function cancelJob(db: MigrationDb, actor: ClassificationActor, jobId: string): 
 		if (job.kind === "classify" && job.started_at != null) {
 			if (request.previousAssignment === undefined) throw Error("classification_reversal_required");
 			if (!request.previousAssignment) {
-				changeAssignment(db, { ...request, actor, remove: true });
 				reversal = id("job");
 				db.prepare(
 					"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES(?,'unclassify','pending',?,?,?)",
@@ -1104,15 +1111,23 @@ function cancelJob(db: MigrationDb, actor: ClassificationActor, jobId: string): 
 				);
 			}
 		}
-		db.prepare(
-			"UPDATE org_jobs SET kind='classify-cancelling',status='running',progress_json=?,error=NULL WHERE id=?",
-		).run(JSON.stringify({ reversal }), jobId);
+		db.prepare("UPDATE org_jobs SET kind=?,status='running',progress_json=?,error=NULL WHERE id=?").run(
+			reversal ? "classify" : "classify-cancelling",
+			JSON.stringify({ reversal, cancelling: true }),
+			jobId,
+		);
 		audit(db, actor, "classification.cancel", request.target, request.id, { jobId, reversal });
 		return { jobId, status: "running" };
 	});
 }
 function executeJob(db: MigrationDb, jobId: string): unknown {
-	if (db.prepare("SELECT 1 FROM org_jobs WHERE id=? AND kind='classify-cancelling'").get(jobId))
+	if (
+		db
+			.prepare(
+				"SELECT 1 FROM org_jobs WHERE id=? AND (kind='classify-cancelling' OR (kind='classify' AND json_extract(progress_json,'$.cancelling')=1))",
+			)
+			.get(jobId)
+	)
 		return executeCancellation(db, jobId);
 	let job = db
 		.prepare("SELECT * FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing')")
@@ -1148,7 +1163,18 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 						"SELECT 1 FROM classification_assignments WHERE target_kind=? AND target_id=? AND agent_id=? AND classification_id=?",
 					)
 					.get(request.target.kind, request.target.id, request.target.agentId, request.id) != null;
-			if (!request.cancellationOf) changeAssignment(db, request);
+			if (
+				request.cancellationOf &&
+				!db
+					.prepare(
+						"SELECT 1 FROM org_jobs WHERE id=? AND kind='classify' AND status='running' AND json_extract(progress_json,'$.cancelling')=1 AND json_extract(progress_json,'$.reversal')=? AND json_extract(params_json,'$.id')=? AND json_extract(params_json,'$.target.agentId')=?",
+					)
+					.get(request.cancellationOf, jobId, request.id, request.target.agentId)
+			)
+				throw Error("invalid_job");
+			changeAssignment(db, request);
+			if (request.cancellationOf)
+				db.prepare("UPDATE org_jobs SET kind='classify-cancelling' WHERE id=?").run(request.cancellationOf);
 			db.prepare("UPDATE org_jobs SET params_json=? WHERE id=?").run(
 				JSON.stringify({ ...request, previousAssignment }),
 				jobId,

@@ -686,17 +686,19 @@ describe("classification cancellation durability", () => {
 				expect(db.query("SELECT status FROM org_jobs WHERE id=?").get(applied)).toEqual({ status: "running" });
 				expect(read(db)).toEqual([]);
 				executeClassification(db, { op: "cancel", actor: compliance, jobId: applied });
+				expect(read(db)).toEqual([]);
+				expect(db.query("SELECT COUNT(*) n FROM classification_assignments").get()).toEqual({ n: 1 });
 				await crash(applied, "UPDATE org_jobs SET params_json=");
 				const recovered = open(true);
 				try {
-					expect(read(recovered)).toEqual(["m"]);
-					expect(membership(recovered)).toEqual(before);
+					expect(read(recovered)).toEqual([]);
+					expect(recovered.query("SELECT COUNT(*) n FROM classification_assignments").get()).toEqual({ n: 1 });
 					expect(recovered.query("SELECT status FROM org_jobs WHERE id=?").get(applied)).toEqual({ status: "running" });
 				} finally {
 					recovered.close();
 				}
-				expect(db.query("SELECT COUNT(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
 				finish(db, applied, "cancelled");
+				expect(db.query("SELECT COUNT(*) n FROM classification_assignments").get()).toEqual({ n: 0 });
 				expect(db.query("SELECT COUNT(*) n FROM memories").get()).toEqual({ n: 101 });
 				expect(db.query("SELECT COUNT(*) n FROM embeddings").get()).toEqual({ n: 101 });
 				expect(read(db)).toEqual(["m"]);
