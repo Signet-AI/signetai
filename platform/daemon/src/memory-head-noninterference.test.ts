@@ -51,6 +51,23 @@ test("hidden evidence cannot invalidate a reader's unchanged MEMORY.md entries",
 			db.prepare("UPDATE memories SET content='Atlas public head corrected' WHERE id='head-visible'").run(),
 		);
 		expect(await read()).toEqual(before);
+		getSyncDbAccessor().withWriteTx((db) => {
+			const compartment = compartmentFor(db, ["cls_head_secret"]);
+			db.prepare("UPDATE memories SET compartment_id=? WHERE id='head-visible'").run(compartment);
+		});
+		expect(await read()).toEqual({ generated: true, status: "stale", content: null });
+		getSyncDbAccessor().withWriteTx((db) =>
+			db.prepare("UPDATE memories SET compartment_id=NULL WHERE id='head-visible'").run(),
+		);
+		expect(await read()).toEqual(before);
+		getSyncDbAccessor().withWriteTx((db) =>
+			db.prepare("UPDATE memories SET is_deleted=1 WHERE id='head-visible'").run(),
+		);
+		expect(await read()).toEqual({ generated: true, status: "stale", content: null });
+		getSyncDbAccessor().withWriteTx((db) =>
+			db.prepare("UPDATE memories SET is_deleted=0 WHERE id='head-visible'").run(),
+		);
+		expect(await read()).toEqual(before);
 		getSyncDbAccessor().withWriteTx((db) =>
 			db.prepare("UPDATE memories SET content='Replacement without the old quote' WHERE id='head-visible'").run(),
 		);

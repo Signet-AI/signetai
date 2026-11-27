@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { redactCredentials } from "@signet/core";
 import type { DreamingSpeaker, EpisodicSourceRecord } from "../episodic-sources";
 export interface DreamingAgentEvidence {
@@ -373,7 +374,16 @@ export function sanitizeTranscriptForDreaming(content: string, preserveAuthors =
 	});
 	return sanitizePlainTranscript(mixedLines.join("\n"));
 }
+const renderCache = new Map<string, { readonly content: string; readonly bytes: number }>();
+let renderCacheBytes = 0;
 export function renderDreamingEvidence(source: EpisodicSourceRecord): string {
+	const key = createHash("sha256").update(JSON.stringify(source)).digest("hex");
+	const cached = renderCache.get(key);
+	if (cached) {
+		renderCache.delete(key);
+		renderCache.set(key, cached);
+		return cached.content;
+	}
 	const content =
 		source.kind === "transcript" || source.sourceKind === "transcript"
 			? sanitizeTranscriptForDreaming(
@@ -382,7 +392,19 @@ export function renderDreamingEvidence(source: EpisodicSourceRecord): string {
 				)
 			: source.content;
 	const metadata = renderDreamingEvidenceMeta(source.evidenceMeta);
-	return redactCredentials(metadata ? `${content}\n${metadata}` : content);
+	const rendered = redactCredentials(metadata ? `${content}\n${metadata}` : content);
+	const bytes = Buffer.byteLength(rendered);
+	if (bytes <= 2 * 1024 * 1024) {
+		while (renderCache.size >= 128 || renderCacheBytes + bytes > 16 * 1024 * 1024) {
+			const oldest = renderCache.entries().next().value;
+			if (!oldest) break;
+			renderCache.delete(oldest[0]);
+			renderCacheBytes -= oldest[1].bytes;
+		}
+		renderCache.set(key, { content: rendered, bytes });
+		renderCacheBytes += bytes;
+	}
+	return rendered;
 }
 export function createDreamingAgentEvidence(
 	evidence: readonly (EpisodicSourceRecord | DreamingEvidenceFragment)[],

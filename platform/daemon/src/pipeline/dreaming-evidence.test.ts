@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as core from "@signet/core";
 import type { EpisodicSourceRecord } from "../episodic-sources";
 import {
 	createDreamingAgentEvidence,
@@ -23,6 +24,44 @@ const SOURCE: EpisodicSourceRecord = {
 };
 
 describe("dreaming evidence", () => {
+	it("reuses unchanged evidence rendering but never a changed body", () => {
+		const source: EpisodicSourceRecord = { ...SOURCE, id: "render-cache-proof", content: "A stable public citation." };
+		const redact = spyOn(core, "redactCredentials");
+		try {
+			const first = renderDreamingEvidence(source);
+			const calls = redact.mock.calls.length;
+			expect(calls).toBeGreaterThan(0);
+			expect(renderDreamingEvidence(structuredClone(source))).toBe(first);
+			expect(redact.mock.calls.length).toBe(calls);
+			expect(renderDreamingEvidence({ ...source, content: "A corrected public citation." })).toContain(
+				"corrected public citation",
+			);
+			expect(redact.mock.calls.length).toBeGreaterThan(calls);
+		} finally {
+			redact.mockRestore();
+		}
+	});
+	it("bounds rendering cache entries and declines oversized results", () => {
+		const redact = spyOn(core, "redactCredentials");
+		try {
+			for (let i = 0; i < 129; i++) renderDreamingEvidence({ ...SOURCE, id: `bounded-render-${i}` });
+			const before = redact.mock.calls.length;
+			renderDreamingEvidence({ ...SOURCE, id: "bounded-render-0" });
+			expect(redact.mock.calls.length).toBe(before + 1);
+			const large: EpisodicSourceRecord = {
+				...SOURCE,
+				id: "oversized-render",
+				content: "public words ".repeat(200000),
+			};
+			const first = renderDreamingEvidence(large);
+			const afterFirst = redact.mock.calls.length;
+			expect(Buffer.byteLength(first)).toBeGreaterThan(2 * 1024 * 1024);
+			expect(renderDreamingEvidence(large)).toBe(first);
+			expect(redact.mock.calls.length).toBe(afterFirst + 1);
+		} finally {
+			redact.mockRestore();
+		}
+	});
 	it("uses the same rendered structured evidence for prompts and agent citations", () => {
 		const rendered = renderDreamingEvidence(SOURCE);
 		const evidence = createDreamingAgentEvidence([SOURCE]);
