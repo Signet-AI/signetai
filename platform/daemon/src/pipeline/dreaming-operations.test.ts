@@ -134,19 +134,21 @@ describe("dreaming operations", () => {
 		});
 	});
 
-	it("rejects a foreign-agent archive target before minting its same-batch flag", async () => {
+	it("hides foreign and absent archive targets before minting same-batch flags", async () => {
 		insertEntity("foreign-archive-target", "Foreign archive target", "foreign archive target", "agent-b");
-		const result = await applyDreamingOperations({
-			accessor: getDbAccessor(),
-			agentId: "agent-a",
-			actor: "dreaming",
-			passId: "pass-1",
-			operations: [
-				flag({ subjectRef: "entity:foreign-archive-target" }),
-				{ operation: "archive_entity", payload: { target: "foreign-archive-target" }, provenance: "attention:$0" },
-			],
-		});
-		expect(result).toMatchObject({ ok: false, items: [], error: "compartment_mismatch" });
+		for (const target of ["foreign-archive-target", "missing-archive-target"]) {
+			const result = await applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				passId: "pass-1",
+				operations: [
+					flag({ subjectRef: `entity:${target}` }),
+					{ operation: "archive_entity", payload: { target }, provenance: "attention:$0" },
+				],
+			});
+			expect(result).toEqual({ ok: false, items: [], error: `Entity not found: ${target}` });
+		}
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM dreaming_attention").get()),
 		).toEqual({ count: 0 });
