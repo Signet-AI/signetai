@@ -989,12 +989,7 @@ async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploa
 	if (!harness) return c.json({ error: "harness is required" }, 400);
 	const sessionId = parseOptionalString(c.req.query("sessionKey"));
 	if (!sessionId) return c.json({ error: "sessionKey is required" }, 400);
-	const scope = resolveScopedAgentId(
-		c,
-		requestedAgentId({ agentId: parseOptionalString(c.req.query("agentId")), sessionKey: sessionId }),
-		"",
-	);
-	if (!scope.agentId) return c.json({ error: "agentId is required" }, 400);
+	const scope = resolveCrossAgentScope(c, parseOptionalString(c.req.query("agentId")), sessionId);
 	if (scope.error) return c.json({ error: scope.error }, 403);
 	const bindingError = validateSessionAgentBinding(c, sessionId, scope.agentId, {
 		requireExisting: false,

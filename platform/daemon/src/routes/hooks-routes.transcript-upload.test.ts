@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
+import { resolveDaemonAgentId } from "../agent-id";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import { MAX_TRANSCRIPT_UPLOAD_BYTES } from "@signet/core/transcript-upload";
@@ -192,9 +193,12 @@ describe("transcript upload route", () => {
 		expect(existsSync(transcriptUploadAgentDirectory(AGENTS_DIR, purged.agentId))).toBe(false);
 	});
 
-	it("requires an agent instead of falling back to the default agent", async () => {
-		expect((await patch('{"a":1}\n', { query: { agentId: null } })).status).toBe(400);
-		expect((await app.request(query({ agentId: null }))).status).toBe(400);
+	it("resolves a missing agent the way the other hook routes do", async () => {
+		expect((await patch('{"a":1}\n', { query: { agentId: null } })).status).toBe(200);
+		expect(await (await app.request(query({ agentId: resolveDaemonAgentId() }))).json()).toMatchObject({
+			committedOffset: 8,
+		});
+		expect(await (await app.request(query({ agentId: null }))).json()).toMatchObject({ committedOffset: 8 });
 	});
 
 	it("rejects bad headers and bad bodies", async () => {

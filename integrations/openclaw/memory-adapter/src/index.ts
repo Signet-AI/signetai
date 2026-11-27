@@ -511,12 +511,6 @@ export async function onCompactionComplete(
 	return result?.success === true;
 }
 
-function declaredAgentId(agentId: string | undefined, sessionKey: string): string | undefined {
-	if (agentId) return agentId;
-	if (sessionKey.startsWith("agent:")) return undefined;
-	return process.env.SIGNET_AGENT_ID?.trim() || "default";
-}
-
 function writeClient(daemonUrl: string): SignetClient {
 	return new SignetClient({ daemonUrl, retries: 0, timeoutMs: WRITE_TIMEOUT });
 }
@@ -549,20 +543,19 @@ export async function onSessionEnd(
 ): Promise<SessionEndResult | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
 	const sessionKey = options.sessionKey ?? options.sessionId;
-	const agentId = sessionKey ? declaredAgentId(options.agentId, sessionKey) : options.agentId;
 	let transcriptPath: string | undefined;
 	try {
 		if (options.transcriptPath && sessionKey) {
 			transcriptPath = await uploadSessionFile(
 				daemonUrl,
-				{ harness, sessionKey, agentId, cwd: options.cwd },
+				{ harness, sessionKey, agentId: options.agentId, cwd: options.cwd },
 				options.transcriptPath,
 			);
 		}
 	} finally {
 		writeClient(daemonUrl).sessionEndFireAndForget({
 			harness,
-			agentId,
+			agentId: options.agentId,
 			...(transcriptPath && { transcriptPath }),
 			...(options.transcript && { transcript: options.transcript }),
 			sessionKey: options.sessionKey,
@@ -1768,16 +1761,13 @@ const signetPlugin = {
 					!sessionFile && Array.isArray(messages) && messages.length > 0
 						? messages.map((m) => JSON.stringify(m)).join("\n")
 						: undefined;
-				const checkpointAgentId = declaredAgentId(agentId, sessionKey);
 				const uploading = sessionFile
-					? uploadSessionFile(
-							daemonUrl,
-							{ harness: "openclaw", sessionKey, agentId: checkpointAgentId, cwd: project },
-							sessionFile,
-						).catch((error: unknown) => {
-							api.logger.warn(uploadFailureWarning(error));
-							return undefined;
-						})
+					? uploadSessionFile(daemonUrl, { harness: "openclaw", sessionKey, agentId, cwd: project }, sessionFile).catch(
+							(error: unknown) => {
+								api.logger.warn(uploadFailureWarning(error));
+								return undefined;
+							},
+						)
 					: Promise.resolve(undefined);
 				void uploading
 					.then((transcriptPath) =>
@@ -1786,7 +1776,7 @@ const signetPlugin = {
 							body: {
 								harness: "openclaw",
 								sessionKey,
-								agentId: checkpointAgentId,
+								agentId,
 								project,
 								...(transcriptPath && { transcriptPath }),
 								...(inlineTranscript && { transcript: inlineTranscript }),

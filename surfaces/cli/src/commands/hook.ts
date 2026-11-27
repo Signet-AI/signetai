@@ -7,7 +7,6 @@ import {
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutFromEnv,
 } from "@signet/core";
-import { MANAGED_AGENT_ID_DEFAULT, readManagedTrimmedEnv, resolveSignetApiKey } from "@signet/connector-base";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult, TranscriptFileUploader } from "../lib/daemon.js";
@@ -518,7 +517,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson(deps.stdin);
 			const stdinProject = pickString(input?.cwd);
-			const agentId = declaredAgentId(input, options.harness);
+			const agentId = pickHookAgentId(input, options.harness);
 			const uploading = uploadHookTranscript(
 				deps,
 				input,
@@ -538,10 +537,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(
 					withPeerContext(
-						{
-							...buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject),
-							agentId: agentId || undefined,
-						},
+						buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject),
 						await buildPeerContext(input, { project: options.project || stdinProject }),
 					),
 				),
@@ -660,7 +656,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson(deps.stdin);
 			const body = buildSessionEndBody(input, options.harness);
-			const agentId = declaredAgentId(input, options.harness);
+			const agentId = pickHookAgentId(input, options.harness);
 			const transcriptPath = await uploadHookTranscript(
 				deps,
 				input,
@@ -671,7 +667,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const data = await fetchHookData<{ memoriesSaved?: number }>(deps, "session-end", "/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ ...body, agentId: agentId || undefined, transcriptPath }),
+				body: JSON.stringify({ ...body, transcriptPath }),
 				timeout: 60_000,
 			});
 			if (!data) {
@@ -723,7 +719,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const input = await readJson(deps.stdin);
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
-			const agentId = declaredAgentId(input, options.harness, options.agentId);
+			const agentId = pickString(options.agentId, pickHookAgentId(input, options.harness));
 			const transcriptPath = await uploadHookTranscript(
 				deps,
 				input,
@@ -1101,12 +1097,6 @@ export function buildStopBody(
 
 function nativeAgentId(input: Record<string, unknown> | null, harness: string): string {
 	return harness === "claude-code" ? pickString(input?.agent_id) : "";
-}
-
-function declaredAgentId(input: Record<string, unknown> | null, harness: string, explicit?: string): string {
-	const named = pickString(explicit, pickHookAgentId(input, harness));
-	if (named || pickSessionKey(input).startsWith("agent:")) return named;
-	return pickString(readManagedTrimmedEnv("SIGNET_AGENT_ID"), resolveSignetApiKey() ? "" : MANAGED_AGENT_ID_DEFAULT);
 }
 
 function pickHookAgentId(input: Record<string, unknown> | null, harness: string): string {

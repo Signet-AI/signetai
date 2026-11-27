@@ -1095,10 +1095,10 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(lastSessionEndBody).not.toHaveProperty("transcriptPath");
 	});
 
-	it("declares the default agent on agent_end when nothing names one", async () => {
+	it("leaves the agent to the daemon on agent_end when nothing names one", async () => {
 		transcriptUploadRoute = true;
 		const savedAgent = process.env.SIGNET_AGENT_ID;
-		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+		process.env.SIGNET_AGENT_ID = "env-agent";
 		try {
 			const { api, hooks } = createMockApi();
 			signetPlugin.register(api);
@@ -1107,8 +1107,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 			await hooks.get("agent_end")?.({ sessionKey: "anonymous-key", sessionFile }, {});
 
-			expect(uploadRequests[0]?.query.agentId).toBe("default");
-			expect(lastSessionEndBody).toMatchObject({ agentId: "default" });
+			expect(uploadRequests[0]?.query.agentId).toBeUndefined();
+			expect(lastSessionEndBody).not.toHaveProperty("agentId");
 		} finally {
 			if (savedAgent === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 			else process.env.SIGNET_AGENT_ID = savedAgent;
