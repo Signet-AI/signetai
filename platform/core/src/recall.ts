@@ -1,3 +1,4 @@
+import { renderResultAttribution } from "./result-attribution";
 import type { AccountingProvenance, AccountingSummaryProvenance } from "./types";
 
 export interface RecallScoreFilterRow {
@@ -10,6 +11,7 @@ export interface RecallPartitionableRow {
 }
 
 export interface RecallRow extends RecallPartitionableRow {
+	readonly attribution?: import("./result-attribution").ResultAttribution;
 	readonly id?: string;
 	readonly content?: string;
 	readonly created_at?: string;
@@ -314,7 +316,15 @@ function formatRecallRow(row: RecallRow, options?: { readonly includeIndex?: num
 	const score = typeof row.score === "number" ? `[${(row.score * 100).toFixed(0)}%] ` : "";
 	const source = typeof row.source === "string" ? row.source : "unknown";
 	const type = typeof row.type === "string" ? row.type : "memory";
-	const who = typeof row.who === "string" && row.who.length > 0 ? `, by ${row.who}` : "";
+	const canonical = renderResultAttribution(row.attribution);
+	const who =
+		row.attribution !== undefined
+			? canonical
+				? `, ${canonical}`
+				: ""
+			: typeof row.who === "string" && row.who.length > 0
+				? `, by ${row.who}`
+				: "";
 	const createdAt = formatDate(row.created_at);
 	const id = typeof row.id === "string" && row.id.length > 0 ? `id: ${row.id}; ` : "";
 	const prefix = options?.includeIndex ? `${options.includeIndex}. ` : "- ";

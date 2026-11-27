@@ -1,3 +1,4 @@
+import { attributeResults, printResultAttribution, resultField } from "../lib/result-attribution.js";
 import chalk from "chalk";
 import type { Command } from "commander";
 
@@ -15,6 +16,30 @@ interface SessionSearchHit {
 
 export function registerSessionCommands(program: Command, deps: SessionDeps): void {
 	const session = program.command("session").description("Search transcripts and manage active sessions");
+	const decorate = <T extends object>(rows: readonly T[]) =>
+		attributeResults(rows, (body) =>
+			deps.fetchFromDaemon("/api/result-attribution", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			}),
+		);
+	session
+		.command("list")
+		.option("--json")
+		.option("--agent <id>")
+		.action(async (options) => {
+			const data = await deps.fetchFromDaemon<{ sessions: object[] }>("/api/sessions");
+			if (!data) throw new Error("Session read failed");
+			if (options.json) {
+				console.log(JSON.stringify(data, null, 2));
+				return;
+			}
+			for (const row of await decorate(data.sessions)) {
+				console.log(resultField(row, "sessionKey", "key", "id") ?? "Session");
+				printResultAttribution(row);
+			}
+		});
 
 	session
 		.command("search <query>")
@@ -71,10 +96,11 @@ export function registerSessionCommands(program: Command, deps: SessionDeps): vo
 				}
 
 				console.log(chalk.bold(`\n  Transcript Search: ${data.query}\n`));
-				for (const hit of data.hits) {
+				for (const hit of await decorate(data.hits)) {
 					const project = hit.project ? ` ${chalk.dim(hit.project)}` : "";
 					console.log(`  ${chalk.cyan(hit.sessionKey)} ${chalk.dim(formatSessionSearchDate(hit.updatedAt))}${project}`);
 					console.log(`  ${hit.excerpt}`);
+					printResultAttribution(hit);
 					console.log();
 				}
 			},
@@ -109,10 +135,11 @@ export function registerSessionCommands(program: Command, deps: SessionDeps): vo
 				console.log(
 					`  ${chalk.dim("KEY".padEnd(38))}${chalk.dim("PATH".padEnd(10))}${chalk.dim("AGE".padEnd(10))}${chalk.dim("BYPASS")}`,
 				);
-				for (const session of data.sessions) {
+				for (const session of await decorate(data.sessions)) {
 					const age = formatAge(session.claimedAt);
 					const bypassLabel = session.bypassed ? chalk.yellow("bypassed") : chalk.dim("-");
 					console.log(`  ${session.key.padEnd(38)}${session.runtimePath.padEnd(10)}${age.padEnd(10)}${bypassLabel}`);
+					printResultAttribution(session);
 				}
 				return;
 			}

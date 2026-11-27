@@ -21,12 +21,15 @@ const SCOPE = "scope-a";
 
 describe("dreaming history", () => {
 	let dir = "";
+	let fixtureMs = 0;
 
 	beforeEach(() => {
+		const startedAt = performance.now();
 		dir = mkdtempSync(join(tmpdir(), "signet-dreaming-history-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		getDbAccessor().withWriteTx((db) => upgradeDreaming(db));
+		fixtureMs = performance.now() - startedAt;
 	});
 
 	afterEach(async () => {
@@ -268,6 +271,7 @@ describe("dreaming history", () => {
 	});
 
 	it("merges the oldest lines once the history outgrows its budget", async () => {
+		const startedAt = performance.now();
 		const leafBytes = 500;
 		const passes = Math.ceil(DREAMING_HISTORY_VIEW_BYTES / leafBytes) + 2;
 		for (let index = 0; index < passes; index++) insertPass(`p${index}`, index);
@@ -311,6 +315,7 @@ describe("dreaming history", () => {
 				n: 2,
 			}),
 		).toMatchObject({ ok: false });
+		expect(fixtureMs + performance.now() - startedAt).toBeLessThan(2_400);
 	});
 
 	it("keeps each scope's history separate, in both what a pass sees and what it can open", async () => {

@@ -975,7 +975,7 @@ export async function getDreamingPasses(
 	const rows = await ownerQueryAll<DreamingPassRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.list",
-		`SELECT id, mode, status, started_at AS startedAt,
+		`SELECT agent_id AS agentId, id, mode, status, started_at AS startedAt,
 		        completed_at AS completedAt, tokens_consumed AS tokensConsumed,
 		        tokens_input AS tokensInput, tokens_output AS tokensOutput,
 		        tokens_cache_read AS tokensCacheRead, tokens_cache_write AS tokensCacheWrite,

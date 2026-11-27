@@ -324,3 +324,22 @@ test("non-interactive connector provisioning refuses before keychain access", as
 		process.exitCode = 0;
 	}
 });
+
+test("non-interactive secret prompts are refused before secret-store access", async () => {
+	const { registerSecretCommands } = await import("./secret.js");
+	let calls = 0;
+	const program = new Command().option("--non-interactive");
+	registerSecretCommands(program, {
+		ensureDaemonForSecrets: async () => {
+			calls++;
+			throw new Error("unexpected secret-store access");
+		},
+		secretApiCall: async () => {
+			throw new Error("unexpected secret write");
+		},
+	});
+	await expect(
+		program.parseAsync(["--non-interactive", "secret", "put", "FIXTURE"], { from: "user" }),
+	).rejects.toMatchObject({ code: "interactive_required" });
+	expect(calls).toBe(0);
+});

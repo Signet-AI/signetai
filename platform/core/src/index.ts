@@ -1,4 +1,6 @@
 export { readMemoriesFtsCanonicalRowCount } from "./fts-schema";
+export { renderResultAttribution } from "./result-attribution";
+export type { ResultAttribution, AttributionName } from "./result-attribution";
 export { attempt, attemptAsync } from "./attempt";
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
