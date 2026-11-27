@@ -184,6 +184,38 @@ test("admitted eligibility keeps nearest memory hits beyond non-memory vectors",
 	}
 });
 
+test("dense admitted shards stay inside SQLite through hidden mutations", () => {
+	const db = fixture();
+	try {
+		db.exec("BEGIN");
+		for (let i = 0; i < 128; i++) add(db, `dense-${i}`, "default", i / 1000);
+		db.exec("UPDATE memories SET stale_at='2020' WHERE id LIKE 'dense-%' AND CAST(substr(id,7) AS INTEGER)<100;COMMIT");
+		const before = recall(db);
+		expect(before.response.completeness).toBe("complete");
+		expect(before.response.results.map((row) => row.id)).toEqual(["dense-100", "dense-101"]);
+		expect(before.admittedInputs).toEqual([]);
+		expect(before.windows).toHaveLength(1);
+		db.exec("BEGIN");
+		for (let i = 0; i < 256; i++) add(db, `hidden-dense-${i}`, "other", 0);
+		db.exec("COMMIT");
+		expect(recall(db)).toEqual(before);
+		db.exec("BEGIN");
+		for (let i = 0; i < 16; i++)
+			db.prepare(
+				"INSERT INTO embeddings(id,content_hash,source_id,source_type,agent_id,vector,dimensions,chunk_text,created_at) VALUES(?,?,'dense-100','memory','default',?,3,'','2020')",
+			).run(`duplicate-${i}`, `duplicate-${i}`, new Float32Array([1, i / 1000, 0]));
+		db.exec("COMMIT");
+		expect(recall(db).response.results.map((row) => row.id)).toEqual(["dense-100", "dense-101"]);
+		db.exec("DELETE FROM embeddings WHERE id LIKE 'duplicate-%'");
+		db.exec("UPDATE memories SET stale_at=NULL,scope='session' WHERE id='dense-0'");
+		expect(recall(db).response.results).toEqual(before.response.results);
+		db.exec("UPDATE memories SET scope=NULL WHERE id='dense-0'");
+		expect(recall(db).response.results.map((row) => row.id)).toEqual(["dense-0", "dense-100"]);
+	} finally {
+		db.close();
+	}
+});
+
 test("current filtering resolves a fourfold cohort in one native pass", () => {
 	const db = fixture();
 	try {

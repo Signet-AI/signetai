@@ -278,7 +278,6 @@ function admittedVectorSearch(
 	limit: number,
 	scan: typeof import("@signet/native").scanAdmittedVectors | undefined,
 ): Array<{ id: string; score: number }> {
-	if (!scan) throw new VectorAdmissionLimitError("vector_shard_native_unavailable");
 	let rowCount = 0;
 	for (const ids of partitioned.groups) {
 		let candidates = 0;
@@ -339,6 +338,33 @@ function admittedVectorSearch(
 		args.push(options.project);
 	}
 	const predicate = clauses.length ? clauses.join(" AND ") : "1";
+	if (partitioned.ids.some((id) => (partitioned.sizes.get(id) ?? 0) > 64)) {
+		const results = new Map<string, number>();
+		for (const partition of partitioned.ids) {
+			const eligible = `SELECT r.id native_id,e.source_id FROM vector_shard_members s CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN memories m ON m.id=e.source_id AND m.agent_id=e.agent_id CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) WHERE s.partition_id=? AND s.projection=? AND e.source_type='memory' AND ${predicate}`;
+			const headroom = db
+				.prepare(`SELECT COUNT(*)-COUNT(DISTINCT source_id) n FROM (${eligible})`)
+				.get(partition, projection, ...args)?.n;
+			if (typeof headroom !== "number" || headroom + limit > 4096)
+				throw new VectorAdmissionLimitError("vector_shard_candidate_limit");
+			const hits = db
+				.prepare(
+					`WITH eligible AS MATERIALIZED(${eligible}),hits AS MATERIALIZED(SELECT id,distance FROM ${partitioned.table} WHERE embedding MATCH ? AND k=? AND admission=? AND id IN(SELECT native_id FROM eligible)) SELECT e.source_id,MIN(h.distance) distance FROM hits h CROSS JOIN ${store} e ON e.id=json_extract(h.id,'$[0]') GROUP BY e.source_id ORDER BY distance,e.source_id LIMIT ?`,
+				)
+				.all(partition, projection, ...args, new Float32Array(query), limit + headroom, partition, limit);
+			for (const hit of hits) {
+				if (typeof hit.source_id !== "string" || typeof hit.distance !== "number")
+					throw new VectorAdmissionLimitError("vector_shard_invalid_metadata");
+				const score = Math.max(0, 1 - hit.distance);
+				results.set(hit.source_id, Math.max(results.get(hit.source_id) ?? 0, score));
+			}
+		}
+		return [...results]
+			.map(([id, score]) => ({ id, score }))
+			.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+			.slice(0, limit);
+	}
+	if (!scan) throw new VectorAdmissionLimitError("vector_shard_native_unavailable");
 	const rows = db
 		.prepare(
 			`WITH admitted AS MATERIALIZED(SELECT value id FROM json_each(?)),members AS MATERIALIZED(SELECT r.rowid native_rowid,r.chunk_id,r.chunk_offset,s.partition_id,k.row_count,e.source_id,e.source_type,e.agent_id FROM admitted a CROSS JOIN vector_shard_members s ON s.partition_id=a.id AND s.projection=? CROSS JOIN ${partitioned.table}_rowids r ON r.id=json_array(s.embedding_id,s.generation) CROSS JOIN ${store} e ON e.id=s.embedding_id CROSS JOIN vector_shard_keys k ON k.id=s.partition_id),memory_rows AS MATERIALIZED(SELECT * FROM members WHERE source_type='memory'),eligible AS MATERIALIZED(SELECT p.native_rowid FROM memory_rows p CROSS JOIN memories m ON m.id=p.source_id AND m.agent_id=p.agent_id WHERE ${predicate}) SELECT CAST(p.native_rowid AS TEXT) native_rowid,p.chunk_id,p.chunk_offset,p.source_id,CASE WHEN eligible.native_rowid IS NULL THEN 0 ELSE 1 END eligible,c.vector singleton FROM members p LEFT JOIN eligible ON eligible.native_rowid=p.native_rowid LEFT JOIN vector_shard_singletons c ON p.row_count=1 AND c.partition_id=p.partition_id`,
