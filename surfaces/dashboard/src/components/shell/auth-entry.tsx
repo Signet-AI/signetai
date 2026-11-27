@@ -45,6 +45,7 @@ export function AuthPage({
 			)}
 			<div className="mx-auto flex w-full max-w-xl flex-col gap-6 overflow-auto p-6">
 				<PageHeading
+					className="h-auto"
 					title={title}
 					description={
 						organizationName ? (
