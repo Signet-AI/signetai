@@ -117,8 +117,8 @@ export class SignetTransport {
 	}
 
 	async fetch(url: string, init: RequestInit): Promise<Response> {
-		const headers = new Headers(init.headers);
-		for (const [name, value] of Object.entries(this.config.headers ?? {})) headers.set(name, value);
+		const headers = new Headers(this.config.headers);
+		for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
 		try {
 			return await fetch(url, {
 				...init,

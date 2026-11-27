@@ -364,6 +364,23 @@ test("fails after three busy answers", async () => {
 	expect(daemon.patches().length).toBe(3);
 });
 
+test("retries a busy daemon when reading the state", async () => {
+	const daemon = new FakeDaemon();
+	daemon.getAnswers.push(Response.json({ error: "busy" }, { status: 503 }));
+	const outcome = await uploadTranscript(daemon.client(), target, source("x\n"));
+	expect(outcome).toEqual({ status: "uploaded", committedOffset: 2, generation: 0 });
+	expect(daemon.sent.map((request) => request.method)).toEqual(["GET", "GET", "PATCH"]);
+});
+
+test("fails with 502 when the daemon sends an invalid state", async () => {
+	const daemon = new FakeDaemon();
+	daemon.getAnswers.push(Response.json({ committedOffset: "0" }));
+	const error = await failure(uploadTranscript(daemon.client(), target, source("x\n")));
+	expect(error.status).toBe(502);
+	expect(error.message).toBe("the daemon sent an invalid transcript upload state");
+	expect(daemon.patches()).toEqual([]);
+});
+
 test("reports a daemon without the upload route", async () => {
 	const daemon = new FakeDaemon();
 	daemon.getAnswers.push(new Response("Not Found", { status: 404 }));

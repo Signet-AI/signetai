@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SignetApiError } from "../errors.js";
 import { SignetClient } from "../index.js";
+import { SignetTransport } from "../transport.js";
 
 interface Upload {
 	readonly method: string;
@@ -94,6 +95,25 @@ test("raises a refused upload as an API error", async () => {
 		status: 403,
 		message: "transcript upload failed with HTTP 403: session transcript is outside the project scope",
 	});
+});
+
+test("lets request headers win over configured headers", async () => {
+	const server = Bun.serve({
+		port: 0,
+		fetch: (req) =>
+			Response.json({ type: req.headers.get("content-type"), authorization: req.headers.get("authorization") }),
+	});
+	servers.push(server);
+	const transport = new SignetTransport({
+		baseUrl: `http://127.0.0.1:${server.port}`,
+		headers: { "Content-Type": "application/json", Authorization: "Bearer configured" },
+	});
+	const response = await transport.fetch(`http://127.0.0.1:${server.port}/echo`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/octet-stream" },
+		body: new Uint8Array([1]),
+	});
+	expect(await response.json()).toEqual({ type: "application/octet-stream", authorization: "Bearer configured" });
 });
 
 test("reports a daemon without the upload route", async () => {

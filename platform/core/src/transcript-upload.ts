@@ -110,12 +110,12 @@ export async function uploadTranscript(
 	source: TranscriptSource,
 ): Promise<TranscriptUploadOutcome> {
 	const url = transcriptUploadUrl(client.baseUrl, target);
-	const answer = await client.fetch(url, { method: "GET", headers: client.headers });
+	const answer = await fetchWithRetry(client, url, { method: "GET", headers: client.headers });
 	if (answer.status === 404) {
 		await answer.body?.cancel();
 		return { status: "unsupported" };
 	}
-	let state = transcriptUploadStatus(await readAnswer(answer), answer.status);
+	let state = transcriptUploadStatus(await readAnswer(answer));
 	for (let plans = 1; ; plans++) {
 		const plan = await transcriptUploadPlan(state, source);
 		if (plan.offset >= plan.end) return { status: "unchanged" };
@@ -146,9 +146,9 @@ async function sendRanges(
 			await source.read(range.start, range.end),
 		);
 		const answer = await readAnswer(response);
-		if (response.status === 409) return { status: "conflict", state: transcriptUploadStatus(answer, 409) };
+		if (response.status === 409) return { status: "conflict", state: transcriptUploadStatus(answer) };
 		if (isRecord(answer) && answer.bypassed === true) return { status: "bypassed" };
-		committedOffset = transcriptUploadStatus(answer, response.status).committedOffset;
+		committedOffset = transcriptUploadStatus(answer).committedOffset;
 	}
 	return { status: "uploaded", committedOffset, generation: plan.generation };
 }
@@ -167,8 +167,12 @@ async function sendRange(
 		"Upload-Offset": String(offset),
 		"Upload-Checksum": await sha256Hex(body),
 	};
+	return await fetchWithRetry(client, url, { method: "PATCH", headers, body });
+}
+
+async function fetchWithRetry(client: TranscriptUploadClient, url: string, init: RequestInit): Promise<Response> {
 	for (let tries = 1; ; tries++) {
-		const response = await client.fetch(url, { method: "PATCH", headers, body });
+		const response = await client.fetch(url, init);
 		if (response.status !== 503 || tries >= MAX_UPLOAD_ATTEMPTS) return response;
 		await response.body?.cancel();
 		const delay = retryAfterMs(response) ?? client.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
@@ -200,7 +204,7 @@ async function readAnswer(response: Response): Promise<unknown> {
 	throw new TranscriptUploadError(response.status, `transcript upload failed with HTTP ${response.status}: ${reason}`);
 }
 
-function transcriptUploadStatus(body: unknown, status: number): TranscriptUploadStatus {
+function transcriptUploadStatus(body: unknown): TranscriptUploadStatus {
 	if (
 		isRecord(body) &&
 		typeof body.committedOffset === "number" &&
@@ -209,7 +213,7 @@ function transcriptUploadStatus(body: unknown, status: number): TranscriptUpload
 	) {
 		return { committedOffset: body.committedOffset, generation: body.generation, tailSha256: body.tailSha256 };
 	}
-	throw new TranscriptUploadError(status, "the daemon sent an invalid transcript upload state");
+	throw new TranscriptUploadError(502, "the daemon sent an invalid transcript upload state");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
