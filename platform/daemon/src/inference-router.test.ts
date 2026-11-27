@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
+import { setSecretKeyringForTests } from "@signet/core";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -825,6 +826,17 @@ printf 'never reached\\n'
 
 	it("isolates a rejected OAuth refresh from healthy fallback targets", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-oauth-refresh-"));
+		let keyringValue: string | undefined;
+		setSecretKeyringForTests({
+			platform: process.platform,
+			service: "inference-router-test",
+			account: dir,
+			get: async () => (keyringValue === undefined ? { state: "missing" } : { state: "found", value: keyringValue }),
+			set: async (value) => {
+				keyringValue = value;
+				return { state: "found", value };
+			},
+		});
 		try {
 			mkdirSync(join(dir, "memory"), { recursive: true });
 			writeFileSync(
@@ -910,6 +922,7 @@ printf 'never reached\\n'
 			expect(result.value.text).toBe("healthy fallback answer");
 			expect(result.value.decision.targetRef).toBe("healthy/default");
 		} finally {
+			setSecretKeyringForTests(null);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
