@@ -682,6 +682,136 @@ test("randomized row predicates and physical shard admission agree for every rea
 	}
 });
 
+test.each(["copying", "verify", "dirty"] as const)(
+	"vector preparation bounds an expensive %s row and preserves old admission",
+	(phase) => {
+		const db = fixture();
+		let clock = 0;
+		const now = spyOn(performance, "now");
+		try {
+			for (let i = 0; i < 12; i++) add(db, `turn-${i}`, "default", i / 100);
+			while (repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase !== "ready") {}
+			const before = recall(db);
+			db.prepare(
+				"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('turn-job','classify-preparing','pending',?,'2020')",
+			).run(JSON.stringify({ id: "cls_hidden_a", target: { kind: "agent", id: "default", agentId: "default" } }));
+			beginVectorAdmissionRepairInTx(db, "vec_embeddings", "embeddings", "turn-job");
+			while (
+				db
+					.query<{ phase: string }, []>("SELECT phase FROM vector_shard_repairs WHERE projection='vec_embeddings'")
+					.get()?.phase === "pending"
+			)
+				stepVectorAdmissionRepairInTx(db, "vec_embeddings");
+			if (phase !== "copying") {
+				while (
+					db
+						.query<{ phase: string }, []>("SELECT phase FROM vector_shard_repairs WHERE projection='vec_embeddings'")
+						.get()?.phase !== "verify"
+				)
+					stepVectorAdmissionRepairInTx(db, "vec_embeddings");
+			}
+			if (phase === "dirty")
+				db.exec(
+					"INSERT OR IGNORE INTO vector_shard_dirty SELECT 'vec_embeddings',r.building_generation,e.id FROM vector_shard_repairs r CROSS JOIN embeddings e WHERE r.projection='vec_embeddings'",
+				);
+			const tracked = observed(db, []);
+			const timed = {
+				...tracked,
+				prepare(sql: string) {
+					const query = tracked.prepare(sql);
+					return {
+						...query,
+						get(...args: unknown[]) {
+							const value = query.get(...args);
+							if (sql.includes(" fingerprint FROM (")) clock += 25;
+							return value;
+						},
+					};
+				},
+				exec(sql: string) {
+					tracked.exec(sql);
+					if (sql.trimStart().startsWith("DELETE FROM _vector_admission_transfer;")) clock += 25;
+				},
+			};
+			now.mockImplementation(() => clock);
+			const result = stepVectorAdmissionRepairInTx(timed, "vec_embeddings");
+			expect(result.updated).toBe(1);
+			expect(result.phase).toBe(phase === "copying" ? "copying" : "verify");
+			expect(db.query("SELECT cursor FROM vector_shard_repairs WHERE projection='vec_embeddings'").get()).toEqual({
+				cursor: phase === "dirty" ? "" : "turn-0",
+			});
+			if (phase === "dirty") expect(db.query("SELECT count(*) n FROM vector_shard_dirty").get()).toEqual({ n: 11 });
+			expect(recall(db)).toEqual(before);
+		} finally {
+			now.mockRestore();
+			db.close();
+		}
+	},
+);
+
+test("starting vector preparation leaves discovery to bounded owner slices", () => {
+	const db = fixture();
+	try {
+		for (let i = 0; i < 12; i++) add(db, `discovery-${i}`, "default", i / 100);
+		while (repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase !== "ready") {}
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('discover','classify-preparing','pending',?,'2020')",
+		).run(JSON.stringify({ id: "cls_hidden_a", target: { kind: "agent", id: "default", agentId: "default" } }));
+		beginVectorAdmissionRepairInTx(db, "vec_embeddings", "embeddings", "discover");
+		expect(db.query("SELECT count(*) n FROM vector_shard_repair_partitions").get()).toEqual({ n: 0 });
+		expect(db.query("SELECT phase,cursor FROM vector_shard_repairs WHERE projection='vec_embeddings'").get()).toEqual({
+			phase: "pending",
+			cursor: "",
+		});
+	} finally {
+		db.close();
+	}
+});
+
+test("vector preparation pages use an ordered range instead of a cohort sort", () => {
+	const db = fixture();
+	try {
+		for (let i = 0; i < 12; i++) add(db, `ordered-${i}`, "default", i / 100);
+		while (repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase !== "ready") {}
+		db.prepare(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('ordered','classify-preparing','pending',?,'2020')",
+		).run(JSON.stringify({ id: "cls_hidden_a", target: { kind: "agent", id: "default", agentId: "default" } }));
+		beginVectorAdmissionRepairInTx(db, "vec_embeddings", "embeddings", "ordered");
+		while (
+			db.query<{ phase: string }, []>("SELECT phase FROM vector_shard_repairs WHERE projection='vec_embeddings'").get()
+				?.phase === "pending"
+		)
+			stepVectorAdmissionRepairInTx(db, "vec_embeddings");
+		const plans: string[] = [];
+		const tracked = observed(db, []);
+		stepVectorAdmissionRepairInTx(
+			{
+				...tracked,
+				prepare(sql: string) {
+					const q = tracked.prepare(sql);
+					return {
+						...q,
+						all(...args: unknown[]) {
+							if (sql.includes("embedding_id id"))
+								for (const row of db
+									.prepare<{ detail: string }, SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${sql}`)
+									.all(...bindings(args)))
+									plans.push(row.detail);
+							return q.all(...args);
+						},
+					};
+				},
+			},
+			"vec_embeddings",
+			1,
+		);
+		expect(plans.length).toBeGreaterThan(0);
+		expect(plans.filter((detail) => detail.includes("TEMP B-TREE"))).toEqual([]);
+	} finally {
+		db.close();
+	}
+});
+
 test("classification preparation preserves old admission until verified atomic publication", () => {
 	const db = fixture();
 	try {
@@ -766,9 +896,9 @@ test("restarted connections preserve admission across preparation and publicatio
 			}
 		};
 		crash("beginVectorAdmissionRepairInTx(db,'vec_embeddings','embeddings','restart-job')");
-		expect(inspect(["a", "b"])).toBe("copying");
+		expect(inspect(["a", "b"])).toBe("pending");
 		crash("stepVectorAdmissionRepairInTx(db,'vec_embeddings',1)");
-		expect(inspect(["a", "b"])).toBe("copying");
+		expect(inspect(["a", "b"])).toBe("pending");
 		crash("db.prepare(\"UPDATE memories SET project='beta' WHERE id='b'\").run()");
 		let phase = inspect(["a", "c"]);
 		for (let i = 0; i < 10 && phase !== "prepared"; i++) {

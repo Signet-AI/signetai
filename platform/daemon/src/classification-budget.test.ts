@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
+import { findSqliteVecExtension, repairVectorAdmissionStepInTx, syncEmbeddingCompartment } from "@signet/core";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +32,59 @@ test("classification yields after its time budget before starting another closur
 		expect(db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NOT NULL").get()).toEqual({ n: 1 });
 		expect(db.prepare("SELECT status FROM org_jobs WHERE id=?").get(value.jobId)).toEqual({ status: "running" });
 	} finally {
+		db.close();
+	}
+});
+
+test("one classification preparation turn shares a single elapsed budget across pages", () => {
+	const db = currentClassificationFixture();
+	const extension = findSqliteVecExtension();
+	if (!extension) throw new Error("sqlite-vec required");
+	db.loadExtension(extension);
+	db.exec(
+		"DROP TABLE IF EXISTS vec_embeddings;CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
+	);
+	repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings");
+	for (let i = 0; i < 12; i++) {
+		const id = `prepare-${i}`;
+		db.prepare(
+			"INSERT INTO embeddings(id,content_hash,source_id,source_type,agent_id,vector,dimensions,chunk_text,created_at) VALUES(?,?,'m','memory','default',?,3,'','now')",
+		).run(id, id, new Float32Array([1, 0, 0]));
+		syncEmbeddingCompartment(db, "embeddings", id);
+	}
+	while (repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase !== "ready") {}
+	db.exec("INSERT INTO classifications(id,name) VALUES('cls_turn','Turn')");
+	const value = executeClassification(db, {
+		op: "enqueue",
+		id: "cls_turn",
+		actor,
+		target: { kind: "agent", id: "default", agentId: "default" },
+		remove: false,
+	});
+	if (typeof value !== "object" || value === null || !("jobId" in value) || typeof value.jobId !== "string")
+		throw new Error("missing job");
+	let clock = 0;
+	const exec = db.exec.bind(db);
+	const observed = spyOn(db, "exec").mockImplementation((sql: string) => {
+		exec(sql);
+		if (sql.trimStart().startsWith("DELETE FROM _vector_admission_transfer;")) clock += 25;
+	});
+	const now = spyOn(performance, "now").mockImplementation(() => clock);
+	try {
+		executeClassification(db, { op: "execute", jobId: value.jobId });
+		expect(
+			db
+				.query(
+					"SELECT count(*) n FROM vector_shard_members WHERE generation=(SELECT building_generation FROM vector_shard_repairs WHERE projection='vec_embeddings')",
+				)
+				.get(),
+		).toEqual({ n: 1 });
+		expect(
+			db.query("SELECT active_generation FROM vector_shard_repairs WHERE projection='vec_embeddings'").get(),
+		).toEqual({ active_generation: 1 });
+	} finally {
+		now.mockRestore();
+		observed.mockRestore();
 		db.close();
 	}
 });

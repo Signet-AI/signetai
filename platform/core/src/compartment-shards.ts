@@ -665,7 +665,10 @@ export function prepareVectorAdmissionWriter(
 		);
 		nativeDimensions = dimensions;
 	}
-	const available = nativeDimensions === dimensions && state.active_generation > 0 && state.phase !== "pending";
+	const available =
+		nativeDimensions === dimensions &&
+		state.active_generation > 0 &&
+		(state.phase !== "pending" || state.job_id !== null);
 	const version = () =>
 		JSON.stringify([
 			db.prepare("PRAGMA schema_version").get()?.schema_version,
@@ -692,7 +695,8 @@ export function prepareVectorAdmissionWriter(
 	const journal = (wanted: string) => {
 		const rows = vectorAdmissionRowsSql(store, wanted, base);
 		return `INSERT OR IGNORE INTO vector_shard_repair_partitions SELECT b.projection,b.building_generation,m.partition_id FROM vector_shard_repairs b JOIN org_jobs j ON j.id=b.job_id JOIN ${store} candidate ON candidate.id=${wanted} AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') JOIN vector_shard_members m ON m.projection=b.projection AND m.embedding_id=candidate.id JOIN vector_shard_keys k ON k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=b.active_generation WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=b.job_id);
-		UPDATE vector_shard_repairs SET phase='copying',cursor='' WHERE projection='${base}' AND job_id IS NOT NULL AND changes()>0;
+		UPDATE org_jobs SET progress_json=json_remove(COALESCE(progress_json,'{}'),'$.vectorPreparation.${base}.copying','$.vectorPreparation.${base}.verify') WHERE id=(SELECT job_id FROM vector_shard_repairs WHERE projection='${base}') AND changes()>0;
+		UPDATE vector_shard_repairs SET phase=CASE WHEN phase='pending' THEN phase ELSE 'copying' END,cursor=CASE WHEN phase='pending' THEN cursor ELSE '' END WHERE projection='${base}' AND job_id IS NOT NULL AND changes()>0;
 		INSERT OR IGNORE INTO vector_shard_dirty(projection,generation,embedding_id) SELECT b.projection,b.building_generation,${wanted} FROM vector_shard_repairs b WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND (b.job_id IS NULL OR EXISTS(SELECT 1 FROM vector_shard_members m JOIN vector_shard_repair_partitions p ON p.partition_id=m.partition_id AND p.projection=b.projection AND p.generation=b.building_generation WHERE m.projection=b.projection AND m.embedding_id=${wanted}));`;
 	};
 	const move = available
@@ -786,7 +790,6 @@ export function admittedVectorPartitions(
 		!state ||
 		typeof state.active_generation !== "number" ||
 		state.active_generation < 1 ||
-		state.phase === "pending" ||
 		(state.phase !== "ready" && state.job_id === null)
 	)
 		throw new VectorAdmissionLimitError("vector_shard_repair_pending");
@@ -843,9 +846,12 @@ export function beginVectorAdmissionRepairInTx(
 	jobId: string | null = null,
 ): void {
 	const state = db
-		.prepare("SELECT phase,active_slot,active_generation,job_id FROM vector_shard_repairs WHERE projection=?")
+		.prepare(
+			"SELECT phase,active_slot,active_generation,job_id,building_generation FROM vector_shard_repairs WHERE projection=?",
+		)
 		.get(base);
 	if (!state || typeof state.active_generation !== "number") throw new Error("vector_repair_marker_missing");
+	if (jobId !== null && state.job_id === jobId && typeof state.building_generation === "number") return;
 	if (state.phase !== "ready" && state.phase !== "pending") {
 		if (state.job_id === jobId) return;
 		throw new Error("vector_repair_busy");
@@ -864,29 +870,19 @@ export function beginVectorAdmissionRepairInTx(
 		);
 	}
 	db.prepare(
-		"UPDATE vector_shard_repairs SET phase='copying',store=?,active_generation=MAX(active_generation,1),building_generation=MAX(active_generation,last_generation)+1,last_generation=MAX(active_generation,last_generation)+1,cursor='',job_id=? WHERE projection=?",
-	).run(store, jobId, base);
-	if (jobId !== null) {
-		const rows = vectorAdmissionRowsSql(store, "candidate.id", base);
-		const parts = db
-			.prepare(
-				`SELECT DISTINCT m.partition_id FROM org_jobs j CROSS JOIN ${store} candidate CROSS JOIN vector_shard_members m CROSS JOIN vector_shard_keys k WHERE j.id=? AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') AND m.projection=? AND m.embedding_id=candidate.id AND k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=? AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=j.id) LIMIT 4097`,
-			)
-			.all(jobId, base, state.active_generation);
-		if (parts.length > 4096) throw new VectorAdmissionLimitError("vector_shard_fanout_limit");
-		for (const part of parts)
-			db.prepare(
-				"INSERT OR IGNORE INTO vector_shard_repair_partitions SELECT projection,building_generation,? FROM vector_shard_repairs WHERE projection=?",
-			).run(part.partition_id, base);
-	}
+		"UPDATE vector_shard_repairs SET phase=CASE WHEN ? IS NULL THEN 'copying' ELSE 'pending' END,store=?,active_generation=MAX(active_generation,1),building_generation=MAX(active_generation,last_generation)+1,last_generation=MAX(active_generation,last_generation)+1,cursor='',job_id=? WHERE projection=?",
+	).run(jobId, store, jobId, base);
 	prepareVectorAdmissionWriter(db, base, store);
 }
 export function stepVectorAdmissionRepairInTx(
 	db: MigrationDb,
 	base: VectorProjectionBase,
 	limit = 100,
+	deadline = performance.now() + 20,
 ): { phase: string; updated: number } {
-	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("vector_repair_batch_limit");
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isFinite(deadline))
+		throw new Error("vector_repair_batch_limit");
+	const turnDeadline = Math.min(deadline, performance.now() + 20);
 	const state = db.prepare("SELECT * FROM vector_shard_repairs WHERE projection=?").get(base);
 	if (
 		!state ||
@@ -903,6 +899,55 @@ export function stepVectorAdmissionRepairInTx(
 	const previous = `${base}__admission_${slot}`;
 	const fallback = shardSchema(db).tables.has(previous) ? previous : base;
 	db.exec("CREATE TEMP TABLE IF NOT EXISTS _vector_admission_wanted(id TEXT PRIMARY KEY)");
+	const enroll = (id: string): boolean => {
+		if (state.job_id === null) return false;
+		const rows = vectorAdmissionRowsSql(store, "candidate.id", base);
+		const parts = db
+			.prepare(
+				`SELECT DISTINCT m.partition_id FROM org_jobs j CROSS JOIN ${store} candidate CROSS JOIN vector_shard_members m CROSS JOIN vector_shard_keys k WHERE j.id=? AND candidate.id=? AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') AND m.projection=? AND m.embedding_id=candidate.id AND k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=? AND NOT EXISTS(SELECT 1 FROM vector_shard_repair_partitions p WHERE p.projection=? AND p.generation=? AND p.partition_id=m.partition_id) AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=j.id) LIMIT 4097`,
+			)
+			.all(state.job_id, id, base, state.active_generation, base, generation);
+		for (const part of parts)
+			db.prepare("INSERT OR IGNORE INTO vector_shard_repair_partitions VALUES(?,?,?)").run(
+				base,
+				generation,
+				part.partition_id,
+			);
+		if (
+			parts.length &&
+			db
+				.prepare(
+					"SELECT count(*) n FROM (SELECT 1 FROM vector_shard_repair_partitions WHERE projection=? AND generation=? LIMIT 4097)",
+				)
+				.get(base, generation)?.n === 4097
+		)
+			throw new VectorAdmissionLimitError("vector_shard_fanout_limit");
+		return parts.length > 0;
+	};
+	if (state.phase === "pending" && state.job_id !== null) {
+		const page = db
+			.prepare(
+				`SELECT candidate.id,candidate.rowid scan_rowid FROM ${store} candidate WHERE candidate.agent_id=(SELECT json_extract(params_json,'$.target.agentId') FROM org_jobs WHERE id=?) AND candidate.rowid>CAST(? AS INTEGER) ORDER BY candidate.rowid LIMIT ?`,
+			)
+			.all(state.job_id, state.cursor, limit);
+		let updated = 0;
+		let cursor = state.cursor;
+		for (const row of page) {
+			if (updated > 0 && performance.now() >= turnDeadline) break;
+			if (typeof row.id !== "string" || typeof row.scan_rowid !== "number")
+				throw new Error("vector_repair_cursor_invalid");
+			enroll(row.id);
+			cursor = String(row.scan_rowid);
+			updated++;
+		}
+		const phase = updated === page.length && page.length < limit ? "copying" : "pending";
+		db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(
+			phase,
+			phase === "copying" ? "" : cursor,
+			base,
+		);
+		return { phase, updated };
+	}
 	const move = (id: string) => {
 		if (
 			state.job_id !== null &&
@@ -956,25 +1001,59 @@ export function stepVectorAdmissionRepairInTx(
 				id,
 			);
 	};
-	const readPage = () =>
-		state.job_id === null
-			? db.prepare(`SELECT id FROM ${store} WHERE id>? ORDER BY id LIMIT ?`).all(state.cursor, limit)
-			: db
-					.prepare(
-						`SELECT DISTINCT m.embedding_id id FROM vector_shard_repair_partitions p CROSS JOIN vector_shard_members m JOIN vector_shard_keys k ON k.id=m.partition_id JOIN ${store} e ON e.id=m.embedding_id WHERE p.projection=? AND p.generation=? AND m.partition_id=p.partition_id AND k.retired_generation IS NULL AND m.embedding_id>? ORDER BY m.embedding_id LIMIT ?`,
-					)
-					.all(base, generation, state.cursor, limit);
+	let partition: number | null = null;
+	const checkpointPath = `$.vectorPreparation.${base}.${state.phase}`;
+	const readPage = () => {
+		if (state.job_id === null)
+			return db.prepare(`SELECT id FROM ${store} WHERE id>? ORDER BY id LIMIT ?`).all(state.cursor, limit);
+		const checkpoint = db
+			.prepare(
+				"SELECT COALESCE(json_extract(progress_json,?||'.partition'),0) partition,COALESCE(json_extract(progress_json,?||'.id'),'') id FROM org_jobs WHERE id=?",
+			)
+			.get(checkpointPath, checkpointPath, state.job_id);
+		if (typeof checkpoint?.partition !== "number" || typeof checkpoint.id !== "string")
+			throw new Error("vector_repair_cursor_invalid");
+		const next = db
+			.prepare(
+				"SELECT partition_id FROM vector_shard_repair_partitions WHERE projection=? AND generation=? AND partition_id>=? ORDER BY partition_id LIMIT 1",
+			)
+			.get(base, generation, checkpoint.partition);
+		if (!next) return [];
+		if (typeof next.partition_id !== "number") throw new Error("vector_repair_cursor_invalid");
+		partition = next.partition_id;
+		return db
+			.prepare(
+				`SELECT m.embedding_id id FROM vector_shard_members m INDEXED BY idx_vector_shard_members_partition JOIN vector_shard_keys k ON k.id=m.partition_id JOIN ${store} e ON e.id=m.embedding_id WHERE m.partition_id=? AND m.embedding_id>? AND k.retired_generation IS NULL ORDER BY m.embedding_id LIMIT ?`,
+			)
+			.all(partition, partition === checkpoint.partition ? checkpoint.id : "", limit);
+	};
+	const checkpointPage = (cursor: string, updated: number, length: number): boolean => {
+		if (state.job_id === null) return updated === length && length < limit;
+		if (partition === null) return true;
+		const finished = updated === length && length < limit;
+		db.prepare(
+			"UPDATE org_jobs SET progress_json=json_set(COALESCE(progress_json,'{}'),?,json_object('partition',?,'id',?)) WHERE id=?",
+		).run(checkpointPath, finished ? partition + 1 : partition, finished ? "" : cursor, state.job_id);
+		return false;
+	};
 	if (state.phase === "copying") {
 		const page = readPage();
-		for (const row of page) if (typeof row.id === "string") move(row.id);
-		const cursor = page.at(-1)?.id;
-		const phase = page.length < limit ? "verify" : "copying";
+		let updated = 0;
+		let cursor = state.cursor;
+		for (const row of page) {
+			if (updated > 0 && performance.now() >= turnDeadline) break;
+			if (typeof row.id !== "string") throw new Error("vector_repair_cursor_invalid");
+			move(row.id);
+			cursor = row.id;
+			updated++;
+		}
+		const phase = checkpointPage(cursor, updated, page.length) ? "verify" : "copying";
 		db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(
 			phase,
 			phase === "verify" ? "" : cursor,
 			base,
 		);
-		return { phase, updated: page.length };
+		return { phase, updated };
 	}
 	const dirty = db
 		.prepare(
@@ -982,23 +1061,37 @@ export function stepVectorAdmissionRepairInTx(
 		)
 		.all(base, state.building_generation, limit);
 	if (dirty.length) {
-		for (const row of dirty)
-			if (typeof row.embedding_id === "string") {
-				move(row.embedding_id);
-				db.prepare("DELETE FROM vector_shard_dirty WHERE projection=? AND generation=? AND embedding_id=?").run(
-					base,
-					state.building_generation,
-					row.embedding_id,
-				);
-			}
+		let updated = 0;
+		for (const row of dirty) {
+			if (updated > 0 && performance.now() >= turnDeadline) break;
+			if (typeof row.embedding_id !== "string") throw new Error("vector_repair_cursor_invalid");
+			move(row.embedding_id);
+			db.prepare("DELETE FROM vector_shard_dirty WHERE projection=? AND generation=? AND embedding_id=?").run(
+				base,
+				state.building_generation,
+				row.embedding_id,
+			);
+			updated++;
+		}
+		if (state.job_id !== null)
+			db.prepare("UPDATE org_jobs SET progress_json=json_remove(COALESCE(progress_json,'{}'),?) WHERE id=?").run(
+				`$.vectorPreparation.${base}.verify`,
+				state.job_id,
+			);
 		db.prepare("UPDATE vector_shard_repairs SET phase='verify',cursor='' WHERE projection=?").run(base);
-		return { phase: "verify", updated: dirty.length };
+		return { phase: "verify", updated };
 	}
 	if (state.phase === "prepared") return { phase: "prepared", updated: 0 };
 	if (state.phase !== "verify") throw new Error("vector_repair_invalid_phase");
 	const page = readPage();
-	for (const row of page)
-		if (typeof row.id === "string") {
+	let updated = 0;
+	let cursor = state.cursor;
+	for (const row of page) {
+		if (updated > 0 && performance.now() >= turnDeadline) break;
+		if (typeof row.id !== "string") throw new Error("vector_repair_cursor_invalid");
+		cursor = row.id;
+		updated++;
+		{
 			const fingerprint = vectorAdmissionFingerprint("r");
 			const valid = db
 				.prepare(`SELECT ${fingerprint} fingerprint FROM (${vectorAdmissionRowsSql(store, "?", base)}) r`)
@@ -1011,13 +1104,10 @@ export function stepVectorAdmissionRepairInTx(
 				.get(base, state.building_generation, row.id);
 			if (projected?.fingerprint !== valid.fingerprint) throw new Error("vector_repair_verification_failed");
 		}
-	const phase = page.length < limit ? "prepared" : "verify";
-	db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(
-		phase,
-		page.at(-1)?.id ?? state.cursor,
-		base,
-	);
-	return { phase, updated: page.length };
+	}
+	const phase = checkpointPage(cursor, updated, page.length) ? "prepared" : "verify";
+	db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(phase, cursor, base);
+	return { phase, updated };
 }
 export function cancelVectorAdmissionRepairInTx(
 	db: MigrationDb,

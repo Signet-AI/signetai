@@ -1022,9 +1022,12 @@ function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean
 			"SELECT r.projection,r.store FROM vector_shard_repairs r JOIN sqlite_master s ON s.name=r.projection AND s.type='table' WHERE lower(s.sql) LIKE '%using vec0%' ORDER BY r.projection LIMIT 3",
 		)
 		.all();
+	const deadline = performance.now() + CLASSIFICATION_TURN_MS;
+	let remaining = 100;
 	for (let round = 0; round < 3; round++) {
 		let prepared = true;
 		for (const root of roots) {
+			if (remaining === 0 || performance.now() >= deadline) return false;
 			if (
 				(root.projection !== "vec_embeddings" && root.projection !== "vec_embeddings_staging") ||
 				(root.store !== "embeddings" && root.store !== "embeddings_staging")
@@ -1037,7 +1040,8 @@ function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean
 				beginVectorAdmissionRepairInTx(db, root.projection, root.store, jobId);
 			state = db.prepare("SELECT phase FROM vector_shard_repairs WHERE projection=?").get(root.projection);
 			if (state?.phase !== "prepared") {
-				const result = stepVectorAdmissionRepairInTx(db, root.projection);
+				const result = stepVectorAdmissionRepairInTx(db, root.projection, remaining, deadline);
+				remaining -= result.updated;
 				if (result.phase !== "prepared") prepared = false;
 			}
 		}
@@ -1148,7 +1152,7 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 			.get(jobId)
 	)
 		return executeCancellation(db, jobId);
-	let job = db
+	const job = db
 		.prepare("SELECT * FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing')")
 		.get(jobId);
 	if (!job || (job.status !== "pending" && job.status !== "running")) throw new Error("job_not_pending");
@@ -1162,8 +1166,7 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 			return prepareClassificationFenceInTx(db, jobId);
 		});
 		if (!published) return { status: "running", phase: "preparing-shards" };
-		job = db.prepare("SELECT * FROM org_jobs WHERE id=?").get(jobId);
-		if (!job) throw new Error("job_not_pending");
+		return { status: "running", phase: "prepared-shards" };
 	}
 	if (job.status === "pending") {
 		const admitted = transaction(db, () => {
