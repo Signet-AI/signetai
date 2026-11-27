@@ -83,6 +83,35 @@ function observed(db: Database, windows: unknown[], plans?: string[]) {
 		},
 	};
 }
+test("single-row vector writes never scan admission payloads", () => {
+	const db = fixture();
+	try {
+		add(db, "write-target", "default", 0);
+		add(db, "unrelated", "other", 1);
+		for (const sql of [
+			"UPDATE embeddings SET vector=vector WHERE id='write-target'",
+			"DELETE FROM embeddings WHERE id='write-target'",
+		]) {
+			const statement = db.prepare<Record<string, unknown>, []>(`EXPLAIN ${sql}`);
+			try {
+				const bytecode = statement.all();
+				expect(bytecode.filter((row) => row.opcode === "VFilter" && row.p4 === "1")).toEqual([]);
+			} finally {
+				statement.finalize();
+			}
+		}
+		db.exec("BEGIN IMMEDIATE;UPDATE embeddings SET vector=vector WHERE id='write-target';ROLLBACK");
+		expect(recall(db).response.results.map((row) => row.id)).toEqual(["write-target"]);
+		db.prepare("DELETE FROM embeddings WHERE id=?").run("write-target");
+		expect(recall(db).response.results).toEqual([]);
+		expect(
+			recall(db, { ...own, reach: { kind: "own", agentId: "other" } }).response.results.map((row) => row.id),
+		).toEqual(["unrelated"]);
+	} finally {
+		db.close();
+	}
+});
+
 const own: ReadScope = {
 	organizationMode: true,
 	reach: { kind: "own", agentId: "default" },

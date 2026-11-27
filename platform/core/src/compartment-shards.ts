@@ -449,17 +449,21 @@ export function deleteCompartmentVectors(db: MigrationDb, ids: readonly string[]
 			continue;
 		if (/__admission_[01]$/.test(row.name)) {
 			const projection = row.name.replace(/__admission_[01]$/, "");
-			const remove = db.prepare(
-				`DELETE FROM ${row.name} WHERE id IN(SELECT json_array(embedding_id,generation) FROM vector_shard_members WHERE projection=? AND embedding_id=?)`,
+			const members = db.prepare(
+				"SELECT json_array(embedding_id,generation) id FROM vector_shard_members WHERE projection=? AND embedding_id=?",
 			);
-			for (const id of ids) remove.run(projection, id);
+			const remove = db.prepare(`DELETE FROM ${row.name} WHERE id=?`);
+			for (const id of ids) for (const member of members.all(projection, id)) remove.run(member.id);
 		} else {
 			const remove = db.prepare(`DELETE FROM ${row.name} WHERE id=?`);
 			for (const id of ids) remove.run(id);
 		}
 	}
 	if (shardSchema(db).tables.has("vector_shard_members"))
-		for (const id of ids) db.prepare("DELETE FROM vector_shard_members WHERE embedding_id=?").run(id);
+		for (const id of ids)
+			db.prepare(
+				"DELETE FROM vector_shard_members WHERE projection IN ('vec_embeddings','vec_embeddings_staging') AND embedding_id=?",
+			).run(id);
 }
 
 export function missingCompartmentVectorSql(db: MigrationDb, base: string, alias: string): string {
@@ -572,6 +576,10 @@ function vectorRecallRowsSql(
 	return `DELETE FROM vector_shard_recall_rows WHERE (partition_id,embedding_id) IN (${members});
 	INSERT INTO vector_shard_recall_rows(partition_id,embedding_id,memory_id,memory_scope,is_current,is_aggregate) SELECT s.partition_id,e.id,m.id,m.scope,CASE WHEN m.id IS NOT NULL AND m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL THEN 1 ELSE 0 END,CASE WHEN m.source_type='aggregate-recall' THEN 1 ELSE 0 END FROM ${store} e CROSS JOIN vector_shard_members s ON s.projection='${base}' AND s.embedding_id=e.id LEFT JOIN memories m ON e.source_type='memory' AND m.id=e.source_id AND m.agent_id=e.agent_id WHERE ${condition};`;
 }
+function vectorAdmissionRemoveSql(base: VectorProjectionBase, ids: string): string {
+	const queue = `_vector_admission_remove_${base}`;
+	return `DELETE FROM ${queue};INSERT INTO ${queue}(id) ${ids};DELETE FROM ${queue};`;
+}
 function vectorAdmissionMoveSql(
 	base: VectorProjectionBase,
 	store: "embeddings" | "embeddings_staging",
@@ -588,7 +596,7 @@ function vectorAdmissionMoveSql(
 	const fallbackId = fallbackTable === base ? "e.id" : `(SELECT json_array(e.id,generation) FROM (${live}) LIMIT 1)`;
 	const removal = preparing
 		? `DELETE FROM ${table} WHERE id=json_array(${wanted},${generation}); DELETE FROM vector_shard_members WHERE projection='${base}' AND generation=${generation} AND embedding_id=${wanted};`
-		: `DELETE FROM ${table} WHERE id IN(SELECT json_array(${wanted},generation) FROM (${live})); DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=${wanted} AND partition_id IN(SELECT id FROM vector_shard_keys WHERE projection='${base}' AND retired_generation IS NULL AND generation<=${generation});`;
+		: `${vectorAdmissionRemoveSql(base, `SELECT json_array(${wanted},generation) FROM (${live})`)} DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=${wanted} AND partition_id IN(SELECT id FROM vector_shard_keys WHERE projection='${base}' AND retired_generation IS NULL AND generation<=${generation});`;
 	return `
 	DELETE FROM _vector_admission_transfer;
 	INSERT INTO _vector_admission_transfer(id,vector) SELECT e.id,COALESCE((SELECT vector FROM _vector_admission_override WHERE id=e.id),e.vector,(SELECT embedding FROM ${fallbackTable} WHERE id=${fallbackId}),(SELECT embedding FROM ${base} WHERE id=e.id)) FROM ${store} e WHERE e.id=${wanted};
@@ -676,8 +684,11 @@ export function prepareVectorAdmissionWriter(
 	db.exec(
 		"CREATE TEMP TABLE IF NOT EXISTS _vector_admission_transfer(id TEXT PRIMARY KEY,vector BLOB);CREATE TEMP TABLE IF NOT EXISTS _vector_admission_override(id TEXT PRIMARY KEY,vector BLOB)",
 	);
-	for (const event of ["ai", "au", "ad", "parent_au", "parent_ad", "job_ai", "recall_au"] as const)
+	for (const event of ["ai", "au", "ad", "parent_au", "parent_ad", "job_ai", "recall_au", "remove_ai"] as const)
 		db.exec(`DROP TRIGGER IF EXISTS temp.${base}_admission_${event}`);
+	if (available)
+		db.exec(`CREATE TEMP TABLE IF NOT EXISTS _vector_admission_remove_${base}(id TEXT PRIMARY KEY);
+		CREATE TEMP TRIGGER ${base}_admission_remove_ai AFTER INSERT ON _vector_admission_remove_${base} BEGIN DELETE FROM ${table} WHERE id=new.id; END`);
 	const journal = (wanted: string) => {
 		const rows = vectorAdmissionRowsSql(store, wanted, base);
 		return `INSERT OR IGNORE INTO vector_shard_repair_partitions SELECT b.projection,b.building_generation,m.partition_id FROM vector_shard_repairs b JOIN org_jobs j ON j.id=b.job_id JOIN ${store} candidate ON candidate.id=${wanted} AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') JOIN vector_shard_members m ON m.projection=b.projection AND m.embedding_id=candidate.id JOIN vector_shard_keys k ON k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=b.active_generation WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=b.job_id);
@@ -697,7 +708,7 @@ export function prepareVectorAdmissionWriter(
 			)
 		: "";
 	const remove = available
-		? `DELETE FROM ${table} WHERE id IN(SELECT json_array(embedding_id,generation) FROM vector_shard_members WHERE projection='${base}' AND embedding_id=old.id); DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=old.id;`
+		? `${vectorAdmissionRemoveSql(base, `SELECT json_array(embedding_id,generation) FROM vector_shard_members WHERE projection='${base}' AND embedding_id=old.id`)} DELETE FROM vector_shard_members WHERE projection='${base}' AND embedding_id=old.id;`
 		: "";
 	db.exec(`CREATE TEMP TRIGGER ${base}_admission_ai AFTER INSERT ON ${store} BEGIN ${move} ${journal("new.id")} END`);
 	db.exec(
