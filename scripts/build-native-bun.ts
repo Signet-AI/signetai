@@ -15,6 +15,7 @@ import {
 import { createRequire } from "node:module";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { nativeWorkerBootstrap } from "./lib/native-worker-bootstrap";
 
 const root = join(import.meta.dir, "..");
 const outDir = join(root, "dist", "native");
@@ -210,7 +211,19 @@ function sqliteVecAsset(): { readonly name: string; readonly contentBase64: stri
 
 for (const [name, entry] of workerEntries) {
 	const output = join(workerDir, `${name}.mjs`);
-	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeWorkerExternalArgs, entry]);
+	let input: string = entry;
+	if (name === "db-owner-worker") {
+		input = join(buildDir, "db-owner-native.ts");
+		writeFileSync(
+			input,
+			nativeWorkerBootstrap(
+				join(root, entry),
+				join(root, "platform/daemon/src/native-runtime-assets.ts"),
+				nativeAddonAssets.filter((asset) => asset.name === "signet-native"),
+			),
+		);
+	}
+	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeWorkerExternalArgs, input]);
 	assertNoUnbundledRelativeRequires(output, name);
 }
 
