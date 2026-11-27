@@ -174,6 +174,12 @@ interface SQLiteDatabase {
 	close(throwOnError?: boolean): void;
 }
 
+export function configureSqliteJournalConnection(db: Pick<SQLiteDatabase, "exec">, directory: string): void {
+	const journal = resolveSqliteJournalConfig({ directory });
+	db.exec(`PRAGMA journal_mode = ${journal.journalMode}`);
+	if (journal.networkFilesystem) db.exec("PRAGMA synchronous = FULL");
+}
+
 export class Database {
 	private dbPath: string;
 	private db: SQLiteDatabase | null = null;
@@ -214,11 +220,7 @@ export class Database {
 		loadSqliteVec(this.db);
 		if (!this.options?.readonly) {
 			this.getDb().exec("PRAGMA auto_vacuum = INCREMENTAL");
-			const journal = resolveSqliteJournalConfig({ directory: dirname(this.dbPath) });
-			const journalMode = `journal_mode = ${journal.journalMode}`;
-			if (isBun) this.getDb().exec(`PRAGMA ${journalMode}`);
-			else (this.getDb() as { pragma(s: string): void }).pragma(journalMode);
-			if (journal.networkFilesystem) this.getDb().exec("PRAGMA synchronous = FULL");
+			configureSqliteJournalConnection(this.getDb(), dirname(this.dbPath));
 		}
 		configureEvidencePurgeConnection(this.getDb());
 		runMigrations(this.getDb());

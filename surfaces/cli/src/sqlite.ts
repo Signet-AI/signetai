@@ -1,4 +1,5 @@
-import { configureEvidencePurgeConnection } from "@signet/core";
+import { configureEvidencePurgeConnection, configureSqliteJournalConnection } from "@signet/core";
+import { dirname } from "node:path";
 
 interface SQLiteDatabase {
 	transaction<T>(operation: () => T): () => T;
@@ -16,6 +17,7 @@ const createDatabase = (dbPath: string, options?: { readonly?: boolean }): SQLit
 	const db: SQLiteDatabase = isBun
 		? new (require("bun:sqlite").Database)(dbPath, options)
 		: new (require("better-sqlite3"))(dbPath, options);
+	if (!options?.readonly) configureSqliteJournalConnection(db, dirname(dbPath));
 	configureEvidencePurgeConnection(db);
 	return db;
 };
