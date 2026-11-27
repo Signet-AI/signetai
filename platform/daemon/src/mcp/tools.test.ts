@@ -432,7 +432,8 @@ describe("createMcpServer", () => {
 		expect(names).toContain("signet_operator_job");
 		expect(names).toContain("signet_org_user_lookup");
 		expect(names).toContain("signet_org_sso_set");
-		expect(names.length).toBe(74);
+		expect(names).toContain("signet_result_attribution");
+		expect(names.length).toBe(75);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
