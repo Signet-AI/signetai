@@ -35,6 +35,8 @@ export interface VectorSearchOptions {
 	limit?: number;
 	type?: string;
 	excludeAggregateRecall?: boolean;
+	currentOnly?: boolean;
+	memoryScope?: string | null;
 	maxScanRows?: number;
 }
 
@@ -197,7 +199,7 @@ function boundedCosineFallback(
 	if (options.excludeAggregateRecall) {
 		predicates.push("COALESCE(m.source_type, '') != 'aggregate-recall'");
 	}
-	const scope = readScopeSql("m", options.readScope);
+	const scope = vectorMemoryPredicate(options);
 	const embeddingScope = embeddingReadPredicate(options.readScope);
 	params.push(...scope.args, ...embeddingScope.args);
 	params.push(maxScanRows + 1);
@@ -231,6 +233,19 @@ function boundedCosineFallback(
 	};
 }
 
+function vectorMemoryPredicate(options: VectorSearchOptions): { sql: string; args: unknown[] } {
+	const scope = readScopeSql("m", options.readScope);
+	let sql = scope.sql;
+	const args: unknown[] = [...scope.args];
+	if (options.currentOnly) sql += " AND m.is_deleted=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL";
+	if (options.memoryScope === null) sql += " AND m.scope IS NULL";
+	else if (options.memoryScope !== undefined) {
+		sql += " AND m.scope=?";
+		args.push(options.memoryScope);
+	}
+	return { sql, args };
+}
+
 function searchShardNames(db: SQLiteDatabase, scope: ReadScope): string[] {
 	if (scope.compartments !== "all" && scope.compartments.length === 0) return [];
 	return db
@@ -257,7 +272,7 @@ export function vectorSearchWithMetadata(
 	try {
 		withReadTransaction(db, () => {
 			const searchTables = activeVectorSearchTables(db);
-			const scope = readScopeSql("m", options.readScope);
+			const scope = vectorMemoryPredicate(options);
 			const embeddingScope = embeddingReadPredicate(options.readScope);
 			const names = options.shardNames ?? searchShardNames(db, options.readScope);
 			const shards = selectedSearchTables(searchTables.projection, options.readScope, names);

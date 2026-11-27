@@ -254,7 +254,9 @@ augmentation. Post-fusion dampening can independently apply gravity, hub, and
 resolution corrections before the final sort.
 
 All explicit recall surfaces should use the same daemon recall implementation or
-preserve this evidence-channel contract. Hook recall, HTTP recall, search
+preserve this evidence-channel contract. Vector admission excludes deleted,
+superseded, stale, and nonmatching memory scopes before its candidate limit,
+so obsolete neighbors do not force repeated recall-owner searches. Hook recall, HTTP recall, search
 aliases, and MCP memory search share `hybridRecall`. Prompt-submit context is a
 deliberately narrower ontology/entity lookup, not an independent general recall
 implementation.
