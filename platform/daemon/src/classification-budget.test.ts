@@ -113,6 +113,9 @@ test("a polling reader never observes unlabelled classified content between owne
 	db.prepare("VACUUM INTO ?").run(path);
 	db.close();
 	const owner = createDbOwnerClient({ dbPath: path });
+	const setup = new Database(path);
+	setup.exec("PRAGMA journal_mode=WAL");
+	setup.close();
 	const reader = new Database(path, { readonly: true });
 	const scope = readScopeSql("m", { reach: { kind: "all" }, compartments: [], projects: null, inFlightUserId: "bob" });
 	const poll = reader.prepare(`SELECT count(*) n FROM memories m WHERE 1=1 ${scope.sql}`);

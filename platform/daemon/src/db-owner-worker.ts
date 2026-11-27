@@ -273,7 +273,7 @@ export function runDbOwnerWorker(): void {
 	const foregroundQueue: DbOwnerJob[] = [];
 	const maintenanceQueue: DbOwnerJob[] = [];
 	let foregroundStreak = 0;
-	const MAX_FOREGROUND_BURST = 8;
+	const MAX_FOREGROUND_BURST = 32;
 	let activeJobId: string | null = null;
 	let writeBlocked = false;
 	let draining = false;

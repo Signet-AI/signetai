@@ -1118,6 +1118,45 @@ describe("DB owner client", () => {
 		}
 	});
 
+	test("interactive reads drain a principal burst before queued maintenance", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const owner = client;
+		await owner.start();
+		const blocker = owner.submit(
+			{ kind: "sleep", durationMs: 100 },
+			{ operation: "maintenance.active-turn", lane: "maintenance", deadlineMs: 1000 },
+		);
+		await waitFor(() => owner.health().activeJobId === blocker.job.id);
+		const finished: string[] = [];
+		const maintenance = owner
+			.submit(
+				{ kind: "sleep", durationMs: 0 },
+				{ operation: "maintenance.following-turn", lane: "maintenance", deadlineMs: 1000 },
+			)
+			.result.then(() => {
+				finished.push("maintenance");
+			});
+		const reads = Array.from({ length: 64 }, (_, i) =>
+			owner
+				.submit(
+					{ kind: "query", statement: { sql: "SELECT 1 ok", result: "get", readonly: true } },
+					{ operation: "organization.read", lane: "read", deadlineMs: 1000 },
+				)
+				.result.then((result) => {
+					expect(result).toEqual({ ok: 1 });
+					finished.push(`read-${i}`);
+				}),
+		);
+		await Promise.all([blocker.result, maintenance, ...reads]);
+		expect(finished).toEqual([
+			...Array.from({ length: 32 }, (_, i) => `read-${i}`),
+			"maintenance",
+			...Array.from({ length: 32 }, (_, i) => `read-${i + 32}`),
+		]);
+	});
+
 	test("abandons a slow recall read without replacing its owner", async () => {
 		const database = makeDb();
 		directory = database.directory;

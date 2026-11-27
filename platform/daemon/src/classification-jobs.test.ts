@@ -63,6 +63,7 @@ test("classification has no corpus row admission ceiling", () => {
 	expect(state(db, jobId)?.status).toBe("complete");
 	expect(db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NULL").get()).toEqual({ n: 0 });
 	db.close();
+	Bun.gc(true);
 }, 120000);
 test("a failed batch rolls back its row moves and cursor without undoing committed batches", async () => {
 	const db = fixture(2011),
