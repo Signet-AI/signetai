@@ -63,13 +63,13 @@ export async function createDashboardHandoff(p: Principal) {
 	return { code, expiresAt: new Date(expiresAt).toISOString() };
 }
 export async function redeemDashboardHandoff(input: unknown) {
-	const { code } = z
-		.object({ code: z.string().min(20).max(256) })
+	const { code, confirm } = z
+		.object({ code: z.string().min(20).max(256), confirm: z.literal(true).optional() })
 		.strict()
 		.parse(input);
 	const key = digest(code);
 	const entry = dashboardHandoffs.get(key);
-	dashboardHandoffs.delete(key);
+	if (confirm) dashboardHandoffs.delete(key);
 	if (!entry || entry.expiresAt <= Date.now()) throw new IdentityError(401, "invalid_credential");
 	const source = await organizationQuery<SessionRow | null>(
 		statement("SELECT * FROM auth_sessions WHERE id=? AND user_id=?", [entry.sessionId, entry.userId], "get"),
@@ -77,6 +77,7 @@ export async function redeemDashboardHandoff(input: unknown) {
 	if (!source) throw new IdentityError(401, "invalid_credential");
 	const org = await readOrganization();
 	const { user, expiresAtCeiling } = await resolveSessionPrincipal(source, org);
+	if (!confirm) return { confirmationRequired: true as const, user: userView(user), organization: { name: org.name } };
 	const binding = sourceSessionBinding(source);
 	const material = sessionMaterial(
 		user.id,

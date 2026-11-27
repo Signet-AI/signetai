@@ -6,7 +6,13 @@ import { Input } from "@/components/ui/field";
 import { PageHeading } from "@/components/dashboard/heading";
 import { Panel } from "@/components/shell/panel";
 import { getJSONResult } from "@/lib/api";
-import { refreshSession, useWhoami } from "@/lib/session";
+import {
+	refreshSession,
+	useWhoami,
+	confirmDashboardHandoff,
+	cancelDashboardHandoff,
+	type DashboardHandoffConfirmation,
+} from "@/lib/session";
 import { usePanelQuery } from "@/lib/use-panel-query";
 
 export function authEntryKind(path: string, mode: string): "claim" | "invite" | "device" | null {
@@ -87,6 +93,35 @@ export function AuthField({
 				onChange={(event) => onChange(event.target.value)}
 			/>
 		</label>
+	);
+}
+
+export function DashboardHandoffPage({ handoff }: { readonly handoff: DashboardHandoffConfirmation }) {
+	const whoami = useWhoami();
+	return (
+		<AuthPage
+			title={`Continue as ${handoff.userName} at ${handoff.instance}?`}
+			description="Review this sign-in link before continuing."
+			organizationName={handoff.organizationName}
+			instanceOrigin={handoff.instance}
+		>
+			{whoami && whoami.user.id !== handoff.userId && (
+				<p role="alert">
+					You are currently signed in as {whoami.user.displayName}. Continuing replaces this browser session. Confirm
+					only if you intended to switch accounts.
+				</p>
+			)}
+			<p>No session changes until you choose Continue.</p>
+			{handoff.error && <p role="alert">{handoff.error}</p>}
+			<div className="flex flex-wrap gap-3">
+				<Button disabled={handoff.busy} onClick={() => void confirmDashboardHandoff()}>
+					{handoff.busy ? "Continuing…" : "Continue"}
+				</Button>
+				<Button variant="outline" disabled={handoff.busy} onClick={cancelDashboardHandoff}>
+					Cancel
+				</Button>
+			</div>
+		</AuthPage>
 	);
 }
 

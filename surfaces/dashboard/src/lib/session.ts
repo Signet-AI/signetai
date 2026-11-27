@@ -92,6 +92,59 @@ let scheduledExpiry = 0;
 let recheck = 0;
 const listeners = new Set<() => void>();
 
+export interface DashboardHandoffConfirmation {
+	readonly userId: string;
+	readonly userName: string;
+	readonly organizationName: string;
+	readonly instance: string;
+	readonly busy: boolean;
+	readonly error: string | null;
+}
+let pendingHandoffCode: string | null = null;
+let handoffConfirmation: DashboardHandoffConfirmation | null = null;
+function publishHandoff(value: DashboardHandoffConfirmation | null): void {
+	handoffConfirmation = value;
+	for (const listener of listeners) listener();
+}
+export function currentDashboardHandoff(): DashboardHandoffConfirmation | null {
+	return handoffConfirmation;
+}
+export function useDashboardHandoff(): DashboardHandoffConfirmation | null {
+	return useSyncExternalStore((listener) => {
+		listeners.add(listener);
+		return () => {
+			listeners.delete(listener);
+		};
+	}, currentDashboardHandoff);
+}
+export function cancelDashboardHandoff(): void {
+	pendingHandoffCode = null;
+	publishHandoff(null);
+}
+export async function confirmDashboardHandoff(): Promise<void> {
+	const code = pendingHandoffCode;
+	const confirmation = handoffConfirmation;
+	if (!code || !confirmation || confirmation.busy) return;
+	publishHandoff({ ...confirmation, busy: true, error: null });
+	const response = await request("/api/auth/handoff/redeem", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ code, confirm: true }),
+	});
+	if (pendingHandoffCode !== code) return;
+	if (response?.status !== 200) {
+		publishHandoff({
+			...confirmation,
+			busy: false,
+			error: "The sign-in link expired or could not be confirmed. Cancel and sign in directly.",
+		});
+		return;
+	}
+	if (isRecord(response.body)) writeToken(text(response.body.token));
+	cancelDashboardHandoff();
+	await refreshSession();
+}
+
 let legacyToken: string | null = null;
 
 export function readToken(): string | null {
@@ -346,14 +399,32 @@ async function redeemHandoff(): Promise<void> {
 	params.delete(DASHBOARD_HANDOFF_PARAM);
 	const hash = params.toString();
 	history.replaceState(history.state, "", `${location.pathname}${location.search}${hash ? `#${hash}` : ""}`);
+	pendingHandoffCode = code;
+	publishHandoff(null);
 	const res = await request("/api/auth/handoff/redeem", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ code }),
 	});
-	const token = res?.status === 200 && isRecord(res.body) ? text(res.body.token) : null;
-	if (token) writeToken(token);
-	else pendingReason = "The sign-in link from the CLI expired or was already used. Sign in here instead.";
+	if (pendingHandoffCode !== code) return;
+	if (
+		res?.status === 200 &&
+		isRecord(res.body) &&
+		res.body.confirmationRequired === true &&
+		isRecord(res.body.user) &&
+		isRecord(res.body.organization)
+	) {
+		const userName = text(res.body.user.displayName);
+		const userId = text(res.body.user.id);
+		const organizationName = text(res.body.organization.name);
+		if (userName && userId && organizationName) {
+			pendingHandoffCode = code;
+			publishHandoff({ userId, userName, organizationName, instance: location.origin, busy: false, error: null });
+			return;
+		}
+	}
+	pendingHandoffCode = null;
+	pendingReason = "The sign-in link from the CLI expired or was already used. Sign in here instead.";
 }
 
 export function startSession(): Promise<void> {

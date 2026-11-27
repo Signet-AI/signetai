@@ -88,6 +88,25 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("L2 handoff previews identity without replacing an existing session until confirmation", async () => {
+		await claim();
+		const bob = await member("handoff-bob");
+		const handoff = await (await call("/api/auth/handoff", "POST", {})).json();
+		const preview = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, bob.token);
+		expect(preview.status).toBe(200);
+		expect(preview.headers.getSetCookie()).toEqual([]);
+		expect(await preview.json()).toMatchObject({
+			confirmationRequired: true,
+			user: { displayName: "Admin" },
+			organization: { name: "Acme" },
+		});
+		expect((await (await call("/api/auth/whoami", "GET", undefined, bob.token)).json()).user.id).toBe(bob.userId);
+		const confirmed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, bob.token);
+		expect(confirmed.status).toBe(200);
+		expect(confirmed.headers.getSetCookie().some((value) => value.startsWith("signet_session="))).toBe(true);
+		expect((await confirmed.json()).user.displayName).toBe("Admin");
+	});
+
 	test.each(["principal", "global"])("L3 key exchange enforces the %s active-session cap", async (scope) => {
 		const root = await claim();
 		const other = scope === "global" ? await member("exchange-other") : { userId: root.user.id, token: admin };
@@ -931,7 +950,7 @@ describe("organization HTTP flows", () => {
 		expect((await write("/api/auth/api-keys", { name: "escape", permissions: ["recall"] })).status).toBe(403);
 		expect((await write("/api/auth/device/approve", { userCode: "AAAA-AAAA", decision: "approve" })).status).toBe(403);
 		const handoff = await (await write("/api/auth/handoff", {})).json();
-		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "");
 		expect(redeemed.status).toBe(200);
 		expect((await redeemed.json()).expiresAt).toBe(expiresAt);
 		const secondCookie = redeemed.headers
@@ -1401,7 +1420,7 @@ describe("organization HTTP flows", () => {
 		expect(issued.status).toBe(200);
 		const handoff = await issued.json();
 		expect(Date.parse(handoff.expiresAt) - Date.now()).toBeLessThanOrEqual(60_000);
-		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "");
+		const redeemed = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "");
 		expect(redeemed.status).toBe(200);
 		expect(
 			redeemed.headers
@@ -1409,7 +1428,9 @@ describe("organization HTTP flows", () => {
 				.some((value) => value.startsWith("signet_session=") && value.includes("HttpOnly")),
 		).toBe(true);
 		expect(await redeemed.json()).not.toHaveProperty("accessToken");
-		expect((await call("/api/auth/handoff/redeem", "POST", { code: handoff.code }, "")).status).toBe(401);
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "")).status).toBe(
+			401,
+		);
 		const device = await (
 			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "handoff" }, "")
 		).json();
@@ -1421,7 +1442,9 @@ describe("organization HTTP flows", () => {
 		expect((await call("/api/auth/handoff", "POST", {}, key.secret)).status).toBe(403);
 		const revoked = await (await call("/api/auth/handoff", "POST", {})).json();
 		await call("/api/auth/logout", "POST", {});
-		expect((await call("/api/auth/handoff/redeem", "POST", { code: revoked.code }, "")).status).toBe(401);
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: revoked.code, confirm: true }, "")).status).toBe(
+			401,
+		);
 	});
 
 	test("R6 POST recalls audit the published resolved agent and result count", async () => {

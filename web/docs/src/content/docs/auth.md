@@ -59,7 +59,7 @@ Personal-key browser exchanges admit at most 20 active key-derived sessions per 
 
 A signed-in user session can call `POST /api/auth/handoff` to receive `{ code, expiresAt }`. The code expires after 60 seconds, is single use, and becomes invalid when its issuing session expires or is revoked. API keys cannot issue handoff codes directly; a key-derived browser session keeps its parent-key ceilings on redemption. Pending handoffs are bounded and are invalidated by a daemon restart.
 
-The browser sends the code in the JSON body of `POST /api/auth/handoff/redeem`. Redemption sets the browser session and CSRF cookies and returns `{ user, expiresAt, csrf }`, never a bearer token. Put the code in a URL fragment rather than a query string, clear it before redemption, and never put an access or refresh token in a URL.
+The browser first posts `{ code }` to `POST /api/auth/handoff/redeem` to preview the account without changing cookies or consuming the code. It shows “Continue as <name> at <instance>?” and warns before replacing a different signed-in account. Only choosing Continue sends `{ code, confirm: true }`, consumes the code, sets the browser session and CSRF cookies, and returns `{ user, expiresAt, csrf }`, never a bearer token. Put the code in a URL fragment rather than a query string, clear it before redemption, and never put an access or refresh token in a URL.
 
 ## Reverse proxies and browser origins
 

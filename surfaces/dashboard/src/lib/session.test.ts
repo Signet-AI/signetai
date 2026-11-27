@@ -80,8 +80,22 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 	describe("dashboard session", () => {
 		test("redeems a CLI handoff code and removes it from the URL", async () => {
 			handler = (path) =>
-				path === "/api/auth/handoff/redeem" ? { status: 200, body: { token: "session-1" } } : signedIn;
+				path === "/api/auth/handoff/redeem"
+					? {
+							status: 200,
+							body: {
+								confirmationRequired: true,
+								user: { id: "alice", displayName: "Alice" },
+								organization: { name: "Acme" },
+							},
+						}
+					: signedIn;
 			await session.startSession();
+			expect(session.readToken()).toBeNull();
+			expect(session.currentDashboardHandoff()?.userName).toBe("Alice");
+			handler = (path) =>
+				path === "/api/auth/handoff/redeem" ? { status: 200, body: { token: "session-1" } } : signedIn;
+			await session.confirmDashboardHandoff();
 			expect(location.hash).toBe("#view=graph");
 			expect(localStorage.getItem(session.TOKEN_KEY)).toBeNull();
 			expect(session.readToken()).toBe("session-1");
@@ -92,10 +106,24 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 
 		test("redeems a handoff opened in a tab that already shows the dashboard", async () => {
 			handler = (path) =>
-				path === "/api/auth/handoff/redeem" ? { status: 200, body: { token: "session-3" } } : signedIn;
+				path === "/api/auth/handoff/redeem"
+					? {
+							status: 200,
+							body: {
+								confirmationRequired: true,
+								user: { id: "carol", displayName: "Carol" },
+								organization: { name: "Acme" },
+							},
+						}
+					: signedIn;
 			location.hash = "#signet-handoff=code-2";
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(location.hash).toBe("");
+			expect(session.readToken()).toBe("session-1");
+			expect(session.currentDashboardHandoff()?.userName).toBe("Carol");
+			handler = (path) =>
+				path === "/api/auth/handoff/redeem" ? { status: 200, body: { token: "session-3" } } : signedIn;
+			await session.confirmDashboardHandoff();
 			expect(session.readToken()).toBe("session-3");
 		});
 
