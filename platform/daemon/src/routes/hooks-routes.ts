@@ -1004,6 +1004,8 @@ async function resolveTranscriptUploadScope(c: Context): Promise<TranscriptUploa
 	if (denied) return denied;
 	const project = resolveScopedProject(c, parseOptionalString(c.req.query("cwd")));
 	if (project.error) return c.json({ error: project.error }, 403);
+	const conflict = checkSessionClaim(c, sessionId, resolveRuntimePath(c), scope.agentId);
+	if (conflict) return conflict;
 	return {
 		agentId: scope.agentId,
 		sessionKey: normalizeSessionKey(sessionId),
