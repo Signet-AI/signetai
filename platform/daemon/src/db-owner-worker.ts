@@ -12,10 +12,12 @@ import {
 	syncEmbeddingCompartment,
 	deleteCompartmentVectors,
 	activeVectorProjectionTable,
+	activeVectorSearchTables,
 	findSqliteVecExtension,
 	requireReadScope,
 	resolveWorkspaceLayout,
 	vectorSearchWithMetadata,
+	bindVectorAdmissionWriters,
 } from "@signet/core";
 import { removeAgentInTx } from "./agent-removal";
 import type { ReadDb, WriteDb } from "./db-accessor";
@@ -203,7 +205,8 @@ export function runDbOwnerWorker(): void {
 		db.exec("PRAGMA busy_timeout = 5000");
 		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
-		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
+		if (vecExtension !== null && loadSqliteVecIfAvailable(db, vecExtension))
+			bindVectorAdmissionWriters(db, activeVectorSearchTables(db), false);
 	} catch (error) {
 		send({ type: "fatal", error: serializeError(error) });
 		closeAndExit(1);
