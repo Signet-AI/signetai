@@ -109,6 +109,8 @@ const remoteCommands = new Set([
 	"import",
 	"export",
 	"export transcripts",
+	"export bundle",
+	"doctor",
 	"daemon restart",
 	"daemon pause",
 	"daemon resume",
