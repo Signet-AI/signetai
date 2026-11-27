@@ -188,6 +188,10 @@ import {
 	up as importContentRegistry,
 	artifacts as importContentRegistryArtifacts,
 } from "./185-import-content-registry";
+import {
+	up as vectorAdmissionShards,
+	artifacts as vectorAdmissionShardsArtifacts,
+} from "./186-vector-admission-shards";
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
@@ -1760,6 +1764,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "import-content-registry",
 		up: importContentRegistry,
 		artifacts: importContentRegistryArtifacts,
+	},
+	{
+		version: 186,
+		name: "vector-admission-shards",
+		up: vectorAdmissionShards,
+		artifacts: vectorAdmissionShardsArtifacts,
 	},
 ];
 function checksum(m: Migration): string {
