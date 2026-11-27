@@ -44,6 +44,7 @@
 	},
 	"homepage": "https://signetai.sh",
 	"dependencies": {
+		"@clack/prompts": "1.7.0",
 		"@modelcontextprotocol/sdk": "1.30.0",
 		"@signet/core": "workspace:*",
 		"@earendil-works/pi-ai": "1.5.2",

@@ -475,6 +475,7 @@
       "version": "1.0.1",
       "bin": "./dist/cli.js",
       "dependencies": {
+        "@clack/prompts": "1.7.0",
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-tui": "1.5.2",
         "@inquirer/prompts": "^7.0.0",
