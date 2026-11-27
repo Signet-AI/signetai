@@ -115,14 +115,22 @@ export async function hasTranscriptUpload(accessor: DbAccessor, agentId: string,
 	return (await readUploadScope(accessor, agentId, sessionKey, "transcript-upload.state")).state !== null;
 }
 
+export interface TranscriptUploadContent {
+	readonly content: string;
+	readonly project: string | null;
+}
+
 export async function readTranscriptUploadContent(
 	accessor: DbAccessor,
 	input: TranscriptUploadRead,
-): Promise<string | null> {
+): Promise<TranscriptUploadContent | null> {
 	return await withTranscriptUploadAgentLock(input.agentId, "shared", () => readCommittedLines(accessor, input));
 }
 
-async function readCommittedLines(accessor: DbAccessor, input: TranscriptUploadRead): Promise<string | null> {
+async function readCommittedLines(
+	accessor: DbAccessor,
+	input: TranscriptUploadRead,
+): Promise<TranscriptUploadContent | null> {
 	const scope = await readUploadScope(accessor, input.agentId, input.sessionKey, "transcript-upload.read");
 	const state = scope.state;
 	if (!state) return null;
@@ -151,7 +159,7 @@ async function readCommittedLines(accessor: DbAccessor, input: TranscriptUploadR
 	);
 	const bytes = await readTranscriptUploadPrefix(input.basePath, path, state.committedOffset);
 	const end = transcriptUploadEnd(bytes);
-	return end === 0 ? null : bytes.subarray(0, end).toString("utf8");
+	return end === 0 ? null : { content: bytes.subarray(0, end).toString("utf8"), project: state.project };
 }
 
 async function writeAndCommitRange(

@@ -70,15 +70,16 @@ export function endTranscriptCaptureJobInTx(
 	db: WriteDb,
 	input: { readonly agentId: string; readonly harness: string; readonly sourcePath: string; readonly endedAt: string },
 ): string | null {
-	const job = prepareTypedStatement<{ id: string }>(
+	const job = prepareTypedStatement<{ id: string; status: string; ended_at: string | null }>(
 		db,
-		`SELECT id
+		`SELECT id, status, ended_at
 		 FROM transcript_capture_jobs
 		 WHERE agent_id = ? AND source_identity = ? AND status <> 'dead'
 		 ORDER BY created_at ASC
 		 LIMIT 1`,
 	).get(input.agentId, fileSourceIdentity(input.harness, input.sourcePath));
 	if (!job) return null;
+	if (job.ended_at === input.endedAt && job.status !== "failed") return job.id;
 	db.prepare(
 		`UPDATE transcript_capture_jobs
 		 SET ended_at = ?, summary_status = 'not_requested', status = 'pending', attempts = 0, error = NULL, updated_at = ?

@@ -156,7 +156,12 @@ import {
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript as normalizeSessionTranscriptBase,
 } from "./transcript-normalization";
-import { endTranscriptUpload, hasTranscriptUpload, readTranscriptUploadContent } from "./transcript-upload";
+import {
+	type TranscriptUploadContent,
+	endTranscriptUpload,
+	hasTranscriptUpload,
+	readTranscriptUploadContent,
+} from "./transcript-upload";
 import { MAX_TRANSCRIPT_SCAN_BYTES } from "./skill-transcript-scan";
 import { getUpdateSummary } from "./update-system";
 import { isRetryableWritePressure } from "./write-pressure";
@@ -2309,9 +2314,11 @@ async function readCheckpointSource(
 	req: CheckpointExtractRequest,
 	agentId: string,
 	scope: CheckpointProjectScope,
-): Promise<string | null> {
+): Promise<TranscriptUploadContent | null> {
 	if (req.transcriptPath) {
-		return existsSync(req.transcriptPath) ? readFileSync(req.transcriptPath, "utf-8") : null;
+		return existsSync(req.transcriptPath)
+			? { content: readFileSync(req.transcriptPath, "utf-8"), project: null }
+			: null;
 	}
 	return await readTranscriptUploadContent(getDbAccessor(), {
 		basePath: getAgentsDir(),
@@ -2336,14 +2343,16 @@ export async function handleCheckpointExtract(
 	let transcript = "";
 	let rawTranscript = req.transcript;
 	let fromStore = false;
+	let sourceProject: string | null = null;
 	if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	} else {
 		try {
 			const source = await readCheckpointSource(req, agentId, scope);
 			if (source) {
-				rawTranscript = source;
-				transcript = normalizeSessionTranscript(req.harness, source);
+				rawTranscript = source.content;
+				transcript = normalizeSessionTranscript(req.harness, source.content);
+				sourceProject = source.project;
 			}
 		} catch (err) {
 			logger.warn("hooks", "Could not read checkpoint transcript", {
@@ -2372,7 +2381,7 @@ export async function handleCheckpointExtract(
 					req.sessionKey,
 					transcript,
 					req.harness,
-					req.project ?? null,
+					req.project ?? sourceProject,
 					agentId,
 					new Date().toISOString(),
 					getDbAccessor(),

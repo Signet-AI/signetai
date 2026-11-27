@@ -1377,28 +1377,28 @@
     },
     {
       "path": "hooks.ts",
-      "line": 489,
+      "line": 495,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return undefined;",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 577,
+      "line": 583,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return [];",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 792,
+      "line": 798,
       "api": "existsSync",
       "source": "if (req.sessionKey && existsSync(getMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 795,
+      "line": 801,
       "api": "withReadDbAsync",
       "source": "const block = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1406,16 +1406,16 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2307,
+      "line": 2319,
       "api": "existsSync",
-      "source": "return existsSync(req.transcriptPath) ? readFileSync(req.transcriptPath, \"utf-8\") : null;",
+      "source": "return existsSync(req.transcriptPath)",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2307,
+      "line": 2320,
       "api": "readFileSync",
-      "source": "return existsSync(req.transcriptPath) ? readFileSync(req.transcriptPath, \"utf-8\") : null;",
+      "source": "? { content: readFileSync(req.transcriptPath, \"utf-8\"), project: null }",
       "category": "hot-path"
     },
     {
@@ -3397,14 +3397,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1652,
+      "line": 1666,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1659,
+      "line": 1673,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3412,7 +3412,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1742,
+      "line": 1756,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -5023,7 +5023,7 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 281,
+      "line": 283,
       "api": "withReadDbAsync",
       "source": "return await dbAccessor.withReadDbAsync(",
       "category": "hot-path",
@@ -5031,7 +5031,7 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 532,
+      "line": 540,
       "api": "withReadDbAsync",
       "source": "const rows = await dbAccessor.withReadDbAsync(",
       "category": "hot-path",
@@ -5039,21 +5039,21 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 559,
+      "line": 567,
       "api": "existsSync",
       "source": "return Boolean(row.has_session_source) || Boolean(path && (existsSync(path) || existsSync(join(basePath, path))));",
       "category": "hot-path"
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 559,
+      "line": 567,
       "api": "existsSync",
       "source": "return Boolean(row.has_session_source) || Boolean(path && (existsSync(path) || existsSync(join(basePath, path))));",
       "category": "hot-path"
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 708,
+      "line": 723,
       "api": "withReadDbAsync",
       "source": "return await dbAccessor.withReadDbAsync(",
       "category": "hot-path",
@@ -5061,7 +5061,7 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 745,
+      "line": 760,
       "api": "withReadDbAsync",
       "source": "return await dbAccessor.withReadDbAsync(",
       "category": "hot-path",

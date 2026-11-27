@@ -625,6 +625,46 @@ describe("transcript capture worker", () => {
 		expect(jobState()).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
 	});
 
+	it("keeps the lease when a session end repeats the same end time", async () => {
+		const sourcePath = join(dir, "repeated-end.jsonl");
+		writeFileSync(sourcePath, "User: ended twice\n", "utf8");
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-repeated-end",
+			sessionId: "session-repeated-end",
+			project: "/repo",
+			transcript: "",
+			transcriptPath: sourcePath,
+			basePath: dir,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: null,
+		});
+		if (!id) throw new Error("expected source capture job");
+		const end = {
+			agentId: "agent-a",
+			harness: "pi",
+			sourcePath: realpathSync(sourcePath),
+			endedAt: "2026-06-20T10:05:00.000Z",
+		};
+		getDbAccessor().withWriteTx((db) => {
+			endTranscriptCaptureJobInTx(db, end);
+			db.prepare("UPDATE transcript_capture_jobs SET status = 'processing', attempts = attempts + 1 WHERE id = ?").run(
+				id,
+			);
+		});
+
+		getDbAccessor().withWriteTx((db) => {
+			endTranscriptCaptureJobInTx(db, end);
+		});
+
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status, attempts, ended_at FROM transcript_capture_jobs WHERE id = ?").get(id),
+			),
+		).toEqual({ status: "processing", attempts: 1, ended_at: "2026-06-20T10:05:00.000Z" });
+	});
+
 	it("releases the lease when the source lock cannot be taken", async () => {
 		const sourcePath = join(dir, "locked-session.jsonl");
 		writeFileSync(sourcePath, "User: waiting on the lock\n", "utf8");

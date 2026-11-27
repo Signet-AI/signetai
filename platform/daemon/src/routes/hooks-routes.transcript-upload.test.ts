@@ -267,6 +267,23 @@ describe("transcript upload route", () => {
 		}
 	});
 
+	it("stores an unscoped checkpoint under the upload's project", async () => {
+		const words = `${"unscoped checkpoint words ".repeat(30)}\n`;
+		expect((await patch(words, { query: { harness: "test" } })).status).toBe(200);
+
+		const response = await app.request("/api/hooks/session-checkpoint-extract", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ harness: "test", sessionKey: "sess-1", agentId: agent }),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await getStoredSessionTranscriptInfoAsync("sess-1", agent)).toMatchObject({
+			project: "/repo",
+			content: expect.stringContaining("unscoped checkpoint words"),
+		});
+	});
+
 	it("uses the token agent and rejects another agent in team mode", async () => {
 		const previousMode = authConfig.mode;
 		authConfig.mode = "team";

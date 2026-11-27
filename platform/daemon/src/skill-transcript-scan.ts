@@ -106,8 +106,8 @@ export function scheduleSessionSkillScan(input: {
 		sessionKey: normalizeSessionKey(sessionKey),
 		maxBytes: MAX_TRANSCRIPT_SCAN_BYTES,
 	})
-		.then((content) => {
-			if (content) recordSkillsFromContent({ ...scope, content });
+		.then((upload) => {
+			if (upload) recordSkillsFromContent({ ...scope, content: upload.content });
 		})
 		.catch((err: unknown) =>
 			logger.warn("skills", "Uploaded transcript skill scan failed (non-fatal)", {

@@ -711,14 +711,14 @@ describe("transcript upload ranges", () => {
 		const accessor = getDbAccessor();
 		await uploadTranscriptRange(accessor, request('{"a":1}\n'));
 		await uploadTranscriptRange(accessor, request('{"b":2}\n', { offset: 8 }));
-		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"a":1}\n{"b":2}\n');
+		expect((await readTranscriptUploadContent(accessor, read()))?.content).toBe('{"a":1}\n{"b":2}\n');
 	});
 
 	it("reads an upload up to its last complete line", async () => {
 		init();
 		const accessor = getDbAccessor();
 		await uploadTranscriptRange(accessor, request('{"a":1}\n{"b"'));
-		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"a":1}\n');
+		expect((await readTranscriptUploadContent(accessor, read()))?.content).toBe('{"a":1}\n');
 	});
 
 	it("reads nothing for a session without an upload", async () => {
@@ -739,7 +739,7 @@ describe("transcript upload ranges", () => {
 		const accessor = getDbAccessor();
 		await uploadTranscriptRange(accessor, request('{"a":1}\n{"b":2}\n'));
 		expect(await readTranscriptUploadContent(accessor, read(15))).toBe(null);
-		expect(await readTranscriptUploadContent(accessor, read(16))).toBe('{"a":1}\n{"b":2}\n');
+		expect((await readTranscriptUploadContent(accessor, read(16)))?.content).toBe('{"a":1}\n{"b":2}\n');
 	});
 
 	it("reads the latest generation of an upload", async () => {
@@ -747,7 +747,7 @@ describe("transcript upload ranges", () => {
 		const accessor = getDbAccessor();
 		await uploadTranscriptRange(accessor, request('{"old":1}\n'));
 		await uploadTranscriptRange(accessor, request('{"new":1}\n', { generation: 1 }));
-		expect(await readTranscriptUploadContent(accessor, read())).toBe('{"new":1}\n');
+		expect((await readTranscriptUploadContent(accessor, read()))?.content).toBe('{"new":1}\n');
 	});
 
 	it("waits for an exclusive upload lock before reading", async () => {
@@ -757,9 +757,9 @@ describe("transcript upload ranges", () => {
 		let settled = false;
 		let pending: Promise<string | null> = Promise.resolve(null);
 		await withTranscriptUploadAgentLock("noam", "exclusive", async () => {
-			pending = readTranscriptUploadContent(accessor, read()).then((content) => {
+			pending = readTranscriptUploadContent(accessor, read()).then((upload) => {
 				settled = true;
-				return content;
+				return upload?.content ?? null;
 			});
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			expect(settled).toBe(false);
