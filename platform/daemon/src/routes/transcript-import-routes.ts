@@ -412,17 +412,13 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				agentId: upload.agentId,
 				jobId: upload.jobId,
 				author: { userId: file.author_user_id, credential: file.author_credential },
+				actor: importActor(c.get("principal")),
 				contentHash: file.content_hash,
+				newGeneration: file.state !== "ready" && file.duplicate_mode === "reimport",
 				workspaceRoot: resolveDefaultBasePath(),
 			});
 			const duplicate = identity.duplicate;
-			const sourceId =
-				file.state === "ready"
-					? file.source_id
-					: (replay?.id ??
-						(file.duplicate_mode === "reimport"
-							? `import:${file.content_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
-							: identity.sourceId));
+			const sourceId = file.state === "ready" ? file.source_id : (replay?.id ?? identity.sourceId);
 			const releaseSourceMutation = beginSourceMutation(sourceId);
 			if (releaseSourceMutation === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
 			try {
@@ -438,6 +434,8 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 								}
 							: undefined,
 						classificationKey: identity.classificationKey,
+						contentRegistry: true,
+						duplicateSourceId: duplicate?.id ?? null,
 						contentHash: file.content_hash,
 						format: "jsonl",
 						agentId: upload.agentId,

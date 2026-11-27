@@ -160,6 +160,8 @@ export interface AddNotionSourceInput extends SourceWriteIdentityInput {
 export type ImportedSourceDuplicateMode = "skip" | "replace" | "reimport";
 
 export interface AddImportedSourceInput extends SourceWriteIdentityInput {
+	readonly duplicateSourceId?: string | null;
+	readonly contentRegistry?: boolean;
 	readonly classificationKey?: string;
 	readonly importKey?: string;
 	readonly fileName: string;
@@ -328,8 +330,14 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		const mode = input.duplicateMode ?? "skip";
 		const adopt = (existing: SignetSourceEntry): SignetSourceEntry => {
 			const identity = sourceWriteIdentity(input, existing);
-			if (existing.writeIdentity || !identity.writeIdentity) return existing;
-			const adopted = { ...existing, ...identity, updatedAt: now };
+			const registryChanged = input.contentRegistry === true && existing.providerSettings?.contentRegistry !== true;
+			if ((existing.writeIdentity || !identity.writeIdentity) && !registryChanged) return existing;
+			const adopted = {
+				...existing,
+				...identity,
+				...(registryChanged ? { providerSettings: { ...existing.providerSettings, contentRegistry: true } } : {}),
+				updatedAt: now,
+			};
 			saveSourcesConfig(
 				{ ...config, sources: config.sources.map((entry) => (entry.id === existing.id ? adopted : entry)) },
 				agentsDir,
@@ -354,20 +362,16 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 			(source) =>
 				source.kind === "import" &&
 				source.providerSettings?.contentHash === contentHash &&
-				source.providerSettings?.classificationKey === input.classificationKey &&
+				(input.duplicateSourceId === undefined
+					? source.providerSettings?.classificationKey === input.classificationKey
+					: source.id === input.duplicateSourceId) &&
 				(agentId === undefined || source.providerSettings?.agentId === agentId),
 		);
 		if (duplicate && mode === "skip") {
 			return { ok: true, source: adopt(duplicate), created: false, duplicate: true };
 		}
 
-		const sourceId =
-			duplicate && mode === "replace"
-				? duplicate.id
-				: input.sourceId?.trim() ||
-					(mode === "reimport"
-						? `import:${contentHash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
-						: deterministicImportedSourceId(contentHash, agentId));
+		const sourceId = duplicate && mode === "replace" ? duplicate.id : input.sourceId?.trim() || `imp_${randomUUID()}`;
 		const source: SignetSourceEntry = {
 			...sourceWriteIdentity(input, duplicate && mode === "replace" ? duplicate : undefined),
 			id: sourceId,
@@ -384,6 +388,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				contentHash,
 				format,
 				...(input.classificationKey === undefined ? {} : { classificationKey: input.classificationKey }),
+				...(input.contentRegistry ? { contentRegistry: true } : {}),
 				...(input.importKey === undefined ? {} : { importKey: input.importKey }),
 				...(agentId === undefined ? {} : { agentId }),
 			},
@@ -395,14 +400,6 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
 		return { ok: true, source, created: !duplicate || mode === "reimport", duplicate: Boolean(duplicate) };
 	});
-}
-
-export function deterministicImportedSourceId(contentHash: string, agentId?: string): string {
-	const normalizedAgentId = agentId?.trim() || undefined;
-	const ownerSuffix = normalizedAgentId
-		? `:${createHash("sha256").update(normalizedAgentId).digest("hex").slice(0, 8)}`
-		: "";
-	return `import:${contentHash.trim().toLowerCase().slice(0, 16)}${ownerSuffix}`;
 }
 
 function addDiscordSourceUnlocked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {

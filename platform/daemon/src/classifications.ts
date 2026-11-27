@@ -60,7 +60,14 @@ export type ImportClassificationRequest =
 			readonly actor?: ClassificationActor;
 			readonly classificationId?: string;
 			readonly jobId?: string;
-			readonly ownSourceIds: readonly string[];
+			readonly contentHash: string;
+			readonly newGeneration?: boolean;
+			readonly legacySources: readonly {
+				readonly id: string;
+				readonly authorUserId: string | null;
+				readonly authorCredential: string;
+				readonly createdAt: string;
+			}[];
 	  }
 	| { readonly op: "import-create"; readonly input: ImportJobCreation }
 	| {

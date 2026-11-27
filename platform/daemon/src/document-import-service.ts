@@ -99,11 +99,12 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 		...input,
 		agentId,
 		contentHash: normalized.value.contentHash,
+		newGeneration: duplicateMode !== "skip",
 		workspaceRoot: agentsDir,
 	});
 	const duplicateSource = identity.duplicate;
 	const replacedSource = duplicateMode === "replace" ? duplicateSource : undefined;
-	const sourceId = duplicateMode === "reimport" || replacedSource ? `imp_${randomUUID()}` : identity.sourceId;
+	const sourceId = identity.sourceId;
 	await importClassificationRequest({
 		op: "import-document",
 		input: {
@@ -124,6 +125,8 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 				: undefined,
 			fileName: normalized.value.fileName,
 			classificationKey: identity.classificationKey,
+			contentRegistry: true,
+			duplicateSourceId: duplicateSource?.id ?? null,
 			contentHash: normalized.value.contentHash,
 			format: normalized.value.format,
 			agentId,

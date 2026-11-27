@@ -64,10 +64,11 @@ export async function stageTranscriptImport(
 			...input,
 			jobId,
 			contentHash: sealed.content_hash,
+			newGeneration: input.duplicateMode === "reimport",
 			workspaceRoot: input.workspaceRoot ?? resolveDefaultBasePath(),
 		});
 		const duplicate = identity.duplicate;
-		const sourceId = input.duplicateMode === "reimport" ? `imp_${randomUUID()}` : identity.sourceId;
+		const sourceId = identity.sourceId;
 		await bindTranscriptSource(scope, sourceId, duplicate?.id);
 		const added = addImportedSource(
 			{
@@ -78,6 +79,8 @@ export async function stageTranscriptImport(
 					authorCredential: input.author.credential,
 				},
 				classificationKey: identity.classificationKey,
+				contentRegistry: true,
+				duplicateSourceId: duplicate?.id ?? null,
 				contentHash: sealed.content_hash,
 				format: "jsonl",
 				agentId: input.agentId,

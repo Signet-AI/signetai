@@ -184,6 +184,10 @@ import { up as hookTranscriptUploads, artifacts as hookTranscriptUploadArtifacts
 import { up as importClassification, artifacts as importClassificationArtifacts } from "./182-import-classification";
 import { up as legacyChildScope, artifacts as legacyChildScopeArtifacts } from "./183-legacy-child-scope";
 import { up as credentialAuthority, artifacts as credentialAuthorityArtifacts } from "./184-credential-authority";
+import {
+	up as importContentRegistry,
+	artifacts as importContentRegistryArtifacts,
+} from "./185-import-content-registry";
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
@@ -1751,6 +1755,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: legacyChildScopeArtifacts,
 	},
 	{ version: 184, name: "credential-authority", up: credentialAuthority, artifacts: credentialAuthorityArtifacts },
+	{
+		version: 185,
+		name: "import-content-registry",
+		up: importContentRegistry,
+		artifacts: importContentRegistryArtifacts,
+	},
 ];
 function checksum(m: Migration): string {
 	let h = 0;

@@ -38,7 +38,7 @@ Choose a classification when creating a transcript import: `POST /api/sources/im
 
 The job and its labels are committed together, before uploaded evidence can be indexed. Finalizing a transcript upload carries those labels to its source atomically. Imported transcripts, artifacts, and derived rows inherit them when written; there is no public interval followed by background classification. Readers outside the audience do not see staging jobs, filenames, source listings, or exported records.
 
-Import identity includes content, agent, and the destination label set. Equal bytes in a different compartment create a separate source without exposing hidden imports. Changing labels on your own readable source returns HTTP 409 with `reason: import_classification_conflict`; Signet never silently merges labels or drops a classification. With the same labels, retrying is idempotent. Use the source's normal deletion operation to purge its imported and derived data.
+Imported source IDs are opaque and remain stable through reclassification. A non-unique content registry deduplicates by content, agent, and destination label set, considering only entries the importer can read. Reclassification moves the registry entry transactionally; purge removes it. Existing sources, including local imports, keep their IDs. Equal bytes in a different compartment create a separate source without exposing hidden imports. Changing labels on your own readable source returns HTTP 409 with `reason: import_classification_conflict`; Signet never silently merges labels or drops a classification. With the same labels, retrying is idempotent. Use the source's normal deletion operation to purge its imported and derived data.
 
 ## Invite people
 

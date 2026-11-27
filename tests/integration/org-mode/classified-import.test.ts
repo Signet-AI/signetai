@@ -5,6 +5,132 @@ import { OrgDaemon } from "./daemon";
 import { Fixture } from "./fixture";
 import { record, request, success, text, until } from "./http";
 
+test.each(["document", "transcript"] as const)(
+	"reclassified %s imports do not reveal their old public identity",
+	async (kind) => {
+		const daemon = await OrgDaemon.create();
+		let snapshot: Database | undefined;
+		try {
+			const fixture = await Fixture.create(daemon, "single", false);
+			snapshot = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+			const database = snapshot;
+			const upload = async (name: "carol" | "alice") => {
+				const credential = fixture.user(name).session;
+				const bearer = text(credential.bearer);
+				if (kind === "transcript") {
+					const job = success(
+						await request(daemon.origin, "/api/sources/imports", credential, "POST", {
+							files: [{ name: "reclassified.jsonl" }],
+						}),
+						"create transcript import",
+					);
+					if (!Array.isArray(job.files)) throw new Error("missing import files");
+					const response = await fetch(
+						`${daemon.origin}/api/sources/imports/${text(job.id)}/files/${text(record(job.files[0]).id)}`,
+						{
+							method: "PUT",
+							headers: { authorization: `Bearer ${bearer}` },
+							body: `${JSON.stringify({ source: "signet", id: "reclassified", harness: "codex", agent_id: "foreign", session_key: "reclassified", project: null, timestamp: "2026-01-01T00:00:00Z", message_count: 1, messages: [{ role: "user", content: "Reclassification source identity probe." }] })}\n`,
+							signal: AbortSignal.timeout(30_000),
+						},
+					);
+					const body = record(await response.json());
+					if (response.status === 201) {
+						success(
+							await request(daemon.origin, `/api/sources/imports/${text(job.id)}/start`, credential, "POST", {}),
+							"start transcript import",
+						);
+						await until(
+							async () => {
+								const state = record(
+									database.query("SELECT state,error FROM source_import_jobs WHERE id=?").get(text(job.id)),
+								);
+								expect(state.state, String(state.error)).not.toBe("failed");
+								expect(state.state, String(state.error)).not.toBe("completed_with_rejections");
+								return state.state === "completed";
+							},
+							"transcript import completes",
+							45_000,
+						);
+					}
+					return { status: response.status, body: { files: [body] } };
+				}
+				const form = new FormData();
+				form.set(
+					"files",
+					new File(["Reclassification source identity probe."], "reclassified.md", { type: "text/markdown" }),
+				);
+				const response = await fetch(`${daemon.origin}/api/sources/import`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${bearer}` },
+					body: form,
+					signal: AbortSignal.timeout(30_000),
+				});
+				return { status: response.status, body: record(await response.json()) };
+			};
+			const first = await upload("carol");
+			expect(first.status).toBe(201);
+			if (!Array.isArray(first.body.files)) throw new Error("missing imported files");
+			const sourceId = text(record(first.body.files[0]).sourceId);
+			await fixture.classify("source", sourceId, "default");
+			expect(
+				database
+					.query(
+						"SELECT cm.classification_id FROM import_content_registry r JOIN compartment_members cm ON cm.compartment_id=r.compartment_id WHERE r.agent_id='default' AND r.source_id=?",
+					)
+					.all(sourceId),
+			).toEqual([{ classification_id: fixture.hrId }]);
+			await daemon.stop();
+			await daemon.start();
+			const outsider = await upload("alice");
+			expect(outsider.status, JSON.stringify(outsider.body)).toBe(201);
+			if (!Array.isArray(outsider.body.files)) throw new Error("missing imported files");
+			const outsiderId = text(record(outsider.body.files[0]).sourceId);
+			expect(outsiderId).not.toBe(sourceId);
+			const repeat = await upload("alice");
+			expect(repeat.status).toBe(201);
+			if (!Array.isArray(repeat.body.files)) throw new Error("missing imported files");
+			expect(record(repeat.body.files[0]).sourceId).toBe(outsiderId);
+			success(
+				await request(
+					daemon.origin,
+					`/api/classifications/${fixture.hrId}/remove?wait=1`,
+					fixture.user("cora").session,
+					"POST",
+					{ target: { kind: "source", id: sourceId, agentId: "default" } },
+				),
+				"remove source classification",
+			);
+			expect(
+				database.query("SELECT source_id,compartment_id FROM import_content_registry WHERE source_id=?").get(sourceId),
+			).toEqual({ source_id: sourceId, compartment_id: null });
+			await fixture.classify("source", sourceId, "default");
+			const purged = await request(
+				daemon.origin,
+				`/api/sources/${encodeURIComponent(sourceId)}`,
+				fixture.user("audra").session,
+				"DELETE",
+			);
+			expect(purged.status, JSON.stringify(purged.body)).toBe(200);
+			for (const table of ["import_content_registry", "source_import_files", "memory_artifacts", "session_transcripts"])
+				expect(database.query(`SELECT COUNT(*) AS n FROM ${table} WHERE source_id=?`).get(sourceId)).toEqual({ n: 0 });
+			expect(database.query("SELECT source_id FROM import_content_registry WHERE source_id=?").get(outsiderId)).toEqual(
+				{ source_id: outsiderId },
+			);
+			const retained = success(
+				await request(daemon.origin, "/api/sources", fixture.user("alice").session),
+				"remaining sources",
+			);
+			expect(JSON.stringify(retained)).toContain(outsiderId);
+			expect(JSON.stringify(retained)).not.toContain(sourceId);
+		} finally {
+			snapshot?.close();
+			await daemon.dispose();
+		}
+	},
+	120_000,
+);
+
 test("different destination labels do not share truncated source identities", async () => {
 	const daemon = await OrgDaemon.create();
 	try {
@@ -285,12 +411,27 @@ test("classified imports stay hidden from admission through worker completion", 
 		const authorListing = await request(daemon.origin, `/api/sources${agentQuery}`, author.session);
 		expect(authorListing.status).toBe(200);
 		expect(JSON.stringify(authorListing.body)).toContain(documentSource);
+		expect(
+			(
+				await request(
+					daemon.origin,
+					`/api/sources/${encodeURIComponent(documentSource)}${agentQuery}`,
+					fixture.user("audra").session,
+					"DELETE",
+				)
+			).status,
+		).toBe(403);
 		success(
 			await request(daemon.origin, `/api/org/users/${author.id}`, fixture.admin, "PATCH", { role: "admin" }),
-			"authorize source operator",
+			"authorize source owner to manage connectors",
 		);
 		success(
-			await request(daemon.origin, `/api/sources/${encodeURIComponent(documentSource)}`, author.session, "DELETE"),
+			await request(
+				daemon.origin,
+				`/api/sources/${encodeURIComponent(documentSource)}${agentQuery}`,
+				author.browser,
+				"DELETE",
+			),
 			"purge classified document",
 		);
 		expect(

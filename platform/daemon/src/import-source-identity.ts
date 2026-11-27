@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { deterministicImportedSourceId, loadSourcesConfig } from "@signet/core";
+import { loadSourcesConfig } from "@signet/core";
 import type { WriteAuthor } from "./auth/audit-owner";
 import { importClassificationRequest, type ClassificationActor } from "./classifications";
 
@@ -11,39 +10,42 @@ export async function resolveImportSourceIdentity(input: {
 	readonly classificationId?: string;
 	readonly jobId?: string;
 	readonly workspaceRoot?: string;
+	readonly newGeneration?: boolean;
 }) {
 	const sources = loadSourcesConfig(input.workspaceRoot).sources;
-	const sameContent = sources.filter(
-		(source) =>
-			source.kind === "import" &&
-			source.providerSettings?.agentId === input.agentId &&
-			source.providerSettings?.contentHash === input.contentHash,
-	);
-	const labelsKey = await importClassificationRequest<string>({
+	const legacySources = sources
+		.filter(
+			(source) =>
+				source.kind === "import" &&
+				source.providerSettings?.contentRegistry !== true &&
+				source.providerSettings?.contentHash === input.contentHash &&
+				(source.providerSettings?.agentId === input.agentId ||
+					(input.author.userId === null && source.providerSettings?.agentId === undefined)),
+		)
+		.map((source) => ({
+			id: source.id,
+			authorUserId: source.writeIdentity?.authorUserId ?? null,
+			authorCredential: source.writeIdentity?.authorCredential ?? "system",
+			createdAt: source.createdAt,
+		}));
+	const identity = await importClassificationRequest<{
+		classificationKey: string;
+		sourceId: string;
+		duplicateSourceId: string | null;
+	}>({
 		op: "import-identity",
 		agentId: input.agentId,
 		author: input.author,
 		actor: input.actor,
 		classificationId: input.classificationId,
 		jobId: input.jobId,
-		ownSourceIds:
-			input.author.userId === null
-				? []
-				: sameContent
-						.filter((source) => source.writeIdentity?.authorUserId === input.author.userId)
-						.map((source) => source.id),
+		contentHash: input.contentHash,
+		newGeneration: input.newGeneration,
+		legacySources,
 	});
-	const classificationKey = input.author.userId === null && labelsKey === "[]" ? undefined : labelsKey;
-	const duplicate = sameContent.find((source) => source.providerSettings?.classificationKey === classificationKey);
 	return {
-		classificationKey,
-		duplicate,
-		sourceId:
-			duplicate?.id ??
-			(classificationKey === undefined
-				? deterministicImportedSourceId(input.contentHash, input.agentId)
-				: `import:${createHash("sha256")
-						.update(JSON.stringify([input.contentHash, input.agentId, classificationKey]))
-						.digest("hex")}`),
+		classificationKey: identity.classificationKey,
+		duplicate: sources.find((source) => source.id === identity.duplicateSourceId),
+		sourceId: identity.sourceId,
 	};
 }
