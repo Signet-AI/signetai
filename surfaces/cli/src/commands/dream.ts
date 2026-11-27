@@ -118,15 +118,22 @@ function formatTokenUsage(pass: DreamPass): string | null {
 export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 	const dream = program.command("dream").description("Manage dreaming memory consolidation");
 	const decorate = <T extends object>(rows: readonly T[]) =>
-		attributeResults(rows, async (body) => {
-			const result = await deps.fetchDaemonResult("/api/result-attribution", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(body),
-			});
-			if (!result.ok) throw new Error("Canonical attribution is unavailable");
-			return result.data;
-		});
+		attributeResults(
+			rows.map((row) =>
+				typeof Reflect.get(row, "agentId") === "string"
+					? { ...row, author: { kind: "system", name: "Dreaming" } }
+					: row,
+			),
+			async (body) => {
+				const result = await deps.fetchDaemonResult("/api/result-attribution", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+				});
+				if (!result.ok) throw new Error("Canonical attribution is unavailable");
+				return result.data;
+			},
+		);
 
 	dream
 		.command("capabilities")

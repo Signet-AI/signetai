@@ -953,9 +953,7 @@ async function withDreamPassReview<T extends { readonly id: string }>(
 	scope?: ReadScope,
 	signal?: AbortSignal,
 ): Promise<readonly T[]> {
-	if (!rows.length) return rows;
-	if (!scope?.organizationMode)
-		return rows.map((row) => ({ ...row, author: { kind: "system" as const, name: "Dreaming" as const } }));
+	if (!scope?.organizationMode || !rows.length) return rows;
 	const { contentRead } = await import("../content-read");
 	const metadata = await contentRead<readonly import("../content-read").DreamPassReview[]>(
 		{ op: "dream_pass_review", scope, ids: rows.map((row) => row.id) },
