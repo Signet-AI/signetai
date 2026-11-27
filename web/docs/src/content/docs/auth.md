@@ -51,6 +51,8 @@ The daemon stores the parent-key binding and issuance permission, agent, project
 
 Key-derived browser sessions cannot issue credentials, approve devices, or change account profile/preferences; sign in directly for those operations. Signing out everywhere requires an interactive user session or the `admin` session-management permission. A narrower key-derived session can sign out only its own browser session. Signing out with a bare API key never revokes the session that created the key; use key revocation to invalidate the key itself.
 
+Device client type, device name, and platform are self-declared by the requester, not verified identities. The approval screen labels them accordingly. Approve only a code from the device you are signing in on.
+
 ## Dashboard handoff
 
 A signed-in user session can call `POST /api/auth/handoff` to receive `{ code, expiresAt }`. The code expires after 60 seconds, is single use, and becomes invalid when its issuing session expires or is revoked. API keys cannot issue handoff codes directly; a key-derived browser session keeps its parent-key ceilings on redemption. Pending handoffs are bounded and are invalidated by a daemon restart.

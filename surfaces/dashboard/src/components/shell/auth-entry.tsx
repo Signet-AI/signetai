@@ -167,8 +167,8 @@ export function DeviceApprovalPage() {
 							{(device) => (
 								<div className="flex flex-col gap-4 rounded-lg border p-4">
 									<p className="m-0">
-										Approve sign-in for the Signet {device.client === "cli" ? "CLI" : "desktop app"} on{" "}
-										<strong>{device.deviceName}</strong>?
+										Requested by a device calling itself <strong>{device.deviceName}</strong>. Client: {device.client}{" "}
+										(self-declared). Device name and platform are also self-declared, not verified by Signet.
 									</p>
 									<p className="m-0 text-small text-muted-foreground">
 										{device.platform ?? "Platform unavailable"} · Requested{" "}
