@@ -874,7 +874,9 @@ Otherwise, Signet searches transcripts in the requested agent and project scope
 while excluding `currentSessionKey`.
 
 A query that exactly matches a stored session key or session id returns that
-session with `rank` 0. Otherwise full-text search runs. Signet indexes each
+session with `rank` 0 when that session is inside the same agent, project, and
+session scope as full-text search. Otherwise full-text search runs, so a
+session outside the scope never appears. Signet indexes each
 transcript turn by turn and returns one hit per session. Signet ignores
 stopwords and one-letter words. When at most three search words remain, a
 session matches only when every word appears somewhere in it, even in different

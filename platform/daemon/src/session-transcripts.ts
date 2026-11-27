@@ -1875,38 +1875,55 @@ function transcriptTurnIndexReady(db: ReadDb): boolean {
 	return state?.ready === 1;
 }
 
+export interface TranscriptSearchScope {
+	readonly agentId: string;
+	readonly sessionKey?: string;
+	readonly excludeSessionKey?: string;
+	readonly project?: string;
+}
+
+export function transcriptScopeFilter(scope: TranscriptSearchScope): {
+	readonly sql: string[];
+	readonly args: string[];
+} {
+	const sql = ["WHERE st.agent_id = ?"];
+	const args = [scope.agentId];
+	if (scope.sessionKey) {
+		sql.push("AND st.session_key = ?");
+		args.push(scope.sessionKey);
+	} else if (scope.excludeSessionKey) {
+		sql.push("AND st.session_key != ?");
+		args.push(scope.excludeSessionKey);
+	}
+	if (scope.project) {
+		sql.push("AND st.project = ?");
+		args.push(scope.project);
+	}
+	return { sql, args };
+}
+
 export function searchTranscriptTurns(
 	db: ReadDb,
-	params: {
-		readonly query: string;
-		readonly agentId: string;
-		readonly sessionKey?: string;
-		readonly excludeSessionKey?: string;
-		readonly project?: string;
-		readonly limit: number;
-	},
+	params: TranscriptSearchScope & { readonly query: string; readonly limit: number },
 ): TranscriptTurnSearchHit[] {
 	const parsed = ftsQueryTerms(params.query);
 	const terms = parsed.terms.slice(0, TRANSCRIPT_TURN_MAX_TERMS);
 	if (terms.length === 0 || !transcriptTurnIndexReady(db)) return [];
 	const sessionKey = params.sessionKey || params.excludeSessionKey;
 	const sessionFilter = sessionKey ? `AND turn.session_key ${params.sessionKey ? "=" : "!="} ?` : "";
+	const scope = transcriptScopeFilter(params);
 	const sql = [
 		"WITH hits AS MATERIALIZED (SELECT turn.session_key AS session_key, bm25(session_transcript_turns_fts) AS rank",
 		"FROM session_transcript_turns_fts JOIN session_transcript_turns turn ON turn.id = session_transcript_turns_fts.rowid",
 		`WHERE session_transcript_turns_fts MATCH ? AND turn.agent_id = ? ${sessionFilter})`,
 		"SELECT st.session_key, st.project, COALESCE(st.updated_at, st.created_at) AS updated_at, st.content, MIN(hits.rank) AS rank",
 		"FROM hits JOIN session_transcripts st ON st.session_key = hits.session_key",
-		"WHERE st.agent_id = ?",
+		...scope.sql,
 	];
-	const args: unknown[] = [terms.join(" OR "), params.agentId, ...(sessionKey ? [sessionKey] : []), params.agentId];
+	const args: unknown[] = [terms.join(" OR "), params.agentId, ...(sessionKey ? [sessionKey] : []), ...scope.args];
 	if (parsed.requireAll && terms.length > 1) {
 		sql.push(`AND st.session_key IN (${terms.map(() => TRANSCRIPT_TURN_MATCH).join(" INTERSECT ")})`);
 		for (const term of terms) args.push(term, params.agentId);
-	}
-	if (params.project) {
-		sql.push("AND st.project = ?");
-		args.push(params.project);
 	}
 	sql.push("GROUP BY st.rowid ORDER BY rank ASC, updated_at DESC LIMIT ?");
 	args.push(params.limit);
