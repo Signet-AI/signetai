@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -280,7 +280,6 @@ fi
 count=0
 [[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
 printf '%s' "$((count + 1))" > ${JSON.stringify(countPath)}
-sleep 0.08
 cat >/dev/null
 printf '\\n'
 `,
@@ -288,6 +287,7 @@ printf '\\n'
 		chmodSync(bin, 0o755);
 		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
 		process.env.SIGNET_ACPX_PROC_ROOT = join(root, "missing-proc");
+		const jitter = spyOn(Math, "random").mockReturnValue(1);
 		try {
 			const provider = createAcpxProvider({
 				agent: "codex",
@@ -297,9 +297,10 @@ printf '\\n'
 				allowedTools: [],
 				emptyResponseRetries: 1,
 			});
-			await expect(provider.generate("deadline", { timeoutMs: 120 })).rejects.toThrow(/retryCount=0/);
+			await expect(provider.generate("deadline", { timeoutMs: 100 })).rejects.toThrow(/retryCount=0/);
 			expect(readFileSync(countPath, "utf8")).toBe("1");
 		} finally {
+			jitter.mockRestore();
 			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
 			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
 			rmSync(root, { recursive: true, force: true });
