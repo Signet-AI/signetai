@@ -134,6 +134,61 @@ export async function updatePreferences(p: Principal, input: unknown) {
 	return { defaultReadAgentId: data.defaultReadAgentId };
 }
 
+export const ORGANIZATION_VISIBILITY_VERSION = "organization-visibility-v1";
+function onboardingIdentity(p: Principal) {
+	const identity = requireUser(p);
+	if (p.credential.kind !== "session" || p.sourceKeyId || p.boundAgentId || p.allowedProjects)
+		throw new IdentityError(403, "permission", "Requires an unrestricted signed-in user session");
+	return identity;
+}
+export async function onboardingStatus(p: Principal) {
+	const identity = onboardingIdentity(p);
+	const acknowledged = await organizationQuery<{ id: string } | null>(
+		statement(
+			"SELECT id FROM audit_events WHERE actor_user_id=? AND action='user.visibility_acknowledged' AND json_extract(detail_json,'$.version')=? LIMIT 1",
+			[identity.userId, ORGANIZATION_VISIBILITY_VERSION],
+			"get",
+		),
+	);
+	const completed = acknowledged
+		? await organizationQuery<{ id: string } | null>(
+				statement(
+					"SELECT id FROM audit_events WHERE actor_user_id=? AND action='user.onboarding_completed' AND json_extract(detail_json,'$.version')=? LIMIT 1",
+					[identity.userId, ORGANIZATION_VISIBILITY_VERSION],
+					"get",
+				),
+			)
+		: null;
+	return {
+		version: ORGANIZATION_VISIBILITY_VERSION,
+		acknowledged: Boolean(acknowledged),
+		complete: Boolean(completed),
+	};
+}
+export async function updateOnboarding(p: Principal, input: unknown) {
+	const identity = onboardingIdentity(p);
+	const data = z
+		.discriminatedUnion("action", [
+			z.object({ action: z.literal("acknowledge"), version: z.literal(ORGANIZATION_VISIBILITY_VERSION) }).strict(),
+			z.object({ action: z.literal("complete") }).strict(),
+		])
+		.parse(input);
+	const current = await onboardingStatus(p);
+	if (data.action === "complete" && !current.acknowledged)
+		throw new IdentityError(409, "visibility_acknowledgement_required");
+	if (data.action === "acknowledge" ? !current.acknowledged : !current.complete)
+		await organizationWrite([
+			auditStatement(
+				p,
+				data.action === "acknowledge" ? "user.visibility_acknowledged" : "user.onboarding_completed",
+				"user",
+				identity.userId,
+				{ version: ORGANIZATION_VISIBILITY_VERSION },
+			),
+		]);
+	return onboardingStatus(p);
+}
+
 export async function profile(p: Principal) {
 	const identity = requireUser(p);
 	const user = await activeUser(identity.userId, p.deviceId);

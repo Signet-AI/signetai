@@ -176,6 +176,17 @@ export function registerOrganizationRoutes(
 		"/api/auth/profile",
 		active(async (c) => c.json(await operations.profile(user(c)))),
 	);
+	app.get(
+		"/api/auth/onboarding",
+		active(async (c) => {
+			if (Object.keys(c.req.query()).length) throw new IdentityError(400, "invalid_input");
+			return c.json(await operations.onboardingStatus(user(c)));
+		}),
+	);
+	app.post(
+		"/api/auth/onboarding",
+		active(async (c) => c.json(await operations.updateOnboarding(user(c), await body(c)))),
+	);
 	app.patch(
 		"/api/auth/profile",
 		active(async (c) => c.json(await operations.updateProfile(user(c), await body(c)))),
