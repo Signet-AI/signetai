@@ -160,8 +160,8 @@ export function enqueueTranscriptCaptureInTx(db: WriteDb, prepared: CaptureEnque
 			upload_size: number | null;
 		}>(
 			db,
-			`SELECT storage_state,result_json,sha256,upload_size FROM hook_transcript_uploads WHERE ${filter.sql} AND (storage_state = 'consumed' OR updated_at > datetime('now','-24 hours'))`,
-		).get(...filter.params);
+			`SELECT storage_state,result_json,sha256,upload_size FROM hook_transcript_uploads WHERE ${filter.sql} AND (storage_state = 'consumed' OR updated_at > datetime('now','-24 hours')) UNION ALL SELECT 'consumed' AS storage_state,result_json,sha256,size_bytes AS upload_size FROM hook_transcript_receipts WHERE ${filter.sql} AND consumed_at > datetime('now','-7 days') LIMIT 1`,
+		).get(...filter.params, ...filter.params);
 		if (!row) throw new Error("Transcript upload not found");
 		if (row.result_json !== null) {
 			const result: unknown = JSON.parse(row.result_json);
