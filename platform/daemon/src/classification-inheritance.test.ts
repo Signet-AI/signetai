@@ -1,4 +1,5 @@
 import { executeClassification } from "./classification-owner";
+import { executeClassificationJob } from "./classifications";
 import { up as writeMigration } from "../../core/src/migrations/178-write-inheritance";
 import { expect, test } from "bun:test";
 import * as shards from "../../core/src/compartment-shards";
@@ -28,6 +29,45 @@ test("migration upgrades legacy message compartments and installs message guards
 	).toThrow("compartment_required");
 	db.close();
 });
+
+for (const table of ["embeddings", "embeddings_staging"]) {
+	test(`classification resolves legacy ${table} ownership before inheritance`, async () => {
+		const db = currentClassificationFixture();
+		try {
+			db.exec("INSERT INTO classifications(id,name) VALUES('cls_legacy_vector','Legacy vector')");
+			db.prepare(
+				`INSERT INTO ${table}(id,content_hash,vector,dimensions,source_type,source_id,agent_id,created_at,chunk_text) VALUES('legacy-vector','legacy-vector',?,3,'memory','m',NULL,'now','legacy')`,
+			).run(new Uint8Array(12));
+			const job = executeClassification(db, {
+				op: "enqueue",
+				id: "cls_legacy_vector",
+				target: { kind: "memory", id: "m", agentId: "default" },
+				remove: false,
+				actor: {
+					userId: "carol",
+					groupIds: [],
+					local: false,
+					compliance: true,
+					boundAgentId: null,
+					allowedProjects: null,
+					credential: "session:test",
+				},
+			});
+			if (typeof job !== "object" || job === null || !("jobId" in job) || typeof job.jobId !== "string")
+				throw new Error("missing job");
+			await executeClassificationJob(job.jobId, async (request) => executeClassification(db, request));
+			expect(db.prepare("SELECT status,error FROM org_jobs WHERE id=?").get(job.jobId)).toEqual({
+				status: "complete",
+				error: null,
+			});
+			const parent = db.prepare("SELECT agent_id,compartment_id FROM memories WHERE id='m'").get();
+			expect(parent?.compartment_id).toBeNumber();
+			expect(db.prepare(`SELECT agent_id,compartment_id FROM ${table} WHERE id='legacy-vector'`).get()).toEqual(parent);
+		} finally {
+			db.close();
+		}
+	});
+}
 
 function assigned() {
 	const db = currentClassificationFixture();

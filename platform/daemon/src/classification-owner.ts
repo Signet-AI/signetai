@@ -686,6 +686,13 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 	add(contextFor(db, [...all.values()]), false);
 	const rows = [...all.values()],
 		labels = new Map<string, Set<string>>();
+	for (const item of rows) {
+		if (!item.table.startsWith("embeddings") || item.row.agent_id != null) continue;
+		const parents = rows.filter((parent) => parent.kind === "memory" && parent.key === item.row.source_id);
+		const owners = new Set(parents.map((parent) => text(parent.row.agent_id)).filter((agent) => agent !== null));
+		if (owners.size !== 1) throw new Error("classification_ownership_unresolved");
+		item.row.agent_id = [...owners][0];
+	}
 	const references = new Map<string, ContentRow[]>(),
 		materialized = new Map<string, ContentRow[]>();
 	for (const row of rows) {
@@ -798,10 +805,6 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 	}
 	for (const item of ordered) {
 		const c = compartmentFor(db, [...(labels.get(`${item.table}:${item.row._classification_rowid}`) ?? [])]);
-		if (item.table.startsWith("embeddings") && item.row.agent_id == null) {
-			const p = rows.find((p) => p.kind === "memory" && p.key === item.row.source_id);
-			item.row.agent_id = p?.row.agent_id;
-		}
 		if (item.table === "embeddings" || item.table === "embeddings_staging")
 			db.prepare(`UPDATE ${item.table} SET compartment_id=?,agent_id=? WHERE rowid=?`).run(
 				c,
