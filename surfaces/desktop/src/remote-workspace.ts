@@ -77,6 +77,7 @@ export class RemoteWorkspace {
 	private flow: { deviceCode: string; userCode: string; expiresAt: number; nextPoll: number; interval: number } | null =
 		null;
 	private polling: Promise<RemoteStatus> | null = null;
+	private startingSignIn = false;
 	private statusValue: RemoteStatus;
 	constructor(
 		readonly origin: string,
@@ -112,7 +113,16 @@ export class RemoteWorkspace {
 		return this.status("unreachable", "Unable to reach the instance or credential store. Try again.");
 	}
 	async signIn(): Promise<{ userCode: string; status: RemoteStatus }> {
-		if (this.flow || this.polling) throw new Error("Sign-in is already pending");
+		if (this.flow || this.startingSignIn) throw new Error("Sign-in is already pending");
+		this.startingSignIn = true;
+		try {
+			await this.polling;
+			return await this.startDeviceSignIn();
+		} finally {
+			this.startingSignIn = false;
+		}
+	}
+	private async startDeviceSignIn(): Promise<{ userCode: string; status: RemoteStatus }> {
 		const flow = object(
 			await this.transport.post("/api/auth/device/start", {
 				client: "desktop",
@@ -148,6 +158,7 @@ export class RemoteWorkspace {
 		return { userCode, status: this.status("pending", "Approve the code in your browser, then return to Signet.") };
 	}
 	async pollSignIn(): Promise<RemoteStatus> {
+		if (this.startingSignIn) return this.statusValue;
 		if (this.polling) return this.polling;
 		this.polling = this.poll().finally(() => {
 			this.polling = null;
