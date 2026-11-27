@@ -42,14 +42,15 @@ test("classification batches persist cursors, queue per agent and resume rather 
 	executeClassification(db, { op: "execute", jobId });
 	expect(state(db, jobId)?.status).toBe("running");
 	expect(() => db.prepare("UPDATE memories SET updated_at='later' WHERE id='batch-002011'").run()).not.toThrow();
-	expect(db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NOT NULL").get()).toEqual({ n: 2000 });
+	const first = db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NOT NULL").get();
+	expect(first?.n).toBeGreaterThan(0);
+	expect(first?.n).toBeLessThanOrEqual(1024);
 	executeClassification(db, { op: "execute", jobId: queued });
 	expect(state(db, queued)?.status).toBe("pending");
 	const cursor = state(db, jobId)?.progress_json;
 	executeClassification(db, { op: "recover" });
 	expect(state(db, jobId)).toMatchObject({ status: "running", progress_json: cursor });
-	for (let i = 0; i < 100 && state(db, jobId)?.status !== "complete"; i++)
-		executeClassification(db, { op: "execute", jobId });
+	while (state(db, jobId)?.status !== "complete") executeClassification(db, { op: "execute", jobId });
 	expect(state(db, jobId)?.status).toBe("complete");
 	expect(db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NULL").get()).toEqual({ n: 0 });
 	expect(db.prepare("SELECT count(*) n FROM audit_events WHERE action='classification.apply'").get()).toEqual({ n: 1 });
@@ -58,8 +59,7 @@ test("classification batches persist cursors, queue per agent and resume rather 
 test("classification has no corpus row admission ceiling", () => {
 	const db = fixture(100001);
 	const jobId = enqueue(db);
-	for (let i = 0; i < 100 && state(db, jobId)?.status !== "complete"; i++)
-		executeClassification(db, { op: "execute", jobId });
+	while (state(db, jobId)?.status !== "complete") executeClassification(db, { op: "execute", jobId });
 	expect(state(db, jobId)?.status).toBe("complete");
 	expect(db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NULL").get()).toEqual({ n: 0 });
 	db.close();
@@ -69,18 +69,21 @@ test("a failed batch rolls back its row moves and cursor without undoing committ
 		jobId = enqueue(db);
 	executeClassification(db, { op: "execute", jobId });
 	const before = state(db, jobId)?.progress_json;
+	const beforeRows = db.prepare("SELECT id,compartment_id FROM memories ORDER BY id").all();
 	db.exec(
-		"CREATE TRIGGER crash_batch BEFORE UPDATE OF compartment_id ON memories WHEN new.id='batch-002005' BEGIN SELECT RAISE(ABORT,'crash batch');END",
+		"CREATE TRIGGER crash_batch BEFORE UPDATE OF compartment_id ON memories WHEN new.id=(SELECT id FROM memories WHERE compartment_id IS NULL ORDER BY rowid LIMIT 1) BEGIN SELECT RAISE(ABORT,'crash batch');END",
 	);
 	expect(() => executeClassification(db, { op: "execute", jobId })).toThrow("crash batch");
+	expect(db.prepare("SELECT id,compartment_id FROM memories ORDER BY id").all()).toEqual(beforeRows);
 	expect(state(db, jobId)).toMatchObject({ status: "running", progress_json: before });
 	executeClassification(db, { op: "record-error", jobId, error: "crash batch" });
 	expect(db.prepare("SELECT error FROM org_jobs WHERE id=?").get(jobId)?.error).toContain("crash batch");
 	expect(state(db, jobId)).toMatchObject({ status: "running" });
-	expect(db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NOT NULL").get()).toEqual({ n: 2000 });
+	const first = db.prepare("SELECT count(*) n FROM memories WHERE compartment_id IS NOT NULL").get();
+	expect(first?.n).toBeGreaterThan(0);
+	expect(first?.n).toBeLessThanOrEqual(1024);
 	db.exec("DROP TRIGGER crash_batch");
-	for (let i = 0; i < 100 && state(db, jobId)?.status !== "complete"; i++)
-		executeClassification(db, { op: "execute", jobId });
+	while (state(db, jobId)?.status !== "complete") executeClassification(db, { op: "execute", jobId });
 	expect(state(db, jobId)?.status).toBe("complete");
 	db.close();
 });

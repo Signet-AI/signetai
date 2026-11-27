@@ -35,7 +35,7 @@ test("five consecutive batch failures are terminal, audited, and release the age
 	executeClassification(db, { op: "execute", jobId: first });
 	const next = job(db, "memory");
 	db.exec(
-		"CREATE TRIGGER fail_batch BEFORE UPDATE OF compartment_id ON memories WHEN new.id='batch-002005' BEGIN SELECT RAISE(ABORT,'broken batch');END",
+		"CREATE TRIGGER fail_batch BEFORE UPDATE OF compartment_id ON memories WHEN new.id=(SELECT id FROM memories WHERE compartment_id IS NULL ORDER BY rowid LIMIT 1) BEGIN SELECT RAISE(ABORT,'broken batch');END",
 	);
 	let failures = 0;
 	const request = async (request: ClassificationRequest) => {

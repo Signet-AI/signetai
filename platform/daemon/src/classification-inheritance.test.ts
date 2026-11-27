@@ -69,6 +69,29 @@ for (const table of ["embeddings", "embeddings_staging"]) {
 	});
 }
 
+test("unresolved legacy vector ownership is reported without publishing an unscoped row", () => {
+	const db = currentClassificationFixture();
+	try {
+		db.prepare(
+			"INSERT INTO embeddings(id,content_hash,vector,dimensions,source_type,source_id,agent_id,created_at,chunk_text) VALUES('orphan','orphan',?,3,'memory','absent',NULL,'now','orphan')",
+		).run(new Uint8Array(12));
+		expect(() => executeClassification(db, { op: "rebuild" })).toThrow("classification_ownership_unresolved");
+		expect(db.prepare("SELECT agent_id,compartment_id FROM embeddings WHERE id='orphan'").get()).toEqual({
+			agent_id: null,
+			compartment_id: null,
+		});
+		expect(
+			db
+				.prepare(
+					"SELECT count(*) n FROM embeddings e JOIN memories m ON e.source_id=m.id AND e.agent_id=m.agent_id WHERE e.id='orphan'",
+				)
+				.get(),
+		).toEqual({ n: 0 });
+	} finally {
+		db.close();
+	}
+});
+
 function assigned() {
 	const db = currentClassificationFixture();
 	db.exec(

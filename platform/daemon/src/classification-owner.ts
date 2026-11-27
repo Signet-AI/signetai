@@ -589,7 +589,22 @@ function referencedRows(db: MigrationDb, kind: unknown, key: unknown, agent: unk
 		return info ? contentRows(db, table, `${info.key}=? AND agent_id=?`, [key, agent]) : [];
 	});
 }
-function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = true): number {
+const CLASSIFICATION_TURN_ROWS = 1024;
+const CLASSIFICATION_TURN_MS = 20;
+class ClassificationTurnFull extends Error {
+	constructor() {
+		super("classification_fanout_budget_exceeded");
+	}
+}
+function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = true, rowBudget = Infinity): number {
+	const boundedRows = (table: string, where: string, args: readonly unknown[]) =>
+		contentRows(db, table, where, args, Number.isFinite(rowBudget) ? rowBudget + 1 : undefined);
+	const citationRows = (sql: string, args: readonly unknown[]): Row[] => {
+		const limit = Number.isFinite(rowBudget) ? [rowBudget + 1] : [];
+		const rows = db.prepare(`${sql}${limit.length ? " LIMIT ?" : ""}`).all(...args, ...limit);
+		if (rows.length > rowBudget) throw new ClassificationTurnFull();
+		return rows;
+	};
 	const initial = contextFor(db, selected),
 		all = new Map(initial.map((r) => [`${r.table}:${r.row._classification_rowid}`, r]));
 	const changed = new Set(selected.map((r) => `${r.table}:${r.row._classification_rowid}`));
@@ -598,16 +613,16 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 			const key = `${item.table}:${item.row._classification_rowid}`;
 			if (!all.has(key)) all.set(key, item);
 			if (change) changed.add(key);
+			if (changed.size > rowBudget || all.size > rowBudget * 4) throw new ClassificationTurnFull();
 		}
 	};
 	if (fanout)
 		for (const item of selected)
 			if (["memory", "transcript", "artifact", "summary"].includes(item.kind ?? ""))
-				for (const link of db
-					.prepare(
-						"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_kind=? AND evidence_id=?",
-					)
-					.all(item.row.agent_id, item.kind, item.key))
+				for (const link of citationRows(
+					"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_kind=? AND evidence_id=?",
+					[item.row.agent_id, item.kind, item.key],
+				))
 					add(referencedRows(db, link.derived_kind, link.derived_id, item.row.agent_id), true);
 	const expanded = new Set<string>();
 	for (;;) {
@@ -620,30 +635,23 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 			if (item.table === "entity_attributes" && typeof item.row.memory_id === "string")
 				add(referencedRows(db, "memory", item.row.memory_id, item.row.agent_id), true);
 			if (item.kind)
-				for (const link of db
-					.prepare(
-						"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_id=? AND derived_kind IN ('contradiction','head_revision','proposal','telemetry','temporal_edge','attention')",
-					)
-					.all(item.row.agent_id, item.key))
+				for (const link of citationRows(
+					"SELECT derived_kind,derived_id FROM evidence_citations WHERE agent_id=? AND evidence_kind IN ('memory','transcript','artifact','summary','attribute') AND evidence_id=? AND derived_kind IN ('contradiction','head_revision','proposal','telemetry','temporal_edge','attention')",
+					[item.row.agent_id, item.key],
+				))
 					add(referencedRows(db, link.derived_kind, link.derived_id, item.row.agent_id), true);
 			if (item.table === "memories") {
 				for (const table of ["memory_entity_mentions", "memory_history"])
-					add(contentRows(db, table, "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
+					add(boundedRows(table, "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
 				add(
-					contentRows(db, "derived_memory_sources", "agent_id=? AND derived_memory_id=?", [
-						item.row.agent_id,
-						item.key,
-					]),
+					boundedRows("derived_memory_sources", "agent_id=? AND derived_memory_id=?", [item.row.agent_id, item.key]),
 					true,
 				);
 			}
 			if (item.table === "entities") {
+				add(boundedRows("memory_entity_mentions", "agent_id=? AND entity_id=?", [item.row.agent_id, item.key]), true);
 				add(
-					contentRows(db, "memory_entity_mentions", "agent_id=? AND entity_id=?", [item.row.agent_id, item.key]),
-					true,
-				);
-				add(
-					contentRows(db, "relations", "agent_id=? AND (source_entity_id=? OR target_entity_id=?)", [
+					boundedRows("relations", "agent_id=? AND (source_entity_id=? OR target_entity_id=?)", [
 						item.row.agent_id,
 						item.key,
 						item.key,
@@ -653,7 +661,7 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 			}
 			if (["memory", "transcript", "artifact", "summary", "attribute"].includes(item.kind ?? ""))
 				add(
-					contentRows(db, "derived_memory_sources", "agent_id=? AND source_kind=? AND source_id=?", [
+					boundedRows("derived_memory_sources", "agent_id=? AND source_kind=? AND source_id=?", [
 						item.row.agent_id,
 						item.kind === "attribute" ? "ontology_claim" : item.kind,
 						item.key,
@@ -661,10 +669,10 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 					true,
 				);
 			if (item.kind === "memory") {
-				add(contentRows(db, "memory_hints", "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
+				add(boundedRows("memory_hints", "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
 				for (const store of ["embeddings", "embeddings_staging"])
 					add(
-						contentRows(db, store, "(agent_id=? OR agent_id IS NULL) AND source_type='memory' AND source_id=?", [
+						boundedRows(store, "(agent_id=? OR agent_id IS NULL) AND source_type='memory' AND source_id=?", [
 							item.row.agent_id,
 							item.key,
 						]),
@@ -672,16 +680,15 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 					);
 			} else if (item.kind === "artifact" || item.kind === "transcript")
 				for (const store of ["embeddings", "embeddings_staging"])
-					add(contentRows(db, store, "agent_id=? AND source_id=?", [item.row.agent_id, item.key]), true);
+					add(boundedRows(store, "agent_id=? AND source_id=?", [item.row.agent_id, item.key]), true);
 		}
 	}
 	for (const item of [...all.values()])
 		if (changed.has(`${item.table}:${item.row._classification_rowid}`) && item.kind)
-			for (const link of db
-				.prepare(
-					"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind=? AND derived_id=? AND agent_id=?",
-				)
-				.all(item.kind, item.key, item.row.agent_id))
+			for (const link of citationRows(
+				"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind=? AND derived_id=? AND agent_id=?",
+				[item.kind, item.key, item.row.agent_id],
+			))
 				add(referencedRows(db, link.evidence_kind, link.evidence_id, item.row.agent_id), false);
 	add(contextFor(db, [...all.values()]), false);
 	const rows = [...all.values()],
@@ -713,11 +720,10 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 		const key = `${item.table}:${item.row._classification_rowid}`,
 			cached = links.get(key);
 		if (cached) return cached;
-		const result = db
-			.prepare(
-				"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind=? AND derived_id=? AND agent_id=?",
-			)
-			.all(item.kind, item.key, item.row.agent_id);
+		const result = citationRows(
+			"SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind=? AND derived_id=? AND agent_id=?",
+			[item.kind, item.key, item.row.agent_id],
+		);
 		links.set(key, result);
 		return result;
 	};
@@ -827,11 +833,12 @@ function batch(
 	db: MigrationDb,
 	agentId: string | undefined,
 	cursor: Cursor,
+	limit = 2000,
 ): { rows: ContentRow[]; cursor: Cursor; done: boolean } {
 	const rows: ContentRow[] = [];
 	let table = cursor.table,
 		rowid = cursor.rowid;
-	while (table < COMPARTMENT_TABLES.length && rows.length < 2000) {
+	while (table < COMPARTMENT_TABLES.length && rows.length < limit) {
 		const name = COMPARTMENT_TABLES[table];
 		if (!name) break;
 		const info = tableInfo(db, name);
@@ -858,11 +865,11 @@ function batch(
 					: name === "cross_agent_messages" || info.columns.has("agent_id")
 						? [agentId]
 						: [];
-		const page = contentRows(db, name, `rowid>? AND ${scope}`, [rowid, ...args], 2000 - rows.length);
+		const page = contentRows(db, name, `rowid>? AND ${scope}`, [rowid, ...args], limit - rows.length);
 		rows.push(...page);
 		const last = page.at(-1)?.row._classification_rowid;
 		if (typeof last === "number") rowid = last;
-		if (page.length === 0 || rows.length < 2000) {
+		if (page.length === 0 || rows.length < limit) {
 			table++;
 			rowid = 0;
 		}
@@ -1010,18 +1017,42 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 		const current = db.prepare("SELECT progress_json FROM org_jobs WHERE id=?").get(jobId),
 			cursor = cursorSchema.safeParse(attempt(() => JSON.parse(String(current?.progress_json))));
 		if (!cursor.success) throw new Error("invalid_cursor");
-		const page = batch(db, request.target.agentId, cursor.data),
-			context = contextFor(db, page.rows),
-			selected = page.rows.filter((r) => covers(db, request.target, r, context));
-		const updated = cursor.data.updated + recompute(db, selected);
-		const progress = { ...page.cursor, updated };
+		let progress = cursor.data;
+		let done = false;
+		let inspected = 0;
+		const started = performance.now();
+		const initialUpdated = progress.updated;
+		while (inspected < CLASSIFICATION_TURN_ROWS && progress.updated - initialUpdated < CLASSIFICATION_TURN_ROWS) {
+			if (inspected > 0 && performance.now() - started >= CLASSIFICATION_TURN_MS) break;
+			const page =
+				request.target.kind === "memory"
+					? {
+							rows: contentRows(db, "memories", "id=? AND agent_id=?", [request.target.id, request.target.agentId]),
+							cursor: { ...progress, table: COMPARTMENT_TABLES.length, rowid: 0 },
+							done: true,
+						}
+					: batch(db, request.target.agentId, progress, 1);
+			const context = contextFor(db, page.rows);
+			const selected = page.rows.filter((row) => covers(db, request.target, row, context));
+			let changed = 0;
+			try {
+				changed = recompute(db, selected, true, CLASSIFICATION_TURN_ROWS - (progress.updated - initialUpdated));
+			} catch (error) {
+				if (!(error instanceof ClassificationTurnFull) || inspected === 0) throw error;
+				break;
+			}
+			progress = { ...page.cursor, updated: progress.updated + changed };
+			inspected += page.rows.length;
+			done = page.done;
+			if (done) break;
+		}
 		db.prepare("UPDATE org_jobs SET status=?,progress_json=?,finished_at=?,error=NULL WHERE id=?").run(
-			page.done ? "complete" : "running",
+			done ? "complete" : "running",
 			JSON.stringify(progress),
-			page.done ? new Date().toISOString() : null,
+			done ? new Date().toISOString() : null,
 			jobId,
 		);
-		return { status: page.done ? "complete" : "running", updated };
+		return { status: done ? "complete" : "running", updated: progress.updated };
 	});
 }
 function visibility(db: MigrationDb, subject: AudienceSubject) {
