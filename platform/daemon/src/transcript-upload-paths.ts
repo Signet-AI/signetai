@@ -1,8 +1,7 @@
 import { constants } from "node:fs";
 import { lstat } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { attemptAsync, resolveWorkspaceLayout } from "@signet/core";
+import { attemptAsync, readFileRange, resolveWorkspaceLayout } from "@signet/core";
 import { sha256 } from "./transcript-capture-jobs";
 import {
 	iterateContainedTranscriptDirectory,
@@ -76,21 +75,11 @@ export function isTranscriptUploadSessionDirectory(
 	);
 }
 
-export async function readTranscriptUploadRange(handle: FileHandle, position: number, length: number): Promise<Buffer> {
-	const buffer = Buffer.allocUnsafe(length);
-	let filled = 0;
-	while (filled < length) {
-		const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
-		if (bytesRead === 0) throw new Error("Transcript upload file is shorter than its committed range");
-		filled += bytesRead;
-	}
-	return buffer;
-}
-
 export async function readTranscriptUploadPrefix(basePath: string, path: string, sizeBytes: number): Promise<Buffer> {
 	const handle = await openContainedTranscriptFile(transcriptUploadsRoot(basePath), path, constants.O_RDONLY);
 	try {
-		return await readTranscriptUploadRange(handle, 0, sizeBytes);
+		const bytes = await readFileRange(handle, 0, sizeBytes);
+		return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	} finally {
 		await handle.close();
 	}

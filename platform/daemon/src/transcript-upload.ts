@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { attemptAsync } from "@signet/core";
+import { attemptAsync, readFileRange } from "@signet/core";
 import { transcriptUploadEnd, transcriptUploadTailStart } from "@signet/core/transcript-upload";
 import type { DbAccessor } from "./db-accessor";
 import {
@@ -23,12 +23,7 @@ import { sha256 } from "./transcript-capture-jobs";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import { openContainedTranscriptFile, removeContainedTranscriptPath } from "./transcript-import-safe-fs";
 import { type TranscriptUploadAdmission, withTranscriptUploadAgentLock } from "./transcript-upload-agent-lock";
-import {
-	readTranscriptUploadPrefix,
-	readTranscriptUploadRange,
-	transcriptUploadFilePath,
-	transcriptUploadsRoot,
-} from "./transcript-upload-paths";
+import { readTranscriptUploadPrefix, transcriptUploadFilePath, transcriptUploadsRoot } from "./transcript-upload-paths";
 
 const PURGE_RUN_DEADLINE_MS = 30_000;
 const PURGE_CONTINUE_DELAY_MS = 1_000;
@@ -196,9 +191,7 @@ async function writeAndCommitRange(
 			tailSha256 =
 				tailStart >= input.offset
 					? sha256(input.body.subarray(tailStart - input.offset))
-					: sha256(
-							Buffer.concat([await readTranscriptUploadRange(handle, tailStart, input.offset - tailStart), input.body]),
-						);
+					: sha256(Buffer.concat([await readFileRange(handle, tailStart, input.offset - tailStart), input.body]));
 		} finally {
 			await handle.close();
 		}
