@@ -88,6 +88,69 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test.each(["long", "equal"])("B2 child expiry and descendant revocation: %s", async (expiry) => {
+		await claim();
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const parent = await (
+			await call("/api/auth/api-keys", "POST", { name: "parent", permissions: ["recall"], expiresAt })
+		).json();
+		const childResponse = await call(
+			"/api/auth/api-keys",
+			"POST",
+			{
+				name: "child",
+				permissions: ["recall"],
+				expiresAt: expiry === "long" ? new Date(Date.now() + 86400_000).toISOString() : expiresAt,
+			},
+			parent.secret,
+		);
+		expect(childResponse.status).toBe(201);
+		const child = await childResponse.json();
+		expect(child.key.expiresAt).toBe(expiresAt);
+		expect(
+			(await call("/api/auth/api-keys", "POST", { name: "widen", permissions: ["admin"], expiresAt }, parent.secret))
+				.status,
+		).toBe(403);
+		const grandchild = await (
+			await call("/api/auth/api-keys", "POST", { name: "grandchild", permissions: ["recall"], expiresAt }, child.secret)
+		).json();
+		expect((await call("/api/auth/api-keys/" + parent.key.id, "DELETE")).status).toBe(200);
+		for (const key of [parent, child, grandchild]) {
+			expect((await (await call("/api/auth/whoami", "GET", undefined, key.secret)).json()).authenticated).toBe(false);
+			expect(
+				await organizationQuery(
+					statement("SELECT revoked_at IS NOT NULL AS revoked FROM api_keys WHERE id=?", [key.key.id], "get"),
+				),
+			).toEqual({ revoked: 1 });
+		}
+	});
+	test.each(["revoked", "expired"])("B2 requests validate the live key ancestor: %s", async (reason) => {
+		await claim();
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const parent = await (
+			await call("/api/auth/api-keys", "POST", { name: "parent", permissions: ["recall"], expiresAt })
+		).json();
+		const child = await (
+			await call("/api/auth/api-keys", "POST", { name: "child", permissions: ["recall"], expiresAt }, parent.secret)
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, child.secret);
+		expect(exchanged.status).toBe(200);
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((value) => value.split(";")[0])
+			.join("; ");
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				reason === "revoked"
+					? "UPDATE api_keys SET revoked_at=? WHERE id=?"
+					: "UPDATE api_keys SET expires_at=? WHERE id=?",
+				["2000-01-01T00:00:00.000Z", parent.key.id],
+			),
+		]);
+		expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(false);
+		expect((await (await app.request("/api/auth/whoami", { headers: { cookie } })).json()).authenticated).toBe(false);
+	});
 	test("B1 bearer keys cannot approve device authorizations", async () => {
 		await claim();
 		const key = await (

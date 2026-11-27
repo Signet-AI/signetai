@@ -775,14 +775,21 @@ export interface BoundKeyRow {
 	expires_at: string | null;
 	revoked_at: string | null;
 }
-export function readBoundKey(keyId: string): Promise<BoundKeyRow | null> {
-	return organizationQuery(
+export async function readBoundKey(keyId: string): Promise<BoundKeyRow | null> {
+	const key = await organizationQuery<(BoundKeyRow & { ancestors_live: number }) | null>(
 		statement(
-			"SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,scope_json,expires_at,revoked_at FROM api_keys WHERE id = ?",
-			[keyId],
+			`WITH RECURSIVE ancestry(id,parent_key_id,user_id,expires_at,revoked_at,depth) AS (
+				SELECT id,parent_key_id,user_id,expires_at,revoked_at,0 FROM api_keys WHERE id=?
+				UNION ALL SELECT p.id,p.parent_key_id,p.user_id,p.expires_at,p.revoked_at,a.depth+1 FROM ancestry a JOIN api_keys p ON p.id=a.parent_key_id WHERE a.depth<64
+			) SELECT id,user_id,device_id,session_id,kind,legacy,harness,agent_id,allowed_projects_json,permissions_json,scope_json,expires_at,revoked_at,
+			NOT EXISTS(SELECT 1 FROM ancestry a WHERE a.depth>=64 OR (a.depth>0 AND (a.revoked_at IS NOT NULL OR a.expires_at<=? OR a.user_id IS NOT api_keys.user_id)) OR (a.parent_key_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM api_keys p WHERE p.id=a.parent_key_id))) AS ancestors_live
+			FROM api_keys WHERE id=?`,
+			[keyId, new Date().toISOString(), keyId],
 			"get",
 		),
 	);
+	if (key && !key.ancestors_live) throw new IdentityError(401, "invalid_credential");
+	return key;
 }
 export async function renewConnectorKey(key: BoundKeyRow, org: OrganizationRow): Promise<void> {
 	if (
@@ -820,6 +827,13 @@ export async function createOrganizationKey(
 	if (!p.userId) throw new IdentityError(403, "org_policy");
 	if (input.permissions.some((permission) => !p.permissions.has(permission)))
 		throw new IdentityError(403, "permission");
+	const parent = p.credential.kind === "api_key" ? await readBoundKey(p.credential.id) : null;
+	if (
+		p.credential.kind === "api_key" &&
+		(!parent || parent.revoked_at || (parent.expires_at && parent.expires_at <= new Date().toISOString()))
+	)
+		throw new IdentityError(401, "invalid_credential");
+	const expiresAt = parent?.expires_at && parent.expires_at < input.expiresAt ? parent.expires_at : input.expiresAt;
 	if (input.deviceId) await activeUser(p.userId, input.deviceId);
 	const keyId = id("key"),
 		prefix = randomBytes(6).toString("hex"),
@@ -828,29 +842,39 @@ export async function createOrganizationKey(
 	const hash = await new Promise<Buffer>((resolve, reject) =>
 		scrypt(key, salt, 32, (error, result) => (error ? reject(error) : resolve(result))),
 	);
-	await organizationWrite([
-		statement(
-			"INSERT INTO api_keys (id,prefix,name,key_hash,role,scope_json,permissions_json,harness,agent_id,allowed_projects_json,created_at,expires_at,user_id,device_id,session_id,kind,legacy) VALUES (?,?,?,?,'member',?,?,?,?,?,?,?,?,?,?,?,0)",
-			[
-				keyId,
-				prefix,
-				input.name,
-				`scrypt:${salt}:${hash.toString("hex")}`,
-				JSON.stringify({ user: p.userId, agent: input.agentId ?? undefined }),
-				JSON.stringify(input.permissions),
-				input.harness,
-				input.agentId,
-				input.allowedProjects ? JSON.stringify(input.allowedProjects) : null,
-				new Date().toISOString(),
-				input.expiresAt,
-				p.userId,
-				input.deviceId,
-				p.sessionId,
-				input.kind,
-			],
-		),
-		auditStatement(p, "key.created", "key", keyId),
-	]);
+	await organizationWrite(
+		[
+			{
+				...statement(
+					"INSERT INTO api_keys (id,prefix,name,key_hash,role,scope_json,permissions_json,harness,agent_id,allowed_projects_json,created_at,expires_at,user_id,device_id,session_id,kind,legacy,parent_key_id) SELECT ?,?,?,?,'member',?,?,?,?,?,?,?,?,?,?,?,0,? WHERE ? IS NULL OR EXISTS(SELECT 1 FROM api_keys WHERE id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?))",
+					[
+						keyId,
+						prefix,
+						input.name,
+						`scrypt:${salt}:${hash.toString("hex")}`,
+						JSON.stringify({ user: p.userId, agent: input.agentId ?? undefined }),
+						JSON.stringify(input.permissions),
+						input.harness,
+						input.agentId,
+						input.allowedProjects ? JSON.stringify(input.allowedProjects) : null,
+						new Date().toISOString(),
+						expiresAt,
+						p.userId,
+						input.deviceId,
+						p.sessionId,
+						input.kind,
+						parent?.id ?? null,
+						parent?.id ?? null,
+						parent?.id ?? null,
+						new Date().toISOString(),
+					],
+				),
+				requireChanges: true,
+			},
+			auditStatement(p, "key.created", "key", keyId),
+		],
+		401,
+	);
 	return {
 		key: {
 			id: keyId,
@@ -858,7 +882,7 @@ export async function createOrganizationKey(
 			harness: input.harness,
 			agentId: input.agentId,
 			deviceId: input.deviceId,
-			expiresAt: input.expiresAt,
+			expiresAt,
 		},
 		secret: key,
 	};
