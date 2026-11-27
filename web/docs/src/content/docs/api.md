@@ -30,6 +30,22 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
   errors may include structured fields such as `status`, `code`, or
   `missingCapabilities`.
 
+## Operator instance settings
+
+`GET /api/org/operator/settings` returns only `{ inference, embedding, sourcesDefaults, instructions, complete }`. It requires a claimed organization and an unrestricted administrator user session. API keys, members, compliance-only callers, bound-agent/project credentials and scope aliases are refused with HTTP 403. The general `/api/config` policy is unchanged.
+
+`PATCH /api/org/operator/settings` accepts exactly one section per request:
+
+- `{ section: "inference", value: { provider, model, endpoint, credentialRef, allowRemote } }`. Providers: `none`, `openai-compatible`, `openai`, `anthropic`, `google`, `openrouter`. A configured provider needs a model; OpenAI-compatible targets need an endpoint. Non-loopback processing requires `allowRemote: true`.
+- `{ section: "embedding", value: { provider, model, dimensions, endpoint, credentialRef } }`. Providers: `none`, `native`, `ollama`, `llama-cpp`, `openai`; dimensions are integers from 1 through 65,536. Configured embedding providers need a model; non-native endpoints are explicit.
+- `{ section: "sourcesDefaults", value: { agentId, classificationId } }`. The agent must be available to the caller; a classification reference must be visible. These defaults do not replace the sources owner's write admission.
+- `{ section: "instructions", value: "organization instructions" }`, at most 65,536 UTF-8 bytes, saved as the instance's `AGENTS.md`.
+- `{ section: "complete", value: true }`, durably completing operator setup.
+
+Unknown fields are rejected. Endpoints are HTTP(S), without credentials, query strings or fragments. Optional endpoints and secret references use `null`. Secret references are existing uppercase Secrets names, not values; hosted provider credentials must use a reference. The response never returns secret values or other configuration sections. A successful PATCH returns the same constrained projection as GET. Publication uses the existing atomic runtime-config writer and excludes overlapping pipeline/config transitions; contention returns HTTP 409. Settings read/update and denied authorization events are audited without instruction text or secret values. An embedding configuration save does not claim that index migration has completed.
+
+MCP tools `signet_operator_settings_get` and `signet_operator_settings_set` use these routes and the same administrator-session requirement.
+
 ## Organization reads and exports
 
 In a claimed organization, the organization agent reads across non-archived

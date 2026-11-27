@@ -1,7 +1,4 @@
-import { readRuntimeConfigFile } from "./runtime-config-file";
-import { randomUUID } from "node:crypto";
-import { open, rename, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readRuntimeConfigFile, publishRuntimeConfigFile } from "./runtime-config-file";
 import { formatYaml, parseSimpleYaml } from "@signet/core";
 import { z } from "zod";
 import { auditStatement, IdentityError, organizationWrite } from "./auth/organization-store";
@@ -16,33 +13,6 @@ import {
 	telemetryRef,
 } from "./routes/state";
 
-const MAX_CONFIG_BYTES = 1_048_576;
-async function publish(file: string, text: string): Promise<void> {
-	if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new IdentityError(413, "config_too_large");
-	const temporary = `${file}.pause-${randomUUID()}`;
-	const handle = await open(temporary, "wx", 0o600);
-	let pending = true;
-	try {
-		try {
-			await handle.writeFile(text);
-			await handle.sync();
-		} finally {
-			await handle.close();
-		}
-		await rename(temporary, file);
-		pending = false;
-		if (process.platform !== "win32") {
-			const directory = await open(dirname(file), "r");
-			try {
-				await directory.sync();
-			} finally {
-				await directory.close();
-			}
-		}
-	} finally {
-		if (pending) await unlink(temporary);
-	}
-}
 export async function changePipelinePause(p: Principal, paused: boolean) {
 	if (!p.permissions.has("admin")) throw new IdentityError(403, "permission", "Requires the admin role");
 	if (p.boundAgentId !== null) throw new IdentityError(403, "agent_not_permitted");
@@ -66,10 +36,10 @@ export async function changePipelinePause(p: Principal, paused: boolean) {
 		]);
 		if (changed && restart) {
 			try {
-				await publish(previous.file, nextText);
+				await publishRuntimeConfigFile(previous.file, nextText);
 				await restart(next, telemetryRef);
 			} catch (error) {
-				await publish(previous.file, previous.text);
+				await publishRuntimeConfigFile(previous.file, previous.text);
 				await restart(before, telemetryRef);
 				throw error;
 			}

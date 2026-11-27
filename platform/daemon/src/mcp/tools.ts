@@ -1,3 +1,4 @@
+import { operatorSettingsInputSchema } from "../operator-settings-contract";
 import { operatorInputSchema } from "../operator-job-contract";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -412,6 +413,28 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		const result = await fetchDaemon<unknown>(baseUrl, path, { method, body });
 		return result.ok ? textResult(result.data) : errorResult(result.error);
 	};
+	registerMcpTool(
+		server,
+		"signet_operator_settings_get",
+		{
+			title: "Read Instance Settings",
+			description:
+				"Read the constrained instance inference, embedding, source defaults and organization instructions. Requires an unrestricted administrator session. Secret values are never returned.",
+			inputSchema: z.object({}).strict(),
+		},
+		async () => organizationResult("/api/org/operator/settings"),
+	);
+	registerMcpTool(
+		server,
+		"signet_operator_settings_set",
+		{
+			title: "Update Instance Settings",
+			description:
+				"Update one allowlisted instance settings section through the audited owner. Requires an unrestricted administrator session. Use existing Secrets references, never secret values.",
+			inputSchema: operatorSettingsInputSchema,
+		},
+		async (input) => organizationResult("/api/org/operator/settings", "PATCH", input),
+	);
 	registerMcpTool(
 		server,
 		"signet_operator_doctor",

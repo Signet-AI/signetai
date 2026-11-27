@@ -1,5 +1,6 @@
-import { type FileHandle, open } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { type FileHandle, open, rename, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { PIPELINE_CONFIG_FILES } from "@signet/core";
 import { IdentityError } from "./auth/organization-store";
 const MAX_CONFIG_BYTES = 1_048_576;
@@ -30,4 +31,31 @@ export async function readRuntimeConfigFile(agentsDir: string) {
 		}
 	}
 	throw new IdentityError(404, "config_not_found", "No Signet config file found");
+}
+
+export async function publishRuntimeConfigFile(file: string, text: string): Promise<void> {
+	if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new IdentityError(413, "config_too_large");
+	const temporary = `${file}.pause-${randomUUID()}`;
+	const handle = await open(temporary, "wx", 0o600);
+	let pending = true;
+	try {
+		try {
+			await handle.writeFile(text);
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await rename(temporary, file);
+		pending = false;
+		if (process.platform !== "win32") {
+			const directory = await open(dirname(file), "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		}
+	} finally {
+		if (pending) await unlink(temporary);
+	}
 }
