@@ -94,6 +94,77 @@ function registerTargetFlags(command: Command): void {
 	}
 	command.hook("preSubcommand", (_parent, child) => registerTargetFlags(child));
 }
+const remoteCommands = new Set([
+	"login",
+	"logout",
+	"whoami",
+	"dashboard",
+	"status",
+	"restart",
+	"pause",
+	"resume",
+	"logs",
+	"remember",
+	"recall",
+	"import",
+	"export",
+	"export transcripts",
+	"daemon restart",
+	"daemon pause",
+	"daemon resume",
+	"daemon status",
+	"daemon logs",
+	"embed audit",
+	"embed backfill",
+	"repair queue requeue",
+	"repair queue cancel",
+	"repair queue prune",
+	"agent use",
+	"agent transfer",
+	"agent list",
+	"agent add",
+	"agent remove",
+	"agent purge",
+	"agent info",
+	"agent show",
+	"agent set",
+	"secret put",
+	"secret list",
+	"secret delete",
+	"secret get",
+	"secret has",
+	"secret exec",
+	"secret exec-status",
+	"api-key create",
+	"api-key list",
+	"api-key revoke",
+	"auth sso set",
+	"auth devices",
+	"auth devices revoke",
+	"auth devices rename",
+	"auth sessions",
+	"auth sessions revoke",
+	"org users list",
+	"org users invite",
+	"org users role",
+	"org users reactivate",
+	"org users deactivate",
+	"org teams list",
+	"org teams create",
+	"org teams show",
+	"org teams delete",
+	"org teams rename",
+	"org teams add",
+	"org teams remove",
+	"org access",
+	"org jobs",
+	"org agents list",
+	"audit",
+	"classification list",
+	"classification create",
+	"classification audience",
+	"classify",
+]);
 export function registerOrganizationTarget(program: Command, deps: ResolveTargetOptions = {}): void {
 	selected = undefined;
 	transport = undefined;
@@ -115,24 +186,9 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 		if (selected.remote && top.name() === "import" && !selectedAgent)
 			throw new Error("Organization imports require --agent <id>.");
 
-		if (
-			selected.remote &&
-			[
-				"start",
-				"stop",
-				"install",
-				"setup",
-				"migrate-schema",
-				"migrate-vectors",
-				"git",
-				"sync",
-				"workspace",
-				"configure",
-			].includes(top.name()) &&
-			!(top.name() === "setup" && command.opts().join)
-		)
-			throw new Error(localOnlyMessage(new URL(selected.url).hostname));
-		if (selected.remote && top.name() === "daemon" && ["start", "stop", "install"].includes(command.name()))
+		const path: string[] = [];
+		for (let node: Command | null = command; node && node !== program; node = node.parent) path.unshift(node.name());
+		if (selected.remote && !remoteCommands.has(path.join(" ")) && !(top.name() === "setup" && options.join))
 			throw new Error(localOnlyMessage(new URL(selected.url).hostname));
 	});
 }

@@ -22,6 +22,38 @@ test("local-only commands refuse remotely before running their action and --loca
 	expect(actions).toBe(1);
 });
 
+test("unknown and local workspace commands refuse remote targets by default", async () => {
+	for (const path of [
+		"skill list",
+		"sources list",
+		"telemetry",
+		"doctor",
+		"bypass",
+		"session search",
+		"dream status",
+		"update",
+		"accelerate",
+		"desktop",
+		"future-command",
+		"agent future-command",
+	]) {
+		const program = new Command();
+		registerOrganizationTarget(program, {
+			env: { SIGNET_DAEMON_URL: "https://org.example", SIGNET_API_KEY: "fixture" },
+		});
+		let command = program;
+		for (const name of path.split(" ")) command = command.command(name);
+		let ran = false;
+		command.action(() => {
+			ran = true;
+		});
+		await expect(program.parseAsync(path.split(" "), { from: "user" })).rejects.toThrow(
+			localOnlyMessage("org.example"),
+		);
+		expect(ran).toBe(false);
+	}
+});
+
 test("--local routes existing clients to loopback without organization credentials", async () => {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
