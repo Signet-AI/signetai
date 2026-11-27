@@ -2,6 +2,7 @@ import {
 	compartmentFor,
 	findSqliteVecExtension,
 	syncEmbeddingCompartment,
+	repairVectorAdmissionStepInTx,
 	vectorSearchWithMetadata,
 } from "@signet/core";
 import { executeClassificationJob, resumeClassificationJobs } from "./classifications";
@@ -474,6 +475,7 @@ test("hidden-agent vectors cannot delay another agent's classification publicati
 			db.exec(
 				"CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine);INSERT INTO agents(id,name,kind,owner_user_id,created_at,updated_at) VALUES('hidden','Hidden','personal','bob','now','now')",
 			);
+			repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings");
 			const memory = db.prepare(
 				"INSERT INTO memories(id,content,agent_id,author_user_id,created_at,updated_at) VALUES(?,'fixture','hidden','bob','now','now')",
 			);
@@ -527,6 +529,7 @@ test("classification owner prepares vector membership before publishing its read
 		db.exec(
 			"DROP TABLE IF EXISTS vec_embeddings;CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY,embedding FLOAT[3] distance_metric=cosine)",
 		);
+		repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings");
 		db.prepare(
 			"INSERT INTO embeddings(id,content_hash,source_type,source_id,vector,dimensions,created_at,agent_id,chunk_text) VALUES('vector','hash','memory','m',?,3,'now','default','chunk')",
 		).run(new Float32Array([1, 0, 0]));

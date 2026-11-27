@@ -3,6 +3,9 @@ import {
 	classificationsForWrite,
 	attempt,
 	syncEmbeddingCompartment,
+	beginVectorAdmissionRepairInTx,
+	stepVectorAdmissionRepairInTx,
+	publishVectorAdmissionRepairInTx,
 	COMPARTMENT_TABLES,
 	backfillEvidenceCitations,
 	type MigrationDb,
@@ -956,12 +959,62 @@ const enqueuedSchema = z.object({
 		credential: z.string(),
 	}),
 });
+function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean {
+	const roots = db
+		.prepare(
+			"SELECT r.projection,r.store FROM vector_shard_repairs r JOIN sqlite_master s ON s.name=r.projection AND s.type='table' WHERE lower(s.sql) LIKE '%using vec0%' ORDER BY r.projection LIMIT 3",
+		)
+		.all();
+	for (let round = 0; round < 3; round++) {
+		let prepared = true;
+		for (const root of roots) {
+			if (
+				(root.projection !== "vec_embeddings" && root.projection !== "vec_embeddings_staging") ||
+				(root.store !== "embeddings" && root.store !== "embeddings_staging")
+			)
+				throw new Error("vector_projection_binding_invalid");
+			let state = db.prepare("SELECT phase,job_id FROM vector_shard_repairs WHERE projection=?").get(root.projection);
+			if (state?.job_id !== null && state?.job_id !== jobId) return false;
+			if (state?.job_id === null && state.phase !== "ready" && state.phase !== "pending") return false;
+			if (state?.phase === "ready" || state?.phase === "pending")
+				beginVectorAdmissionRepairInTx(db, root.projection, root.store, jobId);
+			state = db.prepare("SELECT phase FROM vector_shard_repairs WHERE projection=?").get(root.projection);
+			if (state?.phase !== "prepared") {
+				const result = stepVectorAdmissionRepairInTx(db, root.projection);
+				if (result.phase !== "prepared") prepared = false;
+			}
+		}
+		if (prepared) {
+			for (const root of roots) {
+				if (root.projection !== "vec_embeddings" && root.projection !== "vec_embeddings_staging")
+					throw new Error("vector_projection_binding_invalid");
+				publishVectorAdmissionRepairInTx(db, root.projection, jobId);
+			}
+			if (roots.length === 0)
+				db.prepare("UPDATE org_jobs SET kind='classify' WHERE id=? AND kind='classify-preparing'").run(jobId);
+			return true;
+		}
+	}
+	return false;
+}
 function executeJob(db: MigrationDb, jobId: string): unknown {
-	const job = db.prepare("SELECT * FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify')").get(jobId);
+	let job = db
+		.prepare("SELECT * FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing')")
+		.get(jobId);
 	if (!job || (job.status !== "pending" && job.status !== "running")) throw new Error("job_not_pending");
-	const parsed = enqueuedSchema.safeParse(attempt(() => JSON.parse(String(job.params_json))));
+	const encoded = job.params_json;
+	const parsed = enqueuedSchema.safeParse(attempt(() => JSON.parse(String(encoded))));
 	if (!parsed.success) throw new Error("invalid_job");
 	const request = parsed.data;
+	if (job.kind === "classify-preparing") {
+		const published = transaction(db, () => {
+			authorize(db, request.target, request.id, request.actor, request.remove);
+			return prepareClassificationFenceInTx(db, jobId);
+		});
+		if (!published) return { status: "running", phase: "preparing-shards" };
+		job = db.prepare("SELECT * FROM org_jobs WHERE id=?").get(jobId);
+		if (!job) throw new Error("job_not_pending");
+	}
 	if (job.status === "pending") {
 		const admitted = transaction(db, () => {
 			if (
@@ -1329,7 +1382,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 		return transaction(db, () => {
 			const job = db
 				.prepare(
-					"SELECT kind,status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','recompute')",
+					"SELECT kind,status,progress_json,params_json FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing','recompute')",
 				)
 				.get(request.jobId);
 			if (!job) throw new Error("not_found");
@@ -1367,7 +1420,7 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 	if (request.op === "recover") {
 		const jobs = db
 			.prepare(
-				"SELECT id FROM org_jobs WHERE kind IN ('classify','unclassify','recompute') AND status IN ('pending','running') AND id>? ORDER BY id LIMIT 100",
+				"SELECT id FROM org_jobs WHERE kind IN ('classify','unclassify','classify-preparing','recompute') AND status IN ('pending','running') AND id>? ORDER BY id LIMIT 100",
 			)
 			.all(request.cursor ?? "")
 			.flatMap((row) => (typeof row.id === "string" ? [row.id] : []));
@@ -1505,11 +1558,19 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 		return transaction(db, () => {
 			authorize(db, request.target, request.id, request.actor, request.remove);
 			const jobId = id("job");
+			const staged =
+				!request.remove &&
+				db.prepare("SELECT 1 FROM sqlite_master WHERE name='vector_shard_repairs' AND type='table'").get() != null &&
+				db
+					.prepare(
+						"SELECT 1 FROM sqlite_master WHERE name IN ('vec_embeddings','vec_embeddings_staging') AND type='table' AND lower(sql) LIKE '%using vec0%' LIMIT 1",
+					)
+					.get() != null;
 			db.prepare(
 				"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES (?,?,'pending',?,?,?)",
 			).run(
 				jobId,
-				request.remove ? "unclassify" : "classify",
+				request.remove ? "unclassify" : staged ? "classify-preparing" : "classify",
 				JSON.stringify(request),
 				request.actor.userId,
 				new Date().toISOString(),
