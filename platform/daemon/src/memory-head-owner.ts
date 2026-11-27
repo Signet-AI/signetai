@@ -11,7 +11,7 @@ import {
 } from "@signet/core";
 import { prepareTypedStatement, type WriteDb } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadRequest } from "./memory-head";
-import { readEpisodicSource, type EpisodicSourceRecord } from "./episodic-sources";
+import { readEpisodicSource, sourceIdCandidates, type EpisodicSourceRecord } from "./episodic-sources";
 import { dreamingPassPartitionInDb, dreamingReadScopeInDb, type DreamingPartition } from "./classification-owner";
 
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
@@ -180,12 +180,18 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 
 const headEntryColumns = { memory: null, session: null, source: null } as const;
 
-function readableHeadBody(db: WriteDb, agentId: string, revision: number, scope: ReadScope): string {
+function readableHeadBody(
+	db: WriteDb,
+	agentId: string,
+	revision: number,
+	scope: ReadScope,
+	dependencies?: Set<string>,
+): string {
 	const entry = derivedScopeSql("h", scope, headEntryColumns);
 	const copy = derivedScopeSql("e", scope, headEntryColumns);
 	const restricted = scope.compartments !== "all";
 	const evidence: Evidence = new Map();
-	return db
+	const content = db
 		.prepare(
 			`SELECT h.canonical_text AS text, h.entry_id, e.provenance_json AS support
 			 FROM memory_head_revision_entries e
@@ -200,6 +206,20 @@ function readableHeadBody(db: WriteDb, agentId: string, revision: number, scope:
 				const rawSupport = row.support;
 				const support: unknown = typeof rawSupport === "string" ? attempt(() => JSON.parse(rawSupport)) : null;
 				if (!Array.isArray(support) || support.length === 0) return [];
+				for (const item of support) {
+					if (!isRecord(item)) continue;
+					const reference =
+						typeof item.source_ref === "string"
+							? item.source_ref
+							: typeof item.sourceRef === "string"
+								? item.sourceRef
+								: "";
+					const separator = reference.indexOf(":");
+					const kind = reference.slice(0, separator);
+					if (!["memory", "artifact", "transcript", "summary"].includes(kind)) continue;
+					for (const id of sourceIdCandidates(reference.slice(separator + 1)))
+						dependencies?.add(JSON.stringify([kind, id, null]));
+				}
 				const entryId = row.entry_id;
 				if (
 					!support.every(
@@ -222,6 +242,7 @@ function readableHeadBody(db: WriteDb, agentId: string, revision: number, scope:
 			return [`- ${row.text.trim()}`];
 		})
 		.join("\n");
+	return content;
 }
 
 function authoredHeadReadable(db: WriteDb, agentId: string, scope: ReadScope): boolean {
@@ -334,7 +355,12 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	return result;
 }
 
-export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
+export function executeMemoryHead(
+	db: WriteDb,
+	root: string,
+	request: MemoryHeadRequest,
+	dependencies?: Set<string>,
+): Record<string, unknown> {
 	if (!["read", "inspect", "commit", "publish"].includes(request.action))
 		throw new Error("Unsupported memory head action");
 	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
@@ -383,7 +409,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 				content: authoredHeadReadable(db, agentId, scope) ? request.content : null,
 			};
 		if (scope.compartments !== "all" && head && head.revision > 0) {
-			const content = readableHeadBody(db, agentId, head.revision, scope);
+			const content = readableHeadBody(db, agentId, head.revision, scope, dependencies);
 			return scope.projects === null && !content && head.content
 				? { generated, status: "stale", content: null }
 				: { generated, status: "current", content };
@@ -392,7 +418,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 		return {
 			generated,
 			status: "current",
-			content: readableHeadBody(db, agentId, head.revision, scope),
+			content: readableHeadBody(db, agentId, head.revision, scope, dependencies),
 		};
 	}
 	const publicationPending =

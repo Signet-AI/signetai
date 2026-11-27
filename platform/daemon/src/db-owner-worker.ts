@@ -1,5 +1,6 @@
 import { executeEmbeddingProjectionInTx } from "./embedding-projection-owner";
 import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
+import { ScopedHeadCache } from "./scoped-head-cache";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { AUTHORITY_TABLES } from "./auth/authority-epoch";
@@ -14,6 +15,7 @@ import {
 	syncEmbeddingCompartment,
 	deleteCompartmentVectors,
 	activeVectorProjectionTable,
+	inFlightClassificationSql,
 	findSqliteVecExtension,
 	requireReadScope,
 	resolveWorkspaceLayout,
@@ -157,6 +159,12 @@ export function runDbOwnerWorker(): void {
 	const parentPid = process.ppid;
 	let db = undefined as unknown as SqliteDatabase;
 	let readDb: SqliteDatabase | undefined;
+	const scopedHeads = new ScopedHeadCache((key) => {
+		db.prepare("DELETE FROM temp.signet_head_dependencies WHERE cache_key=?").run(key);
+		db.prepare("DELETE FROM temp.signet_head_scopes WHERE cache_key=?").run(key);
+	});
+	let headDataVersion: unknown;
+	const headClassificationScopes = new Map<string, string>();
 	let parentWatch: ReturnType<typeof setInterval> | undefined;
 	let workspaceRoot: string | undefined;
 	function bindTranscriptWorkspace(candidate: string): string {
@@ -187,7 +195,14 @@ export function runDbOwnerWorker(): void {
 			const epoch = db.prepare("SELECT epoch FROM temp.signet_authority_epoch WHERE id=1").get()?.epoch;
 			if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0)
 				throw new Error("Invalid authority epoch");
+			if (BigInt(epoch) !== authorityEpoch) {
+				scopedHeads.clear();
+				headClassificationScopes.clear();
+			}
 			authorityEpoch = BigInt(epoch);
+			for (const row of db.prepare("SELECT cache_key FROM temp.signet_head_dirty").all<{ cache_key: string }>())
+				scopedHeads.invalidate(row.cache_key);
+			db.exec("DELETE FROM temp.signet_head_dirty");
 		}
 		process.stdout.write(
 			`${JSON.stringify({ ...event, authorityVersion: `${authorityInstance}:${authorityEpoch}` })}\n`,
@@ -218,6 +233,7 @@ export function runDbOwnerWorker(): void {
 		const vecExtension = findSqliteVecExtension();
 		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
 		installAuthorityEpoch();
+		installHeadInvalidation();
 	} catch (error) {
 		send({ type: "fatal", error: serializeError(error) });
 		closeAndExit(1);
@@ -1224,7 +1240,15 @@ export function runDbOwnerWorker(): void {
 			"CREATE TEMP TABLE IF NOT EXISTS signet_authority_epoch (id INTEGER PRIMARY KEY CHECK(id=1), epoch INTEGER NOT NULL); INSERT OR IGNORE INTO signet_authority_epoch VALUES (1,0)",
 		);
 		authorityEpochReady = true;
-		for (const table of AUTHORITY_TABLES) {
+		for (const table of [
+			...AUTHORITY_TABLES,
+			"classifications",
+			"classification_audience",
+			"classification_assignments",
+			"compartments",
+			"compartment_members",
+			"org_jobs",
+		]) {
 			const columns = db
 				.prepare(`PRAGMA table_info("${table}")`)
 				.all()
@@ -1240,7 +1264,15 @@ export function runDbOwnerWorker(): void {
 					`CREATE TEMP TRIGGER IF NOT EXISTS "signet_authority_${table}_${event}" AFTER ${event} ON main."${table}" BEGIN UPDATE signet_authority_epoch SET epoch=epoch+1 WHERE id=1; END`,
 				);
 			const changed = columns
-				.filter((column) => !["last_used_at", "last_seen_at", "updated_at"].includes(column))
+				.filter(
+					(column) =>
+						![
+							"last_used_at",
+							"last_seen_at",
+							"updated_at",
+							...(table === "org_jobs" ? ["progress_json"] : []),
+						].includes(column),
+				)
 				.map((column) => {
 					const quoted = `"${column.replaceAll('"', '""')}"`;
 					return `OLD.${quoted} IS NOT NEW.${quoted}`;
@@ -1253,10 +1285,81 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 
+	function installHeadInvalidation(): void {
+		db.exec(
+			"CREATE TEMP TABLE IF NOT EXISTS signet_head_dependencies(cache_key TEXT NOT NULL, agent_id TEXT NOT NULL, kind TEXT NOT NULL, source_id TEXT NOT NULL, compartment_id INTEGER, PRIMARY KEY(cache_key,kind,source_id,compartment_id)); CREATE INDEX IF NOT EXISTS temp.signet_head_dependency_source ON signet_head_dependencies(kind,source_id,agent_id,compartment_id); CREATE TEMP TABLE IF NOT EXISTS signet_head_scopes(cache_key TEXT PRIMARY KEY,agent_id TEXT NOT NULL,compartments_json TEXT); CREATE TEMP TABLE IF NOT EXISTS signet_head_dirty(cache_key TEXT PRIMARY KEY)",
+		);
+		for (const [table, kind, id] of [
+			["memories", "memory", "id"],
+			["memory_artifacts", "artifact", "source_path"],
+			["session_transcripts", "transcript", "session_key"],
+			["session_summaries", "summary", "id"],
+		]) {
+			if (
+				table === undefined ||
+				kind === undefined ||
+				id === undefined ||
+				!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)
+			)
+				continue;
+			const columns = db
+				.prepare(`PRAGMA table_info("${table}")`)
+				.all<{ name: string }>()
+				.map((row) => row.name);
+			if (
+				![
+					"agent_id",
+					"compartment_id",
+					id,
+					...(table === "memory_artifacts" ? ["source_node_id", "session_id", "session_key", "session_token"] : []),
+				].every((column) => columns.includes(column))
+			)
+				continue;
+			for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+				const readable = (reference: string) =>
+					`d.source_id IN (${(table === "memory_artifacts" ? ["source_path", "source_node_id", "session_id", "session_key", "session_token"] : [id]).map((column) => `${reference}.${column}`).join(",")}) AND d.agent_id=${reference}.agent_id AND (${reference}.compartment_id IS NULL OR s.compartments_json IS NULL OR EXISTS(SELECT 1 FROM json_each(s.compartments_json) WHERE value=${reference}.compartment_id))`;
+				const changed =
+					operation === "DELETE"
+						? readable("OLD")
+						: operation === "INSERT"
+							? readable("NEW")
+							: `((${readable("OLD")}) OR (${readable("NEW")}))`;
+				db.exec(
+					`CREATE TEMP TRIGGER IF NOT EXISTS signet_head_${table}_${operation} AFTER ${operation} ON main.${table} BEGIN INSERT INTO signet_head_dirty SELECT DISTINCT d.cache_key FROM signet_head_dependencies d JOIN signet_head_scopes s ON s.cache_key=d.cache_key WHERE d.kind='${kind}' AND (${changed}) AND NOT EXISTS(SELECT 1 FROM signet_head_dirty WHERE cache_key=d.cache_key); END`,
+				);
+			}
+		}
+		for (const table of [
+			"memory_md_heads",
+			"memory_head_revisions",
+			"memory_head_entries",
+			"memory_head_revision_entries",
+		]) {
+			if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) continue;
+			const columns = db
+				.prepare(`PRAGMA table_info("${table}")`)
+				.all<{ name: string }>()
+				.map((row) => row.name);
+			if (!columns.includes("agent_id") || (table !== "memory_md_heads" && !columns.includes("compartment_id")))
+				continue;
+			for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+				const reference = operation === "DELETE" ? "OLD" : "NEW";
+				const readable = (row: string) =>
+					`s.agent_id=${row}.agent_id AND (${table === "memory_md_heads" ? "1=1" : `${row}.compartment_id IS NULL OR s.compartments_json IS NULL OR EXISTS(SELECT 1 FROM json_each(s.compartments_json) WHERE value=${row}.compartment_id)`})`;
+				const agentMatch =
+					operation === "UPDATE" ? `((${readable("OLD")}) OR (${readable("NEW")}))` : readable(reference);
+				db.exec(
+					`CREATE TEMP TRIGGER IF NOT EXISTS signet_head_${table}_${operation} AFTER ${operation} ON main.${table} BEGIN INSERT INTO signet_head_dirty SELECT cache_key FROM signet_head_scopes s WHERE ${agentMatch} AND NOT EXISTS(SELECT 1 FROM signet_head_dirty WHERE cache_key=s.cache_key); END`,
+				);
+			}
+		}
+	}
+
 	async function execute(job: DbOwnerJob, context: JobExecutionContext): Promise<unknown> {
 		if (job.request.kind === "initialize") {
 			const value = await executeInitialization(job.request.agentsDir, context);
 			installAuthorityEpoch();
+			installHeadInvalidation();
 			return value;
 		}
 		if (job.request.kind === "auth_observations") {
@@ -1350,8 +1453,93 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "memory_head") {
 			const { executeMemoryHead } = await import("./memory-head-owner");
 			const request = job.request.request;
-			if (request.action === "read" || request.action === "inspect")
-				return executeMemoryHead(db, dirname(dirname(ownerDbPath)), request);
+			if (request.action === "inspect") {
+				if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
+				const scope = requireReadScope(request.readScope);
+				const version = db.prepare("PRAGMA data_version").get()?.data_version;
+				if (version !== headDataVersion) {
+					scopedHeads.clear();
+					headClassificationScopes.clear();
+					headDataVersion = version;
+				}
+				const head = db
+					.prepare("SELECT revision,revision_id,content_hash,is_current FROM memory_md_heads WHERE agent_id=?")
+					.get(request.agentId);
+				const epoch = db.prepare("SELECT epoch FROM temp.signet_authority_epoch WHERE id=1").get()?.epoch;
+				const { inFlightUserId, ...readerScope } = scope;
+				let classificationScope = "";
+				if (inFlightUserId !== undefined) {
+					const scopeKey = JSON.stringify([request.agentId, inFlightUserId, epoch]);
+					if (Buffer.byteLength(scopeKey) > 512) return executeMemoryHead(db, dirname(dirname(ownerDbPath)), request);
+					const known = headClassificationScopes.get(scopeKey);
+					if (known !== undefined) classificationScope = known;
+					else {
+						const blocked = db
+							.prepare(
+								`SELECT j.id FROM org_jobs j WHERE ${inFlightClassificationSql("j")} AND json_extract(CASE WHEN json_valid(j.params_json) THEN j.params_json ELSE '{}' END,'$.target.agentId')=? ORDER BY j.id LIMIT 129`,
+							)
+							.all<{ id: string }>(inFlightUserId, inFlightUserId, request.agentId);
+						if (
+							blocked.length > 128 ||
+							blocked.some((row) => typeof row.id !== "string" || Buffer.byteLength(row.id) > 128)
+						)
+							return executeMemoryHead(db, dirname(dirname(ownerDbPath)), request);
+						classificationScope =
+							blocked.length === 0 ? "" : createHash("sha256").update(JSON.stringify(blocked)).digest("hex");
+						if (headClassificationScopes.size >= 2048) headClassificationScopes.clear();
+						headClassificationScopes.set(scopeKey, classificationScope);
+					}
+				}
+				const key = createHash("sha256")
+					.update(JSON.stringify([request.agentId, readerScope, classificationScope]))
+					.digest("hex");
+				const fence = JSON.stringify([head, epoch, createHash("sha256").update(request.content).digest("hex")]);
+				const cached = scopedHeads.get(key, fence);
+				if (cached !== undefined) return cached;
+				const dependencies = new Set<string>();
+				const result = executeMemoryHead(db, dirname(dirname(ownerDbPath)), request, dependencies);
+				if (
+					result.generated === true &&
+					(result.status === "current" || result.status === "stale") &&
+					(typeof result.content === "string" || result.content === null) &&
+					dependencies.size <= 12800 &&
+					[...dependencies].reduce((bytes, value) => bytes + Buffer.byteLength(value), 0) <= 262144 &&
+					Buffer.byteLength(JSON.stringify(scope)) <= 32768 &&
+					scope.projects === null
+				) {
+					scopedHeads.set(key, fence, { generated: true, status: result.status, content: result.content });
+					try {
+						if (scopedHeads.get(key, fence) !== undefined) {
+							db.prepare("INSERT INTO temp.signet_head_scopes(cache_key,agent_id,compartments_json) VALUES(?,?,?)").run(
+								key,
+								request.agentId,
+								scope.compartments === "all" ? null : JSON.stringify(scope.compartments),
+							);
+							db.prepare(
+								"INSERT INTO temp.signet_head_dependencies(cache_key,agent_id,kind,source_id) VALUES(?,?,'head',?)",
+							).run(key, request.agentId, request.agentId);
+							for (const reference of dependencies) {
+								const dependency: unknown = JSON.parse(reference);
+								if (
+									!Array.isArray(dependency) ||
+									typeof dependency[0] !== "string" ||
+									typeof dependency[1] !== "string" ||
+									!(dependency[2] === null || typeof dependency[2] === "number")
+								)
+									throw new Error("Invalid scoped head dependency");
+								db.prepare(
+									"INSERT INTO temp.signet_head_dependencies(cache_key,agent_id,kind,source_id,compartment_id) VALUES(?,?,?,?,?)",
+								).run(key, request.agentId, dependency[0], dependency[1], dependency[2]);
+							}
+						}
+					} catch (error) {
+						scopedHeads.invalidate(key);
+						throw error;
+					}
+				}
+				return result;
+			}
+			if (request.action === "read") return executeMemoryHead(db, dirname(dirname(ownerDbPath)), request);
 			if (job.lane !== "write") throw new Error("Memory head mutation requires the write lane");
 			return withBusyRetry(() => executeMemoryHead(db, dirname(dirname(ownerDbPath)), request), context);
 		}

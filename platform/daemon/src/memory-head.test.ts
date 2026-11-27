@@ -757,6 +757,19 @@ describe("memory head owner runtime", () => {
 			content: "- Meeting is Tuesday.",
 		});
 		expect(
+			await client.submit<{ sources: string }>(
+				{
+					kind: "query",
+					statement: {
+						sql: "SELECT group_concat(source_id) sources FROM temp.signet_head_dependencies WHERE kind='memory' AND source_id NOT LIKE '%:%'",
+						params: [],
+						result: "get",
+					},
+				},
+				options,
+			).result,
+		).toEqual({ sources: "meeting" });
+		expect(
 			await head({
 				action: "inspect",
 				agentId: "default",
@@ -764,6 +777,28 @@ describe("memory head owner runtime", () => {
 				readScope: { ...outside, compartments: [7] },
 			}),
 		).toMatchObject({ content: "- Meeting is Tuesday.\n- Salary bands are HRSECRET." });
+		await sql("UPDATE memory_head_entries SET canonical_text='Corrected HRSECRET salary.' WHERE entry_id='salary'");
+		expect(
+			await client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: { sql: "SELECT count(*) n FROM temp.signet_head_scopes", params: [], result: "get" },
+				},
+				options,
+			).result,
+		).toEqual({ n: 1 });
+		expect(await head({ action: "inspect", agentId: "default", content: file, readScope: outside })).toMatchObject({
+			content: "- Meeting is Tuesday.",
+		});
+		expect(
+			await head({
+				action: "inspect",
+				agentId: "default",
+				content: file,
+				readScope: { ...outside, compartments: [7] },
+			}),
+		).toMatchObject({ content: "- Meeting is Tuesday.\n- Corrected HRSECRET salary." });
+		await sql("UPDATE memory_head_entries SET canonical_text='Salary bands are HRSECRET.' WHERE entry_id='salary'");
 		expect(
 			await head({
 				action: "inspect",
@@ -788,6 +823,111 @@ describe("memory head owner runtime", () => {
 				readScope: { reach: { kind: "own", agentId: "other" }, compartments: "all", projects: null },
 			}),
 		).toMatchObject({ content: "" });
+	});
+
+	it("evicts scoped head dependencies before revoke, reclassify and delete acknowledge", async () => {
+		await label(7);
+		await sql("INSERT INTO classification_audience VALUES('cls_hr','user','reader')");
+		expect(await commit("cache-fences")).toMatchObject({ ok: true });
+		const read = () => head({ action: "inspect", agentId: "default", content: "", readScope: outside });
+		const dependencies = () =>
+			client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: {
+						sql: "SELECT count(DISTINCT kind) n FROM temp.signet_head_dependencies",
+						params: [],
+						result: "get",
+					},
+				},
+				options,
+			).result;
+		const expected = { generated: true, status: "current", content: "- Meeting is Tuesday." };
+		expect(await read()).toEqual(expected);
+		expect(await read()).toEqual(expected);
+		expect(await dependencies()).toEqual({ n: 2 });
+		await sql("DELETE FROM classification_audience WHERE principal_id='reader'");
+		expect(await dependencies()).toEqual({ n: 0 });
+		expect(await read()).toEqual(expected);
+		await sql("UPDATE memories SET compartment_id=7 WHERE id='meeting'");
+		expect(await dependencies()).toEqual({ n: 0 });
+		expect(await read()).toMatchObject({ status: "stale", content: null });
+		await sql("UPDATE memories SET compartment_id=NULL WHERE id='meeting'");
+		expect(await read()).toEqual(expected);
+		await sql("UPDATE memories SET is_deleted=1 WHERE id='meeting'");
+		expect(await dependencies()).toEqual({ n: 0 });
+		expect(await read()).toMatchObject({ status: "stale", content: null });
+	});
+
+	it("refreshes a cached missing citation only when its evidence becomes readable", async () => {
+		await label(7);
+		expect(await commit("cache-missing")).toMatchObject({ ok: true });
+		await sql("UPDATE memory_head_revision_entries SET provenance_json=? WHERE entry_id='meeting'", [
+			JSON.stringify([{ source_ref: "memory:missing", quote: "Meeting is Tuesday." }]),
+		]);
+		const read = () => head({ action: "inspect", agentId: "default", content: "", readScope: outside });
+		expect(await read()).toMatchObject({ status: "stale", content: null });
+		expect(await read()).toMatchObject({ status: "stale", content: null });
+		await sql(
+			"INSERT INTO memories(id,content,agent_id,memory_kind,type,visibility,compartment_id,created_at,updated_at) VALUES('memory:missing','Meeting is Tuesday.','default','episodic','fact','private',7,datetime('now'),datetime('now'))",
+		);
+		expect(
+			await client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: { sql: "SELECT count(*) n FROM temp.signet_head_scopes", params: [], result: "get" },
+				},
+				options,
+			).result,
+		).toEqual({ n: 1 });
+		expect(await read()).toMatchObject({ status: "stale", content: null });
+		await memory("missing", "Meeting is Tuesday.");
+		expect(
+			await client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: { sql: "SELECT count(*) n FROM temp.signet_head_scopes", params: [], result: "get" },
+				},
+				options,
+			).result,
+		).toEqual({ n: 0 });
+		expect(await read()).toEqual({ generated: true, status: "current", content: "- Meeting is Tuesday." });
+	});
+
+	it("shares only equivalent reader fences and separates active classification audiences", async () => {
+		await label(7);
+		expect(await commit("cache-audiences")).toMatchObject({ ok: true });
+		const read = (userId: string) =>
+			head({ action: "inspect", agentId: "default", content: "", readScope: { ...outside, inFlightUserId: userId } });
+		const slots = () =>
+			client.submit<{ n: number }>(
+				{
+					kind: "query",
+					statement: { sql: "SELECT count(*) n FROM temp.signet_head_scopes", params: [], result: "get" },
+				},
+				options,
+			).result;
+		const visible = { generated: true, status: "current", content: "- Meeting is Tuesday." };
+		expect(await read("alice")).toEqual(visible);
+		expect(await read("bob")).toEqual(visible);
+		expect(await slots()).toEqual({ n: 1 });
+		await sql("INSERT INTO classification_audience VALUES('cls_hr','user','alice')");
+		await sql(
+			"INSERT INTO org_jobs(id,kind,status,params_json,created_at) VALUES('head-job','classify','running',?,datetime('now'))",
+			[JSON.stringify({ id: "cls_hr", target: { kind: "memory", id: "meeting", agentId: "default" } })],
+		);
+		expect(await read("alice")).toEqual(visible);
+		expect(await read("bob")).toMatchObject({ status: "stale", content: null });
+		expect(await slots()).toEqual({ n: 2 });
+		await sql("DELETE FROM classification_audience WHERE principal_id='alice'");
+		expect(await slots()).toEqual({ n: 0 });
+		expect(await read("alice")).toMatchObject({ status: "stale", content: null });
+		expect(await read("bob")).toMatchObject({ status: "stale", content: null });
+		expect(await slots()).toEqual({ n: 1 });
+		await sql("UPDATE org_jobs SET progress_json='{}' WHERE id='head-job'");
+		expect(await slots()).toEqual({ n: 1 });
+		await sql("UPDATE org_jobs SET status='complete' WHERE id='head-job'");
+		expect(await read("bob")).toEqual(visible);
 	});
 
 	it("withholds authored head evidence from readers outside the agent label", async () => {

@@ -78,6 +78,10 @@ Signet reuses validated identity metadata in bounded process memory. Role and gr
 
 Last-use timestamps are observational, not proof of authorization. They are coalesced in memory and flushed about once a second through maintenance admission, in turns of at most 128 rows with a 20-ms admission budget. The buffer holds at most 2,048 pending IDs plus one in-flight batch; saturation rejects new observation admission rather than growing without limit. Shutdown, owner replacement, or a failed flush can lose buffered timestamps, and a failed flush is logged. Timestamps may lag while the owner is busy. Credential expiration changes, revocation, source evidence, and authored audit events remain synchronous durable operations. Request rate-limit windows remain bounded in process memory and reset on restart; durable credential-issuance quotas still use their durable audit records.
 
+## Generated session context
+
+Repeated session starts can reuse a rendered generated head inside the database owner. Entries are keyed by the agent and the reader's effective scope, including active classification fences; readers with different visible content never share a cached head. The cache retains only the filtered result, not the unscoped projection or source bodies. Projection changes, visibility changes, and changes to cited evidence invalidate affected entries before the owner acknowledges them. Revocation has no cache TTL. Owner restart drops the cache, and oversized heads are read without caching. Authored memory files keep their existing preservation rules.
+
 ## Provision a connector
 
 1. Start a CLI or desktop sign-in with `POST /api/auth/device/start`.
