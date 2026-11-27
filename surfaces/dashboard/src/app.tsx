@@ -1,4 +1,4 @@
-import { Activity, useEffect, useRef } from "react";
+import { Activity, useEffect, useRef, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
@@ -60,12 +60,16 @@ function Shell() {
 	useAgentContext();
 	const { view, setView, setSetupComplete } = useView();
 	const contentRef = useRef<HTMLDivElement>(null);
+	const [personalSetup, setPersonalSetup] = useState(false);
 	const [sidebarOpen, toggleSidebar] = useSidebarOpen();
 	useEffect(() => {
 		contentRef.current?.scrollTo({ top: 0 });
 	}, [view]);
 	return (
-		<div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+		<div
+			key={personalSetup ? "personal" : "entry"}
+			className="flex h-full min-h-0 flex-col bg-background text-foreground"
+		>
 			<main
 				data-view={view}
 				data-sidebar={sidebarOpen ? "open" : "closed"}
@@ -89,8 +93,11 @@ function Shell() {
 										setView("home");
 									}}
 								/>
+							) : personalSetup ? (
+								<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
 							) : (
 								<OnboardingEntry
+									onPersonal={() => setPersonalSetup(true)}
 									personal={<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />}
 								/>
 							)
