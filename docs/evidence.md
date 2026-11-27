@@ -64,6 +64,14 @@ Trap: deleting the whole agent directory also deletes files of a new agent with 
 
 Owner: `platform/daemon/src/transcript-upload-agent-lock.ts`, `platform/daemon/src/session-transcripts.ts` (`drainTranscriptUploadPurgesOwned`), `platform/daemon/src/transcript-upload-paths.ts`.
 
+## Session end reuses the upload's capture job
+
+A session that uploads its transcript has one capture job, the one its upload commits queue. A session-end without a transcript finds that job, sets its `ended_at` and queues it again, and leaves every other field of the row as it is. It creates no `session:<key>` job on the stored live turns. When no uploaded range has ended a line yet, there is no job and session-end queues nothing.
+
+Trap: a second job on the stored turns, or a full re-upsert of the upload job, gives the capture another session id. The capture then writes a second transcript artifact under another session token, and recall returns the same evidence twice. Changing the upsert's same-source dedupe to carry `ended_at` instead also moves the `captured_at` of path-based jobs, which shifts temporal recall.
+
+Owner: `platform/daemon/src/session-transcripts.ts` (`endTranscriptUploadInTx`), `platform/daemon/src/transcript-capture-jobs.ts` (`endTranscriptCaptureJobInTx`).
+
 ## Dependency history belongs to triggers
 
 SQLite triggers on `entity_dependencies` (insert, update, delete) write the dependency audit rows. Application code must not write those rows.

@@ -1190,6 +1190,11 @@ export function runDbOwnerWorker(): void {
 			const input = job.request.input;
 			return withBusyRetry(() => commitTranscriptUploadInTx(db, input), context);
 		}
+		if (job.request.kind === "session_transcript_upload_end") {
+			const { endTranscriptUploadInTx } = await import("./session-transcripts");
+			const input = job.request.input;
+			return withBusyRetry(() => endTranscriptUploadInTx(db, input), context);
+		}
 		if (job.request.kind === "session_transcript_turn_backfill") {
 			const { backfillTranscriptTurnsFtsChunkInDb } = await import("./session-transcripts");
 			const input = job.request.input;

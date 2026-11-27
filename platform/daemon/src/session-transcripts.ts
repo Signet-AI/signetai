@@ -6,11 +6,16 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
-import { type TranscriptCaptureSource, upsertTranscriptCaptureJobInTx } from "./transcript-capture-jobs";
+import {
+	type TranscriptCaptureSource,
+	endTranscriptCaptureJobInTx,
+	upsertTranscriptCaptureJobInTx,
+} from "./transcript-capture-jobs";
 import {
 	TRANSCRIPT_UPLOAD_CLEANUP_ENTRIES,
 	removeStaleTranscriptUploadEpochs,
 	transcriptUploadAgentRelativePath,
+	transcriptUploadFilePath,
 	transcriptUploadSessionDirectory,
 } from "./transcript-upload-paths";
 import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
@@ -2031,6 +2036,17 @@ export interface TranscriptUploadScope {
 	readonly purgeEpoch: number;
 }
 
+export interface TranscriptUploadEndCommit {
+	readonly basePath: string;
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly endedAt: string;
+}
+
+export type TranscriptUploadEndCommitResult =
+	| { readonly status: "none" }
+	| { readonly status: "ended"; readonly jobId: string | null };
+
 export function readTranscriptUploadStateInDb(
 	db: ReadDb,
 	agentId: string,
@@ -2163,6 +2179,28 @@ export function commitTranscriptUploadInTx(db: WriteDb, input: TranscriptUploadC
 		},
 		jobId,
 	};
+}
+
+export function endTranscriptUploadInTx(
+	db: WriteDb,
+	input: TranscriptUploadEndCommit,
+): TranscriptUploadEndCommitResult {
+	const scope = readTranscriptUploadScopeInDb(db, input.agentId, input.sessionKey);
+	const state = scope.state;
+	if (!state) return { status: "none" };
+	const jobId = endTranscriptCaptureJobInTx(db, {
+		agentId: input.agentId,
+		harness: state.harness,
+		sourcePath: transcriptUploadFilePath(
+			input.basePath,
+			input.agentId,
+			scope.purgeEpoch,
+			input.sessionKey,
+			state.generation,
+		),
+		endedAt: input.endedAt,
+	});
+	return { status: "ended", jobId };
 }
 
 export async function drainTranscriptUploadPurgesOwned(

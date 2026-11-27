@@ -56,10 +56,35 @@ function normalizeMaxAttempts(value: number | undefined): number {
 	return Math.max(1, Math.min(20, Math.trunc(value)));
 }
 
+function fileSourceIdentity(harness: string, sourcePath: string): string {
+	return `file:${harness.trim().toLowerCase()}:${sourcePath}`;
+}
+
 export function transcriptCaptureSourceIdentity(input: TranscriptCaptureJobInput, sourcePath: string | null): string {
-	if (sourcePath) return `file:${input.harness.trim().toLowerCase()}:${sourcePath}`;
+	if (sourcePath) return fileSourceIdentity(input.harness, sourcePath);
 	if (input.sessionKey?.trim()) return `session:${input.sessionKey.trim()}`;
 	return `inline:${input.sessionId.trim()}`;
+}
+
+export function endTranscriptCaptureJobInTx(
+	db: WriteDb,
+	input: { readonly agentId: string; readonly harness: string; readonly sourcePath: string; readonly endedAt: string },
+): string | null {
+	const job = prepareTypedStatement<{ id: string }>(
+		db,
+		`SELECT id
+		 FROM transcript_capture_jobs
+		 WHERE agent_id = ? AND source_identity = ? AND status <> 'dead'
+		 ORDER BY created_at ASC
+		 LIMIT 1`,
+	).get(input.agentId, fileSourceIdentity(input.harness, input.sourcePath));
+	if (!job) return null;
+	db.prepare(
+		`UPDATE transcript_capture_jobs
+		 SET ended_at = ?, summary_status = 'not_requested', status = 'pending', attempts = 0, error = NULL, updated_at = ?
+		 WHERE id = ?`,
+	).run(input.endedAt, new Date().toISOString(), job.id);
+	return job.id;
 }
 
 export function transcriptCaptureJobId(input: TranscriptCaptureJobInput): string {

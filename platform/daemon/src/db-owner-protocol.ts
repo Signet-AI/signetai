@@ -405,6 +405,10 @@ export type DbOwnerRequest =
 			readonly input: import("./session-transcripts").TranscriptUploadCommit;
 	  }
 	| {
+			readonly kind: "session_transcript_upload_end";
+			readonly input: import("./session-transcripts").TranscriptUploadEndCommit;
+	  }
+	| {
 			readonly kind: "session_transcript_turn_backfill";
 			readonly input: import("./session-transcripts").TranscriptTurnBackfillOptions;
 	  }

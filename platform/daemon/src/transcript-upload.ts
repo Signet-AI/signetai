@@ -7,12 +7,18 @@ import type { DbAccessor } from "./db-accessor";
 import {
 	dbOwnerCommitTranscriptUpload,
 	dbOwnerDrainTranscriptUploadPurges,
+	dbOwnerEndTranscriptUpload,
 	dbOwnerReadTranscriptUploadScope,
 	getDbOwner,
 	getDbOwnerForAccessor,
 } from "./db-owner-runtime";
 import { logger } from "./logger";
-import { type TranscriptUploadCommitResult, transcriptUploadConflict } from "./session-transcripts";
+import {
+	type TranscriptUploadCommitResult,
+	type TranscriptUploadEndCommit,
+	type TranscriptUploadEndCommitResult,
+	transcriptUploadConflict,
+} from "./session-transcripts";
 import { sha256 } from "./transcript-capture-jobs";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import { openContainedTranscriptFile, removeContainedTranscriptPath } from "./transcript-import-safe-fs";
@@ -44,6 +50,8 @@ export type TranscriptUploadResult =
 	| TranscriptUploadCommitResult
 	| { readonly status: "invalid"; readonly reason: "empty" | "checksum" };
 
+export type TranscriptUploadEnd = TranscriptUploadEndCommit;
+
 async function syncDirectory(root: string, path: string): Promise<void> {
 	const directory = await openContainedTranscriptFile(root, path, constants.O_RDONLY | constants.O_DIRECTORY);
 	try {
@@ -74,6 +82,15 @@ export async function uploadTranscriptRange(
 				: writeAndCommitRange(accessor, input),
 		),
 	);
+}
+
+export async function endTranscriptUpload(
+	accessor: DbAccessor,
+	input: TranscriptUploadEnd,
+): Promise<TranscriptUploadEndCommitResult> {
+	return await dbOwnerEndTranscriptUpload(await getDbOwnerForAccessor(accessor), input, {
+		operation: "transcript-upload.end",
+	});
 }
 
 async function writeAndCommitRange(

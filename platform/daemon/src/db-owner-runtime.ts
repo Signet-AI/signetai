@@ -26,6 +26,8 @@ import type {
 	TranscriptTurnBackfillOptions,
 	TranscriptUploadCommit,
 	TranscriptUploadCommitResult,
+	TranscriptUploadEndCommit,
+	TranscriptUploadEndCommitResult,
 	TranscriptUploadScope,
 } from "./session-transcripts";
 import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
@@ -240,6 +242,13 @@ async function executeInlineOwnerRequest(
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			if (!("exec" in db)) throw new Error("Transcript upload commit requires owner write access");
 			return commitTranscriptUploadInTx(db, request.input);
+		});
+	}
+	if (request.kind === "session_transcript_upload_end") {
+		const { endTranscriptUploadInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Transcript upload end requires owner write access");
+			return endTranscriptUploadInTx(db, request.input);
 		});
 	}
 	if (request.kind === "session_transcript_turn_backfill") {
@@ -644,6 +653,18 @@ export async function dbOwnerCommitTranscriptUpload(
 	return await submitWithAdmission(
 		owner,
 		{ kind: "session_transcript_upload_commit", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
+}
+
+export async function dbOwnerEndTranscriptUpload(
+	owner: DbOwnerClient,
+	input: TranscriptUploadEndCommit,
+	options: DbOwnerSqlOptions,
+): Promise<TranscriptUploadEndCommitResult> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_upload_end", input },
 		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
 	);
 }

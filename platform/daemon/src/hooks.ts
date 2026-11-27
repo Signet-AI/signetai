@@ -106,6 +106,7 @@ import {
 	hashSessionKey,
 	markSessionEndTelemetry,
 	normalizeSessionBoundaryReason,
+	normalizeSessionKey,
 	pruneSessionEndTelemetry,
 } from "./session-end-state";
 import {
@@ -154,6 +155,7 @@ import {
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript as normalizeSessionTranscriptBase,
 } from "./transcript-normalization";
+import { endTranscriptUpload } from "./transcript-upload";
 import { getUpdateSummary } from "./update-system";
 import { isRetryableWritePressure } from "./write-pressure";
 
@@ -2130,18 +2132,30 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	let transcriptCaptureJobId: string | null = null;
 	if (req.transcriptPath || transcript.trim().length > 0 || sessionKey !== null) {
 		try {
-			transcriptCaptureJobId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
-				agentId,
-				harness: req.harness,
-				sessionKey: sessionKey ?? null,
-				sessionId,
-				project: req.cwd ?? null,
-				transcript: req.transcriptPath ? "" : transcript,
-				transcriptPath: req.transcriptPath ?? null,
-				basePath: getAgentsDir(),
-				capturedAt: endedAt,
-				endedAt,
-			});
+			const upload =
+				!req.transcriptPath && transcript.trim().length === 0 && sessionKey
+					? await endTranscriptUpload(getDbAccessor(), {
+							basePath: getAgentsDir(),
+							agentId,
+							sessionKey: normalizeSessionKey(sessionKey),
+							endedAt,
+						})
+					: null;
+			transcriptCaptureJobId =
+				upload?.status === "ended"
+					? upload.jobId
+					: await enqueueTranscriptCaptureJob(getDbAccessor(), {
+							agentId,
+							harness: req.harness,
+							sessionKey: sessionKey ?? null,
+							sessionId,
+							project: req.cwd ?? null,
+							transcript: req.transcriptPath ? "" : transcript,
+							transcriptPath: req.transcriptPath ?? null,
+							basePath: getAgentsDir(),
+							capturedAt: endedAt,
+							endedAt,
+						});
 		} catch (error) {
 			if (isRetryableWritePressure(error)) throw error;
 			logger.warn("hooks", "Transcript capture enqueue failed", {

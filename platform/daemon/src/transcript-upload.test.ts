@@ -101,8 +101,6 @@ describe("transcript upload ranges", () => {
 			basePath: dir,
 			agentId: "noam",
 			sessionKey: "sess-1",
-			sessionId: "sess-1",
-			project: "/repo",
 			endedAt: "2026-11-26T11:00:00.000Z",
 		};
 	}
@@ -665,9 +663,8 @@ describe("transcript upload ranges", () => {
 		init();
 		const accessor = getDbAccessor();
 		const uploaded = await uploadTranscriptRange(accessor, request('{"a":1}\n'));
-		if (uploaded.status !== "committed") throw new Error("upload not committed");
+		if (uploaded.status !== "committed" || uploaded.jobId === null) throw new Error("upload job not queued");
 		const jobId = uploaded.jobId;
-		expect(jobId).toEqual(expect.any(String));
 		const ended = await endTranscriptUpload(accessor, end());
 		expect(ended).toEqual({ status: "ended", jobId });
 		expect(await captureJobs()).toEqual([{ id: jobId, status: "pending", ended_at: "2026-11-26T11:00:00.000Z" }]);
@@ -677,9 +674,8 @@ describe("transcript upload ranges", () => {
 		init();
 		const accessor = getDbAccessor();
 		const uploaded = await uploadTranscriptRange(accessor, request('{"a":1}\n'));
-		if (uploaded.status !== "committed") throw new Error("upload not committed");
+		if (uploaded.status !== "committed" || uploaded.jobId === null) throw new Error("upload job not queued");
 		const jobId = uploaded.jobId;
-		expect(jobId).toEqual(expect.any(String));
 		expect(await runTranscriptCaptureOnce(accessor, dir)).toBe(true);
 		const ended = await endTranscriptUpload(accessor, end());
 		expect(ended).toEqual({ status: "ended", jobId });

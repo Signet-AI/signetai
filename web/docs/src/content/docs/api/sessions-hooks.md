@@ -245,6 +245,13 @@ in this path. The response includes `transcriptCaptureJobId` when transcript
 capture was queued. Poll `GET /api/hooks/transcript-capture/:jobId?agentId=<agent>`
 until the status is `completed`; the receipt never exposes transcript content.
 
+A connector that uploaded the transcript with `PATCH /api/hooks/transcript-upload`
+sends `session-end` without `transcript` or `transcriptPath`. The daemon then
+marks the upload's capture as ended and queues it again, and
+`transcriptCaptureJobId` is the `jobId` the upload returned. It does not capture
+the session's stored turns a second time. When no uploaded range has ended a
+line yet, nothing is queued and the response has no `transcriptCaptureJobId`.
+
 ### PATCH /api/hooks/transcript-upload
 
 Appends one range of the harness's raw JSONL transcript file at a byte offset.
@@ -276,7 +283,9 @@ waits for the next upload.
 **Response**: `{ "committedOffset": 16, "generation": 0, "tailSha256": "…",
 "jobId": "tcj_…" }`. The daemon queues a capture only when the range ends with
 a newline; a range that ends inside a record returns `"jobId": null`, and the
-next range that ends its line queues the capture.
+next range that ends its line queues the capture. At the end of the session,
+call `POST /api/hooks/session-end` without a transcript: it ends this same
+capture.
 
 `tailSha256` hashes the last 64 KiB of committed bytes, so a connector can
 check that its own file still matches before it sends the next range. A bypassed session or a session being deleted returns
