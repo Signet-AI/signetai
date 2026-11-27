@@ -1,4 +1,5 @@
 import { executeEmbeddingProjectionInTx } from "./embedding-projection-owner";
+import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1645,12 +1646,10 @@ export function runDbOwnerWorker(): void {
 		runNext();
 	}
 
-	let input = "";
+	const input = new DbOwnerLineBuffer();
 	process.stdin.setEncoding("utf8");
 	process.stdin.on("data", (chunk: string) => {
-		input += chunk;
-		const lines = input.split("\n");
-		input = lines.pop() ?? "";
+		const lines = input.read(chunk);
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {
