@@ -18,12 +18,12 @@ describe("web-source-provider", () => {
 	let dir = "";
 	let previousSignetPath: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-web-source-"));
 		previousSignetPath = process.env.SIGNET_PATH;
 		process.env.SIGNET_PATH = dir;
 		mkdirSync(join(dir, "memory"), { recursive: true });
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		setWebDnsLookupForTest((async () => [
 			{ address: "93.184.216.34", family: 4 },
