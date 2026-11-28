@@ -17,7 +17,7 @@ signet --local org remote-features deny git.sync
 
 Organization host status reports `transport: "socket"` and the daemon's health projection, without opening the database for counts. Host feature changes require the socket, are audited with the OS uid and username, and survive restarts. Network administrators can inspect the policy but cannot change it. Allowing a feature does not grant missing credential permissions. See [Server tasks](/organization/#server-tasks) for feature groups and operations that can never be enabled remotely.
 
-Agent-targeted host requests need `--agent <id>`; the local identity never selects `default` implicitly and does not bypass classification. Windows currently reports the local endpoint unavailable rather than replacing it with privileged TCP.
+Agent-targeted host requests need `--agent <id>`; the local identity never selects `default` implicitly and does not bypass classification. The socket is unavailable on Windows, so host tasks there require stopping the daemon. There is no privileged TCP fallback.
 
 `signet graphiq update` invokes the daemon's managed updater. On a running organization host, GraphIQ status, installation, removal, and indexing also use the daemon rather than editing its plugin configuration in the CLI. Index purging with `--purge-indexes` is not supported through the running organization daemon and fails explicitly. Existing personal-mode and offline GraphIQ workflows remain available.
 

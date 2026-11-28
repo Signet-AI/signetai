@@ -34,7 +34,7 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
 
 The Unix private socket serves the same middleware and route stack as TCP. Its OS-user authority comes from the listener, never a request header. In claimed organizations it admits the `local` administrator principal, records uid and username in audit events, requires explicit agents for agent-targeted operations, and does not grant classification visibility. TCP cannot acquire this authority.
 
-`GET /health` includes `localEndpoint: { status: "available", path }` or `{ status: "unavailable", reason }`. Windows reports unavailable because a current-user-only named-pipe DACL is not established by the supported implementation. There is no privileged TCP fallback.
+`GET /health` includes `localEndpoint: { status: "available", path }` or `{ status: "unavailable", reason }`. The socket is unavailable on Windows, so host tasks there require stopping the daemon. There is no privileged TCP fallback.
 
 ### GET /api/org/remote-features
 
