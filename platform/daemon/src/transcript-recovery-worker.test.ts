@@ -1052,11 +1052,19 @@ describe("transcript recovery worker", () => {
 			].join("\n"),
 		);
 		const supervisorPath = join(dirname(fileURLToPath(import.meta.url)), "transcript-recovery-supervisor.ts");
+		const supervisorLaunchPath = join(dir, "delayed-exit-recovery-supervisor.ts");
+		writeFileSync(
+			supervisorLaunchPath,
+			[
+				'process.on("exit", () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100));',
+				`await import(${JSON.stringify(supervisorPath)});`,
+			].join("\n"),
+		);
 		writeFileSync(
 			harnessPath,
 			[
 				'import { spawn } from "node:child_process";',
-				`const supervisor = spawn(process.execPath, [${JSON.stringify(supervisorPath)}], {`,
+				`const supervisor = spawn(process.execPath, [${JSON.stringify(supervisorLaunchPath)}], {`,
 				`env: { ...process.env, SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH: ${JSON.stringify(childPath)} },`,
 				'stdio: ["pipe", "ignore", "ignore"],',
 				"});",
@@ -1070,21 +1078,21 @@ describe("transcript recovery worker", () => {
 			expect(existsSync(childPidPath)).toBe(true);
 			parent.kill("SIGKILL");
 			let childAlive = true;
-			for (let attempt = 0; attempt < 200 && childAlive; attempt++) {
+			let supervisorAlive = true;
+			for (let attempt = 0; attempt < 200 && (childAlive || supervisorAlive); attempt++) {
 				try {
 					process.kill(Number(readFileSync(childPidPath, "utf8")), 0);
 				} catch {
 					childAlive = false;
 				}
-				if (childAlive) await Bun.sleep(5);
+				try {
+					process.kill(Number(readFileSync(supervisorPidPath, "utf8")), 0);
+				} catch {
+					supervisorAlive = false;
+				}
+				if (childAlive || supervisorAlive) await Bun.sleep(5);
 			}
 			expect(childAlive).toBe(false);
-			let supervisorAlive = true;
-			try {
-				process.kill(Number(readFileSync(supervisorPidPath, "utf8")), 0);
-			} catch {
-				supervisorAlive = false;
-			}
 			expect(supervisorAlive).toBe(false);
 			const database = new Database(databasePath);
 			try {
