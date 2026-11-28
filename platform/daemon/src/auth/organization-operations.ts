@@ -325,6 +325,7 @@ function requireSessionManagement(p: Principal): void {
 export async function logout(p: Principal, input: unknown) {
 	const data = z.object({ all: z.boolean().optional() }).parse(input);
 	if (data.all) requireSessionManagement(p);
+	else if (p.credential.kind !== "session" || !p.sessionId) return { ok: true, revoked: 0 };
 	await organizationWrite([
 		statement(
 			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout',refresh_retry_json = '[]' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,

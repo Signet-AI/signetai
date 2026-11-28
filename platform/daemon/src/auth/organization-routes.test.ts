@@ -709,6 +709,21 @@ describe("organization HTTP flows", () => {
 		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
 	});
 
+	test("R5 logout reports zero revocations for a key credential", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "logout",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			})
+		).json();
+		const response = await call("/api/auth/logout", "POST", {}, key.secret);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true, revoked: 0 });
+		expect((await call("/api/auth/profile")).status).toBe(200);
+		expect((await call("/api/auth/profile", "GET", undefined, key.secret)).status).toBe(200);
+	});
 	test("M2 admin session-management keys may sign out all sessions", async () => {
 		await claim();
 		const key = await (
