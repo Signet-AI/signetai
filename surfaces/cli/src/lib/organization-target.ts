@@ -161,8 +161,6 @@ const remoteCommands = new Set([
 	"secret delete",
 	"secret get",
 	"secret has",
-	"secret exec",
-	"secret exec-status",
 	"api-key create",
 	"api-key list",
 	"api-key revoke",

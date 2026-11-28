@@ -49,6 +49,8 @@ test("local-only commands refuse remotely before running their action and --loca
 test("unknown and local workspace commands refuse remote targets by default", async () => {
 	for (const path of [
 		"skill list",
+		"secret exec",
+		"secret exec-status",
 		"sources add obsidian",
 		"telemetry",
 		"bypass",
@@ -166,8 +168,6 @@ test("every registered command is explicitly remote-capable or refuses before it
 		"secret delete",
 		"secret get",
 		"secret has",
-		"secret exec",
-		"secret exec-status",
 		"api-key create",
 		"api-key list",
 		"api-key revoke",

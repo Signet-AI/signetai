@@ -205,6 +205,31 @@ Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_jo
 
 Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
 
+## What an admin can't do remotely
+
+Organization administration is not authority over the instance host. Host operations require the `local` principal, not an administrator session or API key. Connecting over loopback does not turn an organization credential into a local credential. The HTTP route-group guard also applies to CLI and MCP requests; an undeclared route fails closed. Personal/local mode keeps its existing behavior.
+
+The host-operation inventory is:
+
+| Route group | Host effect |
+| --- | --- |
+| `POST /api/secrets/exec`, `POST /api/secrets/:name/exec`, `GET /api/secrets/exec/:jobId` | Starts commands with injected secrets or reads their output. `secret exec` and `secret exec-status` refuse remote CLI targets. Secret put/list/delete remain available. |
+| `/api/secrets/bitwarden/*`, `/api/secrets/1password/*` | Runs installed secret-manager clients and changes their host connections. |
+| `/api/skills` and its browse/search/detail/install/delete routes | Reads executable skill files, installs code, or removes local skill files. |
+| `/api/plugins` and its detail/diagnostics/audit/prompt-contributions/enable routes | Inspects or activates installed host plugins. |
+| `/api/graphiq/*` | Inspects installed code, installs or updates GraphIQ, or indexes an arbitrary host project. MCP `signet_code_*` tools and their `code_*` aliases have the same local-principal requirement, including batch calls. |
+| `/api/connectors`, its detail/health/delete routes, `POST /api/connectors/:id/sync`, `/sync/full`, `/api/connectors/resync` | Registers filesystem roots and starts host filesystem scans. |
+| `GET /api/harnesses`, `GET /api/harnesses/:id/health`, `POST /api/harnesses/regenerate`, `POST /api/harnesses/:id/connect`, `/disconnect`, `/repair`, `/reinitialize` | Inspects installed harnesses or writes their hooks, configuration, and memory files. |
+| `GET /api/git/status`, `GET /api/git/config`, `POST /api/git/pull`, `/push`, `/sync`, `/config` | Runs Git or changes automatic synchronization. |
+| `POST /api/sources/pick-directory`, `/pick-files`, `/obsidian`, `/discord`, `/github` | Opens native file pickers, reads host vaults or desktop caches, or configures repository ingestion. |
+| `POST /api/sources/import` with multipart `paths` | Reads arbitrary host paths. Uploaded `files` remain supported remotely; clients send bytes, not server filenames. |
+| Hook requests with `transcriptPath` or `transcript_path` | Reads a harness transcript from the host. Inline transcripts and staged uploads remain remote-capable. |
+| `POST /api/memory/codex-native-note` | Writes the host's Codex memory files. |
+| `/api/inference/*`, `/api/assistant/models`, `/api/assistant/chat`, `/v1/models`, `/v1/chat/completions` | Inspects host provider credentials or can dispatch host CLI inference processes. |
+| `/api/update/*`, `POST /api/config`, `POST /api/troubleshoot/exec` | Installs code, changes unrestricted host configuration, or executes troubleshooting commands, including unsupervised restart/stop. |
+
+The separately supervised `POST /api/org/operator/restart` remains remote-capable only after the restart owner verifies its own systemd or launchd supervisor. It never falls back to an unsupervised host command. Scoped operator repairs, embedding backfills, evidence uploads, and organization settings remain daemon-owned record operations, not a way to execute a host command.
+
 ## Operator log feeds
 
 `signet logs` (also `signet daemon logs`) reads a bounded snapshot from the selected organization. Use `--follow` to stream new events; Ctrl-C cancels the request, releases the server subscription, and exits cleanly. `--lines` accepts 1–500 events (default 50); `--level` and `--category` filter the feed. `--json` returns one JSON snapshot, or newline-delimited JSON when following, starting with a `connected` record. A stream ends after at most 60 seconds; it does not reconnect automatically. Authentication and permission failures are returned without reading local log files or starting a daemon. JSON log output is organization-only; existing local text logging behavior is unchanged.
