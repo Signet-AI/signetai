@@ -183,7 +183,9 @@ test("same import bytes do not probe another author's hidden label set", async (
 		const fixture = await Fixture.create(daemon, "single", false);
 		const carol = fixture.user("carol");
 		const alice = fixture.user("alice");
-		const transcript = async (bearer: string, classificationId?: string) => {
+		let hiddenCanonicalId: string | undefined;
+		let oracleCanonicalId: string | undefined;
+		const transcript = async (bearer: string, classificationId?: string, content = "confidential oracle") => {
 			const created = success(
 				await request(daemon.origin, "/api/sources/imports", { bearer }, "POST", {
 					classificationId,
@@ -197,11 +199,58 @@ test("same import bytes do not probe another author's hidden label set", async (
 				{
 					method: "PUT",
 					headers: { authorization: `Bearer ${bearer}`, "content-type": "application/octet-stream" },
-					body: `${JSON.stringify({ source: "signet", id: "oracle", harness: "codex", session_key: "oracle", messages: [{ role: "user", content: "confidential oracle" }] })}\n`,
+					body: `${JSON.stringify({ source: "signet", id: "oracle", agent_id: "foreign", harness: "codex", session_key: "oracle", project: null, timestamp: "2026-01-01T00:00:00Z", message_count: 1, messages: [{ role: "user", content }] })}\n`,
 					signal: AbortSignal.timeout(30_000),
 				},
 			);
-			return { status: response.status, body: record(await response.json()) };
+			const body = record(await response.json());
+			if (response.status === 201) {
+				success(
+					await request(daemon.origin, `/api/sources/imports/${text(created.id)}/start`, { bearer }, "POST", {}),
+					"start oracle import",
+				);
+				const db = new Database(join(daemon.workspace, "data/signet.db"), { readonly: true });
+				try {
+					await until(
+						async () => {
+							const state = record(
+								db.query("SELECT state,error FROM source_import_jobs WHERE id=?").get(text(created.id)),
+							);
+							expect(state.state, String(state.error)).not.toBe("failed");
+							return state.state === "completed" || state.state === "completed_with_rejections";
+						},
+						"oracle job completes",
+						45_000,
+					);
+					const rows = db
+						.query("SELECT status,canonical_id,canonical_key,rejection_code FROM source_import_records WHERE job_id=?")
+						.all(text(created.id));
+					expect(rows).toHaveLength(1);
+					if (content !== "confidential oracle") {
+						expect(record(rows[0]).status).toBe("rejected");
+						expect(record(rows[0]).rejection_code).toBe("conversation_identity_conflict");
+						expect(record(rows[0]).canonical_id).toBe(oracleCanonicalId);
+						return { status: response.status, body };
+					}
+					expect(record(rows[0]).status).toBe(
+						bearer === text(alice.session.bearer) && oracleCanonicalId !== undefined ? "duplicate" : "imported",
+					);
+					if (bearer === text(carol.session.bearer)) hiddenCanonicalId = text(record(rows[0]).canonical_id);
+					else {
+						expect(record(rows[0]).canonical_id).not.toBe(hiddenCanonicalId);
+						oracleCanonicalId = text(record(rows[0]).canonical_id);
+					}
+					const stored = record(
+						db
+							.query("SELECT source_id,speaker_user_id FROM session_transcripts WHERE session_key=?")
+							.get(text(record(rows[0]).canonical_key)),
+					);
+					expect(stored.source_id).toBe(body.sourceId);
+				} finally {
+					db.close();
+				}
+			}
+			return { status: response.status, body };
 		};
 		const document = async (bearer: string, classificationId?: string) => {
 			const form = new FormData();
@@ -222,6 +271,10 @@ test("same import bytes do not probe another author's hidden label set", async (
 			expect(ownConflict.status).toBe(409);
 			const outsider = await upload(text(alice.session.bearer));
 			expect(outsider.status, JSON.stringify(outsider.body)).toBe(201);
+			if (upload === transcript)
+				expect((await transcript(text(alice.session.bearer), undefined, "changed readable conversation")).status).toBe(
+					201,
+				);
 			const repeat = await upload(text(alice.session.bearer));
 			expect(repeat.status).toBe(201);
 			const source = (body: Record<string, unknown>) =>

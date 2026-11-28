@@ -1635,6 +1635,46 @@ describe("organization HTTP flows", () => {
 			await (await call(`/api/classifications/${created.id}`, "GET", undefined, narrowed.secret)).json(),
 		).not.toHaveProperty("audience");
 	});
+	test("offboarding retains derived knowledge citing surviving evidence", async () => {
+		await claim();
+		const departed = await member("mixed-departed");
+		const other = await member("mixed-survivor");
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories(id,agent_id,author_user_id,content,type,memory_kind,created_at,updated_at) VALUES('mixed-root',?,?,'departed','fact','episodic','2026','2026'),('mixed-other',?,?,'surviving','fact','episodic','2026','2026'),('mixed-derived',?,NULL,'joint knowledge','fact','episodic','2026','2026')",
+				[departed.agentId, departed.userId, departed.agentId, other.userId, departed.agentId],
+			),
+			statement(
+				"INSERT INTO derived_memory_sources(agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES(?,'mixed-derived','memory','mixed-root','2026'),(?,'mixed-derived','memory','mixed-other','2026')",
+				[departed.agentId, departed.agentId],
+			),
+		]);
+		const preview = await (
+			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge" })
+		).json();
+		expect(preview.plan.counts.memories).toBe(1);
+		const started = await (
+			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge", dryRun: false })
+		).json();
+		let job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+		for (let i = 0; job.status === "running" && i < 100; i++) {
+			await Bun.sleep(20);
+			job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
+		}
+		expect(job.status).toBe("complete");
+		expect(
+			await organizationQuery(
+				statement("SELECT id,stale_at IS NOT NULL AS stale FROM memories WHERE id='mixed-derived'", [], "get"),
+			),
+		).toEqual({ id: "mixed-derived", stale: 1 });
+		expect(
+			await organizationQuery(
+				statement("SELECT source_id FROM derived_memory_sources WHERE derived_memory_id='mixed-derived'", [], "all"),
+			),
+		).toEqual([{ source_id: "mixed-other" }]);
+	});
+
 	test("offboarding purge removes exactly the actor-visible preview", async () => {
 		const { registerClassificationRoutes } = await import("../routes/classification-routes");
 		registerClassificationRoutes(app);
@@ -1676,10 +1716,29 @@ describe("organization HTTP flows", () => {
 				"UPDATE memory_artifacts SET compartment_id=(SELECT compartment_id FROM memories WHERE id='departed-hr') WHERE source_path='departed-hr-artifact'",
 			),
 		]);
+		await organizationWrite([
+			statement(
+				"INSERT INTO session_transcripts(agent_id,session_key,content,harness,created_at,speaker_user_id) VALUES(?,'public-offboard-session','public transcript','test','2026',?)",
+				[departed.agentId, departed.userId],
+			),
+			statement("UPDATE memories SET source_id='public-offboard-session',source_type='session' WHERE id='departed-hr'"),
+			statement(
+				"INSERT INTO memories(id,agent_id,content,type,memory_kind,created_at,updated_at,compartment_id) SELECT 'departed-hr-derived',agent_id,'HR derivation','fact','episodic','2026','2026',compartment_id FROM memories WHERE id='departed-hr'",
+			),
+			statement(
+				"INSERT INTO derived_memory_sources(agent_id,derived_memory_id,source_kind,source_id,created_at) VALUES(?,'departed-hr-derived','transcript','public-offboard-session','2026')",
+				[departed.agentId],
+			),
+		]);
+		await organizationWrite([
+			statement(
+				"INSERT INTO memories_cold(archive_id,memory_id,agent_id,author_user_id,compartment_id,provenance_resolved,content,original_created_at,archived_at) SELECT 'departed-cold','retained-tombstone',agent_id,author_user_id,compartment_id,1,'cold HR secret','2026','2026' FROM memories WHERE id='departed-hr'",
+			),
+		]);
 		const preview = await (
 			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge" })
 		).json();
-		expect(preview.plan.counts).toMatchObject({ memories: 1, artifacts: 0 });
+		expect(preview.plan.counts).toMatchObject({ memories: 1, artifacts: 0, transcripts: 1 });
 		const started = await (
 			await call(`/api/org/users/${departed.userId}/deactivate`, "POST", { mode: "purge", dryRun: false })
 		).json();
@@ -1688,7 +1747,8 @@ describe("organization HTTP flows", () => {
 			await Bun.sleep(20);
 			job = await (await call(`/api/org/jobs/${started.jobId}`)).json();
 		}
-		expect(job.status).toBe("complete");
+		expect(job.status).toBe("incomplete");
+		expect(JSON.parse(job.progress_json).reason).toBe("hidden_material_remains");
 		expect(JSON.parse(job.progress_json).removed).toMatchObject({ memories: 1, memory_artifacts: 0 });
 		expect(
 			await organizationQuery(statement("SELECT id FROM memories WHERE author_user_id=?", [departed.userId], "all")),
@@ -1698,11 +1758,21 @@ describe("organization HTTP flows", () => {
 				statement("SELECT COUNT(*) AS n FROM memory_artifacts WHERE author_user_id=?", [departed.userId], "get"),
 			),
 		).toEqual({ n: 1 });
+		expect(
+			await organizationQuery(statement("SELECT id FROM memories WHERE id='departed-hr-derived'", [], "get")),
+		).toEqual({ id: "departed-hr-derived" });
+		expect(
+			await organizationQuery(
+				statement("SELECT archive_id FROM memories_cold WHERE archive_id='departed-cold'", [], "get"),
+			),
+		).toEqual({ archive_id: "departed-cold" });
+		const hiddenAudit = await (await call("/api/org/audit?action=purge.hidden_material")).json();
+		expect(hiddenAudit.events).toEqual([]);
 		const material = `/api/classifications/${hr.id}/purge-author`;
 		expect((await call(material, "POST", { userId: departed.userId })).status).toBe(403);
 		const managerPreview = await call(material, "POST", { userId: departed.userId }, manager.token);
 		expect(managerPreview.status).toBe(200);
-		expect((await managerPreview.json()).plan.counts).toMatchObject({ memories: 1, artifacts: 1 });
+		expect((await managerPreview.json()).plan.counts).toMatchObject({ memories: 2, artifacts: 1, cold: 1 });
 		const managerStarted = await call(material, "POST", { userId: departed.userId, dryRun: false }, manager.token);
 		expect(managerStarted.status).toBe(202);
 		const managerJob = await managerStarted.json();
@@ -1712,7 +1782,19 @@ describe("organization HTTP flows", () => {
 			managerStatus = await (await call(`/api/org/jobs/${managerJob.jobId}`, "GET", undefined, manager.token)).json();
 		}
 		expect(managerStatus.status).toBe("complete");
-		expect(JSON.parse(managerStatus.progress_json).removed).toMatchObject({ memories: 1, memory_artifacts: 1 });
+		expect(
+			await organizationQuery(
+				statement("SELECT COUNT(*) AS n FROM memories_cold WHERE author_user_id=?", [departed.userId], "get"),
+			),
+		).toEqual({ n: 0 });
+		expect(
+			await organizationQuery(statement("SELECT id FROM memories WHERE id='departed-hr-derived'", [], "get")),
+		).toBeNull();
+		expect(JSON.parse(managerStatus.progress_json).removed).toMatchObject({
+			memories: 2,
+			memory_artifacts: 1,
+			memories_cold: 1,
+		});
 		expect(
 			await organizationQuery(
 				statement("SELECT COUNT(*) AS n FROM memories WHERE author_user_id=?", [departed.userId], "get"),
@@ -1844,7 +1926,8 @@ describe("organization HTTP flows", () => {
 			await Bun.sleep(25);
 			status = await (await call(`/api/org/jobs/${purged.jobId}`)).json();
 		}
-		expect(status.status).toBe("complete");
+		expect(status.status).toBe("incomplete");
+		expect(JSON.parse(status.progress_json).reason).toBe("hidden_material_remains");
 		expect(JSON.parse(status.progress_json).removed).toMatchObject({
 			memories: 1,
 			documents: 1,

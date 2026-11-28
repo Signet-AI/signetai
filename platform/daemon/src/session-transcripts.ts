@@ -1,3 +1,4 @@
+import { readScopeSql } from "./read-scope";
 import { purgeHookUploadSessionBatchInTx } from "./transcript-capture-owner";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -39,7 +40,12 @@ import type {
 	TranscriptLifecycleResult,
 } from "./session-transcript-lifecycle";
 import { captureTranscriptOwned, type TranscriptCaptureAdmission } from "./session-transcript-lifecycle";
-import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
+import {
+	derivedPurgeOutcome,
+	purgeColdEvidenceInTx,
+	purgeMemoryEmbeddingsInTx,
+	purgeMemoryInTx,
+} from "./source-purge-tx";
 import { upsertThreadHead } from "./thread-heads";
 import { txForgetMemory } from "./transactions";
 import { writeTranscriptAudit } from "./transcript-audit";
@@ -540,11 +546,16 @@ export function deleteSessionTranscriptInTx(
 	basePath: string,
 	deadlineAt: number,
 ): TranscriptDeleteResult {
+	const memoryRead = input.readScope ? readScopeSql("m", input.readScope) : { sql: "", args: [] };
+	const evidenceRead = (alias: string) =>
+		input.readScope
+			? readScopeSql(alias, input.readScope, { visibility: null, memory: null, session: "session_key", source: null })
+			: { sql: "", args: [] };
 	const previous = transcriptDeletion(db, input.agentId, input.sessionKey);
 	const stored = prepareTypedStatement<{ harness: string | null; project: string | null; content: string }>(
 		db,
-		"SELECT harness, project, content FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
-	).get(input.agentId, input.sessionKey);
+		`SELECT harness, project, content FROM session_transcripts t WHERE agent_id = ? AND session_key = ?${evidenceRead("t").sql}`,
+	).get(input.agentId, input.sessionKey, ...evidenceRead("t").args);
 	const claim = prepareTypedStatement<{ harness: string | null }>(
 		db,
 		"SELECT harness FROM session_claims WHERE agent_id = ? AND session_key = ? AND state = 'active' AND expires_at > ?",
@@ -614,8 +625,17 @@ export function deleteSessionTranscriptInTx(
 		]) {
 			const sources = prepareTypedStatement<{ id: string }>(
 				db,
-				`SELECT ${column} AS id FROM ${table} t WHERE t.agent_id = ? AND ${kind === "artifact" ? "COALESCE(NULLIF(t.session_key, ''),t.session_id)" : "t.session_key"} IN (?, ?) ${kind === "artifact" ? "AND t.source_kind IN ('transcript','summary','compaction','manifest')" : ""} AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = t.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = ? AND d.id = t.${column}) LIMIT ?`,
-			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, input.sessionKey, generation, kind, budget);
+				`SELECT ${column} AS id FROM ${table} t WHERE t.agent_id = ? AND ${kind === "artifact" ? "COALESCE(NULLIF(t.session_key, ''),t.session_id)" : "t.session_key"} IN (?, ?) ${kind === "artifact" ? "AND t.source_kind IN ('transcript','summary','compaction','manifest')" : ""} AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = t.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = ? AND d.id = t.${column})${evidenceRead("t").sql} LIMIT ?`,
+			).all(
+				input.agentId,
+				input.sessionKey,
+				`session:${input.sessionKey}`,
+				input.sessionKey,
+				generation,
+				kind,
+				...evidenceRead("t").args,
+				budget,
+			);
 			for (const source of sources) {
 				db.prepare(
 					"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,?,?)",
@@ -645,24 +665,27 @@ export function deleteSessionTranscriptInTx(
 			SELECT m.id,m.pinned,m.source_id,m.source_type,m.type FROM session_transcript_deleted_sources d
 			JOIN derived_memory_sources s ON s.agent_id = d.agent_id AND s.source_kind = d.kind AND s.source_id = d.id
 			JOIN memories m ON m.agent_id = s.agent_id AND m.id = s.derived_memory_id
-			WHERE d.agent_id = ? AND d.session_key = ? AND d.generation = ? AND d.outcome = 'deleted'
+			WHERE d.agent_id = ? AND d.session_key = ? AND d.generation = ? AND d.outcome = 'deleted'${memoryRead.sql}
 			UNION ALL
 			SELECT m.id,m.pinned,m.source_id,m.source_type,m.type FROM memories m
 			WHERE m.agent_id = ? AND m.source_id IN (?, ?) AND (m.type = 'session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))
-			AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = m.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = 'memory' AND d.id = m.id)
+			AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = m.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = 'memory' AND d.id = m.id)${memoryRead.sql}
 			UNION ALL
 			SELECT m.id,m.pinned,m.source_id,m.source_type,m.type FROM session_transcript_deleted_sources d JOIN memories m ON m.agent_id = d.agent_id AND m.id = d.id
-			WHERE d.agent_id = ? AND d.session_key = ? AND d.generation = ? AND d.kind = 'memory' AND d.outcome = 'deleted' AND ? = 1
+			WHERE d.agent_id = ? AND d.session_key = ? AND d.generation = ? AND d.kind = 'memory' AND d.outcome = 'deleted' AND ? = 1${memoryRead.sql}
 			LIMIT 1`,
 		).get(
 			...scope,
+			...memoryRead.args,
 			input.agentId,
 			input.sessionKey,
 			`session:${input.sessionKey}`,
 			input.sessionKey,
 			generation,
+			...memoryRead.args,
 			...scope,
 			row.hard,
+			...memoryRead.args,
 		);
 		if (!memory) {
 			phase = "cleanup";
@@ -684,7 +707,7 @@ export function deleteSessionTranscriptInTx(
 					"SELECT 1 FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND generation = ? AND kind = ? AND id = ? AND outcome = 'deleted' LIMIT 1",
 				)
 				.get(...scope, sourceKind, memory.source_id);
-		const outcome = memory.pinned === 1 ? "pinned" : external || otherProvenance ? "mixed" : "deleted";
+		const outcome = derivedPurgeOutcome(memory.pinned === 1, Boolean(external), Boolean(otherProvenance));
 		const old = prepareTypedStatement<{ outcome: string }>(
 			db,
 			"SELECT outcome FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND generation = ? AND kind = 'memory' AND id = ?",
@@ -719,17 +742,20 @@ export function deleteSessionTranscriptInTx(
 			if (old?.outcome !== outcome) add(outcome === "pinned" ? "retainedPinned" : "retainedMixed", 1);
 		}
 		if (outcome === "deleted") {
-			const result = txForgetMemory(db, {
-				memoryId: memory.id,
-				reason: "session transcript deleted",
-				force: false,
-				preservePinnedDerived: true,
-				changedBy: input.changedBy,
-				changedAt: row.watermark,
-				ctx: { actorType: "operator" },
-			});
+			const result =
+				input.readScope && row.hard === 1
+					? { status: "deleted" }
+					: txForgetMemory(db, {
+							memoryId: memory.id,
+							reason: "session transcript deleted",
+							force: false,
+							preservePinnedDerived: true,
+							changedBy: input.changedBy,
+							changedAt: row.watermark,
+							ctx: { actorType: "operator" },
+						});
 			if (result.status === "pinned_requires_force") throw new Error("Pinned memory changed during deletion");
-			add("embeddings", purgeMemoryEmbeddingsInTx(db, memory.id));
+			add("embeddings", purgeMemoryEmbeddingsInTx(db, memory.id, input.readScope));
 			db.prepare(
 				"UPDATE entity_attributes SET status = 'archived', archived_at = ?, archive_reason = 'session transcript deleted' WHERE memory_id = ? AND agent_id = ?",
 			).run(row.watermark, memory.id, input.agentId);
@@ -753,7 +779,7 @@ export function deleteSessionTranscriptInTx(
 				)
 				.all(input.agentId, memory.id, ...scope).length,
 		);
-		if (outcome === "deleted" && row.hard === 1) purgeMemoryInTx(db, memory.id);
+		if (outcome === "deleted" && row.hard === 1) purgeMemoryInTx(db, memory.id, input.readScope);
 		db.prepare(
 			"INSERT INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id,outcome) VALUES (?,?,?,'memory',?,?) ON CONFLICT(agent_id,session_key,generation,kind,id) DO UPDATE SET outcome = excluded.outcome",
 		).run(...scope, memory.id, outcome);
@@ -761,6 +787,8 @@ export function deleteSessionTranscriptInTx(
 	}
 	if (Date.now() >= deadlineAt - 100) budget = 0;
 	if (phase === "cleanup" && budget > 0) {
+		for (const key of [input.sessionKey, `session:${input.sessionKey}`])
+			purgeColdEvidenceInTx(db, key, input.agentId, input.readScope);
 		const hookRows = purgeHookUploadSessionBatchInTx(db, input.agentId, input.sessionKey);
 		if (hookRows > 0) {
 			add("hookUploadRows", hookRows);
@@ -791,8 +819,8 @@ export function deleteSessionTranscriptInTx(
 			if (budget === 0) break;
 			const items = prepareTypedStatement<{ id: string }>(
 				db,
-				`SELECT ${column} AS id FROM ${table} WHERE agent_id = ? AND ${table === "memory_artifacts" ? "COALESCE(NULLIF(session_key, ''),session_id)" : "session_key"} IN (?, ?) ${table === "memory_artifacts" ? "AND source_kind IN ('transcript','summary','compaction','manifest')" : ""} LIMIT ?`,
-			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, budget);
+				`SELECT ${column} AS id FROM ${table} t WHERE agent_id = ? AND ${table === "memory_artifacts" ? "COALESCE(NULLIF(session_key, ''),session_id)" : "session_key"} IN (?, ?) ${table === "memory_artifacts" ? "AND source_kind IN ('transcript','summary','compaction','manifest')" : ""}${evidenceRead("t").sql} LIMIT ?`,
+			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, ...evidenceRead("t").args, budget);
 			for (const item of items) {
 				if (table === "session_summaries") {
 					db.prepare("DELETE FROM session_summary_children WHERE parent_id = ? OR child_id = ?").run(item.id, item.id);

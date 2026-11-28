@@ -43,3 +43,22 @@ test("hook upload migration is self-contained, repeatable and preserves scoped c
 		db.close();
 	}
 });
+
+test("hook uploads upgrade a legacy workspace without changing its evidence", () => {
+	const db = new Database(":memory:");
+	try {
+		for (const migration of MIGRATIONS.filter((entry) => entry.version <= 179)) migration.up(db);
+		db.exec(
+			"INSERT INTO session_transcripts(agent_id,session_key,content,harness,created_at) VALUES('legacy','session','legacy evidence','codex','2026')",
+		);
+		const before = db.prepare("SELECT * FROM session_transcripts").all();
+		const migration = MIGRATIONS.find((entry) => entry.version === 180);
+		if (!migration) throw new Error("Migration 180 missing");
+		migration.up(db);
+		migration.up(db);
+		expect(db.prepare("SELECT * FROM session_transcripts").all()).toEqual(before);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM hook_transcript_uploads").get()).toEqual({ n: 0 });
+	} finally {
+		db.close();
+	}
+});

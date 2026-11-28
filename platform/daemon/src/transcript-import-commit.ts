@@ -1,4 +1,5 @@
-import { assertImportSourceLabelsInTx } from "./classification-owner";
+import { readScopeSql, readVisibilitySchema } from "./read-scope";
+import { assertImportSourceLabelsInTx, executeClassification } from "./classification-owner";
 import { createHash } from "node:crypto";
 import { getDbOwner } from "./db-owner-runtime";
 import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
@@ -288,6 +289,7 @@ export function buildCompletedTranscriptCommit(
 ): CompletedTranscriptCommit {
 	const identity = canonicalTranscriptIdentity(record);
 	const externalIdentity = externalIdentityFingerprint(record);
+	const canonicalKey = `import:${checksum(Buffer.from(fixed([input.agentId, input.sourceId, externalIdentity])))}`;
 	const recordId = createHash("sha256")
 		.update(fixed([input.agentId, input.sourceId, input.sourceRecordId, record.harness, identity.contentHash]))
 		.digest("hex");
@@ -299,7 +301,7 @@ export function buildCompletedTranscriptCommit(
 		agentId: input.agentId,
 		harness: record.harness,
 		project: record.project,
-		sessionKey: identity.canonicalKey,
+		sessionKey: canonicalKey,
 		originalSessionKey: record.session_key,
 		capturedAt: record.timestamp,
 		messages: record.messages,
@@ -307,8 +309,8 @@ export function buildCompletedTranscriptCommit(
 		sourceMetaJson: input.sourceMetaJson ?? null,
 		sourcePath: input.sourcePath ?? null,
 		externalIdentity,
-		canonicalId: identity.canonicalId,
-		canonicalKey: identity.canonicalKey,
+		canonicalId: canonicalKey,
+		canonicalKey,
 	};
 }
 export function serializeCompletedTranscriptMessages(messages: CompletedTranscriptEvidence["messages"]): string {
@@ -437,7 +439,42 @@ export function commitCompletedTranscriptBatchInTx(
 	if (transcriptCommitBatchBytes(commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
 		throw new RangeError("canonical_batch_too_large");
 	const results: TranscriptCommitResult[] = [];
-	for (const original of commits) {
+	for (const input of commits) {
+		const schema = db
+			.prepare("SELECT 1 FROM pragma_table_info('transcript_import_conversations') WHERE name='compartment_id'")
+			.get();
+		const compartment = schema ? compartmentForWrite(db, { agentId: input.agentId, sourceId: input.sourceId }) : null;
+		const read = schema
+			? readScopeSql(
+					"r",
+					{
+						reach: { kind: "own", agentId: input.agentId },
+						projects: null,
+						...readVisibilitySchema.parse(
+							executeClassification(db, {
+								op: "visibility",
+								subject: { userId: input.author.userId, groupIds: [], local: input.author.userId === null },
+							}),
+						),
+					},
+					{ visibility: null, memory: null, session: "canonical_key", source: "owner_source_id" },
+				)
+			: { sql: "", args: [] };
+		const identity = schema
+			? db
+					.prepare(
+						`SELECT canonical_id,canonical_key FROM transcript_import_conversations r WHERE agent_id=? AND external_identity=? AND compartment_id IS ?${read.sql} ORDER BY created_at,canonical_key LIMIT 1`,
+					)
+					.get(input.agentId, input.externalIdentity, compartment, ...read.args)
+			: undefined;
+		const opaque = input.canonicalKey;
+		const original = schema
+			? {
+					...input,
+					canonicalId: identity ? z.string().parse(identity.canonical_id) : opaque,
+					canonicalKey: identity ? z.string().parse(identity.canonical_key) : opaque,
+				}
+			: input;
 		const serialize = (messages: CompletedTranscriptCommit["messages"]): string =>
 			messages
 				.map((message) =>
@@ -477,9 +514,9 @@ export function commitCompletedTranscriptBatchInTx(
 					};
 		const existing = db
 			.prepare(
-				"SELECT conversation_fingerprint, canonical_id, canonical_key, state FROM transcript_import_conversations WHERE agent_id = ? AND external_identity = ?",
+				`SELECT conversation_fingerprint, canonical_id, canonical_key, state FROM transcript_import_conversations r WHERE agent_id = ? AND external_identity = ?${schema ? " AND compartment_id IS ?" : ""}${read.sql}${schema ? " ORDER BY created_at,canonical_key" : ""} LIMIT 1`,
 			)
-			.get(commit.agentId, commit.externalIdentity) as
+			.get(commit.agentId, commit.externalIdentity, ...(schema ? [compartment] : []), ...read.args) as
 			| { conversation_fingerprint: string; canonical_id: string; canonical_key: string; state: string }
 			| undefined;
 		if (existing) {
@@ -494,7 +531,7 @@ export function commitCompletedTranscriptBatchInTx(
 			if (existing.state === "committing") {
 				insertSessionTranscriptIfMissing(db, commit);
 				db.prepare(
-					"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', content_hash = ?, harness = ?, timestamp = ?, updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ? AND state = 'committing'",
+					"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', content_hash = ?, harness = ?, timestamp = ?, updated_at = datetime('now') WHERE agent_id = ? AND canonical_key = ? AND state = 'committing'",
 				).run(
 					commit.sourceId,
 					commit.sourceRecordId,
@@ -502,7 +539,7 @@ export function commitCompletedTranscriptBatchInTx(
 					commit.harness,
 					commit.capturedAt,
 					commit.agentId,
-					commit.externalIdentity,
+					commit.canonicalKey,
 				);
 				updateSessionTranscriptOwnership(db, commit);
 				results.push({ outcome: "imported", canonicalId: existing.canonical_id, sessionKey: existing.canonical_key });
@@ -510,7 +547,7 @@ export function commitCompletedTranscriptBatchInTx(
 				insertSessionTranscriptIfMissing(db, commit);
 				updateSessionTranscriptOwnership(db, commit);
 				db.prepare(
-					"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', content_hash = ?, harness = ?, timestamp = ?, updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ? AND state = 'removed'",
+					"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', content_hash = ?, harness = ?, timestamp = ?, updated_at = datetime('now') WHERE agent_id = ? AND canonical_key = ? AND state = 'removed'",
 				).run(
 					commit.sourceId,
 					commit.sourceRecordId,
@@ -518,7 +555,7 @@ export function commitCompletedTranscriptBatchInTx(
 					commit.harness,
 					commit.capturedAt,
 					commit.agentId,
-					commit.externalIdentity,
+					commit.canonicalKey,
 				);
 				results.push({ outcome: "imported", canonicalId: existing.canonical_id, sessionKey: existing.canonical_key });
 			} else {
@@ -528,8 +565,8 @@ export function commitCompletedTranscriptBatchInTx(
 		}
 		insertSessionTranscriptIfMissing(db, commit);
 		db.prepare(`INSERT INTO transcript_import_conversations
-			(agent_id, external_identity, canonical_key, conversation_fingerprint, canonical_id, owner_source_id, owner_record_id, state, content_hash, harness, timestamp)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'committed', ?, ?, ?)`).run(
+			(agent_id, external_identity, canonical_key, conversation_fingerprint, canonical_id, owner_source_id, owner_record_id, state, content_hash, harness, timestamp${schema ? ",compartment_id" : ""})
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'committed', ?, ?, ?${schema ? ",?" : ""})`).run(
 			commit.agentId,
 			commit.externalIdentity,
 			commit.canonicalKey,
@@ -540,6 +577,7 @@ export function commitCompletedTranscriptBatchInTx(
 			commit.contentHash,
 			commit.harness,
 			commit.capturedAt,
+			...(schema ? [compartment] : []),
 		);
 		results.push({ outcome: "imported", canonicalId: commit.canonicalId, sessionKey: commit.canonicalKey });
 	}
@@ -572,22 +610,27 @@ export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string | u
 						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE owner_source_id = ? AND state != 'removed' LIMIT 25",
 					)
 					.all(sourceId) as Array<{ agent_id: string; external_identity: string; canonical_key: string }>);
+	const partitioned = db
+		.prepare("SELECT 1 FROM pragma_table_info('transcript_import_conversations') WHERE name='compartment_id'")
+		.get();
 	for (const conversation of conversations) {
 		const replacement = db
 			.prepare(
-				"SELECT id, source_id FROM source_import_records WHERE agent_id = ? AND external_identity = ? AND source_id != ? AND status IN ('imported','duplicate') ORDER BY CASE status WHEN 'imported' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
+				`SELECT id, source_id FROM source_import_records WHERE agent_id = ? AND external_identity = ? ${partitioned ? "AND canonical_key = ?" : ""} AND source_id != ? AND status IN ('imported','duplicate') ORDER BY CASE status WHEN 'imported' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1`,
 			)
-			.get(conversation.agent_id, conversation.external_identity, sourceId) as
-			| { id: string; source_id: string }
-			| undefined;
+			.get(
+				conversation.agent_id,
+				conversation.external_identity,
+				...(partitioned ? [conversation.canonical_key] : []),
+				sourceId,
+			) as { id: string; source_id: string } | undefined;
 		if (replacement) {
 			changed += Number(
 				db
 					.prepare(
-						"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ?",
+						"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', updated_at = datetime('now') WHERE agent_id = ? AND canonical_key = ?",
 					)
-					.run(replacement.source_id, replacement.id, conversation.agent_id, conversation.external_identity).changes >
-					0,
+					.run(replacement.source_id, replacement.id, conversation.agent_id, conversation.canonical_key).changes > 0,
 			);
 			updateSessionTranscriptSource(
 				db,
@@ -605,9 +648,9 @@ export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string | u
 			changed += Number(
 				db
 					.prepare(
-						"UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ?",
+						"UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE agent_id = ? AND canonical_key = ?",
 					)
-					.run(conversation.agent_id, conversation.external_identity).changes > 0,
+					.run(conversation.agent_id, conversation.canonical_key).changes > 0,
 			);
 		}
 	}

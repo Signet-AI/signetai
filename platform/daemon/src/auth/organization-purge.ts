@@ -3,6 +3,7 @@ import { prepareTypedStatement, type WriteDb } from "../db-accessor";
 import { dbOwnerOrganizationPurge, dbOwnerTranscriptOperation, getDbOwner } from "../db-owner-runtime";
 import type { TranscriptDeleteResult } from "../session-transcript-lifecycle";
 import {
+	derivedPurgeOutcome,
 	purgeArtifactRecordInTx,
 	purgeDocumentRecordInTx,
 	purgeMemoryEmbeddingsInTx,
@@ -11,6 +12,8 @@ import {
 } from "../source-purge-tx";
 import { auditAuthoredWriteInTx, type WriteAuthor } from "./audit-owner";
 import { auditStatement, organizationQuery, organizationWrite, statement } from "./organization-store";
+import { markDerivedMemoriesStaleForSourceInTx } from "../derived-memory-provenance";
+import { enqueueDreamingAttentionInTx } from "../pipeline/dreaming-attention";
 import type { Principal } from "./principal";
 
 export interface PurgeBatchResult {
@@ -18,10 +21,11 @@ export interface PurgeBatchResult {
 	remaining: number;
 	counts: Record<string, number>;
 	blocked: boolean;
+	hiddenMaterialRemains: boolean;
 }
 function purgeReadClause(
 	scope: ReadScope | undefined,
-	kind: "memory" | "artifact" | "document" | "summary" | "transcript",
+	kind: "memory" | "artifact" | "document" | "summary" | "transcript" | "cold",
 	alias: string,
 	classificationId?: string,
 ) {
@@ -32,7 +36,7 @@ function purgeReadClause(
 			: readScopeSql(alias, scope, {
 					visibility: null,
 					memory: null,
-					session: kind === "document" ? null : "session_key",
+					session: kind === "document" || kind === "cold" ? null : "session_key",
 					source: kind === "artifact" || kind === "transcript" ? "source_id" : null,
 				});
 	return classificationId
@@ -41,6 +45,9 @@ function purgeReadClause(
 				args: [...clause.args, classificationId],
 			}
 		: clause;
+}
+function authoredPurgedEvidenceMemory(alias: string): string {
+	return `EXISTS(SELECT 1 FROM audit_events a WHERE a.action IN ('session.purged','memory.purged','artifact.purged','summary.purged') AND a.agent_id=${alias}.agent_id AND json_extract(a.detail_json,'$.offboardUserId')=? AND (${alias}.source_id IN (a.target_id,'session:'||a.target_id) OR EXISTS(SELECT 1 FROM derived_memory_sources d WHERE d.derived_memory_id=${alias}.id AND d.agent_id=${alias}.agent_id AND d.source_kind=CASE WHEN a.target_kind='session' THEN 'transcript' ELSE a.target_kind END AND d.source_id IN (a.target_id,'session:'||a.target_id))))`;
 }
 function planAuthoredMemoryPurgeInTx(
 	db: WriteDb,
@@ -57,13 +64,18 @@ function planAuthoredMemoryPurgeInTx(
 	const artifactScope = purgeReadClause(options.scope, "artifact", "a", options.classificationId);
 	const summaryScope = purgeReadClause(options.scope, "summary", "s", options.classificationId);
 	const transcriptScope = purgeReadClause(options.scope, "transcript", "t", options.classificationId);
+	const coldScope = purgeReadClause(options.scope, "cold", "c", options.classificationId);
+	const cold = prepareTypedStatement<{ archive_id: string }>(
+		db,
+		`SELECT c.archive_id FROM memories_cold c WHERE c.${options.agentId ? "agent_id" : "author_user_id"}=? AND c.provenance_resolved=1${coldScope.sql} LIMIT ?`,
+	).all(options.agentId ?? userId, ...coldScope.args, options.preview ? 1001 : 50);
 	const rootLimit = options.preview ? 1001 : 50;
 	const agentId = options.agentId;
 	const evidenceLimit = options.preview ? 1001 : 1;
 	const roots = prepareTypedStatement<{ id: string }>(
 		db,
-		`SELECT m.id FROM memories m WHERE ${agentId ? "m.agent_id=?" : `(m.author_user_id=? OR EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=m.agent_id AND m.source_id IN (t.session_key,'session:'||t.session_key) AND (m.type='session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))${transcriptScope.sql}))`}${memoryScope.sql} LIMIT ?`,
-	).all(...(agentId ? [agentId] : [userId, userId, ...transcriptScope.args]), ...memoryScope.args, rootLimit);
+		`SELECT m.id FROM memories m WHERE ${agentId ? "m.agent_id=?" : `(m.author_user_id=? OR ${authoredPurgedEvidenceMemory("m")} OR EXISTS(SELECT 1 FROM session_transcripts t WHERE t.speaker_user_id=? AND t.agent_id=m.agent_id AND m.source_id IN (t.session_key,'session:'||t.session_key) AND (m.type='session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))${transcriptScope.sql}))`}${memoryScope.sql} LIMIT ?`,
+	).all(...(agentId ? [agentId] : [userId, userId, userId, ...transcriptScope.args]), ...memoryScope.args, rootLimit);
 	const transcripts = prepareTypedStatement<{ agent_id: string; session_key: string }>(
 		db,
 		`SELECT t.agent_id,t.session_key FROM session_transcripts t WHERE t.${agentId ? "agent_id" : "speaker_user_id"}=?${transcriptScope.sql} LIMIT ?`,
@@ -82,7 +94,9 @@ function planAuthoredMemoryPurgeInTx(
 	).all(...(agentId ? [agentId] : [userId, userId, ...transcriptScope.args]), ...summaryScope.args, evidenceLimit);
 	const exceeded =
 		options.preview &&
-		[roots.length, documents.length, artifacts.length, summaries.length, transcripts.length].some((n) => n > 1000);
+		[cold.length, roots.length, documents.length, artifacts.length, summaries.length, transcripts.length].some(
+			(n) => n > 1000,
+		);
 	if (exceeded) throw new Error("plan_limit");
 	for (const doc of documents) {
 		roots.push(
@@ -119,17 +133,81 @@ function planAuthoredMemoryPurgeInTx(
 		...summaryScope.args,
 		...summaryScope.args,
 	);
-	const rows = prepareTypedStatement<{ id: string; agent_id: string; pinned: number }>(
+	const candidates = prepareTypedStatement<{
+		id: string;
+		agent_id: string;
+		pinned: number;
+		source_id: string | null;
+		source_type: string | null;
+	}>(
 		db,
-		"SELECT id,agent_id,pinned FROM memories WHERE id IN (SELECT value FROM json_each(?))",
+		"SELECT id,agent_id,pinned,source_id,source_type FROM memories WHERE id IN (SELECT value FROM json_each(?))",
 	).all(JSON.stringify(nodes.filter((n) => n.kind === "memory").map((n) => n.id)));
+	const affected = new Set(nodes.map((node) => `${node.kind}:${node.id}`));
+	for (const artifact of artifacts) affected.add(`artifact:${artifact.source_path}`);
+	for (const transcript of transcripts) {
+		affected.add(`transcript:${transcript.session_key}`);
+		affected.add(`transcript:session:${transcript.session_key}`);
+	}
+	const citations = prepareTypedStatement<{ derived_memory_id: string; source_kind: string; source_id: string }>(
+		db,
+		"SELECT derived_memory_id,source_kind,source_id FROM derived_memory_sources WHERE derived_memory_id IN (SELECT value FROM json_each(?)) LIMIT 1001",
+	).all(JSON.stringify(candidates.map((row) => row.id)));
+	if (citations.length > 1000) throw new Error("plan_limit");
+	for (const citation of citations) {
+		if (citation.source_kind !== "transcript") continue;
+		if (
+			db
+				.prepare(
+					"SELECT 1 FROM audit_events WHERE action='session.purged' AND json_extract(detail_json,'$.offboardUserId')=? AND ? IN (target_id,'session:'||target_id) LIMIT 1",
+				)
+				.get(userId, citation.source_id)
+		)
+			affected.add(`transcript:${citation.source_id}`);
+	}
+	const mixed = new Set<string>();
+	for (;;) {
+		let changed = false;
+		for (const row of candidates) {
+			if (mixed.has(row.id)) continue;
+			const survivingCitation = citations.some(
+				(citation) =>
+					citation.derived_memory_id === row.id && !affected.has(`${citation.source_kind}:${citation.source_id}`),
+			);
+			const survivingProvenance =
+				row.source_id !== null &&
+				row.source_type !== null &&
+				!affected.has(
+					`${["session", "session_summary", "checkpoint"].includes(row.source_type) ? "transcript" : row.source_type}:${row.source_id}`,
+				);
+			if (
+				derivedPurgeOutcome(false, survivingCitation, survivingProvenance) === "mixed" &&
+				citations.some((citation) => citation.derived_memory_id === row.id)
+			) {
+				mixed.add(row.id);
+				affected.delete(`memory:${row.id}`);
+				changed = true;
+			}
+		}
+		if (!changed) break;
+	}
+	const rows = candidates.filter((row) => !mixed.has(row.id));
+	const retainedMixed = candidates
+		.filter((row) => mixed.has(row.id))
+		.map((row) => ({
+			...row,
+			citations: citations.filter(
+				(citation) =>
+					citation.derived_memory_id === row.id && affected.has(`${citation.source_kind}:${citation.source_id}`),
+			),
+		}));
 	const affectedSummaries = prepareTypedStatement<{ id: string; agent_id: string }>(
 		db,
 		"SELECT id,agent_id FROM session_summaries WHERE id IN (SELECT value FROM json_each(?))",
 	).all(JSON.stringify(nodes.filter((n) => n.kind === "summary").map((n) => n.id)));
 	const blocked = nodes.length > 1000 || rows.some((row) => row.pinned === 1);
 	if (options.preview && nodes.length > 1000) throw new Error("plan_limit");
-	return { rows, documents, artifacts, affectedSummaries, transcripts, blocked };
+	return { cold, rows, retainedMixed, documents, artifacts, affectedSummaries, transcripts, blocked };
 }
 export function planOffboardPurgeInTx(
 	db: WriteDb,
@@ -139,6 +217,7 @@ export function planOffboardPurgeInTx(
 ): Record<string, number> {
 	const plan = planAuthoredMemoryPurgeInTx(db, userId, { scope, preview: true, classificationId });
 	return {
+		cold: plan.cold.length,
 		memories: plan.rows.length,
 		documents: plan.documents.length,
 		artifacts: plan.artifacts.length,
@@ -153,19 +232,49 @@ export function purgeAuthoredMemoryBatchInTx(
 	options: { readonly agentId?: string; readonly scope?: ReadScope; readonly classificationId?: string } = {},
 ): PurgeBatchResult {
 	const count = (sql: string, ...args: string[]) => prepareTypedStatement<{ n: number }>(db, sql).get(...args)?.n ?? 0;
-	const { rows, documents, artifacts, affectedSummaries, blocked } = planAuthoredMemoryPurgeInTx(db, userId, options);
+	const { cold, rows, retainedMixed, documents, artifacts, affectedSummaries, blocked } = planAuthoredMemoryPurgeInTx(
+		db,
+		userId,
+		options,
+	);
 	const detail = options.agentId ? { purgedAgentId: options.agentId } : { offboardUserId: userId };
 	const counts: Record<string, number> = { memories: 0, documents: 0, memory_artifacts: 0, session_summaries: 0 };
 	if (!blocked) {
+		for (const row of cold) {
+			db.prepare("DELETE FROM memories_cold WHERE archive_id=?").run(row.archive_id);
+			counts.memories_cold = (counts.memories_cold ?? 0) + 1;
+		}
+		for (const memory of retainedMixed) {
+			for (const citation of memory.citations) {
+				markDerivedMemoriesStaleForSourceInTx(db, {
+					agentId: memory.agent_id,
+					sourceKind: citation.source_kind,
+					sourceId: citation.source_id,
+					staleAt: new Date().toISOString(),
+					derivedMemoryId: memory.id,
+				});
+				db.prepare(
+					"DELETE FROM derived_memory_sources WHERE agent_id=? AND derived_memory_id=? AND source_kind=? AND source_id=?",
+				).run(memory.agent_id, memory.id, citation.source_kind, citation.source_id);
+			}
+			enqueueDreamingAttentionInTx(db, {
+				agentId: memory.agent_id,
+				kind: "evidence_requeue",
+				subjectRef: `memory:${memory.id}`,
+				details: { reason: "source_removed" },
+				priority: 60,
+				reopen: true,
+			});
+		}
 		for (const row of rows) {
-			purgeMemoryEmbeddingsInTx(db, row.id);
-			purgeMemoryInTx(db, row.id);
+			purgeMemoryEmbeddingsInTx(db, row.id, options.scope);
+			purgeMemoryInTx(db, row.id, options.scope);
 			auditAuthoredWriteInTx(db, author, "memory.purged", "memory", row.id, row.agent_id, detail);
 			counts.memories = (counts.memories ?? 0) + 1;
 		}
 		for (const doc of documents)
 			if (!count("SELECT COUNT(*) AS n FROM document_memories WHERE document_id=?", doc.id)) {
-				purgeDocumentRecordInTx(db, doc.id);
+				purgeDocumentRecordInTx(db, doc.id, options.scope);
 				counts.documents = (counts.documents ?? 0) + 1;
 				auditAuthoredWriteInTx(db, author, "document.purged", "document", doc.id, doc.agent_id, detail);
 			}
@@ -177,7 +286,7 @@ export function purgeAuthoredMemoryBatchInTx(
 					artifact.agent_id,
 				)
 			) {
-				purgeArtifactRecordInTx(db, artifact);
+				purgeArtifactRecordInTx(db, artifact, options.scope);
 				counts.memory_artifacts = (counts.memory_artifacts ?? 0) + 1;
 				auditAuthoredWriteInTx(
 					db,
@@ -190,15 +299,45 @@ export function purgeAuthoredMemoryBatchInTx(
 				);
 			}
 		for (const summary of affectedSummaries) {
-			purgeSummaryRecordInTx(db, summary.id, summary.agent_id);
+			purgeSummaryRecordInTx(db, summary.id, summary.agent_id, options.scope);
 			counts.session_summaries = (counts.session_summaries ?? 0) + 1;
 			auditAuthoredWriteInTx(db, author, "summary.purged", "summary", summary.id, summary.agent_id, detail);
 		}
 	}
 	const pending = planAuthoredMemoryPurgeInTx(db, userId, options);
 	const remaining =
-		pending.rows.length + pending.documents.length + pending.artifacts.length + pending.affectedSummaries.length;
-	return { removed: counts.memories ?? 0, remaining, counts, blocked };
+		pending.cold.length +
+		pending.rows.length +
+		pending.documents.length +
+		pending.artifacts.length +
+		pending.affectedSummaries.length;
+	let hiddenMaterialRemains = false;
+	if (options.scope) {
+		for (const [table, kind, column] of [
+			["memories_cold", "cold", "author_user_id"],
+			["memories", "memory", "author_user_id"],
+			["documents", "document", "author_user_id"],
+			["memory_artifacts", "artifact", "author_user_id"],
+			["session_summaries", "summary", "author_user_id"],
+			["session_transcripts", "transcript", "speaker_user_id"],
+		] as const) {
+			const visible = purgeReadClause(options.scope, kind, "r", options.classificationId);
+			const hidden = prepareTypedStatement<{ compartment_id: number | null; n: number }>(
+				db,
+				`SELECT r.compartment_id,COUNT(*) AS n FROM ${table} r WHERE (r.${column}=?${table === "memories" ? ` OR ${authoredPurgedEvidenceMemory("r")}` : ""}) AND NOT (1=1${visible.sql}) GROUP BY r.compartment_id`,
+			).all(userId, ...(table === "memories" ? [userId] : []), ...visible.args);
+			for (const row of hidden) {
+				hiddenMaterialRemains = true;
+				auditAuthoredWriteInTx(db, author, "purge.hidden_material", "user", userId, null, {
+					ownerOnly: true,
+					compartmentId: row.compartment_id,
+					table,
+					count: row.n,
+				});
+			}
+		}
+	}
+	return { removed: counts.memories ?? 0, remaining, counts, blocked, hiddenMaterialRemains };
 }
 async function purgeResidual(
 	userId: string,
@@ -208,6 +347,7 @@ async function purgeResidual(
 ): Promise<Record<string, number>> {
 	const residual: Record<string, number> = {};
 	for (const [table, column] of [
+		["memories_cold", "author_user_id"],
 		["memories", "author_user_id"],
 		["documents", "author_user_id"],
 		["memory_artifacts", "author_user_id"],
@@ -215,13 +355,15 @@ async function purgeResidual(
 	]) {
 		const clause = purgeReadClause(
 			scope,
-			table === "memories"
-				? "memory"
-				: table === "documents"
-					? "document"
-					: table === "memory_artifacts"
-						? "artifact"
-						: "transcript",
+			table === "memories_cold"
+				? "cold"
+				: table === "memories"
+					? "memory"
+					: table === "documents"
+						? "document"
+						: table === "memory_artifacts"
+							? "artifact"
+							: "transcript",
 			"r",
 			classificationId,
 		);
@@ -290,12 +432,14 @@ export async function runOffboardPurge(
 		session_transcripts: 0,
 	};
 	let blocked = false;
+	let hiddenMaterialRemains = false;
 	const purgeDerived = async () => {
 		for (;;) {
 			if (Date.now() >= deadline) break;
 			const batch = await dbOwnerOrganizationPurge(userId, author, scope, classificationId);
 			for (const [kind, count] of Object.entries(batch.counts)) removed[kind] = (removed[kind] ?? 0) + count;
 			blocked ||= batch.blocked;
+			hiddenMaterialRemains = batch.hiddenMaterialRemains;
 			await organizationWrite([
 				statement("UPDATE org_jobs SET progress_json=? WHERE id=?", [
 					JSON.stringify({ phase: "purging", removed }),
@@ -325,6 +469,7 @@ export async function runOffboardPurge(
 					kind: "session_transcript_delete",
 					input: {
 						basePath,
+						readScope: scope,
 						agentId: row.agent_id,
 						sessionKey: row.session_key,
 						hard: true,
@@ -376,11 +521,12 @@ export async function runOffboardPurge(
 	}
 	await purgeDerived();
 	const residual = await purgeResidual(userId, jobId, scope, classificationId);
-	const status = blocked || Object.values(residual).some((n) => n > 0) ? "incomplete" : "complete";
+	const status =
+		blocked || hiddenMaterialRemains || Object.values(residual).some((n) => n > 0) ? "incomplete" : "complete";
 	await organizationWrite([
 		statement("UPDATE org_jobs SET status=?,progress_json=?,finished_at=? WHERE id=?", [
 			status,
-			JSON.stringify({ removed, residual }),
+			JSON.stringify({ removed, residual, ...(hiddenMaterialRemains ? { reason: "hidden_material_remains" } : {}) }),
 			new Date().toISOString(),
 			jobId,
 		]),

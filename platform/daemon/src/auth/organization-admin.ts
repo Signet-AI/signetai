@@ -1,3 +1,4 @@
+import { readableCompartments } from "../read-scope";
 import { AuthRateLimiter } from "./rate-limiter";
 import { oidcSchema, settingsSchema } from "./organization-settings-contract";
 import { operatorActor, operatorRequest } from "../operator-jobs";
@@ -516,8 +517,8 @@ export async function jobs(p: Principal, kind?: string) {
 			).filter(() => !kind || kind === "operator"),
 			...(await organizationQuery<readonly import("../operator-job-contract").OperatorJobRow[]>(
 				statement(
-					"SELECT * FROM org_jobs WHERE kind NOT IN ('operator','organization_upgrade','classification_author_purge') AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
-					[p.boundAgentId, p.allowedProjects === null ? null : "restricted", kind ?? null, kind ?? null],
+					"SELECT * FROM org_jobs WHERE kind NOT IN ('operator','organization_upgrade','classification_author_purge') AND (kind<>'offboard' OR created_by=?) AND (kind NOT IN ('restart','agent_purge') OR (? IS NULL AND ? IS NULL)) AND (? IS NULL OR kind = ?) ORDER BY created_at DESC LIMIT 1000",
+					[p.userId, p.boundAgentId, p.allowedProjects === null ? null : "restricted", kind ?? null, kind ?? null],
 					"all",
 				),
 			)),
@@ -530,7 +531,7 @@ export async function job(p: Principal, jobId: string) {
 	const result = await organizationQuery<{ created_by: string; kind: string } | null>(
 		statement("SELECT * FROM org_jobs WHERE id = ?", [jobId], "get"),
 	);
-	if (!result || (result.kind === "classification_author_purge" && result.created_by !== p.userId))
+	if (!result || (["offboard", "classification_author_purge"].includes(result.kind) && result.created_by !== p.userId))
 		throw new IdentityError(404, "not_found");
 	if (result.kind === "organization_upgrade") {
 		if (p.role !== "admin" || !p.permissions.has("admin") || p.boundAgentId !== null || p.allowedProjects !== null)
@@ -559,6 +560,15 @@ export async function audit(p: Principal, filters: Record<string, string | undef
 		.parse(filters.limit ?? 100);
 	const predicates: string[] = [];
 	const params: (string | number)[] = [];
+	const compartments = await readableCompartments(audienceSubjectFromPrincipal(p));
+	predicates.push(
+		"(action<>'purge.hidden_material' OR (?=1 AND (?=1 OR json_extract(detail_json,'$.compartmentId') IN (SELECT value FROM json_each(?)))))",
+	);
+	params.push(
+		Number(p.compliance || p.kind === "local"),
+		Number(compartments === "all"),
+		JSON.stringify(compartments === "all" ? [] : compartments),
+	);
 	for (const [key, column] of Object.entries({
 		actor: "actor_user_id",
 		action: "action",
