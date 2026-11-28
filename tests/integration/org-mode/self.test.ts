@@ -73,8 +73,22 @@ test("isolated team daemon boots, restarts with durable agents, and reaps its DB
 		const derived = await request(daemon.origin, `/api/memory/${claim.memoryId}?agent_id=alice-base`, alice);
 		expect(derived.status).toBe(200);
 		expect(JSON.stringify(derived.body)).toContain("Atlas baseline graph quokka is durable.");
-		const foreignBefore = (await request(daemon.origin, "/api/knowledge/entities?agent_id=carol-base", admin)).body;
-		const foreign = await request(daemon.origin, "/api/dream/tools/apply_ontology_ops", admin, "POST", {
+		const foreignQuote = "Atlas baseline foreign citation quokka belongs to Alice.";
+		const foreignEvidence = success(
+			await request(daemon.origin, "/api/memory/remember", alice, "POST", {
+				content: foreignQuote,
+				agentId: "alice-base",
+				type: "fact",
+			}),
+			"Create independently owned foreign-citation evidence",
+		);
+		const foreignId =
+			typeof foreignEvidence.id === "string" ? foreignEvidence.id : text(record(foreignEvidence.memory).id);
+		const foreignBefore = success(
+			await request(daemon.origin, "/api/knowledge/entities?agent_id=carol-base", admin),
+			"Foreign target graph is readable",
+		);
+		const foreignInput = {
 			agentId: "carol-base",
 			input: {
 				agentId: "carol-base",
@@ -82,16 +96,29 @@ test("isolated team daemon boots, restarts with durable agents, and reaps its DB
 					{
 						operation: "create_entity",
 						payload: { name: "forbidden-cross-agent-base", type: "project" },
-						evidence: [{ source_ref: `memory:${sourceId}`, quote: "Atlas baseline graph quokka is durable." }],
+						evidence: [{ source_ref: `memory:${foreignId}`, quote: foreignQuote }],
 					},
 				],
 			},
-		});
+		};
+		const foreign = await request(daemon.origin, "/api/dream/tools/apply_ontology_ops", admin, "POST", foreignInput);
 		expect(foreign.status).toBe(400);
-		expect(JSON.stringify(foreign.body)).toContain("Cited evidence belongs to scope");
+		success(
+			await request(daemon.origin, `/api/memory/${foreignId}?agent_id=alice-base`, alice, "DELETE", {
+				reason: "Verify absent-identical foreign-citation refusal",
+			}),
+			"Source owner deletes its foreign citation control",
+		);
+		expect((await request(daemon.origin, `/api/memory/${foreignId}?agent_id=alice-base`, alice)).status).toBe(404);
+		const absent = await request(daemon.origin, "/api/dream/tools/apply_ontology_ops", admin, "POST", foreignInput);
+		expect(absent.status).toBe(400);
+		expect(foreign.body).toEqual(absent.body);
 		assertUnchanged(
 			foreignBefore,
-			(await request(daemon.origin, "/api/knowledge/entities?agent_id=carol-base", admin)).body,
+			success(
+				await request(daemon.origin, "/api/knowledge/entities?agent_id=carol-base", admin),
+				"Rejected citation target graph remains readable",
+			),
 			"native foreign citation leaves no graph rows",
 		);
 		const changed = await read();
