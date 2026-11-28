@@ -1,5 +1,22 @@
 import { describe, expect, it } from "bun:test";
-import { detectSchemaType } from "./migration";
+import { Database } from "bun:sqlite";
+import { detectSchemaType, initializeDatabaseSchema } from "./migration";
+import { MIGRATIONS } from "./migrations/index";
+
+it("initializes with foreign keys enabled without enclosing migration 179 in a transaction", () => {
+	const db = new Database(":memory:");
+	try {
+		db.exec("PRAGMA foreign_keys=ON");
+		expect(() => initializeDatabaseSchema(db)).not.toThrow();
+		expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+		expect(db.query("SELECT MAX(version) version FROM schema_migrations").get()).toEqual({
+			version: MIGRATIONS.at(-1)?.version,
+		});
+		expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+	} finally {
+		db.close();
+	}
+});
 
 describe("detectSchemaType", () => {
 	it("recognizes the legacy Python schema", () => {
