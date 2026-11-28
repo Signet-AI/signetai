@@ -26,7 +26,9 @@ export function up(db: MigrationDb): void {
 	);
 	if (!keyColumns.has("parent_key_id"))
 		db.exec("ALTER TABLE api_keys ADD COLUMN parent_key_id TEXT REFERENCES api_keys(id)");
-	db.exec(`
+	db.exec("CREATE INDEX _legacy_key_creation ON audit_events(target_id,action,at)");
+	try {
+		db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_api_keys_parent ON api_keys(parent_key_id) WHERE parent_key_id IS NOT NULL;
 		UPDATE api_keys SET parent_key_id=(
 			SELECT substr(a.actor_credential,9) FROM audit_events a JOIN api_keys p ON p.id=substr(a.actor_credential,9)
@@ -49,4 +51,7 @@ export function up(db: MigrationDb): void {
 			revoked_at=COALESCE(revoked_at,(SELECT min(a.revoked_at) FROM ancestry a WHERE a.child=api_keys.id))
 		WHERE parent_key_id IS NOT NULL;
 	`);
+	} finally {
+		db.exec("DROP INDEX _legacy_key_creation");
+	}
 }

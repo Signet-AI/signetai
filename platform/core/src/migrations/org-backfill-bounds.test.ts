@@ -3,6 +3,7 @@ import type { MigrationDb } from "./contract";
 import { up as registry } from "./185-import-content-registry";
 import { up as classifications } from "./177-classifications";
 import { up as leases } from "./179-dreaming-evidence-leases";
+import { up as authority } from "./184-credential-authority";
 import { MIGRATIONS, runMigrations } from "./index";
 import { expect, test } from "bun:test";
 
@@ -88,6 +89,69 @@ test("alias creator backfills seek by alias identity rather than rescanning each
 			true,
 		);
 		expect(plans.some((detail) => /SCAN p|USE TEMP B-TREE/.test(detail))).toBe(false);
+	} finally {
+		db.close();
+	}
+});
+
+test("credential ancestry backfill seeks creation events by target identity", () => {
+	const db = new Database(":memory:");
+	try {
+		for (const entry of MIGRATIONS.filter((entry) => entry.version < 184)) entry.up(db);
+		const database: MigrationDb = db;
+		const plans: string[] = [];
+		authority({
+			prepare: (sql) => database.prepare(sql),
+			exec: (sql) => {
+				const update = sql.split(";").find((part) => part.trimStart().startsWith("UPDATE api_keys SET parent_key_id"));
+				if (update) {
+					const explain = database.prepare(`EXPLAIN QUERY PLAN ${update}`);
+					plans.push(...explain.all().map((row) => String(row.detail)));
+					explain.finalize?.();
+				}
+				database.exec(sql);
+			},
+		});
+		expect(plans.filter((detail) => /SEARCH a /.test(detail)).length).toBeGreaterThan(0);
+		expect(plans.filter((detail) => /SEARCH a /.test(detail)).every((detail) => detail.includes("target_id=?"))).toBe(
+			true,
+		);
+	} finally {
+		db.close();
+	}
+});
+
+test("legacy artifact citations use an indexed latest-reference lookup", () => {
+	const db = new Database(":memory:");
+	try {
+		for (const entry of MIGRATIONS.filter((entry) => entry.version < 177)) entry.up(db);
+		db.exec(`INSERT INTO entities(id,name,entity_type,agent_id,created_at,updated_at,proposal_evidence) VALUES('lookup-entity','Lookup','project','default','now','now','[{"source_id":"lookup-ref"}]');
+			INSERT INTO memory_artifacts(agent_id,source_path,source_kind,source_sha256,session_id,session_token,source_node_id,captured_at,updated_at) VALUES('default','lookup/path','file','hash','unbound','unbound','lookup-ref','now','now');`);
+		const database: MigrationDb = db;
+		const plans: string[] = [];
+		classifications({
+			exec: (sql) => database.exec(sql),
+			prepare: (sql) => {
+				const statement = database.prepare(sql);
+				return {
+					run: (...args) => statement.run(...args),
+					all: (...args) => statement.all(...args),
+					get: (...args) => {
+						if (sql.includes("SELECT source_path FROM") && sql.includes("ORDER BY captured_at")) {
+							const explain = database.prepare(`EXPLAIN QUERY PLAN ${sql}`);
+							plans.push(...explain.all(...args).map((row) => String(row.detail)));
+							explain.finalize?.();
+						}
+						return statement.get(...args);
+					},
+				};
+			},
+		});
+		expect(plans.length).toBeGreaterThan(0);
+		expect(plans.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
+		expect(
+			db.query("SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_id='lookup-entity'").all(),
+		).toEqual([{ evidence_kind: "artifact", evidence_id: "lookup/path" }]);
 	} finally {
 		db.close();
 	}

@@ -64,9 +64,9 @@ function citation(db: MigrationDb, agent: string, row: Record<string, unknown>):
 		const artifact = exists(db, "memory_artifacts")
 			? db
 					.prepare(
-						"SELECT source_path FROM memory_artifacts WHERE agent_id=? AND (source_path=? OR source_node_id=? OR session_id=? OR session_key=? OR session_token=?) ORDER BY captured_at DESC LIMIT 1",
+						"SELECT source_path FROM _legacy_artifact_lookup WHERE agent_id=? AND ref=? ORDER BY captured_at DESC LIMIT 1",
 					)
-					.get(agent, value, value, value, value, value)
+					.get(agent, value)
 			: undefined;
 		if (typeof artifact?.source_path === "string") return { kind: "artifact", id: artifact.source_path };
 		for (const [table, key, kind] of [
@@ -88,59 +88,72 @@ function citation(db: MigrationDb, agent: string, row: Record<string, unknown>):
 	return null;
 }
 export function backfillEvidenceCitations(db: MigrationDb): void {
-	for (const [table, kind] of [
-		["entity_attributes", "attribute"],
-		["entity_dependencies", "dependency"],
-		["entities", "entity"],
-		["entity_aspects", "aspect"],
-	]) {
-		if (!table || !kind || !exists(db, table)) continue;
-		if (
-			!db
-				.prepare(`PRAGMA table_info(${table})`)
-				.all()
-				.some((r) => r.name === "proposal_evidence")
-		)
-			continue;
-		db.exec(`CREATE TEMP TABLE _legacy_citation_refs AS SELECT t.id,t.agent_id,
+	const artifacts = exists(db, "memory_artifacts");
+	if (artifacts) {
+		db.exec("CREATE TEMP TABLE _legacy_artifact_lookup(agent_id TEXT,ref TEXT,source_path TEXT,captured_at TEXT)");
+		for (const column of ["source_path", "source_node_id", "session_id", "session_key", "session_token"])
+			db.exec(
+				`INSERT INTO _legacy_artifact_lookup SELECT agent_id,${column},source_path,captured_at FROM memory_artifacts WHERE ${column} IS NOT NULL`,
+			);
+		db.exec("CREATE INDEX _legacy_artifact_lookup_ref ON _legacy_artifact_lookup(agent_id,ref,captured_at DESC)");
+	}
+	try {
+		for (const [table, kind] of [
+			["entity_attributes", "attribute"],
+			["entity_dependencies", "dependency"],
+			["entities", "entity"],
+			["entity_aspects", "aspect"],
+		]) {
+			if (!table || !kind || !exists(db, table)) continue;
+			if (
+				!db
+					.prepare(`PRAGMA table_info(${table})`)
+					.all()
+					.some((r) => r.name === "proposal_evidence")
+			)
+				continue;
+			db.exec(`CREATE TEMP TABLE _legacy_citation_refs AS SELECT t.id,t.agent_id,
    CASE WHEN j.type='text' THEN j.value ELSE json_extract(j.value,'$.source_ref') END ref,
    CASE WHEN j.type='object' THEN json_extract(j.value,'$.memory_id') END memory_id,
    CASE WHEN j.type='object' THEN COALESCE(json_extract(j.value,'$.source_kind'),CASE WHEN COALESCE(json_extract(j.value,'$.transcript_id'),json_extract(j.value,'$.session_key')) IS NOT NULL THEN 'transcript' END) END source_kind,
    CASE WHEN j.type='object' THEN COALESCE(json_extract(j.value,'$.source_id'),json_extract(j.value,'$.transcript_id'),json_extract(j.value,'$.session_key'),json_extract(j.value,'$.session_id'),json_extract(j.value,'$.source')) END source_id,
    CASE WHEN j.type='object' THEN json_extract(j.value,'$.source_path') END source_path
    FROM ${table} t,json_each(CASE WHEN json_valid(t.proposal_evidence) THEN CASE WHEN json_type(t.proposal_evidence)='array' THEN t.proposal_evidence ELSE '[]' END ELSE '[]' END) j WHERE j.type IN ('object','text')`);
-		const page = db.prepare(
-			"SELECT rowid AS cursor,* FROM _legacy_citation_refs WHERE rowid>? ORDER BY rowid LIMIT 256",
-		);
-		const insert = db.prepare(
-			"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES (?,?,?,?,?)",
-		);
-		let cursor = 0;
-		try {
-			for (;;) {
-				const rows = page.all(cursor);
-				if (rows.length === 0) break;
-				for (const row of rows) {
-					if (typeof row.cursor !== "number") throw new Error("Invalid evidence backfill cursor");
-					cursor = row.cursor;
-					if (typeof row.agent_id !== "string" || typeof row.id !== "string") continue;
-					const ref = citation(db, row.agent_id, row);
-					if (ref) insert.run(kind, row.id, row.agent_id, ref.kind, ref.id);
-				}
-			}
-		} finally {
-			db.exec("DROP TABLE _legacy_citation_refs");
-		}
-	}
-	for (const [table, id, kind, source] of [
-		["derived_memory_sources", "derived_memory_id", "source_kind", "source_id"],
-		["aggregate_memory_sources", "aggregate_memory_id", "'memory'", "source_memory_id"],
-		["aggregate_evidence_sources", "aggregate_memory_id", "source_kind", "source_id"],
-	]) {
-		if (table && exists(db, table))
-			db.exec(
-				`INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) SELECT 'memory',${id},agent_id,${kind},${source} FROM ${table} WHERE ${kind} IN ('memory','transcript','artifact','summary') AND typeof(${source})='text' AND length(${source})>0`,
+			const page = db.prepare(
+				"SELECT rowid AS cursor,* FROM _legacy_citation_refs WHERE rowid>? ORDER BY rowid LIMIT 256",
 			);
+			const insert = db.prepare(
+				"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES (?,?,?,?,?)",
+			);
+			let cursor = 0;
+			try {
+				for (;;) {
+					const rows = page.all(cursor);
+					if (rows.length === 0) break;
+					for (const row of rows) {
+						if (typeof row.cursor !== "number") throw new Error("Invalid evidence backfill cursor");
+						cursor = row.cursor;
+						if (typeof row.agent_id !== "string" || typeof row.id !== "string") continue;
+						const ref = citation(db, row.agent_id, row);
+						if (ref) insert.run(kind, row.id, row.agent_id, ref.kind, ref.id);
+					}
+				}
+			} finally {
+				db.exec("DROP TABLE _legacy_citation_refs");
+			}
+		}
+		for (const [table, id, kind, source] of [
+			["derived_memory_sources", "derived_memory_id", "source_kind", "source_id"],
+			["aggregate_memory_sources", "aggregate_memory_id", "'memory'", "source_memory_id"],
+			["aggregate_evidence_sources", "aggregate_memory_id", "source_kind", "source_id"],
+		]) {
+			if (table && exists(db, table))
+				db.exec(
+					`INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) SELECT 'memory',${id},agent_id,${kind},${source} FROM ${table} WHERE ${kind} IN ('memory','transcript','artifact','summary') AND typeof(${source})='text' AND length(${source})>0`,
+				);
+		}
+	} finally {
+		if (artifacts) db.exec("DROP TABLE _legacy_artifact_lookup");
 	}
 }
 function installTrigger(db: MigrationDb, name: string, sql: string): void {
