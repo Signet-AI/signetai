@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { repairVectorAdmissionStepInTx, syncEmbeddingCompartment } from "@signet/core";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,9 @@ import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall, type RecallResponse } from "./memory-search";
 import { localTestReadScope } from "./test-support/local-read-scope";
 import { setActiveTelemetry } from "./telemetry";
+
+const ownerVectorFixture = new Float32Array(768);
+ownerVectorFixture[0] = 1;
 
 let directory: string | null = null;
 let previousSignetPath: string | undefined;
@@ -302,19 +306,21 @@ describe("DB owner recall lane", () => {
 		const databasePath = join(directory, "memory", "memories.db");
 		initDbAccessor(databasePath);
 		getDbAccessor().withWriteTx((db) => {
+			expect(repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase).toBe("ready");
 			db.prepare(
 				`INSERT INTO memories (id, content, type, agent_id, visibility, created_at, updated_at, updated_by)
 				 VALUES (?, ?, 'fact', 'agent-a', 'global', datetime('now'), datetime('now'), 'test')`,
 			).run("owner-vector-fact", "owner vector fixture");
 			db.prepare(
-				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, agent_id, created_at) VALUES (?, ?, 'memory', ?, ?, '', 'agent-a', datetime('now'))",
-			).run("owner-vector-hash", "owner-vector-fact", new Float32Array([1, 0, 0]), 3);
+				"INSERT INTO embeddings (id, content_hash, source_id, source_type, vector, dimensions, chunk_text, agent_id, created_at) VALUES (?, ?, ?, 'memory', ?, ?, '', 'agent-a', datetime('now'))",
+			).run("owner-vector-embedding", "owner-vector-hash", "owner-vector-fact", ownerVectorFixture, 768);
+			expect(syncEmbeddingCompartment(db, "embeddings", "owner-vector-embedding")).toBe(1);
 		});
 		await closeDbAccessor();
 
 		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
 		try {
-			const result = await vectorSearchThroughDbOwner(client, [1, 0, 0], {
+			const result = await vectorSearchThroughDbOwner(client, Array.from(ownerVectorFixture), {
 				limit: 1,
 				maxScanRows: 10,
 				readScope: localTestReadScope("agent-a"),
@@ -337,12 +343,16 @@ describe("DB owner recall lane", () => {
 			const databasePath = join(directory, "memory", "memories.db");
 			initDbAccessor(databasePath);
 			getDbAccessor().withWriteTx((db) => {
+				expect(repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase).toBe("ready");
+				db.exec(
+					"INSERT INTO classifications(id,name) VALUES('cls_scope_hidden','Hidden'); INSERT INTO compartments(id,key) VALUES(7,'cls_scope_hidden'); INSERT INTO compartment_members(compartment_id,classification_id) VALUES(7,'cls_scope_hidden')",
+				);
 				const memory = db.prepare(
 					`INSERT INTO memories (id, content, type, agent_id, visibility, compartment_id, created_at, updated_at, updated_by)
 					 VALUES (?, ?, 'fact', ?, 'global', ?, datetime('now'), datetime('now'), 'test')`,
 				);
 				const embedding = db.prepare(
-					"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, compartment_id, agent_id, created_at) VALUES (?, ?, 'memory', ?, 3, '', ?, ?, datetime('now'))",
+					"INSERT INTO embeddings (id, content_hash, source_id, source_type, vector, dimensions, chunk_text, compartment_id, agent_id, created_at) VALUES (?, ?, ?, 'memory', ?, 768, '', ?, ?, datetime('now'))",
 				);
 				for (const [id, agent, compartment] of [
 					["scope-own", "agent-a", null],
@@ -350,7 +360,8 @@ describe("DB owner recall lane", () => {
 					["scope-hidden", "agent-a", 7],
 				] as const) {
 					memory.run(id, `vector scope ${id}`, agent, compartment);
-					embedding.run(`hash-${id}`, id, new Float32Array([1, 0, 0]), compartment, agent);
+					embedding.run(`embedding-${id}`, `hash-${id}`, id, ownerVectorFixture, compartment, agent);
+					expect(syncEmbeddingCompartment(db, "embeddings", `embedding-${id}`)).toBe(1);
 				}
 			});
 			const readScope = { reach: { kind: "own" as const, agentId: "agent-a" }, compartments: [], projects: null };
@@ -360,7 +371,11 @@ describe("DB owner recall lane", () => {
 					process.env.SIGNET_DB_OWNER_WORKER = "1";
 					try {
 						const owner = await getDbRecallOwner(databasePath);
-						return await vectorSearchThroughDbOwner(owner, [1, 0, 0], { limit: 5, maxScanRows: 10, readScope });
+						return await vectorSearchThroughDbOwner(owner, Array.from(ownerVectorFixture), {
+							limit: 5,
+							maxScanRows: 10,
+							readScope,
+						});
 					} finally {
 						if (previousOwnerWorker === undefined) delete process.env.SIGNET_DB_OWNER_WORKER;
 						else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerWorker;
@@ -369,7 +384,11 @@ describe("DB owner recall lane", () => {
 				await closeDbAccessor();
 				const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
 				try {
-					return await vectorSearchThroughDbOwner(client, [1, 0, 0], { limit: 5, maxScanRows: 10, readScope });
+					return await vectorSearchThroughDbOwner(client, Array.from(ownerVectorFixture), {
+						limit: 5,
+						maxScanRows: 10,
+						readScope,
+					});
 				} finally {
 					await client.close();
 				}
@@ -388,20 +407,28 @@ describe("DB owner recall lane", () => {
 		const databasePath = join(directory, "memory", "memories.db");
 		initDbAccessor(databasePath);
 		getDbAccessor().withWriteTx((db) => {
+			expect(repairVectorAdmissionStepInTx(db, "vec_embeddings", "embeddings").phase).toBe("ready");
 			db.prepare(
 				`INSERT INTO memories (id, content, type, agent_id, visibility, created_at, updated_at, updated_by)
 				 VALUES (?, ?, 'fact', 'agent-a', 'global', datetime('now'), datetime('now'), 'test')`,
 			).run("nested-owner-vector-fact", "nested owner vector fixture");
 			db.prepare(
-				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, agent_id, created_at) VALUES (?, ?, 'memory', ?, ?, '', 'agent-a', datetime('now'))",
-			).run("nested-owner-vector-hash", "nested-owner-vector-fact", new Float32Array([1, 0, 0]), 3);
+				"INSERT INTO embeddings (id, content_hash, source_id, source_type, vector, dimensions, chunk_text, agent_id, created_at) VALUES (?, ?, ?, 'memory', ?, ?, '', 'agent-a', datetime('now'))",
+			).run(
+				"nested-owner-vector-embedding",
+				"nested-owner-vector-hash",
+				"nested-owner-vector-fact",
+				ownerVectorFixture,
+				768,
+			);
+			expect(syncEmbeddingCompartment(db, "embeddings", "nested-owner-vector-embedding")).toBe(1);
 		});
 
 		const previousOwnerWorker = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "1";
 		try {
 			const owner = await getDbRecallOwner(databasePath);
-			const result = await vectorSearchThroughDbOwner(owner, [1, 0, 0], {
+			const result = await vectorSearchThroughDbOwner(owner, Array.from(ownerVectorFixture), {
 				limit: 1,
 				maxScanRows: 10,
 				readScope: localTestReadScope("agent-a"),
