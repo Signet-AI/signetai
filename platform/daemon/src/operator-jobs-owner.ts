@@ -367,11 +367,19 @@ function upgradePlan(db: WriteDb, input: UpgradePlanInput, actor: OperatorActor)
 		fingerprint: createHash("sha256").update(JSON.stringify(inventory)).digest("hex"),
 	};
 }
-function upgradeJob(db: WriteDb, jobId: string) {
+function visibleUpgradeJobsSql(actor: OperatorActor) {
+	const visible = visibleAgentSql({ kind: "user", userId: actor.userId, boundAgentId: actor.boundAgentId });
+	return {
+		sql: `NOT EXISTS(SELECT 1 FROM json_each(j.params_json,'$.preview.agents') item WHERE NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=json_extract(item.value,'$.agentId') AND ${visible.sql})) AND NOT EXISTS(SELECT 1 FROM json_each(j.params_json,'$.preview.keys') item WHERE json_extract(item.value,'$.agentId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=json_extract(item.value,'$.agentId') AND ${visible.sql}))`,
+		args: [...visible.args, ...visible.args],
+	};
+}
+function upgradeJob(db: WriteDb, jobId: string, actor?: OperatorActor) {
+	const visible = actor ? visibleUpgradeJobsSql(actor) : { sql: "1=1", args: [] };
 	const row = prepareTypedStatement<OperatorJobRow>(
 		db,
-		"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE id=? AND kind='organization_upgrade'",
-	).get(jobId);
+		`SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs j WHERE id=? AND kind='organization_upgrade' AND ${visible.sql}`,
+	).get(jobId, ...visible.args);
 	if (!row) deny("not_found");
 	return row;
 }
@@ -551,6 +559,7 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 	if (!request.actor) deny("permission");
 	operation(db, { op: "authorize-global", actor: request.actor });
 	const actor = request.actor;
+	const visibleJobs = visibleUpgradeJobsSql(actor);
 	if (command.action === "map-agent") {
 		const mapping = command.mapping;
 		if (mapping.kind === "organization" && command.agentId !== "default") deny("org_policy");
@@ -571,9 +580,9 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 	if (command.action === "list")
 		return db
 			.prepare(
-				"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE kind='organization_upgrade' ORDER BY created_at DESC LIMIT 100",
+				`SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs j WHERE kind='organization_upgrade' AND ${visibleJobs.sql} ORDER BY created_at DESC LIMIT 100`,
 			)
-			.all<OperatorJobRow>()
+			.all<OperatorJobRow>(...visibleJobs.args)
 			.map(upgradeView);
 	if (command.action === "inventory") {
 		const inventory = upgradeInventory(db, actor);
@@ -585,9 +594,9 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 			groups: db.prepare("SELECT id,name FROM groups ORDER BY id LIMIT 1000").all(),
 			jobs: db
 				.prepare(
-					"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE kind='organization_upgrade' ORDER BY created_at DESC LIMIT 8",
+					`SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs j WHERE kind='organization_upgrade' AND ${visibleJobs.sql} ORDER BY created_at DESC LIMIT 8`,
 				)
-				.all<OperatorJobRow>()
+				.all<OperatorJobRow>(...visibleJobs.args)
 				.map(upgradeView),
 		};
 	}
@@ -611,7 +620,7 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 		audit(db, actor, id, "organization.upgrade_previewed", null);
 		return upgradeView(upgradeJob(db, id));
 	}
-	const row = upgradeJob(db, command.jobId);
+	const row = upgradeJob(db, command.jobId, actor);
 	if (command.action === "read") return upgradeView(row);
 	const saved = upgradeSavedSchema.parse(JSON.parse(row.params_json));
 	const progress = upgradeProgressSchema.parse(JSON.parse(row.progress_json ?? "{}"));

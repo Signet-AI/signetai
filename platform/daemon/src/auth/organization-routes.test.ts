@@ -376,6 +376,24 @@ describe("organization HTTP flows", () => {
 		const eve = await member("agent-eve");
 		const hidden = await member("agent-hidden");
 		const { organizationWrite } = await import("./organization-store");
+		const issued = await call("/api/auth/api-keys", "POST", {
+			kind: "shared",
+			name: "Classified binding",
+			agentId: hidden.agentId,
+			permissions: ["recall"],
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+		});
+		expect(issued.status).toBe(201);
+		const boundKey = await issued.json();
+		await organizationWrite([statement("UPDATE agents SET kind='legacy' WHERE id=?", [hidden.agentId])]);
+		const draftResponse = await call("/api/org/upgrade/preview", "POST", {
+			mappings: [],
+			keys: [],
+			legacyKeyDeadline: new Date(Date.now() + 86400_000).toISOString(),
+		});
+		expect(draftResponse.status).toBe(201);
+		const draft = await draftResponse.json();
+		expect(JSON.stringify(draft)).toContain(hidden.agentId);
 		expect(
 			(await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: hidden.agentId }, eve.token)).status,
 		).toBe(200);
@@ -394,6 +412,18 @@ describe("organization HTTP flows", () => {
 		]);
 		const after = await (await call("/api/agents", "GET", undefined, eve.token)).json();
 		expect(after.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		for (const path of [
+			"/api/org/users",
+			"/api/org/keys",
+			"/api/auth/api-keys?all=1",
+			"/api/org/upgrade",
+			"/api/org/jobs",
+		])
+			expect(JSON.stringify(await (await call(path)).json()), path).not.toContain(hidden.agentId);
+		const keyIdentity = await (await call("/api/auth/whoami", "GET", undefined, boundKey.secret)).json();
+		expect(JSON.stringify(keyIdentity)).not.toContain(hidden.agentId);
+		expect((await call(`/api/org/upgrade/${draft.id}`)).status).toBe(404);
+		expect((await call(`/api/org/jobs/${draft.id}`)).status).toBe(404);
 		expect(JSON.stringify(await (await call("/api/auth/whoami", "GET", undefined, eve.token)).json())).not.toContain(
 			hidden.agentId,
 		);

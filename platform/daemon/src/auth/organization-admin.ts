@@ -367,7 +367,7 @@ export async function updateSettings(p: Principal, input: unknown) {
 export async function keys(p: Principal, filters: Record<string, string | undefined>) {
 	requireAdmin(p);
 	const where: string[] = [];
-	const params: string[] = [];
+	const params: (string | null)[] = [];
 	for (const [key, column] of Object.entries({
 		userId: "user_id",
 		deviceId: "device_id",
@@ -381,10 +381,13 @@ export async function keys(p: Principal, filters: Record<string, string | undefi
 			params.push(value);
 		}
 	}
+	const visible = visibleAgentSql(p);
+	where.push(`(k.agent_id IS NULL OR EXISTS(SELECT 1 FROM agents a WHERE a.id=k.agent_id AND ${visible.sql}))`);
+	params.push(...visible.args);
 	return {
 		keys: await organizationQuery(
 			statement(
-				`SELECT id,prefix,name,user_id,device_id,harness,agent_id,kind,legacy,created_at,last_used_at,expires_at,revoked_at FROM api_keys WHERE ${where.join(" AND ") || "1=1"} ORDER BY created_at DESC LIMIT 1000`,
+				`SELECT id,prefix,name,user_id,device_id,harness,agent_id,kind,legacy,created_at,last_used_at,expires_at,revoked_at FROM api_keys k WHERE ${where.join(" AND ") || "1=1"} ORDER BY created_at DESC LIMIT 1000`,
 				params,
 				"all",
 			),

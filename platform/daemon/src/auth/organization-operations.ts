@@ -29,6 +29,7 @@ import {
 	type UserRow,
 	userView,
 	verifyUserPassword,
+	visibleAgentSql,
 } from "./organization-store";
 import type { Principal } from "./principal";
 import { PERMISSIONS, type Permission } from "./types";
@@ -299,7 +300,7 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 			? {
 					...p.credential,
 					keyKind: key?.kind ?? null,
-					agentId: p.boundAgentId,
+					agentId: visibleDefault(p.boundAgentId),
 					expiresAt: session?.access_expires_at ?? key?.expires_at ?? null,
 					deviceId: p.deviceId,
 					harness: p.harness,
@@ -564,10 +565,11 @@ export async function changeDevice(p: Principal, deviceId: string, input: unknow
 }
 export async function listKeys(p: Principal, all = false, kind?: string): Promise<Record<string, unknown>[]> {
 	if (all) requireAdmin(p);
+	const visible = visibleAgentSql(p);
 	return organizationQuery(
 		statement(
-			`SELECT id,prefix,name,role,harness,agent_id,device_id,user_id,kind,legacy,created_at,last_used_at,revoked_at,expires_at FROM api_keys WHERE ${all ? "1=1" : "user_id = ?"}${kind ? " AND kind = ?" : ""} ORDER BY created_at DESC LIMIT 1000`,
-			[...(all ? [] : [p.userId]), ...(kind ? [kind] : [])],
+			`SELECT id,prefix,name,role,harness,agent_id,device_id,user_id,kind,legacy,created_at,last_used_at,revoked_at,expires_at FROM api_keys k WHERE ${all ? "1=1" : "user_id = ?"}${kind ? " AND kind = ?" : ""} AND (k.agent_id IS NULL OR EXISTS(SELECT 1 FROM agents a WHERE a.id=k.agent_id AND ${visible.sql})) ORDER BY created_at DESC LIMIT 1000`,
+			[...(all ? [] : [p.userId]), ...(kind ? [kind] : []), ...visible.args],
 			"all",
 		),
 	);
@@ -762,11 +764,14 @@ export async function groupOwner(p: Principal, groupId: string): Promise<boolean
 }
 export async function listUsers(p: Principal, filters: Record<string, string | undefined>) {
 	requireAdmin(p);
+	const visible = visibleAgentSql(p);
 	return {
 		users: await organizationQuery(
 			statement(
-				"SELECT id,username,email,display_name,role,compliance,status,personal_agent_id,default_read_agent_id,created_at,updated_at,deactivated_at,last_active_at FROM users WHERE (? IS NULL OR status = ?) AND (? IS NULL OR role = ?) AND (? IS NULL OR id IN (SELECT user_id FROM group_members WHERE group_id = ?)) AND (? IS NULL OR username LIKE ? OR display_name LIKE ?) ORDER BY username LIMIT 1000",
+				`SELECT id,username,email,display_name,role,compliance,status,(SELECT a.id FROM agents a WHERE a.id=users.personal_agent_id AND ${visible.sql}) AS personal_agent_id,(SELECT a.id FROM agents a WHERE a.id=users.default_read_agent_id AND ${visible.sql}) AS default_read_agent_id,created_at,updated_at,deactivated_at,last_active_at FROM users WHERE (? IS NULL OR status = ?) AND (? IS NULL OR role = ?) AND (? IS NULL OR id IN (SELECT user_id FROM group_members WHERE group_id = ?)) AND (? IS NULL OR username LIKE ? OR display_name LIKE ?) ORDER BY username LIMIT 1000`,
 				[
+					...visible.args,
+					...visible.args,
 					filters.status ?? null,
 					filters.status ?? null,
 					filters.role ?? null,
