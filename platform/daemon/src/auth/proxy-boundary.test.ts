@@ -69,13 +69,14 @@ test("login has a five-attempt username and client limit without a global five-a
 	expect((await request(server, "/api/auth/login", "127.0.0.1", "198.51.100.1")).status).toBe(429);
 	expect((await request(server, "/api/auth/login", "127.0.0.1", "198.51.100.2")).status).toBe(200);
 });
-test("login has a thirty-attempt username ceiling across clients", async () => {
+test("login lockout cannot follow an account to another client IP", async () => {
 	const server = app({ mode: "local", trustedProxies: ["127.0.0.1"] });
 	for (let i = 0; i < 30; i++)
 		expect((await request(server, "/api/auth/login", "127.0.0.1", `198.51.100.${Math.floor(i / 5) + 1}`)).status).toBe(
 			200,
 		);
-	expect((await request(server, "/api/auth/login", "127.0.0.1", "198.51.100.99")).status).toBe(429);
+	expect((await request(server, "/api/auth/login", "127.0.0.1", "198.51.100.99")).status).toBe(200);
+	expect((await request(server, "/api/auth/login", "127.0.0.1", "198.51.100.1")).status).toBe(429);
 });
 test("full rate limiter evicts the oldest-expiring entry without rejecting a new client", () => {
 	const limiter = new AuthRateLimiter(60000, 1);

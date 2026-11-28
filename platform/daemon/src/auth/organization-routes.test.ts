@@ -709,6 +709,30 @@ describe("organization HTTP flows", () => {
 		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
 	});
 
+	test("R5 account lockouts are scoped to the account and client IP", async () => {
+		await claim();
+		const login = (username: string, ip: string, password?: string) =>
+			app.request(
+				"/api/auth/login",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ username, password }),
+				},
+				{ incoming: { socket: { remoteAddress: ip } } },
+			);
+		for (let network = 1; network <= 6; network++) {
+			for (let attempt = 0; attempt < 5; attempt++)
+				expect((await login("admin", `203.0.113.${network}`)).status).toBe(400);
+			expect((await login("admin", `203.0.113.${network}`)).status).toBe(429);
+		}
+		expect((await login("admin", "198.51.100.1", "test password")).status).toBe(200);
+		const known = await login("admin", "198.51.100.2", "wrong password");
+		const unknown = await login("unknown", "198.51.100.2", "wrong password");
+		expect(known.status).toBe(401);
+		expect(unknown.status).toBe(known.status);
+		expect(await unknown.json()).toEqual(await known.json());
+	});
 	test("R5 local password setters reject fewer than twelve characters", async () => {
 		const short = "elevenchars";
 		expect(short.length).toBe(11);

@@ -73,7 +73,6 @@ async function withIdentityBody(c: Context, next: Next): Promise<Response | unde
 export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | null): MiddlewareHandler {
 	const legacy = createAuthMiddleware(config, secret, verifyApiKey);
 	const ipLimits = new AuthRateLimiter(60_000, 20),
-		nameLimits = new AuthRateLimiter(60_000, 30),
 		pairLimits = new AuthRateLimiter(60_000, 5),
 		deviceLimits = new AuthRateLimiter(60_000, 20);
 	const openAuthPaths = new Set([
@@ -123,8 +122,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				return failure(c, new IdentityError(400, "invalid_request"));
 			if (
 				typeof username === "string" &&
-				(!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), rateLimitClientAddress(c)]), c) ||
-					!admit(nameLimits, username.trim().toLowerCase(), c))
+				!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), rateLimitClientAddress(c)]), c)
 			)
 				return failure(c, new IdentityError(429, "rate_limit"));
 		}
