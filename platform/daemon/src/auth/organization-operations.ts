@@ -15,6 +15,7 @@ import {
 	organizationQuery,
 	organizationWrite,
 	passwordHash,
+	newPasswordSchema,
 	personalAgentStatements,
 	readBoundKey,
 	readOrganization,
@@ -707,7 +708,7 @@ export async function acceptInvite(input: unknown) {
 			token: z.string().max(256),
 			username: text,
 			displayName: text,
-			password: z.string().min(1).max(1024).optional(),
+			password: newPasswordSchema.optional(),
 		})
 		.parse(input);
 	const invite = await readInvite(data.token);

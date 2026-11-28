@@ -709,6 +709,53 @@ describe("organization HTTP flows", () => {
 		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
 	});
 
+	test("R5 local password setters reject fewer than twelve characters", async () => {
+		const short = "elevenchars";
+		expect(short.length).toBe(11);
+		const rejected = await call(
+			"/api/org/claim",
+			"POST",
+			{
+				setupToken: setup,
+				organizationName: "Acme",
+				admin: { username: "admin", displayName: "Admin", password: short },
+			},
+			"",
+		);
+		expect(rejected.status).toBe(400);
+		await claim();
+		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+		const token = new URL(invite.inviteUrl).pathname.split("/").pop();
+		expect(
+			(
+				await call(
+					"/api/auth/invites/accept",
+					"POST",
+					{ token, username: "short", displayName: "Short", password: short },
+					"",
+				)
+			).status,
+		).toBe(400);
+		expect(
+			(
+				await call(
+					"/api/auth/invites/accept",
+					"POST",
+					{ token, username: "valid", displayName: "Valid", password: "twelve-chars" },
+					"",
+				)
+			).status,
+		).toBe(200);
+		const { pbkdf2Sync } = await import("node:crypto");
+		const salt = Buffer.alloc(16, 1);
+		const legacy = `pbkdf2-sha256$10000$${salt.toString("base64url")}$${pbkdf2Sync("old", salt, 10_000, 32, "sha256").toString("base64url")}`;
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([statement("UPDATE users SET password_hash=? WHERE username='admin'", [legacy])]);
+		expect((await call("/api/auth/login", "POST", { username: "admin", password: "old" }, "")).status).toBe(200);
+		expect(
+			await organizationQuery(statement("SELECT password_hash FROM users WHERE username='admin'", [], "get")),
+		).toEqual({ password_hash: legacy });
+	});
 	test("R5 logout reports zero revocations for a key credential", async () => {
 		await claim();
 		const key = await (
@@ -2768,7 +2815,7 @@ describe("organization HTTP flows", () => {
 		const payload = {
 			setupToken: setup,
 			organizationName: "Acme",
-			admin: { username: "admin", displayName: "Admin", password: "test" },
+			admin: { username: "admin", displayName: "Admin", password: "test password" },
 		};
 		const responses = await Promise.all([
 			call("/api/org/claim", "POST", payload, ""),
@@ -2817,7 +2864,7 @@ describe("organization HTTP flows", () => {
 			body: JSON.stringify({
 				setupToken: setup,
 				organizationName: "Acme",
-				admin: { username: "admin", displayName: "Admin", password: "test" },
+				admin: { username: "admin", displayName: "Admin", password: "test password" },
 			}),
 		});
 		expect(response.status).toBe(200);
@@ -3010,7 +3057,7 @@ describe("organization HTTP flows", () => {
 				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
 				username: "original",
 				displayName: "Original",
-				password: "test",
+				password: "test password",
 			},
 			"",
 		);
@@ -3081,7 +3128,7 @@ describe("organization HTTP flows", () => {
 				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
 				username: "departing",
 				displayName: "Departing",
-				password: "test",
+				password: "test password",
 			},
 			"",
 		);
@@ -3262,7 +3309,7 @@ describe("organization HTTP flows", () => {
 					token: new URL(invite.inviteUrl).pathname.split("/").pop(),
 					username: "departing",
 					displayName: "Departing",
-					password: "test",
+					password: "test password",
 				},
 				"",
 			);

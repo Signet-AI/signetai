@@ -183,7 +183,9 @@ function passwordDigest(password: string, salt: Buffer, iterations: number): Pro
 		pbkdf2(password, salt, iterations, 32, "sha256", (error, key) => (error ? reject(error) : resolve(key))),
 	);
 }
+export const newPasswordSchema = z.string().min(12).max(1024);
 export async function passwordHash(password: string): Promise<string> {
+	newPasswordSchema.parse(password);
 	const salt = randomBytes(16);
 	const key = await passwordDigest(password, salt, 600_000);
 	return `pbkdf2-sha256$600000$${salt.toString("base64url")}$${key.toString("base64url")}`;
@@ -507,7 +509,7 @@ export const claimSchema = z.object({
 		username: z.string().trim().min(1).max(128),
 		displayName: z.string().min(1).max(128),
 		email: z.email().optional(),
-		password: z.string().min(1).max(1024),
+		password: newPasswordSchema,
 	}),
 });
 export async function claimOrganization(input: z.infer<typeof claimSchema>, agentsDir?: string) {
