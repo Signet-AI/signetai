@@ -134,10 +134,10 @@ test("every remote host feature retains role and credential permission ceilings"
 								return next();
 							});
 							app.get("/", (c) => requireLocalHost(c, feature) ?? c.json({ admitted: true }));
+							app.get("/never", (c) => requireLocalHost(c, "never-remote") ?? c.json({ admitted: true }));
 							expect((await app.request("/")).status).toBe(
 								allowed && kind === "user" && role === "admin" && adminPermission ? 200 : 403,
 							);
-							app.get("/never", (c) => requireLocalHost(c, "never-remote") ?? c.json({ admitted: true }));
 							expect((await app.request("/never")).status).toBe(403);
 						}
 					}
