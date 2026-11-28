@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { compartmentForWrite } from "./compartment-shards";
+import { assertLocalBundleRestore, compartmentForWrite } from "./compartment-shards";
 
 export interface ExportOptions {
 	readonly includeEmbeddings?: boolean;
@@ -252,11 +252,7 @@ function scope(item: Line): string | null {
 }
 
 export function importBundle(db: ImportDb, input: ImportInput, options: ImportOptions = {}): ExportImportResult {
-	if (
-		db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='organization'").get() &&
-		db.prepare("SELECT 1 FROM organization WHERE id=1 AND claimed_at IS NOT NULL").get()
-	)
-		throw new Error("org_policy");
+	assertLocalBundleRestore(db);
 	if (options.agentId !== undefined && options.agentId.trim().length === 0)
 		throw new Error("Target agent must not be empty");
 	const now = new Date().toISOString();

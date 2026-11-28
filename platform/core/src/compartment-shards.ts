@@ -275,6 +275,14 @@ export function classificationsForWrite(
 		throw new ClassifiedDestinationError();
 	return [...labels].sort();
 }
+export function assertLocalBundleRestore(db: Pick<MigrationDb, "prepare">): void {
+	if (
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='organization'").get() &&
+		db.prepare("SELECT 1 FROM organization WHERE id=1 AND claimed_at IS NOT NULL").get()
+	)
+		throw new Error("org_policy");
+}
+
 export function compartmentForWrite(db: MigrationDb, input: CompartmentWriteScope): number | null {
 	return compartmentFor(db, classificationsForWrite(db, input));
 }
