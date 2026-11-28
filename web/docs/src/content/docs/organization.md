@@ -389,7 +389,8 @@ do not stop the organization instance or open its database from a client.
 On the instance host, run `signet setup --host --local --public-url https://memory.example.com`.
 Use `--path` for a separate workspace and `--port <port>` to select its listen
 port. Port selection is resolved once: `--port` overrides `SIGNET_PORT`, then the
-port in `SIGNET_DAEMON_URL`, then the default. A listener already using the port
+port in a loopback `SIGNET_DAEMON_URL`, then the default. A remote URL never chooses
+its HTTP or HTTPS port for the host listener. A listener already using the port
 makes setup fail before creating or launching a workspace; choose an unused
 `--port`. Readiness must report the PID and workspace of the daemon just launched.
 Without `--public-url`, the setup link uses that resolved loopback origin. Supply

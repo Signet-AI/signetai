@@ -21,6 +21,20 @@ test("host listen origin resolves flag then port environment then URL then defau
 	);
 });
 
+test("remote daemon URLs do not select the local host listen port", () => {
+	for (const url of ["https://org.example.com", "http://org.example.com:43125", "http://127.0.0.1.example.com:43125"]) {
+		expect(resolveHostOrigin(undefined, { SIGNET_DAEMON_URL: url }, 43123)).toBe("http://127.0.0.1:43123");
+		expect(resolveHostOrigin(undefined, { SIGNET_DAEMON_URL: url, SIGNET_PORT: "43124" }, 43123)).toBe(
+			"http://127.0.0.1:43124",
+		);
+		expect(resolveHostOrigin("43120", { SIGNET_DAEMON_URL: url }, 43123)).toBe("http://127.0.0.1:43120");
+	}
+	for (const host of ["localhost", "127.0.0.1", "[::1]"])
+		expect(resolveHostOrigin(undefined, { SIGNET_DAEMON_URL: `http://${host}:43125` }, 43123)).toBe(
+			"http://127.0.0.1:43125",
+		);
+});
+
 test("host readiness refuses a healthy listener with the wrong PID or workspace", async () => {
 	let health = { pid: process.pid, agentsDir: "/isolated/workspace" };
 	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(health) });

@@ -6,7 +6,10 @@ export function resolveHostOrigin(portFlag: string | undefined, env: NodeJS.Proc
 		const url = env.SIGNET_DAEMON_URL === undefined ? undefined : new URL(env.SIGNET_DAEMON_URL);
 		if (url && url.protocol !== "http:" && url.protocol !== "https:")
 			throw new Error("SIGNET_DAEMON_URL must use HTTP or HTTPS");
-		raw = url ? url.port || (url.protocol === "https:" ? "443" : "80") : String(defaultPort);
+		raw =
+			url && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+				? url.port || (url.protocol === "https:" ? "443" : "80")
+				: String(defaultPort);
 	}
 	if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 65535)
 		throw new Error("Host listen port must be an integer between 1 and 65535; choose --port <port>");
