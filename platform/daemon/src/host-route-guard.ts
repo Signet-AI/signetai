@@ -4,7 +4,7 @@ import routeEffects from "./route-effects.json";
 
 const hostRoutes = Object.values(routeEffects).flatMap((routes) =>
 	Object.entries(routes).flatMap(([route, effect]) => {
-		if (effect !== "host" && effect !== "host-input") return [];
+		if (effect !== "host" && effect !== "host-input" && effect !== "host-input-evidence") return [];
 		const separator = route.indexOf(" ");
 		const method = route.slice(0, separator);
 		const path = route.slice(separator + 1).replace(/\$\{[^}]+\}/g, ":effect");
@@ -27,9 +27,9 @@ const declarations = Object.values(routeEffects).flatMap((routes) =>
 );
 
 export function requireLocalHost(c: Context): Response | undefined {
-	if (c.get("organization") && c.get("principal")?.kind !== "local")
+	if (c.get("organization"))
 		return c.json(
-			{ error: "Run this operation on the instance host with the local credential", reason: "local_required" },
+			{ error: "Run this operation with the CLI on the instance host", reason: "host_operation_local_only" },
 			403,
 		);
 	return undefined;

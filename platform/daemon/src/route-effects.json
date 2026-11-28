@@ -27,9 +27,9 @@
 		"GET /api/board/threads": "records",
 		"GET /api/board/threads/:threadId": "records",
 		"GET /api/board/topics": "records",
-		"PATCH /api/board/threads/:threadId": "records",
-		"POST /api/board/threads": "records",
-		"POST /api/board/threads/:threadId/posts": "records",
+		"PATCH /api/board/threads/:threadId": "evidence",
+		"POST /api/board/threads": "evidence",
+		"POST /api/board/threads/:threadId/posts": "evidence",
 		"POST /api/board/threads/:threadId/read": "records",
 		"POST /api/board/topics": "records"
 	},
@@ -89,8 +89,8 @@
 	"routes/hook-upload-routes.ts": {
 		"DELETE /api/hooks/session-end/uploads/:id": "records",
 		"GET /api/hooks/session-end/uploads/:id": "records",
-		"PATCH /api/hooks/session-end/uploads/:id": "records",
-		"POST /api/hooks/session-end/uploads": "host-input"
+		"PATCH /api/hooks/session-end/uploads/:id": "evidence",
+		"POST /api/hooks/session-end/uploads": "host-input-evidence"
 	},
 	"routes/hooks-routes.ts": {
 		"DELETE /api/cross-agent/presence/:sessionKey": "records",
@@ -101,29 +101,29 @@
 		"GET /api/hooks/synthesis/config": "records",
 		"GET /api/hooks/transcript-capture/:jobId": "records",
 		"GET /api/synthesis/status": "records",
-		"POST /api/cross-agent/messages": "records",
+		"POST /api/cross-agent/messages": "evidence",
 		"POST /api/cross-agent/messages/:messageId/ack": "records",
 		"POST /api/cross-agent/messages/:messageId/retry": "records",
 		"POST /api/cross-agent/presence": "records",
 		"POST /api/cross-agent/wake": "records",
 		"POST /api/cross-agent/wake/release": "records",
-		"POST /api/hooks/compaction-complete": "host-input",
+		"POST /api/hooks/compaction-complete": "host-input-evidence",
 		"POST /api/hooks/notifications": "host-input",
-		"POST /api/hooks/pre-compaction": "host-input",
+		"POST /api/hooks/pre-compaction": "host-input-evidence",
 		"POST /api/hooks/recall": "host-input",
-		"POST /api/hooks/remember": "host-input",
-		"POST /api/hooks/session-checkpoint-extract": "host-input",
-		"POST /api/hooks/session-end": "host-input",
-		"POST /api/hooks/session-start": "host-input",
-		"POST /api/hooks/skill-invocation": "host-input",
-		"POST /api/hooks/stop": "host-input",
-		"POST /api/hooks/synthesis": "host-input",
-		"POST /api/hooks/synthesis/complete": "host-input",
-		"POST /api/hooks/user-prompt-submit": "host-input",
+		"POST /api/hooks/remember": "host-input-evidence",
+		"POST /api/hooks/session-checkpoint-extract": "host-input-evidence",
+		"POST /api/hooks/session-end": "host-input-evidence",
+		"POST /api/hooks/session-start": "host-input-evidence",
+		"POST /api/hooks/skill-invocation": "host-input-evidence",
+		"POST /api/hooks/stop": "host-input-evidence",
+		"POST /api/hooks/synthesis": "host-input-evidence",
+		"POST /api/hooks/synthesis/complete": "host-input-evidence",
+		"POST /api/hooks/user-prompt-submit": "host-input-evidence",
 		"POST /api/synthesis/trigger": "records"
 	},
 	"routes/import-routes.ts": {
-		"POST /api/sources/import": "host-paths"
+		"POST /api/sources/import": "host-paths-evidence"
 	},
 	"routes/inference.ts": {
 		"DELETE /api/inference/requests/:id": "host",
@@ -172,10 +172,10 @@
 		"DELETE /api/marketplace/reviews/:id": "records",
 		"GET /api/marketplace/reviews": "records",
 		"GET /api/marketplace/reviews/config": "records",
-		"PATCH /api/marketplace/reviews/:id": "records",
+		"PATCH /api/marketplace/reviews/:id": "evidence",
 		"PATCH /api/marketplace/reviews/config": "records",
-		"POST /api/marketplace/reviews": "records",
-		"POST /api/marketplace/reviews/sync": "records"
+		"POST /api/marketplace/reviews": "evidence",
+		"POST /api/marketplace/reviews/sync": "evidence"
 	},
 	"routes/memory-routes.ts": {
 		"DELETE /api/documents/:id": "records",
@@ -200,19 +200,19 @@
 		"GET /api/org/export": "records",
 		"GET /memory/search": "records",
 		"GET /memory/similar": "records",
-		"PATCH /api/memory/:id": "records",
-		"POST /api/documents": "records",
-		"POST /api/hook/remember": "records",
-		"POST /api/memories/:id/supersede": "records",
+		"PATCH /api/memory/:id": "evidence",
+		"POST /api/documents": "evidence",
+		"POST /api/hook/remember": "evidence",
+		"POST /api/memories/:id/supersede": "evidence",
 		"POST /api/memories/:id/tombstone": "records",
 		"POST /api/memory/:id/recover": "records",
 		"POST /api/memory/codex-native-note": "host",
 		"POST /api/memory/feedback": "records",
 		"POST /api/memory/forget": "records",
-		"POST /api/memory/modify": "records",
+		"POST /api/memory/modify": "evidence",
 		"POST /api/memory/recall": "records",
-		"POST /api/memory/remember": "records",
-		"POST /api/memory/save": "records"
+		"POST /api/memory/remember": "evidence",
+		"POST /api/memory/save": "evidence"
 	},
 	"routes/misc-routes.ts": {
 		"DELETE /api/agents/:name": "records",
@@ -391,7 +391,7 @@
 	"routes/reflection-routes.ts": {
 		"GET /api/reflections": "records",
 		"GET /api/reflections/today": "records",
-		"POST /api/reflections/:id/answer": "records",
+		"POST /api/reflections/:id/answer": "evidence",
 		"POST /api/reflections/generate": "records"
 	},
 	"routes/repair-routes.ts": {
@@ -475,14 +475,14 @@
 		"GET /api/sources": "records",
 		"GET /api/sources/:sourceId/health": "records",
 		"GET /api/sources/:sourceId/snapshot": "records",
-		"POST /api/sources/:sourceId/snapshot/import": "records",
+		"POST /api/sources/:sourceId/snapshot/import": "evidence",
 		"POST /api/sources/discord": "host",
 		"POST /api/sources/github": "host",
-		"POST /api/sources/notion": "records",
+		"POST /api/sources/notion": "evidence",
 		"POST /api/sources/obsidian": "host",
 		"POST /api/sources/pick-directory": "host",
 		"POST /api/sources/pick-files": "host",
-		"POST /api/sources/web": "records"
+		"POST /api/sources/web": "evidence"
 	},
 	"routes/telemetry-routes.ts": {
 		"GET /api/analytics/continuity": "records",
@@ -507,11 +507,11 @@
 		"GET /api/sources/imports/:jobId/${suffix}": "records",
 		"GET /api/sources/imports/:jobId/files/:fileId/content": "records",
 		"GET /api/sources/imports/export/transcripts": "records",
-		"PATCH /api/sources/imports/:jobId/files/:fileId": "records",
-		"POST /api/sources/imports": "records",
-		"POST /api/sources/imports/:jobId/${control}": "records",
-		"POST /api/sources/imports/:jobId/files/:fileId/finalize": "records",
+		"PATCH /api/sources/imports/:jobId/files/:fileId": "evidence",
+		"POST /api/sources/imports": "evidence",
+		"POST /api/sources/imports/:jobId/${control}": "evidence",
+		"POST /api/sources/imports/:jobId/files/:fileId/finalize": "evidence",
 		"POST /api/sources/imports/:jobId/files/:fileId/reset": "records",
-		"PUT /api/sources/imports/:jobId/files/:fileId": "records"
+		"PUT /api/sources/imports/:jobId/files/:fileId": "evidence"
 	}
 }

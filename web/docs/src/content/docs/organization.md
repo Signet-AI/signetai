@@ -207,7 +207,7 @@ Classification definition reads (`GET /api/classifications` and `GET /api/classi
 
 ## What an admin can't do remotely
 
-Organization administration is not authority over the instance host. Host operations require the `local` principal, not an administrator session or API key. Connecting over loopback does not turn an organization credential into a local credential. The HTTP route-group guard also applies to CLI and MCP requests; an undeclared route fails closed. Personal/local mode keeps its existing behavior.
+Organization administration is not authority over the instance host. In claimed organization mode, host-affecting HTTP operations return `403` with reason `host_operation_local_only` for every principal. Run these operations with the CLI on the instance host, using its offline or direct host paths, or use the host shell. There is no special host credential and loopback is not an exception: a CLI or MCP request sent over HTTP is refused too. An undeclared route fails closed. Personal/local mode keeps its existing behavior.
 
 The host-operation inventory is:
 
@@ -217,7 +217,7 @@ The host-operation inventory is:
 | `/api/secrets/bitwarden/*`, `/api/secrets/1password/*` | Runs installed secret-manager clients and changes their host connections. |
 | `/api/skills` and its browse/search/detail/install/delete routes | Reads executable skill files, installs code, or removes local skill files. |
 | `/api/plugins` and its detail/diagnostics/audit/prompt-contributions/enable routes | Inspects or activates installed host plugins. |
-| `/api/graphiq/*` | Inspects installed code, installs or updates GraphIQ, or indexes an arbitrary host project. MCP `signet_code_*` tools and their `code_*` aliases have the same local-principal requirement, including batch calls. |
+| `/api/graphiq/*` | Inspects installed code, installs or updates GraphIQ, or indexes an arbitrary host project. MCP `signet_code_*` tools and their `code_*` aliases have the same organization-mode HTTP refusal, including batch calls. |
 | `/api/connectors`, its detail/health/delete routes, `POST /api/connectors/:id/sync`, `/sync/full`, `/api/connectors/resync` | Registers filesystem roots and starts host filesystem scans. |
 | `GET /api/harnesses`, `GET /api/harnesses/:id/health`, `POST /api/harnesses/regenerate`, `POST /api/harnesses/:id/connect`, `/disconnect`, `/repair`, `/reinitialize` | Inspects installed harnesses or writes their hooks, configuration, and memory files. |
 | `GET /api/git/status`, `GET /api/git/config`, `POST /api/git/pull`, `/push`, `/sync`, `/config` | Runs Git or changes automatic synchronization. |
