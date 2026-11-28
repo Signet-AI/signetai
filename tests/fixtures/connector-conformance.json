@@ -189,6 +189,25 @@
       }
     },
     {
+      "name": "flag-never-borrows-unbound-environment-key",
+      "env": {
+        "SIGNET_DAEMON_URL": "",
+        "SIGNET_HOST": "",
+        "SIGNET_PORT": "",
+        "SIGNET_API_KEY": "environment-fixture"
+      },
+      "registry": null,
+      "flagUrl": "https://flag.example",
+      "flagKey": null,
+      "configUrl": null,
+      "expected": {
+        "url": "https://flag.example",
+        "source": "none",
+        "credential": null,
+        "remote": true
+      }
+    },
+    {
       "name": "explicit-flag-credential",
       "env": {
         "SIGNET_DAEMON_URL": "",
