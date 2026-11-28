@@ -104,7 +104,27 @@ export function up(db: MigrationDb): void {
 		const references = [...new Set(child.parents.map((parent) => parent.reference))];
 		const select =
 			db.prepare(`SELECT child.rowid AS cursor,child.agent_id,child.compartment_id,${references.map((ref) => `child.${ref}`).join(",")}
-			FROM ${child.table} child WHERE child.rowid>? AND (child.agent_id IS NULL OR child.agent_id='' OR child.compartment_id IS NULL) AND (${child.when ?? "1"}) ORDER BY child.rowid LIMIT 256`);
+			FROM ${child.table} child NOT INDEXED WHERE child.rowid>? AND (child.agent_id IS NULL OR child.agent_id='' OR child.compartment_id IS NULL) AND (${child.when ?? "1"}) ORDER BY child.rowid LIMIT 256`);
+		const parentReaders = child.parents.flatMap((parent) => {
+			if (parent.alternative && !fields(parent.table).has(parent.key)) return [];
+			const label = fields(parent.table).has("compartment_id") ? "compartment_id" : "NULL AS compartment_id";
+			const owner = fields(parent.table).has("agent_id") ? "agent_id" : "NULL AS agent_id";
+			return [
+				{
+					parent,
+					condition: parent.when ? db.prepare(`SELECT 1 FROM ${child.table} WHERE rowid=? AND ${parent.when}`) : null,
+					select: db.prepare(`SELECT ${owner},${label} FROM ${parent.table} WHERE ${parent.key}=? LIMIT 2`),
+				},
+			];
+		});
+		const members = fields("compartment_members").has("compartment_id")
+			? db.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
+			: null;
+		const update = db.prepare(`UPDATE ${child.table} SET agent_id=?,compartment_id=? WHERE rowid=?`);
+		const embeddingId =
+			child.table === "embeddings" || child.table === "embeddings_staging"
+				? db.prepare(`SELECT id FROM ${child.table} WHERE rowid=?`)
+				: null;
 		for (;;) {
 			const rows = select.all(cursor);
 			if (rows.length === 0) break;
@@ -112,15 +132,9 @@ export function up(db: MigrationDb): void {
 				if (typeof row.cursor !== "number") throw new Error("legacy_scope_cursor_invalid");
 				cursor = row.cursor;
 				examined++;
-				const parents = child.parents.flatMap((parent) => {
-					if (parent.alternative && !fields(parent.table).has(parent.key)) return [];
-					if (parent.when && !db.prepare(`SELECT 1 FROM ${child.table} WHERE rowid=? AND ${parent.when}`).get(cursor))
-						return [];
-					const label = fields(parent.table).has("compartment_id") ? "compartment_id" : "NULL AS compartment_id";
-					const owner = fields(parent.table).has("agent_id") ? "agent_id" : "NULL AS agent_id";
-					const matches = db
-						.prepare(`SELECT ${owner},${label} FROM ${parent.table} WHERE ${parent.key}=? LIMIT 2`)
-						.all(row[parent.reference]);
+				const parents = parentReaders.flatMap(({ parent, condition, select }) => {
+					if (condition && !condition.get(cursor)) return [];
+					const matches = select.all(row[parent.reference]);
 					if (matches.length === 0 && parent.alternative) return [];
 					return matches.length === 1 ? matches : [{ agent_id: null, compartment_id: null }];
 				});
@@ -139,16 +153,15 @@ export function up(db: MigrationDb): void {
 				const labels = [...parents, row]
 					.filter((parent) => parent.compartment_id !== null && parent.compartment_id !== undefined)
 					.flatMap((parent) =>
-						db
-							.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
-							.all(parent.compartment_id)
-							.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : [])),
+						(members?.all(parent.compartment_id) ?? []).flatMap((member) =>
+							typeof member.classification_id === "string" ? [member.classification_id] : [],
+						),
 					);
 				const label = compartmentFor(db, labels);
 				if (row.agent_id === agent && row.compartment_id === label) continue;
-				db.prepare(`UPDATE ${child.table} SET agent_id=?,compartment_id=? WHERE rowid=?`).run(agent, label, cursor);
+				update.run(agent, label, cursor);
 				if ((child.table === "embeddings" || child.table === "embeddings_staging") && row.compartment_id !== label) {
-					const id = db.prepare(`SELECT id FROM ${child.table} WHERE rowid=?`).get(cursor)?.id;
+					const id = embeddingId?.get(cursor)?.id;
 					if (typeof id === "string") syncEmbeddingCompartment(db, child.table, id);
 				}
 				repaired++;

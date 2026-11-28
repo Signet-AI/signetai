@@ -2,6 +2,60 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { artifacts, up } from "./183-legacy-child-scope";
 import { MIGRATIONS, runMigrations } from "./index";
+import type { MigrationDb } from "./contract";
+
+function repairFixture(size: number): Database {
+	const db = new Database(":memory:");
+	db.exec(`CREATE TABLE embeddings(id TEXT PRIMARY KEY,source_id TEXT,source_type TEXT,agent_id TEXT,compartment_id INTEGER);
+		CREATE INDEX idx_embeddings_source ON embeddings(source_type,source_id);
+		CREATE TABLE memories(id TEXT PRIMARY KEY,agent_id TEXT,compartment_id INTEGER);`);
+	const insert = db.prepare("INSERT INTO embeddings VALUES(?,?,'memory',NULL,NULL)");
+	db.transaction(() => {
+		for (let i = 0; i < size; i++) insert.run(`e${i}`, `missing${i}`);
+	})();
+	return db;
+}
+
+test("legacy embedding pages use an ordered rowid range without a temporary sort", () => {
+	const db = repairFixture(512);
+	const plans: Record<string, unknown>[] = [];
+	const database: MigrationDb = db;
+	const observed: MigrationDb = {
+		exec: (sql) => database.exec(sql),
+		prepare: (sql) => {
+			if (/SELECT child.rowid/.test(sql)) plans.push(...database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0));
+			return database.prepare(sql);
+		},
+	};
+	try {
+		up(observed);
+		expect(plans.length).toBeGreaterThan(0);
+		expect(plans.some((row) => String(row.detail).includes("USE TEMP B-TREE"))).toBe(false);
+	} finally {
+		db.close();
+	}
+});
+
+test("doubling legacy embeddings costs at most 2.5 times the repair time", () => {
+	const measure = (size: number): number => {
+		const db = repairFixture(size);
+		try {
+			const started = performance.now();
+			up(db);
+			const elapsed = performance.now() - started;
+			expect(db.query("SELECT unresolved FROM legacy_child_scope_repairs WHERE table_name='embeddings'").get()).toEqual(
+				{ unresolved: size },
+			);
+			return elapsed;
+		} finally {
+			db.close();
+		}
+	};
+	measure(1000);
+	const small = [measure(20000), measure(20000), measure(20000)].sort((a, b) => a - b)[1] ?? 0;
+	const large = [measure(40000), measure(40000), measure(40000)].sort((a, b) => a - b)[1] ?? Infinity;
+	expect(large / small).toBeLessThanOrEqual(2.5);
+});
 
 test("legacy vectors retain all parent-owned recall candidates after upgrade", () => {
 	const db = new Database(":memory:");
