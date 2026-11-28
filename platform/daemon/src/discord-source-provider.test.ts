@@ -351,14 +351,20 @@ describe("discord-source-provider", () => {
 			expect(added.ok).toBe(true);
 			if (added.ok === false) throw new Error(added.error);
 
-			const result = await discordSourceProvider.sync?.({
+			const result = await syncDiscordGatewayTail({
 				source: added.source,
-				agentsDir: dir,
-				agentId: "default",
+				token: "fixture-token",
+				guildIds: ["123456789012345678"],
 				shouldContinue: () => shouldContinue,
+				recordFailure: () => undefined,
+				recordMessage: () => undefined,
+				recordMessageDelete: () => undefined,
+				recordChannel: () => undefined,
+				recordMember: () => undefined,
+				recordMemberRemove: () => undefined,
 			});
 
-			expect(result?.failures).toEqual([]);
+			expect(result.failures).toBe(0);
 			const heartbeatTimers = timers.filter((timer) => timer.timeout !== 250);
 			expect(heartbeatTimers.map((timer) => timer.timeout)).toEqual([1_000, 1_000]);
 			expect(cleared).toEqual(expect.arrayContaining(heartbeatTimers));
