@@ -10,7 +10,7 @@ import { packageRegistry } from "./package-registry";
 import { OrgDaemon } from "./daemon";
 import { connector, Fixture } from "./fixture";
 import { deriveClaim } from "./graph";
-import { record, request, success, until } from "./http";
+import { record, request, success, text, until } from "./http";
 import { assertUnchanged, checkNoninterference, normalize } from "./noninterference";
 
 async function withFixture(
@@ -211,43 +211,59 @@ test(
 			async (fixture) => {
 				const quote = "cross-agent-evidence-quokka owns the payroll endpoint.";
 				const source = await fixture.remember(fixture.user("alice"), quote);
-				const target = fixture.user("bob").agentId;
-				const before = normalize(
-					(await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${target}`, fixture.admin)).body,
-				);
-				const result = await request(
-					fixture.daemon.origin,
-					"/api/dream/tools/apply_ontology_ops",
-					fixture.user("bob").session,
-					"POST",
-					{
+				const writer = fixture.user("audra");
+				const target = writer.agentId;
+				const ownSource = await fixture.remember(writer, quote);
+				const graph = async () =>
+					normalize(
+						success(
+							await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${target}`, writer.session),
+							"AC6 target owner can inspect the actual graph",
+						),
+					);
+				const before = await graph();
+				const apply = (memoryId: string, name: string) =>
+					request(fixture.daemon.origin, "/api/dream/tools/apply_ontology_ops", writer.session, "POST", {
 						agentId: target,
 						input: {
 							agentId: target,
 							operations: [
 								{
 									operation: "create_entity",
-									payload: { name: "forbidden-cross-agent-quokka", type: "project" },
-									evidence: [{ source_ref: `memory:${source}`, quote }],
+									payload: { name, type: "project" },
+									evidence: [{ source_ref: `memory:${memoryId}`, quote }],
 								},
 							],
 						},
-					},
-				);
+					});
+				const result = await apply(source, "forbidden-cross-agent-quokka");
 				assert.equal(result.status, 400, "AC6 valid native operation with foreign evidence must be rejected");
-				assert.match(
-					JSON.stringify(result.body),
-					/belongs to scope.*targets|cross_agent|scope_mismatch|(?:another|different|cross).*?(?:agent|scope)|(?:agent|scope).*?(?:mismatch|another|different)/i,
-					"AC6 must fail specifically for the foreign citation, not schema/auth/provider errors",
-				);
-				assertUnchanged(
-					before,
-					normalize(
-						(await request(fixture.daemon.origin, `/api/knowledge/entities?agent_id=${target}`, fixture.admin)).body,
-					),
-					"AC6 rejected citation must not create graph nodes",
-				);
 				await deriveClaim(fixture, fixture.user("alice").agentId, source, quote, "allowed-same-agent-quokka");
+				success(
+					await request(fixture.daemon.origin, `/api/memory/${source}`, fixture.user("alice").session, "DELETE", {
+						reason: "Verify absent-identical native citation admission",
+					}),
+					"AC6 source owner deletes foreign evidence",
+				);
+				assert.equal(
+					(await request(fixture.daemon.origin, `/api/memory/${source}`, fixture.user("alice").session)).status,
+					404,
+				);
+				const absent = await apply(source, "forbidden-cross-agent-quokka");
+				assert.equal(absent.status, 400);
+				assert.deepEqual(result.body, absent.body, "Foreign citations must be indistinguishable from absent evidence");
+				assertUnchanged(before, await graph(), "AC6 rejected citations must not create graph nodes");
+				const allowed = success(
+					await apply(ownSource, "allowed-native-same-agent-quokka"),
+					"AC6 native same-agent control",
+				);
+				assert.equal(allowed.ok, true);
+				assert(Array.isArray(allowed.items) && allowed.items.length === 1);
+				const applied = record(allowed.items[0]);
+				assert.equal(applied.ok, true);
+				const entityId = text(record(applied.result).entityId);
+				assert(entityId.length > 0);
+				assert(JSON.stringify(await graph()).includes(entityId), "Native positive control must persist its graph node");
 			},
 			"personal",
 			false,

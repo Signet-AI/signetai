@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { deriveClaim, dreamOperation } from "./graph";
+import { deriveClaim, graphOperation } from "./graph";
 import type { OrgDaemon } from "./daemon";
 import { browser, id, record, request, success, text, until, type Credential } from "./http";
 
@@ -279,14 +279,14 @@ export class Fixture {
 		const related = await deriveClaim(this, this.user("carol").agentId, this.hrMemory, hrQuote, `${hrMarker}-related`);
 		this.hrRelatedEntity = related.entityId;
 		this.hiddenMemoryIds.add(related.memoryId);
-		await dreamOperation(
+		await graphOperation(
 			this,
 			this.user("carol").agentId,
 			"create_link",
 			{
-				fromEntityId: this.hrEntity,
-				toEntityId: related.entityId,
-				linkType: "related_to",
+				source_entity_id: this.hrEntity,
+				target_entity_id: related.entityId,
+				link_type: "related_to",
 				reason: "Both claims concern the same HR compensation review.",
 			},
 			[{ source_ref: `memory:${this.hrMemory}`, quote: hrQuote }],

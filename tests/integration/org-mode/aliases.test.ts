@@ -6,7 +6,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { OrgDaemon } from "./daemon";
 import { Fixture } from "./fixture";
-import { dreamOperation } from "./graph";
+import { graphOperation } from "./graph";
 import { record, request, success, text, until } from "./http";
 
 test("A20(g): classified aliases on public parents stay hidden through the real HTTP owner", async () => {
@@ -18,9 +18,13 @@ test("A20(g): classified aliases on public parents stay hidden through the real 
 		const secretQuote = "Atlas is internally called Compensation Review.";
 		const publicMemory = await fixture.remember(writer, publicQuote);
 		const secretMemory = await fixture.remember(writer, secretQuote);
-		const parent = await dreamOperation(fixture, writer.agentId, "create_entity", { name: "Atlas", type: "project" }, [
-			{ source_ref: `memory:${publicMemory}`, quote: publicQuote },
-		]);
+		const parent = await graphOperation(
+			fixture,
+			writer.agentId,
+			"create_entity",
+			{ name: "Atlas", entity_type: "project" },
+			[{ source_ref: `memory:${publicMemory}`, quote: publicQuote }],
+		);
 		const entityId = text(parent.entityId);
 		const path = `/api/ontology/entities/${entityId}/aliases?agent_id=${writer.agentId}`;
 		const reader = fixture.user("alice").session;
@@ -92,9 +96,13 @@ test("A20(g): a running classified native Dreaming worker creates a hidden alias
 		const publicQuote = "The Atlas project is public.";
 		const secretQuote = "Atlas is internally called Compensation Review.";
 		const publicMemory = await fixture.remember(writer, publicQuote);
-		const parent = await dreamOperation(fixture, writer.agentId, "create_entity", { name: "Atlas", type: "project" }, [
-			{ source_ref: `memory:${publicMemory}`, quote: publicQuote },
-		]);
+		const parent = await graphOperation(
+			fixture,
+			writer.agentId,
+			"create_entity",
+			{ name: "Atlas", entity_type: "project" },
+			[{ source_ref: `memory:${publicMemory}`, quote: publicQuote }],
+		);
 		const entityId = text(parent.entityId);
 		const parentBefore = rows("SELECT * FROM entities WHERE id=?", entityId);
 		assert.equal(parentBefore[0]?.compartment_id, null);
