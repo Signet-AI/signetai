@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { OrganizationUpgrade } from "@/components/organization/upgrade";
+import { RemoteHostFeaturesContent, type RemoteHostFeatures } from "@/components/organization/remote-features";
 import { AgentsContent } from "@/components/organization/agents";
 import { AuthenticationContent } from "@/components/organization/authentication";
 import { ClassificationsContent } from "@/components/organization/classifications";
@@ -146,9 +147,16 @@ export function OrganizationSection({ section }: { section: OrganizationSectionI
 	if (section === "audit") return <AuditSection admin={admin} />;
 	if (section === "health")
 		return (
-			<OrganizationResource<Record<string, unknown>> path="/api/status">
-				{(status) => <HealthContent status={status} />}
-			</OrganizationResource>
+			<div className="flex flex-col gap-6">
+				<OrganizationResource<Record<string, unknown>> path="/api/status">
+					{(status) => <HealthContent status={status} />}
+				</OrganizationResource>
+				{admin && (
+					<OrganizationResource<RemoteHostFeatures> path="/api/org/remote-features">
+						{(policy) => <RemoteHostFeaturesContent features={policy.features} />}
+					</OrganizationResource>
+				)}
+			</div>
 		);
 	return (
 		<OrganizationResource<readonly OrganizationClassification[]>

@@ -1,7 +1,11 @@
+import { localTransportIdentity } from "../local-endpoint";
+import { globalHostOperation } from "../host-route-guard";
+import { auditStatement, organizationWrite } from "./organization-store";
 import { bodyLimit } from "hono/body-limit";
 import { acceptCredentialAuthority, withCredentialAuthority, withoutCredentialAuthority } from "./authority-cache";
 import { withWritePrincipal, classifiedDestinationDenied } from "@signet/core";
 import { admitWriteDestination } from "./write-destination";
+import { withLogSubject, type LogSubject } from "../log-subject";
 import { LOCAL_AUTHOR } from "./audit-owner";
 import { withStopAdmission } from "../stop-admission";
 import type { Context, MiddlewareHandler, Next } from "hono";
@@ -179,7 +183,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		const cookie = !bearer ? getCookie(c, authCookies(c).session) : undefined;
 		const token = bearer?.startsWith("Bearer ") ? bearer.slice(7) : cookie;
 		if (cookie && !token?.startsWith("sig_ses_")) return failure(c, new IdentityError(401, "invalid_credential"));
-		if (!token) {
+		const osIdentity = localTransportIdentity();
+		if (!token && !osIdentity) {
 			c.set("auth", { authenticated: false, claims: null });
 			if (
 				open ||
@@ -195,7 +200,26 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		const requestId = crypto.randomUUID();
 		try {
 			let p: Principal;
-			if (token.startsWith("sig_ses_")) {
+			if (osIdentity) {
+				p = {
+					...localPrincipal(),
+					osIdentity,
+					permissions: rolePermissions("admin"),
+					credential: { kind: "local", id: `${osIdentity.uid}:${osIdentity.username}` },
+				};
+				await bindAccess(p, null, org);
+				c.set("auth", {
+					authenticated: true,
+					claims: {
+						sub: `local:${osIdentity.uid}:${osIdentity.username}`,
+						role: "admin",
+						scope: {},
+						permissions: [...p.permissions],
+						iat: 0,
+						exp: Number.MAX_SAFE_INTEGER,
+					},
+				});
+			} else if (token?.startsWith("sig_ses_")) {
 				const result = await verifySession(
 					token,
 					c.req.header("x-signet-csrf"),
@@ -225,7 +249,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 						permissions: [...p.permissions],
 					},
 				});
-			} else if (isSignetApiKey(token)) {
+			} else if (token && isSignetApiKey(token)) {
 				const verified = await verifyApiKey(token);
 				verifiedKeyId =
 					verified.verifiedKeyId ?? (verified.authenticated ? (verified.claims?.sub.slice(8) ?? null) : null);
@@ -290,8 +314,13 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			)
 				return failure(c, new IdentityError(429, "rate_limit"));
 			c.set("author", { userId: p.userId, credential: `${p.credential.kind}:${p.credential.id}` });
+			if (osIdentity)
+				await organizationWrite([
+					auditStatement(p, "local.request_started", "route", `${c.req.method} ${c.req.path}`, osIdentity),
+				]);
 			return await withWritePrincipal({ userId: p.userId }, () =>
 				withIdentityBody(c, async () => {
+					let logSubject: LogSubject | undefined;
 					if (!open) {
 						for (const header of ["x-signet-actor", "x-signet-actor-type"]) {
 							const actor = c.req.header(header);
@@ -346,7 +375,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 							!c.req.path.startsWith("/api/agents") &&
 							c.req.path !== "/mcp" &&
 							["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
-							!organizationReadRequest(c.req.method, c.req.path)
+							!organizationReadRequest(c.req.method, c.req.path) &&
+							!(p.osIdentity && globalHostOperation(c.req.method, c.req.path))
 						) {
 							if (body.scope === "all" || c.req.query("scope") === "all")
 								throw new IdentityError(403, "agent_not_permitted");
@@ -354,7 +384,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 							if (!access) throw new IdentityError(403, "org_policy");
 							const target = resolveWriteAgent(p, requested.value, access);
 							if (!target.ok) throw new IdentityError(target.error.status, target.error.reason);
-							await admitWriteDestination(
+							logSubject = await admitWriteDestination(
 								target.value,
 								body,
 								c.req.path,
@@ -378,7 +408,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 							}
 						}
 					}
-					await next();
+					await withLogSubject(logSubject, next);
 					if (classifiedDestinationDenied()) c.res = failure(c, new IdentityError(403, "classified_destination"));
 					if (verifiedKeyId && (c.res.status === 401 || c.res.status === 403))
 						await recordConnectorError(
@@ -409,7 +439,23 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 	return (c, next) =>
 		withCredentialAuthority(
 			config.mode === "team" ? (c.req.header("authorization") ?? getCookie(c, authCookies(c).session)) : undefined,
-			() => resolveIdentity(c, () => withoutCredentialAuthority(next)),
+			async () => {
+				const result = await resolveIdentity(c, () => withoutCredentialAuthority(next));
+				const identity = localTransportIdentity();
+				if (identity && config.mode === "team") {
+					const p = c.get("principal") ?? {
+						...localPrincipal(),
+						credential: { kind: "local" as const, id: `${identity.uid}:${identity.username}` },
+					};
+					await organizationWrite([
+						auditStatement(p, "local.request", "route", `${c.req.method} ${c.req.path}`, {
+							...identity,
+							status: result?.status ?? c.res.status,
+						}),
+					]);
+				}
+				return result;
+			},
 		);
 }
 export function failure(c: Context, error: IdentityError): Response {

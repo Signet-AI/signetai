@@ -10,11 +10,17 @@ export interface AudienceSubject {
 	readonly userId: string | null;
 	readonly groupIds: readonly string[];
 	readonly local: boolean;
+	readonly hostOperator?: boolean;
 }
 export function audienceSubjectFromPrincipal(
-	principal: Pick<Principal, "kind" | "userId" | "groupIds">,
+	principal: Pick<Principal, "kind" | "userId" | "groupIds" | "osIdentity">,
 ): AudienceSubject {
-	return { userId: principal.userId, groupIds: principal.groupIds, local: principal.kind === "local" };
+	return {
+		userId: principal.userId,
+		groupIds: principal.groupIds,
+		local: principal.kind === "local" && !principal.osIdentity,
+		hostOperator: principal.osIdentity !== undefined,
+	};
 }
 export { inFlightClassificationSql, localAllReadScope, readScopeSql, requireReadScope } from "@signet/core";
 export type { AgentReach, ReadScope } from "@signet/core";
@@ -33,6 +39,6 @@ export async function resolveReadScope(
 		return readVisibilitySchema.parse(await classificationRequest({ op: "visibility", subject }));
 	},
 ): Promise<ReadScope> {
-	if (!subject.local && !subject.userId) throw new Error("unauthorized");
+	if (!subject.local && !subject.userId && !subject.hostOperator) throw new Error("unauthorized");
 	return { reach: input.reach, projects: input.projects, ...(await resolveVisibility(subject)) };
 }

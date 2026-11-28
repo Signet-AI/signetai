@@ -1,4 +1,5 @@
 import { preflightWorkspace } from "@signet/core";
+import { localEndpointStatus } from "../local-endpoint";
 import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
@@ -203,6 +204,7 @@ export function mountHealthRoutes(app: Hono): void {
 			runtime: DAEMON_RUNTIME,
 			port: PORT,
 			agentsDir: AGENTS_DIR,
+			localEndpoint: localEndpointStatus(),
 			workspace: {
 				status: workspace.status,
 				path: workspace.path,

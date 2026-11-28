@@ -2,6 +2,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Context } from "hono";
 import { z } from "zod";
 import { requirePermission } from "../auth";
+import { requireLocalHost } from "../host-route-guard";
 import { authConfig } from "../routes/state";
 import type { Hono } from "hono";
 import { admissionKey, type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission.js";
@@ -92,6 +93,8 @@ export function mountMcpRoute(app: Hono): void {
 					.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) })
 					.safeParse(element);
 				if (call.success && /^(?:signet_)?code_/.test(call.data.params.name)) {
+					const hostDenied = requireLocalHost(c);
+					if (hostDenied) return hostDenied;
 					const permission = /clear|index/.test(call.data.params.name) ? "admin" : "recall";
 					if (!c.get("principal"))
 						return c.json({ reason: "permission", required: permission, error: "A principal is required" }, 403);

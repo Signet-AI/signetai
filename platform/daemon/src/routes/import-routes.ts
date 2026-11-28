@@ -10,6 +10,7 @@ import { getPeerAddress } from "../auth/middleware";
 import { type DocumentImportStatus, importDocument } from "../document-import-service";
 import { type DurableImportAdmission, ImportAdmissionConflictError } from "../import-inbox";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILES } from "../import-normalizer";
+import { requireLocalHost } from "../host-route-guard";
 import { isWorkspacePrivatePath } from "../workspace-private-paths";
 import { AGENTS_DIR, authConfig, getCurrentAgentsDir } from "./state.js";
 import { resolveScopedAgentId } from "./utils";
@@ -48,6 +49,8 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 			.getAll("paths")
 			.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
 		if (pathEntries.length > 0) {
+			const hostDenied = requireLocalHost(c);
+			if (hostDenied) return hostDenied;
 			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
 			if (!isLoopbackRequest(c))

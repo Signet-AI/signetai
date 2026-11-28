@@ -895,6 +895,19 @@ const healthDeps = {
 const showTargetStatus = async (options: { path?: string; json?: boolean }): Promise<void> => {
 	const remote = cliTransport();
 	if (remote) return organizationStatus(remote, options.json);
+	const client = createDaemonClient(DEFAULT_PORT, options.path ?? AGENTS_DIR);
+	const mode = await client.fetchDaemonResult<{ mode: string }>("/api/mode");
+	if (mode.ok && mode.data.mode === "team") {
+		const health = await client.fetchDaemonResult("/health");
+		if (!health.ok) throw new Error(health.error ?? "Host status unavailable");
+		if (!options.json) console.log(`Signet organization host\nTransport: ${client.transport}`);
+		console.log(
+			JSON.stringify({ transport: client.transport, daemon: health.data }, null, options.json ? undefined : 2),
+		);
+		return;
+	}
+	if (!mode.ok && mode.reason === "http" && (mode.status === 401 || mode.status === 403))
+		throw new Error("Organization host status requires the private socket or a signed-in remote target");
 	return showStatus(options, healthDeps);
 };
 const setTargetPause = async (paused: boolean, options?: { path?: string; json?: boolean }): Promise<void> => {
@@ -1068,10 +1081,6 @@ registerConnectorCommands(program, {
 	agentsDir: AGENTS_DIR,
 });
 
-registerGraphiqCommands(program, {
-	agentsDir: AGENTS_DIR,
-});
-
 async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
@@ -1080,6 +1089,7 @@ const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, fetchDaemonRaw, s
 	DEFAULT_PORT,
 	AGENTS_DIR,
 );
+registerGraphiqCommands(program, { agentsDir: AGENTS_DIR, fetchFromDaemon });
 const offlineSecretApiCall = createOfflineSecretApiCall();
 const secretCommandApiCall = createSecretCommandApiCall({
 	daemonApiCall: secretApiCall,

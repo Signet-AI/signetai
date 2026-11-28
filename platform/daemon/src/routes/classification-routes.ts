@@ -11,6 +11,7 @@ import {
 
 const principalSchema = z.object({
 	kind: z.enum(["local", "user", "legacy"]),
+	osIdentity: z.object({ uid: z.number(), username: z.string() }).optional(),
 	userId: z.string().nullable(),
 	groupIds: z.array(z.string()),
 	compliance: z.boolean(),
@@ -72,7 +73,7 @@ export function registerClassificationRoutes(parent: Hono, options: Classificati
 				credential: `${p.credential.kind}:${p.credential.id}`,
 			},
 			projects: p.allowedProjects,
-			canClassify: p.kind === "local" || p.permissions.has("classify"),
+			canClassify: (p.kind === "local" && !p.osIdentity) || p.permissions.has("classify"),
 		};
 	};
 	app.onError((error, _c) => {

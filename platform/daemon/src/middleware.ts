@@ -9,6 +9,7 @@ import { organizationReadRequest } from "./auth/agent-access";
 import { createIdentityMiddleware } from "./auth/identity-middleware";
 import { bufferReadAudit } from "./auth/organization-runtime";
 import { logger } from "./logger";
+import { hostRouteGuard } from "./host-route-guard";
 import { JsonBodyError, prepareJsonBody, streamedRequestBody } from "./request-body";
 import { requestRoute } from "./request-route";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
@@ -69,6 +70,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 		}
 		return identity(c, next);
 	});
+	app.use("*", hostRouteGuard);
 	app.use("*", async (c, next) => {
 		if (authConfig.mode !== "team" && !c.get("auth")?.claims && isForeignBrowserWrite(c)) {
 			return c.json({ error: "cross-origin request rejected" }, 403);

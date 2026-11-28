@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createConnection } from "node:net";
+import { request } from "node:http";
+import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { closeSignetHttpServer, createSignetHttpServer } from "./http-server";
 
 test("shutdown closes idle TCP preconnections without aborting an active response", async () => {
@@ -43,6 +46,46 @@ test("shutdown closes idle TCP preconnections without aborting an active respons
 	idle.destroy();
 	expect(closed).toBe(true);
 });
+
+for (const method of ["POST", "PUT", "PATCH", "DELETE"])
+	test(`chunked ${method} preserves method and body through the middleware stack`, async () => {
+		const app = new Hono();
+		app.use("*", bodyLimit({ maxSize: 1024 }));
+		app.all("*", async (c) =>
+			c.json({ method: c.req.method, value: await c.req.text(), forged: c.req.header("x-signet-local") ?? null }),
+		);
+		const server = createSignetHttpServer({ fetch: app.fetch });
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("No port");
+		try {
+			const result = await new Promise<string>((resolve, reject) => {
+				const outgoing = request(
+					{
+						host: "127.0.0.1",
+						port: address.port,
+						method,
+						headers: { "x-signet-local": "true", "transfer-encoding": "chunked" },
+					},
+					(incoming) => {
+						let response = "";
+						incoming.setEncoding("utf8");
+						incoming.on("data", (chunk: string) => {
+							response += chunk;
+						});
+						incoming.once("end", () => resolve(response));
+						incoming.once("error", reject);
+					},
+				);
+				outgoing.once("error", reject);
+				outgoing.write("first ");
+				outgoing.end("second");
+			});
+			expect(JSON.parse(result)).toEqual({ method, value: "first second", forged: null });
+		} finally {
+			await closeSignetHttpServer(server);
+		}
+	});
 
 describe("createSignetHttpServer", () => {
 	test("keeps native Request and Response globals intact", () => {

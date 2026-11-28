@@ -30,7 +30,8 @@ export function importActor(principal: Principal | undefined): ClassificationAct
 		? {
 				userId: principal.userId,
 				groupIds: principal.groupIds,
-				local: principal.kind === "local",
+				local: principal.kind === "local" && !principal.osIdentity,
+				hostOperator: principal.osIdentity !== undefined,
 				...(principal.kind === "legacy" ? { legacy: true as const } : {}),
 				compliance: principal.compliance && principal.permissions.has("classify"),
 				boundAgentId: principal.boundAgentId,

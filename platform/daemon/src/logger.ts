@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { currentLogSubject, type LogSubject } from "./log-subject";
 import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -64,6 +65,7 @@ export type LogCategory =
 	| "shadow";
 
 export interface LogEntry {
+	subject?: LogSubject;
 	timestamp: string;
 	level: LogLevel;
 	category: LogCategory;
@@ -245,6 +247,8 @@ export class Logger extends EventEmitter {
 	}
 
 	private write(entry: LogEntry) {
+		const subject = currentLogSubject();
+		if (subject) entry = { ...entry, subject };
 		if (this.config.consoleOutput) {
 			const message = this.formatConsole(entry);
 			if (process.env.SIGNET_DB_OWNER_WORKER === "1") console.error(message);

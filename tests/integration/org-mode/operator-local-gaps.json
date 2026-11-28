@@ -1,0 +1,246 @@
+[
+	{
+		"signature": "GET /api/connectors",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/connectors/:id",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/connectors/:id/health",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/connectors",
+		"input": ""
+	},
+	{
+		"signature": "DELETE /api/connectors/:id",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/connectors/:id/sync",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/connectors/:id/sync/full",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/connectors/resync",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/harnesses",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/harnesses/:id/health",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/harnesses/regenerate",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/harnesses/:id/repair",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/harnesses/:id/reinitialize",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/config",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/git/status",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/git/config",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/git/config",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/git/pull",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/git/push",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/git/sync",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/memory/codex-native-note",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/sources/obsidian",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/sources/github",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/sources/discord",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/hooks/pre-compaction",
+		"input": "with a transcript path"
+	},
+	{
+		"signature": "POST /api/hooks/user-prompt-submit",
+		"input": "with a transcript path"
+	},
+	{
+		"signature": "POST /api/hooks/session-end",
+		"input": "with a transcript path"
+	},
+	{
+		"signature": "POST /api/hooks/session-checkpoint-extract",
+		"input": "with a transcript path"
+	},
+	{
+		"signature": "GET /api/plugins",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/plugins/:id",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/plugins/:id/diagnostics",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/plugins/audit",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/plugins/prompt-contributions",
+		"input": ""
+	},
+	{
+		"signature": "PATCH /api/plugins/:id",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/graphiq/update",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/secrets/1password/status",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/secrets/1password/vaults",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/secrets/1password/connect",
+		"input": ""
+	},
+	{
+		"signature": "DELETE /api/secrets/1password/connect",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/secrets/1password/import",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/secrets/bitwarden/status",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/secrets/bitwarden/folders",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/secrets/bitwarden/connect",
+		"input": ""
+	},
+	{
+		"signature": "DELETE /api/secrets/bitwarden/connect",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/secrets/bitwarden/migrate",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/secrets/bitwarden/provider",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/inference/status",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/inference/catalog",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/assistant/models",
+		"input": ""
+	},
+	{
+		"signature": "GET /v1/models",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/inference/execute",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/inference/stream",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/assistant/chat",
+		"input": ""
+	},
+	{
+		"signature": "POST /v1/chat/completions",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/inference/explain",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/inference/history",
+		"input": ""
+	},
+	{
+		"signature": "DELETE /api/inference/requests/:id",
+		"input": ""
+	},
+	{
+		"signature": "GET /api/inference/oauth/providers",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/inference/oauth/login/:id",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/inference/oauth/complete",
+		"input": ""
+	},
+	{
+		"signature": "POST /api/inference/oauth/disconnect/:id",
+		"input": ""
+	}
+]

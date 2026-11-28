@@ -305,7 +305,7 @@ async function resolveScopedDreamRead(
 	if (principal.kind === "legacy") return { agentId, local: false, readScope: { reach, compartments: [], projects } };
 	if (principal.kind === "user" && !principal.userId) return { error: "unauthorized", status: 401 };
 	const readScope = await resolveReadScope({ reach, projects }, audienceSubjectFromPrincipal(principal));
-	return { agentId, readScope, local: principal.kind === "local" };
+	return { agentId, readScope, local: principal.kind === "local" && !principal.osIdentity };
 }
 
 function parseDreamingCursor(value: string | undefined): number | null | "invalid" {

@@ -1,4 +1,5 @@
 import { attempt, type CompartmentWriteScope } from "@signet/core";
+import type { LogSubject } from "../log-subject";
 import { IdentityError } from "./organization-store";
 import { classificationRequest } from "../classifications";
 
@@ -8,7 +9,7 @@ export async function admitWriteDestination(
 	path: string,
 	headerSession: string | undefined,
 	routePattern?: string,
-): Promise<void> {
+): Promise<LogSubject> {
 	const scopes: CompartmentWriteScope[] = [{ agentId }];
 	const add = (key: "sessionKey" | "sourceId", value: unknown) => {
 		if (typeof value === "string" && value) scopes.push({ agentId, [key]: value });
@@ -29,5 +30,5 @@ export async function admitWriteDestination(
 			add("sourceId", decoded);
 		}
 	}
-	await classificationRequest({ op: "admit-write", scopes });
+	return classificationRequest<LogSubject>({ op: "admit-write", scopes });
 }

@@ -17,6 +17,7 @@ import {
 	type ResolveTargetOptions,
 	type ResolvedTarget,
 } from "../../../../libs/sdk/src/node.js";
+import { createCliNodeTransport } from "../lib/socket-transport.js";
 import { cliTarget, cliTransport } from "../lib/organization-target.js";
 
 export interface AuthCommandDeps extends ResolveTargetOptions {
@@ -91,7 +92,10 @@ export function reportAuthError(
 export async function authTransport(options: AuthOptions, deps: AuthCommandDeps = {}): Promise<NodeTransport> {
 	const selected = cliTransport();
 	if (selected) return selected;
-	return new NodeTransport(await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl }), { env: deps.env });
+	return createCliNodeTransport(
+		cliTarget() ?? (await resolveTarget({ ...deps, flagUrl: options.url ?? deps.flagUrl })),
+		{ env: deps.env },
+	);
 }
 function loginTarget(options: AuthOptions, deps: AuthCommandDeps): { url: string; origin: string } {
 	const env = deps.env ?? process.env;
@@ -180,7 +184,7 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 							env: { ...(deps.env ?? process.env), SIGNET_API_KEY: undefined, SIGNET_API_KEY_FILE: undefined },
 						};
 						const resolved = await resolveTarget(loginOptions);
-						const authenticated = new NodeTransport(resolved, { env: loginOptions.env });
+						const authenticated = createCliNodeTransport(resolved, { env: loginOptions.env });
 						await authenticated.flush();
 						const onboarding = await deps.afterLogin?.({
 							target: resolved,
@@ -222,7 +226,9 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 				try {
 					if (await store.load()) {
 						const target = await resolveTarget({ ...deps, flagUrl: location.url });
-						await new NodeTransport(target, { env: deps.env }).post("/api/auth/logout", { all: opts.all === true });
+						await createCliNodeTransport(target, { env: deps.env }).post("/api/auth/logout", {
+							all: opts.all === true,
+						});
 						revocationConfirmed = true;
 					}
 				} catch (error) {
@@ -243,7 +249,7 @@ export function registerAuthCommands(program: Command, deps: AuthCommandDeps = {
 	options(program.command("whoami").description("Show the authenticated identity")).action(
 		action(async (opts) => {
 			const target = cliTarget() ?? (await resolveTarget({ ...deps, flagUrl: opts.url ?? deps.flagUrl }));
-			const identity = await (cliTransport() ?? new NodeTransport(target, { env: deps.env })).get<{
+			const identity = await (cliTransport() ?? createCliNodeTransport(target, { env: deps.env })).get<{
 				mode?: string;
 				authenticated?: boolean;
 			}>("/api/auth/whoami");

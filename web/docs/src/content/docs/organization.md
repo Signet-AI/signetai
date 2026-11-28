@@ -205,13 +205,58 @@ Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_jo
 
 Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
 
+## Server tasks
+
+Organization administration does not grant access to the instance host. Host features are server-only by default. A network request receives `403` with reason `host_operation_local_only` unless the server operator has allowed its feature. Loopback TCP and headers claiming a local principal are not exceptions. Undeclared routes fail closed.
+
+On Unix, the daemon also serves its routes through a private socket. Its directory is owned by the daemon's OS user with mode `0700`; the socket has mode `0600`. The path is `$XDG_RUNTIME_DIR/signet/<workspace-hash>.sock`, or a short path under the temporary directory when the runtime path is too long or unset. Unsafe directories and occupied sockets are refused. The daemon removes a verified stale socket before binding and removes its socket on shutdown. `/health` reports `localEndpoint` as an available path or an unavailable reason.
+
+The host CLI automatically uses an owned socket for its local workspace. Use `--local` when a remote organization is your usual target, `--socket <path>` to select a socket explicitly, or `--no-socket` to force TCP. Remote targets never use a local socket. `signet daemon status` reports the transport for an organization host. The socket is unavailable on Windows, so host tasks there require stopping the daemon. Signet does not substitute privileged TCP access.
+
+Socket requests have the `local` principal and administrator permissions, with host operations enabled. Audit events record the OS uid and username. Agent-targeted operations still need `--agent <id>`; the host identity never becomes `default`. Content reads still enforce classifications. Being the server operator does not make the local identity an audience member.
+
+### Allow a feature remotely
+
+Run these commands on the server while its daemon is running:
+
+```bash
+signet --local org remote-features list
+signet --local org remote-features allow git.sync
+signet --local org remote-features deny git.sync
+```
+
+Changes take effect immediately and survive a restart. Only the private socket can change the policy. Organization administrators can inspect it remotely, and the dashboard's organization health view shows it read-only, with a reminder to change it on the server. Allowing a feature does not elevate a member, restore a restricted credential's missing permissions, or bypass classification. Remote feature calls appear in the organization audit log.
+
+Features are grouped by capability:
+
+- `sources.github`, `sources.filesystem`, and `sources.discord`: repository, Obsidian/filesystem connector, and Discord host integrations.
+- `git.sync`: Git status, configuration, pull, push, and sync.
+- `plugins.manage`, `skills.manage`, and `graphiq.manage`: installed plugin/skill management and managed GraphIQ status, installation, removal, and updates.
+- `secrets.providers`: installed Bitwarden and 1Password integrations, not arbitrary secret command execution.
+- `inference.local`: host-backed inference, model discovery, and provider sign-in.
+- `harness.repair`: host harness inspection, configuration, repair, reinitialization, and Codex-native notes.
+- `config.apply`: the bounded operator-settings sections. Remote `POST /api/config` accepts the same section payloads as operator settings, not raw configuration files or authentication changes. Raw host configuration stays on the socket.
+- `daemon.update`: update checks, settings, and managed updates.
+
+### Always server-only
+
+No feature can enable these over the network:
+
+- `POST /api/secrets/exec`, `POST /api/secrets/:name/exec`, and `GET /api/secrets/exec/:jobId`.
+- `POST /api/troubleshoot/exec`.
+- Server-path imports through `POST /api/sources/import`; upload file bytes instead.
+- Hook requests containing `transcriptPath` or `transcript_path`; use inline content or staged uploads instead.
+- Arbitrary project-path indexing through `POST /api/graphiq/index`, direct GraphIQ MCP code tools and their aliases, and native directory/file pickers.
+
+The separately supervised `POST /api/org/operator/restart` retains its existing supervisor verification. It never falls back to an unsupervised host command. Scoped repairs, embedding backfills, evidence uploads, and organization settings continue to use their existing daemon owners. Personal/local mode retains its existing authorization behavior.
+
 ## Operator log feeds
 
 `signet logs` (also `signet daemon logs`) reads a bounded snapshot from the selected organization. Use `--follow` to stream new events; Ctrl-C cancels the request, releases the server subscription, and exits cleanly. `--lines` accepts 1–500 events (default 50); `--level` and `--category` filter the feed. `--json` returns one JSON snapshot, or newline-delimited JSON when following, starting with a `connected` record. A stream ends after at most 60 seconds; it does not reconnect automatically. Authentication and permission failures are returned without reading local log files or starting a daemon. JSON log output is organization-only; existing local text logging behavior is unchanged.
 
-Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Snapshot and stream opens share one audit event per principal per minute. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Content-item events without compartment attribution, and unattributed content-pipeline categories, are omitted entirely: they leave no timestamp, count, or event-budget footprint. Attributed stream events are visible only to their audience. The recent snapshot retains only organization-visible operational metadata, so classified events cannot evict public history. Daemon and system events remain available. Local-mode logging is unchanged.
+Organization log feeds require both `admin` and `diagnostics`, without an agent or project restriction. `GET /api/logs` returns up to 500 recent operational events; `GET /api/logs/stream` uses server-sent events. Snapshot and stream opens share one audit event per principal per minute. Remote events contain only timestamp, severity, category, and an explicit redaction notice—not messages, request bodies, credential values, or other log metadata. Unattributed entries are visible only from the explicitly system-scoped categories `system`, `resources`, `system-pressure`, `startup-recovery`, `db-vacuum`, and `config-migration`, and only when they carry no data fields. Other entries need a subject agent and compartment that the reader can access. Hook and write logs inherit their admitted subject, including asynchronous work. Unknown or unresolved subjects fail closed. Subject-isolated bounded history prevents classified events from evicting public history. Local-mode logging is unchanged.
 
-A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. Credentials and authority are rechecked every two seconds with a one-second owner deadline. Revocation, deactivation, permission loss, or a changed audience closes the stream with a terminal `scope_changed` event within five seconds. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
+A stream ends after at most 60 seconds or the requested event limit (1–500, default 100). Each user can hold two streams, with 32 streams across the instance. Buffered data is limited to 64 KiB; overflow closes the stream. At most eight eligible events can await authorization; saturation ends with a terminal `log_capacity` event. Credentials and authority are rechecked every two seconds with a one-second owner deadline and again before each eligible event is delivered. Delivery also rechecks the subject agent's current ownership. Revocation, deactivation, permission loss, or a changed audience closes the stream with a terminal `scope_changed` event within five seconds. Cancelling the request or response releases its listener, timer, and capacity. The MCP tool `signet_operator_logs` reads the same bounded snapshot through HTTP authorization.
 
 ## Memory review filters
 
@@ -364,7 +409,8 @@ do not stop the organization instance or open its database from a client.
 On the instance host, run `signet setup --host --local --public-url https://memory.example.com`.
 Use `--path` for a separate workspace and `--port <port>` to select its listen
 port. Port selection is resolved once: `--port` overrides `SIGNET_PORT`, then the
-port in `SIGNET_DAEMON_URL`, then the default. A listener already using the port
+port in a loopback `SIGNET_DAEMON_URL`, then the default. A remote URL never chooses
+its HTTP or HTTPS port for the host listener. A listener already using the port
 makes setup fail before creating or launching a workspace; choose an unused
 `--port`. Readiness must report the PID and workspace of the daemon just launched.
 Without `--public-url`, the setup link uses that resolved loopback origin. Supply

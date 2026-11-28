@@ -4,8 +4,10 @@ import { formatYaml } from "@signet/core";
 import { join } from "node:path";
 import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
-import { cliAgent, cliTarget, cliTransport } from "./organization-target.js";
-import { apiError, SignetNetworkError, SignetTimeoutError } from "../../../../libs/sdk/src/errors.js";
+import { resolveDefaultBasePath } from "@signet/core";
+import { selectLocalSocket, socketFetch } from "./socket-transport.js";
+import { cliSocket, cliAgent, cliTarget, cliTransport } from "./organization-target.js";
+import { SignetError, apiError, SignetNetworkError, SignetTimeoutError } from "../../../../libs/sdk/src/errors.js";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 
@@ -105,6 +107,7 @@ export function createDaemonClient(
 	agentsDir?: string,
 ): {
 	readonly url: string;
+	readonly transport: "socket" | "tcp";
 	readonly localWorkspace: boolean;
 	readonly hasCredential: boolean;
 	readonly fetchFromDaemon: DaemonFetch;
@@ -122,6 +125,28 @@ export function createDaemonClient(
 		!configUrl &&
 		!process.env.SIGNET_DAEMON_URL?.trim() &&
 		["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
+
+	let usedTransport: "socket" | "tcp" = "tcp";
+	const localFetch = async (requestUrl: string, options: RequestInit): Promise<Response> => {
+		const target = cliTarget();
+		const socket = await selectLocalSocket(
+			agentsDir ?? resolveDefaultBasePath(),
+			target ? !target.remote : localWorkspace,
+			cliSocket(),
+		);
+		usedTransport = socket ? "socket" : "tcp";
+		const headers = new Headers(options.headers);
+		if (cliAgent()) headers.set("x-signet-agent-id", cliAgent() ?? "");
+		if (!socket) return fetch(requestUrl, { ...options, headers });
+		try {
+			return await socketFetch(socket, requestUrl, { ...options, headers });
+		} catch (error) {
+			throw new SignetError(
+				error instanceof Error ? error.message : "Local socket unavailable",
+				"local_socket_unavailable",
+			);
+		}
+	};
 
 	const fetchDaemonResult = async <T>(
 		path: string,
@@ -146,7 +171,7 @@ export function createDaemonClient(
 			};
 		}
 		try {
-			const res = await fetch(`${cliTarget()?.url ?? url}${path}`, {
+			const res = await localFetch(`${cliTarget()?.url ?? url}${path}`, {
 				...fetchOpts,
 				headers: withAuthHeaders(fetchOpts.headers),
 				signal: AbortSignal.timeout(timeout || 5_000),
@@ -162,6 +187,7 @@ export function createDaemonClient(
 				return { ok: false, reason: "invalid-json", status: res.status };
 			}
 		} catch (err) {
+			if (err instanceof SignetError) throw err;
 			if (isTimeoutError(err)) {
 				return { ok: false, reason: "timeout" };
 			}
@@ -203,7 +229,7 @@ export function createDaemonClient(
 		}
 		const streamSignal = createStreamAbortSignal(fetchOpts.signal ?? undefined, timeout ?? 5_000);
 		try {
-			const res = await fetch(`${cliTarget()?.url ?? url}${path}`, {
+			const res = await localFetch(`${cliTarget()?.url ?? url}${path}`, {
 				...fetchOpts,
 				headers: withAuthHeaders(fetchOpts.headers),
 				signal: streamSignal.signal,
@@ -215,6 +241,7 @@ export function createDaemonClient(
 			if (!res.body) return { ok: false, reason: "invalid-json", status: res.status };
 			return { ok: true, response: res };
 		} catch (err) {
+			if (err instanceof SignetError) throw err;
 			if (isTimeoutError(err)) return { ok: false, reason: "timeout" };
 			return { ok: false, reason: "offline" };
 		} finally {
@@ -227,7 +254,10 @@ export function createDaemonClient(
 		opts?: RequestInit & { timeout?: number },
 	): Promise<T | null> => {
 		const res = await fetchDaemonResult<T>(path, opts);
-		if (!res.ok) return null;
+		if (!res.ok) {
+			if (res.reason === "http" && (res.status === 401 || res.status === 403)) throw apiError(res.status, res.body);
+			return null;
+		}
 		return res.data;
 	};
 
@@ -240,7 +270,7 @@ export function createDaemonClient(
 		const remote = cliTransport();
 		if (remote) return { ok: true, data: await remote.request(method, path, { body, timeoutMs }) };
 		try {
-			const res = await fetch(`${cliTarget()?.url ?? url}${path}`, {
+			const res = await localFetch(`${cliTarget()?.url ?? url}${path}`, {
 				method,
 				headers: withAuthHeaders(body ? { "Content-Type": "application/json" } : undefined),
 				body: body ? JSON.stringify(body) : undefined,
@@ -255,6 +285,7 @@ export function createDaemonClient(
 			}
 			return { ok: res.ok, data };
 		} catch (err) {
+			if (err instanceof SignetError) throw err;
 			if (isTimeoutError(err)) {
 				return {
 					ok: false,
@@ -269,6 +300,9 @@ export function createDaemonClient(
 	};
 
 	return {
+		get transport() {
+			return usedTransport;
+		},
 		get url() {
 			return cliTarget()?.url ?? url;
 		},

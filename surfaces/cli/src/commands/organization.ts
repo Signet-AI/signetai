@@ -1,3 +1,6 @@
+import { createDaemonClient } from "../lib/daemon.js";
+import { resolveDefaultBasePath } from "@signet/core";
+import { apiError } from "../../../../libs/sdk/src/errors.js";
 import { attributeResults, printResultAttribution, resultField } from "../lib/result-attribution.js";
 import { SignetError, SignetNetworkError, SignetTimeoutError } from "../../../../libs/sdk/src/index.js";
 import { Command } from "commander";
@@ -87,6 +90,38 @@ export function registerOrganizationCommands(program: Command, deps: AuthCommand
 			}
 		};
 	const org = program.command("org").description("Organization administration");
+	const remoteFeatures = org
+		.command("remote-features")
+		.description("List host feature policy; change it on the server");
+	for (const action of ["list", "allow", "deny"] as const) {
+		const command = standard(remoteFeatures.command(action === "list" ? action : `${action} <feature>`));
+		command.action(async (...args: unknown[]) => {
+			const context = args.at(-1);
+			if (!(context instanceof Command)) throw new Error("Missing command context");
+			const options = context.optsWithGlobals<Options>();
+			try {
+				const feature = typeof args[0] === "string" ? args[0] : "";
+				const client = createDaemonClient(3850, resolveDefaultBasePath());
+				const result = await client.fetchDaemonResult(
+					`/api/org/remote-features${action === "list" ? "" : `/${encodeURIComponent(feature)}`}`,
+					action === "list"
+						? undefined
+						: {
+								method: "POST",
+								headers: { "content-type": "application/json" },
+								body: JSON.stringify({ allow: action === "allow" }),
+							},
+				);
+				if (!result.ok) {
+					if (result.status) throw apiError(result.status, result.body);
+					throw new SignetError(result.error ?? "Daemon unavailable", "network");
+				}
+				print(JSON.stringify(result.data, null, options.json ? undefined : 2));
+			} catch (error) {
+				reportAuthError(error, options.json);
+			}
+		});
+	}
 	const users = org.command("users").description("Manage organization users");
 	const encoded = (args: readonly string[], index = 0) => encodeURIComponent(args[index] ?? "");
 	standard(users.command("list")).action(run((transport) => transport.get("/api/org/users")));

@@ -83,7 +83,7 @@ function actorScope(
 	original: ReadScope,
 	permission: string,
 	global = false,
-): ReadScope {
+): ReadScope & { readonly groupIds: readonly string[] } {
 	const user = z
 		.object({ status: z.string(), role: z.string() })
 		.parse(db.prepare("SELECT status,role FROM users WHERE id=?").get(actor.userId));
@@ -178,6 +178,7 @@ function actorScope(
 				: original.compartments.filter((c) => visible.includes(c));
 	return {
 		...original,
+		groupIds: groups,
 		compartments,
 		projects:
 			original.projects === null
@@ -775,7 +776,7 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 		const scope = actorScope(
 			db,
 			request.actor,
-			{ reach: { kind: "own", agentId: agent.id }, projects: null, compartments: "all" },
+			{ reach: { kind: "own", agentId: request.subjectAgentId ?? agent.id }, projects: null, compartments: "all" },
 			"diagnostics",
 			true,
 		);
@@ -793,7 +794,7 @@ function operation(db: WriteDb, request: OperatorRequest): unknown {
 				"logs",
 				null,
 			);
-		return { compartments: scope.compartments };
+		return { compartments: scope.compartments, groupIds: scope.groupIds };
 	}
 	if (request.op === "agent-purge") return agentPurge(db, request);
 	if (request.op === "authorize-global") {
