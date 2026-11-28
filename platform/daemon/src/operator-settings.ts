@@ -1,3 +1,12 @@
+import { atomicPrivateWrite } from "@signet/sdk/node";
+import { localTransportIdentity } from "./local-endpoint";
+import {
+	hostFeatureSchema,
+	remoteHostFeatures,
+	remoteHostFeaturesSchema,
+	replaceRemoteHostFeatures,
+	remoteHostFeatureStatus,
+} from "./host-features";
 import { constants } from "node:fs";
 import { open, unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -220,5 +229,69 @@ export async function setOperatorSettings(p: Principal, workspace: string, raw: 
 		return next;
 	} finally {
 		setPipelineTransition(false);
+	}
+}
+
+const remoteFeaturesFile = "remote-host-features.json";
+let remoteFeaturesBusy = false;
+export async function loadRemoteHostFeatures(workspace: string): Promise<void> {
+	replaceRemoteHostFeatures([]);
+	let file: Awaited<ReturnType<typeof open>>;
+	try {
+		file = await open(
+			join(workspace, remoteFeaturesFile),
+			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		);
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+		throw error;
+	}
+	try {
+		const stat = await file.stat();
+		if (
+			!stat.isFile() ||
+			stat.size > 4096 ||
+			(process.getuid && stat.uid !== process.getuid()) ||
+			(stat.mode & 0o077) !== 0
+		)
+			throw new IdentityError(409, "remote_features_file_unsafe");
+		const bytes = Buffer.alloc(4097);
+		const result = await file.read(bytes, 0, bytes.length, 0);
+		if (result.bytesRead > 4096) throw new IdentityError(413, "remote_features_too_large");
+		replaceRemoteHostFeatures(
+			remoteHostFeaturesSchema.parse(JSON.parse(bytes.subarray(0, result.bytesRead).toString("utf8"))),
+		);
+	} finally {
+		await file.close();
+	}
+}
+export function getRemoteHostFeatures(p: Principal) {
+	if (!localTransportIdentity()) requireAdmin(p);
+	return remoteHostFeatureStatus();
+}
+export async function setRemoteHostFeature(p: Principal, workspace: string, raw: unknown, allow: boolean) {
+	if (!localTransportIdentity() || !p.osIdentity) throw new IdentityError(403, "host_operation_local_only");
+	const feature = hostFeatureSchema.parse(raw);
+	if (remoteFeaturesBusy) throw new IdentityError(409, "config_transition");
+	remoteFeaturesBusy = true;
+	const before = remoteHostFeatures();
+	const next = allow ? [...new Set([...before, feature])] : before.filter((item) => item !== feature);
+	try {
+		await organizationWrite([
+			auditStatement(p, "operator.remote_features_update_started", "host_feature", feature, { allow, ...p.osIdentity }),
+		]);
+		await atomicPrivateWrite(join(workspace, remoteFeaturesFile), JSON.stringify(next));
+		try {
+			await organizationWrite([
+				auditStatement(p, "operator.remote_features_updated", "host_feature", feature, { allow, ...p.osIdentity }),
+			]);
+		} catch (error) {
+			await atomicPrivateWrite(join(workspace, remoteFeaturesFile), JSON.stringify(before));
+			throw error;
+		}
+		replaceRemoteHostFeatures(next);
+		return remoteHostFeatureStatus();
+	} finally {
+		remoteFeaturesBusy = false;
 	}
 }

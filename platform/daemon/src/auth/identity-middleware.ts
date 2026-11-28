@@ -313,6 +313,10 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			)
 				return failure(c, new IdentityError(429, "rate_limit"));
 			c.set("author", { userId: p.userId, credential: `${p.credential.kind}:${p.credential.id}` });
+			if (osIdentity)
+				await organizationWrite([
+					auditStatement(p, "local.request_started", "route", `${c.req.method} ${c.req.path}`, osIdentity),
+				]);
 			return await withWritePrincipal({ userId: p.userId }, () =>
 				withIdentityBody(c, async () => {
 					let logSubject: LogSubject | undefined;

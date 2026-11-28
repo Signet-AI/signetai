@@ -11,6 +11,9 @@ import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
 import type { AgentRemovalResult } from "../agent-removal.js";
 import { IdentityError } from "../auth/organization-store";
+import { localTransportIdentity } from "../local-endpoint";
+import { setOperatorSettings } from "../operator-settings";
+import { operatorSettingsInputSchema } from "../operator-settings-contract";
 import { operatorLogSnapshot, operatorLogStream } from "../operator-logs";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
@@ -157,6 +160,20 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.post("/api/config", async (c) => {
+		if (c.get("organization") && !localTransportIdentity()) {
+			const input = operatorSettingsInputSchema.safeParse(await jsonBody(c)());
+			if (!input.success)
+				return c.json(
+					{ error: "Remote config accepts operator settings, not raw files", reason: "invalid_request" },
+					400,
+				);
+			try {
+				return c.json(await setOperatorSettings(c.get("principal"), AGENTS_DIR, input.data));
+			} catch (error) {
+				if (error instanceof IdentityError) return c.json({ error: error.message, reason: error.reason }, error.status);
+				throw error;
+			}
+		}
 		try {
 			const { file, content: rawContent } = await jsonBody(c)();
 			const content = rawContent;

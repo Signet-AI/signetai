@@ -1,5 +1,10 @@
 import { registerOrganizationUpgradeRoutes } from "./organization-upgrade-routes";
-import { getOperatorSettings, setOperatorSettings } from "../operator-settings";
+import {
+	getOperatorSettings,
+	setOperatorSettings,
+	getRemoteHostFeatures,
+	setRemoteHostFeature,
+} from "../operator-settings";
 import { setOrganizationSso } from "../organization-sso";
 import { contentRead } from "../content-read";
 import { resolveRouteReadScope } from "./read-scope";
@@ -92,6 +97,26 @@ export function registerOrganizationRoutes(
 	workspaceRoot: string,
 ): void {
 	const getConfig = typeof config === "function" ? config : () => config;
+	app.get(
+		"/api/org/remote-features",
+		endpoint(async (c) => {
+			const p = c.get("principal");
+			if (!p) throw new IdentityError(401, "missing_credential");
+			return c.json(getRemoteHostFeatures(p));
+		}),
+	);
+	app.post(
+		"/api/org/remote-features/:feature",
+		endpoint(async (c) => {
+			const p = c.get("principal");
+			if (!p) throw new IdentityError(401, "missing_credential");
+			const input = z
+				.object({ allow: z.boolean() })
+				.strict()
+				.parse(await body(c));
+			return c.json(await setRemoteHostFeature(p, workspaceRoot, c.req.param("feature"), input.allow));
+		}),
+	);
 	app.post(
 		"/api/result-attribution",
 		endpoint(async (c) => {

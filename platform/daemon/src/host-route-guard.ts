@@ -1,5 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type {} from "./auth/identity-middleware";
+import { hostFeatureAssignment, remoteHostFeatureAllowed, type HostFeature } from "./host-features";
+import { auditStatement, organizationWrite } from "./auth/organization-store";
 import routeEffects from "./route-effects.json";
 import { localTransportIdentity } from "./local-endpoint";
 
@@ -34,8 +36,16 @@ export function globalHostOperation(method: string, path: string): boolean {
 	);
 }
 
-export function requireLocalHost(c: Context): Response | undefined {
-	if (c.get("organization") && !localTransportIdentity())
+export function requireLocalHost(c: Context, feature?: HostFeature | "never-remote"): Response | undefined {
+	const principal = c.get("principal");
+	const remote =
+		feature &&
+		feature !== "never-remote" &&
+		remoteHostFeatureAllowed(feature) &&
+		principal?.kind === "user" &&
+		principal.role === "admin" &&
+		principal.permissions.has("admin");
+	if (c.get("organization") && !localTransportIdentity() && !remote)
 		return c.json(
 			{ error: "Run this operation with the CLI on the instance host", reason: "host_operation_local_only" },
 			403,
@@ -69,8 +79,17 @@ export const hostRouteGuard: MiddlewareHandler = async (c, next) => {
 				(key) => typeof Reflect.get(body, key) === "string" && Reflect.get(body, key).length > 0,
 			);
 		if (route.effect === "host" || hostInput) {
-			const denied = requireLocalHost(c);
+			const feature = hostFeatureAssignment(c.req.method === "HEAD" ? "GET" : c.req.method, c.req.path);
+			const denied = requireLocalHost(c, feature);
 			if (denied) return denied;
+			if (c.get("organization") && !localTransportIdentity()) {
+				await organizationWrite([
+					auditStatement(c.get("principal"), "host.remote_request", "host_feature", feature, {
+						method: c.req.method,
+						path: c.req.path,
+					}),
+				]);
+			}
 		}
 	}
 	return next();

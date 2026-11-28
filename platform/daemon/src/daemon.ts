@@ -146,6 +146,7 @@ import {
 import { closeSignetHttpServer, createSignetHttpServer } from "./http-server";
 import { workspaceSocketPath } from "@signet/core/local-endpoint";
 import { bindLocalEndpoint, unavailableLocalEndpoint } from "./local-endpoint";
+import { loadRemoteHostFeatures } from "./operator-settings";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
@@ -3630,6 +3631,7 @@ async function main() {
 		});
 	};
 
+	await loadRemoteHostFeatures(AGENTS_DIR);
 	try {
 		localEndpoint = await bindLocalEndpoint(workspaceSocketPath(AGENTS_DIR), app.fetch);
 	} catch (error) {
