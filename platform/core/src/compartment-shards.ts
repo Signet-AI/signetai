@@ -695,7 +695,6 @@ export function prepareVectorAdmissionWriter(
 	const journal = (wanted: string) => {
 		const rows = vectorAdmissionRowsSql(store, wanted, base);
 		return `INSERT OR IGNORE INTO vector_shard_repair_partitions SELECT b.projection,b.building_generation,m.partition_id FROM vector_shard_repairs b JOIN org_jobs j ON j.id=b.job_id JOIN ${store} candidate ON candidate.id=${wanted} AND candidate.agent_id=json_extract(j.params_json,'$.target.agentId') JOIN vector_shard_members m ON m.projection=b.projection AND m.embedding_id=candidate.id JOIN vector_shard_keys k ON k.id=m.partition_id AND k.retired_generation IS NULL AND k.generation<=b.active_generation WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND EXISTS(SELECT 1 FROM (${rows}) r,json_each(r.in_flight_jobs) labels WHERE labels.value=b.job_id);
-		UPDATE org_jobs SET progress_json=json_remove(COALESCE(progress_json,'{}'),'$.vectorPreparation.${base}.copying','$.vectorPreparation.${base}.verify') WHERE id=(SELECT job_id FROM vector_shard_repairs WHERE projection='${base}') AND changes()>0;
 		UPDATE vector_shard_repairs SET phase=CASE WHEN phase='pending' THEN phase ELSE 'copying' END,cursor=CASE WHEN phase='pending' THEN cursor ELSE '' END WHERE projection='${base}' AND job_id IS NOT NULL AND changes()>0;
 		INSERT OR IGNORE INTO vector_shard_dirty(projection,generation,embedding_id) SELECT b.projection,b.building_generation,${wanted} FROM vector_shard_repairs b WHERE b.projection='${base}' AND b.building_generation IS NOT NULL AND (b.job_id IS NULL OR EXISTS(SELECT 1 FROM vector_shard_members m JOIN vector_shard_repair_partitions p ON p.partition_id=m.partition_id AND p.projection=b.projection AND p.generation=b.building_generation WHERE m.projection=b.projection AND m.embedding_id=${wanted}));`;
 	};
@@ -892,6 +891,7 @@ export function stepVectorAdmissionRepairInTx(
 	)
 		throw new Error("vector_repair_not_started");
 	const store = state.store;
+	const repairCursor = state.cursor;
 	const generation = state.building_generation;
 	prepareVectorAdmissionWriter(db, base, store);
 	const slot = state.active_slot === 1 ? 1 : 0;
@@ -1002,17 +1002,30 @@ export function stepVectorAdmissionRepairInTx(
 			);
 	};
 	let partition: number | null = null;
-	const checkpointPath = `$.vectorPreparation.${base}.${state.phase}`;
+	let savedCursor = state.cursor;
+	const checkpointPath = `$.vectorPreparationCursor.${base}`;
 	const readPage = () => {
 		if (state.job_id === null)
 			return db.prepare(`SELECT id FROM ${store} WHERE id>? ORDER BY id LIMIT ?`).all(state.cursor, limit);
-		const checkpoint = db
-			.prepare(
-				"SELECT COALESCE(json_extract(progress_json,?||'.partition'),0) partition,COALESCE(json_extract(progress_json,?||'.id'),'') id FROM org_jobs WHERE id=?",
+		const version = db
+			.prepare("SELECT json_extract(progress_json,?) version FROM org_jobs WHERE id=?")
+			.get(checkpointPath, state.job_id);
+		let checkpoint = { partition: 0, id: "" };
+		if (version?.version === 1 && state.cursor !== "") {
+			const parsed: unknown = JSON.parse(repairCursor);
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				!("partition" in parsed) ||
+				!("id" in parsed) ||
+				typeof parsed.partition !== "number" ||
+				!Number.isSafeInteger(parsed.partition) ||
+				parsed.partition < 0 ||
+				typeof parsed.id !== "string"
 			)
-			.get(checkpointPath, checkpointPath, state.job_id);
-		if (typeof checkpoint?.partition !== "number" || typeof checkpoint.id !== "string")
-			throw new Error("vector_repair_cursor_invalid");
+				throw new Error("vector_repair_cursor_invalid");
+			checkpoint = { partition: parsed.partition, id: parsed.id };
+		}
 		const next = db
 			.prepare(
 				"SELECT partition_id FROM vector_shard_repair_partitions WHERE projection=? AND generation=? AND partition_id>=? ORDER BY partition_id LIMIT 1",
@@ -1028,12 +1041,19 @@ export function stepVectorAdmissionRepairInTx(
 			.all(partition, partition === checkpoint.partition ? checkpoint.id : "", limit);
 	};
 	const checkpointPage = (cursor: string, updated: number, length: number): boolean => {
-		if (state.job_id === null) return updated === length && length < limit;
-		if (partition === null) return true;
+		if (state.job_id === null) {
+			savedCursor = cursor;
+			return updated === length && length < limit;
+		}
+		if (partition === null) {
+			savedCursor = "";
+			return true;
+		}
 		const finished = updated === length && length < limit;
+		savedCursor = JSON.stringify({ partition: finished ? partition + 1 : partition, id: finished ? "" : cursor });
 		db.prepare(
-			"UPDATE org_jobs SET progress_json=json_set(COALESCE(progress_json,'{}'),?,json_object('partition',?,'id',?)) WHERE id=?",
-		).run(checkpointPath, finished ? partition + 1 : partition, finished ? "" : cursor, state.job_id);
+			"UPDATE org_jobs SET progress_json=json_set(json_remove(COALESCE(progress_json,'{}'),'$.vectorPreparation'),?,1) WHERE id=?",
+		).run(checkpointPath, state.job_id);
 		return false;
 	};
 	if (state.phase === "copying") {
@@ -1050,7 +1070,7 @@ export function stepVectorAdmissionRepairInTx(
 		const phase = checkpointPage(cursor, updated, page.length) ? "verify" : "copying";
 		db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(
 			phase,
-			phase === "verify" ? "" : cursor,
+			phase === "verify" ? "" : savedCursor,
 			base,
 		);
 		return { phase, updated };
@@ -1073,11 +1093,6 @@ export function stepVectorAdmissionRepairInTx(
 			);
 			updated++;
 		}
-		if (state.job_id !== null)
-			db.prepare("UPDATE org_jobs SET progress_json=json_remove(COALESCE(progress_json,'{}'),?) WHERE id=?").run(
-				`$.vectorPreparation.${base}.verify`,
-				state.job_id,
-			);
 		db.prepare("UPDATE vector_shard_repairs SET phase='verify',cursor='' WHERE projection=?").run(base);
 		return { phase: "verify", updated };
 	}
@@ -1106,7 +1121,7 @@ export function stepVectorAdmissionRepairInTx(
 		}
 	}
 	const phase = checkpointPage(cursor, updated, page.length) ? "prepared" : "verify";
-	db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(phase, cursor, base);
+	db.prepare("UPDATE vector_shard_repairs SET phase=?,cursor=? WHERE projection=?").run(phase, savedCursor, base);
 	return { phase, updated };
 }
 export function cancelVectorAdmissionRepairInTx(

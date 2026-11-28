@@ -736,8 +736,17 @@ test.each(["copying", "verify", "dirty"] as const)(
 			now.mockImplementation(() => clock);
 			const result = stepVectorAdmissionRepairInTx(timed, "vec_embeddings");
 			expect(result.updated).toBe(1);
+			expect(JSON.stringify(db.query("SELECT progress_json FROM org_jobs WHERE id='turn-job'").get())).not.toContain(
+				"turn-",
+			);
 			expect(result.phase).toBe(phase === "copying" ? "copying" : "verify");
-			expect(db.query("SELECT cursor FROM vector_shard_repairs WHERE projection='vec_embeddings'").get()).toEqual({
+			expect(
+				db
+					.query(
+						"SELECT CASE WHEN cursor='' THEN '' ELSE json_extract(cursor,'$.id') END cursor FROM vector_shard_repairs WHERE projection='vec_embeddings'",
+					)
+					.get(),
+			).toEqual({
 				cursor: phase === "dirty" ? "" : "turn-0",
 			});
 			if (phase === "dirty") expect(db.query("SELECT count(*) n FROM vector_shard_dirty").get()).toEqual({ n: 11 });
