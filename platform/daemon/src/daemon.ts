@@ -2923,6 +2923,56 @@ async function main() {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			});
+	initUpdateSystem(
+		CURRENT_VERSION,
+		AGENTS_DIR,
+		(preferredExecutablePath) => {
+			if (resolveDaemonRestartMode() === "service-manager") {
+				logger.info("daemon", "Update installed; releasing lock for launchd KeepAlive restart");
+				setTimeout(() => {
+					requestShutdown("update:launchd-restart", 0, undefined, false);
+				}, 500);
+				return;
+			}
+
+			const daemonScript = process.argv[1] ?? "";
+			if (!daemonScript) {
+				logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");
+				setTimeout(() => {
+					requestShutdown("update:no-self-restart", 0, undefined, false);
+				}, 500);
+				return;
+			}
+
+			logger.info("daemon", "Spawning replacement daemon process", {
+				execPath: preferredExecutablePath ?? process.execPath,
+				script: daemonScript,
+			});
+
+			const replacement = spawn(preferredExecutablePath ?? process.execPath, [daemonScript], {
+				detached: true,
+				stdio: "ignore",
+				env: {
+					...process.env,
+					SIGNET_PORT: String(PORT),
+					SIGNET_HOST: HOST,
+					SIGNET_BIND: BIND_HOST,
+					SIGNET_PATH: AGENTS_DIR,
+					SIGNET_DAEMON_ENTRYPOINT: "1",
+				},
+			});
+			replacement.unref();
+
+			logger.info("daemon", "Replacement daemon spawned, exiting current process");
+			setTimeout(() => {
+				requestShutdown("update:replacement-spawned", 0, undefined, false);
+			}, 500);
+		},
+		{
+			logger,
+			onUpgraded: (from, to) => telemetryRef?.record("version.upgraded", { from, to }),
+		},
+	);
 	const startPostReadyRuntime = async (): Promise<void> => {
 		await deferredRuntimeGate.waitForIntegrity();
 		if (migrationIntegrityWritesBlocked) {
@@ -3055,56 +3105,7 @@ async function main() {
 		setCheckpointPruneTimer(checkpointPruneTimer);
 
 		startGitSyncTimer();
-		initUpdateSystem(
-			CURRENT_VERSION,
-			AGENTS_DIR,
-			(preferredExecutablePath) => {
-				if (resolveDaemonRestartMode() === "service-manager") {
-					logger.info("daemon", "Update installed; releasing lock for launchd KeepAlive restart");
-					setTimeout(() => {
-						requestShutdown("update:launchd-restart", 0, undefined, false);
-					}, 500);
-					return;
-				}
 
-				const daemonScript = process.argv[1] ?? "";
-				if (!daemonScript) {
-					logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");
-					setTimeout(() => {
-						requestShutdown("update:no-self-restart", 0, undefined, false);
-					}, 500);
-					return;
-				}
-
-				logger.info("daemon", "Spawning replacement daemon process", {
-					execPath: preferredExecutablePath ?? process.execPath,
-					script: daemonScript,
-				});
-
-				const replacement = spawn(preferredExecutablePath ?? process.execPath, [daemonScript], {
-					detached: true,
-					stdio: "ignore",
-					env: {
-						...process.env,
-						SIGNET_PORT: String(PORT),
-						SIGNET_HOST: HOST,
-						SIGNET_BIND: BIND_HOST,
-						SIGNET_PATH: AGENTS_DIR,
-						SIGNET_DAEMON_ENTRYPOINT: "1",
-					},
-				});
-				replacement.unref();
-
-				logger.info("daemon", "Replacement daemon spawned, exiting current process");
-				setTimeout(() => {
-					requestShutdown("update:replacement-spawned", 0, undefined, false);
-				}, 500);
-			},
-			{
-				logger,
-				onUpgraded: (from, to) => telemetryRef?.record("version.upgraded", { from, to }),
-			},
-		);
 		initFeatureFlags(AGENTS_DIR);
 		startUpdateTimer();
 	};
