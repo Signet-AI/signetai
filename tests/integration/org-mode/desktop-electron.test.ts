@@ -88,6 +88,12 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 		const temporaryRoot = process.env.SIGNET_ELECTRON_TMPDIR;
 		if (!temporaryRoot || temporaryRoot.length > 70)
 			throw new Error("Set SIGNET_ELECTRON_TMPDIR to a short disposable scratch directory for Chromium sockets");
+		await stat(join(repo, "platform/daemon/dashboard/index.html")).catch((cause: unknown) => {
+			throw new Error(
+				"Real Electron integration requires built dashboard assets; run bun run --cwd platform/daemon build:dashboard",
+				{ cause },
+			);
+		});
 		const runtime = await mkdtemp(join(temporaryRoot, "e-"));
 		const daemon = await OrgDaemon.create().catch(async (error: unknown) => {
 			await rm(runtime, { recursive: true, force: true });
@@ -288,7 +294,8 @@ test.skipIf(process.platform !== "linux" || !process.env.SIGNET_ELECTRON_TEST_EX
 				"Alice",
 			);
 			expect(await cdp.evaluate("fetch('/api/auth/refresh',{method:'POST'}).then(r=>r.status)")).toBe(403);
-			for (const method of ["getWorkspace", "workspaceStatus", "signIn", "signOut"]) {
+			for (const method of ["getWorkspace", "selectWorkspace", "workspaceStatus", "signIn", "signOut"]) {
+				expect(await cdp.evaluate(`typeof window.signetDesktop.${method}`)).toBe("undefined");
 				expect(
 					await cdp.evaluate(
 						`typeof window.signetDesktop.${method} !== "function" || window.signetDesktop.${method}().then(()=>false,()=>true)`,
