@@ -27,6 +27,7 @@ import { rolePermissions } from "./principal";
 
 const text = z.string().trim().min(1).max(128);
 const lookupLimiter = new AuthRateLimiter(60_000, 30);
+	visibleAgentSql,
 export async function lookupUsers(p: Principal, input: unknown) {
 	if (!(p.permissions.has("admin") || (p.compliance && p.permissions.has("classify"))))
 		throw new IdentityError(403, "permission", "Requires admin or compliance access");
@@ -170,7 +171,8 @@ interface NamedAgent extends AgentRecord {
 }
 export async function agents(p: Principal) {
 	const rows = await organizationQuery<NamedAgent[]>(
-		statement("SELECT * FROM agents ORDER BY name LIMIT 1000", [], "all"),
+	const visible = visibleAgentSql(p);
+		statement(`SELECT a.* FROM agents a WHERE ${visible.sql} ORDER BY name LIMIT 1000`, visible.args, "all"),
 	);
 	return {
 		agents: rows.map((a) => ({
@@ -270,7 +272,12 @@ export async function legacyAgents(p: Principal) {
 	requireAdmin(p);
 	return {
 		agents: await organizationQuery(
-			statement("SELECT id,name FROM agents WHERE kind = 'legacy' ORDER BY name LIMIT 1000", [], "all"),
+			statement(
+				`SELECT id,name FROM agents a WHERE kind = 'legacy' AND ${visible.sql} ORDER BY name LIMIT 1000`,
+				visible.args,
+				"all",
+			),
+	const visible = visibleAgentSql(p);
 		),
 	};
 }
@@ -299,8 +306,9 @@ export async function effectiveAccess(p: Principal, userId: string) {
 	if (!u) throw new IdentityError(404, "not_found");
 	const target = await userPrincipal(u, { kind: "session", id: "access-inspector" }, null, null);
 	const rows = await organizationQuery<AgentRecord[]>(
-		statement("SELECT * FROM agents WHERE archived_at IS NULL", [], "all"),
+		statement(`SELECT a.* FROM agents a WHERE archived_at IS NULL AND ${visible.sql}`, visible.args, "all"),
 	);
+	const visible = visibleAgentSql(p);
 	return {
 		user: userView(u),
 		role: u.role,
@@ -687,8 +695,9 @@ export async function deactivate(p: Principal, userId: string, input: unknown, b
 			throw new IdentityError(400, "plan_limit", "Narrow the offboarding preview to an agent");
 		throw error;
 	}
-	const visibleAgents = `WITH visible_agents AS (SELECT a.id,a.name,a.kind,a.owner_user_id FROM agents a WHERE a.archived_at IS NULL${p.boundAgentId ? " AND a.id=?" : ""} AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.target_kind='agent' AND ca.target_id=a.id AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))) AND NOT EXISTS(SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} AND json_extract(j.params_json,'$.target.kind')='agent' AND json_extract(j.params_json,'$.target.agentId')=a.id))`;
-	const agentArgs = [...(p.boundAgentId ? [p.boundAgentId] : []), p.userId, p.userId, p.userId, p.userId];
+	const visibility = visibleAgentSql(p);
+	const visibleAgents = `WITH visible_agents AS (SELECT a.id,a.name,a.kind,a.owner_user_id FROM agents a WHERE a.archived_at IS NULL AND ${visibility.sql})`;
+	const agentArgs = visibility.args;
 	const at = new Date().toISOString();
 	const counts = await organizationQuery<Record<string, number>>(
 		statement(

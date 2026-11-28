@@ -264,7 +264,7 @@ async function resolveScopedDreamRead(
 	body: Readonly<Record<string, unknown>> = {},
 ): Promise<
 	| { readonly agentId: string; readonly readScope: ReadScope; readonly local: boolean }
-	| { readonly error: string; readonly status: 400 | 401 | 403 }
+	| { readonly error: string; readonly status: 400 | 401 | 403 | 404 }
 > {
 	const principal: Principal | undefined = c.get("principal");
 	if (!principal || !["local", "user", "legacy"].includes(principal.kind))

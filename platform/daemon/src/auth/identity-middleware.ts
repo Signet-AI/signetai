@@ -333,7 +333,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 						if (p.boundAgentId && requested.value && requested.value !== p.boundAgentId)
 							throw new IdentityError(403, "agent_binding_conflict");
 						c.set("requestedOrganizationAgent", requested.value);
-						if (organizationReadRequest(c.req.method, c.req.path)) await bindRequestedReadAgent(p, requested.value);
+						await bindRequestedReadAgent(p, requested.value);
 						const project = checkPrincipalProject(
 							p,
 							typeof body.project === "string" ? body.project : c.req.query("project"),

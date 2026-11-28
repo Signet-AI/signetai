@@ -90,6 +90,109 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	test("R5 classified agents are absent from lists and indistinguishable by id", async () => {
+		await claim();
+		const eve = await member("agent-eve");
+		const hidden = await member("agent-hidden");
+		const { organizationWrite } = await import("./organization-store");
+		expect(
+			(await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: hidden.agentId }, eve.token)).status,
+		).toBe(200);
+		const before = await (await call("/api/agents", "GET", undefined, eve.token)).json();
+		expect(before.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(true);
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_agent_hidden','Agent hidden')"),
+			statement(
+				"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES('cls_agent_hidden','user',?)",
+				[hidden.userId],
+			),
+			statement(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent',?,?,'cls_agent_hidden')",
+				[hidden.agentId, hidden.agentId],
+			),
+		]);
+		const after = await (await call("/api/agents", "GET", undefined, eve.token)).json();
+		expect(after.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		expect(JSON.stringify(await (await call("/api/auth/whoami", "GET", undefined, eve.token)).json())).not.toContain(
+			hidden.agentId,
+		);
+		const headerResponse = (id: string) =>
+			app.request("/api/agents", { headers: { authorization: `Bearer ${eve.token}`, "x-signet-agent-id": id } });
+		const missingHeader = await headerResponse("unknown-agent");
+		const hiddenHeader = await headerResponse(hidden.agentId);
+		expect(hiddenHeader.status).toBe(404);
+		expect(missingHeader.status).toBe(404);
+		expect(await hiddenHeader.json()).toEqual(await missingHeader.json());
+		for (const bearer of [eve.token, admin]) {
+			for (const [path, method, body] of [
+				["/api/auth/preferences", "PATCH", { defaultReadAgentId: "TARGET" }],
+				["/api/agents/TARGET", "GET", undefined],
+				["/api/agents/TARGET", "PATCH", { name: "Denied" }],
+				["/api/agents/TARGET", "DELETE", undefined],
+				["/api/org/agents/TARGET/map", "POST", { kind: "personal", ownerUserId: eve.userId }],
+				["/api/org/agents/TARGET/purge", "POST", {}],
+			] as const) {
+				const responseFor = (id: string) =>
+					call(
+						path.replace("TARGET", id),
+						method,
+						path === "/api/auth/preferences" ? { defaultReadAgentId: id } : body,
+						bearer,
+					);
+				const absent = await responseFor("unknown-agent");
+				const denied = await responseFor(hidden.agentId);
+				expect({ path, status: denied.status, body: await denied.json() }).toEqual({
+					path,
+					status: absent.status,
+					body: await absent.json(),
+				});
+				expect(denied.status).toBe(404);
+			}
+		}
+		const allowed = await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: hidden.agentId }, hidden.token);
+		expect(allowed.status).toBe(200);
+		await organizationWrite([statement("UPDATE agents SET kind='legacy' WHERE id=?", [hidden.agentId])]);
+		const legacy = await (await call("/api/org/agents/legacy")).json();
+		expect(legacy.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		const inventory = await (await call("/api/org/upgrade")).json();
+		expect(inventory.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+		const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+		const { createMcpServer } = await import("../mcp/tools");
+		const server = await createMcpServer({
+			daemonUrl: "http://isolated.test",
+			authorizationHeader: `Bearer ${admin}`,
+			request: async (url, init) => app.request(url, init),
+		});
+		const client = new Client({ name: "visibility-proof", version: "1" });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		try {
+			await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+			const result = await client.callTool({ name: "signet_org_upgrade", arguments: { action: "inventory" } });
+			expect(result.isError).not.toBe(true);
+			expect(JSON.stringify(result)).toContain("legacyKeyDeadline");
+			expect(JSON.stringify(result)).not.toContain(hidden.agentId);
+		} finally {
+			await client.close();
+			await server.close();
+		}
+		const preview = await (
+			await call("/api/org/upgrade/preview", "POST", {
+				mappings: [],
+				keys: [],
+				legacyKeyDeadline: new Date(Date.now() + 86400_000).toISOString(),
+			})
+		).json();
+		expect(JSON.stringify(preview)).not.toContain(hidden.agentId);
+		await organizationWrite([
+			statement("DELETE FROM classification_assignments WHERE target_kind='agent' AND target_id=?", [hidden.agentId]),
+		]);
+		expect(
+			(await (await call("/api/agents", "GET", undefined, eve.token)).json()).agents.some(
+				(agent: { id: string }) => agent.id === hidden.agentId,
+			),
+		).toBe(true);
+	});
 	test("verified credentials reuse authority resolution without owner reads", async () => {
 		app.get("/api/cache-proof", (c) => c.json({ userId: c.get("principal").userId }));
 		await claim();
@@ -1927,7 +2030,7 @@ describe("organization HTTP flows", () => {
 			).status,
 		).toBe(400);
 		expect((await (await call("/api/auth/whoami")).json()).agents.defaultRead).toBe(created.agentId);
-		expect((await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: "missing" })).status).toBe(403);
+		expect((await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: "missing" })).status).toBe(404);
 		expect(claimed.user.id).toBeTruthy();
 	});
 

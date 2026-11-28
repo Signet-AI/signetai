@@ -1,4 +1,4 @@
-import { attemptAsync } from "@signet/core";
+import { attemptAsync, inFlightClassificationSql } from "@signet/core";
 import { logger } from "../logger";
 import { recordAuthObservation } from "./observations";
 import { publishSetupToken, removeSetupToken } from "./setup-token-file";
@@ -221,6 +221,21 @@ export function personalAgentStatements(userId: string, agentId: string, name: s
 }
 export async function bindAccess(p: Principal, u: UserRow | null, org: OrganizationRow): Promise<void> {
 	if (u && !u.personal_agent_id && org.agent_model === "personal" && org.personal_agents_self_service) {
+export function visibleAgentSql(p: Pick<Principal, "kind" | "userId" | "boundAgentId">) {
+	if (p.kind === "local") return { sql: "1=1", args: [] };
+	return {
+		sql: `(? IS NULL OR a.id=?) AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.target_kind='agent' AND ca.target_id=a.id AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))) AND NOT EXISTS(SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} AND json_extract(j.params_json,'$.target.kind')='agent' AND json_extract(j.params_json,'$.target.agentId')=a.id)`,
+		args: [p.boundAgentId, p.boundAgentId, p.userId, p.userId, p.userId, p.userId],
+	};
+}
+export async function requireVisibleAgent(p: Principal, agentId: string) {
+	const visible = visibleAgentSql(p);
+	const agent = await organizationQuery<(AgentRecord & { name: string }) | null>(
+		statement(`SELECT a.* FROM agents a WHERE a.id=? AND ${visible.sql}`, [agentId, ...visible.args], "get"),
+	);
+	if (!agent) throw new IdentityError(404, "not_found");
+	return agent;
+}
 		const agentId = `personal-${u.id.slice(4)}`;
 		const now = new Date().toISOString();
 		await organizationWrite([
@@ -235,8 +250,9 @@ export async function bindAccess(p: Principal, u: UserRow | null, org: Organizat
 	}
 	const agents = await organizationQuery<AgentRecord[]>(
 		statement(
-			"SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE archived_at IS NULL AND (kind = 'organization' OR (kind = 'personal' AND owner_user_id = ?) OR (kind = 'team' AND owner_group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)) OR id = ? OR id = ? OR (? = 'admin' AND kind = 'legacy'))",
-			[p.userId, p.userId, p.boundAgentId, u?.default_read_agent_id ?? null, p.role],
+	const visible = visibleAgentSql(p);
+			`SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents a WHERE archived_at IS NULL AND (kind = 'organization' OR (kind = 'personal' AND owner_user_id = ?) OR (kind = 'team' AND owner_group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)) OR id = ? OR id = ? OR (? = 'admin' AND kind = 'legacy')) AND ${visible.sql}`,
+			[p.userId, p.userId, p.boundAgentId, u?.default_read_agent_id ?? null, p.role, ...visible.args],
 			"all",
 		),
 	);
@@ -252,10 +268,8 @@ export async function bindAccess(p: Principal, u: UserRow | null, org: Organizat
 export async function bindRequestedReadAgent(p: Principal, id: string | undefined): Promise<void> {
 	const access = principalAccess(p);
 	if (!id || !access || access.agents.some((a) => a.id === id)) return;
-	const agent = await organizationQuery<AgentRecord | null>(
-		statement("SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE id=?", [id], "get"),
-	);
-	if (agent) bindPrincipalAccess(p, { ...access, agents: [...access.agents, agent] });
+	const agent = await requireVisibleAgent(p, id);
+	bindPrincipalAccess(p, { ...access, agents: [...access.agents, agent] });
 }
 export async function activeUser(userId: string, deviceId: string | null): Promise<UserRow> {
 	const u = await readUser(userId);

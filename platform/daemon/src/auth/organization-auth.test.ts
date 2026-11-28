@@ -129,12 +129,16 @@ describe("organization credential boundary", () => {
 			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
 			body: JSON.stringify({ agentId, sessionKey: "blind-session", content: "Blind evidence" }),
 		});
-		expect(response.status).toBe(403);
-		expect(await response.json()).toEqual({
-			error: "classified destination",
-			reason: "classified_destination",
-			required: "classified destination",
+		expect(response.status).toBe(404);
+		const absent = await app.request(`${path}?agentId=unknown-agent`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: JSON.stringify({ agentId: "unknown-agent", sessionKey: "blind-session", content: "Blind evidence" }),
 		});
+		expect(absent.status).toBe(404);
+		const rejected = await response.json();
+		expect(rejected).toEqual({ error: "not found", reason: "not_found" });
+		expect(rejected).toEqual(await absent.json());
 		expect(entered).toBe(false);
 		expect(await organizationQuery(statement("SELECT count(*) n FROM destination_side_effects", [], "get"))).toEqual({
 			n: 0,

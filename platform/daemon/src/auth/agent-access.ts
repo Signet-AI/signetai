@@ -47,7 +47,7 @@ export interface OrganizationSettings {
 	readonly agents: readonly AgentRecord[];
 }
 export interface Forbidden {
-	readonly status: 400 | 403;
+	readonly status: 400 | 403 | 404;
 	readonly reason: string;
 	readonly error: string;
 }
@@ -61,7 +61,7 @@ export function bindPrincipalAccess(p: Principal, settings: OrganizationSettings
 export function principalAccess(p: Principal): OrganizationSettings | undefined {
 	return access.get(p);
 }
-function denied(reason: string, status: 400 | 403 = 403): Result<never> {
+function denied(reason: string, status: 400 | 403 | 404 = 403): Result<never> {
 	return { ok: false, error: { status, reason, error: reason.replaceAll("_", " ") } };
 }
 
@@ -101,7 +101,8 @@ export function resolveWriteAgent(
 		(org.agentModel === "personal" && p.kind === "user" ? org.personalAgentId : org.organizationAgentId);
 	if (!id) return denied("org_policy");
 	const agent = org.agents.find((a) => a.id === id);
-	if (!agent || !canActAs(p, agent)) return denied("agent_not_permitted");
+	if (!agent) return denied("not_found", 404);
+	if (!canActAs(p, agent)) return denied("agent_not_permitted");
 	if (agent.kind === "organization" && agent.id !== org.organizationAgentId) {
 		if (p.role !== "admin" || requested !== agent.id) return denied("agent_not_permitted");
 		return { ok: true, value: agent.id };
@@ -121,7 +122,7 @@ export function resolveReadAgent(p: Principal, requested: string | undefined): R
 	if (!org) return denied("org_policy");
 	const id = target.value ?? org.defaultReadAgentId ?? org.organizationAgentId;
 	const agent = org.agents.find((a) => a.id === id);
-	if (!agent || agent.archived_at) return denied("agent_not_permitted");
+	if (!agent || agent.archived_at) return denied("not_found", 404);
 	return { ok: true, value: id };
 }
 export function checkPrincipalProject(p: Principal, project: string | undefined): Result<undefined> {

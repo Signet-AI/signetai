@@ -27,6 +27,7 @@ import {
 	readOrganization,
 	issueKeyBrowserSession,
 	refreshSession,
+	requireVisibleAgent,
 } from "../auth/organization-store";
 import { getRequestOrigin } from "../auth/request-network";
 import { jsonBody } from "../request-body";
@@ -144,6 +145,20 @@ export function registerOrganizationRoutes(
 			if (!c.get("organization")) return next();
 			return endpoint(fn)(c, next);
 		};
+	for (const path of ["/api/agents/:id", "/api/org/agents/:id/map", "/api/org/agents/:id/purge"]) {
+		app.use(path, async (c, next) => {
+			if (!c.get("organization")) return next();
+			return endpoint(async () => {
+				await requireVisibleAgent(user(c), c.req.param("id") ?? "");
+				await next();
+				return c.res;
+			})(c, next);
+		});
+	}
+	app.get(
+		"/api/agents/:id",
+		active(async (c) => c.json(await requireVisibleAgent(user(c), c.req.param("id") ?? ""))),
+	);
 	registerOrganizationUpgradeRoutes(app, active);
 	app.get(
 		"/api/org/operator/settings",

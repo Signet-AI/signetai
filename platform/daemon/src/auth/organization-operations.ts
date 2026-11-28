@@ -285,6 +285,9 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 		credential: p
 			? {
 					...p.credential,
+	const visibleAgents = p ? principalAccess(p)?.agents : undefined;
+	const visibleDefault = (agentId: string | null) =>
+		visibleAgents?.some((agent) => agent.id === agentId) ? agentId : null;
 					keyKind: key?.kind ?? null,
 					agentId: p.boundAgentId,
 					expiresAt: session?.access_expires_at ?? key?.expires_at ?? null,
@@ -294,8 +297,9 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 			: null,
 		permissions: p ? [...p.permissions] : [],
 		agents: {
-			defaultRead: u?.default_read_agent_id ?? "default",
-			defaultWrite: org.agent_model === "personal" ? (u?.personal_agent_id ?? null) : "default",
+			defaultRead:
+				visibleDefault(p?.boundAgentId ?? u?.default_read_agent_id ?? "default") ?? visibleDefault("default"),
+			defaultWrite: visibleDefault(org.agent_model === "personal" ? (u?.personal_agent_id ?? null) : "default"),
 		},
 		hybridProxyDetected,
 		providers: authProviders(org),
