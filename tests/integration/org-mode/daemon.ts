@@ -81,6 +81,7 @@ export class OrgDaemon {
 	stdout = "";
 	stderr = "";
 	child: ChildProcess | undefined;
+	preload: string | undefined;
 	lastStoppedPids: number[] = [];
 	private constructor(
 		readonly root: string,
@@ -106,7 +107,7 @@ export class OrgDaemon {
 		delete this.env.HERMES_HOME;
 		delete this.env.CODEX_HOME;
 	}
-	static async create(): Promise<OrgDaemon> {
+	static async create(prepare?: (daemon: OrgDaemon) => Promise<void>): Promise<OrgDaemon> {
 		const root = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "signet-org-"));
 		const daemon = new OrgDaemon(root, await reservePort());
 		try {
@@ -136,6 +137,7 @@ export class OrgDaemon {
 				new Response(initializer.stderr).text(),
 			]);
 			assert.equal(await initializer.exited, 0, `Isolated DB initialization failed: ${output}`);
+			await prepare?.(daemon);
 			await daemon.start();
 			return daemon;
 		} catch (error) {
@@ -148,7 +150,9 @@ export class OrgDaemon {
 		this.stdout = "";
 		this.stderr = "";
 		const binary = process.env.SIGNET_DAEMON_BIN;
-		const args = binary ? [resolve(binary)] : [process.execPath, "src/daemon.ts"];
+		const args = binary
+			? [resolve(binary)]
+			: [process.execPath, ...(this.preload ? ["--preload", this.preload] : []), "src/daemon.ts"];
 		const child = spawn("setsid", args, {
 			cwd: join(repo, "platform/daemon"),
 			env: this.env,
