@@ -214,19 +214,23 @@ function upgradeDreamingAliases(db: MigrationDb): void {
 }
 
 function backfillDreamingAliases(db: MigrationDb): void {
-	const creator = `p.agent_id=entity_aliases.agent_id AND p.operation='create_entity_alias' AND p.status='applied' AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=entity_aliases.id`;
-	db.exec(`
+	db.exec(
+		"CREATE INDEX _legacy_alias_creator ON ontology_proposals(agent_id,CAST(CASE WHEN json_valid(result) THEN json_extract(result,'$.aliasId') END AS TEXT)) WHERE operation='create_entity_alias' AND status='applied'",
+	);
+	try {
+		const creator = `p.agent_id=entity_aliases.agent_id AND p.operation='create_entity_alias' AND p.status='applied' AND CAST(CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END AS TEXT)=entity_aliases.id`;
+		db.exec(`
 		UPDATE entity_aliases SET
-			compartment_id=(SELECT p.compartment_id FROM ontology_proposals p WHERE ${creator} ORDER BY p.created_at,p.id LIMIT 1),
-			dreaming_pass_id=(SELECT p.dreaming_pass_id FROM ontology_proposals p WHERE ${creator} ORDER BY p.created_at,p.id LIMIT 1)
+			compartment_id=(SELECT p.compartment_id FROM ontology_proposals p WHERE ${creator} LIMIT 1),
+			dreaming_pass_id=(SELECT p.dreaming_pass_id FROM ontology_proposals p WHERE ${creator} LIMIT 1)
 		WHERE (SELECT COUNT(*) FROM ontology_proposals p WHERE ${creator})=1
 		AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.derived_kind='alias' AND c.derived_id=entity_aliases.id AND c.agent_id=entity_aliases.agent_id);
 		WITH creators AS (
 			SELECT a.id AS alias_id,p.id AS proposal_id,a.agent_id,p.evidence
 			FROM entity_aliases a JOIN ontology_proposals p ON p.agent_id=a.agent_id
 			AND p.operation='create_entity_alias' AND p.status='applied'
-			AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=a.id
-			WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END=a.id)=1
+			AND CAST(CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END AS TEXT)=a.id
+			WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CAST(CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END AS TEXT)=a.id)=1
 		), refs AS (
 			SELECT c.*,CASE WHEN j.type='text' THEN j.value WHEN j.type='object' THEN json_extract(j.value,'$.source_ref') END AS ref
 			FROM creators c,json_each(CASE WHEN json_valid(c.evidence) THEN CASE WHEN json_type(c.evidence)='array' THEN c.evidence ELSE '[]' END ELSE '[]' END) j
@@ -245,10 +249,13 @@ function backfillDreamingAliases(db: MigrationDb): void {
 		SELECT 'alias',a.id,a.agent_id,c.evidence_kind,c.evidence_id
 		FROM entity_aliases a JOIN ontology_proposals p ON p.agent_id=a.agent_id
 		AND p.operation='create_entity_alias' AND p.status='applied'
-		AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=a.id
+		AND CAST(CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END AS TEXT)=a.id
 		JOIN evidence_citations c ON c.derived_kind='proposal' AND c.derived_id=p.id AND c.agent_id=a.agent_id
-		WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END=a.id)=1;
+		WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CAST(CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END AS TEXT)=a.id)=1;
 	`);
+	} finally {
+		db.exec("DROP INDEX _legacy_alias_creator");
+	}
 }
 
 function upgradeDreamingChildren(db: MigrationDb): void {
@@ -274,28 +281,35 @@ function upgradeDreamingChildren(db: MigrationDb): void {
 		if (!columns.some((row) => row.name === "dreaming_pass_id"))
 			db.exec(`ALTER TABLE ${table} ADD COLUMN dreaming_pass_id TEXT`);
 		if (needsLabel) {
-			const rows = db.prepare(`SELECT child.*,child.rowid AS child_rowid FROM ${table} child`).all();
-			for (const row of rows) {
-				const args: unknown[] = [];
-				const parentSql = parents.replace(/child\.(\w+)/g, (_, column: string) => {
-					args.push(row[column]);
-					return "?";
-				});
-				const inherited = db.prepare(parentSql).all(...args);
-				const agents = new Set(
-					inherited.flatMap((parent) => (typeof parent.agent_id === "string" ? [parent.agent_id] : [])),
-				);
-				const labels = inherited.flatMap((parent) =>
-					db
-						.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
-						.all(parent.compartment_id)
-						.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : [])),
-				);
-				db.prepare(`UPDATE ${table} SET agent_id=COALESCE(agent_id,?),compartment_id=? WHERE rowid=?`).run(
-					agents.size === 1 ? [...agents][0] : null,
-					compartmentFor(db, labels),
-					row.child_rowid,
-				);
+			const page = db.prepare(
+				`SELECT child.*,child.rowid AS child_rowid FROM ${table} child NOT INDEXED WHERE child.rowid>? ORDER BY child.rowid LIMIT 256`,
+			);
+			const references: string[] = [];
+			const parentSql = parents.replace(/child\.(\w+)/g, (_, column: string) => {
+				references.push(column);
+				return "?";
+			});
+			const parent = db.prepare(parentSql);
+			const members = db.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?");
+			const update = db.prepare(`UPDATE ${table} SET agent_id=COALESCE(agent_id,?),compartment_id=? WHERE rowid=?`);
+			let cursor = 0;
+			for (;;) {
+				const rows = page.all(cursor);
+				if (rows.length === 0) break;
+				for (const row of rows) {
+					if (typeof row.child_rowid !== "number") throw new Error("Invalid Dreaming child cursor");
+					cursor = row.child_rowid;
+					const inherited = parent.all(...references.map((column) => row[column]));
+					const agents = new Set(
+						inherited.flatMap((parent) => (typeof parent.agent_id === "string" ? [parent.agent_id] : [])),
+					);
+					const labels = inherited.flatMap((parent) =>
+						members
+							.all(parent.compartment_id)
+							.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : [])),
+					);
+					update.run(agents.size === 1 ? [...agents][0] : null, compartmentFor(db, labels), row.child_rowid);
+				}
 			}
 		}
 		db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_compartment ON ${table}(agent_id,compartment_id)`);

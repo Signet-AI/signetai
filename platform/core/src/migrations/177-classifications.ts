@@ -102,22 +102,34 @@ export function backfillEvidenceCitations(db: MigrationDb): void {
 				.some((r) => r.name === "proposal_evidence")
 		)
 			continue;
-		const rows = db
-			.prepare(`SELECT t.id,t.agent_id,
+		db.exec(`CREATE TEMP TABLE _legacy_citation_refs AS SELECT t.id,t.agent_id,
    CASE WHEN j.type='text' THEN j.value ELSE json_extract(j.value,'$.source_ref') END ref,
    CASE WHEN j.type='object' THEN json_extract(j.value,'$.memory_id') END memory_id,
    CASE WHEN j.type='object' THEN COALESCE(json_extract(j.value,'$.source_kind'),CASE WHEN COALESCE(json_extract(j.value,'$.transcript_id'),json_extract(j.value,'$.session_key')) IS NOT NULL THEN 'transcript' END) END source_kind,
    CASE WHEN j.type='object' THEN COALESCE(json_extract(j.value,'$.source_id'),json_extract(j.value,'$.transcript_id'),json_extract(j.value,'$.session_key'),json_extract(j.value,'$.session_id'),json_extract(j.value,'$.source')) END source_id,
    CASE WHEN j.type='object' THEN json_extract(j.value,'$.source_path') END source_path
-   FROM ${table} t,json_each(CASE WHEN json_valid(t.proposal_evidence) THEN CASE WHEN json_type(t.proposal_evidence)='array' THEN t.proposal_evidence ELSE '[]' END ELSE '[]' END) j WHERE j.type IN ('object','text')`)
-			.all();
-		for (const row of rows) {
-			if (typeof row.agent_id !== "string" || typeof row.id !== "string") continue;
-			const ref = citation(db, row.agent_id, row);
-			if (ref)
-				db.prepare(
-					"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES (?,?,?,?,?)",
-				).run(kind, row.id, row.agent_id, ref.kind, ref.id);
+   FROM ${table} t,json_each(CASE WHEN json_valid(t.proposal_evidence) THEN CASE WHEN json_type(t.proposal_evidence)='array' THEN t.proposal_evidence ELSE '[]' END ELSE '[]' END) j WHERE j.type IN ('object','text')`);
+		const page = db.prepare(
+			"SELECT rowid AS cursor,* FROM _legacy_citation_refs WHERE rowid>? ORDER BY rowid LIMIT 256",
+		);
+		const insert = db.prepare(
+			"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES (?,?,?,?,?)",
+		);
+		let cursor = 0;
+		try {
+			for (;;) {
+				const rows = page.all(cursor);
+				if (rows.length === 0) break;
+				for (const row of rows) {
+					if (typeof row.cursor !== "number") throw new Error("Invalid evidence backfill cursor");
+					cursor = row.cursor;
+					if (typeof row.agent_id !== "string" || typeof row.id !== "string") continue;
+					const ref = citation(db, row.agent_id, row);
+					if (ref) insert.run(kind, row.id, row.agent_id, ref.kind, ref.id);
+				}
+			}
+		} finally {
+			db.exec("DROP TABLE _legacy_citation_refs");
 		}
 	}
 	for (const [table, id, kind, source] of [
