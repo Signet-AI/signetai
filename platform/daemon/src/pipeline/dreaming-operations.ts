@@ -1,7 +1,7 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import { SYSTEM_AUTHOR } from "../auth/audit-owner";
 import { runWriteTxAsync, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
-import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
+import { readEpisodicSource } from "../episodic-sources";
 import { withContentPassWrites } from "../memory-head-owner";
 import {
 	applyOntologyOperationBatchInTx,
@@ -124,7 +124,7 @@ function citeEvidence(
 			}
 			return {
 				evidence: [],
-				sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef).filter((owner) => owner !== agentId),
+				sourceAgentIds: [],
 			};
 		}, "db:dreaming.operations.cite-evidence.read");
 	return {
@@ -487,13 +487,6 @@ function provenanceForEvidence(
 	for (const citation of citations) {
 		const resolution = citeEvidence(accessor, agentId, citation, readScope);
 		if (resolution.evidence === null) {
-			if (resolution.sourceAgentIds.length > 0) {
-				const scopes = resolution.sourceAgentIds.map((sourceAgentId) => `'${sourceAgentId}'`).join(", ");
-				return {
-					provenance: null,
-					scopeMismatch: `Cited evidence belongs to scope${resolution.sourceAgentIds.length === 1 ? "" : "s"} ${scopes} but this operation targets '${agentId}'. Search evidence in the target scope before applying the operation.`,
-				};
-			}
 			const cited = citationRecord(citation);
 			if (cited === null) return { provenance: null, scopeMismatch: null };
 			const quote = cited.quote.length > 120 ? `${cited.quote.slice(0, 120)}…` : cited.quote;

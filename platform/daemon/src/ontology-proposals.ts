@@ -657,18 +657,12 @@ function requireStrictEpisodicSourceRefInTx(
 		sourceRef,
 		readScope: partition ? dreamingReadScopeInDb(db, agentId, partition.compartmentId) : undefined,
 	});
-	if (partition && resolved.status === "not_found") {
-		const unscoped = resolveStrictEpisodicSourceRef(db, { agentId, sourceRef });
-		if (unscoped.status === "resolved") throw new OntologyProposalError("compartment_mismatch", 409);
-		if (unscoped.status === "cross_agent")
-			throw new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409);
-	}
 	if (resolved.status === "resolved") return resolved.source;
 	if (resolved.status === "invalid") {
 		throw new OntologyProposalError("Evidence source_ref must name a canonical episodic source", 409);
 	}
 	if (resolved.status === "cross_agent") {
-		throw new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409);
+		throw new OntologyProposalError(`Evidence source_ref was not found: ${resolved.sourceRef}`, 409);
 	}
 	throw new OntologyProposalError(`Evidence source_ref was not found: ${resolved.sourceRef}`, 409);
 }

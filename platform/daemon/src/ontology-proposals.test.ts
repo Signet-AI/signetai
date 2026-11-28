@@ -595,8 +595,8 @@ describe("ontology proposals", () => {
 			),
 		).toEqual({ compartment_id: 93 });
 		for (const [source, error] of [
-			["sibling", "compartment_mismatch"],
-			["foreign", "authorized agent scope"],
+			["sibling", "Evidence source_ref was not found: memory:sibling"],
+			["foreign", "Evidence source_ref was not found: memory:foreign"],
 		])
 			await expect(
 				createOntologyProposal(getDbAccessor(), {
@@ -1613,7 +1613,7 @@ describe("ontology proposals", () => {
 				payload: payload("cross_scope"),
 				evidence: [{ source_ref: "memory:other-source" }],
 			}),
-		).rejects.toThrow(new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409));
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:other-source", 409));
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				author: { userId: null, credential: "system" },
