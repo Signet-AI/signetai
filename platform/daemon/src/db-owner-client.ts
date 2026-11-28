@@ -183,6 +183,7 @@ export const DB_OWNER_SURVIVABLE_CODES: ReadonlySet<string> = new Set([
 	"DB_OWNER_CANCELLED",
 	"DB_OWNER_QUEUE_FULL",
 	"DB_OWNER_WORK_BUDGET",
+	"owner_retired",
 ] as const);
 
 interface PendingJob<Result> {
