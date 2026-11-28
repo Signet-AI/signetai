@@ -1103,17 +1103,19 @@ describe("organization HTTP flows", () => {
 		const { logger } = await import("../logger");
 		registerMiscRoutes(app);
 		await claim();
-		const before = await (await call("/api/logs?category=memory")).json();
+		const before = await (await call("/api/logs?limit=500")).json();
 		const response = await call("/api/logs/stream?limit=1");
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("missing stream");
 		await reader.read();
 		logger.info("memory", "HR write", { memoryId: "hr-write", compartmentId: 999 });
 		logger.info("pipeline", "unattributed write");
-		const after = await (await call("/api/logs?category=memory")).json();
+		logger.info("hooks", "unattributed session start");
+		logger.info("daemon", "unattributed host activity");
+		const after = await (await call("/api/logs?limit=500")).json();
 		expect(after).toEqual(before);
-		logger.info("daemon", "safe event");
-		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"category":"daemon"');
+		logger.info("system", "safe event");
+		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"category":"system"');
 		expect((await reader.read()).done).toBe(true);
 	});
 	test("log snapshot and stream audit opens coalesce per principal per minute", async () => {
@@ -1154,9 +1156,11 @@ describe("organization HTTP flows", () => {
 		if (!reader) throw new Error("missing log stream");
 		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"redacted":true');
 		logger.info("api", "classified-log-marker", { content: "private-log-detail" });
+		logger.info("system", "classified-log-marker");
 		const event = new TextDecoder().decode((await reader.read()).value);
 		expect(event).not.toContain("classified-log-marker");
 		expect(event).not.toContain("private-log-detail");
+		expect(event).toContain('"category":"system"');
 		controller.abort();
 		await reader.cancel();
 		expect(logger.listenerCount("log")).toBe(listeners);
@@ -1182,7 +1186,7 @@ describe("organization HTTP flows", () => {
 		const boundedReader = bounded.body?.getReader();
 		if (!boundedReader) throw new Error("missing bounded log stream");
 		await boundedReader.read();
-		logger.info("api", "bounded event");
+		logger.info("system", "bounded event");
 		expect((await boundedReader.read()).done).toBe(false);
 		expect((await boundedReader.read()).done).toBe(true);
 		expect(logger.listenerCount("log")).toBe(listeners);

@@ -1550,8 +1550,17 @@ export function executeClassification(db: MigrationDb, request: ClassificationRe
 			return { id: jobId };
 		});
 	if (request.op === "admit-write") {
-		for (const scope of request.scopes) classificationsForWrite(db, scope);
-		return true;
+		const labels = [...new Set(request.scopes.flatMap((scope) => classificationsForWrite(db, scope)))].sort();
+		const agentId = request.scopes[0]?.agentId;
+		if (!agentId) throw new Error("agent_required");
+		const row = labels.length ? db.prepare("SELECT id FROM compartments WHERE key=?").get(labels.join(",")) : undefined;
+		return {
+			agentId,
+			compartmentId: labels.length === 0 ? null : typeof row?.id === "number" ? row.id : "unresolved",
+			...(request.scopes.find((scope) => scope.sessionKey)?.sessionKey
+				? { sessionKey: request.scopes.find((scope) => scope.sessionKey)?.sessionKey }
+				: {}),
+		};
 	}
 	if (request.op === "visibility") return visibility(db, request.subject);
 	if (request.op === "readable") return request.subject.local ? "all" : readable(db, request.subject);

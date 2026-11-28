@@ -2,6 +2,7 @@ import { bodyLimit } from "hono/body-limit";
 import { acceptCredentialAuthority, withCredentialAuthority, withoutCredentialAuthority } from "./authority-cache";
 import { withWritePrincipal, classifiedDestinationDenied } from "@signet/core";
 import { admitWriteDestination } from "./write-destination";
+import { withLogSubject, type LogSubject } from "../log-subject";
 import { LOCAL_AUTHOR } from "./audit-owner";
 import { withStopAdmission } from "../stop-admission";
 import type { Context, MiddlewareHandler, Next } from "hono";
@@ -291,6 +292,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 			c.set("author", { userId: p.userId, credential: `${p.credential.kind}:${p.credential.id}` });
 			return await withWritePrincipal({ userId: p.userId }, () =>
 				withIdentityBody(c, async () => {
+					let logSubject: LogSubject | undefined;
 					if (!open) {
 						for (const header of ["x-signet-actor", "x-signet-actor-type"]) {
 							const actor = c.req.header(header);
@@ -353,7 +355,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 							if (!access) throw new IdentityError(403, "org_policy");
 							const target = resolveWriteAgent(p, requested.value, access);
 							if (!target.ok) throw new IdentityError(target.error.status, target.error.reason);
-							await admitWriteDestination(
+							logSubject = await admitWriteDestination(
 								target.value,
 								body,
 								c.req.path,
@@ -377,7 +379,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 							}
 						}
 					}
-					await next();
+					await withLogSubject(logSubject, next);
 					if (classifiedDestinationDenied()) c.res = failure(c, new IdentityError(403, "classified_destination"));
 					if (verifiedKeyId && (c.res.status === 401 || c.res.status === 403))
 						await recordConnectorError(

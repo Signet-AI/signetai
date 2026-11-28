@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canActAs, principalAccess } from "./auth/agent-access";
 import { IdentityError } from "./auth/organization-store";
 import { operatorActor, operatorRequest } from "./operator-jobs";
 import type { Principal } from "./auth/principal";
@@ -33,31 +34,38 @@ function view(entry: LogEntry) {
 		redacted: true,
 	};
 }
-type LogAccess = { readonly compartments: "all" | readonly number[] };
-function visible(entry: LogEntry, access: LogAccess): boolean {
-	if (entry.data && Object.hasOwn(entry.data, "compartmentId")) {
-		const compartment = entry.data.compartmentId;
+type LogAccess = { readonly compartments: "all" | readonly number[]; readonly groupIds: readonly string[] };
+const systemCategories = new Set([
+	"system",
+	"resources",
+	"system-pressure",
+	"startup-recovery",
+	"db-vacuum",
+	"config-migration",
+]);
+function visible(entry: LogEntry, access: LogAccess, p: Principal): boolean {
+	const subject = entry.subject;
+	if (subject) {
+		const agent = principalAccess(p)?.agents.find((agent) => agent.id === subject.agentId);
+		if (!agent || !canActAs({ ...p, groupIds: access.groupIds }, agent)) return false;
 		return (
-			compartment === null ||
-			(typeof compartment === "number" && (access.compartments === "all" || access.compartments.includes(compartment)))
+			subject.compartmentId === null ||
+			(typeof subject.compartmentId === "number" &&
+				(access.compartments === "all" || access.compartments.includes(subject.compartmentId)))
 		);
 	}
-	const data = entry.data;
-	if (data && ["memoryId", "sourceId", "documentId", "entityId", "sessionKey"].some((key) => Object.hasOwn(data, key)))
-		return false;
-	return !/memory|pipeline|dreaming|source|classif|embedding|synthesis|document|transcript|reflection|session-memories/.test(
-		entry.category,
-	);
+	return systemCategories.has(entry.category) && entry.data === undefined;
 }
-const recent: LogEntry[] = [];
+const recent = new Map<string, LogEntry[]>();
 const severity = { debug: 0, info: 1, warn: 2, error: 3 };
 logger.on("log", (entry: LogEntry) => {
-	if (!visible(entry, { compartments: [] })) return;
-	recent.push({
-		...view(entry),
-		...(entry.data && Object.hasOwn(entry.data, "compartmentId") ? { data: { compartmentId: null } } : {}),
-	});
-	if (recent.length > 500) recent.shift();
+	if (!entry.subject && (!systemCategories.has(entry.category) || entry.data !== undefined)) return;
+	const key = entry.subject ? JSON.stringify([entry.subject.agentId, entry.subject.compartmentId]) : "system";
+	const bucket = recent.get(key) ?? [];
+	if (!recent.has(key) && recent.size >= 1024) return;
+	bucket.push({ ...view(entry), ...(entry.subject ? { subject: entry.subject } : {}) });
+	if (bucket.length > 500) bucket.shift();
+	recent.set(key, bucket);
 });
 function accepts(entry: Pick<LogEntry, "timestamp" | "level" | "category">, options: z.infer<typeof query>): boolean {
 	return (
@@ -75,8 +83,11 @@ export async function operatorLogSnapshot(p: Principal, input: unknown) {
 	authorize(p);
 	const options = filters(input);
 	const access = await operatorRequest<LogAccess>({ op: "logs-access", actor: operatorActor(p), audit: true });
-	const logs = recent
-		.filter((entry) => visible(entry, access) && accepts(entry, options))
+	const logs = [...recent.values()]
+		.filter((entries) => entries[0] !== undefined && visible(entries[0], access, p))
+		.flat()
+		.filter((entry) => accepts(entry, options))
+		.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
 		.slice(-options.limit)
 		.map(view);
 	return { logs, count: logs.length, redacted: true };
@@ -143,10 +154,42 @@ export async function operatorLogStream(
 				}, 2000);
 				producer.addDisposer(() => clearInterval(recheck));
 				let events = 0;
+				let pendingEvents = 0;
+				let delivery = Promise.resolve();
 				const onLog = (entry: LogEntry) => {
-					if (!visible(entry, access) || !accepts(entry, options)) return;
-					producer.write(view(entry));
-					if (++events >= options.limit) producer.close();
+					if (!visible(entry, access, p) || !accepts(entry, options)) return;
+					if (pendingEvents >= 8) {
+						producer.close();
+						return;
+					}
+					pendingEvents++;
+					delivery = delivery.then(async () => {
+						try {
+							if (producer.signal.aborted) return;
+							const fresh = await operatorRequest<LogAccess>({
+								op: "logs-access",
+								actor: operatorActor(p),
+								audit: false,
+								subjectAgentId: entry.subject?.agentId,
+							});
+							if (producer.signal.aborted) return;
+							if (JSON.stringify(fresh) !== JSON.stringify(access)) {
+								producer.write({ type: "error", reason: "scope_changed" });
+								producer.close();
+								return;
+							}
+							if (!visible(entry, fresh, p)) return;
+							producer.write(view(entry));
+							if (++events >= options.limit) producer.close();
+						} catch {
+							if (!producer.signal.aborted) {
+								producer.write({ type: "error", reason: "scope_changed" });
+								producer.close();
+							}
+						} finally {
+							pendingEvents--;
+						}
+					});
 				};
 				producer.addDisposer(() => logger.off("log", onLog));
 				const timer = setTimeout(
