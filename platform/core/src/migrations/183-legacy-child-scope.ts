@@ -152,11 +152,12 @@ export function up(db: MigrationDb): void {
 				}
 				const labels = [...parents, row]
 					.filter((parent) => parent.compartment_id !== null && parent.compartment_id !== undefined)
-					.flatMap((parent) =>
-						(members?.all(parent.compartment_id) ?? []).flatMap((member) =>
-							typeof member.classification_id === "string" ? [member.classification_id] : [],
-						),
-					);
+					.flatMap((parent) => {
+						if (members === null) throw new Error("legacy_scope_members_missing");
+						return members
+							.all(parent.compartment_id)
+							.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : []));
+					});
 				const label = compartmentFor(db, labels);
 				if (row.agent_id === agent && row.compartment_id === label) continue;
 				update.run(agent, label, cursor);

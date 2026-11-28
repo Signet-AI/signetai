@@ -119,6 +119,23 @@ test("partial checkpoint upgrades require one authoritative session owner", () =
 	}
 });
 
+test("partial schemas never erase a label when its membership table is missing", () => {
+	const db = new Database(":memory:");
+	try {
+		db.exec(`CREATE TABLE memories(id TEXT PRIMARY KEY,agent_id TEXT,compartment_id INTEGER);
+			CREATE TABLE memory_history(memory_id TEXT,agent_id TEXT,compartment_id INTEGER);
+			INSERT INTO memories VALUES('private','owner',7);
+			INSERT INTO memory_history VALUES('private',NULL,NULL);`);
+		expect(() => up(db)).toThrow("legacy_scope_members_missing");
+		expect(db.query("SELECT agent_id,compartment_id FROM memory_history").get()).toEqual({
+			agent_id: null,
+			compartment_id: null,
+		});
+	} finally {
+		db.close();
+	}
+});
+
 test("empty and partial legacy schemas are restart safe", () => {
 	const db = new Database(":memory:");
 	try {
