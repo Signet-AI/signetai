@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, spyOn } from "bu
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compartmentFor } from "@signet/core";
+import { compartmentFor, findSqliteVecExtension } from "@signet/core";
 import type { ReadScope } from "./read-scope";
 import type { RecallDedupeItem } from "./session-recall-dedupe";
 import { executeClassification } from "./classification-owner";
@@ -510,6 +510,9 @@ describe("session recall ledger compartments", () => {
 		await dbAccessor.closeDbAccessor();
 		const db = new Database(path);
 		try {
+			const extension = findSqliteVecExtension();
+			if (!extension) throw new Error("sqlite-vec required for classification fixture");
+			db.loadExtension(extension);
 			const actor = {
 				userId: "carol",
 				groupIds: [],
@@ -523,7 +526,12 @@ describe("session recall ledger compartments", () => {
 			const job = executeClassification(db, { op: "enqueue", actor, id: "cls_hr", target, remove: false });
 			if (typeof job !== "object" || job === null || !("jobId" in job) || typeof job.jobId !== "string")
 				throw new Error("missing job");
-			executeClassification(db, { op: "execute", jobId: job.jobId });
+			for (let turn = 0; turn < 20; turn++) {
+				executeClassification(db, { op: "execute", jobId: job.jobId });
+				const status = db.prepare("SELECT status FROM org_jobs WHERE id=?").get(job.jobId)?.status;
+				if (status !== "pending" && status !== "running") break;
+			}
+			expect(db.prepare("SELECT status FROM org_jobs WHERE id=?").get(job.jobId)).toEqual({ status: "complete" });
 			const memory = db.prepare("SELECT compartment_id FROM memories WHERE id = 'mem-open'").get();
 			expect(memory?.compartment_id).toEqual(expect.any(Number));
 			expect(db.prepare("SELECT compartment_id FROM session_recall_events").get()).toEqual(memory);
