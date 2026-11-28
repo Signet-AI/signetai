@@ -220,13 +220,13 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | GET | `/api/auth/onboarding` | Unrestricted user session; own `{ version, acknowledged, complete }` visibility acknowledgement. No identity or scope parameters. |
 | POST | `/api/auth/onboarding` | Unrestricted user session; `{ action: "acknowledge", version: "organization-visibility-v1" }` records the human visibility acknowledgement, or `{ action: "complete" }` completes onboarding after acknowledgement. Audited and durable; credentials cannot acknowledge for another user. |
 | PATCH | `/api/auth/preferences` | User session; `{ defaultReadAgentId }` sets only the caller's default read agent. |
-| POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited. |
+| POST | `/api/auth/login` | `{ username, password, client?: "browser" }`; returns user, expiry, CSRF, and session cookies. Rate limited by account plus client IP, and by client IP. Existing passwords remain valid; setting a new local-account password requires at least 12 characters. |
 | GET | `/api/auth/sso/start` | OIDC authorization redirect; optional `continuation` is a single-use code with a 60-second TTL, never an invitation token. |
 | GET | `/api/auth/sso/callback` | PKCE code exchange with one-use state and nonce validation. |
-| POST | `/api/auth/logout` | `{ all?: boolean }`; revoke this session or all of your sessions, not connector keys. |
+| POST | `/api/auth/logout` | `{ all?: boolean }`; revoke this session or all of your sessions, not connector keys. With no session and `all` omitted/false, returns `{ ok: true, revoked: 0 }` without recording a logout. Session-management mutations require an interactive session or `admin` permission. |
 | GET | `/api/auth/sessions` | Your sessions, without token hashes. |
 | DELETE | `/api/auth/sessions/:id` | Revoke an owned session; admin may revoke another user's. |
-| POST | `/api/auth/device/start` | `{ client: "cli" | "desktop", deviceName, platform? }`; returns device/user codes, verification URLs, 2-second poll interval, 600-second expiry. |
+| POST | `/api/auth/device/start` | `{ client: "cli" | "desktop", deviceName, platform? }`; returns device/user codes, verification URLs, 2-second poll interval, 600-second expiry. Limited to 20 starts per IP and 100 globally per minute. Device sessions use the 30-day default refresh lifetime independently of the approver’s session. Continued access and refresh respect explicit device/session revocation. |
 | GET | `/api/auth/device/:userCode` | Signed-in user previews the device requesting approval. |
 | POST | `/api/auth/device/approve` | `{ userCode, decision: "approve" | "deny" }`. |
 | POST | `/api/auth/device/token` | `{ deviceCode }`; `428 authorization_pending`, `429 slow_down`, `403 denied`, `410 expired`, or access/refresh tokens. |
@@ -238,7 +238,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | POST | `/api/auth/connector-keys` | User session required. `{ harness, deviceId, agentId? }`; `201 { key, secret }`, secret shown once. |
 | GET | `/api/auth/connector-keys` | Your connector keys. |
 | DELETE | `/api/auth/connector-keys/:id` | Revoke your key. |
-| POST | `/api/auth/api-keys` | `{ name, agentId?, permissions, expiresAt, kind?: "personal" | "shared" }`; shared requires an agent and admin or group ownership. |
+| POST | `/api/auth/api-keys` | `{ name, agentId?, permissions, expiresAt, kind?: "personal" | "shared" }`; personal keys expire within 365 days. Shared requires an agent and `admin` permission or an interactive group owner with `modify`. |
 | GET | `/api/auth/api-keys` | Your keys; `?all=1` requires admin. |
 | DELETE | `/api/auth/api-keys/:id` | Revoke an owned key; admin may revoke any key. |
 | POST | `/api/org/claim` | `{ setupToken, organizationName, admin: { username, displayName, email?, password } }`; consumes setup token and creates the first admin/browser session. |
@@ -260,7 +260,8 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | DELETE | `/api/org/groups/:id` | Admin; remove group membership. |
 | PUT | `/api/org/groups/:id/members/:userId` | Admin or group owner; `{ role: "owner" | "member" }`. |
 | DELETE | `/api/org/groups/:id/members/:userId` | Admin or group owner. Provider-managed groups reject manual edits with `409 managed_by_idp`. |
-| GET | `/api/agents` | Adds kind, owner user/group, archive state, and `canActAs`. |
+| GET | `/api/agents` | Visible agents only, with kind, owner user/group, archive state, and `canActAs`. Agent-target classifications hide the identity as well as content. |
+| GET | `/api/agents/:id` | Visible agent metadata; hidden and unknown IDs both return `404 not_found`. This applies to every by-ID agent route. |
 | POST | `/api/agents` | `{ name, kind: "personal" | "team", ownerGroupId? }`; self-service personal policy or team ownership/admin required. |
 | PATCH | `/api/agents/:id` | Admin; `{ name?, ownerUserId?, ownerGroupId?, archived? }`. |
 | GET | `/api/org/agents/legacy` | Admin; legacy agents awaiting mapping. |
@@ -272,7 +273,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | POST | `/api/org/upgrade/:id/confirm` | Unrestricted admin; `{ revision }`; validates inventory and starts the exact reviewed plan, `202`. |
 | POST | `/api/org/upgrade/:id/cancel` | Unrestricted admin; `{ revision }`; cancels an unconfirmed draft without ownership/key/deadline writes. |
 | POST | `/api/org/upgrade/:id/resume` | Unrestricted admin; `{ revision }`; continues an interrupted applying job, `202`, never reapplies committed steps. |
-| GET | `/api/org/access/:userId` | Admin or compliance; effective roles, groups, act-as agents, and readable classifications. |
+| GET | `/api/org/access/:userId` | Administrator role or compliance authority plus the credential’s `audit` permission; effective roles, groups, visible act-as agents, and readable classifications. |
 | GET | `/api/org/settings` | Admin; organization policy and OIDC configuration, never client-secret values. |
 | PATCH | `/api/org/settings` | Admin; name, agent model, self-service, login policy, TTLs, legacy deadline, retention, public URL, OIDC. |
 | GET | `/api/org/keys` | Admin; filter by `userId`, `deviceId`, `harness`, `agentId`, `legacy`. |

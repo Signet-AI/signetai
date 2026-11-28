@@ -98,7 +98,7 @@ The import preserves each selected export record, including its original ID, age
 
 Groups are teams. The Teams page's empty state walks new owners through creating a team, adding members, and creating a team agent. An organization administrator creates the team; its owners manage membership and shared agents. Team owners can add members and use **Create team agent** directly on their team's page. SSO-synced teams can appear automatically.
 
-Any member of a group may act through that group's team agent. Group owners may manage membership. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
+Any member of a group may act through that group's team agent. Group owners may manage membership using a signed-in session with `modify`; connector keys and key-derived sessions cannot use group ownership to change membership, create team agents, or issue shared keys. Administrator actions also require the credential’s `admin` permission. When an identity provider manages a group, manual membership changes return `409 managed_by_idp`.
 
 ## Agents and attribution
 
@@ -132,9 +132,9 @@ Repeated session starts can reuse a rendered generated head inside the database 
 4. Use the resulting user session to call `POST /api/auth/connector-keys` with `harness` and `deviceId`, and optionally an agent.
 5. Store the returned secret in the client's credential store. It is shown once; never put it in harness configuration, command arguments, or a repository.
 
-Connector keys grant `recall`, `remember`, `documents`, and `modify`, limited by their user's permissions. They expire after 30 days by default. An eligible key renews silently while its issuing CLI or desktop session remains renewable. Signing out does not revoke connector keys. Revoke the connector key or its device to stop capture.
+Connector keys grant `recall`, `remember`, `documents`, and `modify`, limited by their user's permissions. They expire after 30 days by default. An eligible key renews silently while its issuing CLI or desktop session remains renewable. Device-approved sessions use the organization’s refresh lifetime (30 days by default), independently of the approving browser session’s expiry or revocation. The approval limits permissions and scope, not lifetime. Revoking the device session or device still ends its access. Signing out does not revoke connector keys. Revoke the connector key or its device to stop capture.
 
-Personal API keys can choose a smaller permission set. Shared-agent keys require an administrator or the owning team's owner. Shared keys must identify their agent.
+Personal API keys choose a subset of their user’s permissions and an explicit expiry no more than 365 days after issuance. Existing keys are not shortened. Shared-agent keys require the credential’s `admin` permission or a signed-in owning-team owner with `modify`. Shared keys must identify their agent. Effective-access inspection requires `audit` as well as the administrator role or compliance authority. Session, device, and key management requires an interactive session or the credential’s `admin` permission.
 
 ## SSO
 
@@ -144,13 +144,13 @@ Register `<publicUrl>/api/auth/sso/callback` with your identity provider. Signet
 
 An allowed-domain user can join on first sign-in. Mapped identity-provider groups synchronize during sign-in, including removing stale provider-managed memberships. Manually managed memberships are retained.
 
-Signet rejects disabling password login until an OIDC provider is configured. New password hashes use 600,000 PBKDF2 iterations; existing hashes continue to verify using their stored iteration count.
+Signet rejects disabling password login until an OIDC provider is configured. New or changed local-account passwords require at least 12 characters and use 600,000 PBKDF2 iterations. Existing passwords are not rewritten or rejected for their length and continue to verify using their stored iteration count. Login throttling is per account and client IP, with an additional per-IP limit; an attacker cannot exhaust a username-wide bucket for other networks. Unknown accounts return the same invalid-credential response. Device-start accepts at most 20 requests per client IP and 100 globally per minute, in addition to the 1,000 outstanding-authorization limit.
 
 Keep password login enabled until SSO is working. `requireSso` prevents password sign-in. Changing authentication policy does not revoke existing sessions; use session or device revocation when needed.
 
 ## Agents and API keys from the CLI
 
-Against an organization, `signet agent list` shows each agent's owner IDs and `canActAs` result. `signet agent add notes` creates a personal agent without scaffolding local files; `signet agent add payments --team <group-id>` creates a team agent. `signet agent use <name-or-id>` changes your default read agent. Writes still default to your personal agent.
+Against an organization, `signet agent list` shows each agent's owner IDs and `canActAs` result. `signet agent add notes` creates a personal agent without scaffolding local files; `signet agent add payments --team <group-id>` creates a team agent. `signet agent use <name-or-id>` changes your default read agent. An agent-target classification also hides the agent’s identity from callers outside its audience: agent lists, the switcher, preferences, upgrade inventories, and MCP views omit it. By-ID access returns the same `404 not_found` as an unknown agent, including for administrators. A newly hidden default read agent falls back to a visible organization agent, or no default when none is visible. Writes still default to your personal agent.
 
 Administrators can rename with `signet agent set <name-or-id> --name <new-name>`, archive with `signet agent remove <name-or-id>`, and transfer with `signet agent transfer <name-or-id> --user <user-id>` or `--team <group-id>`. Transfer changes ownership, not evidence authorship. Local read policies do not apply in organization mode. Organization agent purge is not yet available through the CLI; it refuses without changing local files.
 
