@@ -13,6 +13,7 @@ import { QUEUE_MAX_DEAD_RATE, QUEUE_MAX_DEPTH, QUEUE_MAX_OLDEST_AGE_SEC, type Qu
 import { getAllFeatureFlags } from "../feature-flags";
 import { loadMemoryConfig } from "../memory-config";
 import { getCachedResourceSnapshot } from "../resource-monitor";
+import { getDreamingWorker } from "../pipeline";
 import { getUpdateState } from "../update-system";
 import type { readEmbeddingIndexMigrationProgress } from "../embedding-index-state";
 import {
@@ -209,6 +210,7 @@ export function mountHealthRoutes(app: Hono): void {
 				reasons: workspace.reasons,
 			},
 			db: dbOk,
+			workers: { dreaming: { registered: getDreamingWorker() !== null } },
 			dbWriter,
 			dbReader,
 			dbRuntime,

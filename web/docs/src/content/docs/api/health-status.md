@@ -15,6 +15,12 @@ No authentication required. Legacy health check retained for backward
 compatibility. New integrations should prefer `GET /health/live` for liveness
 and `GET /health/ready` for readiness.
 
+Database readiness does not imply that deferred workers have registered.
+`workers.dreaming.registered` becomes `true` when the pipeline owner registers
+Dreaming, including when automatic passes are disabled. It reports registration,
+not an active pass; paused pipelines can leave it `false`. After a restart,
+consumers that require Dreaming must observe this signal on the new daemon PID.
+
 **Response**
 
 ```json
@@ -26,6 +32,7 @@ and `GET /health/ready` for readiness.
   "port": 3850,
   "agentsDir": "/home/user/.agents",
   "db": true,
+  "workers": { "dreaming": { "registered": true } },
   "dbWriter": {
     "queued": 0,
     "maxQueue": 64,

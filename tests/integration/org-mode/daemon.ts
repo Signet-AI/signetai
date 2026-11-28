@@ -195,6 +195,21 @@ export class OrgDaemon {
 			throw new Error(`Daemon boot failed: ${this.stderr}`, { cause: error });
 		}
 	}
+	async waitForDreamingRegistration(): Promise<void> {
+		const child = this.child;
+		assert(child?.pid, "Daemon must be running before observing registration");
+		await until(
+			async () => {
+				assert(child.exitCode === null && child.signalCode === null, `Daemon exited: ${this.stderr}`);
+				const health = record((await request(this.origin, "/health")).body);
+				assert.equal(health.pid, child.pid, "Registration health belongs to another daemon");
+				assert.equal(health.agentsDir, this.workspace, "Registration health escaped isolated workspace");
+				return record(record(health.workers).dreaming).registered === true;
+			},
+			"Dreaming worker registration through production health",
+			60_000,
+		);
+	}
 	async stop(): Promise<void> {
 		const child = this.child;
 		if (!child) return;

@@ -14,6 +14,12 @@ test("isolated team daemon boots, restarts with durable agents, and reaps its DB
 	try {
 		const secret = await readFile(join(daemon.workspace, "runtime/auth-secret"));
 		const admin = { bearer: createToken(secret, { sub: "org-harness", role: "admin", scope: {} }, 600) };
+		const registeredWorker = async () => {
+			await daemon.waitForDreamingRegistration();
+			const status = success(await request(daemon.origin, "/api/dream/status", admin), "Dreaming after registration");
+			expect(record(status.worker).running).toBe(true);
+		};
+		await registeredWorker();
 		for (const name of ["alice-base", "carol-base"])
 			success(
 				await request(daemon.origin, "/api/agents", admin, "POST", { name }),
@@ -155,6 +161,7 @@ test("isolated team daemon boots, restarts with durable agents, and reaps its DB
 		);
 		const previousPid = daemon.child?.pid;
 		await daemon.restart();
+		await registeredWorker();
 		expect(daemon.lastStoppedPids.length).toBeGreaterThanOrEqual(2);
 		expect(daemon.child?.pid).not.toBe(previousPid);
 		assertUnchanged(changed, await read(), "restart preserves evidence");

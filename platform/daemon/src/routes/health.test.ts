@@ -16,6 +16,9 @@ import {
 import { getEventLoopLiveness, resetDbObservability } from "../db-observability";
 import { startEventLoopMonitor, stopResourceMonitors } from "../resource-monitor";
 import { mountHealthRoutes } from "./health";
+import { loadMemoryConfig } from "../memory-config";
+import { setDreamingWorker } from "../pipeline";
+import { startDreamingWorker } from "../pipeline/dreaming-worker";
 
 let dir = "";
 let savedSignetPath: string | undefined;
@@ -107,6 +110,26 @@ afterEach(async () => {
 });
 
 describe("GET /health owner diagnostics", () => {
+	test("reports Dreaming registration independently of database readiness and active passes", async () => {
+		const owner = makeOwner(() => makeOwnerHealth(1));
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+		const app = makeApp();
+		const health = async () => (await app.request("/health")).json();
+		expect(await health()).toMatchObject({ db: true, workers: { dreaming: { registered: false } } });
+		const worker = startDreamingWorker(getDbAccessor(), loadMemoryConfig(dir).dreaming, dir, "default", {
+			enabled: () => false,
+		});
+		try {
+			setDreamingWorker(worker);
+			expect(worker.running).toBe(false);
+			expect(await health()).toMatchObject({ db: true, workers: { dreaming: { registered: true } } });
+		} finally {
+			worker.stop();
+			setDreamingWorker(null);
+		}
+		expect(await health()).toMatchObject({ db: true, workers: { dreaming: { registered: false } } });
+	});
+
 	for (const measuredAt of [null, 1]) {
 		test(`reports stale owner liveness without probing: ${measuredAt}`, async () => {
 			const owner = makeOwner(() => ({ ...makeOwnerHealth(1), lastMeasuredAtMs: measuredAt }));

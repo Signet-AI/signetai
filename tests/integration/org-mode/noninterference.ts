@@ -346,6 +346,7 @@ function visibleResults(value: unknown): number {
 	);
 }
 export async function checkNoninterference(fixture: Fixture): Promise<void> {
+	await fixture.daemon.waitForDreamingRegistration();
 	const all = catalogue(fixture);
 	const cohorts = [
 		{
@@ -408,6 +409,7 @@ export async function checkNoninterference(fixture: Fixture): Promise<void> {
 		baselines.push({ before, audienceBefore });
 	}
 	await fixture.perturbHidden();
+	await fixture.daemon.waitForDreamingRegistration();
 	const tokens = privateTokens(fixture);
 	const failures: string[] = [];
 	for (const [index, cohort] of cohorts.entries()) {
