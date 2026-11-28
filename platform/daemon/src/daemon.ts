@@ -4,6 +4,7 @@ import { localAllReadScope } from "@signet/core";
 import { stopProjectionWorkers } from "./projection-worker-client";
 import { purgeExpiredHookUploads } from "./hook-transcript-uploads";
 import type { Server } from "node:net";
+import { stopAuthObservations } from "./auth/observations";
 import { SYSTEM_AUTHOR } from "./auth/audit-owner";
 import { startClassificationRecovery } from "./classifications";
 import { requestMemoryHead } from "./memory-head";
@@ -2139,6 +2140,7 @@ async function cleanup() {
 		if (await closeSignetHttpServer(httpServer)) logger.warn("daemon", "HTTP server drain timed out, forcing close");
 		httpServer = null;
 	}
+	await stopAuthObservations();
 	if (authConfig.mode === "team") {
 		try {
 			await stopOrganizationRuntime();

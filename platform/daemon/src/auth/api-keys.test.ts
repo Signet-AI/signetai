@@ -163,6 +163,20 @@ describe("api keys", () => {
 		).rejects.toThrow("Invalid authentication observation batch");
 		expect(await lastUsedAt(created.id)).toBe(new Date(at + 79).toISOString());
 	});
+	test("drains every queued last-use batch before owner shutdown", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "shutdown observation" });
+		const at = new Date(Date.now() - 5000).toISOString();
+		for (let i = 0; i < 128; i++) await observations.recordAuthObservation("api_key", crypto.randomUUID(), at);
+		await observations.recordAuthObservation("api_key", created.id, at);
+		expect(await lastUsedAt(created.id)).toBeNull();
+		await observations.stopAuthObservations();
+		await expect(observations.recordAuthObservation("api_key", created.id, at)).rejects.toThrow("closing");
+		await closeDbAccessor();
+		initDbAccessor(join(tempDir, "memory.db"), { agentsDir: tempDir });
+		expect(await lastUsedAt(created.id)).toBe(at);
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+	});
+
 	test("records last use at most once a minute per key", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
 

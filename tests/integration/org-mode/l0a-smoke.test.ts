@@ -419,6 +419,19 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		const auditedRead = await request("/api/auth/sessions");
 		expect(auditedRead.status).toBe(200);
 		await auditedRead.text();
+		const observationKeyResponse = await request("/api/auth/api-keys", "POST", {
+			name: "Shutdown observation",
+			agentId: "default",
+			permissions: ["recall"],
+			expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+		});
+		expect(observationKeyResponse.status).toBe(201);
+		const observationKey = z
+			.object({ secret: z.string(), key: z.object({ id: z.string() }) })
+			.parse(await observationKeyResponse.json());
+		const observationRead = await request("/api/memory/search?q=shutdown", "GET", undefined, observationKey.secret);
+		expect(observationRead.status).toBe(200);
+		await observationRead.text();
 		const children = (await readFile(`/proc/${child.pid}/task/${child.pid}/children`, "utf8"))
 			.trim()
 			.split(/\s+/)
@@ -465,6 +478,9 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 		);
 		const snapshot = new Database(join(workspace, "data", "signet.db"), { readonly: true });
 		try {
+			expect(snapshot.query("SELECT last_used_at FROM api_keys WHERE id = ?").get(observationKey.key.id)).toEqual({
+				last_used_at: expect.any(String),
+			});
 			expect(
 				snapshot
 					.query(

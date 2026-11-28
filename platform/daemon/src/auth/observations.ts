@@ -1,5 +1,6 @@
 import { withWritePrincipal } from "@signet/core";
 import { getDbAccessorPath, hasDbAccessor } from "../db-accessor";
+import { registerDbAccessorCloseParticipant } from "../db-accessor-lifecycle";
 import { DbOwnerAdmissionError, type DbOwnerClient } from "../db-owner-client";
 import type { AuthObservation } from "../db-owner-protocol";
 import { getDbOwner } from "../db-owner-runtime";
@@ -11,6 +12,7 @@ let owner: DbOwnerClient | undefined;
 let binding: string | null = null;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let active: Promise<void> | undefined;
+let stopped = false;
 
 function identity(client: DbOwnerClient): string | null {
 	if (!hasDbAccessor()) return null;
@@ -18,7 +20,7 @@ function identity(client: DbOwnerClient): string | null {
 	return health.state === "ready" ? JSON.stringify([getDbAccessorPath(), health.pid, health.generation]) : null;
 }
 function schedule(): void {
-	if (timer || active || pending.size === 0) return;
+	if (stopped || timer || active || pending.size === 0) return;
 	timer = setTimeout(() => {
 		timer = undefined;
 		void flushAuthObservations();
@@ -38,7 +40,9 @@ export async function recordAuthObservation(kind: AuthObservation["kind"], id: s
 		pending.clear();
 		binding = scope;
 		owner = client;
+		stopped = false;
 	}
+	if (stopped) throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "Authentication observations are closing");
 	const key = `${kind}:${id}`;
 	if (!pending.has(key) && pending.size >= 2048)
 		throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "Authentication observation capacity reached");
@@ -46,16 +50,20 @@ export async function recordAuthObservation(kind: AuthObservation["kind"], id: s
 	if (!previous || previous.at < at) pending.set(key, { kind, id, at });
 	schedule();
 }
-async function flushCurrent(): Promise<void> {
+async function flushCurrent(deadlineMs: number): Promise<void> {
 	const client = owner;
 	const scope = binding;
-	if (!client || !scope || identity(client) !== scope) {
+	if (!client || !scope) {
 		pending.clear();
 		return;
 	}
 	const batch = [...pending.entries()].slice(0, 128);
 	if (batch.length === 0) return;
 	try {
+		if (identity(client) !== scope) {
+			pending.clear();
+			return;
+		}
 		const applied = await withWritePrincipal(
 			undefined,
 			() =>
@@ -64,7 +72,7 @@ async function flushCurrent(): Promise<void> {
 					{
 						lane: "maintenance",
 						operation: "auth.observations.flush",
-						deadlineMs: 5000,
+						deadlineMs,
 						estimatedWorkUnits: batch.length,
 					},
 				).result,
@@ -82,15 +90,37 @@ async function flushCurrent(): Promise<void> {
 		});
 	}
 }
-export function flushAuthObservations(): Promise<void> {
+export function flushAuthObservations(deadlineMs = 5000): Promise<void> {
 	if (active) return active;
 	if (timer) {
 		clearTimeout(timer);
 		timer = undefined;
 	}
-	active = withoutRequestOwnerProfile(flushCurrent).finally(() => {
+	active = withoutRequestOwnerProfile(() => flushCurrent(deadlineMs)).finally(() => {
 		active = undefined;
 		schedule();
 	});
 	return active;
 }
+
+export async function stopAuthObservations(): Promise<void> {
+	stopped = true;
+	if (timer) clearTimeout(timer);
+	timer = undefined;
+	const deadline = Date.now() + 5000;
+	await active;
+	while (pending.size > 0 && Date.now() < deadline) {
+		await flushAuthObservations(Math.max(1, deadline - Date.now()));
+	}
+	if (pending.size > 0) {
+		logger.warn("auth", "Authentication observations exceeded shutdown deadline", { count: pending.size });
+		pending.clear();
+	}
+	owner = undefined;
+}
+
+registerDbAccessorCloseParticipant({
+	name: "auth-observations",
+	order: 10,
+	close: stopAuthObservations,
+});
