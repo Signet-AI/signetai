@@ -331,13 +331,15 @@ test("CLI organization admin flow uses the real isolated daemon", async () => {
 			"remember member evidence",
 		);
 		expect(memory).toBeTruthy();
+		const access = await cli(["org", "access", memberId, "--json"]);
+		expect(access.actAs.some((entry: { agentId: string }) => entry.agentId === agentId)).toBe(true);
 		const classified = await cli(
 			["classify", `agent:${agentId}`, "--agent", agentId, "--as", fixture.hrId, "--wait", "--json"],
 			fixture.user("cora").session.bearer,
 		);
 		expect(classified.job.status).toBe("complete");
-		const access = await cli(["org", "access", memberId, "--json"]);
-		expect(access.actAs.some((entry: { agentId: string }) => entry.agentId === agentId)).toBe(true);
+		const hiddenAccess = await cli(["org", "access", memberId, "--json"]);
+		expect(hiddenAccess.actAs.some((entry: { agentId: string }) => entry.agentId === agentId)).toBe(false);
 		const plan = await cli(["org", "users", "deactivate", memberId, "--json"]);
 		expect(plan.plan.counts.keys).toBe(0);
 		expect(plan.plan.counts.memories).toBe(0);

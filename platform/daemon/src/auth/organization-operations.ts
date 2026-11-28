@@ -126,10 +126,14 @@ export function requireAuthority(p: Principal, permission: Permission, authorize
 export function requireAdmin(p: Principal): void {
 	requireAuthority(p, "admin", p.role === "admin");
 }
-export async function requireGroupOwnerOrAdmin(p: Principal, groupId: string | null | undefined): Promise<void> {
+export async function requireGroupOwnerOrAdmin(
+	p: Principal,
+	groupId: string | null | undefined,
+	denialMessage?: string,
+): Promise<void> {
 	if (p.role === "admin") return requireAdmin(p);
 	requireAuthority(p, "modify", p.credential.kind === "session" && !p.sourceKeyId);
-	if (!groupId || !(await groupOwner(p, groupId))) throw new IdentityError(403, "not_owner");
+	if (!groupId || !(await groupOwner(p, groupId))) throw new IdentityError(403, "not_owner", denialMessage);
 }
 export function requireAudit(p: Principal): void {
 	if (!p.permissions.has("audit")) throw new IdentityError(403, "permission", "Requires the audit permission");

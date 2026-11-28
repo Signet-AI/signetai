@@ -149,7 +149,11 @@ export async function changeGroup(p: Principal, groupId: string, input: unknown 
 export async function groupMember(p: Principal, groupId: string, userId: string, input: unknown | null) {
 	const row = await group(p, groupId);
 	if (row.managed_by === "idp") throw new IdentityError(409, "managed_by_idp");
-	await requireGroupOwnerOrAdmin(p, groupId);
+	await requireGroupOwnerOrAdmin(
+		p,
+		groupId,
+		`Ask a team owner (${Array.from(row.name, (character) => (character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? " " : character)).join("")})`,
+	);
 	if (!(await readUser(userId))) throw new IdentityError(404, "not_found");
 	const writes =
 		input === null
