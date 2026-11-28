@@ -15,7 +15,7 @@ signet import ./signet-export.json --json --agent alice
 
 `signet export` is equivalent to `signet export bundle`. Bundles carry the workspace identity files, `agent.yaml`, memory and ontology data, and installed skills. Each memory carries its `agent_id`, `scope`, and `visibility`, and each entity carries its `agent_id`. Import restores a bundle into the selected workspace and keeps that identity.
 
-Import writes the workspace database directly, so it refuses to run while the daemon is running. Stop the daemon with `signet daemon stop`, import, then start it again.
+Import writes the workspace database directly, so it refuses to run while the daemon is running. Stop the daemon with `signet daemon stop`, import, then start it again. This offline restore is local-only: a database with a claimed organization rejects it with `org_policy`, even when the daemon is stopped. Organization imports use the authenticated, evidence-only daemon path instead.
 
 `--agent <id>` imports every memory and entity into that agent instead. Bundles from older releases carry no agent identity and require `--agent`; their memories are imported as `private` to that agent. Import validates the whole bundle first and writes nothing when any row lacks identity or is malformed.
 

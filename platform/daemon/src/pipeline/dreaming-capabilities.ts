@@ -1073,6 +1073,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					actor,
 					operations,
 					passId: params.passId,
+					readScope: params.readScope,
 					contentPassId: params.memoryHeadCommitter ? params.passId : undefined,
 					writeCaps: params.writeCaps,
 				});

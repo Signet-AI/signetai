@@ -595,8 +595,8 @@ describe("ontology proposals", () => {
 			),
 		).toEqual({ compartment_id: 93 });
 		for (const [source, error] of [
-			["sibling", "compartment_mismatch"],
-			["foreign", "authorized agent scope"],
+			["sibling", "Evidence source_ref was not found: memory:sibling"],
+			["foreign", "Evidence source_ref was not found: memory:foreign"],
 		])
 			await expect(
 				createOntologyProposal(getDbAccessor(), {
@@ -1613,7 +1613,7 @@ describe("ontology proposals", () => {
 				payload: payload("cross_scope"),
 				evidence: [{ source_ref: "memory:other-source" }],
 			}),
-		).rejects.toThrow(new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409));
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:other-source", 409));
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				author: { userId: null, credential: "system" },
@@ -2102,7 +2102,7 @@ describe("ontology proposals", () => {
 		expect(written.items.every((item) => item.sourceKind === "transcript")).toBe(true);
 	});
 
-	it("writes extracted assertions without marking the response as a dry run", async () => {
+	it("refuses extracted assertion writes before creating semantic rows", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 1);
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -2131,20 +2131,21 @@ describe("ontology proposals", () => {
 			);
 		});
 
-		const result = await extractOntologyProposals(getDbAccessor(), {
-			author: { userId: null, credential: "system" },
-			agentId: "ant",
-			from: "transcript:assertion-extract",
-			writeAssertions: true,
-		});
+		await expect(
+			extractOntologyProposals(getDbAccessor(), {
+				author: { userId: null, credential: "system" },
+				agentId: "ant",
+				from: "transcript:assertion-extract",
+				writeAssertions: true,
+			}),
+		).rejects.toThrow("Extraction produces proposals only; apply them explicitly");
 
-		expect(result.dryRun).toBe(false);
-		expect(result.writtenCount).toBe(0);
-		expect(result.writtenAssertionCount).toBe(1);
-		expect(result.assertionItems[0]?.predicate).toBe("believes");
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM epistemic_assertions").get()),
+		).toEqual({ n: 0 });
 	});
 
-	it("rolls back proposal and assertion extraction when one assertion is invalid", async () => {
+	it("refuses mixed extraction writes before any proposals or assertions", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 1);
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -2194,7 +2195,7 @@ describe("ontology proposals", () => {
 				writeProposals: true,
 				writeAssertions: true,
 			}),
-		).rejects.toThrow("predicate is invalid");
+		).rejects.toThrow("Extraction produces proposals only; apply them explicitly");
 
 		expect((await listOntologyProposals(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(0);
 		expect((await listEpistemicAssertions(getDbAccessor(), { agentId: "ant", status: "all" })).items).toHaveLength(0);

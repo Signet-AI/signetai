@@ -86,6 +86,13 @@ describe("epistemic assertions", () => {
 	});
 
 	it("creates, lists, and reads a source-attributed assertion", async () => {
+		getDbAccessor().withWriteTx((db) =>
+			db
+				.prepare(
+					"INSERT INTO session_transcripts(session_key,content,agent_id,created_at) VALUES('session-1','who believes what','ant',datetime('now'))",
+				)
+				.run(),
+		);
 		const assertion = createEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
@@ -165,7 +172,7 @@ describe("epistemic assertions", () => {
 		expect(denied.status).toBe(403);
 	});
 
-	it("ingests interleaved same-entity assertions before observer-scoped reads", async () => {
+	it("previews interleaved assertions before explicit observer-scoped writes", async () => {
 		const now = "2026-08-14T00:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -229,16 +236,26 @@ describe("epistemic assertions", () => {
 			author: { userId: null, credential: "system" },
 			agentId: "ant",
 			from: "shared-conversation-ant",
-			writeAssertions: true,
 		});
 		const extractedDot = await extractOntologyProposals(getDbAccessor(), {
 			author: { userId: null, credential: "system" },
 			agentId: "dot",
 			from: "shared-conversation-dot",
-			writeAssertions: true,
 		});
-		expect(extractedAnt.writtenAssertionCount).toBe(1);
-		expect(extractedDot.writtenAssertionCount).toBe(1);
+		expect(extractedAnt.writtenAssertionCount).toBe(0);
+		expect(extractedDot.writtenAssertionCount).toBe(0);
+		for (const [agentId, result] of [
+			["ant", extractedAnt],
+			["dot", extractedDot],
+		] as const)
+			for (const assertion of result.assertions)
+				createEpistemicAssertion(getDbAccessor(), {
+					agentId,
+					...assertion,
+					entityId: assertion.entity_id,
+					sourceKind: "transcript",
+					sourceId: `shared-conversation-${agentId}`,
+				});
 
 		const app = new Hono();
 		registerOntologyRoutes(app);

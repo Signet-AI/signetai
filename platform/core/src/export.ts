@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { compartmentForWrite } from "./compartment-shards";
+import { assertLocalBundleRestore, compartmentForWrite } from "./compartment-shards";
 
 export interface ExportOptions {
 	readonly includeEmbeddings?: boolean;
@@ -252,6 +252,7 @@ function scope(item: Line): string | null {
 }
 
 export function importBundle(db: ImportDb, input: ImportInput, options: ImportOptions = {}): ExportImportResult {
+	assertLocalBundleRestore(db);
 	if (options.agentId !== undefined && options.agentId.trim().length === 0)
 		throw new Error("Target agent must not be empty");
 	const now = new Date().toISOString();

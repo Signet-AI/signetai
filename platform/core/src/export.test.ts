@@ -36,6 +36,15 @@ function exported(db: Database): ReadonlyMap<string, string> {
 }
 
 describe("portable bundle identity", () => {
+	test("refuses offline portable-bundle writes into a claimed organization", () => {
+		const db = open();
+		db.exec("INSERT OR REPLACE INTO organization(id,name,claimed_at) VALUES(1,'Claimed','now')");
+		expect(() =>
+			importBundle(db, { entities: JSON.stringify({ id: "restored", name: "Restored", agent_id: "alice" }) }),
+		).toThrow("org_policy");
+		expect(db.prepare("SELECT COUNT(*) AS n FROM entities WHERE id='restored'").get()).toEqual({ n: 0 });
+		db.close();
+	});
 	test("offline bundle import inherits assignments and preserves source authors", () => {
 		const db = open();
 		db.exec(

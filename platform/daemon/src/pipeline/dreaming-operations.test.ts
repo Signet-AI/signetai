@@ -1476,8 +1476,7 @@ describe("dreaming operations", () => {
 			expect(result).toMatchObject({
 				ok: false,
 				items: [],
-				error:
-					"Cited evidence belongs to scope 'default' but this operation targets 'hermes-agent'. Search evidence in the target scope before applying the operation.",
+				error: `Every operation must cite an exact quote from scoped episodic evidence: operation 1 quotes text not found verbatim in ${sourceRef}: "${content}"; copy the source exactly, typos included`,
 			});
 			expect(
 				getDbAccessor().withReadDb((db) =>

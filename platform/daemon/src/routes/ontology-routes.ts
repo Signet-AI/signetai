@@ -233,6 +233,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (!alias) return c.json({ error: "alias is required" }, 400);
 		try {
 			const { result } = await applyOntologyOperation(getDbAccessor(), {
+				readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 				agentId: scoped.agentId,
 				actor: resolveMutationActor(c, readString(body, "created_by") ?? "operator").changedBy,
 				author: c.get("author"),
@@ -269,6 +270,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		try {
 			await applyOntologyOperation(getDbAccessor(), {
+				readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 				agentId: scoped.agentId,
 				actor: resolveMutationActor(c, "operator").changedBy,
 				author: c.get("author"),
@@ -367,6 +369,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await extractOntologyProposals(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					from,
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
@@ -395,6 +398,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await consolidateOntologyProposals(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					status,
 					limit: readNumber(body, "limit"),
@@ -708,6 +712,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				createEpistemicAssertion(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					observerId: readString(body, "observer_id") ?? null,
 					entity: readString(body, "entity"),
@@ -742,6 +747,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				linkEpistemicAssertionClaim(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					attributeId,
@@ -759,6 +765,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				archiveEpistemicAssertion(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
@@ -778,6 +785,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				supersedeEpistemicAssertion(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					observerId: readString(body, "observer_id") ?? null,
 					oldAssertionId: c.req.param("id"),
@@ -814,6 +822,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await applyOntologyOperation(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
 					author: c.get("author"),
@@ -847,6 +856,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await applyOntologyOperationBatch(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					author: c.get("author"),
 					agentId: scoped.agentId,
 					actor,
@@ -898,6 +908,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await createOntologyProposal(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					operation,
 					payload,
@@ -929,6 +940,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const sourcePath = readString(body, "source_path") ?? null;
 		const sourceRoot = readString(body, "source_root") ?? null;
 		const proposals = readArray(body, "proposals") ?? [];
+		const readScope = await resolveKnowledgeReadScope(c, scoped.agentId);
 
 		try {
 			return c.json(
@@ -940,6 +952,7 @@ export function registerOntologyRoutes(app: Hono): void {
 						const payload = asRecord(proposal.payload);
 						return {
 							author: c.get("author"),
+							readScope,
 							agentId: scoped.agentId,
 							operation,
 							payload,
@@ -971,6 +984,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await applyOntologyProposal(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,
@@ -990,6 +1004,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				await rejectOntologyProposal(getDbAccessor(), {
+					readScope: await resolveKnowledgeReadScope(c, scoped.agentId),
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: resolveMutationActor(c, readString(body, "actor") ?? "operator").changedBy,

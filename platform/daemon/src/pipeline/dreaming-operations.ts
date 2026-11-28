@@ -1,7 +1,7 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import { SYSTEM_AUTHOR } from "../auth/audit-owner";
 import { runWriteTxAsync, type DbAccessor, type ReadDb, type WriteDb } from "../db-accessor";
-import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
+import { readEpisodicSource } from "../episodic-sources";
 import { withContentPassWrites } from "../memory-head-owner";
 import {
 	applyOntologyOperationBatchInTx,
@@ -57,6 +57,7 @@ export interface ApplyDreamingOperationsResult {
 }
 
 export interface ApplyDreamingOperationsParams {
+	readonly readScope?: ReadScope;
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
 	readonly actor: string;
@@ -101,7 +102,6 @@ function citationRecord(value: unknown): {
 }
 interface CitationResolution {
 	readonly evidence: DreamingAgentEvidence | null;
-	readonly sourceAgentIds: readonly string[];
 }
 
 function citeEvidence(
@@ -111,20 +111,18 @@ function citeEvidence(
 	readScope: ReadScope,
 ): CitationResolution {
 	const requested = citationRecord(citation);
-	if (requested === null) return { evidence: null, sourceAgentIds: [] };
+	if (requested === null) return { evidence: null };
 	const result: {
 		readonly evidence: readonly DreamingAgentEvidence[];
-		readonly sourceAgentIds: readonly string[];
 	} =
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		accessor.withReadDb((db: ReadDb) => {
 			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef, readScope });
 			if (source !== null && (source.kind !== "transcript" || source.completed)) {
-				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
+				return { evidence: createDreamingAgentEvidence([source]) };
 			}
 			return {
 				evidence: [],
-				sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef).filter((owner) => owner !== agentId),
 			};
 		}, "db:dreaming.operations.cite-evidence.read");
 	return {
@@ -137,7 +135,6 @@ function citeEvidence(
 					(requested.sourcePath === null || record.sourcePath === requested.sourcePath) &&
 					record.content.includes(requested.quote),
 			) ?? null,
-		sourceAgentIds: result.sourceAgentIds,
 	};
 }
 
@@ -487,13 +484,6 @@ function provenanceForEvidence(
 	for (const citation of citations) {
 		const resolution = citeEvidence(accessor, agentId, citation, readScope);
 		if (resolution.evidence === null) {
-			if (resolution.sourceAgentIds.length > 0) {
-				const scopes = resolution.sourceAgentIds.map((sourceAgentId) => `'${sourceAgentId}'`).join(", ");
-				return {
-					provenance: null,
-					scopeMismatch: `Cited evidence belongs to scope${resolution.sourceAgentIds.length === 1 ? "" : "s"} ${scopes} but this operation targets '${agentId}'. Search evidence in the target scope before applying the operation.`,
-				};
-			}
 			const cited = citationRecord(citation);
 			if (cited === null) return { provenance: null, scopeMismatch: null };
 			const quote = cited.quote.length > 120 ? `${cited.quote.slice(0, 120)}…` : cited.quote;
@@ -956,6 +946,7 @@ function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperatio
 			assertOntologyOperationPartitionInTx(db, {
 				agentId: params.agentId,
 				passId: params.passId,
+				readScope: params.readScope,
 				operation: operation.operation,
 				payload: applicator.payload,
 				evidence: operation.evidence,
@@ -1076,6 +1067,7 @@ function applyValidatedOperationBody(
 				author: SYSTEM_AUTHOR,
 				agentId: params.agentId,
 				passId: params.passId,
+				readScope: params.readScope,
 				operation: entry.input.operation,
 				payload: entry.input.payload,
 				confidence: entry.input.confidence,
@@ -1117,6 +1109,7 @@ function applyValidatedOperationBody(
 		author: SYSTEM_AUTHOR,
 		agentId: params.agentId,
 		passId: params.passId,
+		readScope: params.readScope,
 		actor: params.actor,
 		operations: [entry.input],
 		writeCaps: params.writeCaps,
@@ -1199,7 +1192,7 @@ export async function applyDreamingOperations(
 				compartmentId: partition.compartmentId,
 			};
 		});
-		readScope = resolved.scope;
+		readScope = params.passId ? resolved.scope : (params.readScope ?? resolved.scope);
 		compartmentId = resolved.compartmentId;
 	} catch (error) {
 		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };

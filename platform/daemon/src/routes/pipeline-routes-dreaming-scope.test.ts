@@ -8,6 +8,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { ownerReadAll } from "../db-owner-sql";
 import { getDreamingEvidenceExclusions, requestDreamingEvidenceRequeue } from "../pipeline/dreaming";
+import { bindDreamingPassTools } from "../pipeline/dreaming-pass-tools";
 import { registerPipelineRoutes } from "./pipeline-routes";
 
 let directory = "";
@@ -16,7 +17,7 @@ beforeEach(() => {
 	initDbAccessor(join(directory, "data", "signet.db"), { agentsDir: directory });
 	getDbAccessor().withWriteTx((db) => {
 		db.exec(
-			"INSERT INTO classifications(id,name) VALUES('secret','Secret'); INSERT INTO compartments(id,key) VALUES(1,'secret'); INSERT INTO compartment_members VALUES(1,'secret')",
+			"INSERT INTO classifications(id,name) VALUES('cls_secret','Secret'); INSERT INTO compartments(id,key) VALUES(1,'cls_secret'); INSERT INTO compartment_members VALUES(1,'cls_secret')",
 		);
 		db.exec(
 			"INSERT INTO agents(id,name,created_at,updated_at) VALUES('alice','Alice','2026-01-01','2026-01-01'),('bob','Bob','2026-01-01','2026-01-01')",
@@ -113,6 +114,123 @@ it("native manual requeue treats hidden and cross-agent sources as missing witho
 	expect(
 		await ownerReadAll(owner, "SELECT compartment_id FROM dreaming_attention", [], { operation: "test.attention" }),
 	).toEqual([{ compartment_id: 1 }]);
+});
+
+it("explicit admin operations inherit readable classified evidence", async () => {
+	getDbAccessor().withWriteTx((db) =>
+		db.exec("UPDATE session_transcripts SET compartment_id=1 WHERE agent_id='alice'"),
+	);
+	const response = await appFor(local).request("/api/dream/operations", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			agentId: "alice",
+			operations: [
+				{
+					operation: "create_entity",
+					payload: { name: "Classified admin candidate", type: "project" },
+					evidence: [{ source_ref: "transcript:same", quote: "Durable evidence." }],
+				},
+			],
+		}),
+	});
+	expect(response.status).toBe(200);
+	expect(
+		getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT compartment_id FROM entities WHERE name='Classified admin candidate'").all(),
+		),
+	).toEqual([{ compartment_id: 1 }]);
+	expect(
+		getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT evidence_kind,evidence_id FROM evidence_citations WHERE derived_kind='entity'").all(),
+		),
+	).toEqual([{ evidence_kind: "transcript", evidence_id: "same" }]);
+});
+
+it("does not authorize pass tools by a hidden bare pass id", async () => {
+	let calls = 0;
+	const release = bindDreamingPassTools({
+		passId: "pass-1",
+		agentId: "alice",
+		tools: [
+			{
+				name: "runbook_write",
+				label: "test",
+				description: "test",
+				parameters: {},
+				execute: async () => {
+					calls++;
+					return { content: [{ type: "text", text: '{"ok":true}' }], details: {} };
+				},
+			},
+		],
+	});
+	try {
+		const member: Principal = {
+			...local,
+			kind: "legacy",
+			role: "operator",
+			permissions: new Set(["modify", "recall"]),
+			boundAgentId: "alice",
+		};
+		const request = (passId: string) =>
+			appFor(member).request("/api/dream/tools/runbook_write", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ agentId: "alice", passId, input: {} }),
+			});
+		const hidden = await request("pass-1");
+		const absent = await request("missing");
+		expect(hidden.status).toBe(404);
+		expect([hidden.status, await hidden.json()]).toEqual([absent.status, await absent.json()]);
+		expect(calls).toBe(0);
+	} finally {
+		await release();
+	}
+});
+
+it("requires a running readable owned pass or explicit admin target for operations", async () => {
+	const member: Principal = {
+		...local,
+		kind: "legacy",
+		role: "operator",
+		permissions: new Set(["modify", "recall"]),
+		boundAgentId: "alice",
+	};
+	const operations = [
+		{
+			operation: "create_entity",
+			payload: { name: "Scoped mutation", type: "project" },
+			evidence: [{ source_ref: "transcript:same", quote: "Durable evidence." }],
+		},
+	];
+	const request = (body: Record<string, unknown>) => ({
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ operations, ...body }),
+	});
+	const unboundTool = await appFor(member).request("/api/dream/tools/apply_ontology_ops", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ agentId: "alice", input: { operations } }),
+	});
+	expect(unboundTool.status).toBe(403);
+	const unbound = await appFor(member).request("/api/dream/operations", request({ agentId: "alice" }));
+	expect(unbound.status).toBe(403);
+	const hidden = await appFor(member).request("/api/dream/operations", request({ agentId: "alice", passId: "pass-1" }));
+	const absent = await appFor(member).request(
+		"/api/dream/operations",
+		request({ agentId: "alice", passId: "missing" }),
+	);
+	expect(hidden.status).toBe(404);
+	expect([hidden.status, await hidden.json()]).toEqual([absent.status, await absent.json()]);
+	const implicitAdmin = await appFor(local).request("/api/dream/operations", request({}));
+	expect(implicitAdmin.status).toBe(403);
+	const allowed = await appFor(member).request(
+		"/api/dream/operations",
+		request({ agentId: "alice", passId: "pass-null" }),
+	);
+	expect(allowed.status).toBe(200);
 });
 
 function appFor(principal?: Principal) {
