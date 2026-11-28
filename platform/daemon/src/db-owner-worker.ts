@@ -2026,7 +2026,14 @@ export function runDbOwnerWorker(): void {
 	const input = new DbOwnerLineBuffer();
 	process.stdin.setEncoding("utf8");
 	process.stdin.on("data", (chunk: string) => {
-		const lines = input.read(chunk);
+		let lines: readonly string[];
+		try {
+			lines = input.read(chunk);
+		} catch (error) {
+			send({ type: "fatal", error: serializeError(error) });
+			closeAndExit(1);
+			return;
+		}
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {

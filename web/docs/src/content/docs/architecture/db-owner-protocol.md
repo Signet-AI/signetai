@@ -68,7 +68,7 @@ Reads that can queue behind other jobs, such as the knowledge-graph reads behind
 
 ## Wire messages
 
-Messages are newline-delimited JSON over the owner's stdin/stdout. The daemon sends:
+Messages are newline-delimited JSON over the owner's stdin/stdout. Each frame is limited to 64 MiB of UTF-8 bytes, including fragmented frames. An oversized frame fails with `DB_OWNER_FRAME_TOO_LARGE`; the connection is retired and the child is reaped before replacement startup. This transport cap does not increase the smaller per-job result limits. The daemon sends:
 
 - `{"type":"submit","job": ...}`
 - `{"type":"cancel","jobId": ...}`

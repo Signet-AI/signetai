@@ -911,6 +911,32 @@ describe("DB owner client", () => {
 		}
 	});
 
+	test("reaps oversized protocol frames with a typed failure before replacement startup", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "oversized-owner-worker.js");
+		writeFileSync(
+			workerPath,
+			`process.stdin.setEncoding('utf8');
+			process.stdout.write(JSON.stringify({type:'ready',pid:process.pid})+'\\n');
+			process.stdin.on('data', () => { process.stdout.write('x'.repeat(64*1024*1024+1)); });`,
+		);
+		client = createDbOwnerClient({ dbPath: database.path, workerPath });
+		await client.start();
+		const firstPid = client.health().pid;
+		if (firstPid === null) throw new Error("oversized owner missing");
+		const handle = client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
+			{ operation: "oversized-frame", lane: "read", deadlineMs: 1000 },
+		);
+		expect(await rejected(handle.result)).toMatchObject({ code: "DB_OWNER_FRAME_TOO_LARGE" });
+		await waitFor(() => !processExists(firstPid));
+		expect(client.health()).toMatchObject({ state: "failed", pid: null });
+		await client.start();
+		expect(client.health().pid).not.toBe(firstPid);
+		expect(client.health().state).toBe("ready");
+	});
+
 	test("reaps malformed protocol output before allowing replacement startup", async () => {
 		const database = makeDb();
 		directory = database.directory;

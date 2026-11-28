@@ -523,7 +523,13 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	function handleStdout(owner: ChildProcess, chunk: string): void {
 		if (child !== owner) return;
-		const lines = input.read(chunk);
+		let lines: readonly string[];
+		try {
+			lines = input.read(chunk);
+		} catch (error) {
+			retireOwner(error instanceof Error ? error : new Error(String(error)), owner, "failed", true);
+			return;
+		}
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {
