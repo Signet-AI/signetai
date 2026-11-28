@@ -445,7 +445,6 @@ export async function deviceApprove(p: Principal, input: unknown) {
 			permissions: [...p.permissions],
 			agentId: p.boundAgentId,
 			projects: p.allowedProjects ? [...p.allowedProjects] : null,
-			expiresAt: approver.refresh_expires_at ?? approver.access_expires_at,
 		},
 	});
 	const writes: DbOwnerStatement[] = [

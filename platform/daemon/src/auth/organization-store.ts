@@ -219,8 +219,6 @@ export function personalAgentStatements(userId: string, agentId: string, name: s
 		statement("UPDATE users SET personal_agent_id = ? WHERE id = ?", [agentId, userId]),
 	];
 }
-export async function bindAccess(p: Principal, u: UserRow | null, org: OrganizationRow): Promise<void> {
-	if (u && !u.personal_agent_id && org.agent_model === "personal" && org.personal_agents_self_service) {
 export function visibleAgentSql(p: Pick<Principal, "kind" | "userId" | "boundAgentId">) {
 	if (p.kind === "local") return { sql: "1=1", args: [] };
 	return {
@@ -236,6 +234,8 @@ export async function requireVisibleAgent(p: Principal, agentId: string) {
 	if (!agent) throw new IdentityError(404, "not_found");
 	return agent;
 }
+export async function bindAccess(p: Principal, u: UserRow | null, org: OrganizationRow): Promise<void> {
+	if (u && !u.personal_agent_id && org.agent_model === "personal" && org.personal_agents_self_service) {
 		const agentId = `personal-${u.id.slice(4)}`;
 		const now = new Date().toISOString();
 		await organizationWrite([
@@ -248,9 +248,9 @@ export async function requireVisibleAgent(p: Principal, agentId: string) {
 		]);
 		u = await readUser(u.id);
 	}
+	const visible = visibleAgentSql(p);
 	const agents = await organizationQuery<AgentRecord[]>(
 		statement(
-	const visible = visibleAgentSql(p);
 			`SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents a WHERE archived_at IS NULL AND (kind = 'organization' OR (kind = 'personal' AND owner_user_id = ?) OR (kind = 'team' AND owner_group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)) OR id = ? OR id = ? OR (? = 'admin' AND kind = 'legacy')) AND ${visible.sql}`,
 			[p.userId, p.userId, p.boundAgentId, u?.default_read_agent_id ?? null, p.role, ...visible.args],
 			"all",
@@ -317,7 +317,7 @@ const keySessionCeilingSchema = z
 		permissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length),
 		agentId: z.string().min(1).max(200).nullable(),
 		projects: z.array(z.string().min(1).max(4096)).max(100).nullable(),
-		expiresAt: z.iso.datetime(),
+		expiresAt: z.iso.datetime().optional(),
 	})
 	.strict();
 export interface SessionKeyBinding {
@@ -347,10 +347,8 @@ function intersectProjects(left: readonly string[] | null, right: readonly strin
 async function sessionKeyLimits(session: SessionRow) {
 	const binding = sourceSessionBinding(session);
 	if (!binding) return undefined;
-	if (!binding.sourceKeyId) {
-		if (binding.ceiling.expiresAt <= new Date().toISOString()) throw new IdentityError(401, "expired");
-		return { ...binding.ceiling, sourceKeyId: undefined };
-	}
+	if (!binding.sourceKeyId) return { ...binding.ceiling, expiresAt: undefined, sourceKeyId: undefined };
+	if (!binding.ceiling.expiresAt) throw new IdentityError(401, "invalid_credential");
 	const key = await readBoundKey(binding.sourceKeyId);
 	if (!key || key.user_id !== session.user_id || key.kind !== "personal")
 		throw new IdentityError(401, "invalid_credential");
@@ -408,11 +406,12 @@ export function sessionMaterial(
 	const expires = new Date(
 		Date.now() + (kind === "browser" ? org.session_ttl_seconds : org.access_ttl_seconds) * 1000,
 	).toISOString();
-	const accessExpiresAt = binding && binding.ceiling.expiresAt < expires ? binding.ceiling.expiresAt : expires;
+	const ceilingExpiry = binding?.sourceKeyId ? binding.ceiling.expiresAt : undefined;
+	const accessExpiresAt = ceilingExpiry && ceilingExpiry < expires ? ceilingExpiry : expires;
 	const refreshExpiry = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
 	const refreshExpiresAt = refresh
-		? binding && binding.ceiling.expiresAt < refreshExpiry
-			? binding.ceiling.expiresAt
+		? ceilingExpiry && ceilingExpiry < refreshExpiry
+			? ceilingExpiry
 			: refreshExpiry
 		: null;
 	return {
@@ -724,8 +723,8 @@ async function rotateSession(
 	const refresh = secret();
 	const accessExpiry = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
 	const refreshExpiry = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
-	const accessExpiresAt = limits && limits.expiresAt < accessExpiry ? limits.expiresAt : accessExpiry;
-	const refreshExpiresAt = limits && limits.expiresAt < refreshExpiry ? limits.expiresAt : refreshExpiry;
+	const accessExpiresAt = limits?.expiresAt && limits.expiresAt < accessExpiry ? limits.expiresAt : accessExpiry;
+	const refreshExpiresAt = limits?.expiresAt && limits.expiresAt < refreshExpiry ? limits.expiresAt : refreshExpiry;
 	const retryState = appendRefreshRetry(token, row.id, row.refresh_hash, {
 		accessToken: `sig_ses_${row.id}_${access}`,
 		refreshToken: `sig_ref_${row.id}_${refresh}`,

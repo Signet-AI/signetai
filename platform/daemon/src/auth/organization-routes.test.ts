@@ -819,6 +819,108 @@ describe("organization HTTP flows", () => {
 		).toBe(403);
 		expect((await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).status).toBe(428);
 	});
+	test.each(["revoked", "expired"])("B2 requests validate the live key ancestor: %s", async (reason) => {
+		await claim();
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const parent = await (
+			await call("/api/auth/api-keys", "POST", { name: "parent", permissions: ["recall"], expiresAt })
+		).json();
+		const child = await (
+			await call("/api/auth/api-keys", "POST", { name: "child", permissions: ["recall"], expiresAt }, parent.secret)
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, child.secret);
+		expect(exchanged.status).toBe(200);
+		const cookie = exchanged.headers
+			.getSetCookie()
+			.map((value) => value.split(";")[0])
+			.join("; ");
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				reason === "revoked"
+					? "UPDATE api_keys SET revoked_at=? WHERE id=?"
+					: "UPDATE api_keys SET expires_at=? WHERE id=?",
+				["2000-01-01T00:00:00.000Z", parent.key.id],
+			),
+		]);
+		expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(false);
+		expect((await (await app.request("/api/auth/whoami", { headers: { cookie } })).json()).authenticated).toBe(false);
+	});
+	test("B1 bearer keys cannot approve device authorizations", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "recall only",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+			})
+		).json();
+		const flow = await (await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "evil" }, "")).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, key.secret))
+				.status,
+		).toBe(403);
+		expect((await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).status).toBe(428);
+	});
+	test.each(["revoked", "expired"])(
+		"R5 device session outlives its %s approver and renews connectors",
+		async (state) => {
+			await claim();
+			const approver = await member("device-approver");
+			const identity = await (await call("/api/auth/whoami", "GET", undefined, approver.token)).json();
+			const flow = await (
+				await call("/api/auth/device/start", "POST", { client: "desktop", deviceName: "Lifetime" }, "")
+			).json();
+			expect(
+				(
+					await call(
+						"/api/auth/device/approve",
+						"POST",
+						{ userCode: flow.userCode, decision: "approve" },
+						approver.token,
+					)
+				).status,
+			).toBe(200);
+			const loginResponse = await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "");
+			expect(loginResponse.status).toBe(200);
+			const login = await loginResponse.json();
+			expect(Date.parse(login.refreshExpiresAt) - Date.now()).toBeGreaterThan(29 * 86400_000);
+			const connectorResponse = await call(
+				"/api/auth/connector-keys",
+				"POST",
+				{ harness: "codex", deviceId: login.deviceId },
+				login.accessToken,
+			);
+			expect(connectorResponse.status).toBe(201);
+			const connector = await connectorResponse.json();
+			const { organizationWrite } = await import("./organization-store");
+			await organizationWrite([
+				statement(
+					state === "revoked"
+						? "UPDATE auth_sessions SET revoked_at='revoked' WHERE id=?"
+						: "UPDATE auth_sessions SET access_expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+					[identity.credential.id],
+				),
+				statement("UPDATE api_keys SET expires_at=? WHERE id=?", [
+					new Date(Date.now() + 3600_000).toISOString(),
+					connector.key.id,
+				]),
+			]);
+			expect((await call("/api/auth/profile", "GET", undefined, login.accessToken)).status).toBe(200);
+			const refreshedResponse = await call("/api/auth/refresh", "POST", { refreshToken: login.refreshToken }, "");
+			expect(refreshedResponse.status).toBe(200);
+			const refreshed = await refreshedResponse.json();
+			expect(Date.parse(refreshed.refreshExpiresAt) - Date.now()).toBeGreaterThan(29 * 86400_000);
+			expect((await call("/api/auth/profile", "GET", undefined, connector.secret)).status).toBe(200);
+			const renewed = await organizationQuery<{ expires_at: string } | null>(
+				statement("SELECT expires_at FROM api_keys WHERE id=?", [connector.key.id], "get"),
+			);
+			expect(Date.parse(renewed?.expires_at ?? "") - Date.now()).toBeGreaterThan(29 * 86400_000);
+			expect((await call(`/api/auth/sessions/${login.sessionId}`, "DELETE", undefined, admin)).status).toBe(200);
+			expect((await call("/api/auth/profile", "GET", undefined, refreshed.accessToken)).status).toBe(401);
+			expect((await call("/api/auth/refresh", "POST", { refreshToken: refreshed.refreshToken }, "")).status).toBe(401);
+		},
+	);
 	test("B1 device sessions retain the approving session permission ceiling through refresh", async () => {
 		await claim();
 		const bob = await member("ceiling-bob");
