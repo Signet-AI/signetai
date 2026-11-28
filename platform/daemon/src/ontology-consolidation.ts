@@ -14,6 +14,7 @@ type ProposalDraft = {
 };
 
 export interface ConsolidateOntologyParams {
+	readonly readScope?: import("./read-scope").ReadScope;
 	readonly agentId: string;
 	readonly status?: OntologyProposalStatus;
 	readonly limit?: number;
@@ -296,12 +297,20 @@ export async function consolidateOntologyProposals(
 	const agentId = params.agentId.trim();
 	if (!agentId) throw new OntologyConsolidationError("agentId is required", 400);
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
-	const source = await listOntologyProposals(accessor, {
-		agentId,
-		status: params.status ?? "pending",
-		limit,
-	});
-	const conflicts = await listOntologyProposalConflicts(accessor, { agentId, limit: Math.max(limit, 50) });
+	const source = await listOntologyProposals(
+		accessor,
+		{
+			agentId,
+			status: params.status ?? "pending",
+			limit,
+		},
+		params.readScope,
+	);
+	const conflicts = await listOntologyProposalConflicts(
+		accessor,
+		{ agentId, limit: Math.max(limit, 50) },
+		params.readScope,
+	);
 	const warnings: string[] = [];
 	let summary: string | null = null;
 	let rejections: readonly unknown[] = [];
@@ -345,11 +354,12 @@ export async function consolidateOntologyProposals(
 		accessor,
 		proposals.map((proposal) => ({
 			agentId,
+			readScope: params.readScope,
 			operation: proposal.operation,
 			payload: proposal.payload,
 			confidence: proposal.confidence,
 			rationale: proposal.rationale,
-			evidence: proposal.evidence,
+			evidence: [...(proposal.evidence ?? []), ...source.items.flatMap((item) => item.evidence)],
 			risk: proposal.risk,
 			sourceKind: "ontology_consolidation",
 			sourceId: `proposals:${source.items.length}`,

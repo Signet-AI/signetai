@@ -1144,11 +1144,31 @@ export function registerPipelineRoutes(app: Hono): void {
 		const scopedAgent = resolveScopedDreamAgent(c, body);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
+		const principal: Principal | undefined = c.get("principal");
+		if (!principal) return c.json({ error: "unauthorized" }, 401);
+		const passId = readString(body, "passId");
+		if (body.passId !== undefined && passId === undefined)
+			return c.json({ error: "passId must be a non-empty string" }, 400);
+		const scopedRead = await resolveScopedDreamRead(c, body);
+		if ("error" in scopedRead) return c.json({ error: scopedRead.error }, scopedRead.status);
+		if (passId === undefined) {
+			if (!principal.permissions.has("admin") || requestedDreamAgentId(c, body) === undefined)
+				return c.json({ error: "A running owned Dreaming pass or an explicit admin target is required" }, 403);
+		} else {
+			const pass = await getDreamingPass(getDbAccessor(), agentId, passId, {
+				readScope: { ...scopedRead.readScope, reach: { kind: "own", agentId } },
+				signal: c.req.raw.signal,
+			});
+			if (!pass || pass.agentId !== agentId || pass.status !== "running")
+				return c.json({ error: "Dreaming pass not found" }, 404);
+		}
 		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-agent";
 		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId,
 			actor,
+			passId,
+			readScope: scopedRead.readScope,
 			writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
 			operations: operations.map((rawOperation) => {
 				const operation = asRecord(rawOperation);
@@ -1196,6 +1216,16 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (passId !== undefined && (!readOnly || !c.get("organization"))) {
 			if (requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId)
 				return c.json(scopeError, 403);
+			if (c.get("principal")?.kind !== "local") {
+				const scopedRead = await resolveScopedDreamRead(c, body);
+				if ("error" in scopedRead) return c.json({ error: scopedRead.error }, scopedRead.status);
+				const pass = await getDreamingPass(getDbAccessor(), scopedAgent.agentId, passId, {
+					readScope: { ...scopedRead.readScope, reach: { kind: "own", agentId: scopedAgent.agentId } },
+					signal: c.req.raw.signal,
+				});
+				if (!pass || pass.agentId !== scopedAgent.agentId || pass.status !== "running")
+					return c.json({ error: "Dreaming pass not found" }, 404);
+			}
 			const outcome = await callDreamingPassTool({
 				passId,
 				agentId: scopedAgent.agentId,
@@ -1210,11 +1240,20 @@ export function registerPipelineRoutes(app: Hono): void {
 				outcome.result.ok ? 200 : outcome.result.retryable === true ? 503 : 400,
 			);
 		}
+		if (!readOnly) {
+			const principal: Principal | undefined = c.get("principal");
+			if (!principal) return c.json({ error: "unauthorized" }, 401);
+			if (!principal.permissions.has("admin") || requestedDreamAgentId(c, body) === undefined)
+				return c.json({ error: "A running owned Dreaming pass or an explicit admin target is required" }, 403);
+		}
+		const capabilityReadScope = readOnly
+			? scopedAgent.readScope
+			: await resolveKnowledgeReadScope(c, scopedAgent.agentId);
 		const capability = getDreamingCapability(
 			{
 				accessor: getDbAccessor(),
 				agentId: capabilityAgentId,
-				readScope: scopedAgent.readScope,
+				readScope: capabilityReadScope,
 				actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-client",
 			},
 			c.req.param("capability"),

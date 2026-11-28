@@ -1934,6 +1934,71 @@ export interface SemanticEvidenceCitation {
 	readonly id: string;
 }
 
+export function ontologyTargetLabelsInDb(
+	db: ReadDb,
+	agentId: string,
+	scope: ReadScope,
+	payload: Readonly<Record<string, unknown>>,
+): number[] {
+	if (scope.projects !== null) throw new Error("project_scope_unsupported");
+	const labels: number[] = [];
+	const definitions = [
+		[
+			"entities",
+			["entity", "entity_id", "source_entity", "source_entity_id", "target_entity", "target_entity_id", "target_id"],
+		],
+		[
+			"entity_attributes",
+			["attribute_id", "claim_id", "left_attribute_id", "right_attribute_id", "claim_attribute_id"],
+		],
+		["entity_aspects", ["aspect_id", "source_aspect_id", "target_aspect_id"]],
+	] as const;
+	for (const [table, keys] of definitions) {
+		const predicate = readScopeSql("t", scope, { visibility: null });
+		for (const key of keys) {
+			const value = payload[key];
+			if (typeof value !== "string") continue;
+			for (const row of prepareTypedStatement<{ compartment_id: number | null }>(
+				db,
+				`SELECT t.compartment_id FROM ${table} t WHERE t.agent_id=? AND (t.id=?${table === "entities" ? " OR t.canonical_name=LOWER(?) OR LOWER(t.name)=LOWER(?)" : ""}) ${predicate.sql}`,
+			).all(agentId, value, ...(table === "entities" ? [value, value] : []), ...predicate.args))
+				if (row.compartment_id !== null) labels.push(row.compartment_id);
+		}
+	}
+	return labels;
+}
+
+export function semanticWritePartitionInDb(
+	db: WriteDb,
+	agentId: string,
+	scope: ReadScope,
+	evidence: readonly SemanticEvidenceCitation[],
+	parents: readonly number[] = [],
+): DreamingPartition {
+	const labels = new Set(classificationsForWrite(db, { agentId }));
+	for (const parentCompartment of parents)
+		for (const label of classificationsForWrite(db, { agentId, parentCompartment })) labels.add(label);
+	for (const citation of evidence) {
+		const tables = {
+			memory: "memories",
+			transcript: "session_transcripts",
+			artifact: "memory_artifacts",
+			summary: "session_summaries",
+			attribute: "entity_attributes",
+		} as const;
+		const key = citation.kind === "transcript" ? "session_key" : citation.kind === "artifact" ? "source_path" : "id";
+		const predicate = readScopeSql("e", scope, { visibility: citation.kind === "memory" ? "visibility" : null });
+		const row = prepareTypedStatement<{ compartment_id: number | null }>(
+			db,
+			`SELECT e.compartment_id FROM ${tables[citation.kind]} e WHERE e.${key}=? AND e.agent_id=? ${predicate.sql}`,
+		).get(citation.id, agentId, ...predicate.args);
+		if (!row) throw new Error("Evidence source was not found");
+		for (const label of classificationsForWrite(db, { agentId, parentCompartment: row.compartment_id }))
+			labels.add(label);
+	}
+	return { agentId, compartmentId: compartmentFor(db, [...labels]) };
+}
+
 export function dreamingEvidenceRecordInDb(
 	db: ReadDb,
 	agentId: string,

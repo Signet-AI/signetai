@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
+import { createEpistemicAssertion } from "../platform/daemon/src/ontology-assertions";
 import { extractOntologyProposals } from "../platform/daemon/src/ontology-extraction";
 import { registerOntologyRoutes } from "../platform/daemon/src/routes/ontology-routes";
 
@@ -120,7 +121,6 @@ export async function runObserverBeliefEval(): Promise<ObserverBeliefEvalResult>
 		const extractedA = await extractOntologyProposals(getDbAccessor(), {
 			agentId: AGENT_A,
 			from: "conversation-a",
-			writeAssertions: true,
 			createdBy: "observer-belief-eval",
 			useProvider: true,
 			provider: providerForSpeaker("Alice"),
@@ -128,11 +128,26 @@ export async function runObserverBeliefEval(): Promise<ObserverBeliefEvalResult>
 		const extractedB = await extractOntologyProposals(getDbAccessor(), {
 			agentId: AGENT_B,
 			from: "conversation-b",
-			writeAssertions: true,
 			createdBy: "observer-belief-eval",
 			useProvider: true,
 			provider: providerForSpeaker("Bob"),
 		});
+		const assertionsA = extractedA.assertions.map((assertion) =>
+			createEpistemicAssertion(getDbAccessor(), {
+				...assertion,
+				agentId: AGENT_A,
+				sourceKind: "transcript",
+				sourceId: "conversation-a",
+			}),
+		);
+		const assertionsB = extractedB.assertions.map((assertion) =>
+			createEpistemicAssertion(getDbAccessor(), {
+				...assertion,
+				agentId: AGENT_B,
+				sourceKind: "transcript",
+				sourceId: "conversation-b",
+			}),
+		);
 		const contentA = messageForSpeaker(INTERLEAVED_CONVERSATION, "Alice");
 		const contentB = messageForSpeaker(INTERLEAVED_CONVERSATION, "Bob");
 		results.push({
@@ -140,12 +155,14 @@ export async function runObserverBeliefEval(): Promise<ObserverBeliefEvalResult>
 			passed:
 				extractedA.providerName === "observer-belief-eval-alice" &&
 				extractedB.providerName === "observer-belief-eval-bob" &&
-				extractedA.writtenAssertionCount === 1 &&
-				extractedB.writtenAssertionCount === 1 &&
-				extractedA.assertionItems[0]?.content === contentA &&
-				extractedB.assertionItems[0]?.content === contentB &&
-				extractedA.assertionItems[0]?.subjectEntityName === ENTITY_NAME &&
-				extractedB.assertionItems[0]?.subjectEntityName === ENTITY_NAME,
+				extractedA.writtenAssertionCount === 0 &&
+				extractedB.writtenAssertionCount === 0 &&
+				assertionsA.length === 1 &&
+				assertionsB.length === 1 &&
+				assertionsA[0]?.content === contentA &&
+				assertionsB[0]?.content === contentB &&
+				assertionsA[0]?.subjectEntityName === ENTITY_NAME &&
+				assertionsB[0]?.subjectEntityName === ENTITY_NAME,
 		});
 
 		const app = new Hono();

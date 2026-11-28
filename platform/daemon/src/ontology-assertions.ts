@@ -1,6 +1,8 @@
 import { resolveNamedEntity } from "./knowledge-graph";
 import { knowledgeReadDb, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
-import type { ReadScope } from "./read-scope";
+import { readScopeSql, type ReadScope } from "./read-scope";
+import { dreamingReadScopeInDb, recordSemanticCitationsInTx, semanticWritePartitionInDb } from "./classification-owner";
+import { proposalCitationsInDb } from "./ontology-proposals";
 import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
 import type { WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -18,6 +20,7 @@ export class OntologyAssertionError extends Error {
 }
 
 export interface CreateEpistemicAssertionInput {
+	readonly readScope?: ReadScope;
 	readonly agentId: string;
 	readonly observerId?: string | null;
 	readonly entity?: string;
@@ -155,36 +158,61 @@ function parseAssertedAt(value: string | null | undefined): string {
 	return new Date(ms).toISOString();
 }
 
+function assertAssertionSubjectLabel(
+	db: ReadDb,
+	agentId: string,
+	label: number | null,
+	subjectLabel: number | null,
+): void {
+	const scope = dreamingReadScopeInDb(db, agentId, label);
+	if (subjectLabel !== null && scope.compartments !== "all" && !scope.compartments.includes(subjectLabel))
+		throw new OntologyAssertionError("compartment_mismatch", 409);
+}
+
+function assertionReadScope(agentId: string, scope?: ReadScope): ReadScope {
+	if (scope?.projects !== undefined && scope.projects !== null)
+		throw new OntologyAssertionError("project_scope_unsupported", 403);
+	return scope ?? { reach: { kind: "own", agentId }, compartments: [], projects: null };
+}
+
 function readEntityById(
 	db: ReadDb | WriteDb,
 	agentId: string,
 	id: string,
-): { readonly id: string; readonly name: string } | null {
+	readScope?: ReadScope,
+): { readonly id: string; readonly name: string; readonly compartment_id: number | null } | null {
+	const scope = readScopeSql("", assertionReadScope(agentId, readScope), { visibility: null });
 	const row = db
 		.prepare(
-			`SELECT id, name
+			`SELECT id, name, compartment_id
 			 FROM entities
-			 WHERE id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'`,
+			 WHERE id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active' ${scope.sql}`,
 		)
-		.get(id, agentId) as { id: string; name: string } | undefined;
+		.get(id, agentId, ...scope.args) as { id: string; name: string; compartment_id: number | null } | undefined;
 	return row ?? null;
 }
 
 function resolveSubject(
 	db: ReadDb | WriteDb,
-	input: Pick<CreateEpistemicAssertionInput, "agentId" | "entity" | "entityId">,
-): { readonly id: string; readonly name: string } {
+	input: Pick<CreateEpistemicAssertionInput, "agentId" | "entity" | "entityId" | "readScope">,
+): { readonly id: string; readonly name: string; readonly compartment_id: number | null } {
 	const entityId = trim(input.entityId);
 	if (entityId !== null) {
-		const byId = readEntityById(db, input.agentId, entityId);
+		const byId = readEntityById(db, input.agentId, entityId, input.readScope);
 		if (byId === null) throw new OntologyAssertionError("entity_id was not found", 404);
 		return byId;
 	}
 	const entity = trim(input.entity);
 	if (entity === null) throw new OntologyAssertionError("entity or entity_id is required", 400);
-	const resolved = resolveEntityRecordByName(db, { agentId: input.agentId, name: entity });
+	const resolved = resolveEntityRecordByName(
+		db,
+		{ agentId: input.agentId, name: entity },
+		assertionReadScope(input.agentId, input.readScope),
+	);
 	if (resolved === null) throw new OntologyAssertionError("entity was not found", 404);
-	return { id: resolved.id, name: resolved.name };
+	const subject = readEntityById(db, input.agentId, resolved.id, input.readScope);
+	if (subject === null) throw new OntologyAssertionError("entity was not found", 404);
+	return subject;
 }
 
 function validateEvidence(input: CreateEpistemicAssertionInput): readonly unknown[] {
@@ -201,16 +229,26 @@ function validateEvidence(input: CreateEpistemicAssertionInput): readonly unknow
 	return evidence;
 }
 
-function readClaimAttributeEntityId(db: ReadDb | WriteDb, agentId: string, attributeId: string): string | null {
+function readClaimAttributeEntityId(
+	db: ReadDb | WriteDb,
+	agentId: string,
+	attributeId: string,
+	readScope?: ReadScope,
+): { entity_id: string; compartment_id: number | null } | null {
+	const scope = readScopeSql("attr", assertionReadScope(agentId, readScope), { visibility: null });
+	const entityScope = readScopeSql("e", assertionReadScope(agentId, readScope), { visibility: null });
 	const row = db
 		.prepare(
-			`SELECT asp.entity_id
+			`SELECT asp.entity_id, attr.compartment_id
 			 FROM entity_attributes attr
 			 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
-			 WHERE attr.id = ? AND attr.agent_id = ? AND attr.status = 'active'`,
+			 JOIN entities e ON e.id=asp.entity_id AND e.agent_id=asp.agent_id
+			 WHERE attr.id = ? AND attr.agent_id = ? AND attr.status = 'active' ${scope.sql} ${entityScope.sql}`,
 		)
-		.get(attributeId, agentId) as { entity_id: string } | undefined;
-	return row?.entity_id ?? null;
+		.get(attributeId, agentId, ...scope.args, ...entityScope.args) as
+		| { entity_id: string; compartment_id: number | null }
+		| undefined;
+	return row ?? null;
 }
 
 function validateClaimAttribute(
@@ -218,11 +256,12 @@ function validateClaimAttribute(
 	agentId: string,
 	subjectEntityId: string,
 	attributeId: string | null,
+	readScope?: ReadScope,
 ): string | null {
 	if (attributeId === null) return null;
-	const entityId = readClaimAttributeEntityId(db, agentId, attributeId);
+	const entityId = readClaimAttributeEntityId(db, agentId, attributeId, readScope);
 	if (entityId === null) throw new OntologyAssertionError("claim attribute was not found", 404);
-	if (entityId !== subjectEntityId) {
+	if (entityId.entity_id !== subjectEntityId) {
 		throw new OntologyAssertionError("claim attribute belongs to a different entity", 409);
 	}
 	return attributeId;
@@ -236,13 +275,21 @@ function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): Epi
 	const predicate = parsePredicate(input.predicate);
 	const evidence = validateEvidence(input);
 	const assertedAt = parseAssertedAt(input.assertedAt);
-	const claimAttributeId = validateClaimAttribute(db, input.agentId, subject.id, trim(input.claimAttributeId));
+	const claimAttributeId = validateClaimAttribute(
+		db,
+		input.agentId,
+		subject.id,
+		trim(input.claimAttributeId),
+		input.readScope,
+	);
 	const sourceKind = trim(input.sourceKind);
 	const sourceId = trim(input.sourceId);
 	if (sourceKind === "ontology_claim" && sourceId === null) {
 		throw new OntologyAssertionError("ontology_claim source_id is required", 400);
 	}
 	if (sourceKind === "ontology_claim" && sourceId !== null) {
+		if (readClaimAttributeEntityId(db, input.agentId, sourceId, input.readScope) === null)
+			throw new OntologyAssertionError("Evidence source was not found", 404);
 		try {
 			validateDerivedMemorySourceInTx(db, { agentId: input.agentId, sourceKind, sourceId });
 		} catch (err) {
@@ -253,13 +300,41 @@ function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): Epi
 		}
 	}
 	const supersedesAssertionId = trim(input.supersedesAssertionId);
+	const parents = subject.compartment_id === null ? [] : [subject.compartment_id];
+	if (claimAttributeId !== null) {
+		const claim = readClaimAttributeEntityId(db, input.agentId, claimAttributeId, input.readScope);
+		if (claim?.compartment_id != null) parents.push(claim.compartment_id);
+	}
 	if (supersedesAssertionId !== null) {
+		const predicate = readScopeSql("", assertionReadScope(input.agentId, input.readScope), { visibility: null });
 		const existing = db
-			.prepare("SELECT id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
-			.get(supersedesAssertionId, input.agentId) as { id: string } | undefined;
+			.prepare(`SELECT id,compartment_id FROM epistemic_assertions WHERE id = ? AND agent_id = ? ${predicate.sql}`)
+			.get(supersedesAssertionId, input.agentId, ...predicate.args) as
+			| { id: string; compartment_id: number | null }
+			| undefined;
 		if (!existing) throw new OntologyAssertionError("superseded assertion was not found", 404);
+		if (existing.compartment_id !== null) parents.push(existing.compartment_id);
 	}
 
+	const scope = assertionReadScope(input.agentId, input.readScope);
+	const sourceEvidence =
+		sourceKind && sourceId && ["memory", "artifact", "transcript", "summary"].includes(sourceKind)
+			? [...evidence, { source_kind: sourceKind, source_id: sourceId }]
+			: evidence;
+	const citations = proposalCitationsInDb(
+		db,
+		input.agentId,
+		sourceEvidence.filter((value) => {
+			if (typeof value !== "object" || value === null) return false;
+			return "source_ref" in value || "source_kind" in value || "source_id" in value || "memory_id" in value;
+		}),
+		undefined,
+		scope,
+	);
+	if (sourceKind === "ontology_claim" && sourceId !== null) citations.push({ kind: "attribute", id: sourceId });
+	if (scope.organizationMode && citations.length === 0)
+		throw new OntologyAssertionError("Evidence source was not found", 404);
+	const partition = semanticWritePartitionInDb(db, input.agentId, scope, citations, parents);
 	const now = new Date().toISOString();
 	const id = crypto.randomUUID();
 	db.prepare(
@@ -267,8 +342,8 @@ function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): Epi
 		 (id, agent_id, subject_entity_id, claim_attribute_id, predicate,
 		  content, normalized_content, speaker, asserted_at, confidence, evidence,
 		  source_kind, source_id, source_path, source_root, status,
-		  supersedes_assertion_id, created_by, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+		  supersedes_assertion_id, created_by, created_at, updated_at, compartment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		input.agentId,
@@ -289,7 +364,9 @@ function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): Epi
 		trim(input.createdBy) ?? "operator",
 		now,
 		now,
+		partition.compartmentId,
 	);
+	recordSemanticCitationsInTx(db, { kind: "assertion", id, partition, evidence: citations });
 
 	const row = db
 		.prepare(
@@ -413,20 +490,40 @@ export async function getEpistemicAssertion(
 
 export function linkEpistemicAssertionClaim(
 	accessor: DbAccessor,
-	params: { readonly agentId: string; readonly id: string; readonly attributeId: string },
+	params: {
+		readonly agentId: string;
+		readonly id: string;
+		readonly attributeId: string;
+		readonly readScope?: ReadScope;
+	},
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx((db: WriteDb) => {
+		const scope = readScopeSql("a", assertionReadScope(params.agentId, params.readScope), { visibility: null });
+		const entityScope = readScopeSql("e", assertionReadScope(params.agentId, params.readScope), { visibility: null });
 		const assertion = db
-			.prepare("SELECT subject_entity_id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
-			.get(params.id, params.agentId) as { subject_entity_id: string } | undefined;
+			.prepare(
+				`SELECT a.subject_entity_id,a.compartment_id,e.compartment_id AS subject_compartment_id FROM epistemic_assertions a JOIN entities e ON e.id=a.subject_entity_id AND e.agent_id=a.agent_id WHERE a.id = ? AND a.agent_id = ? ${scope.sql} ${entityScope.sql}`,
+			)
+			.get(params.id, params.agentId, ...scope.args, ...entityScope.args) as
+			| { subject_entity_id: string; compartment_id: number | null; subject_compartment_id: number | null }
+			| undefined;
 		if (!assertion) throw new OntologyAssertionError("assertion was not found", 404);
-		validateClaimAttribute(db, params.agentId, assertion.subject_entity_id, params.attributeId);
+		validateClaimAttribute(db, params.agentId, assertion.subject_entity_id, params.attributeId, params.readScope);
+		const citations = [{ kind: "attribute" as const, id: params.attributeId }];
+		const partition = semanticWritePartitionInDb(
+			db,
+			params.agentId,
+			assertionReadScope(params.agentId, params.readScope),
+			citations,
+			[assertion.compartment_id, assertion.subject_compartment_id].filter((value): value is number => value !== null),
+		);
+		recordSemanticCitationsInTx(db, { kind: "assertion", id: params.id, partition, evidence: citations });
 		db.prepare(
 			`UPDATE epistemic_assertions
-			 SET claim_attribute_id = ?, updated_at = ?
+			 SET claim_attribute_id = ?, updated_at = ?, compartment_id = ?
 			 WHERE id = ? AND agent_id = ?`,
-		).run(params.attributeId, new Date().toISOString(), params.id, params.agentId);
+		).run(params.attributeId, new Date().toISOString(), partition.compartmentId, params.id, params.agentId);
 		const row = db
 			.prepare(
 				`SELECT a.*, e.name AS subject_entity_name
@@ -445,16 +542,24 @@ export function archiveEpistemicAssertion(
 		readonly agentId: string;
 		readonly id: string;
 		readonly actor: string;
+		readonly readScope?: ReadScope;
 		readonly author?: WriteAuthor;
 		readonly reason?: string | null;
 	},
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx((db: WriteDb) => {
+		const scope = readScopeSql("a", assertionReadScope(params.agentId, params.readScope), { visibility: null });
+		const entityScope = readScopeSql("e", assertionReadScope(params.agentId, params.readScope), { visibility: null });
 		const existing = db
-			.prepare("SELECT id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
-			.get(params.id, params.agentId) as { id: string } | undefined;
+			.prepare(
+				`SELECT a.id,a.compartment_id,e.compartment_id AS subject_compartment_id FROM epistemic_assertions a JOIN entities e ON e.id=a.subject_entity_id AND e.agent_id=a.agent_id WHERE a.id = ? AND a.agent_id = ? ${scope.sql} ${entityScope.sql}`,
+			)
+			.get(params.id, params.agentId, ...scope.args, ...entityScope.args) as
+			| { id: string; compartment_id: number | null; subject_compartment_id: number | null }
+			| undefined;
 		if (!existing) throw new OntologyAssertionError("assertion was not found", 404);
+		assertAssertionSubjectLabel(db, params.agentId, existing.compartment_id, existing.subject_compartment_id);
 		const now = new Date().toISOString();
 		db.prepare(
 			`UPDATE epistemic_assertions
@@ -479,15 +584,25 @@ export function supersedeEpistemicAssertion(
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx((db: WriteDb) => {
+		const scope = readScopeSql("a", assertionReadScope(input.agentId, input.readScope), { visibility: null });
+		const entityScope = readScopeSql("e", assertionReadScope(input.agentId, input.readScope), { visibility: null });
 		const old = db
 			.prepare(
-				`SELECT a.*, e.name AS subject_entity_name
+				`SELECT a.*, e.name AS subject_entity_name, e.compartment_id AS subject_compartment_id
 				 FROM epistemic_assertions a
 				 JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
-				 WHERE a.id = ? AND a.agent_id = ?`,
+				 WHERE a.id = ? AND a.agent_id = ? ${scope.sql} ${entityScope.sql}`,
 			)
-			.get(input.oldAssertionId, input.agentId) as Record<string, unknown> | undefined;
+			.get(input.oldAssertionId, input.agentId, ...scope.args, ...entityScope.args) as
+			| Record<string, unknown>
+			| undefined;
 		if (!old) throw new OntologyAssertionError("assertion was not found", 404);
+		assertAssertionSubjectLabel(
+			db,
+			input.agentId,
+			typeof old.compartment_id === "number" ? old.compartment_id : null,
+			typeof old.subject_compartment_id === "number" ? old.subject_compartment_id : null,
+		);
 		if (trim(input.entityId) !== null || trim(input.entity) !== null) {
 			const subject = resolveSubject(db, input);
 			if (subject.id !== old.subject_entity_id) {

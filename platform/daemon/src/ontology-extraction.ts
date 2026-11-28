@@ -3,7 +3,7 @@ import { redactCredentials } from "@signet/core";
 import { requireWriteAuthor, type WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { type EpisodicSourceRecord, readEpisodicSource } from "./episodic-sources";
-import { type CreateEpistemicAssertionInput, createEpistemicAssertionsInTx } from "./ontology-assertions";
+import type { ReadScope } from "./read-scope";
 import { type CreateOntologyProposalInput, createOntologyProposalsInTx } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
 
@@ -51,6 +51,7 @@ export interface OntologyExtractionSourceInfo {
 }
 
 export interface ExtractOntologyParams {
+	readonly readScope?: ReadScope;
 	readonly agentId: string;
 	readonly from: string;
 	readonly writeProposals?: boolean;
@@ -360,8 +361,8 @@ function claimKeyFor(value: string): string {
 function evidence(source: SourceRecord, quote: string): readonly unknown[] {
 	return [
 		{
-			source_kind: source.sourceKind,
-			source_id: source.sourceId,
+			source_kind: source.kind,
+			source_id: source.id,
 			source_path: source.sourcePath,
 			quote,
 		},
@@ -542,7 +543,7 @@ Return ONLY JSON with this shape:
       "name": "string",
       "type": "person|project|system|tool|source|artifact|concept|task|unknown",
       "confidence": 0.0,
-      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+      "evidence": [{ "source_kind": "${source.kind}", "source_id": "${source.id}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
     }
   ],
   "claim_values": [
@@ -555,7 +556,7 @@ Return ONLY JSON with this shape:
       "confidence": 0.0,
       "visibility": "private|project|public|unknown",
       "reducer_hint": "explicit_user_statement_wins|most_recent|highest_confidence|null",
-      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+      "evidence": [{ "source_kind": "${source.kind}", "source_id": "${source.id}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
     }
   ],
   "links": [
@@ -566,7 +567,7 @@ Return ONLY JSON with this shape:
       "properties": {},
       "confidence": 0.0,
       "reason": "string",
-      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+      "evidence": [{ "source_kind": "${source.kind}", "source_id": "${source.id}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
     }
   ],
   "actions_or_policies": [
@@ -575,7 +576,7 @@ Return ONLY JSON with this shape:
       "kind": "permitted_action|forbidden_action|approval_required|disclosure_policy",
       "content": "string",
       "confidence": 0.0,
-      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+      "evidence": [{ "source_kind": "${source.kind}", "source_id": "${source.id}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
     }
   ],
   "assertions": [
@@ -586,7 +587,7 @@ Return ONLY JSON with this shape:
       "speaker": "person/tool/source name|null",
       "asserted_at": "ISO timestamp if available|null",
       "confidence": 0.0,
-      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+      "evidence": [{ "source_kind": "${source.kind}", "source_id": "${source.id}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
     }
   ],
   "questions": ["uncertainties that need review"]
@@ -644,13 +645,16 @@ function sourceInfo(source: SourceRecord): OntologyExtractionSourceInfo {
 	};
 }
 
-function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "agentId" | "from">): SourceRecord {
+function readSource(
+	accessor: DbAccessor,
+	params: Pick<ExtractOntologyParams, "agentId" | "from" | "readScope">,
+): SourceRecord {
 	const from = params.from.trim();
 	if (from.length === 0) throw new OntologyExtractionError("from is required", 400);
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const source = accessor.withReadDb(
-		(db: ReadDb) => readEpisodicSource(db, { agentId: params.agentId, from }),
-		"ontology-extraction.ts:651",
+		(db: ReadDb) => readEpisodicSource(db, { agentId: params.agentId, from, readScope: params.readScope }),
+		"db:ontology.extract.source.read",
 	);
 	if (source) return source;
 	throw new OntologyExtractionError("Extraction source not found", 404);
@@ -660,6 +664,8 @@ export async function extractOntologyProposals(
 	accessor: DbAccessor,
 	params: ExtractOntologyParams,
 ): Promise<OntologyExtractionResult> {
+	if (params.writeAssertions)
+		throw new OntologyExtractionError("Extraction produces proposals only; apply them explicitly", 400);
 	const limit = Math.min(Math.max(params.limit ?? 100, 1), 500);
 	const source = readSource(accessor, params);
 	const explicitParsed = mergeParsedProposalJson(extractJsonBlocks(source.content).map(normalizeProposalJson));
@@ -688,7 +694,7 @@ export async function extractOntologyProposals(
 	const assertions = [...explicitAssertions, ...providerAssertions].slice(0, limit);
 	const proposals = raw.map((proposal) => ({
 		...proposal,
-		evidence: proposal.evidence && proposal.evidence.length > 0 ? proposal.evidence : evidence(source, source.id),
+		evidence: [...(proposal.evidence ?? []), ...evidence(source, source.content.slice(0, 500))],
 	}));
 	const extractionMode =
 		params.useProvider && providerProposals.length > 0 && explicit.length > 0
@@ -699,6 +705,7 @@ export async function extractOntologyProposals(
 	const questions = [...new Set([...explicitParsed.questions, ...providerQuestions])];
 	const proposalInputs: readonly CreateOntologyProposalInput[] = proposals.map((proposal) => ({
 		agentId: params.agentId,
+		readScope: params.readScope,
 		operation: proposal.operation,
 		payload: proposal.payload,
 		confidence: proposal.confidence,
@@ -711,27 +718,8 @@ export async function extractOntologyProposals(
 		createdBy: params.createdBy ?? "ontology-extract",
 		author: requireWriteAuthor(params.author),
 	}));
-	const assertionInputs: readonly CreateEpistemicAssertionInput[] = assertions.map((assertion) => ({
-		agentId: params.agentId,
-		entity: assertion.entity,
-		entityId: assertion.entity_id,
-		predicate: assertion.predicate,
-		content: assertion.content,
-		speaker: assertion.speaker ?? null,
-		assertedAt: assertion.asserted_at ?? null,
-		confidence: assertion.confidence,
-		evidence:
-			assertion.evidence && assertion.evidence.length > 0 ? assertion.evidence : evidence(source, assertion.content),
-		sourceKind: assertion.source_kind ?? source.sourceKind,
-		sourceId: assertion.source_id ?? source.sourceId,
-		sourcePath: assertion.source_path ?? source.sourcePath,
-		sourceRoot: assertion.source_root ?? null,
-		claimAttributeId: assertion.claim_attribute_id ?? null,
-		createdBy: params.createdBy ?? "ontology-extract",
-	}));
 	const shouldWriteProposals = params.writeProposals === true && proposalInputs.length > 0;
-	const shouldWriteAssertions = params.writeAssertions === true && assertionInputs.length > 0;
-	if (!shouldWriteProposals && !shouldWriteAssertions) {
+	if (!shouldWriteProposals) {
 		return {
 			source: sourceInfo(source),
 			proposals,
@@ -755,9 +743,9 @@ export async function extractOntologyProposals(
 		const proposalResult = shouldWriteProposals
 			? createOntologyProposalsInTx(db, proposalInputs)
 			: { items: [] as readonly OntologyProposal[], count: 0 };
-		const assertionItems = shouldWriteAssertions ? createEpistemicAssertionsInTx(accessor, db, assertionInputs) : [];
+		const assertionItems: readonly EpistemicAssertion[] = [];
 		return { proposalResult, assertionItems };
-	}, "ontology-extraction.ts:754");
+	}, "db:ontology.extract.proposals.write");
 
 	return {
 		source: sourceInfo(source),

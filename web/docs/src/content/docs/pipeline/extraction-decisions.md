@@ -266,10 +266,12 @@ to propose ontology candidates such as:
 - assertions
 - questions
 
-The default behavior is a dry run. `write_proposals` and `write_assertions`
-explicitly opt into persisting those results. The provider is instructed not to
-write memory or invent unsupported facts. This path produces ontology proposals
-and assertions; it is not the retired per-memory fact extractor.
+The default behavior is a dry run. `write_proposals` saves pending proposals
+that a person must apply explicitly. Assertions remain previews:
+`write_assertions: true` is rejected. The route reads only material the caller
+can read, including before a provider call, and retains citations and inherited
+labels on proposals and applied claims. Dreaming remains the only automatic
+author of semantic claims; this is not the retired per-memory fact extractor.
 
 ## Content normalization and deduplication
 

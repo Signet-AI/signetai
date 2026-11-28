@@ -57,6 +57,7 @@ export interface ApplyDreamingOperationsResult {
 }
 
 export interface ApplyDreamingOperationsParams {
+	readonly readScope?: ReadScope;
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
 	readonly actor: string;
@@ -101,7 +102,6 @@ function citationRecord(value: unknown): {
 }
 interface CitationResolution {
 	readonly evidence: DreamingAgentEvidence | null;
-	readonly sourceAgentIds: readonly string[];
 }
 
 function citeEvidence(
@@ -111,20 +111,18 @@ function citeEvidence(
 	readScope: ReadScope,
 ): CitationResolution {
 	const requested = citationRecord(citation);
-	if (requested === null) return { evidence: null, sourceAgentIds: [] };
+	if (requested === null) return { evidence: null };
 	const result: {
 		readonly evidence: readonly DreamingAgentEvidence[];
-		readonly sourceAgentIds: readonly string[];
 	} =
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		accessor.withReadDb((db: ReadDb) => {
 			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef, readScope });
 			if (source !== null && (source.kind !== "transcript" || source.completed)) {
-				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
+				return { evidence: createDreamingAgentEvidence([source]) };
 			}
 			return {
 				evidence: [],
-				sourceAgentIds: [],
 			};
 		}, "db:dreaming.operations.cite-evidence.read");
 	return {
@@ -137,7 +135,6 @@ function citeEvidence(
 					(requested.sourcePath === null || record.sourcePath === requested.sourcePath) &&
 					record.content.includes(requested.quote),
 			) ?? null,
-		sourceAgentIds: result.sourceAgentIds,
 	};
 }
 
@@ -949,6 +946,7 @@ function preflightDreamingRequestInTx(db: WriteDb, params: ApplyDreamingOperatio
 			assertOntologyOperationPartitionInTx(db, {
 				agentId: params.agentId,
 				passId: params.passId,
+				readScope: params.readScope,
 				operation: operation.operation,
 				payload: applicator.payload,
 				evidence: operation.evidence,
@@ -1069,6 +1067,7 @@ function applyValidatedOperationBody(
 				author: SYSTEM_AUTHOR,
 				agentId: params.agentId,
 				passId: params.passId,
+				readScope: params.readScope,
 				operation: entry.input.operation,
 				payload: entry.input.payload,
 				confidence: entry.input.confidence,
@@ -1110,6 +1109,7 @@ function applyValidatedOperationBody(
 		author: SYSTEM_AUTHOR,
 		agentId: params.agentId,
 		passId: params.passId,
+		readScope: params.readScope,
 		actor: params.actor,
 		operations: [entry.input],
 		writeCaps: params.writeCaps,
@@ -1192,7 +1192,7 @@ export async function applyDreamingOperations(
 				compartmentId: partition.compartmentId,
 			};
 		});
-		readScope = resolved.scope;
+		readScope = params.passId ? resolved.scope : (params.readScope ?? resolved.scope);
 		compartmentId = resolved.compartmentId;
 	} catch (error) {
 		return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) };

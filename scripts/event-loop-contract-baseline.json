@@ -2292,17 +2292,19 @@
     },
     {
       "path": "ontology-extraction.ts",
-      "line": 651,
+      "line": 655,
       "api": "withReadDb",
       "source": "const source = accessor.withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.extract.source.read"
     },
     {
       "path": "ontology-extraction.ts",
-      "line": 754,
+      "line": 742,
       "api": "withWriteTx",
       "source": "const written = accessor.withWriteTx((db: WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:ontology.extract.proposals.write"
     },
     {
       "path": "ontology-proposals.ts",

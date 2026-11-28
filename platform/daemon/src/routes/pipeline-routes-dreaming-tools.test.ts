@@ -53,6 +53,10 @@ describe("POST /api/dream/tools/apply_ontology_ops", () => {
 			return enqueue(fn);
 		};
 		const app = new Hono();
+		app.use("*", async (c, next) => {
+			c.set("principal", localPrincipal());
+			await next();
+		});
 		registerPipelineRoutes(app);
 
 		try {

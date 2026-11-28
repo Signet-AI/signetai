@@ -1,5 +1,5 @@
 import { knowledgeReadDb, knowledgeReadQuery, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
-import type { ReadScope } from "./read-scope";
+import { readScopeSql, type ReadScope } from "./read-scope";
 import type {
 	AttributeKind,
 	AttributeStatus,
@@ -697,7 +697,9 @@ export function resolveEntityRecordByName(
 		readonly agentId: string;
 		readonly name: string;
 	},
+	readScope?: ReadScope,
 ): Entity | null {
+	const scope = readScope ? readScopeSql("", readScope, { visibility: null }) : { sql: "", args: [] };
 	const canonical = toCanonicalName(params.name);
 	if (canonical.length === 0) return null;
 	const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
@@ -707,7 +709,7 @@ export function resolveEntityRecordByName(
 		.prepare(
 			`SELECT *
 			 FROM entities
-			 WHERE agent_id = ?
+			 WHERE agent_id = ? ${scope.sql}
 			   AND COALESCE(status, 'active') = 'active'
 			   AND (
 					COALESCE(canonical_name, LOWER(name)) = ?
@@ -734,6 +736,7 @@ export function resolveEntityRecordByName(
 		)
 		.get(
 			params.agentId,
+			...scope.args,
 			canonical,
 			canonical,
 			starts,

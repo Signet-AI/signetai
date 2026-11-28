@@ -482,11 +482,12 @@ agent-scoped transcript or memory artifact. Body parameters: `from`, `agent_id`,
 `provider_timeout_ms`, and `provider_max_tokens`. `from` accepts refs such as
 `transcript:<id>`, `artifact:<source_path>`, or `source:<source_path>`.
 
-The route dry-runs by default. It writes pending proposals only when
-`write_proposals` is true and writes epistemic assertions only when
-`write_assertions` is true. If both write flags are set, proposal and assertion
-inserts share one transaction and roll back together on invalid extracted
-items. When `use_provider` is true, the route uses the configured
+The route dry-runs by default. `write_proposals` saves pending proposals for a
+person to apply explicitly; extraction never applies claims or writes assertions.
+`write_assertions: true` is rejected. Sources are resolved under the caller's
+read scope before any provider call. Proposals and applied claims retain their
+source citations and inherit the source labels, including later reclassification.
+When `use_provider` is true, the route uses the configured
 `memory_extraction` inference workload and falls back to deterministic
 extraction if no valid provider proposals are returned. Provider-returned
 `questions` are surfaced in the response for review; this route does not persist
@@ -499,7 +500,9 @@ Body parameters: `agent_id`, `status`, `limit`, `write_proposals`, `created_by`,
 `use_provider`, `provider_timeout_ms`, and `provider_max_tokens`. The route
 dry-runs by default. Provider-backed consolidation uses the configured
 `memory_extraction` inference workload and never mutates ontology state directly;
-it writes only pending proposals when `write_proposals` is true.
+it writes only pending proposals when `write_proposals` is true. Only proposals
+readable by the caller contribute to counts or provider inputs; consolidated
+proposals retain the supporting evidence and its labels.
 
 ### POST /api/ontology/proposals
 
@@ -908,9 +911,12 @@ the response includes `reviewedExcluded: true` when that state was cleared.
 ### POST /api/dream/operations
 
 Apply a batch of cited ontology operations for an external Dreaming agent.
-Requires `modify` permission. This is the daemon-owned semantic apply seam:
-the caller supplies operations and evidence, but the daemon resolves every
-episodic source in the credential's agent scope before it writes graph state.
+Requires `modify` permission and a `passId` naming a running pass owned by the
+caller's agent whose partition the caller can read. An administrator may omit
+`passId` only when explicitly targeting an agent. Hidden, foreign, and absent
+citations return the same error and are rejected before any effects. Writes
+inherit cited evidence labels. Pass-bound tool calls enforce the same ownership
+and readability checks; knowing a pass ID is not authorization.
 
 **Request body**
 
@@ -923,7 +929,7 @@ episodic source in the credential's agent scope before it writes graph state.
       "operation": "set_claim_value",
       "payload": { "entityId": "entity-id", "aspect": "role", "value": "Engineer" },
       "reason": "The cited note explicitly identifies this role.",
-      "evidence": [{ "sourceKind": "artifact", "sourceId": "note.md", "quote": "..." }],
+      "evidence": [{ "source_ref": "artifact:note.md", "quote": "..." }],
       "confidence": 0.9
     }
   ]
