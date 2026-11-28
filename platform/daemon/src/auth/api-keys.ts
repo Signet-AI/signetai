@@ -318,7 +318,7 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 
 	const staleBefore = new Date(nowMs - LAST_USED_WRITE_INTERVAL_MS).toISOString();
 	if (!row.last_used_at || row.last_used_at <= staleBefore) {
-		await recordAuthObservation("api_key", row.id, now);
+		await recordAuthObservation("api_key", row.id, now, row.last_used_at);
 	}
 	const current = await readApiKey(prefix);
 	if (!current || current.id !== row.id || current.key_hash !== row.key_hash) {

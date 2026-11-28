@@ -142,6 +142,22 @@ describe("organization HTTP flows", () => {
 		const first = await call("/api/observation-proof", "GET", undefined, key.secret);
 		expect(first.status).toBe(200);
 		const profile: unknown = JSON.parse(first.headers.get("x-signet-owner-profile") ?? "null");
+		const { getDbOwner } = await import("../db-owner-runtime");
+		const observations = await import("./observations");
+		const submit = spyOn(await getDbOwner(), "submit");
+		try {
+			for (let i = 0; i < 6; i++) {
+				expect((await call("/api/observation-proof", "GET", undefined, key.secret)).status).toBe(200);
+				await observations.flushAuthObservations();
+			}
+			const batches = submit.mock.calls.filter(([request]) => request.kind === "auth_observations");
+			expect(batches).toHaveLength(1);
+			expect(
+				await organizationQuery(statement("SELECT last_used_at FROM api_keys WHERE id=?", [key.key.id], "get")),
+			).toEqual({ last_used_at: expect.any(String) });
+		} finally {
+			submit.mockRestore();
+		}
 		expect(profile).not.toEqual(
 			expect.arrayContaining([expect.objectContaining({ operation: "auth.record-api-key-use" })]),
 		);

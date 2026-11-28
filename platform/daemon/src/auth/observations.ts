@@ -8,6 +8,7 @@ import { withoutRequestOwnerProfile } from "../db-request-profile";
 import { logger } from "../logger";
 
 const pending = new Map<string, AuthObservation>();
+const observedAt = new Map<string, { at: string; previousAt: string | null | undefined }>();
 let owner: DbOwnerClient | undefined;
 let binding: string | null = null;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -27,7 +28,12 @@ function schedule(): void {
 	}, 1000);
 	timer.unref();
 }
-export async function recordAuthObservation(kind: AuthObservation["kind"], id: string, at: string): Promise<void> {
+export async function recordAuthObservation(
+	kind: AuthObservation["kind"],
+	id: string,
+	at: string,
+	previousAt?: string | null,
+): Promise<void> {
 	const client = await getDbOwner();
 	const scope = identity(client);
 	if (scope === null)
@@ -38,16 +44,33 @@ export async function recordAuthObservation(kind: AuthObservation["kind"], id: s
 			timer = undefined;
 		}
 		pending.clear();
+		observedAt.clear();
 		binding = scope;
 		owner = client;
 		stopped = false;
 	}
 	if (stopped) throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "Authentication observations are closing");
 	const key = `${kind}:${id}`;
+	const observed = observedAt.get(key);
+	if (
+		!pending.has(key) &&
+		observed &&
+		observed.previousAt === previousAt &&
+		Date.parse(at) - Date.parse(observed.at) < 60_000
+	)
+		return;
 	if (!pending.has(key) && pending.size >= 2048)
 		throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "Authentication observation capacity reached");
 	const previous = pending.get(key);
-	if (!previous || previous.at < at) pending.set(key, { kind, id, at });
+	if (!previous || previous.at < at) {
+		pending.set(key, { kind, id, at });
+		observedAt.delete(key);
+		if (observedAt.size >= 2048) {
+			const oldest = observedAt.keys().next().value;
+			if (oldest !== undefined) observedAt.delete(oldest);
+		}
+		observedAt.set(key, { at, previousAt });
+	}
 	schedule();
 }
 async function flushCurrent(deadlineMs: number): Promise<void> {
@@ -84,7 +107,11 @@ async function flushCurrent(deadlineMs: number): Promise<void> {
 				if (latest && latest !== value) pending.set(key, latest);
 			}
 	} catch (error) {
-		if (binding === scope) for (const [key, value] of batch) if (pending.get(key) === value) pending.delete(key);
+		if (binding === scope)
+			for (const [key, value] of batch) {
+				if (pending.get(key) === value) pending.delete(key);
+				if (observedAt.get(key)?.at === value.at) observedAt.delete(key);
+			}
 		logger.warn("auth", "Authentication observations were not persisted", {
 			error: error instanceof Error ? error.name : "unknown",
 		});
