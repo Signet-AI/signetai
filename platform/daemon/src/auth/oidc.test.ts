@@ -21,7 +21,7 @@ beforeEach(async () => {
 	await claimOrganization({
 		setupToken: token ?? "",
 		organizationName: "Acme",
-		admin: { username: "admin", displayName: "Admin", password: "test" },
+		admin: { username: "admin", displayName: "Admin", password: "test password" },
 	});
 });
 afterEach(async () => {
@@ -128,6 +128,26 @@ describe("OIDC identity", () => {
 					statement("SELECT group_id FROM group_members WHERE user_id = ?", [session.user.id], "all"),
 				),
 			).toEqual([]);
+			await organizationWrite([
+				statement("INSERT INTO group_members(group_id,user_id,role,managed_by) VALUES('grp_eng',?,'owner','signet')", [
+					session.user.id,
+				]),
+			]);
+			for (const groups of [["engineering"], []]) {
+				claimsGroups = groups;
+				const manual = await oidcStart("http://signet.test");
+				nonce = new URL(manual.url).searchParams.get("nonce") ?? "";
+				await oidcCallback({ state: manual.state, code: "code", cookieState: manual.state }, "http://signet.test");
+				expect(
+					await organizationQuery(
+						statement(
+							"SELECT role,managed_by FROM group_members WHERE group_id='grp_eng' AND user_id=?",
+							[session.user.id],
+							"get",
+						),
+					),
+				).toEqual({ role: "owner", managed_by: "signet" });
+			}
 			badNonce = true;
 			const rejected = await oidcStart("http://signet.test");
 			await expect(
