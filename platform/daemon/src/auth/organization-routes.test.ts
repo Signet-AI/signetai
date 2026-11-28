@@ -10,6 +10,7 @@ import { parseAuthConfig } from "./config";
 import { createIdentityMiddleware } from "./identity-middleware";
 import { ensureSetupToken, organizationQuery, statement } from "./organization-store";
 import { generateSecret } from "./tokens";
+import { PERMISSIONS, type Permission } from "./types";
 
 let dir = "";
 let app: Hono;
@@ -90,6 +91,287 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+
+	const matrixCredentials = ["interactive", "derived-recall", "derived-admin", "connector", ...PERMISSIONS];
+	for (const family of ["reads", "mutations"] as const) {
+		test.each(matrixCredentials)(`R5 org route matrix ${family} / %s`, async (credential: string) => {
+			const root = await claim();
+			writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\nembedding:\n  provider: none\n");
+			const target = await member("matrix-target");
+			const team = await (await call("/api/org/groups", "POST", { name: "Matrix team" })).json();
+			const { organizationWrite } = await import("./organization-store");
+			await organizationWrite([
+				statement("UPDATE users SET compliance=1 WHERE id=?", [root.user.id]),
+				statement("INSERT INTO group_members(group_id,user_id,role) VALUES(?,?,'owner')", [team.id, root.user.id]),
+				statement(
+					"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES('matrix-job','offboard','complete','{}',?,'2026-01-01')",
+					[target.userId],
+				),
+				statement(
+					"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('matrix-legacy','Matrix legacy','legacy','2026-01-01','2026-01-01')",
+				),
+			]);
+			const personal = (await (await call("/api/auth/whoami")).json()).agents.defaultWrite;
+			let bearer = admin;
+			const permissions: readonly Permission[] =
+				credential === "interactive" || credential === "derived-admin"
+					? PERMISSIONS
+					: credential === "derived-recall"
+						? ["recall"]
+						: credential === "connector"
+							? ["recall", "remember", "documents", "modify"]
+							: PERMISSIONS.filter((permission) => permission === credential);
+			if (credential === "connector") {
+				const flow = await (
+					await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Matrix" }, "")
+				).json();
+				expect(
+					(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+				).toBe(200);
+				const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+				const issued = await call(
+					"/api/auth/connector-keys",
+					"POST",
+					{ harness: "codex", deviceId: cli.deviceId },
+					cli.accessToken,
+				);
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+			} else if (credential !== "interactive") {
+				const issued = await call("/api/auth/api-keys", "POST", {
+					name: "Matrix",
+					permissions,
+					expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+				});
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+				if (credential.startsWith("derived-")) {
+					const exchanged = await call("/api/auth/session", "POST", {}, bearer);
+					expect(exchanged.status).toBe(200);
+					bearer =
+						exchanged.headers
+							.getSetCookie()
+							.find((cookie) => cookie.startsWith("signet_session="))
+							?.split(";")[0]
+							?.slice("signet_session=".length) ?? "";
+				}
+			}
+			const isAdmin = permissions.includes("admin");
+			const gate = (permission: Permission) => permissions.includes(permission);
+			const unbound = credential !== "connector";
+			const signedInAdmin = credential === "interactive" || credential === "derived-admin";
+			type Cell = readonly [string, string, unknown, boolean, number, number?];
+			const plan = { mappings: [], keys: [], legacyKeyDeadline: new Date(Date.now() + 86400_000).toISOString() };
+			const reads: readonly Cell[] = [
+				["GET", "/api/org/users", undefined, isAdmin, 200],
+				["GET", "/api/org/users/lookup?q=matrix", undefined, isAdmin || gate("classify"), 200],
+				["GET", "/api/org/invites", undefined, isAdmin, 200],
+				["GET", "/api/org/groups", undefined, true, 200],
+				["GET", `/api/org/groups/${team.id}`, undefined, true, 200],
+				["GET", "/api/agents", undefined, true, 200],
+				["GET", `/api/agents/${personal}`, undefined, true, 200],
+				["GET", "/api/org/agents/legacy", undefined, isAdmin, 200],
+				["GET", `/api/org/access/${target.userId}`, undefined, gate("audit"), 200],
+				["GET", "/api/org/settings", undefined, isAdmin, 200],
+				["GET", "/api/org/keys", undefined, isAdmin, 200],
+				["GET", "/api/org/audit", undefined, gate("audit"), 200],
+				["GET", "/api/org/audit/export", undefined, gate("audit"), 200],
+				["GET", "/api/org/operator/doctor", undefined, gate("diagnostics"), 200],
+				["GET", "/api/org/operator/capabilities", undefined, isAdmin, 200],
+				["GET", "/api/org/operator/settings", undefined, signedInAdmin, 200],
+				["GET", "/api/org/jobs", undefined, isAdmin, 200],
+				["GET", "/api/org/jobs/matrix-job", undefined, isAdmin, 200],
+				["GET", "/api/org/upgrade", undefined, isAdmin, 200],
+				["GET", "/api/org/upgrade/missing", undefined, isAdmin, 404],
+			];
+			const mutations: readonly Cell[] = [
+				[
+					"POST",
+					"/api/org/claim",
+					{
+						setupToken: setup,
+						organizationName: "Acme",
+						admin: { username: "new", displayName: "New", password: "test password" },
+					},
+					true,
+					409,
+				],
+				["POST", "/api/org/bootstrap", { setupToken: setup, publicUrl: "https://org.example" }, true, 409],
+				["POST", "/api/org/invites", { role: "member", groupIds: [] }, isAdmin, 201],
+				["DELETE", "/api/org/invites/missing", undefined, isAdmin, 200],
+				["PATCH", `/api/org/users/${target.userId}`, { displayName: "Matrix target" }, isAdmin, 200],
+				["POST", `/api/org/users/${target.userId}/deactivate`, { mode: "keep", dryRun: true }, isAdmin, 200],
+				["POST", `/api/org/users/${target.userId}/reactivate`, {}, isAdmin, 200],
+				["POST", "/api/org/groups", { name: "Created matrix team" }, isAdmin, 201],
+				["PATCH", `/api/org/groups/${team.id}`, { description: "Matrix" }, isAdmin, 200],
+				["PUT", `/api/org/groups/${team.id}/members/${target.userId}`, { role: "member" }, isAdmin, 200],
+				["DELETE", `/api/org/groups/${team.id}/members/${target.userId}`, undefined, isAdmin, 200],
+				["POST", "/api/agents", { name: "Matrix personal", kind: "personal" }, isAdmin, 201],
+				["POST", "/api/agents", { name: "Matrix team agent", kind: "team", ownerGroupId: team.id }, isAdmin, 201],
+				[
+					"PATCH",
+					`/api/agents/${personal}`,
+					{ name: "Matrix personal renamed" },
+					isAdmin || credential === "connector",
+					200,
+				],
+				["DELETE", `/api/agents/${personal}`, undefined, true, 409],
+				["POST", `/api/org/agents/${personal}/purge`, {}, isAdmin, 409],
+				[
+					"POST",
+					"/api/org/agents/matrix-legacy/map",
+					{ kind: "personal", ownerUserId: target.userId },
+					isAdmin,
+					200,
+					unbound ? 403 : 404,
+				],
+				["PATCH", "/api/org/settings", { name: "Matrix organization" }, isAdmin, 200],
+				["POST", "/api/org/keys/revoke", { ids: ["missing"] }, isAdmin, 202],
+				["PATCH", "/api/org/keys/missing", { userId: target.userId }, isAdmin, 409],
+				["POST", "/api/org/operator/restart", {}, isAdmin, 409],
+				[
+					"PATCH",
+					"/api/org/operator/settings",
+					{ section: "instructions", value: "Matrix instance" },
+					signedInAdmin,
+					200,
+				],
+				[
+					"POST",
+					"/api/org/operator/jobs",
+					{ action: "embed.audit", agentId: personal, options: {} },
+					gate("diagnostics"),
+					202,
+				],
+				["POST", "/api/org/sso", {}, isAdmin, 400],
+				["POST", "/api/org/upgrade/preview", plan, isAdmin, 201],
+				["PUT", "/api/org/upgrade/missing", { revision: "missing", plan }, isAdmin, 404],
+				...(["confirm", "cancel", "resume"] as const).map(
+					(action): Cell => ["POST", `/api/org/upgrade/missing/${action}`, { revision: "missing" }, isAdmin, 404],
+				),
+				["DELETE", `/api/org/groups/${team.id}`, undefined, isAdmin, 200],
+			];
+			const results = [];
+			for (const [method, path, body, allowed, accepted, denied = 403] of family === "reads" ? reads : mutations) {
+				const response = await call(path, method, body, bearer);
+				results.push({ method, path, status: response.status, expected: allowed ? accepted : denied });
+			}
+			expect(results.filter((result) => result.status !== result.expected)).toEqual([]);
+		});
+	}
+
+	test.each(["admin-key", "owner-key", "derived", "connector"])(
+		"R5 %s cannot bypass owner permission ceilings",
+		async (kind) => {
+			await claim();
+			const owner = await member("ceiling-owner");
+			const target = await member("ceiling-target");
+			const team = await (await call("/api/org/groups", "POST", { name: "Ceiling team" })).json();
+			expect((await call(`/api/org/groups/${team.id}/members/${owner.userId}`, "PUT", { role: "owner" })).status).toBe(
+				200,
+			);
+			const agent = await (
+				await call("/api/agents", "POST", { name: "Ceiling agent", kind: "team", ownerGroupId: team.id })
+			).json();
+			let bearer: string;
+			if (kind === "connector") {
+				const flow = await (
+					await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Ceiling" }, "")
+				).json();
+				expect(
+					(
+						await call(
+							"/api/auth/device/approve",
+							"POST",
+							{ userCode: flow.userCode, decision: "approve" },
+							owner.token,
+						)
+					).status,
+				).toBe(200);
+				const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+				const issued = await call(
+					"/api/auth/connector-keys",
+					"POST",
+					{ harness: "codex", deviceId: cli.deviceId, agentId: agent.agentId },
+					cli.accessToken,
+				);
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+			} else {
+				const issued = await call(
+					"/api/auth/api-keys",
+					"POST",
+					{ name: "Ceiling", permissions: ["recall"], expiresAt: new Date(Date.now() + 3600_000).toISOString() },
+					kind === "owner-key" ? owner.token : admin,
+				);
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+				if (kind === "derived") {
+					const exchanged = await call("/api/auth/session", "POST", {}, bearer);
+					expect(exchanged.status).toBe(200);
+					bearer =
+						exchanged.headers
+							.getSetCookie()
+							.find((cookie) => cookie.startsWith("signet_session="))
+							?.split(";")[0]
+							?.slice("signet_session=".length) ?? "";
+				}
+			}
+			const statuses = [];
+			statuses.push(
+				(await call(`/api/org/groups/${team.id}/members/${target.userId}`, "PUT", { role: "member" }, bearer)).status,
+			);
+			statuses.push(
+				(await call(`/api/org/groups/${team.id}/members/${target.userId}`, "DELETE", undefined, bearer)).status,
+			);
+			statuses.push(
+				(await call("/api/agents", "POST", { name: "Denied", kind: "team", ownerGroupId: team.id }, bearer)).status,
+			);
+			statuses.push((await call(`/api/org/access/${target.userId}`, "GET", undefined, bearer)).status);
+			statuses.push(
+				(
+					await call(
+						"/api/auth/api-keys",
+						"POST",
+						{
+							kind: "shared",
+							name: "Denied",
+							agentId: agent.agentId,
+							permissions: ["recall"],
+							expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+						},
+						bearer,
+					)
+				).status,
+			);
+			expect(statuses).toEqual([403, 403, 403, 403, 403]);
+		},
+	);
+	test("R5 self ownership does not bypass credential ceilings", async () => {
+		await claim();
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Owned" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+		).toBe(200);
+		const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "Own key",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			})
+		).json();
+		const results = [
+			(await call("/api/agents", "POST", { name: "Unpermitted personal", kind: "personal" }, key.secret)).status,
+			(await call(`/api/auth/sessions/${cli.sessionId}`, "DELETE", undefined, key.secret)).status,
+			(await call(`/api/auth/devices/${cli.deviceId}`, "PATCH", { name: "Unpermitted" }, key.secret)).status,
+			(await call(`/api/auth/devices/${cli.deviceId}`, "DELETE", undefined, key.secret)).status,
+			(await call(`/api/auth/api-keys/${key.key.id}`, "DELETE", undefined, key.secret)).status,
+		];
+		expect(results).toEqual([403, 403, 403, 403, 403]);
+	});
 	test("R5 classified agents are absent from lists and indistinguishable by id", async () => {
 		await claim();
 		const eve = await member("agent-eve");

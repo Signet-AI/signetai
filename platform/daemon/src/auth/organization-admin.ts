@@ -9,7 +9,13 @@ import { dbOwnerOrganizationPurgePlan } from "../db-owner-runtime";
 import type { DbOwnerStatement } from "../db-owner-protocol";
 import { logger } from "../logger";
 import { type AgentRecord, canActAs } from "./agent-access";
-import { groupOwner, requireAdmin, requireAudit, whoami } from "./organization-operations";
+import {
+	requireAuthority,
+	requireGroupOwnerOrAdmin,
+	requireAdmin,
+	requireAudit,
+	whoami,
+} from "./organization-operations";
 import {
 	auditStatement,
 	IdentityError,
@@ -21,13 +27,13 @@ import {
 	statement,
 	userPrincipal,
 	userView,
+	visibleAgentSql,
 } from "./organization-store";
 import type { Principal } from "./principal";
 import { rolePermissions } from "./principal";
 
 const text = z.string().trim().min(1).max(128);
 const lookupLimiter = new AuthRateLimiter(60_000, 30);
-	visibleAgentSql,
 export async function lookupUsers(p: Principal, input: unknown) {
 	if (!(p.permissions.has("admin") || (p.compliance && p.permissions.has("classify"))))
 		throw new IdentityError(403, "permission", "Requires admin or compliance access");
@@ -142,12 +148,7 @@ export async function changeGroup(p: Principal, groupId: string, input: unknown 
 export async function groupMember(p: Principal, groupId: string, userId: string, input: unknown | null) {
 	const row = await group(p, groupId);
 	if (row.managed_by === "idp") throw new IdentityError(409, "managed_by_idp");
-	if (p.role !== "admin" && !(await groupOwner(p, groupId)))
-		throw new IdentityError(
-			403,
-			"not_owner",
-			`Ask a team owner (${Array.from(row.name, (character) => (character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? " " : character)).join("")})`,
-		);
+	await requireGroupOwnerOrAdmin(p, groupId);
 	if (!(await readUser(userId))) throw new IdentityError(404, "not_found");
 	const writes =
 		input === null
@@ -170,8 +171,8 @@ interface NamedAgent extends AgentRecord {
 	name: string;
 }
 export async function agents(p: Principal) {
-	const rows = await organizationQuery<NamedAgent[]>(
 	const visible = visibleAgentSql(p);
+	const rows = await organizationQuery<NamedAgent[]>(
 		statement(`SELECT a.* FROM agents a WHERE ${visible.sql} ORDER BY name LIMIT 1000`, visible.args, "all"),
 	);
 	return {
@@ -187,11 +188,13 @@ export async function agents(p: Principal) {
 	};
 }
 export async function createAgent(p: Principal, input: unknown) {
+	if (p.role === "admin") requireAdmin(p);
+	else requireAuthority(p, "modify");
+	if (p.boundAgentId || p.allowedProjects) throw new IdentityError(403, "permission");
 	const data = z.object({ name: text, kind: z.enum(["personal", "team"]), ownerGroupId: text.optional() }).parse(input);
 	const org = await readOrganization();
 	if (data.kind === "personal" && !org.personal_agents_self_service) throw new IdentityError(403, "org_policy");
-	if (data.kind === "team" && (!data.ownerGroupId || (p.role !== "admin" && !(await groupOwner(p, data.ownerGroupId)))))
-		throw new IdentityError(403, "not_owner");
+	if (data.kind === "team") await requireGroupOwnerOrAdmin(p, data.ownerGroupId);
 	if (data.ownerGroupId) await group(p, data.ownerGroupId);
 	const agentId = `agent-${crypto.randomUUID().replaceAll("-", "")}`,
 		now = new Date().toISOString();
@@ -270,6 +273,7 @@ export async function updateAgent(p: Principal, agentId: string, input: unknown)
 }
 export async function legacyAgents(p: Principal) {
 	requireAdmin(p);
+	const visible = visibleAgentSql(p);
 	return {
 		agents: await organizationQuery(
 			statement(
@@ -277,7 +281,6 @@ export async function legacyAgents(p: Principal) {
 				visible.args,
 				"all",
 			),
-	const visible = visibleAgentSql(p);
 		),
 	};
 }
@@ -301,14 +304,14 @@ export async function mapAgent(p: Principal, agentId: string, input: unknown) {
 	});
 }
 export async function effectiveAccess(p: Principal, userId: string) {
-	if (p.role !== "admin" && !p.compliance) throw new IdentityError(403, "permission");
+	requireAuthority(p, "audit", p.role === "admin" || p.compliance);
 	const u = await readUser(userId);
 	if (!u) throw new IdentityError(404, "not_found");
 	const target = await userPrincipal(u, { kind: "session", id: "access-inspector" }, null, null);
+	const visible = visibleAgentSql(p);
 	const rows = await organizationQuery<AgentRecord[]>(
 		statement(`SELECT a.* FROM agents a WHERE archived_at IS NULL AND ${visible.sql}`, visible.args, "all"),
 	);
-	const visible = visibleAgentSql(p);
 	return {
 		user: userView(u),
 		role: u.role,
