@@ -272,6 +272,7 @@
 		"DELETE /api/org/groups/:id/members/:userId": "records",
 		"DELETE /api/org/invites/:id": "records",
 		"GET /api/agents": "records",
+		"GET /api/agents/:id": "records",
 		"GET /api/auth/api-keys": "records",
 		"GET /api/auth/connector-keys": "records",
 		"GET /api/auth/connector-keys/:id/errors": "records",
