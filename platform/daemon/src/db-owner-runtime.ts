@@ -546,6 +546,7 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 			const started = await withRegisteredDbOwnerMaintenance(async (maintenance) => {
 				if (maintenance.owner !== owner) throw registeredOwnerError();
 				await maintenance.owner.start();
+				return true;
 			});
 			if (started === undefined) throw registeredOwnerError();
 		},
