@@ -252,6 +252,11 @@ function scope(item: Line): string | null {
 }
 
 export function importBundle(db: ImportDb, input: ImportInput, options: ImportOptions = {}): ExportImportResult {
+	if (
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='organization'").get() &&
+		db.prepare("SELECT 1 FROM organization WHERE id=1 AND claimed_at IS NOT NULL").get()
+	)
+		throw new Error("org_policy");
 	if (options.agentId !== undefined && options.agentId.trim().length === 0)
 		throw new Error("Target agent must not be empty");
 	const now = new Date().toISOString();
