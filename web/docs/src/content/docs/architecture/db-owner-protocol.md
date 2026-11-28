@@ -68,7 +68,7 @@ Reads that can queue behind other jobs, such as the knowledge-graph reads behind
 
 ## Wire messages
 
-Messages are newline-delimited JSON over the owner's stdin/stdout. The daemon sends:
+Messages are newline-delimited JSON over the owner's stdin/stdout. Each frame is limited to 64 MiB of UTF-8 bytes, including fragmented frames. An oversized frame fails with `DB_OWNER_FRAME_TOO_LARGE`; the connection is retired and the child is reaped before replacement startup. This transport cap does not increase the smaller per-job result limits. The daemon sends:
 
 - `{"type":"submit","job": ...}`
 - `{"type":"cancel","jobId": ...}`
@@ -92,9 +92,9 @@ The owner sends:
 
 The single owner process serially drains bounded foreground and maintenance queues. It prioritizes foreground jobs and admits a maintenance turn after a bounded foreground burst; no job preempts synchronous work already running. Read-only statements use read-only SQLite connections within that same process, not a separate reader process. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements atomically. A `batch` contains only `run` statements and also rolls back on failure; `requireChanges` is a fail-closed zero-change precondition.
 
-A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline abandons the job rather than killing the owner: the client rejects the handle, removes the job from its pending map, and sends a cancel message when the job was dispatched. The owner drops a still-queued job; an already-running synchronous operation may finish, but its abandoned result is ignored. Other jobs continue on the surviving owner.
+A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline rejects the caller and sends cancellation when dispatched. The owner drops a still-queued job. An executing operation has a 1-second grace period to finish cooperatively before the supervisor retires the process.
 
-Construction failure, malformed protocol input, owner exit, deadline abandonment, and job failure are observable through the health state or the rejected handle. Deadline expiry does not kill the owner or fail unrelated jobs. Supervised shutdown and transport recovery are the only owner-kill authorities; no job is silently replayed because writes may have reached SQLite before a process crash.
+Construction failure, malformed protocol input, owner exit, deadline abandonment, and job failure are observable through the health state or the rejected handle. Expiry immediately rejects the caller and requests cooperative cancellation. If an executing job has still not returned 1 second after its hard deadline, the supervisor fences that owner generation, SIGKILLs it, and fails its remaining admitted requests with `owner_retired`. It reaps the old child before starting and initializing one replacement. Health remains degraded until database readiness is restored. No failed job is replayed; an interrupted SQLite transaction rolls back, while an already committed write can have an unknown outcome to its caller.
 
 ## Client surface
 
@@ -105,10 +105,18 @@ Construction failure, malformed protocol input, owner exit, deadline abandonment
 - `submit(request, options)` returns a serializable job envelope and a typed result handle.
 - `awaitResult(handle, timeoutMs?)` awaits a result and cancels on the optional caller timeout.
 - `cancel(jobId)` requests cancellation.
-- `health()` returns owner state, PID, generation, total and per-class queue counts, active job/class, oldest pending ages, and last error without touching SQLite. Deadline expiry is represented by the rejected job handle, not a hard-deadline-kill metric: it abandons the job, sends cancellation to the owner when dispatched, and leaves the owner alive.
+- `health()` returns owner state, PID, generation, total and per-class queue counts, active job/class, oldest pending ages, and last error without touching SQLite. Deadline expiry rejects the handle and sends cancellation when dispatched. A separate supervisor watchdog retains the executing job until completion or hard-deadline retirement, even after its caller has stopped waiting.
 - `close()` sends shutdown and is idempotent.
 
 No callback receives a database handle. No synchronous SQLite symbol is exported by the client or the recall seam. The owner module is the sanctioned synchronous site.
+
+## Migration startup
+
+The daemon binds its diagnostic HTTP surface before database initialization. While migrations run, `/health` and `/api/status` report `migrating`, `db: false`, and `dbOwner.migration` with the current version, name, phase, and completed database-operation count. This is observed work, not a row count or percentage. `/health/ready` returns 503 until startup finishes. Application work is unavailable: supplied credentials receive 503 without database-backed authentication, while missing credentials on protected team requests still receive the canonical 401 response. The diagnostic status contains no corpus content.
+
+The migration owner sends sequenced progress after completed database operations, throttled to one update per 250 ms plus phase transitions. These are not timer-only keepalives: a blocked native call cannot renew its own lease. Increasing progress suspends the ordinary 60-second initialization budget; that unchanged budget starts after migrations finish. Thirty seconds without new progress retires the owner once with `DB_OWNER_MIGRATION_STALLED`, preserves the backup, and fails startup instead of restarting automatically. A single native statement must finish within that observation window; longer backfills need bounded operations between progress updates.
+
+Migration transactions remain atomic. Restart skips committed migration versions; an interrupted version rolls back and repeats. Backup-copy checkpoints retain their existing resume behavior. The aggregate repair markers are not row-level resume cursors.
 
 ## Session transcript writes
 

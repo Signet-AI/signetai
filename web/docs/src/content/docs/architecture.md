@@ -17,7 +17,7 @@ Signet has one canonical state layer: agent-scoped SQLite rows and user-facing w
 
 ## Database owner boundary
 
-The daemon submits database work through a bounded asynchronous protocol to one killable owner process. The owner serially drains foreground and maintenance queues, prioritizing foreground work with a bounded burst. Read-only statements use read-only SQLite connections within the owner process; they are not handled by a separate reader process. Job deadlines bound admission and execution, but expiry does not kill the owner or roll back synchronous work already in progress. Failed or abandoned jobs are not silently replayed, and the daemon does not fall back to opening SQLite itself.
+The daemon submits database work through a bounded asynchronous protocol to one killable owner process. The owner serially drains foreground and maintenance queues, prioritizing foreground work with a bounded burst. Read-only statements use read-only SQLite connections within the owner process; they are not handled by a separate reader process. Job expiry rejects the caller immediately. An executing job that outlives its hard deadline by more than 1 second causes supervisor retirement: the generation is fenced, the owner is killed and reaped, and a replacement initializes before health becomes ready. Uncommitted SQLite transactions roll back. Failed or abandoned jobs are not silently replayed, and the daemon does not fall back to opening SQLite itself.
 
 See the [DB owner protocol reference](/architecture/db-owner-protocol/) for the job envelope, wire messages, cancellation behavior, and maintenance contract.
 

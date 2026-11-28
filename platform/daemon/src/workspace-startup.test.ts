@@ -177,6 +177,7 @@ describe("daemon workspace startup preflight", () => {
 				signal: AbortSignal.timeout(5_000),
 			});
 			expect(firstResponse.status).toBe(401);
+			await until(() => daemon.output().includes("Daemon ready"));
 
 			writeFileSync(configPath, rejected);
 			await until(() => daemon.output().includes("Rejected runtime config change"));

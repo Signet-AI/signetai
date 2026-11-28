@@ -517,7 +517,7 @@ export type {
 	ExportImportResult,
 } from "./export";
 export { runMigrations, hasPendingMigrations, MIGRATIONS, LATEST_SCHEMA_VERSION } from "./migrations/index";
-export type { MigrationDb, Migration } from "./migrations/index";
+export type { MigrationDb, Migration, MigrationProgress } from "./migrations/index";
 export {
 	IDENTITY_FILES,
 	IDENTITY_PRESETS,

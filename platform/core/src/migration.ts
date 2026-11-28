@@ -402,12 +402,13 @@ export function initializeDatabaseSchema(
 		transaction<T>(operation: () => T): () => T;
 	},
 ): MigrationResult {
-	return db.transaction(() => {
+	const result = db.transaction(() => {
 		const result = ensureUnifiedSchema(db);
 		if (result.errors.length > 0) throw new Error(result.errors.join("; "));
-		runMigrations(db);
 		return result;
 	})();
+	runMigrations(db);
+	return result;
 }
 
 export function ensureUnifiedSchema(db: {

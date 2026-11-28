@@ -128,6 +128,7 @@ describe("GET /health owner diagnostics", () => {
 	test("health answers without waiting for active maintenance", async () => {
 		const owner = createDbOwnerClient({ dbPath: join(dir, "memory", "memories.db") });
 		await owner.start();
+		await owner.initialize(dir);
 		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
 		expect(
 			await owner.submit({ kind: "database_probe" }, { operation: "health.probe-test", lane: "read", deadlineMs: 1000 })

@@ -1584,9 +1584,16 @@ export interface DbAccessorInitializationResult {
 	readonly deferredMigrationVerification: boolean;
 }
 
+interface DbAccessorInitializationOptions {
+	readonly agentsDir?: string;
+	readonly deadlineAt?: number;
+	readonly onMigrationProgress?: (progress: import("@signet/core").MigrationProgress) => void;
+	readonly onMigrationsComplete?: () => number;
+}
+
 export async function initDbAccessorAsync(
 	path: string,
-	opts?: { readonly agentsDir?: string; readonly deadlineAt?: number },
+	opts?: DbAccessorInitializationOptions,
 ): Promise<DbAccessorInitializationResult> {
 	const writeConn = openDbAccessorConnection(path, opts);
 	const deferMigrations = shouldDeferPendingMigration(path, toMigrationDb(writeConn) as never, migrationBackupDeps);
@@ -1658,7 +1665,7 @@ async function backupBeforePendingMigrationsAsync(
 
 function finishDbAccessorInit(
 	writeConn: SqliteDatabase,
-	opts?: { readonly agentsDir?: string },
+	opts?: DbAccessorInitializationOptions,
 	migrationBackup?: string | null,
 	deadlineAt?: number,
 	skipMigrations = false,
@@ -1667,7 +1674,8 @@ function finishDbAccessorInit(
 	const auditHighWaterMark = migrationAuditHighWaterMark(writeConn);
 	if (!skipMigrations) {
 		assertMigrationStartupBudget(deadlineAt, "migrations");
-		runMigrations(toMigrationDb(writeConn));
+		runMigrations(toMigrationDb(writeConn), opts?.onMigrationProgress);
+		deadlineAt = opts?.onMigrationsComplete?.() ?? deadlineAt;
 	}
 	if (!skipMigrations && migrationBackup !== null && migrationBackup !== undefined) {
 		assertMigrationStartupBudget(deadlineAt, "migration artifact verification");

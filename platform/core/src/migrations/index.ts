@@ -1943,7 +1943,14 @@ function assertMigrationsSequence(): void {
 		}
 	}
 }
-export function runMigrations(db: MigrationDb): void {
+export interface MigrationProgress {
+	readonly version: number;
+	readonly name: string;
+	readonly completedOperations: number;
+	readonly phase: "running" | "complete";
+}
+
+export function runMigrations(db: MigrationDb, onProgress?: (progress: MigrationProgress) => void): void {
 	assertMigrationsSequence();
 
 	ensureMetaTables(db);
@@ -1953,6 +1960,44 @@ export function runMigrations(db: MigrationDb): void {
 	for (const migration of MIGRATIONS) {
 		if (applied.has(migration.version)) continue;
 
+		let completedOperations = 0;
+		const report = (phase: MigrationProgress["phase"] = "running"): void => {
+			onProgress?.({ version: migration.version, name: migration.name, completedOperations, phase });
+		};
+		const completed = (): void => {
+			completedOperations++;
+			report();
+		};
+		const observed: MigrationDb =
+			onProgress === undefined
+				? db
+				: {
+						exec: (sql) => {
+							db.exec(sql);
+							completed();
+						},
+						prepare: (sql) => {
+							const statement = db.prepare(sql);
+							return {
+								run: (...args) => {
+									statement.run(...args);
+									completed();
+								},
+								get: (...args) => {
+									const row = statement.get(...args);
+									completed();
+									return row;
+								},
+								all: (...args) => {
+									const rows = statement.all(...args);
+									completed();
+									return rows;
+								},
+								finalize: () => statement.finalize?.(),
+							};
+						},
+					};
+		report();
 		const start = Date.now();
 		const cs = checksum(migration);
 		const foreignKeys = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
@@ -1963,7 +2008,7 @@ export function runMigrations(db: MigrationDb): void {
 		}
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
-			migration.up(db);
+			migration.up(observed);
 			if (applied.has(177) && migration.version < 177) {
 				rebuildBaseCompartmentFts(db);
 				rebuildCompartmentFtsShards(db);
@@ -1995,5 +2040,6 @@ export function runMigrations(db: MigrationDb): void {
 		} finally {
 			if (migration.foreignKeysOff && foreignKeys === 1) db.exec("PRAGMA foreign_keys=ON");
 		}
+		report("complete");
 	}
 }

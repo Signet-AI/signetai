@@ -790,6 +790,13 @@ type DbOwnerEventPayload =
 	| { readonly type: "ready"; readonly pid: number }
 	| { readonly type: "started"; readonly jobId: string; readonly workloadClass: DbOwnerWorkloadClass }
 	| {
+			readonly type: "migration_progress";
+			readonly jobId: string;
+			readonly sequence: number;
+			readonly progress: import("@signet/core").MigrationProgress;
+	  }
+	| { readonly type: "migrations_complete"; readonly jobId: string }
+	| {
 			readonly type: "result";
 			readonly jobId: string;
 			readonly outcome: DbOwnerOutcome;

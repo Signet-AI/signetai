@@ -911,6 +911,59 @@ describe("DB owner client", () => {
 		}
 	});
 
+	test("registered daemon owner starts and recovers after a mid-job process kill", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: database.path, owner: client }));
+		const owner = await getDbOwner();
+		await owner.start();
+		const firstPid = owner.health().pid;
+		if (firstPid === null) throw new Error("missing registered owner pid");
+		const active = owner.submit(
+			{ kind: "sleep", durationMs: 1000 },
+			{ operation: "maintenance.kill-proof", lane: "maintenance", deadlineMs: 2000 },
+		);
+		const failure = rejected(active.result);
+		await waitFor(() => owner.health().activeJobId === active.job.id);
+		process.kill(firstPid, "SIGKILL");
+		expect(await failure).toMatchObject({ code: "DB_OWNER_DIED" });
+		await owner.start();
+		expect(owner.health().pid).not.toBe(firstPid);
+		expect(
+			await owner.submit(
+				{ kind: "query", statement: { sql: "SELECT 1 ok", result: "get", readonly: true } },
+				{ operation: "organization.restart-proof", lane: "read", deadlineMs: 1000 },
+			).result,
+		).toEqual({ ok: 1 });
+	});
+
+	test("reaps oversized protocol frames with a typed failure before replacement startup", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "oversized-owner-worker.js");
+		writeFileSync(
+			workerPath,
+			`process.stdin.setEncoding('utf8');
+			process.stdout.write(JSON.stringify({type:'ready',pid:process.pid})+'\\n');
+			process.stdin.on('data', () => { process.stdout.write('x'.repeat(64*1024*1024+1)); });`,
+		);
+		client = createDbOwnerClient({ dbPath: database.path, workerPath });
+		await client.start();
+		const firstPid = client.health().pid;
+		if (firstPid === null) throw new Error("oversized owner missing");
+		const handle = client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
+			{ operation: "oversized-frame", lane: "read", deadlineMs: 1000 },
+		);
+		expect(await rejected(handle.result)).toMatchObject({ code: "DB_OWNER_FRAME_TOO_LARGE" });
+		await waitFor(() => !processExists(firstPid));
+		expect(client.health()).toMatchObject({ state: "failed", pid: null });
+		await client.start();
+		expect(client.health().pid).not.toBe(firstPid);
+		expect(client.health().state).toBe("ready");
+	});
+
 	test("reaps malformed protocol output before allowing replacement startup", async () => {
 		const database = makeDb();
 		directory = database.directory;

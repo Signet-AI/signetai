@@ -1,6 +1,17 @@
 import { expect, test } from "bun:test";
 import { DbOwnerLineBuffer } from "./db-owner-line-buffer";
 
+test("DB owner framing bounds fragmented and complete frames in UTF-8 bytes", () => {
+	for (const terminated of [false, true]) {
+		const buffer = new DbOwnerLineBuffer(8);
+		expect(buffer.read("ΣΣ")).toEqual([]);
+		expect(() => buffer.read(`ΣΣx${terminated ? "\n" : ""}`)).toThrow(
+			expect.objectContaining({ code: "DB_OWNER_FRAME_TOO_LARGE" }),
+		);
+		expect(buffer.read("ready\n")).toEqual(["ready"]);
+	}
+});
+
 test("DB owner framing preserves split records, empty lines and Unicode", () => {
 	const buffer = new DbOwnerLineBuffer();
 	expect(buffer.read('{"text":"')).toEqual([]);

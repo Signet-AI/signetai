@@ -1,4 +1,5 @@
 import type { MigrationDb } from "./contract";
+import { installEvidencePurgeLifecycle } from "./177-classifications";
 import { compartmentFor } from "../compartment-shards";
 
 function partitionDreamingHistory(db: MigrationDb): void {
@@ -213,19 +214,23 @@ function upgradeDreamingAliases(db: MigrationDb): void {
 }
 
 function backfillDreamingAliases(db: MigrationDb): void {
-	const creator = `p.agent_id=entity_aliases.agent_id AND p.operation='create_entity_alias' AND p.status='applied' AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=entity_aliases.id`;
-	db.exec(`
+	db.exec(
+		"CREATE INDEX _legacy_alias_creator ON ontology_proposals(agent_id,CAST(CASE WHEN json_valid(result) THEN json_extract(result,'$.aliasId') END AS TEXT)) WHERE operation='create_entity_alias' AND status='applied'",
+	);
+	try {
+		const creator = `p.agent_id=entity_aliases.agent_id AND p.operation='create_entity_alias' AND p.status='applied' AND CAST(CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END AS TEXT)=entity_aliases.id`;
+		db.exec(`
 		UPDATE entity_aliases SET
-			compartment_id=(SELECT p.compartment_id FROM ontology_proposals p WHERE ${creator} ORDER BY p.created_at,p.id LIMIT 1),
-			dreaming_pass_id=(SELECT p.dreaming_pass_id FROM ontology_proposals p WHERE ${creator} ORDER BY p.created_at,p.id LIMIT 1)
+			compartment_id=(SELECT p.compartment_id FROM ontology_proposals p WHERE ${creator} LIMIT 1),
+			dreaming_pass_id=(SELECT p.dreaming_pass_id FROM ontology_proposals p WHERE ${creator} LIMIT 1)
 		WHERE (SELECT COUNT(*) FROM ontology_proposals p WHERE ${creator})=1
 		AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.derived_kind='alias' AND c.derived_id=entity_aliases.id AND c.agent_id=entity_aliases.agent_id);
 		WITH creators AS (
 			SELECT a.id AS alias_id,p.id AS proposal_id,a.agent_id,p.evidence
 			FROM entity_aliases a JOIN ontology_proposals p ON p.agent_id=a.agent_id
 			AND p.operation='create_entity_alias' AND p.status='applied'
-			AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=a.id
-			WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END=a.id)=1
+			AND CAST(CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END AS TEXT)=a.id
+			WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CAST(CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END AS TEXT)=a.id)=1
 		), refs AS (
 			SELECT c.*,CASE WHEN j.type='text' THEN j.value WHEN j.type='object' THEN json_extract(j.value,'$.source_ref') END AS ref
 			FROM creators c,json_each(CASE WHEN json_valid(c.evidence) THEN CASE WHEN json_type(c.evidence)='array' THEN c.evidence ELSE '[]' END ELSE '[]' END) j
@@ -244,10 +249,13 @@ function backfillDreamingAliases(db: MigrationDb): void {
 		SELECT 'alias',a.id,a.agent_id,c.evidence_kind,c.evidence_id
 		FROM entity_aliases a JOIN ontology_proposals p ON p.agent_id=a.agent_id
 		AND p.operation='create_entity_alias' AND p.status='applied'
-		AND CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END=a.id
+		AND CAST(CASE WHEN json_valid(p.result) THEN json_extract(p.result,'$.aliasId') END AS TEXT)=a.id
 		JOIN evidence_citations c ON c.derived_kind='proposal' AND c.derived_id=p.id AND c.agent_id=a.agent_id
-		WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END=a.id)=1;
+		WHERE (SELECT COUNT(*) FROM ontology_proposals candidate WHERE candidate.agent_id=a.agent_id AND candidate.operation='create_entity_alias' AND candidate.status='applied' AND CAST(CASE WHEN json_valid(candidate.result) THEN json_extract(candidate.result,'$.aliasId') END AS TEXT)=a.id)=1;
 	`);
+	} finally {
+		db.exec("DROP INDEX _legacy_alias_creator");
+	}
 }
 
 function upgradeDreamingChildren(db: MigrationDb): void {
@@ -273,83 +281,54 @@ function upgradeDreamingChildren(db: MigrationDb): void {
 		if (!columns.some((row) => row.name === "dreaming_pass_id"))
 			db.exec(`ALTER TABLE ${table} ADD COLUMN dreaming_pass_id TEXT`);
 		if (needsLabel) {
-			const rows = db.prepare(`SELECT child.*,child.rowid AS child_rowid FROM ${table} child`).all();
-			for (const row of rows) {
-				const args: unknown[] = [];
-				const parentSql = parents.replace(/child\.(\w+)/g, (_, column: string) => {
-					args.push(row[column]);
-					return "?";
-				});
-				const inherited = db.prepare(parentSql).all(...args);
-				const agents = new Set(
-					inherited.flatMap((parent) => (typeof parent.agent_id === "string" ? [parent.agent_id] : [])),
-				);
-				const labels = inherited.flatMap((parent) =>
-					db
-						.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?")
-						.all(parent.compartment_id)
-						.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : [])),
-				);
-				db.prepare(`UPDATE ${table} SET agent_id=COALESCE(agent_id,?),compartment_id=? WHERE rowid=?`).run(
-					agents.size === 1 ? [...agents][0] : null,
-					compartmentFor(db, labels),
-					row.child_rowid,
-				);
+			const page = db.prepare(
+				`SELECT child.*,child.rowid AS child_rowid FROM ${table} child NOT INDEXED WHERE child.rowid>? ORDER BY child.rowid LIMIT 256`,
+			);
+			const references: string[] = [];
+			const parentSql = parents.replace(/child\.(\w+)/g, (_, column: string) => {
+				references.push(column);
+				return "?";
+			});
+			const parent = db.prepare(parentSql);
+			const members = db.prepare("SELECT classification_id FROM compartment_members WHERE compartment_id=?");
+			const update = db.prepare(`UPDATE ${table} SET agent_id=COALESCE(agent_id,?),compartment_id=? WHERE rowid=?`);
+			let cursor = 0;
+			for (;;) {
+				const rows = page.all(cursor);
+				if (rows.length === 0) break;
+				for (const row of rows) {
+					if (typeof row.child_rowid !== "number") throw new Error("Invalid Dreaming child cursor");
+					cursor = row.child_rowid;
+					const inherited = parent.all(...references.map((column) => row[column]));
+					const agents = new Set(
+						inherited.flatMap((parent) => (typeof parent.agent_id === "string" ? [parent.agent_id] : [])),
+					);
+					const labels = inherited.flatMap((parent) =>
+						members
+							.all(parent.compartment_id)
+							.flatMap((member) => (typeof member.classification_id === "string" ? [member.classification_id] : [])),
+					);
+					update.run(agents.size === 1 ? [...agents][0] : null, compartmentFor(db, labels), row.child_rowid);
+				}
 			}
 		}
 		db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_compartment ON ${table}(agent_id,compartment_id)`);
 	}
 }
 
-function suspendDreamingPurgeTriggers(db: MigrationDb): { name: string; sql: string }[] {
-	return db
+function suspendDreamingPurgeTriggers(db: MigrationDb): void {
+	for (const row of db
 		.prepare(
-			"SELECT name,sql FROM sqlite_master WHERE type='trigger' AND (name GLOB '*_evidence_purge' OR name GLOB '*_citation_purge')",
+			"SELECT name FROM sqlite_master WHERE type='trigger' AND (name GLOB '*_evidence_purge' OR name GLOB '*_citation_purge')",
 		)
-		.all()
-		.map((row) => {
-			if (typeof row.name !== "string" || typeof row.sql !== "string")
-				throw new Error("Invalid evidence purge trigger");
-			db.exec(`DROP TRIGGER "${row.name.replaceAll('"', '""')}"`);
-			return { name: row.name, sql: row.sql };
-		});
-}
-
-function restoreDreamingPurgeTriggers(db: MigrationDb, triggers: readonly { name: string; sql: string }[]): void {
-	for (const trigger of triggers) {
-		let sql = trigger.sql
-			.replaceAll("memory_head_entries.entry_id", "memory_head_entries.id")
-			.replaceAll("memory_head_revision_entries.revision,", "memory_head_revision_entries.revision_id,")
-			.replaceAll("json_array(revision,entry_id)", "json_array(revision_id,entry_id)")
-			.replaceAll("json_array(old.revision,old.entry_id)", "json_array(old.revision_id,old.entry_id)")
-			.replaceAll(
-				"DELETE FROM memory_head_entries WHERE agent_id=old.agent_id AND entry_id IN",
-				"DELETE FROM memory_head_entries WHERE agent_id=old.agent_id AND id IN",
-			);
-		if (trigger.name === "memory_head_entries_citation_purge")
-			sql = sql.replaceAll("derived_id=old.entry_id", "derived_id=old.id");
-		for (const [table, kind, key] of [
-			["memories", "memory", "id"],
-			["session_transcripts", "transcript", "session_key"],
-			["memory_artifacts", "artifact", "source_path"],
-			["session_summaries", "summary", "id"],
-			["entity_attributes", "attribute", "id"],
-		] as const) {
-			if (trigger.name !== `${table}_evidence_purge` || sql.includes("DELETE FROM entity_aliases")) continue;
-			const marker = `DELETE FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}'`;
-			if (!sql.includes(marker)) throw new Error("Unknown evidence purge trigger layout");
-			const aliases = `DELETE FROM entity_aliases WHERE agent_id=old.agent_id AND id IN (SELECT derived_id FROM evidence_citations WHERE agent_id=old.agent_id AND derived_kind='alias' AND evidence_kind='${kind}' AND evidence_id=old.${key}) AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.agent_id=old.agent_id AND c.derived_kind='alias' AND c.derived_id=entity_aliases.id AND NOT(c.evidence_kind='${kind}' AND c.evidence_id=old.${key})); `;
-			sql = sql.replace(marker, aliases + marker);
-		}
-		db.exec(sql);
+		.all()) {
+		if (typeof row.name !== "string") throw new Error("Invalid evidence purge trigger");
+		db.exec(`DROP TRIGGER "${row.name.replaceAll('"', '""')}"`);
 	}
-	db.exec(`CREATE TRIGGER IF NOT EXISTS entity_aliases_citation_purge AFTER DELETE ON entity_aliases BEGIN
-		DELETE FROM evidence_citations WHERE derived_kind='alias' AND derived_id=old.id AND agent_id=old.agent_id;
-	END; CREATE INDEX IF NOT EXISTS idx_dreaming_citation_purge_lookup ON evidence_citations(agent_id,derived_kind,derived_id,evidence_kind,evidence_id);`);
 }
 
 export function up(db: MigrationDb): void {
-	const purgeTriggers = suspendDreamingPurgeTriggers(db);
+	suspendDreamingPurgeTriggers(db);
 	for (const [table, column, declaration] of [
 		["ontology_proposals", "dreaming_pass_id", "TEXT"],
 		["entities", "dreaming_pass_id", "TEXT"],
@@ -488,7 +467,7 @@ export function up(db: MigrationDb): void {
 			) THEN RAISE(ABORT, 'compartment_mismatch') END;
 		END;`);
 	}
-	restoreDreamingPurgeTriggers(db, purgeTriggers);
+	installEvidencePurgeLifecycle(db);
 }
 
 function partitionMemoryHeads(db: MigrationDb): void {

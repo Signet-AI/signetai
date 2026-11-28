@@ -9,6 +9,29 @@ function upgraded(): Database {
 }
 
 describe("Dreaming lease migration", () => {
+	for (const version of [177, 178, 179]) {
+		it(`repairing migration ${version} preserves the fresh schema and alias purge`, () => {
+			const db = upgraded();
+			const schema = () =>
+				db
+					.query("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")
+					.all();
+			try {
+				const fresh = schema();
+				db.prepare("DELETE FROM schema_migrations WHERE version=?").run(version);
+				runMigrations(db);
+				expect(schema()).toEqual(fresh);
+				db.exec(`INSERT INTO entities(id,name,entity_type,agent_id,created_at,updated_at) VALUES('purge-parent','Parent','project','default','now','now');
+					INSERT INTO memories(id,agent_id,content,created_at,updated_at) VALUES('purge-evidence','default','Evidence','now','now');
+					INSERT INTO entity_aliases(id,entity_id,alias,canonical_alias,agent_id,created_at,updated_at) VALUES('purge-alias','purge-parent','Alias','alias','default','now','now');
+					INSERT INTO evidence_citations VALUES('alias','purge-alias','default','memory','purge-evidence');
+					DELETE FROM memories WHERE id='purge-evidence';`);
+				expect(db.query("SELECT id FROM entity_aliases WHERE id='purge-alias'").get()).toBeNull();
+			} finally {
+				db.close();
+			}
+		});
+	}
 	it("backfills legacy alias labels and only same-agent creating evidence", () => {
 		const db = new Database(":memory:");
 		try {

@@ -45,7 +45,7 @@ import { watch } from "chokidar";
 import { Hono } from "hono";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
-import { createToken, requirePermission } from "./auth";
+import { createAuthMiddleware, createToken, requirePermission } from "./auth";
 import {
 	pauseOrganizationRuntime,
 	startOrganizationRuntime,
@@ -2511,6 +2511,60 @@ async function main() {
 	dbOwnerClient = recallOwner;
 	await dbOwnerClient.start();
 	const owner = dbOwnerClient;
+	const { createServer: nodeCreateServer } = await import("node:http");
+	const BIND_MAX_DELAY_MS = 30_000;
+	const BIND_RETRY_BASE_MS = 1000;
+	let bootstrapComplete = false;
+	const diagnosticPaths = new Set(["/health", "/health/live", "/health/ready", "/api/status"]);
+	const bootstrapApp = new Hono();
+	const bootstrapAuth = createAuthMiddleware(authConfig, authSecret);
+	bootstrapApp.use("*", async (c, next) => {
+		if (c.req.method === "GET" && diagnosticPaths.has(c.req.path)) return next();
+		if (c.req.header("authorization") || c.req.header("cookie")) return c.json({ error: "database_initializing" }, 503);
+		return bootstrapAuth(c, next);
+	});
+	bootstrapApp.all("*", (c) => {
+		const health = owner.health();
+		const status = shuttingDown
+			? "shutting_down"
+			: health.initialization === "migrating"
+				? "migrating"
+				: health.state === "failed"
+					? "failed"
+					: "starting";
+		const readable = c.req.method === "GET" && diagnosticPaths.has(c.req.path);
+		return c.json(
+			{
+				status,
+				pid: process.pid,
+				agentsDir: AGENTS_DIR,
+				db: false,
+				dbOwner: health,
+				...(readable ? {} : { error: "database_initializing" }),
+			},
+			readable && c.req.path !== "/health/ready" ? 200 : 503,
+		);
+	});
+	const bindingInfo = await new Promise<{ address: string; port: number }>((resolve, reject) => {
+		bindWithRetry({
+			port: PORT,
+			hostname: BIND_HOST,
+			signal: bindAbort.signal,
+			maxDelayMs: BIND_MAX_DELAY_MS,
+			baseDelayMs: BIND_RETRY_BASE_MS,
+			createServer: () =>
+				createSignetHttpServer({
+					fetch: (request) => (bootstrapComplete ? app.fetch(request) : bootstrapApp.fetch(request)),
+					hostname: BIND_HOST,
+					createServer: nodeCreateServer,
+				}),
+			onBound: (server) => {
+				httpServer = server;
+			},
+			onListening: resolve,
+			onFatalError: reject,
+		});
+	});
 	const retainedMigrationBackupPath = pendingMigrationBackupPath(MEMORY_DB);
 	let retainedMigrationCorrupt = false;
 	let retainedMigrationStatus: string | null = null;
@@ -3073,10 +3127,6 @@ async function main() {
 	}
 
 	await initializeOperatorRestart(AGENTS_DIR, () => requestShutdown("operator_restart", 0));
-	const { createServer: nodeCreateServer } = await import("node:http");
-
-	const BIND_MAX_DELAY_MS = 30_000;
-	const BIND_RETRY_BASE_MS = 1000;
 	const INCREMENTAL_INTEGRITY_TABLES_PER_RUN = 8;
 	const INCREMENTAL_INTEGRITY_RUN_BUDGET_MS = 5_000;
 	const INCREMENTAL_INTEGRITY_OWNER_DEADLINE_MS = 1_000;
@@ -3623,23 +3673,8 @@ async function main() {
 		});
 	};
 
-	bindWithRetry({
-		port: PORT,
-		hostname: BIND_HOST,
-		signal: bindAbort.signal,
-		maxDelayMs: BIND_MAX_DELAY_MS,
-		baseDelayMs: BIND_RETRY_BASE_MS,
-		createServer: () =>
-			createSignetHttpServer({
-				fetch: app.fetch,
-				hostname: BIND_HOST,
-				createServer: nodeCreateServer,
-			}),
-		onBound: (server) => {
-			httpServer = server;
-		},
-		onListening,
-	});
+	bootstrapComplete = true;
+	onListening(bindingInfo);
 }
 
 function isMainEntrypoint(): boolean {
