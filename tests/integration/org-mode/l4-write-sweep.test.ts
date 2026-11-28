@@ -117,6 +117,8 @@ test("A16 actual HTTP writes reject classified destinations without persisted si
 			"/api/hooks/pre-compaction",
 			"/api/hooks/compaction-complete",
 			"/api/hooks/session-end",
+			"/api/hooks/session-end/uploads",
+			"/api/cross-agent/messages",
 			"/api/documents",
 			"/api/sources/imports",
 		]) {

@@ -245,7 +245,7 @@ All organization API bodies are JSON. Error responses include `error` and `reaso
 | POST | `/api/auth/invites/lookup` | JSON `{ token }`; returns organization, role, and optional invite email. Tokens never appear in API paths. |
 | POST | `/api/auth/invites/accept` | `{ token, username, displayName, password? }`; browser session or `ssoStartPath`. |
 | GET | `/api/org/users` | Admin; optional `status`, `role`, `group`, `q`. |
-| POST | `/api/classifications/:id/purge-author` | Classification manager in the audience; `{ userId, dryRun? }` for a deactivated author. Previews actor-readable counts by default; execution returns 202 `{ jobId }`. Hidden rows remain untouched with no hint they exist. |
+| POST | `/api/classifications/:id/purge-author` | Classification manager in the audience; `{ userId, dryRun? }` for a deactivated author. Previews actor-readable counts by default; execution returns 202 `{ jobId }`. Hidden rows remain untouched; the initiating actor’s private job reports `incomplete` / `hidden_material_remains` without hidden counts or IDs. |
 | GET | `/api/org/users/lookup` | Admin or compliance, without agent/project restrictions; required `q` (2–128 characters) searches active display names/emails. Limited to 30 queries per principal per minute (429 with `Retry-After`). Returns `{ users: [{ id, displayName, email }], nextCursor }`; optional `limit` (1–50, default 20) and `cursor`. |
 | PATCH | `/api/org/users/:id` | Admin; `{ role?, compliance?, displayName? }`. |
 | POST | `/api/org/users/:id/deactivate` | Admin; `{ mode: "keep" | "transfer" | "purge", transferTo?, dryRun?: true }`; plan, or `202 { jobId }` when `dryRun: false`. |

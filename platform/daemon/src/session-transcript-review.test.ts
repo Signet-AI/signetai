@@ -349,7 +349,12 @@ test("partial deletion reimports the same source fingerprint and retains its new
 				{ role: "assistant", content: "post-watermark turn" },
 			],
 		}),
-		{ agentId: "review", sourceId: "source-partial", sourceRecordId: "record-partial" },
+		{
+			author: { userId: null, credential: "local" },
+			agentId: "review",
+			sourceId: "source-partial",
+			sourceRecordId: "record-partial",
+		},
 	);
 	const apply = () => getDbAccessor().withWriteTxAsync((db) => commitCompletedTranscriptBatchInTx(db, [commit]));
 	expect(await apply()).toMatchObject([{ outcome: "imported" }]);
@@ -418,7 +423,12 @@ test("filtered imports preserve system tool unknown roles and literal User lines
 			message_count: 5,
 			messages: [{ role: "user", content: "old" }, ...kept],
 		}),
-		{ agentId: "review", sourceId: "source-roles", sourceRecordId: "record-roles" },
+		{
+			author: { userId: null, credential: "local" },
+			agentId: "review",
+			sourceId: "source-roles",
+			sourceRecordId: "record-roles",
+		},
 	);
 	expect(
 		await getDbAccessor().withWriteTxAsync((db) => commitCompletedTranscriptBatchInTx(db, [commit])),
@@ -924,7 +934,12 @@ test.each([true, false])("reimport admits repeated new turns with replay=%s", as
 			message_count: messages.length,
 			messages,
 		}),
-		{ agentId: "review", sourceId: "fixture-source", sourceRecordId: `fixture-record-${replay}` },
+		{
+			author: { userId: null, credential: "local" },
+			agentId: "review",
+			sourceId: "fixture-source",
+			sourceRecordId: `fixture-record-${replay}`,
+		},
 	);
 	const result = await getDbAccessor().withWriteTxAsync((db) => commitCompletedTranscriptBatchInTx(db, [commit]));
 	expect(result).toMatchObject([{ outcome: "imported" }]);

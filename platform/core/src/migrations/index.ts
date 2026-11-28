@@ -182,6 +182,7 @@ import { up as dreamingEvidenceLeases } from "./179-dreaming-evidence-leases";
 import { up as keySessionBinding, artifacts as keySessionBindingArtifacts } from "./181-key-session-binding";
 import { up as hookTranscriptUploads, artifacts as hookTranscriptUploadArtifacts } from "./180-hook-transcript-uploads";
 import { up as importClassification, artifacts as importClassificationArtifacts } from "./182-import-classification";
+import { up as writeProvenance, artifacts as writeProvenanceArtifacts } from "./187-write-provenance";
 import { up as legacyChildScope, artifacts as legacyChildScopeArtifacts } from "./183-legacy-child-scope";
 import { up as credentialAuthority, artifacts as credentialAuthorityArtifacts } from "./184-credential-authority";
 import {
@@ -1771,6 +1772,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: vectorAdmissionShards,
 		artifacts: vectorAdmissionShardsArtifacts,
 	},
+	{ version: 187, name: "write-provenance", up: writeProvenance, artifacts: writeProvenanceArtifacts },
 ];
 function checksum(m: Migration): string {
 	let h = 0;

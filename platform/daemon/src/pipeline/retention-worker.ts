@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { classificationRequest } from "../classifications";
 import { pruneSessionRecallEventsInTx } from "../db-helpers";
 import { withWritePrincipal } from "@signet/core";
@@ -183,9 +184,9 @@ export function archiveToCold(
 			content_hash, normalized_content, extraction_status,
 			embedding_model, extraction_model, update_count,
 			original_created_at, archived_at, archived_reason,
-			cold_source_id, agent_id, original_row_json
+			cold_source_id, agent_id, original_row_json, compartment_id, author_user_id, provenance_resolved
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`);
 
 	for (const row of rows) {
@@ -213,8 +214,11 @@ export function archiveToCold(
 			now,
 			reason,
 			coldSourceId ?? null,
-			typeof row.agent_id === "string" ? row.agent_id : "default",
+			z.string().min(1).parse(row.agent_id),
 			JSON.stringify(row),
+			z.number().int().positive().nullable().parse(row.compartment_id),
+			z.string().nullable().parse(row.author_user_id),
+			1,
 		);
 	}
 }

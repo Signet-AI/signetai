@@ -275,7 +275,8 @@ function childParentRefs(item: ContentRow): readonly (readonly [string, string, 
 			["memories", "id", item.row.memory_id],
 			["entities", "id", item.row.entity_id],
 		];
-	if (item.table === "memory_history") return [["memories", "id", item.row.memory_id]];
+	if (item.table === "memory_history" || item.table === "memories_cold")
+		return [["memories", "id", item.row.memory_id]];
 	if (item.table === "relations")
 		return [
 			["entities", "id", item.row.source_entity_id],
@@ -362,12 +363,16 @@ function covers(db: MigrationDb, target: ClassificationTarget, item: ContentRow,
 			: undefined;
 	if ((r.agent_id ?? parentMemory?.row.agent_id) !== target.agentId) return false;
 	if (target.kind === "agent") return true;
-	if (target.kind === "memory") return item.table === "memories" && item.key === target.id;
+	if (target.kind === "memory")
+		return (
+			(item.table === "memories" && item.key === target.id) ||
+			(item.table === "memories_cold" && r.memory_id === target.id)
+		);
 	if (target.kind === "session") {
 		const keys = [target.id, `session:${target.id}`];
 		return (
 			keys.includes(String(r.session_key ?? r.session_id)) ||
-			(item.table === "memories" &&
+			(["memories", "memories_cold"].includes(item.table) &&
 				(keys.includes(String(r.source_id)) ||
 					rows.some(
 						(p) =>
@@ -421,7 +426,13 @@ function effective(db: MigrationDb, item: ContentRow, rows: readonly ContentRow[
 				: rows
 						.filter((p) => p.table === "memories" && p.key === item.row.source_id)
 						.flatMap((p) => (typeof p.row.agent_id === "string" ? [p.row.agent_id] : []));
-	const keys = new Set<unknown>([item.key, item.row.session_key, item.row.session_id, item.row.source_id]);
+	const keys = new Set<unknown>([
+		item.key,
+		item.row.memory_id,
+		item.row.session_key,
+		item.row.session_id,
+		item.row.source_id,
+	]);
 	if (typeof item.row.source_id === "string")
 		for (const p of rows)
 			if (p.row.agent_id === item.row.agent_id && p.key === item.row.source_id) {
@@ -660,7 +671,7 @@ function recompute(db: MigrationDb, selected: readonly ContentRow[], fanout = tr
 				))
 					add(referencedRows(db, link.derived_kind, link.derived_id, item.row.agent_id), true);
 			if (item.table === "memories") {
-				for (const table of ["memory_entity_mentions", "memory_history"])
+				for (const table of ["memory_entity_mentions", "memory_history", "memories_cold"])
 					add(boundedRows(table, "agent_id=? AND memory_id=?", [item.row.agent_id, item.key]), true);
 				add(
 					boundedRows("derived_memory_sources", "agent_id=? AND derived_memory_id=?", [item.row.agent_id, item.key]),

@@ -778,6 +778,7 @@ export { backfillEvidenceCitations, configureEvidencePurgeConnection } from "./m
 export const COMPARTMENT_TABLES = [
 	...HISTORICAL_COMPARTMENT_TABLES,
 	"import_content_registry",
+	"memories_cold",
 	"entity_aliases",
 	"memory_entity_mentions",
 	"derived_memory_sources",

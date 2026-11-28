@@ -184,6 +184,7 @@ export async function captureTranscriptOwned(
 }
 
 export interface TranscriptDeleteInput {
+	readonly readScope?: import("./read-scope").ReadScope;
 	readonly generation?: number;
 	readonly basePath: string;
 	readonly sessionKey: string;
