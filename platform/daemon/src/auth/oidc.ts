@@ -269,7 +269,7 @@ export async function oidcCallback(
 		);
 		writes.push(
 			statement(
-				"INSERT INTO group_members (group_id,user_id,role,managed_by,created_at) VALUES (?,?,'member','idp',?) ON CONFLICT(group_id,user_id) DO UPDATE SET managed_by = 'idp'",
+				"INSERT INTO group_members (group_id,user_id,role,managed_by,created_at) VALUES (?,?,'member','idp',?) ON CONFLICT(group_id,user_id) DO NOTHING",
 				[groupId, userId, now],
 			),
 		);

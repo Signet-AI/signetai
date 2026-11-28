@@ -976,7 +976,7 @@ def resolve_target(*, harness=None, flag_url=None, flag_key=None, config_url=Non
             raise ValueError("SIGNET_PORT must be between 1 and 65535")
         url = _url("http://%s:%s" % ("[%s]" % host if ":" in host and not host.startswith("[") else host, int(port)))
     environment_credential = bool(env.get("SIGNET_API_KEY", "").strip() or env.get("SIGNET_API_KEY_FILE", "").strip())
-    environment_credential_applies = flag_key is not None or not environment_credential or not env_url or _url(env_url) == url
+    environment_credential_applies = flag_key is not None or not environment_credential or (not env_url and not flag_url) or bool(env_url and _url(env_url) == url)
     if flag_key is not None:
         if not flag_key.strip():
             raise ValueError("flag_key cannot be empty")

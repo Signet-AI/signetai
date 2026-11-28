@@ -73,9 +73,9 @@ async function withIdentityBody(c: Context, next: Next): Promise<Response | unde
 export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | null): MiddlewareHandler {
 	const legacy = createAuthMiddleware(config, secret, verifyApiKey);
 	const ipLimits = new AuthRateLimiter(60_000, 20),
-		nameLimits = new AuthRateLimiter(60_000, 30),
 		pairLimits = new AuthRateLimiter(60_000, 5),
-		deviceLimits = new AuthRateLimiter(60_000, 20);
+		deviceLimits = new AuthRateLimiter(60_000, 20),
+		deviceStartLimits = new AuthRateLimiter(60_000, 100);
 	const openAuthPaths = new Set([
 		"/api/auth/session",
 		"/api/auth/handoff/redeem",
@@ -106,6 +106,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		if (c.req.method === "GET" && ["/health", "/health/live"].includes(c.req.path)) return next();
 		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${rateLimitClientAddress(c) ?? "unknown"}`, c))
 			return failure(c, new IdentityError(429, "rate_limit"));
+		if (c.req.path === "/api/auth/device/start" && !admit(deviceStartLimits, "all", c))
+			return failure(c, new IdentityError(429, "rate_limit"));
 		try {
 			if (
 				(config.mode === "team" || c.req.path === "/api/auth/login") &&
@@ -123,8 +125,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 				return failure(c, new IdentityError(400, "invalid_request"));
 			if (
 				typeof username === "string" &&
-				(!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), rateLimitClientAddress(c)]), c) ||
-					!admit(nameLimits, username.trim().toLowerCase(), c))
+				!admit(pairLimits, JSON.stringify([username.trim().toLowerCase(), rateLimitClientAddress(c)]), c)
 			)
 				return failure(c, new IdentityError(429, "rate_limit"));
 		}
@@ -333,7 +334,7 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 						if (p.boundAgentId && requested.value && requested.value !== p.boundAgentId)
 							throw new IdentityError(403, "agent_binding_conflict");
 						c.set("requestedOrganizationAgent", requested.value);
-						if (organizationReadRequest(c.req.method, c.req.path)) await bindRequestedReadAgent(p, requested.value);
+						await bindRequestedReadAgent(p, requested.value);
 						const project = checkPrincipalProject(
 							p,
 							typeof body.project === "string" ? body.project : c.req.query("project"),

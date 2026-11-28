@@ -1,5 +1,5 @@
 import { settingsSchema, settingsColumns } from "./auth/organization-settings-contract";
-import type { OrganizationRow } from "./auth/organization-store";
+import { visibleAgentSql, type OrganizationRow } from "./auth/organization-store";
 import { removeAgentInTx } from "./agent-removal";
 import { purgeAuthoredMemoryBatchInTx } from "./auth/organization-purge";
 import { canActAs, type AgentRecord } from "./auth/agent-access";
@@ -295,17 +295,18 @@ const upgradeProgressSchema = z.object({
 	phase: z.enum(["draft", "applying", "complete", "cancelled"]),
 	cursor: z.number().int().min(0),
 });
-function upgradeInventory(db: WriteDb) {
+function upgradeInventory(db: WriteDb, actor: OperatorActor) {
+	const visible = visibleAgentSql({ kind: "user", userId: actor.userId, boundAgentId: actor.boundAgentId });
 	const agents = db
 		.prepare(
-			"SELECT id,name,kind,owner_user_id,owner_group_id FROM agents WHERE kind='legacy' AND archived_at IS NULL ORDER BY id LIMIT ?",
+			`SELECT id,name,kind,owner_user_id,owner_group_id FROM agents a WHERE kind='legacy' AND archived_at IS NULL AND ${visible.sql} ORDER BY id LIMIT ?`,
 		)
-		.all<UpgradeLegacyAgent>(UPGRADE_AGENT_LIMIT + 1);
+		.all<UpgradeLegacyAgent>(...visible.args, UPGRADE_AGENT_LIMIT + 1);
 	const keys = db
 		.prepare(
-			"SELECT id,name,prefix,agent_id,permissions_json,scope_json,allowed_projects_json FROM api_keys WHERE legacy=1 AND user_id IS NULL AND revoked_at IS NULL ORDER BY id LIMIT ?",
+			`SELECT id,name,prefix,agent_id,permissions_json,scope_json,allowed_projects_json FROM api_keys k WHERE legacy=1 AND user_id IS NULL AND revoked_at IS NULL AND (k.agent_id IS NULL OR EXISTS(SELECT 1 FROM agents a WHERE a.id=k.agent_id AND ${visible.sql})) ORDER BY id LIMIT ?`,
 		)
-		.all<UpgradeLegacyKey>(UPGRADE_KEY_LIMIT + 1);
+		.all<UpgradeLegacyKey>(...visible.args, UPGRADE_KEY_LIMIT + 1);
 	if (agents.length > UPGRADE_AGENT_LIMIT || keys.length > UPGRADE_KEY_LIMIT) deny("upgrade_inventory_limit");
 	const settings = prepareTypedStatement<{ legacy_key_deadline: string | null }>(
 		db,
@@ -314,8 +315,8 @@ function upgradeInventory(db: WriteDb) {
 	if (!settings) deny("not_found");
 	return { agents, keys, legacyKeyDeadline: settings.legacy_key_deadline };
 }
-function upgradePlan(db: WriteDb, input: UpgradePlanInput) {
-	const inventory = upgradeInventory(db);
+function upgradePlan(db: WriteDb, input: UpgradePlanInput, actor: OperatorActor) {
+	const inventory = upgradeInventory(db, actor);
 	const mappings = new Map(input.mappings.map((row) => [row.agentId, row]));
 	const keys = new Map(input.keys.map((row) => [row.id, row]));
 	if (
@@ -366,11 +367,19 @@ function upgradePlan(db: WriteDb, input: UpgradePlanInput) {
 		fingerprint: createHash("sha256").update(JSON.stringify(inventory)).digest("hex"),
 	};
 }
-function upgradeJob(db: WriteDb, jobId: string) {
+function visibleUpgradeJobsSql(actor: OperatorActor) {
+	const visible = visibleAgentSql({ kind: "user", userId: actor.userId, boundAgentId: actor.boundAgentId });
+	return {
+		sql: `NOT EXISTS(SELECT 1 FROM json_each(j.params_json,'$.preview.agents') item WHERE NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=json_extract(item.value,'$.agentId') AND ${visible.sql})) AND NOT EXISTS(SELECT 1 FROM json_each(j.params_json,'$.preview.keys') item WHERE json_extract(item.value,'$.agentId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=json_extract(item.value,'$.agentId') AND ${visible.sql}))`,
+		args: [...visible.args, ...visible.args],
+	};
+}
+function upgradeJob(db: WriteDb, jobId: string, actor?: OperatorActor) {
+	const visible = actor ? visibleUpgradeJobsSql(actor) : { sql: "1=1", args: [] };
 	const row = prepareTypedStatement<OperatorJobRow>(
 		db,
-		"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE id=? AND kind='organization_upgrade'",
-	).get(jobId);
+		`SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs j WHERE id=? AND kind='organization_upgrade' AND ${visible.sql}`,
+	).get(jobId, ...visible.args);
 	if (!row) deny("not_found");
 	return row;
 }
@@ -550,6 +559,7 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 	if (!request.actor) deny("permission");
 	operation(db, { op: "authorize-global", actor: request.actor });
 	const actor = request.actor;
+	const visibleJobs = visibleUpgradeJobsSql(actor);
 	if (command.action === "map-agent") {
 		const mapping = command.mapping;
 		if (mapping.kind === "organization" && command.agentId !== "default") deny("org_policy");
@@ -570,12 +580,12 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 	if (command.action === "list")
 		return db
 			.prepare(
-				"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE kind='organization_upgrade' ORDER BY created_at DESC LIMIT 100",
+				`SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs j WHERE kind='organization_upgrade' AND ${visibleJobs.sql} ORDER BY created_at DESC LIMIT 100`,
 			)
-			.all<OperatorJobRow>()
+			.all<OperatorJobRow>(...visibleJobs.args)
 			.map(upgradeView);
 	if (command.action === "inventory") {
-		const inventory = upgradeInventory(db);
+		const inventory = upgradeInventory(db, actor);
 		return {
 			agents: inventory.agents,
 			keys: inventory.keys.map((key) => ({ id: key.id, name: key.name, prefix: key.prefix, agentId: key.agent_id })),
@@ -584,9 +594,9 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 			groups: db.prepare("SELECT id,name FROM groups ORDER BY id LIMIT 1000").all(),
 			jobs: db
 				.prepare(
-					"SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs WHERE kind='organization_upgrade' ORDER BY created_at DESC LIMIT 8",
+					`SELECT id,kind,status,created_by,params_json,progress_json,error,created_at,finished_at FROM org_jobs j WHERE kind='organization_upgrade' AND ${visibleJobs.sql} ORDER BY created_at DESC LIMIT 8`,
 				)
-				.all<OperatorJobRow>()
+				.all<OperatorJobRow>(...visibleJobs.args)
 				.map(upgradeView),
 		};
 	}
@@ -595,7 +605,7 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 			.prepare("SELECT id FROM org_jobs WHERE kind='organization_upgrade' AND status='pending' LIMIT 8")
 			.all();
 		if (pending.length >= 8) deny("capacity");
-		const plan = upgradePlan(db, command.plan);
+		const plan = upgradePlan(db, command.plan, actor);
 		const id = `job_${randomUUID().replaceAll("-", "")}`;
 		const saved = { version: 1, revision: randomUUID(), input: command.plan, ...plan, actor, deadlineAt: null };
 		db.prepare(
@@ -610,7 +620,7 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 		audit(db, actor, id, "organization.upgrade_previewed", null);
 		return upgradeView(upgradeJob(db, id));
 	}
-	const row = upgradeJob(db, command.jobId);
+	const row = upgradeJob(db, command.jobId, actor);
 	if (command.action === "read") return upgradeView(row);
 	const saved = upgradeSavedSchema.parse(JSON.parse(row.params_json));
 	const progress = upgradeProgressSchema.parse(JSON.parse(row.progress_json ?? "{}"));
@@ -631,7 +641,7 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 	if (saved.revision !== command.revision || progress.phase !== "draft" || row.status !== "pending")
 		deny("upgrade_revision_conflict");
 	if (command.action === "confirm") {
-		const current = upgradePlan(db, saved.input);
+		const current = upgradePlan(db, saved.input, actor);
 		if (current.fingerprint !== saved.fingerprint || JSON.stringify(current.preview) !== JSON.stringify(saved.preview))
 			deny("upgrade_inventory_changed");
 		if (
@@ -652,7 +662,13 @@ function upgradeOperation(db: WriteDb, request: UpgradeRequest): unknown {
 		return upgradeView(upgradeJob(db, row.id));
 	}
 	if (command.action === "revise") {
-		const next = { ...saved, ...upgradePlan(db, command.plan), input: command.plan, revision: randomUUID(), actor };
+		const next = {
+			...saved,
+			...upgradePlan(db, command.plan, actor),
+			input: command.plan,
+			revision: randomUUID(),
+			actor,
+		};
 		db.prepare("UPDATE org_jobs SET params_json=? WHERE id=?").run(JSON.stringify(next), row.id);
 		audit(db, actor, row.id, "organization.upgrade_revised", null);
 		return upgradeView(upgradeJob(db, row.id));

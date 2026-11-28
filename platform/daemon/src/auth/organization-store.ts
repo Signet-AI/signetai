@@ -1,4 +1,4 @@
-import { attemptAsync } from "@signet/core";
+import { attemptAsync, inFlightClassificationSql } from "@signet/core";
 import { logger } from "../logger";
 import { recordAuthObservation } from "./observations";
 import { publishSetupToken, removeSetupToken } from "./setup-token-file";
@@ -183,7 +183,9 @@ function passwordDigest(password: string, salt: Buffer, iterations: number): Pro
 		pbkdf2(password, salt, iterations, 32, "sha256", (error, key) => (error ? reject(error) : resolve(key))),
 	);
 }
+export const newPasswordSchema = z.string().min(12).max(1024);
 export async function passwordHash(password: string): Promise<string> {
+	newPasswordSchema.parse(password);
 	const salt = randomBytes(16);
 	const key = await passwordDigest(password, salt, 600_000);
 	return `pbkdf2-sha256$600000$${salt.toString("base64url")}$${key.toString("base64url")}`;
@@ -219,6 +221,21 @@ export function personalAgentStatements(userId: string, agentId: string, name: s
 		statement("UPDATE users SET personal_agent_id = ? WHERE id = ?", [agentId, userId]),
 	];
 }
+export function visibleAgentSql(p: Pick<Principal, "kind" | "userId" | "boundAgentId">) {
+	if (p.kind === "local") return { sql: "1=1", args: [] };
+	return {
+		sql: `(? IS NULL OR a.id=?) AND NOT EXISTS(SELECT 1 FROM classification_assignments ca WHERE ca.target_kind='agent' AND ca.target_id=a.id AND NOT EXISTS(SELECT 1 FROM classification_audience audience WHERE audience.classification_id=ca.classification_id AND ((audience.principal_kind='user' AND audience.principal_id=?) OR (audience.principal_kind='group' AND audience.principal_id IN (SELECT group_id FROM group_members WHERE user_id=?))))) AND NOT EXISTS(SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} AND json_extract(j.params_json,'$.target.kind')='agent' AND json_extract(j.params_json,'$.target.agentId')=a.id)`,
+		args: [p.boundAgentId, p.boundAgentId, p.userId, p.userId, p.userId, p.userId],
+	};
+}
+export async function requireVisibleAgent(p: Principal, agentId: string) {
+	const visible = visibleAgentSql(p);
+	const agent = await organizationQuery<(AgentRecord & { name: string }) | null>(
+		statement(`SELECT a.* FROM agents a WHERE a.id=? AND ${visible.sql}`, [agentId, ...visible.args], "get"),
+	);
+	if (!agent) throw new IdentityError(404, "not_found");
+	return agent;
+}
 export async function bindAccess(p: Principal, u: UserRow | null, org: OrganizationRow): Promise<void> {
 	if (u && !u.personal_agent_id && org.agent_model === "personal" && org.personal_agents_self_service) {
 		const agentId = `personal-${u.id.slice(4)}`;
@@ -233,10 +250,11 @@ export async function bindAccess(p: Principal, u: UserRow | null, org: Organizat
 		]);
 		u = await readUser(u.id);
 	}
+	const visible = visibleAgentSql(p);
 	const agents = await organizationQuery<AgentRecord[]>(
 		statement(
-			"SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE archived_at IS NULL AND (kind = 'organization' OR (kind = 'personal' AND owner_user_id = ?) OR (kind = 'team' AND owner_group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)) OR id = ? OR id = ? OR (? = 'admin' AND kind = 'legacy'))",
-			[p.userId, p.userId, p.boundAgentId, u?.default_read_agent_id ?? null, p.role],
+			`SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents a WHERE archived_at IS NULL AND (kind = 'organization' OR (kind = 'personal' AND owner_user_id = ?) OR (kind = 'team' AND owner_group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)) OR id = ? OR id = ? OR (? = 'admin' AND kind = 'legacy')) AND ${visible.sql}`,
+			[p.userId, p.userId, p.boundAgentId, u?.default_read_agent_id ?? null, p.role, ...visible.args],
 			"all",
 		),
 	);
@@ -252,10 +270,8 @@ export async function bindAccess(p: Principal, u: UserRow | null, org: Organizat
 export async function bindRequestedReadAgent(p: Principal, id: string | undefined): Promise<void> {
 	const access = principalAccess(p);
 	if (!id || !access || access.agents.some((a) => a.id === id)) return;
-	const agent = await organizationQuery<AgentRecord | null>(
-		statement("SELECT id,kind,owner_user_id,owner_group_id,archived_at FROM agents WHERE id=?", [id], "get"),
-	);
-	if (agent) bindPrincipalAccess(p, { ...access, agents: [...access.agents, agent] });
+	const agent = await requireVisibleAgent(p, id);
+	bindPrincipalAccess(p, { ...access, agents: [...access.agents, agent] });
 }
 export async function activeUser(userId: string, deviceId: string | null): Promise<UserRow> {
 	const u = await readUser(userId);
@@ -303,7 +319,7 @@ const keySessionCeilingSchema = z
 		permissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length),
 		agentId: z.string().min(1).max(200).nullable(),
 		projects: z.array(z.string().min(1).max(4096)).max(100).nullable(),
-		expiresAt: z.iso.datetime(),
+		expiresAt: z.iso.datetime().optional(),
 	})
 	.strict();
 export interface SessionKeyBinding {
@@ -333,10 +349,8 @@ function intersectProjects(left: readonly string[] | null, right: readonly strin
 async function sessionKeyLimits(session: SessionRow) {
 	const binding = sourceSessionBinding(session);
 	if (!binding) return undefined;
-	if (!binding.sourceKeyId) {
-		if (binding.ceiling.expiresAt <= new Date().toISOString()) throw new IdentityError(401, "expired");
-		return { ...binding.ceiling, sourceKeyId: undefined };
-	}
+	if (!binding.sourceKeyId) return { ...binding.ceiling, expiresAt: undefined, sourceKeyId: undefined };
+	if (!binding.ceiling.expiresAt) throw new IdentityError(401, "invalid_credential");
 	const key = await readBoundKey(binding.sourceKeyId);
 	if (!key || key.user_id !== session.user_id || key.kind !== "personal")
 		throw new IdentityError(401, "invalid_credential");
@@ -394,11 +408,12 @@ export function sessionMaterial(
 	const expires = new Date(
 		Date.now() + (kind === "browser" ? org.session_ttl_seconds : org.access_ttl_seconds) * 1000,
 	).toISOString();
-	const accessExpiresAt = binding && binding.ceiling.expiresAt < expires ? binding.ceiling.expiresAt : expires;
+	const ceilingExpiry = binding?.sourceKeyId ? binding.ceiling.expiresAt : undefined;
+	const accessExpiresAt = ceilingExpiry && ceilingExpiry < expires ? ceilingExpiry : expires;
 	const refreshExpiry = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
 	const refreshExpiresAt = refresh
-		? binding && binding.ceiling.expiresAt < refreshExpiry
-			? binding.ceiling.expiresAt
+		? ceilingExpiry && ceilingExpiry < refreshExpiry
+			? ceilingExpiry
 			: refreshExpiry
 		: null;
 	return {
@@ -494,7 +509,7 @@ export const claimSchema = z.object({
 		username: z.string().trim().min(1).max(128),
 		displayName: z.string().min(1).max(128),
 		email: z.email().optional(),
-		password: z.string().min(1).max(1024),
+		password: newPasswordSchema,
 	}),
 });
 export async function claimOrganization(input: z.infer<typeof claimSchema>, agentsDir?: string) {
@@ -710,8 +725,8 @@ async function rotateSession(
 	const refresh = secret();
 	const accessExpiry = new Date(Date.now() + org.access_ttl_seconds * 1000).toISOString();
 	const refreshExpiry = new Date(Date.now() + org.refresh_ttl_seconds * 1000).toISOString();
-	const accessExpiresAt = limits && limits.expiresAt < accessExpiry ? limits.expiresAt : accessExpiry;
-	const refreshExpiresAt = limits && limits.expiresAt < refreshExpiry ? limits.expiresAt : refreshExpiry;
+	const accessExpiresAt = limits?.expiresAt && limits.expiresAt < accessExpiry ? limits.expiresAt : accessExpiry;
+	const refreshExpiresAt = limits?.expiresAt && limits.expiresAt < refreshExpiry ? limits.expiresAt : refreshExpiry;
 	const retryState = appendRefreshRetry(token, row.id, row.refresh_hash, {
 		accessToken: `sig_ses_${row.id}_${access}`,
 		refreshToken: `sig_ref_${row.id}_${refresh}`,

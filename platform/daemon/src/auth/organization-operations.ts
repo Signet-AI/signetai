@@ -15,6 +15,7 @@ import {
 	organizationQuery,
 	organizationWrite,
 	passwordHash,
+	newPasswordSchema,
 	personalAgentStatements,
 	readBoundKey,
 	readOrganization,
@@ -28,6 +29,7 @@ import {
 	type UserRow,
 	userView,
 	verifyUserPassword,
+	visibleAgentSql,
 } from "./organization-store";
 import type { Principal } from "./principal";
 import { PERMISSIONS, type Permission } from "./types";
@@ -88,6 +90,7 @@ export async function redeemDashboardHandoff(input: unknown) {
 			sourceKeyId: binding.sourceKeyId,
 			ceiling: { ...binding.ceiling, expiresAt: expiresAtCeiling ?? binding.ceiling.expiresAt },
 		},
+		binding?.sourceKeyId ? "key-exchange" : undefined,
 	);
 	await organizationWrite(
 		[
@@ -104,7 +107,7 @@ export async function redeemDashboardHandoff(input: unknown) {
 				sourceSessionId: entry.sessionId,
 			}),
 		],
-		401,
+		binding?.sourceKeyId ? 429 : 401,
 	);
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
@@ -116,9 +119,17 @@ export function requireUser(p: Principal | undefined): Principal & { userId: str
 	if (!p || p.kind !== "user" || !p.userId) throw new IdentityError(401, "missing_credential");
 	return { ...p, userId: p.userId };
 }
+export function requireAuthority(p: Principal, permission: Permission, authorized = true): void {
+	if (!authorized || !p.permissions.has(permission))
+		throw new IdentityError(403, "permission", `Requires the ${permission} permission`);
+}
 export function requireAdmin(p: Principal): void {
-	if (p.role !== "admin" || !p.permissions.has("admin"))
-		throw new IdentityError(403, "permission", "Requires the admin role");
+	requireAuthority(p, "admin", p.role === "admin");
+}
+export async function requireGroupOwnerOrAdmin(p: Principal, groupId: string | null | undefined): Promise<void> {
+	if (p.role === "admin") return requireAdmin(p);
+	requireAuthority(p, "modify", p.credential.kind === "session" && !p.sourceKeyId);
+	if (!groupId || !(await groupOwner(p, groupId))) throw new IdentityError(403, "not_owner");
 }
 export function requireAudit(p: Principal): void {
 	if (!p.permissions.has("audit")) throw new IdentityError(403, "permission", "Requires the audit permission");
@@ -275,6 +286,9 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 					statement("SELECT expires_at,kind FROM api_keys WHERE id = ?", [p.credential.id], "get"),
 				)
 			: null;
+	const visibleAgents = p ? principalAccess(p)?.agents : undefined;
+	const visibleDefault = (agentId: string | null) =>
+		visibleAgents?.some((agent) => agent.id === agentId) ? agentId : null;
 	return {
 		authenticated: Boolean(p),
 		mode: "team",
@@ -286,7 +300,7 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 			? {
 					...p.credential,
 					keyKind: key?.kind ?? null,
-					agentId: p.boundAgentId,
+					agentId: visibleDefault(p.boundAgentId),
 					expiresAt: session?.access_expires_at ?? key?.expires_at ?? null,
 					deviceId: p.deviceId,
 					harness: p.harness,
@@ -294,8 +308,9 @@ export async function whoami(p: Principal | undefined, org: OrganizationRow, hyb
 			: null,
 		permissions: p ? [...p.permissions] : [],
 		agents: {
-			defaultRead: u?.default_read_agent_id ?? "default",
-			defaultWrite: org.agent_model === "personal" ? (u?.personal_agent_id ?? null) : "default",
+			defaultRead:
+				visibleDefault(p?.boundAgentId ?? u?.default_read_agent_id ?? "default") ?? visibleDefault("default"),
+			defaultWrite: visibleDefault(org.agent_model === "personal" ? (u?.personal_agent_id ?? null) : "default"),
 		},
 		hybridProxyDetected,
 		providers: authProviders(org),
@@ -312,6 +327,7 @@ function requireSessionManagement(p: Principal): void {
 export async function logout(p: Principal, input: unknown) {
 	const data = z.object({ all: z.boolean().optional() }).parse(input);
 	if (data.all) requireSessionManagement(p);
+	else if (p.credential.kind !== "session" || !p.sessionId) return { ok: true, revoked: 0 };
 	await organizationWrite([
 		statement(
 			`UPDATE auth_sessions SET revoked_at = ?,revoked_reason = 'logout',refresh_retry_json = '[]' WHERE ${data.all ? "user_id" : "id"} = ? AND revoked_at IS NULL`,
@@ -333,6 +349,7 @@ export async function listSessions(p: Principal) {
 	};
 }
 export async function revokeSession(p: Principal, sessionId: string) {
+	requireSessionManagement(p);
 	const row = await organizationQuery<SessionRow | null>(
 		statement("SELECT * FROM auth_sessions WHERE id = ?", [sessionId], "get"),
 	);
@@ -432,7 +449,6 @@ export async function deviceApprove(p: Principal, input: unknown) {
 			permissions: [...p.permissions],
 			agentId: p.boundAgentId,
 			projects: p.allowedProjects ? [...p.allowedProjects] : null,
-			expiresAt: approver.refresh_expires_at ?? approver.access_expires_at,
 		},
 	});
 	const writes: DbOwnerStatement[] = [
@@ -523,6 +539,7 @@ export async function devices(p: Principal) {
 	return { devices: rows.map((d) => ({ ...d, keys: keys.filter((k) => k.device_id === d.id) })) };
 }
 export async function changeDevice(p: Principal, deviceId: string, input: unknown | null) {
+	requireSessionManagement(p);
 	const device = await organizationQuery<{ user_id: string } | null>(
 		statement("SELECT user_id FROM devices WHERE id = ?", [deviceId], "get"),
 	);
@@ -548,10 +565,11 @@ export async function changeDevice(p: Principal, deviceId: string, input: unknow
 }
 export async function listKeys(p: Principal, all = false, kind?: string): Promise<Record<string, unknown>[]> {
 	if (all) requireAdmin(p);
+	const visible = visibleAgentSql(p);
 	return organizationQuery(
 		statement(
-			`SELECT id,prefix,name,role,harness,agent_id,device_id,user_id,kind,legacy,created_at,last_used_at,revoked_at,expires_at FROM api_keys WHERE ${all ? "1=1" : "user_id = ?"}${kind ? " AND kind = ?" : ""} ORDER BY created_at DESC LIMIT 1000`,
-			[...(all ? [] : [p.userId]), ...(kind ? [kind] : [])],
+			`SELECT id,prefix,name,role,harness,agent_id,device_id,user_id,kind,legacy,created_at,last_used_at,revoked_at,expires_at FROM api_keys k WHERE ${all ? "1=1" : "user_id = ?"}${kind ? " AND kind = ?" : ""} AND (k.agent_id IS NULL OR EXISTS(SELECT 1 FROM agents a WHERE a.id=k.agent_id AND ${visible.sql})) ORDER BY created_at DESC LIMIT 1000`,
+			[...(all ? [] : [p.userId]), ...(kind ? [kind] : []), ...visible.args],
 			"all",
 		),
 	);
@@ -592,8 +610,7 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 		await bindRequestedReadAgent(p, data.agentId);
 		const agent = principalAccess(p)?.agents.find((a) => a.id === data.agentId);
 		if (!agent || agent.archived_at) throw new IdentityError(403, "agent_not_permitted");
-		if (p.role !== "admin" && (!agent?.owner_group_id || !(await groupOwner(p, agent.owner_group_id))))
-			throw new IdentityError(403, "not_owner");
+		await requireGroupOwnerOrAdmin(p, agent.owner_group_id);
 	}
 	const permissions: readonly Permission[] = connector
 		? (["recall", "remember", "documents", "modify"] as const).filter((v) => p.permissions.has(v))
@@ -604,6 +621,8 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 		? new Date(Date.now() + org.connector_key_ttl_seconds * 1000).toISOString()
 		: (data.expiresAt ?? "");
 	if (Date.parse(expiresAt) <= Date.now()) throw new IdentityError(400, "invalid_expiry");
+	if (!connector && data.kind !== "shared" && Date.parse(expiresAt) > Date.now() + 365 * 86400_000)
+		throw new IdentityError(400, "invalid_expiry", "Personal API keys may last at most 365 days");
 	return createOrganizationKey(p, {
 		name: data.name ?? `${data.harness} connector`,
 		kind: connector ? "connector" : (data.kind ?? "personal"),
@@ -616,6 +635,7 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 	});
 }
 export async function revokeKey(p: Principal, keyId: string) {
+	requireSessionManagement(p);
 	const key = await organizationQuery<{ user_id: string | null } | null>(
 		statement("SELECT user_id FROM api_keys WHERE id = ?", [keyId], "get"),
 	);
@@ -692,7 +712,7 @@ export async function acceptInvite(input: unknown) {
 			token: z.string().max(256),
 			username: text,
 			displayName: text,
-			password: z.string().min(1).max(1024).optional(),
+			password: newPasswordSchema.optional(),
 		})
 		.parse(input);
 	const invite = await readInvite(data.token);
@@ -744,11 +764,14 @@ export async function groupOwner(p: Principal, groupId: string): Promise<boolean
 }
 export async function listUsers(p: Principal, filters: Record<string, string | undefined>) {
 	requireAdmin(p);
+	const visible = visibleAgentSql(p);
 	return {
 		users: await organizationQuery(
 			statement(
-				"SELECT id,username,email,display_name,role,compliance,status,personal_agent_id,default_read_agent_id,created_at,updated_at,deactivated_at,last_active_at FROM users WHERE (? IS NULL OR status = ?) AND (? IS NULL OR role = ?) AND (? IS NULL OR id IN (SELECT user_id FROM group_members WHERE group_id = ?)) AND (? IS NULL OR username LIKE ? OR display_name LIKE ?) ORDER BY username LIMIT 1000",
+				`SELECT id,username,email,display_name,role,compliance,status,(SELECT a.id FROM agents a WHERE a.id=users.personal_agent_id AND ${visible.sql}) AS personal_agent_id,(SELECT a.id FROM agents a WHERE a.id=users.default_read_agent_id AND ${visible.sql}) AS default_read_agent_id,created_at,updated_at,deactivated_at,last_active_at FROM users WHERE (? IS NULL OR status = ?) AND (? IS NULL OR role = ?) AND (? IS NULL OR id IN (SELECT user_id FROM group_members WHERE group_id = ?)) AND (? IS NULL OR username LIKE ? OR display_name LIKE ?) ORDER BY username LIMIT 1000`,
 				[
+					...visible.args,
+					...visible.args,
 					filters.status ?? null,
 					filters.status ?? null,
 					filters.role ?? null,

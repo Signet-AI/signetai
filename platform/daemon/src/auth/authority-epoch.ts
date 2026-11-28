@@ -10,6 +10,9 @@ export const AUTHORITY_TABLES = [
 	"devices",
 	"agents",
 	"device_authorizations",
+	"classification_assignments",
+	"classification_audience",
+	"org_jobs",
 ] as const;
 const authorityTables = new Set<string>(AUTHORITY_TABLES);
 

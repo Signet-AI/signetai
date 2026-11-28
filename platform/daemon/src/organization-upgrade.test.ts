@@ -135,7 +135,7 @@ test("upgrade routes deny members and narrowed credentials without exposing job 
 			name: "Narrowed upgrade administrator",
 			agentId: "old-personal",
 			permissions: ["admin"],
-			expiresAt: "2030-01-01T00:00:00.000Z",
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
 		})
 	).json();
 	for (const path of ["/api/org/upgrade", `/api/org/upgrade/${draft.id}`, "/api/org/upgrade/nonexistent"])

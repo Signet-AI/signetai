@@ -10,6 +10,7 @@ import { parseAuthConfig } from "./config";
 import { createIdentityMiddleware } from "./identity-middleware";
 import { ensureSetupToken, organizationQuery, statement } from "./organization-store";
 import { generateSecret } from "./tokens";
+import { PERMISSIONS, type Permission } from "./types";
 
 let dir = "";
 let app: Hono;
@@ -90,6 +91,419 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
+	const matrixCredentials = ["interactive", "derived-recall", "derived-admin", "connector", ...PERMISSIONS];
+	for (const family of ["reads", "mutations"] as const) {
+		test.each(matrixCredentials)(`R5 org route matrix ${family} / %s`, async (credential: string) => {
+			const root = await claim();
+			writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\nembedding:\n  provider: none\n");
+			const target = await member("matrix-target");
+			const team = await (await call("/api/org/groups", "POST", { name: "Matrix team" })).json();
+			const { organizationWrite } = await import("./organization-store");
+			await organizationWrite([
+				statement("UPDATE users SET compliance=1 WHERE id=?", [root.user.id]),
+				statement("INSERT INTO group_members(group_id,user_id,role) VALUES(?,?,'owner')", [team.id, root.user.id]),
+				statement(
+					"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES('matrix-job','offboard','complete','{}',?,'2026-01-01')",
+					[target.userId],
+				),
+				statement(
+					"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('matrix-legacy','Matrix legacy','legacy','2026-01-01','2026-01-01')",
+				),
+			]);
+			const personal = (await (await call("/api/auth/whoami")).json()).agents.defaultWrite;
+			let bearer = admin;
+			const permissions: readonly Permission[] =
+				credential === "interactive" || credential === "derived-admin"
+					? PERMISSIONS
+					: credential === "derived-recall"
+						? ["recall"]
+						: credential === "connector"
+							? ["recall", "remember", "documents", "modify"]
+							: PERMISSIONS.filter((permission) => permission === credential);
+			if (credential === "connector") {
+				const flow = await (
+					await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Matrix" }, "")
+				).json();
+				expect(
+					(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+				).toBe(200);
+				const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+				const issued = await call(
+					"/api/auth/connector-keys",
+					"POST",
+					{ harness: "codex", deviceId: cli.deviceId },
+					cli.accessToken,
+				);
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+			} else if (credential !== "interactive") {
+				const issued = await call("/api/auth/api-keys", "POST", {
+					name: "Matrix",
+					permissions,
+					expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+				});
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+				if (credential.startsWith("derived-")) {
+					const exchanged = await call("/api/auth/session", "POST", {}, bearer);
+					expect(exchanged.status).toBe(200);
+					bearer =
+						exchanged.headers
+							.getSetCookie()
+							.find((cookie) => cookie.startsWith("signet_session="))
+							?.split(";")[0]
+							?.slice("signet_session=".length) ?? "";
+				}
+			}
+			const isAdmin = permissions.includes("admin");
+			const gate = (permission: Permission) => permissions.includes(permission);
+			const unbound = credential !== "connector";
+			const signedInAdmin = credential === "interactive" || credential === "derived-admin";
+			type Cell = readonly [string, string, unknown, boolean, number, number?];
+			const plan = { mappings: [], keys: [], legacyKeyDeadline: new Date(Date.now() + 86400_000).toISOString() };
+			const reads: readonly Cell[] = [
+				["GET", "/api/org/users", undefined, isAdmin, 200],
+				["GET", "/api/org/users/lookup?q=matrix", undefined, isAdmin || gate("classify"), 200],
+				["GET", "/api/org/invites", undefined, isAdmin, 200],
+				["GET", "/api/org/groups", undefined, true, 200],
+				["GET", `/api/org/groups/${team.id}`, undefined, true, 200],
+				["GET", "/api/agents", undefined, true, 200],
+				["GET", `/api/agents/${personal}`, undefined, true, 200],
+				["GET", "/api/org/agents/legacy", undefined, isAdmin, 200],
+				["GET", `/api/org/access/${target.userId}`, undefined, gate("audit"), 200],
+				["GET", "/api/org/settings", undefined, isAdmin, 200],
+				["GET", "/api/org/keys", undefined, isAdmin, 200],
+				["GET", "/api/org/audit", undefined, gate("audit"), 200],
+				["GET", "/api/org/audit/export", undefined, gate("audit"), 200],
+				["GET", "/api/org/operator/doctor", undefined, gate("diagnostics"), 200],
+				["GET", "/api/org/operator/capabilities", undefined, isAdmin, 200],
+				["GET", "/api/org/operator/settings", undefined, signedInAdmin, 200],
+				["GET", "/api/org/jobs", undefined, isAdmin, 200],
+				["GET", "/api/org/jobs/matrix-job", undefined, isAdmin, 200],
+				["GET", "/api/org/upgrade", undefined, isAdmin, 200],
+				["GET", "/api/org/upgrade/missing", undefined, isAdmin, 404],
+			];
+			const mutations: readonly Cell[] = [
+				[
+					"POST",
+					"/api/org/claim",
+					{
+						setupToken: setup,
+						organizationName: "Acme",
+						admin: { username: "new", displayName: "New", password: "test password" },
+					},
+					true,
+					409,
+				],
+				["POST", "/api/org/bootstrap", { setupToken: setup, publicUrl: "https://org.example" }, true, 409],
+				["POST", "/api/org/invites", { role: "member", groupIds: [] }, isAdmin, 201],
+				["DELETE", "/api/org/invites/missing", undefined, isAdmin, 200],
+				["PATCH", `/api/org/users/${target.userId}`, { displayName: "Matrix target" }, isAdmin, 200],
+				["POST", `/api/org/users/${target.userId}/deactivate`, { mode: "keep", dryRun: true }, isAdmin, 200],
+				["POST", `/api/org/users/${target.userId}/reactivate`, {}, isAdmin, 200],
+				["POST", "/api/org/groups", { name: "Created matrix team" }, isAdmin, 201],
+				["PATCH", `/api/org/groups/${team.id}`, { description: "Matrix" }, isAdmin, 200],
+				["PUT", `/api/org/groups/${team.id}/members/${target.userId}`, { role: "member" }, isAdmin, 200],
+				["DELETE", `/api/org/groups/${team.id}/members/${target.userId}`, undefined, isAdmin, 200],
+				["POST", "/api/agents", { name: "Matrix personal", kind: "personal" }, isAdmin, 201],
+				["POST", "/api/agents", { name: "Matrix team agent", kind: "team", ownerGroupId: team.id }, isAdmin, 201],
+				[
+					"PATCH",
+					`/api/agents/${personal}`,
+					{ name: "Matrix personal renamed" },
+					isAdmin || credential === "connector",
+					200,
+				],
+				["DELETE", `/api/agents/${personal}`, undefined, true, 409],
+				["POST", `/api/org/agents/${personal}/purge`, {}, isAdmin, 409],
+				[
+					"POST",
+					"/api/org/agents/matrix-legacy/map",
+					{ kind: "personal", ownerUserId: target.userId },
+					isAdmin,
+					200,
+					unbound ? 403 : 404,
+				],
+				["PATCH", "/api/org/settings", { name: "Matrix organization" }, isAdmin, 200],
+				["POST", "/api/org/keys/revoke", { ids: ["missing"] }, isAdmin, 202],
+				["PATCH", "/api/org/keys/missing", { userId: target.userId }, isAdmin, 409],
+				["POST", "/api/org/operator/restart", {}, isAdmin, 409],
+				[
+					"PATCH",
+					"/api/org/operator/settings",
+					{ section: "instructions", value: "Matrix instance" },
+					signedInAdmin,
+					200,
+				],
+				[
+					"POST",
+					"/api/org/operator/jobs",
+					{ action: "embed.audit", agentId: personal, options: {} },
+					gate("diagnostics"),
+					202,
+				],
+				["POST", "/api/org/sso", {}, isAdmin, 400],
+				["POST", "/api/org/upgrade/preview", plan, isAdmin, 201],
+				["PUT", "/api/org/upgrade/missing", { revision: "missing", plan }, isAdmin, 404],
+				...(["confirm", "cancel", "resume"] as const).map(
+					(action): Cell => ["POST", `/api/org/upgrade/missing/${action}`, { revision: "missing" }, isAdmin, 404],
+				),
+				["DELETE", `/api/org/groups/${team.id}`, undefined, isAdmin, 200],
+			];
+			const results = [];
+			for (const [method, path, body, allowed, accepted, denied = 403] of family === "reads" ? reads : mutations) {
+				const response = await call(path, method, body, bearer);
+				results.push({ method, path, status: response.status, expected: allowed ? accepted : denied });
+			}
+			expect(results.filter((result) => result.status !== result.expected)).toEqual([]);
+		});
+	}
+
+	test.each(["admin-key", "owner-key", "derived", "connector"])(
+		"R5 %s cannot bypass owner permission ceilings",
+		async (kind) => {
+			await claim();
+			const owner = await member("ceiling-owner");
+			const target = await member("ceiling-target");
+			const team = await (await call("/api/org/groups", "POST", { name: "Ceiling team" })).json();
+			expect((await call(`/api/org/groups/${team.id}/members/${owner.userId}`, "PUT", { role: "owner" })).status).toBe(
+				200,
+			);
+			const agent = await (
+				await call("/api/agents", "POST", { name: "Ceiling agent", kind: "team", ownerGroupId: team.id })
+			).json();
+			let bearer: string;
+			if (kind === "connector") {
+				const flow = await (
+					await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Ceiling" }, "")
+				).json();
+				expect(
+					(
+						await call(
+							"/api/auth/device/approve",
+							"POST",
+							{ userCode: flow.userCode, decision: "approve" },
+							owner.token,
+						)
+					).status,
+				).toBe(200);
+				const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+				const issued = await call(
+					"/api/auth/connector-keys",
+					"POST",
+					{ harness: "codex", deviceId: cli.deviceId, agentId: agent.agentId },
+					cli.accessToken,
+				);
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+			} else {
+				const issued = await call(
+					"/api/auth/api-keys",
+					"POST",
+					{ name: "Ceiling", permissions: ["recall"], expiresAt: new Date(Date.now() + 3600_000).toISOString() },
+					kind === "owner-key" ? owner.token : admin,
+				);
+				expect(issued.status).toBe(201);
+				bearer = (await issued.json()).secret;
+				if (kind === "derived") {
+					const exchanged = await call("/api/auth/session", "POST", {}, bearer);
+					expect(exchanged.status).toBe(200);
+					bearer =
+						exchanged.headers
+							.getSetCookie()
+							.find((cookie) => cookie.startsWith("signet_session="))
+							?.split(";")[0]
+							?.slice("signet_session=".length) ?? "";
+				}
+			}
+			const statuses = [];
+			statuses.push(
+				(await call(`/api/org/groups/${team.id}/members/${target.userId}`, "PUT", { role: "member" }, bearer)).status,
+			);
+			statuses.push(
+				(await call(`/api/org/groups/${team.id}/members/${target.userId}`, "DELETE", undefined, bearer)).status,
+			);
+			statuses.push(
+				(await call("/api/agents", "POST", { name: "Denied", kind: "team", ownerGroupId: team.id }, bearer)).status,
+			);
+			statuses.push((await call(`/api/org/access/${target.userId}`, "GET", undefined, bearer)).status);
+			statuses.push(
+				(
+					await call(
+						"/api/auth/api-keys",
+						"POST",
+						{
+							kind: "shared",
+							name: "Denied",
+							agentId: agent.agentId,
+							permissions: ["recall"],
+							expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+						},
+						bearer,
+					)
+				).status,
+			);
+			expect(statuses).toEqual([403, 403, 403, 403, 403]);
+		},
+	);
+	test("R5 self ownership does not bypass credential ceilings", async () => {
+		await claim();
+		const flow = await (
+			await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "Owned" }, "")
+		).json();
+		expect(
+			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" })).status,
+		).toBe(200);
+		const cli = await (await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).json();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "Own key",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			})
+		).json();
+		const results = [
+			(await call("/api/agents", "POST", { name: "Unpermitted personal", kind: "personal" }, key.secret)).status,
+			(await call(`/api/auth/sessions/${cli.sessionId}`, "DELETE", undefined, key.secret)).status,
+			(await call(`/api/auth/devices/${cli.deviceId}`, "PATCH", { name: "Unpermitted" }, key.secret)).status,
+			(await call(`/api/auth/devices/${cli.deviceId}`, "DELETE", undefined, key.secret)).status,
+			(await call(`/api/auth/api-keys/${key.key.id}`, "DELETE", undefined, key.secret)).status,
+		];
+		expect(results).toEqual([403, 403, 403, 403, 403]);
+	});
+	test("R5 classified agents are absent from lists and indistinguishable by id", async () => {
+		await claim();
+		const eve = await member("agent-eve");
+		const hidden = await member("agent-hidden");
+		const { organizationWrite } = await import("./organization-store");
+		const issued = await call("/api/auth/api-keys", "POST", {
+			kind: "shared",
+			name: "Classified binding",
+			agentId: hidden.agentId,
+			permissions: ["recall"],
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+		});
+		expect(issued.status).toBe(201);
+		const boundKey = await issued.json();
+		await organizationWrite([statement("UPDATE agents SET kind='legacy' WHERE id=?", [hidden.agentId])]);
+		const draftResponse = await call("/api/org/upgrade/preview", "POST", {
+			mappings: [],
+			keys: [],
+			legacyKeyDeadline: new Date(Date.now() + 86400_000).toISOString(),
+		});
+		expect(draftResponse.status).toBe(201);
+		const draft = await draftResponse.json();
+		expect(JSON.stringify(draft)).toContain(hidden.agentId);
+		expect(
+			(await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: hidden.agentId }, eve.token)).status,
+		).toBe(200);
+		const before = await (await call("/api/agents", "GET", undefined, eve.token)).json();
+		expect(before.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(true);
+		await organizationWrite([
+			statement("INSERT INTO classifications(id,name) VALUES('cls_agent_hidden','Agent hidden')"),
+			statement(
+				"INSERT INTO classification_audience(classification_id,principal_kind,principal_id) VALUES('cls_agent_hidden','user',?)",
+				[hidden.userId],
+			),
+			statement(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id) VALUES('agent',?,?,'cls_agent_hidden')",
+				[hidden.agentId, hidden.agentId],
+			),
+		]);
+		const after = await (await call("/api/agents", "GET", undefined, eve.token)).json();
+		expect(after.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		for (const path of [
+			"/api/org/users",
+			"/api/org/keys",
+			"/api/auth/api-keys?all=1",
+			"/api/org/upgrade",
+			"/api/org/jobs",
+		])
+			expect(JSON.stringify(await (await call(path)).json()), path).not.toContain(hidden.agentId);
+		const keyIdentity = await (await call("/api/auth/whoami", "GET", undefined, boundKey.secret)).json();
+		expect(JSON.stringify(keyIdentity)).not.toContain(hidden.agentId);
+		expect((await call(`/api/org/upgrade/${draft.id}`)).status).toBe(404);
+		expect((await call(`/api/org/jobs/${draft.id}`)).status).toBe(404);
+		expect(JSON.stringify(await (await call("/api/auth/whoami", "GET", undefined, eve.token)).json())).not.toContain(
+			hidden.agentId,
+		);
+		const headerResponse = (id: string) =>
+			app.request("/api/agents", { headers: { authorization: `Bearer ${eve.token}`, "x-signet-agent-id": id } });
+		const missingHeader = await headerResponse("unknown-agent");
+		const hiddenHeader = await headerResponse(hidden.agentId);
+		expect(hiddenHeader.status).toBe(404);
+		expect(missingHeader.status).toBe(404);
+		expect(await hiddenHeader.json()).toEqual(await missingHeader.json());
+		for (const bearer of [eve.token, admin]) {
+			for (const [path, method, body] of [
+				["/api/auth/preferences", "PATCH", { defaultReadAgentId: "TARGET" }],
+				["/api/agents/TARGET", "GET", undefined],
+				["/api/agents/TARGET", "PATCH", { name: "Denied" }],
+				["/api/agents/TARGET", "DELETE", undefined],
+				["/api/org/agents/TARGET/map", "POST", { kind: "personal", ownerUserId: eve.userId }],
+				["/api/org/agents/TARGET/purge", "POST", {}],
+			] as const) {
+				const responseFor = (id: string) =>
+					call(
+						path.replace("TARGET", id),
+						method,
+						path === "/api/auth/preferences" ? { defaultReadAgentId: id } : body,
+						bearer,
+					);
+				const absent = await responseFor("unknown-agent");
+				const denied = await responseFor(hidden.agentId);
+				expect({ path, status: denied.status, body: await denied.json() }).toEqual({
+					path,
+					status: absent.status,
+					body: await absent.json(),
+				});
+				expect(denied.status).toBe(404);
+			}
+		}
+		const allowed = await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: hidden.agentId }, hidden.token);
+		expect(allowed.status).toBe(200);
+		await organizationWrite([statement("UPDATE agents SET kind='legacy' WHERE id=?", [hidden.agentId])]);
+		const legacy = await (await call("/api/org/agents/legacy")).json();
+		expect(legacy.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		const inventory = await (await call("/api/org/upgrade")).json();
+		expect(inventory.agents.some((agent: { id: string }) => agent.id === hidden.agentId)).toBe(false);
+		const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+		const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+		const { createMcpServer } = await import("../mcp/tools");
+		const server = await createMcpServer({
+			daemonUrl: "http://isolated.test",
+			authorizationHeader: `Bearer ${admin}`,
+			request: async (url, init) => app.request(url, init),
+		});
+		const client = new Client({ name: "visibility-proof", version: "1" });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		try {
+			await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+			const result = await client.callTool({ name: "signet_org_upgrade", arguments: { action: "inventory" } });
+			expect(result.isError).not.toBe(true);
+			expect(JSON.stringify(result)).toContain("legacyKeyDeadline");
+			expect(JSON.stringify(result)).not.toContain(hidden.agentId);
+		} finally {
+			await client.close();
+			await server.close();
+		}
+		const preview = await (
+			await call("/api/org/upgrade/preview", "POST", {
+				mappings: [],
+				keys: [],
+				legacyKeyDeadline: new Date(Date.now() + 86400_000).toISOString(),
+			})
+		).json();
+		expect(JSON.stringify(preview)).not.toContain(hidden.agentId);
+		await organizationWrite([
+			statement("DELETE FROM classification_assignments WHERE target_kind='agent' AND target_id=?", [hidden.agentId]),
+		]);
+		expect(
+			(await (await call("/api/agents", "GET", undefined, eve.token)).json()).agents.some(
+				(agent: { id: string }) => agent.id === hidden.agentId,
+			),
+		).toBe(true);
+	});
 	test("verified credentials reuse authority resolution without owner reads", async () => {
 		app.get("/api/cache-proof", (c) => c.json({ userId: c.get("principal").userId }));
 		await claim();
@@ -142,6 +556,22 @@ describe("organization HTTP flows", () => {
 		const first = await call("/api/observation-proof", "GET", undefined, key.secret);
 		expect(first.status).toBe(200);
 		const profile: unknown = JSON.parse(first.headers.get("x-signet-owner-profile") ?? "null");
+		const { getDbOwner } = await import("../db-owner-runtime");
+		const observations = await import("./observations");
+		const submit = spyOn(await getDbOwner(), "submit");
+		try {
+			for (let i = 0; i < 6; i++) {
+				expect((await call("/api/observation-proof", "GET", undefined, key.secret)).status).toBe(200);
+				await observations.flushAuthObservations();
+			}
+			const batches = submit.mock.calls.filter(([request]) => request.kind === "auth_observations");
+			expect(batches).toHaveLength(1);
+			expect(
+				await organizationQuery(statement("SELECT last_used_at FROM api_keys WHERE id=?", [key.key.id], "get")),
+			).toEqual({ last_used_at: expect.any(String) });
+		} finally {
+			submit.mockRestore();
+		}
 		expect(profile).not.toEqual(
 			expect.arrayContaining([expect.objectContaining({ operation: "auth.record-api-key-use" })]),
 		);
@@ -257,6 +687,44 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'cap-%'")]);
 		expect((await call("/api/auth/session", "POST", {}, target.secret)).status).toBe(200);
 	});
+	test.each(["principal", "global"])("R5 key handoff enforces the %s session cap", async (scope) => {
+		const root = await claim();
+		const other = scope === "global" ? await member("handoff-cap-other") : { userId: root.user.id, token: admin };
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", { name: "handoff cap", permissions: ["recall"], expiresAt })
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, key.secret);
+		expect(exchanged.status).toBe(200);
+		const derived =
+			exchanged.headers
+				.getSetCookie()
+				.find((cookie) => cookie.startsWith("signet_session="))
+				?.split(";")[0]
+				?.slice("signet_session=".length) ?? "";
+		const handoff = await (await call("/api/auth/handoff", "POST", {}, derived)).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?) INSERT INTO auth_sessions(id,user_id,kind,token_hash,access_expires_at,source_key_id,source_key_ceiling_json) SELECT 'handoff-cap-'||x,?,'browser','hash',?,?,? FROM n",
+				[
+					scope === "global" ? 999 : 19,
+					other.userId,
+					expiresAt,
+					key.key.id,
+					JSON.stringify({ permissions: ["recall"], agentId: null, projects: null, expiresAt }),
+				],
+			),
+		]);
+		const denied = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "");
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'handoff-cap-%'"),
+		]);
+		const next = await (await call("/api/auth/handoff", "POST", {}, derived)).json();
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: next.code, confirm: true }, "")).status).toBe(200);
+	});
 	test("handoff caps apply across a user's sessions with Retry-After", async () => {
 		const root = await claim();
 		const { issueSession } = await import("./organization-store");
@@ -270,6 +738,131 @@ describe("organization HTTP flows", () => {
 		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
 	});
 
+	test("R5 personal API key lifetime cannot exceed one year", async () => {
+		await claim();
+		const payload = { name: "maximum lifetime", permissions: ["recall"] };
+		const denied = await call("/api/auth/api-keys", "POST", {
+			...payload,
+			expiresAt: new Date(Date.now() + 366 * 86400_000).toISOString(),
+		});
+		expect(denied.status).toBe(400);
+		expect(await denied.json()).toMatchObject({ reason: "invalid_expiry" });
+		const valid = await call("/api/auth/api-keys", "POST", {
+			...payload,
+			expiresAt: new Date(Date.now() + 365 * 86400_000 - 60_000).toISOString(),
+		});
+		expect(valid.status).toBe(201);
+	});
+	test("R5 device-start is bounded per IP and globally", async () => {
+		await claim();
+		const start = (ip: string) =>
+			app.request(
+				"/api/auth/device/start",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ client: "cli", deviceName: "Limited" }),
+				},
+				{ incoming: { socket: { remoteAddress: ip } } },
+			);
+		for (let attempt = 0; attempt < 20; attempt++) expect((await start("203.0.113.1")).status).toBe(200);
+		const ipDenied = await start("203.0.113.1");
+		expect(ipDenied.status).toBe(429);
+		expect(Number(ipDenied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		for (let attempt = 0; attempt < 80; attempt++) expect((await start(`198.51.100.${attempt + 1}`)).status).toBe(200);
+		const globalDenied = await start("192.0.2.1");
+		expect(globalDenied.status).toBe(429);
+		expect(Number(globalDenied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM device_authorizations", [], "get"))).toEqual({
+			n: 100,
+		});
+	});
+	test("R5 account lockouts are scoped to the account and client IP", async () => {
+		await claim();
+		const login = (username: string, ip: string, password?: string) =>
+			app.request(
+				"/api/auth/login",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ username, password }),
+				},
+				{ incoming: { socket: { remoteAddress: ip } } },
+			);
+		for (let network = 1; network <= 6; network++) {
+			for (let attempt = 0; attempt < 5; attempt++)
+				expect((await login("admin", `203.0.113.${network}`)).status).toBe(400);
+			expect((await login("admin", `203.0.113.${network}`)).status).toBe(429);
+		}
+		expect((await login("admin", "198.51.100.1", "test password")).status).toBe(200);
+		const known = await login("admin", "198.51.100.2", "wrong password");
+		const unknown = await login("unknown", "198.51.100.2", "wrong password");
+		expect(known.status).toBe(401);
+		expect(unknown.status).toBe(known.status);
+		expect(await unknown.json()).toEqual(await known.json());
+	});
+	test("R5 local password setters reject fewer than twelve characters", async () => {
+		const short = "elevenchars";
+		expect(short.length).toBe(11);
+		const rejected = await call(
+			"/api/org/claim",
+			"POST",
+			{
+				setupToken: setup,
+				organizationName: "Acme",
+				admin: { username: "admin", displayName: "Admin", password: short },
+			},
+			"",
+		);
+		expect(rejected.status).toBe(400);
+		await claim();
+		const invite = await (await call("/api/org/invites", "POST", { role: "member", groupIds: [] })).json();
+		const token = new URL(invite.inviteUrl).pathname.split("/").pop();
+		expect(
+			(
+				await call(
+					"/api/auth/invites/accept",
+					"POST",
+					{ token, username: "short", displayName: "Short", password: short },
+					"",
+				)
+			).status,
+		).toBe(400);
+		expect(
+			(
+				await call(
+					"/api/auth/invites/accept",
+					"POST",
+					{ token, username: "valid", displayName: "Valid", password: "twelve-chars" },
+					"",
+				)
+			).status,
+		).toBe(200);
+		const { pbkdf2Sync } = await import("node:crypto");
+		const salt = Buffer.alloc(16, 1);
+		const legacy = `pbkdf2-sha256$10000$${salt.toString("base64url")}$${pbkdf2Sync("old", salt, 10_000, 32, "sha256").toString("base64url")}`;
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([statement("UPDATE users SET password_hash=? WHERE username='admin'", [legacy])]);
+		expect((await call("/api/auth/login", "POST", { username: "admin", password: "old" }, "")).status).toBe(200);
+		expect(
+			await organizationQuery(statement("SELECT password_hash FROM users WHERE username='admin'", [], "get")),
+		).toEqual({ password_hash: legacy });
+	});
+	test("R5 logout reports zero revocations for a key credential", async () => {
+		await claim();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", {
+				name: "logout",
+				permissions: ["recall"],
+				expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			})
+		).json();
+		const response = await call("/api/auth/logout", "POST", {}, key.secret);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true, revoked: 0 });
+		expect((await call("/api/auth/profile")).status).toBe(200);
+		expect((await call("/api/auth/profile", "GET", undefined, key.secret)).status).toBe(200);
+	});
 	test("M2 admin session-management keys may sign out all sessions", async () => {
 		await claim();
 		const key = await (
@@ -418,6 +1011,65 @@ describe("organization HTTP flows", () => {
 		).toBe(403);
 		expect((await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).status).toBe(428);
 	});
+	test.each(["revoked", "expired"])(
+		"R5 device session outlives its %s approver and renews connectors",
+		async (state) => {
+			await claim();
+			const approver = await member("device-approver");
+			const identity = await (await call("/api/auth/whoami", "GET", undefined, approver.token)).json();
+			const flow = await (
+				await call("/api/auth/device/start", "POST", { client: "desktop", deviceName: "Lifetime" }, "")
+			).json();
+			expect(
+				(
+					await call(
+						"/api/auth/device/approve",
+						"POST",
+						{ userCode: flow.userCode, decision: "approve" },
+						approver.token,
+					)
+				).status,
+			).toBe(200);
+			const loginResponse = await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "");
+			expect(loginResponse.status).toBe(200);
+			const login = await loginResponse.json();
+			expect(Date.parse(login.refreshExpiresAt) - Date.now()).toBeGreaterThan(29 * 86400_000);
+			const connectorResponse = await call(
+				"/api/auth/connector-keys",
+				"POST",
+				{ harness: "codex", deviceId: login.deviceId },
+				login.accessToken,
+			);
+			expect(connectorResponse.status).toBe(201);
+			const connector = await connectorResponse.json();
+			const { organizationWrite } = await import("./organization-store");
+			await organizationWrite([
+				statement(
+					state === "revoked"
+						? "UPDATE auth_sessions SET revoked_at='revoked' WHERE id=?"
+						: "UPDATE auth_sessions SET access_expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+					[identity.credential.id],
+				),
+				statement("UPDATE api_keys SET expires_at=? WHERE id=?", [
+					new Date(Date.now() + 3600_000).toISOString(),
+					connector.key.id,
+				]),
+			]);
+			expect((await call("/api/auth/profile", "GET", undefined, login.accessToken)).status).toBe(200);
+			const refreshedResponse = await call("/api/auth/refresh", "POST", { refreshToken: login.refreshToken }, "");
+			expect(refreshedResponse.status).toBe(200);
+			const refreshed = await refreshedResponse.json();
+			expect(Date.parse(refreshed.refreshExpiresAt) - Date.now()).toBeGreaterThan(29 * 86400_000);
+			expect((await call("/api/auth/profile", "GET", undefined, connector.secret)).status).toBe(200);
+			const renewed = await organizationQuery<{ expires_at: string } | null>(
+				statement("SELECT expires_at FROM api_keys WHERE id=?", [connector.key.id], "get"),
+			);
+			expect(Date.parse(renewed?.expires_at ?? "") - Date.now()).toBeGreaterThan(29 * 86400_000);
+			expect((await call(`/api/auth/sessions/${login.sessionId}`, "DELETE", undefined, admin)).status).toBe(200);
+			expect((await call("/api/auth/profile", "GET", undefined, refreshed.accessToken)).status).toBe(401);
+			expect((await call("/api/auth/refresh", "POST", { refreshToken: refreshed.refreshToken }, "")).status).toBe(401);
+		},
+	);
 	test("B1 device sessions retain the approving session permission ceiling through refresh", async () => {
 		await claim();
 		const bob = await member("ceiling-bob");
@@ -1994,7 +2646,7 @@ describe("organization HTTP flows", () => {
 			).status,
 		).toBe(400);
 		expect((await (await call("/api/auth/whoami")).json()).agents.defaultRead).toBe(created.agentId);
-		expect((await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: "missing" })).status).toBe(403);
+		expect((await call("/api/auth/preferences", "PATCH", { defaultReadAgentId: "missing" })).status).toBe(404);
 		expect(claimed.user.id).toBeTruthy();
 	});
 
@@ -2295,7 +2947,7 @@ describe("organization HTTP flows", () => {
 		const payload = {
 			setupToken: setup,
 			organizationName: "Acme",
-			admin: { username: "admin", displayName: "Admin", password: "test" },
+			admin: { username: "admin", displayName: "Admin", password: "test password" },
 		};
 		const responses = await Promise.all([
 			call("/api/org/claim", "POST", payload, ""),
@@ -2344,7 +2996,7 @@ describe("organization HTTP flows", () => {
 			body: JSON.stringify({
 				setupToken: setup,
 				organizationName: "Acme",
-				admin: { username: "admin", displayName: "Admin", password: "test" },
+				admin: { username: "admin", displayName: "Admin", password: "test password" },
 			}),
 		});
 		expect(response.status).toBe(200);
@@ -2537,7 +3189,7 @@ describe("organization HTTP flows", () => {
 				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
 				username: "original",
 				displayName: "Original",
-				password: "test",
+				password: "test password",
 			},
 			"",
 		);
@@ -2608,7 +3260,7 @@ describe("organization HTTP flows", () => {
 				token: new URL(invite.inviteUrl).pathname.split("/").pop(),
 				username: "departing",
 				displayName: "Departing",
-				password: "test",
+				password: "test password",
 			},
 			"",
 		);
@@ -2789,7 +3441,7 @@ describe("organization HTTP flows", () => {
 					token: new URL(invite.inviteUrl).pathname.split("/").pop(),
 					username: "departing",
 					displayName: "Departing",
-					password: "test",
+					password: "test password",
 				},
 				"",
 			);
