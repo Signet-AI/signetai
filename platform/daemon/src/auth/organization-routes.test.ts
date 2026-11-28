@@ -91,7 +91,6 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = initialSignetPath;
 });
 describe("organization HTTP flows", () => {
-
 	const matrixCredentials = ["interactive", "derived-recall", "derived-admin", "connector", ...PERMISSIONS];
 	for (const family of ["reads", "mutations"] as const) {
 		test.each(matrixCredentials)(`R5 org route matrix ${family} / %s`, async (credential: string) => {
@@ -709,6 +708,21 @@ describe("organization HTTP flows", () => {
 		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
 	});
 
+	test("R5 personal API key lifetime cannot exceed one year", async () => {
+		await claim();
+		const payload = { name: "maximum lifetime", permissions: ["recall"] };
+		const denied = await call("/api/auth/api-keys", "POST", {
+			...payload,
+			expiresAt: new Date(Date.now() + 366 * 86400_000).toISOString(),
+		});
+		expect(denied.status).toBe(400);
+		expect(await denied.json()).toMatchObject({ reason: "invalid_expiry" });
+		const valid = await call("/api/auth/api-keys", "POST", {
+			...payload,
+			expiresAt: new Date(Date.now() + 365 * 86400_000 - 60_000).toISOString(),
+		});
+		expect(valid.status).toBe(201);
+	});
 	test("R5 device-start is bounded per IP and globally", async () => {
 		await claim();
 		const start = (ip: string) =>
@@ -923,49 +937,6 @@ describe("organization HTTP flows", () => {
 			expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(true);
 		await Bun.sleep(Math.max(0, expires - Date.now() + 5));
 		expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(false);
-	});
-	test.each(["revoked", "expired"])("B2 requests validate the live key ancestor: %s", async (reason) => {
-		await claim();
-		const expiresAt = new Date(Date.now() + 300_000).toISOString();
-		const parent = await (
-			await call("/api/auth/api-keys", "POST", { name: "parent", permissions: ["recall"], expiresAt })
-		).json();
-		const child = await (
-			await call("/api/auth/api-keys", "POST", { name: "child", permissions: ["recall"], expiresAt }, parent.secret)
-		).json();
-		const exchanged = await call("/api/auth/session", "POST", {}, child.secret);
-		expect(exchanged.status).toBe(200);
-		const cookie = exchanged.headers
-			.getSetCookie()
-			.map((value) => value.split(";")[0])
-			.join("; ");
-		const { organizationWrite } = await import("./organization-store");
-		await organizationWrite([
-			statement(
-				reason === "revoked"
-					? "UPDATE api_keys SET revoked_at=? WHERE id=?"
-					: "UPDATE api_keys SET expires_at=? WHERE id=?",
-				["2000-01-01T00:00:00.000Z", parent.key.id],
-			),
-		]);
-		expect((await (await call("/api/auth/whoami", "GET", undefined, child.secret)).json()).authenticated).toBe(false);
-		expect((await (await app.request("/api/auth/whoami", { headers: { cookie } })).json()).authenticated).toBe(false);
-	});
-	test("B1 bearer keys cannot approve device authorizations", async () => {
-		await claim();
-		const key = await (
-			await call("/api/auth/api-keys", "POST", {
-				name: "recall only",
-				permissions: ["recall"],
-				expiresAt: new Date(Date.now() + 300_000).toISOString(),
-			})
-		).json();
-		const flow = await (await call("/api/auth/device/start", "POST", { client: "cli", deviceName: "evil" }, "")).json();
-		expect(
-			(await call("/api/auth/device/approve", "POST", { userCode: flow.userCode, decision: "approve" }, key.secret))
-				.status,
-		).toBe(403);
-		expect((await call("/api/auth/device/token", "POST", { deviceCode: flow.deviceCode }, "")).status).toBe(428);
 	});
 	test.each(["revoked", "expired"])("B2 requests validate the live key ancestor: %s", async (reason) => {
 		await claim();

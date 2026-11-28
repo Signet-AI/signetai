@@ -619,6 +619,8 @@ export async function createKey(p: Principal, input: unknown, connector: boolean
 		? new Date(Date.now() + org.connector_key_ttl_seconds * 1000).toISOString()
 		: (data.expiresAt ?? "");
 	if (Date.parse(expiresAt) <= Date.now()) throw new IdentityError(400, "invalid_expiry");
+	if (!connector && data.kind !== "shared" && Date.parse(expiresAt) > Date.now() + 365 * 86400_000)
+		throw new IdentityError(400, "invalid_expiry", "Personal API keys may last at most 365 days");
 	return createOrganizationKey(p, {
 		name: data.name ?? `${data.harness} connector`,
 		kind: connector ? "connector" : (data.kind ?? "personal"),
