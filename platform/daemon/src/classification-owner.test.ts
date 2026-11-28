@@ -629,6 +629,14 @@ describe("classification cancellation durability", () => {
 				"jobId",
 			);
 			executeClassification(initial, { op: "execute", jobId });
+			for (let turn = 0; turn < 100; turn++) {
+				const copied = initial
+					.query<{ n: number }, []>("SELECT count(*) n FROM vector_shard_members WHERE generation>1")
+					.get();
+				if (copied?.n === 101) break;
+				executeClassification(initial, { op: "execute", jobId });
+			}
+			expect(initial.query("SELECT count(*) n FROM vector_shard_members WHERE generation>1").get()).toEqual({ n: 101 });
 			expect(initial.query("SELECT kind FROM org_jobs WHERE id=?").get(jobId)).toEqual({ kind: "classify-preparing" });
 			expect(() => executeClassification(initial, { op: "cancel", actor: alice, jobId })).toThrow("permission");
 			initial.exec(

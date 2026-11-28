@@ -881,7 +881,6 @@ export function stepVectorAdmissionRepairInTx(
 ): { phase: string; updated: number } {
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isFinite(deadline))
 		throw new Error("vector_repair_batch_limit");
-	const turnDeadline = Math.min(deadline, performance.now() + 20);
 	const state = db.prepare("SELECT * FROM vector_shard_repairs WHERE projection=?").get(base);
 	if (
 		!state ||
@@ -890,6 +889,7 @@ export function stepVectorAdmissionRepairInTx(
 		typeof state.cursor !== "string"
 	)
 		throw new Error("vector_repair_not_started");
+	const turnDeadline = state.job_id === null ? Number.POSITIVE_INFINITY : Math.min(deadline, performance.now() + 20);
 	const store = state.store;
 	const repairCursor = state.cursor;
 	const generation = state.building_generation;

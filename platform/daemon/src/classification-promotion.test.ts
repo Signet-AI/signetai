@@ -154,12 +154,21 @@ async function promotion(virtual: boolean, fault = false): Promise<void> {
 		).result;
 		if (typeof job !== "object" || job === null || !("jobId" in job) || typeof job.jobId !== "string")
 			throw new Error("missing job");
-		expect(
-			await owner.submit(
+		let classificationResult: unknown;
+		for (let turn = 0; turn < 100; turn++) {
+			classificationResult = await owner.submit(
 				{ kind: "classification", request: { op: "execute", jobId: job.jobId } },
 				{ operation: "test.move-both-generations", lane: "maintenance", deadlineMs: 10000 },
-			).result,
-		).toMatchObject({ status: "complete" });
+			).result;
+			if (
+				typeof classificationResult === "object" &&
+				classificationResult !== null &&
+				"status" in classificationResult &&
+				classificationResult.status === "complete"
+			)
+				break;
+		}
+		expect(classificationResult).toMatchObject({ status: "complete" });
 	} finally {
 		await closeDbAccessor();
 		await owner.close();

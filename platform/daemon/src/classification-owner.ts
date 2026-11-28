@@ -1016,13 +1016,12 @@ function changeAssignment(
 		}
 	}
 }
-function prepareClassificationFenceInTx(db: MigrationDb, jobId: string): boolean {
+function prepareClassificationFenceInTx(db: MigrationDb, jobId: string, deadline: number): boolean {
 	const roots = db
 		.prepare(
 			"SELECT r.projection,r.store FROM vector_shard_repairs r JOIN sqlite_master s ON s.name=r.projection AND s.type='table' WHERE lower(s.sql) LIKE '%using vec0%' ORDER BY r.projection LIMIT 3",
 		)
 		.all();
-	const deadline = performance.now() + CLASSIFICATION_TURN_MS;
 	let remaining = 100;
 	for (let round = 0; round < 3; round++) {
 		let prepared = true;
@@ -1144,6 +1143,7 @@ function cancelJob(db: MigrationDb, actor: ClassificationActor, jobId: string): 
 	});
 }
 function executeJob(db: MigrationDb, jobId: string): unknown {
+	const deadline = performance.now() + CLASSIFICATION_TURN_MS;
 	if (
 		db
 			.prepare(
@@ -1152,7 +1152,7 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 			.get(jobId)
 	)
 		return executeCancellation(db, jobId);
-	const job = db
+	let job = db
 		.prepare("SELECT * FROM org_jobs WHERE id=? AND kind IN ('classify','unclassify','classify-preparing')")
 		.get(jobId);
 	if (!job || (job.status !== "pending" && job.status !== "running")) throw new Error("job_not_pending");
@@ -1163,10 +1163,12 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 	if (job.kind === "classify-preparing") {
 		const published = transaction(db, () => {
 			authorize(db, request.target, request.id, request.actor, request.remove);
-			return prepareClassificationFenceInTx(db, jobId);
+			return prepareClassificationFenceInTx(db, jobId, deadline);
 		});
 		if (!published) return { status: "running", phase: "preparing-shards" };
-		return { status: "running", phase: "prepared-shards" };
+		if (performance.now() >= deadline) return { status: "running", phase: "prepared-shards" };
+		job = db.prepare("SELECT * FROM org_jobs WHERE id=?").get(jobId);
+		if (!job) throw new Error("job_not_pending");
 	}
 	if (job.status === "pending") {
 		const admitted = transaction(db, () => {
@@ -1225,10 +1227,9 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 		let progress = cursor.data;
 		let done = false;
 		let inspected = 0;
-		const started = performance.now();
 		const initialUpdated = progress.updated;
 		while (inspected < CLASSIFICATION_TURN_ROWS && progress.updated - initialUpdated < CLASSIFICATION_TURN_ROWS) {
-			if (inspected > 0 && performance.now() - started >= CLASSIFICATION_TURN_MS) break;
+			if (inspected > 0 && performance.now() >= deadline) break;
 			const page =
 				request.target.kind === "memory"
 					? {
