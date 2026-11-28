@@ -3,6 +3,24 @@ title: "Runtime operations"
 description: "Inspect status, open the dashboard, route inference, manage the daemon, update, and bypass hooks."
 ---
 
+## Private host socket
+
+For a local workspace, the CLI automatically uses the running daemon's owned Unix socket when it exists. It does not need an organization bearer token. A remote target never selects that socket. Use `--local` to select the host workspace when your default target is remote, `--socket <path>` to override its path, and `--no-socket` to force TCP. An unsafe or explicitly selected unavailable socket fails without trying a different transport.
+
+```bash
+signet --local daemon status --json
+signet --local --socket /run/user/1000/signet/<workspace-hash>.sock git status
+signet --local org remote-features list
+signet --local org remote-features allow git.sync
+signet --local org remote-features deny git.sync
+```
+
+Organization host status reports `transport: "socket"` and the daemon's health projection, without opening the database for counts. Host feature changes require the socket, are audited with the OS uid and username, and survive restarts. Network administrators can inspect the policy but cannot change it. Allowing a feature does not grant missing credential permissions. See [Server tasks](/organization/#server-tasks) for feature groups and operations that can never be enabled remotely.
+
+Agent-targeted host requests need `--agent <id>`; the local identity never selects `default` implicitly and does not bypass classification. Windows currently reports the local endpoint unavailable rather than replacing it with privileged TCP.
+
+`signet graphiq update` invokes the daemon's managed updater. On a running organization host, GraphIQ status, installation, removal, and indexing also use the daemon rather than editing its plugin configuration in the CLI. Index purging with `--purge-indexes` is not supported through the running organization daemon and fails explicitly. Existing personal-mode and offline GraphIQ workflows remain available.
+
 ## `signet status`
 
 Show daemon liveness and readiness, Dreaming and extraction state, the memory-job

@@ -30,11 +30,29 @@ SIGNET_BIND  — bind host override (defaults to the configured network mode:
   errors may include structured fields such as `status`, `code`, or
   `missingCapabilities`.
 
+## Local host transport and remote feature policy
+
+The Unix private socket serves the same middleware and route stack as TCP. Its OS-user authority comes from the listener, never a request header. In claimed organizations it admits the `local` administrator principal, records uid and username in audit events, requires explicit agents for agent-targeted operations, and does not grant classification visibility. TCP cannot acquire this authority.
+
+`GET /health` includes `localEndpoint: { status: "available", path }` or `{ status: "unavailable", reason }`. Windows reports unavailable because a current-user-only named-pipe DACL is not established by the supported implementation. There is no privileged TCP fallback.
+
+### GET /api/org/remote-features
+
+Requires administrator permission, or the private host socket. Returns `{ features: [{ name, allowed }], neverRemote: ["METHOD /route", ...] }`. Every host feature is denied remotely until allowed by the operator. The dashboard reads this projection without mutation controls.
+
+### POST /api/org/remote-features/:feature
+
+Private socket only. Accepts exactly `{ allow: boolean }`. An unknown feature, including `never-remote`, returns `400`; a network caller cannot change the policy and receives `403` with reason `host_operation_local_only`. Changes are persisted by the operator settings owner and audited with the OS identity. They take effect without restarting the daemon.
+
+An allowed feature admits organization administrators with `admin` permission. Members and credentials without that permission remain denied. Arbitrary secret commands/status, troubleshooting execution, server-path imports, transcript-path reads, native pickers, and arbitrary GraphIQ indexing are not opt-in features. Raw configuration-file writes remain socket-only; when `config.apply` is allowed remotely, `POST /api/config` translates only the bounded operator-settings section payload into the existing settings owner.
+
+See [Server tasks](/organization/#server-tasks) for the feature names and CLI commands.
+
 ## Operator instance settings
 
 ### GET /api/org/operator/settings
 
-Returns only `{ inference, embedding, sourcesDefaults, instructions, complete }`. It requires a claimed organization and an unrestricted administrator user session. API keys, members, compliance-only callers, bound-agent/project credentials and scope aliases are refused with HTTP 403. The general `/api/config` policy is unchanged.
+Returns only `{ inference, embedding, sourcesDefaults, instructions, complete }`. It requires a claimed organization and an unrestricted administrator user session. API keys, members, compliance-only callers, bound-agent/project credentials and scope aliases are refused with HTTP 403. The general `/api/config` route is socket-only by default; its remote opt-in accepts these same bounded sections, not raw files.
 
 ### PATCH /api/org/operator/settings
 

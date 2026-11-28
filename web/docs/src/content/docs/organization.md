@@ -205,30 +205,50 @@ Agents can use MCP tools `signet_org_access`, `signet_org_audit`, `signet_org_jo
 
 Classification definition reads (`GET /api/classifications` and `GET /api/classifications/:id`) include `audience` and `appliers` arrays with `{ kind, id, displayName }` only when the caller has classification-management authority. Other readers keep the existing definition shape. Classification definitions outside the caller's visibility remain absent from lists and return `404` when requested directly.
 
-## What an admin can't do remotely
+## Server tasks
 
-Organization administration is not authority over the instance host. In claimed organization mode, host-affecting HTTP operations return `403` with reason `host_operation_local_only` for every principal. Run these operations with the CLI on the instance host, using its offline or direct host paths, or use the host shell. There is no special host credential and loopback is not an exception: a CLI or MCP request sent over HTTP is refused too. An undeclared route fails closed. Personal/local mode keeps its existing behavior.
+Organization administration does not grant access to the instance host. Host features are server-only by default. A network request receives `403` with reason `host_operation_local_only` unless the server operator has allowed its feature. Loopback TCP and headers claiming a local principal are not exceptions. Undeclared routes fail closed.
 
-The host-operation inventory is:
+On Unix, the daemon also serves its routes through a private socket. Its directory is owned by the daemon's OS user with mode `0700`; the socket has mode `0600`. The path is `$XDG_RUNTIME_DIR/signet/<workspace-hash>.sock`, or a short path under the temporary directory when the runtime path is too long or unset. Unsafe directories and occupied sockets are refused. The daemon removes a verified stale socket before binding and removes its socket on shutdown. `/health` reports `localEndpoint` as an available path or an unavailable reason.
 
-| Route group | Host effect |
-| --- | --- |
-| `POST /api/secrets/exec`, `POST /api/secrets/:name/exec`, `GET /api/secrets/exec/:jobId` | Starts commands with injected secrets or reads their output. `secret exec` and `secret exec-status` refuse remote CLI targets. Secret put/list/delete remain available. |
-| `/api/secrets/bitwarden/*`, `/api/secrets/1password/*` | Runs installed secret-manager clients and changes their host connections. |
-| `/api/skills` and its browse/search/detail/install/delete routes | Reads executable skill files, installs code, or removes local skill files. |
-| `/api/plugins` and its detail/diagnostics/audit/prompt-contributions/enable routes | Inspects or activates installed host plugins. |
-| `/api/graphiq/*` | Inspects installed code, installs or updates GraphIQ, or indexes an arbitrary host project. MCP `signet_code_*` tools and their `code_*` aliases have the same organization-mode HTTP refusal, including batch calls. |
-| `/api/connectors`, its detail/health/delete routes, `POST /api/connectors/:id/sync`, `/sync/full`, `/api/connectors/resync` | Registers filesystem roots and starts host filesystem scans. |
-| `GET /api/harnesses`, `GET /api/harnesses/:id/health`, `POST /api/harnesses/regenerate`, `POST /api/harnesses/:id/connect`, `/disconnect`, `/repair`, `/reinitialize` | Inspects installed harnesses or writes their hooks, configuration, and memory files. |
-| `GET /api/git/status`, `GET /api/git/config`, `POST /api/git/pull`, `/push`, `/sync`, `/config` | Runs Git or changes automatic synchronization. |
-| `POST /api/sources/pick-directory`, `/pick-files`, `/obsidian`, `/discord`, `/github` | Opens native file pickers, reads host vaults or desktop caches, or configures repository ingestion. |
-| `POST /api/sources/import` with multipart `paths` | Reads arbitrary host paths. Uploaded `files` remain supported remotely; clients send bytes, not server filenames. |
-| Hook requests with `transcriptPath` or `transcript_path` | Reads a harness transcript from the host. Inline transcripts and staged uploads remain remote-capable. |
-| `POST /api/memory/codex-native-note` | Writes the host's Codex memory files. |
-| `/api/inference/*`, `/api/assistant/models`, `/api/assistant/chat`, `/v1/models`, `/v1/chat/completions` | Inspects host provider credentials or can dispatch host CLI inference processes. |
-| `/api/update/*`, `POST /api/config`, `POST /api/troubleshoot/exec` | Installs code, changes unrestricted host configuration, or executes troubleshooting commands, including unsupervised restart/stop. |
+The host CLI automatically uses an owned socket for its local workspace. Use `--local` when a remote organization is your usual target, `--socket <path>` to select a socket explicitly, or `--no-socket` to force TCP. Remote targets never use a local socket. `signet daemon status` reports the transport for an organization host. Windows currently has no local endpoint: Signet cannot establish a verified current-user-only pipe DACL with the supported runtime APIs, and does not substitute privileged TCP access.
 
-The separately supervised `POST /api/org/operator/restart` remains remote-capable only after the restart owner verifies its own systemd or launchd supervisor. It never falls back to an unsupervised host command. Scoped operator repairs, embedding backfills, evidence uploads, and organization settings remain daemon-owned record operations, not a way to execute a host command.
+Socket requests have the `local` principal and administrator permissions, with host operations enabled. Audit events record the OS uid and username. Agent-targeted operations still need `--agent <id>`; the host identity never becomes `default`. Content reads still enforce classifications. Being the server operator does not make the local identity an audience member.
+
+### Allow a feature remotely
+
+Run these commands on the server while its daemon is running:
+
+```bash
+signet --local org remote-features list
+signet --local org remote-features allow git.sync
+signet --local org remote-features deny git.sync
+```
+
+Changes take effect immediately and survive a restart. Only the private socket can change the policy. Organization administrators can inspect it remotely, and the dashboard's organization health view shows it read-only, with a reminder to change it on the server. Allowing a feature does not elevate a member, restore a restricted credential's missing permissions, or bypass classification. Remote feature calls appear in the organization audit log.
+
+Features are grouped by capability:
+
+- `sources.github`, `sources.filesystem`, and `sources.discord`: repository, Obsidian/filesystem connector, and Discord host integrations.
+- `git.sync`: Git status, configuration, pull, push, and sync.
+- `plugins.manage`, `skills.manage`, and `graphiq.manage`: installed plugin/skill management and managed GraphIQ status, installation, removal, and updates.
+- `secrets.providers`: installed Bitwarden and 1Password integrations, not arbitrary secret command execution.
+- `inference.local`: host-backed inference, model discovery, and provider sign-in.
+- `harness.repair`: host harness inspection, configuration, repair, reinitialization, and Codex-native notes.
+- `config.apply`: the bounded operator-settings sections. Remote `POST /api/config` accepts the same section payloads as operator settings, not raw configuration files or authentication changes. Raw host configuration stays on the socket.
+- `daemon.update`: update checks, settings, and managed updates.
+
+### Always server-only
+
+No feature can enable these over the network:
+
+- `POST /api/secrets/exec`, `POST /api/secrets/:name/exec`, and `GET /api/secrets/exec/:jobId`.
+- `POST /api/troubleshoot/exec`.
+- Server-path imports through `POST /api/sources/import`; upload file bytes instead.
+- Hook requests containing `transcriptPath` or `transcript_path`; use inline content or staged uploads instead.
+- Arbitrary project-path indexing through `POST /api/graphiq/index`, direct GraphIQ MCP code tools and their aliases, and native directory/file pickers.
+
+The separately supervised `POST /api/org/operator/restart` retains its existing supervisor verification. It never falls back to an unsupervised host command. Scoped repairs, embedding backfills, evidence uploads, and organization settings continue to use their existing daemon owners. Personal/local mode retains its existing authorization behavior.
 
 ## Operator log feeds
 
