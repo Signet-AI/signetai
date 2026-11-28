@@ -658,6 +658,44 @@ describe("organization HTTP flows", () => {
 		await organizationWrite([statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'cap-%'")]);
 		expect((await call("/api/auth/session", "POST", {}, target.secret)).status).toBe(200);
 	});
+	test.each(["principal", "global"])("R5 key handoff enforces the %s session cap", async (scope) => {
+		const root = await claim();
+		const other = scope === "global" ? await member("handoff-cap-other") : { userId: root.user.id, token: admin };
+		const expiresAt = new Date(Date.now() + 300_000).toISOString();
+		const key = await (
+			await call("/api/auth/api-keys", "POST", { name: "handoff cap", permissions: ["recall"], expiresAt })
+		).json();
+		const exchanged = await call("/api/auth/session", "POST", {}, key.secret);
+		expect(exchanged.status).toBe(200);
+		const derived =
+			exchanged.headers
+				.getSetCookie()
+				.find((cookie) => cookie.startsWith("signet_session="))
+				?.split(";")[0]
+				?.slice("signet_session=".length) ?? "";
+		const handoff = await (await call("/api/auth/handoff", "POST", {}, derived)).json();
+		const { organizationWrite } = await import("./organization-store");
+		await organizationWrite([
+			statement(
+				"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?) INSERT INTO auth_sessions(id,user_id,kind,token_hash,access_expires_at,source_key_id,source_key_ceiling_json) SELECT 'handoff-cap-'||x,?,'browser','hash',?,?,? FROM n",
+				[
+					scope === "global" ? 999 : 19,
+					other.userId,
+					expiresAt,
+					key.key.id,
+					JSON.stringify({ permissions: ["recall"], agentId: null, projects: null, expiresAt }),
+				],
+			),
+		]);
+		const denied = await call("/api/auth/handoff/redeem", "POST", { code: handoff.code, confirm: true }, "");
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		await organizationWrite([
+			statement("UPDATE auth_sessions SET revoked_at='released' WHERE id LIKE 'handoff-cap-%'"),
+		]);
+		const next = await (await call("/api/auth/handoff", "POST", {}, derived)).json();
+		expect((await call("/api/auth/handoff/redeem", "POST", { code: next.code, confirm: true }, "")).status).toBe(200);
+	});
 	test("handoff caps apply across a user's sessions with Retry-After", async () => {
 		const root = await claim();
 		const { issueSession } = await import("./organization-store");

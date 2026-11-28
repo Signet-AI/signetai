@@ -88,6 +88,7 @@ export async function redeemDashboardHandoff(input: unknown) {
 			sourceKeyId: binding.sourceKeyId,
 			ceiling: { ...binding.ceiling, expiresAt: expiresAtCeiling ?? binding.ceiling.expiresAt },
 		},
+		binding?.sourceKeyId ? "key-exchange" : undefined,
 	);
 	await organizationWrite(
 		[
@@ -104,7 +105,7 @@ export async function redeemDashboardHandoff(input: unknown) {
 				sourceSessionId: entry.sessionId,
 			}),
 		],
-		401,
+		binding?.sourceKeyId ? 429 : 401,
 	);
 	const { statements: _statements, ...result } = material;
 	return { ...result, user: userView(user) };
