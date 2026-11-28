@@ -159,6 +159,7 @@ export async function operatorLogStream(
 				const onLog = (entry: LogEntry) => {
 					if (!visible(entry, access, p) || !accepts(entry, options)) return;
 					if (pendingEvents >= 8) {
+						producer.write({ type: "error", reason: "log_capacity" });
 						producer.close();
 						return;
 					}

@@ -1131,6 +1131,26 @@ describe("organization HTTP flows", () => {
 			),
 		).toEqual({ n: 1 });
 	});
+	test("operator log queue saturation emits a terminal event before closing", async () => {
+		const { registerMiscRoutes } = await import("../routes/misc-routes");
+		const { logger } = await import("../logger");
+		registerMiscRoutes(app);
+		await claim();
+		const listeners = logger.listenerCount("log");
+		const response = await call("/api/logs/stream");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("missing saturation stream");
+		try {
+			await reader.read();
+			for (let index = 0; index < 9; index++) logger.info("system", "queue saturation probe");
+			const terminal = new TextDecoder().decode((await reader.read()).value);
+			expect(terminal).toContain("log_capacity");
+			expect((await reader.read()).done).toBe(true);
+			expect(logger.listenerCount("log")).toBe(listeners);
+		} finally {
+			await reader.cancel();
+		}
+	});
 	test("operator log streams are scoped, content-free and cancelled cleanly", async () => {
 		const { registerMiscRoutes } = await import("../routes/misc-routes");
 		const { logger } = await import("../logger");
