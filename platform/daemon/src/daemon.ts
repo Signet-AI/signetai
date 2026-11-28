@@ -144,6 +144,8 @@ import {
 	sweepStaleSessions,
 } from "./hooks";
 import { closeSignetHttpServer, createSignetHttpServer } from "./http-server";
+import { workspaceSocketPath } from "@signet/core/local-endpoint";
+import { bindLocalEndpoint, unavailableLocalEndpoint } from "./local-endpoint";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
@@ -364,6 +366,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let httpServer: Server | null = null;
+let localEndpoint: Awaited<ReturnType<typeof bindLocalEndpoint>> | null = null;
 let dbOwnerClient: DbOwnerClient | null = null;
 let dbOwnerMaintenanceHandle: DbOwnerMaintenance | null = null;
 let globalVerifyInFlight = false;
@@ -2136,6 +2139,10 @@ async function cleanup() {
 	await stopHarnessHealth();
 	logger.info("daemon", "Shutting down");
 
+	if (localEndpoint) {
+		await localEndpoint.close();
+		localEndpoint = null;
+	}
 	if (httpServer) {
 		if (await closeSignetHttpServer(httpServer)) logger.warn("daemon", "HTTP server drain timed out, forcing close");
 		httpServer = null;
@@ -3622,6 +3629,14 @@ async function main() {
 			}
 		});
 	};
+
+	try {
+		localEndpoint = await bindLocalEndpoint(workspaceSocketPath(AGENTS_DIR), app.fetch);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		unavailableLocalEndpoint(reason);
+		logger.warn("daemon", "Local endpoint unavailable", { reason });
+	}
 
 	bindWithRetry({
 		port: PORT,

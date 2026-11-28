@@ -96,6 +96,7 @@ export function resolveWriteAgent(
 ): Result<string> {
 	const target = boundTarget(p, requested);
 	if (!target.ok) return target;
+	if (p.osIdentity && !target.value) return denied("agent_required");
 	let id =
 		target.value ??
 		(org.agentModel === "personal" && p.kind === "user" ? org.personalAgentId : org.organizationAgentId);
@@ -119,6 +120,7 @@ export function resolveReadAgent(p: Principal, requested: string | undefined): R
 	if (!target.ok) return target;
 	const org = access.get(p);
 	if (!org) return denied("org_policy");
+	if (p.osIdentity && !target.value) return denied("agent_required");
 	const id = target.value ?? org.defaultReadAgentId ?? org.organizationAgentId;
 	const agent = org.agents.find((a) => a.id === id);
 	if (!agent || agent.archived_at) return denied("agent_not_permitted");

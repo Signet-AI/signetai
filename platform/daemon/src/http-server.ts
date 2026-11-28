@@ -37,7 +37,21 @@ export function closeSignetHttpServer(server: Server, deadlineMs = 15_000): Prom
 	return state.closing;
 }
 export function createSignetHttpServer(opts: SignetHttpServerOptions): ReturnType<typeof createAdaptorServer> {
-	const server = createAdaptorServer({ ...opts, overrideGlobalObjects: false });
+	const server = createAdaptorServer({
+		...opts,
+		overrideGlobalObjects: false,
+		fetch: (request, env) => {
+			for (const header of [
+				"x-signet-principal",
+				"x-signet-local",
+				"x-signet-local-origin",
+				"x-signet-os-uid",
+				"x-signet-os-user",
+			])
+				request.headers.delete(header);
+			return opts.fetch(request, env);
+		},
+	});
 	const state: HttpLifecycle = { pending: new Set(), closeWhenIdle: null, closing: null };
 	lifecycles.set(server, state);
 	server.prependListener("request", (_request: unknown, response: ServerResponse) => {

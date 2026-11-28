@@ -1269,6 +1269,7 @@ function executeJob(db: MigrationDb, jobId: string): unknown {
 }
 function visibility(db: MigrationDb, subject: AudienceSubject) {
 	if (subject.local) return { compartments: "all" as const };
+	if (subject.hostOperator) return { compartments: [] };
 	if (!subject.userId) throw new Error("unauthorized");
 	const pending = db
 		.prepare(`SELECT 1 FROM org_jobs j WHERE ${inFlightClassificationSql("j")} LIMIT 1`)

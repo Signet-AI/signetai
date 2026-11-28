@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type {} from "./auth/identity-middleware";
 import routeEffects from "./route-effects.json";
+import { localTransportIdentity } from "./local-endpoint";
 
 const hostRoutes = Object.values(routeEffects).flatMap((routes) =>
 	Object.entries(routes).flatMap(([route, effect]) => {
@@ -26,8 +27,15 @@ const declarations = Object.values(routeEffects).flatMap((routes) =>
 	}),
 );
 
+export function globalHostOperation(method: string, path: string): boolean {
+	return (
+		hostRoutes.some((entry) => entry.method === method && entry.effect === "host" && entry.pattern.test(path)) &&
+		!/^\/api\/(sources\/(github|obsidian|discord)|connectors(?:\/|$)|memory\/)/.test(path)
+	);
+}
+
 export function requireLocalHost(c: Context): Response | undefined {
-	if (c.get("organization"))
+	if (c.get("organization") && !localTransportIdentity())
 		return c.json(
 			{ error: "Run this operation with the CLI on the instance host", reason: "host_operation_local_only" },
 			403,
