@@ -17,6 +17,7 @@ import { runMigrations } from "../../core/src/migrations";
 import { resolveWorkspaceLayout } from "../../core/src/workspace-layout";
 import { createDbOwnerClient } from "./db-owner-client";
 import { runIncrementalDatabaseIntegrityCheck } from "./incremental-database-integrity";
+import { repairVectorAdmissionThroughOwner } from "./embedding-projection";
 import { upgradeWorkspaceLayout } from "./workspace-layout-upgrade";
 
 const daemonScript = join(import.meta.dir, "daemon.ts");
@@ -229,6 +230,7 @@ describe("daemon workspace startup preflight", () => {
 		const owner = createDbOwnerClient({ dbPath: resolveWorkspaceLayout(workspace).database });
 		try {
 			await owner.initialize(workspace);
+			await repairVectorAdmissionThroughOwner(owner);
 			let integrity = await runIncrementalDatabaseIntegrityCheck({ owner, tablesPerRun: 64, maxWorkUnits: 64 });
 			for (let batch = 1; batch < 16 && integrity.phase === "running" && integrity.remainingObjects > 64; batch += 1) {
 				integrity = await runIncrementalDatabaseIntegrityCheck({ owner, tablesPerRun: 64, maxWorkUnits: 64 });
