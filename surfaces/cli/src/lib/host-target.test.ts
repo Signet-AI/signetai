@@ -21,15 +21,18 @@ test("host listen origin resolves flag then port environment then URL then defau
 	);
 });
 
-test("host readiness refuses a healthy listener with the wrong PID or workspace", async () => {
-	let health = { pid: process.pid, agentsDir: "/isolated/workspace" };
+test("host readiness requires database readiness and the launched PID and workspace", async () => {
+	let health = { pid: process.pid, agentsDir: "/isolated/workspace", db: true };
 	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(health) });
 	const origin = `http://127.0.0.1:${server.port}`;
 	try {
 		expect(await isHostDaemonReady(origin, process.pid, "/isolated/workspace")).toBe(true);
+		health = { ...health, db: false };
+		expect(await isHostDaemonReady(origin, process.pid, "/isolated/workspace")).toBe(false);
+		health = { ...health, db: true };
 		health = { ...health, pid: process.pid + 1 };
 		await expect(isHostDaemonReady(origin, process.pid, "/isolated/workspace")).rejects.toThrow("launched daemon PID");
-		health = { pid: process.pid, agentsDir: "/another/workspace" };
+		health = { pid: process.pid, agentsDir: "/another/workspace", db: true };
 		await expect(isHostDaemonReady(origin, process.pid, "/isolated/workspace")).rejects.toThrow("workspace");
 	} finally {
 		await server.stop(true);

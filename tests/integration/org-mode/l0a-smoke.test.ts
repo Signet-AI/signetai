@@ -88,11 +88,15 @@ test("real team daemon claims, provisions a connector, writes attributed evidenc
 			try {
 				const response = await request("/health");
 				if (response.ok) {
-					const health = z.object({ pid: z.number(), agentsDir: z.string() }).parse(await response.json());
+					const health = z
+						.object({ pid: z.number(), agentsDir: z.string(), db: z.boolean() })
+						.parse(await response.json());
 					expect(health.pid).toBe(child.pid);
 					expect(health.agentsDir).toBe(workspace);
-					ready = true;
-					break;
+					if (health.db) {
+						ready = true;
+						break;
+					}
 				}
 			} catch (error) {
 				if (error instanceof z.ZodError) throw error;

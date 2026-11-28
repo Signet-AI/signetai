@@ -58,5 +58,5 @@ export async function isHostDaemonReady(origin: string, pid: number, agentsDir: 
 		throw new Error(
 			`Port ${new URL(origin).port || "80"} readiness does not match the launched daemon PID and workspace; choose --port <port>`,
 		);
-	return true;
+	return "db" in health && health.db === true;
 }
