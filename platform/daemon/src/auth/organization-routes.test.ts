@@ -103,8 +103,8 @@ describe("organization HTTP flows", () => {
 				statement("UPDATE users SET compliance=1 WHERE id=?", [root.user.id]),
 				statement("INSERT INTO group_members(group_id,user_id,role) VALUES(?,?,'owner')", [team.id, root.user.id]),
 				statement(
-					"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES('matrix-job','offboard','complete','{}',?,'2026-01-01')",
-					[target.userId],
+					"INSERT INTO org_jobs(id,kind,status,params_json,created_by,created_at) VALUES('matrix-job','bulk_revoke','complete','{}',?,'2026-01-01'),('matrix-hidden-job','offboard','complete','{}',?,'2026-01-01'),('matrix-own-job','offboard','complete','{}',?,'2026-01-01')",
+					[target.userId, target.userId, root.user.id],
 				),
 				statement(
 					"INSERT INTO agents(id,name,kind,created_at,updated_at) VALUES('matrix-legacy','Matrix legacy','legacy','2026-01-01','2026-01-01')",
@@ -180,6 +180,7 @@ describe("organization HTTP flows", () => {
 				["GET", "/api/org/operator/settings", undefined, signedInAdmin, 200],
 				["GET", "/api/org/jobs", undefined, isAdmin, 200],
 				["GET", "/api/org/jobs/matrix-job", undefined, isAdmin, 200],
+				["GET", "/api/org/jobs/matrix-own-job", undefined, true, 200],
 				["GET", "/api/org/upgrade", undefined, isAdmin, 200],
 				["GET", "/api/org/upgrade/missing", undefined, isAdmin, 404],
 			];
@@ -256,6 +257,17 @@ describe("organization HTTP flows", () => {
 				results.push({ method, path, status: response.status, expected: allowed ? accepted : denied });
 			}
 			expect(results.filter((result) => result.status !== result.expected)).toEqual([]);
+			if (family === "reads") {
+				const hidden = await call("/api/org/jobs/matrix-hidden-job", "GET", undefined, bearer);
+				const absent = await call("/api/org/jobs/matrix-absent-job", "GET", undefined, bearer);
+				expect(hidden.status).toBe(404);
+				expect(absent.status).toBe(hidden.status);
+				const hiddenBody = await hidden.json();
+				const absentBody = await absent.json();
+				expect(hiddenBody.reason).toBe("not_found");
+				expect(absentBody.reason).toBe(hiddenBody.reason);
+				expect(absentBody).toEqual(hiddenBody);
+			}
 		});
 	}
 
