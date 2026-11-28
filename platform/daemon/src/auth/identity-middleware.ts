@@ -74,7 +74,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 	const legacy = createAuthMiddleware(config, secret, verifyApiKey);
 	const ipLimits = new AuthRateLimiter(60_000, 20),
 		pairLimits = new AuthRateLimiter(60_000, 5),
-		deviceLimits = new AuthRateLimiter(60_000, 20);
+		deviceLimits = new AuthRateLimiter(60_000, 20),
+		deviceStartLimits = new AuthRateLimiter(60_000, 100);
 	const openAuthPaths = new Set([
 		"/api/auth/session",
 		"/api/auth/handoff/redeem",
@@ -104,6 +105,8 @@ export function createIdentityMiddleware(config: AuthConfig, secret: Buffer | nu
 		resolveRequestNetwork(c, config);
 		if (c.req.method === "GET" && ["/health", "/health/live"].includes(c.req.path)) return next();
 		if (openAuthPaths.has(c.req.path) && !admit(ipLimits, `${c.req.path}:${rateLimitClientAddress(c) ?? "unknown"}`, c))
+			return failure(c, new IdentityError(429, "rate_limit"));
+		if (c.req.path === "/api/auth/device/start" && !admit(deviceStartLimits, "all", c))
 			return failure(c, new IdentityError(429, "rate_limit"));
 		try {
 			if (

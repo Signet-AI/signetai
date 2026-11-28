@@ -709,6 +709,30 @@ describe("organization HTTP flows", () => {
 		expect(Number(denied.headers.get("Retry-After"))).toBeGreaterThan(0);
 	});
 
+	test("R5 device-start is bounded per IP and globally", async () => {
+		await claim();
+		const start = (ip: string) =>
+			app.request(
+				"/api/auth/device/start",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ client: "cli", deviceName: "Limited" }),
+				},
+				{ incoming: { socket: { remoteAddress: ip } } },
+			);
+		for (let attempt = 0; attempt < 20; attempt++) expect((await start("203.0.113.1")).status).toBe(200);
+		const ipDenied = await start("203.0.113.1");
+		expect(ipDenied.status).toBe(429);
+		expect(Number(ipDenied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		for (let attempt = 0; attempt < 80; attempt++) expect((await start(`198.51.100.${attempt + 1}`)).status).toBe(200);
+		const globalDenied = await start("192.0.2.1");
+		expect(globalDenied.status).toBe(429);
+		expect(Number(globalDenied.headers.get("Retry-After"))).toBeGreaterThan(0);
+		expect(await organizationQuery(statement("SELECT COUNT(*) AS n FROM device_authorizations", [], "get"))).toEqual({
+			n: 100,
+		});
+	});
 	test("R5 account lockouts are scoped to the account and client IP", async () => {
 		await claim();
 		const login = (username: string, ip: string, password?: string) =>
