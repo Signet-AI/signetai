@@ -267,7 +267,6 @@ export function up(db: MigrationDb): void {
  CREATE TABLE IF NOT EXISTS classification_assignments(target_kind TEXT NOT NULL CHECK(target_kind IN ('memory','session','source','agent')),target_id TEXT NOT NULL,agent_id TEXT NOT NULL,classification_id TEXT NOT NULL REFERENCES classifications(id),applied_by TEXT,applied_at TEXT,PRIMARY KEY(target_kind,target_id,agent_id,classification_id));
  CREATE INDEX IF NOT EXISTS idx_classification_assignments_agent ON classification_assignments(agent_id,target_kind,target_id);
  CREATE TABLE IF NOT EXISTS evidence_citations(derived_kind TEXT NOT NULL CHECK(derived_kind IN ('attribute','memory','dependency','entity','aspect','assertion','head_entry','reflection','contradiction','head_revision','proposal','telemetry')),derived_id TEXT NOT NULL,agent_id TEXT NOT NULL,evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('memory','transcript','artifact','summary','attribute')),evidence_id TEXT NOT NULL,PRIMARY KEY(derived_kind,derived_id,evidence_kind,evidence_id));
- CREATE INDEX IF NOT EXISTS idx_evidence_citations_source ON evidence_citations(agent_id,evidence_kind,evidence_id);
  CREATE TABLE IF NOT EXISTS classification_access_version(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL);
  INSERT OR IGNORE INTO classification_access_version VALUES(1,0);
  `);
@@ -275,11 +274,16 @@ export function up(db: MigrationDb): void {
 		db.exec(
 			"INSERT INTO evidence_citations SELECT * FROM evidence_citations_177_legacy;DROP TABLE evidence_citations_177_legacy;CREATE INDEX IF NOT EXISTS idx_evidence_citations_source ON evidence_citations(agent_id,evidence_kind,evidence_id)",
 		);
+	if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='idx_evidence_citations_reverse'").get())
+		db.exec(
+			"CREATE INDEX IF NOT EXISTS idx_evidence_citations_source ON evidence_citations(agent_id,evidence_kind,evidence_id)",
+		);
 	for (const table of COMPARTMENT_TABLES) {
 		if (!exists(db, table)) continue;
 		const columns = db.prepare(`PRAGMA table_info(${table})`).all();
 		if (!columns.some((r) => r.name === "compartment_id"))
 			db.exec(`ALTER TABLE ${table} ADD COLUMN compartment_id INTEGER REFERENCES compartments(id)`);
+		if (table === "memory_head_revision_entries" && columns.some((row) => row.name === "revision_id")) continue;
 		db.exec(
 			`CREATE INDEX IF NOT EXISTS idx_${table}_compartment ON ${table}(${columns.some((r) => r.name === "agent_id") ? "agent_id," : ""}compartment_id)`,
 		);
@@ -315,7 +319,10 @@ export function up(db: MigrationDb): void {
 		db.exec(
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_classification_job_agent ON org_jobs(CASE WHEN json_valid(params_json) THEN json_extract(params_json,'$.target.agentId') END) WHERE status='running' AND kind IN ('classify','unclassify')",
 		);
-	if (exists(db, "memory_head_revision_entries"))
+	if (
+		exists(db, "memory_head_revision_entries") &&
+		!db.prepare("SELECT 1 FROM pragma_table_info('memory_head_revision_entries') WHERE name='revision_id'").get()
+	)
 		db.exec(
 			"CREATE INDEX IF NOT EXISTS idx_head_revision_citation ON memory_head_revision_entries(agent_id,json_array(revision,entry_id))",
 		);
@@ -348,6 +355,10 @@ export function configureEvidencePurgeConnection(db: MigrationDb): void {
 
 export function installEvidencePurgeLifecycle(db: MigrationDb): void {
 	configureEvidencePurgeConnection(db);
+	if (exists(db, "evidence_citations"))
+		db.exec(
+			"CREATE INDEX IF NOT EXISTS idx_dreaming_citation_purge_lookup ON evidence_citations(agent_id,derived_kind,derived_id,evidence_kind,evidence_id)",
+		);
 	const derived = [
 		["entity", "entities", ["id"]],
 		["attribute", "entity_attributes", ["id"]],
@@ -359,8 +370,22 @@ export function installEvidencePurgeLifecycle(db: MigrationDb): void {
 		["proposal", "ontology_proposals", ["id"]],
 		["contradiction", "ontology_contradictions", ["id"]],
 		["community", "entity_communities", ["id"]],
-		["head_entry", "memory_head_entries", ["entry_id"]],
-		["head_revision", "memory_head_revision_entries", ["revision", "entry_id"]],
+		[
+			"head_entry",
+			"memory_head_entries",
+			[db.prepare("SELECT 1 FROM pragma_table_info('memory_head_entries') WHERE name='id'").get() ? "id" : "entry_id"],
+		],
+		[
+			"head_revision",
+			"memory_head_revision_entries",
+			[
+				db.prepare("SELECT 1 FROM pragma_table_info('memory_head_revision_entries') WHERE name='revision_id'").get()
+					? "revision_id"
+					: "revision",
+				"entry_id",
+			],
+		],
+		["alias", "entity_aliases", ["id"]],
 		["telemetry", "memory_search_telemetry", ["id"]],
 		["telemetry", "session_recall_events", ["session_key", "context_epoch", "item_kind", "item_id"]],
 	] as const;

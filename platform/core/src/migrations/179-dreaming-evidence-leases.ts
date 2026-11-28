@@ -1,4 +1,5 @@
 import type { MigrationDb } from "./contract";
+import { installEvidencePurgeLifecycle } from "./177-classifications";
 import { compartmentFor } from "../compartment-shards";
 
 function partitionDreamingHistory(db: MigrationDb): void {
@@ -301,55 +302,19 @@ function upgradeDreamingChildren(db: MigrationDb): void {
 	}
 }
 
-function suspendDreamingPurgeTriggers(db: MigrationDb): { name: string; sql: string }[] {
-	return db
+function suspendDreamingPurgeTriggers(db: MigrationDb): void {
+	for (const row of db
 		.prepare(
-			"SELECT name,sql FROM sqlite_master WHERE type='trigger' AND (name GLOB '*_evidence_purge' OR name GLOB '*_citation_purge')",
+			"SELECT name FROM sqlite_master WHERE type='trigger' AND (name GLOB '*_evidence_purge' OR name GLOB '*_citation_purge')",
 		)
-		.all()
-		.map((row) => {
-			if (typeof row.name !== "string" || typeof row.sql !== "string")
-				throw new Error("Invalid evidence purge trigger");
-			db.exec(`DROP TRIGGER "${row.name.replaceAll('"', '""')}"`);
-			return { name: row.name, sql: row.sql };
-		});
-}
-
-function restoreDreamingPurgeTriggers(db: MigrationDb, triggers: readonly { name: string; sql: string }[]): void {
-	for (const trigger of triggers) {
-		let sql = trigger.sql
-			.replaceAll("memory_head_entries.entry_id", "memory_head_entries.id")
-			.replaceAll("memory_head_revision_entries.revision,", "memory_head_revision_entries.revision_id,")
-			.replaceAll("json_array(revision,entry_id)", "json_array(revision_id,entry_id)")
-			.replaceAll("json_array(old.revision,old.entry_id)", "json_array(old.revision_id,old.entry_id)")
-			.replaceAll(
-				"DELETE FROM memory_head_entries WHERE agent_id=old.agent_id AND entry_id IN",
-				"DELETE FROM memory_head_entries WHERE agent_id=old.agent_id AND id IN",
-			);
-		if (trigger.name === "memory_head_entries_citation_purge")
-			sql = sql.replaceAll("derived_id=old.entry_id", "derived_id=old.id");
-		for (const [table, kind, key] of [
-			["memories", "memory", "id"],
-			["session_transcripts", "transcript", "session_key"],
-			["memory_artifacts", "artifact", "source_path"],
-			["session_summaries", "summary", "id"],
-			["entity_attributes", "attribute", "id"],
-		] as const) {
-			if (trigger.name !== `${table}_evidence_purge` || sql.includes("DELETE FROM entity_aliases")) continue;
-			const marker = `DELETE FROM evidence_citations WHERE agent_id=old.agent_id AND evidence_kind='${kind}'`;
-			if (!sql.includes(marker)) throw new Error("Unknown evidence purge trigger layout");
-			const aliases = `DELETE FROM entity_aliases WHERE agent_id=old.agent_id AND id IN (SELECT derived_id FROM evidence_citations WHERE agent_id=old.agent_id AND derived_kind='alias' AND evidence_kind='${kind}' AND evidence_id=old.${key}) AND NOT EXISTS(SELECT 1 FROM evidence_citations c WHERE c.agent_id=old.agent_id AND c.derived_kind='alias' AND c.derived_id=entity_aliases.id AND NOT(c.evidence_kind='${kind}' AND c.evidence_id=old.${key})); `;
-			sql = sql.replace(marker, aliases + marker);
-		}
-		db.exec(sql);
+		.all()) {
+		if (typeof row.name !== "string") throw new Error("Invalid evidence purge trigger");
+		db.exec(`DROP TRIGGER "${row.name.replaceAll('"', '""')}"`);
 	}
-	db.exec(`CREATE TRIGGER IF NOT EXISTS entity_aliases_citation_purge AFTER DELETE ON entity_aliases BEGIN
-		DELETE FROM evidence_citations WHERE derived_kind='alias' AND derived_id=old.id AND agent_id=old.agent_id;
-	END; CREATE INDEX IF NOT EXISTS idx_dreaming_citation_purge_lookup ON evidence_citations(agent_id,derived_kind,derived_id,evidence_kind,evidence_id);`);
 }
 
 export function up(db: MigrationDb): void {
-	const purgeTriggers = suspendDreamingPurgeTriggers(db);
+	suspendDreamingPurgeTriggers(db);
 	for (const [table, column, declaration] of [
 		["ontology_proposals", "dreaming_pass_id", "TEXT"],
 		["entities", "dreaming_pass_id", "TEXT"],
@@ -488,7 +453,7 @@ export function up(db: MigrationDb): void {
 			) THEN RAISE(ABORT, 'compartment_mismatch') END;
 		END;`);
 	}
-	restoreDreamingPurgeTriggers(db, purgeTriggers);
+	installEvidencePurgeLifecycle(db);
 }
 
 function partitionMemoryHeads(db: MigrationDb): void {
