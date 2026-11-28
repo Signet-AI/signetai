@@ -97,7 +97,7 @@ interface SqliteDatabaseConstructor {
 
 interface JobExecutionContext {
 	readonly jobId: string;
-	readonly deadlineAt: number;
+	deadlineAt: number;
 	committed: boolean;
 }
 
@@ -1228,7 +1228,30 @@ export function runDbOwnerWorker(): void {
 			while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));
 		}
 		const { initDbAccessorAsync } = await import("./db-accessor");
-		const initialization = await initDbAccessorAsync(ownerDbPath, { agentsDir, deadlineAt: context?.deadlineAt });
+		let sequence = 0;
+		let lastProgressAt = 0;
+		const initialization = await initDbAccessorAsync(ownerDbPath, {
+			agentsDir,
+			deadlineAt: context?.deadlineAt,
+			onMigrationProgress:
+				context === undefined
+					? undefined
+					: (progress) => {
+							const now = Date.now();
+							if (progress.completedOperations !== 0 && progress.phase !== "complete" && now - lastProgressAt < 250)
+								return;
+							lastProgressAt = now;
+							send({ type: "migration_progress", jobId: context.jobId, sequence: ++sequence, progress });
+						},
+			onMigrationsComplete:
+				context === undefined
+					? undefined
+					: () => {
+							context.deadlineAt = Date.now() + 60_000;
+							send({ type: "migrations_complete", jobId: context.jobId });
+							return context.deadlineAt;
+						},
+		});
 		recallAccessorReady = true;
 		try {
 			const { refreshQueryPlannerStatisticsOnOpen } = await import("./query-planner-statistics");

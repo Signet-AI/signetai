@@ -110,6 +110,14 @@ Construction failure, malformed protocol input, owner exit, deadline abandonment
 
 No callback receives a database handle. No synchronous SQLite symbol is exported by the client or the recall seam. The owner module is the sanctioned synchronous site.
 
+## Migration startup
+
+The daemon binds its diagnostic HTTP surface before database initialization. While migrations run, `/health` and `/api/status` report `migrating`, `db: false`, and `dbOwner.migration` with the current version, name, phase, and completed database-operation count. This is observed work, not a row count or percentage. `/health/ready` returns 503 until startup finishes. Application work is unavailable: supplied credentials receive 503 without database-backed authentication, while missing credentials on protected team requests still receive the canonical 401 response. The diagnostic status contains no corpus content.
+
+The migration owner sends sequenced progress after completed database operations, throttled to one update per 250 ms plus phase transitions. These are not timer-only keepalives: a blocked native call cannot renew its own lease. Increasing progress suspends the ordinary 60-second initialization budget; that unchanged budget starts after migrations finish. Thirty seconds without new progress retires the owner once with `DB_OWNER_MIGRATION_STALLED`, preserves the backup, and fails startup instead of restarting automatically. A single native statement must finish within that observation window; longer backfills need bounded operations between progress updates.
+
+Migration transactions remain atomic. Restart skips committed migration versions; an interrupted version rolls back and repeats. Backup-copy checkpoints retain their existing resume behavior. The aggregate repair markers are not row-level resume cursors.
+
 ## Session transcript writes
 
 Async transcript upserts and live appends submit `session_transcript_write` on the foreground write lane. The payload carries the resolved agent, exact session key, transcript text, project, and an optional `append` flag; it never carries a callback or an abort signal. The owner calls the canonical `writeSessionTranscriptRow` inside one transaction, including the existing-content read and trailing-text deduplication for appends. The result is `written`, `skipped`, or `conflict`. Cancellation stays on the client, and an unavailable owner never falls back to a daemon-side write.

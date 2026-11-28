@@ -1,21 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { initDbAccessor, closeDbAccessor } from "../db-accessor";
 import { getDbOwner } from "../db-owner-runtime";
+import { prepareOwnerDaemonFixture } from "./isolated-owner-daemon-fixture";
 
-const root = process.env.SIGNET_PATH;
-if (!root) throw new Error("Isolated workspace required");
-mkdirSync(join(root, "data"), { recursive: true });
-mkdirSync(join(root, ".daemon", "logs"), { recursive: true });
-writeFileSync(join(root, "workspace-layout.json"), JSON.stringify({ version: 2 }));
-writeFileSync(
-	join(root, "agent.yaml"),
-	"version: 1\nconfigVersion: 9\nembedding:\n  provider: none\nharnesses: []\nauth:\n  mode: local\nmemory:\n  dreaming:\n    enabled: false\n  pipelineV2:\n    enabled: false\n    reranker:\n      enabled: false\n",
-);
-initDbAccessor(join(root, "data", "signet.db"), { agentsDir: root });
-await closeDbAccessor();
+const { root, endpoint } = await prepareOwnerDaemonFixture();
 await import("../daemon");
-const endpoint = `http://127.0.0.1:${process.env.SIGNET_PORT}`;
 const until = async (predicate: () => boolean | Promise<boolean>): Promise<void> => {
 	const deadline = Date.now() + 10000;
 	while (!(await predicate())) {
@@ -25,7 +12,8 @@ const until = async (predicate: () => boolean | Promise<boolean>): Promise<void>
 };
 await until(async () => {
 	try {
-		return (await fetch(`${endpoint}/health`)).ok;
+		const response = await fetch(`${endpoint}/health`);
+		return response.ok && (await response.json()).status === "healthy";
 	} catch {
 		return false;
 	}
@@ -93,6 +81,8 @@ for (const write of [false, true]) {
 		{ kind: "query", statement: { sql: "SELECT COUNT(*) n FROM supervision_writes", result: "get", readonly: true } },
 		{ operation: "organization.supervision-recovered", lane: "read", deadlineMs: 2000 },
 	).result;
+	const healthy = await (await fetch(`${endpoint}/health`)).json();
+	if (!healthy.db || healthy.status !== "healthy") throw new Error("Replacement did not restore healthy reads");
 	results.push({ write, previous, current: owner.health(), queuedOutcome, deadlineOutcome, recovered });
 }
 console.log(`SUPERVISION_RESULT ${JSON.stringify({ daemonPid: process.pid, health, results })}`);

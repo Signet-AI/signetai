@@ -183,17 +183,19 @@ export function mountHealthRoutes(app: Hono): void {
 		return c.json({
 			status: shuttingDown
 				? "shutting_down"
-				: ownerState === "closing"
-					? "degraded"
-					: !dbOk
+				: dbOwner?.initialization === "migrating"
+					? "migrating"
+					: ownerState === "closing"
 						? "degraded"
-						: workspace.status === "missing" || workspace.status === "incomplete"
+						: !dbOk
 							? "degraded"
-							: databaseIntegrity.state === "corrupt" ||
-									databaseIntegrity.state === "unavailable" ||
-									databaseIntegrity.state === "degraded"
+							: workspace.status === "missing" || workspace.status === "incomplete"
 								? "degraded"
-								: "healthy",
+								: databaseIntegrity.state === "corrupt" ||
+										databaseIntegrity.state === "unavailable" ||
+										databaseIntegrity.state === "degraded"
+									? "degraded"
+									: "healthy",
 			uptime: process.uptime(),
 			pid: process.pid,
 			version: CURRENT_VERSION,

@@ -34,7 +34,7 @@ import {
 export type { DbOwnerLane, DbOwnerRequest, DbOwnerWorkloadClass } from "./db-owner-protocol";
 
 export type DbOwnerHealthState = "starting" | "ready" | "dead" | "failed" | "closed";
-export type DbOwnerInitializationState = "not_started" | "running" | "ready" | "failed";
+export type DbOwnerInitializationState = "not_started" | "running" | "migrating" | "ready" | "failed";
 export const MAX_DB_OWNER_PENDING_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
 export const MAX_DB_OWNER_FOREGROUND_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
 export const MAX_DB_OWNER_MAINTENANCE_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
@@ -44,6 +44,7 @@ export const MAX_DB_OWNER_RESULT_BYTES = DB_OWNER_MAX_RESULT_BYTES;
 const dbOwnerWallClockNow = Date.now.bind(Date);
 export const DB_OWNER_LIVENESS_STALE_MS = 5_000;
 export const DB_OWNER_HARD_DEADLINE_GRACE_MS = 1_000;
+export const DB_OWNER_MIGRATION_STALL_MS = 30_000;
 const DB_OWNER_CLOSE_WAIT_MS = 1_000;
 const DB_OWNER_CLOSE_FORCE_KILL_AFTER_MS = 250;
 
@@ -62,6 +63,7 @@ export interface DbOwnerLaneHealth {
 }
 
 export interface DbOwnerHealth {
+	readonly migration?: import("@signet/core").MigrationProgress | null;
 	readonly lastMeasuredAtMs?: number | null;
 	readonly state: DbOwnerHealthState;
 	readonly initialization: DbOwnerInitializationState;
@@ -139,6 +141,16 @@ export class DbOwnerDeadlineError extends DbOwnerError {
 	}
 }
 
+export class DbOwnerMigrationStalledError extends DbOwnerError {
+	constructor(version: number) {
+		super(
+			"DB_OWNER_MIGRATION_STALLED",
+			`Migration ${version} made no observable database progress for ${DB_OWNER_MIGRATION_STALL_MS}ms`,
+		);
+		this.name = "DB_OWNER_MIGRATION_STALLED";
+	}
+}
+
 export class DbOwnerRetiredError extends DbOwnerError {
 	constructor(jobId: string) {
 		super("owner_retired", `DB owner generation retired after job ${jobId} exceeded its hard deadline`);
@@ -190,7 +202,10 @@ interface PendingJob<Result> {
 	readonly job: DbOwnerJob;
 	readonly resolve: (value: Result | PromiseLike<Result>) => void;
 	readonly reject: (reason?: unknown) => void;
-	readonly timer: ReturnType<typeof setTimeout>;
+	timer: ReturnType<typeof setTimeout>;
+	readonly expire: () => void;
+	progressSequence: number;
+	migrationsComplete: boolean;
 	readonly resolveMetrics: (value: DbOwnerJobMetrics | undefined) => void;
 	settled: boolean;
 	dispatched: boolean;
@@ -283,6 +298,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let livenessTimer: ReturnType<typeof setInterval> | null = null;
 	let livenessPending = false;
 	let initialization: DbOwnerInitializationState = "not_started";
+	let migration: import("@signet/core").MigrationProgress | null = null;
 	let initializationAgentsDir: string | undefined;
 	let recovery: Promise<void> | null = null;
 	const hardDeadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -334,6 +350,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		return {
 			state,
 			initialization,
+			migration,
 			lastMeasuredAtMs,
 			databaseReady: initialization === "ready",
 			pid,
@@ -416,7 +433,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		startPromise = null;
 		state = closed ? "closed" : nextState;
 		lastError = error.message;
-		if (initialization === "running") initialization = "failed";
+		if (initialization === "running" || initialization === "migrating") initialization = "failed";
 		const rejectStartup = startupReject;
 		startupResolve = null;
 		startupReject = null;
@@ -469,6 +486,39 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		livenessTimer.unref();
 	}
 
+	function armHardDeadline(owner: ChildProcess, jobId: string, deadlineAt: number): void {
+		const previous = hardDeadlineTimers.get(jobId);
+		if (previous !== undefined) clearTimeout(previous);
+		const timer = setTimeout(
+			() => {
+				if (closed || child !== owner || !hardDeadlineTimers.has(jobId)) return;
+				const reinitialize = initialization === "ready";
+				retireOwner(new DbOwnerRetiredError(jobId), owner, "failed");
+				initialization = "not_started";
+				const replacement = (async () => {
+					await start();
+					if (reinitialize && !closed) await initialize(initializationAgentsDir);
+				})();
+				recovery = replacement;
+				void replacement.then(
+					() => {
+						if (recovery === replacement) recovery = null;
+					},
+					(error: unknown) => {
+						if (recovery === replacement) recovery = null;
+						if (!closed) {
+							state = "failed";
+							initialization = "failed";
+							lastError = error instanceof Error ? error.message : String(error);
+						}
+					},
+				);
+			},
+			Math.max(0, deadlineAt + DB_OWNER_HARD_DEADLINE_GRACE_MS - dbOwnerWallClockNow()),
+		);
+		hardDeadlineTimers.set(jobId, timer);
+	}
+
 	function handleEvent(owner: ChildProcess, event: DbOwnerEvent): void {
 		if (child !== owner) return;
 		authorityVersion =
@@ -493,35 +543,59 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			const entry = pending.get(event.jobId);
 			if (entry !== undefined) {
 				activeJobId = event.jobId;
-				const timer = setTimeout(
-					() => {
-						if (closed || child !== owner || !hardDeadlineTimers.has(event.jobId)) return;
-						const reinitialize = initialization === "ready";
-						retireOwner(new DbOwnerRetiredError(event.jobId), owner, "failed");
-						initialization = "not_started";
-						const replacement = (async () => {
-							await start();
-							if (reinitialize && !closed) await initialize(initializationAgentsDir);
-						})();
-						recovery = replacement;
-						void replacement.then(
-							() => {
-								if (recovery === replacement) recovery = null;
-							},
-							(error: unknown) => {
-								if (recovery === replacement) recovery = null;
-								if (!closed) {
-									state = "failed";
-									initialization = "failed";
-									lastError = error instanceof Error ? error.message : String(error);
-								}
-							},
-						);
-					},
-					Math.max(0, entry.job.deadlineAt + DB_OWNER_HARD_DEADLINE_GRACE_MS - dbOwnerWallClockNow()),
-				);
-				hardDeadlineTimers.set(event.jobId, timer);
+				armHardDeadline(owner, event.jobId, entry.job.deadlineAt);
 			}
+			return;
+		}
+		if (event.type === "migration_progress") {
+			const entry = pending.get(event.jobId);
+			if (
+				entry?.job.request.kind !== "initialize" ||
+				entry.migrationsComplete ||
+				event.sequence <= entry.progressSequence
+			)
+				return;
+			if (
+				!Number.isSafeInteger(event.sequence) ||
+				!Number.isSafeInteger(event.progress.version) ||
+				event.progress.version < 1 ||
+				typeof event.progress.name !== "string" ||
+				event.progress.name.length > 256 ||
+				(event.progress.phase !== "running" && event.progress.phase !== "complete") ||
+				!Number.isSafeInteger(event.progress.completedOperations) ||
+				event.progress.completedOperations < 0
+			)
+				throw new Error("Invalid migration progress");
+			if (
+				migration !== null &&
+				(event.progress.version < migration.version ||
+					(event.progress.version === migration.version &&
+						event.progress.completedOperations <= migration.completedOperations &&
+						event.progress.phase === migration.phase))
+			)
+				return;
+			entry.progressSequence = event.sequence;
+			migration = event.progress;
+			initialization = "migrating";
+			clearTimeout(entry.timer);
+			const hardTimer = hardDeadlineTimers.get(event.jobId);
+			if (hardTimer !== undefined) clearTimeout(hardTimer);
+			hardDeadlineTimers.delete(event.jobId);
+			entry.timer = setTimeout(() => {
+				if (child !== owner || closed) return;
+				retireOwner(new DbOwnerMigrationStalledError(event.progress.version), owner, "failed");
+			}, DB_OWNER_MIGRATION_STALL_MS);
+			return;
+		}
+		if (event.type === "migrations_complete") {
+			const entry = pending.get(event.jobId);
+			if (entry?.job.request.kind !== "initialize" || entry.migrationsComplete) return;
+			entry.migrationsComplete = true;
+			migration = null;
+			initialization = "running";
+			clearTimeout(entry.timer);
+			entry.timer = setTimeout(entry.expire, 60_000);
+			armHardDeadline(owner, event.jobId, dbOwnerWallClockNow() + 60_000);
 			return;
 		}
 		if (event.type === "fatal") {
@@ -835,7 +909,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			resolveMetrics = resolve;
 		});
 		const result = new Promise<Result>((resolve, reject) => {
-			const timer = setTimeout(() => {
+			const expire = (): void => {
 				const entry = pending.get(job.id);
 				if (entry === undefined || entry.settled) return;
 				lastError = `deadline exceeded for ${job.id}`;
@@ -857,8 +931,12 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				if (dispatched && owner !== null && state === "ready") {
 					void write(owner, { type: "cancel", jobId: job.id }).catch(() => {});
 				}
-			}, submitOptions.deadlineMs);
+			};
+			const timer = setTimeout(expire, submitOptions.deadlineMs);
 			pendingJob = {
+				expire,
+				progressSequence: 0,
+				migrationsComplete: false,
 				job,
 				resolve,
 				reject,
@@ -1014,11 +1092,12 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	async function initialize(agentsDir?: string): Promise<DbOwnerInitializationResult> {
 		initializationAgentsDir = agentsDir;
+		migration = null;
 		const handle = submit<DbOwnerInitializationResult>(
 			{ kind: "initialize", agentsDir },
 			{ operation: "db.initialize", lane: "maintenance", deadlineMs: 60_000, estimatedWorkUnits: 10_000 },
 		);
-		return await awaitResult<DbOwnerInitializationResult>(handle, 60_000);
+		return await handle.result;
 	}
 
 	return {
