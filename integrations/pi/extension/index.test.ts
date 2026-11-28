@@ -1357,6 +1357,7 @@ describe("SignetPiExtension", () => {
 			port: 0,
 			async fetch(req) {
 				const path = new URL(req.url).pathname;
+				if (req.method === "HEAD" && path === "/") return new Response(null);
 				const body = req.method === "POST" ? ((await req.json()) as unknown) : undefined;
 				requests.push({ path, body });
 
@@ -1371,6 +1372,7 @@ describe("SignetPiExtension", () => {
 		});
 		servers.push(server);
 		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+		await fetch(`http://127.0.0.1:${server.port}`, { method: "HEAD" });
 
 		const handlers: HandlerMap = {};
 		const pi = {
