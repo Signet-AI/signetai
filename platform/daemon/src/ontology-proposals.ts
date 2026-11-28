@@ -3001,7 +3001,7 @@ export function proposalCitationsInDb(
 	return citations;
 }
 
-function proposalTargetCitationsInDb(
+export function proposalTargetCitationsInDb(
 	db: WriteDb,
 	targets: readonly OntologyMutationTarget[],
 	partition: DreamingPartition,

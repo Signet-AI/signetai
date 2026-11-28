@@ -2,7 +2,7 @@ import { resolveNamedEntity } from "./knowledge-graph";
 import { knowledgeReadDb, type KnowledgeReadDb } from "./knowledge-graph-hygiene";
 import { readScopeSql, type ReadScope } from "./read-scope";
 import { dreamingReadScopeInDb, recordSemanticCitationsInTx, semanticWritePartitionInDb } from "./classification-owner";
-import { proposalCitationsInDb } from "./ontology-proposals";
+import { proposalCitationsInDb, proposalTargetCitationsInDb } from "./ontology-proposals";
 import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
 import type { WriteAuthor } from "./auth/audit-owner";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -335,6 +335,22 @@ function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): Epi
 	if (scope.organizationMode && citations.length === 0)
 		throw new OntologyAssertionError("Evidence source was not found", 404);
 	const partition = semanticWritePartitionInDb(db, input.agentId, scope, citations, parents);
+	const inheritedCitations = proposalTargetCitationsInDb(
+		db,
+		[
+			{ table: "entities", id: subject.id },
+			...(claimAttributeId === null ? [] : [{ table: "entity_attributes" as const, id: claimAttributeId }]),
+			...(supersedesAssertionId === null
+				? []
+				: [{ table: "epistemic_assertions" as const, id: supersedesAssertionId }]),
+		],
+		partition,
+	);
+	citations.push(...inheritedCitations);
+	const storedEvidence = [
+		...evidence,
+		...inheritedCitations.map((citation) => ({ source_kind: citation.kind, source_id: citation.id })),
+	];
 	const now = new Date().toISOString();
 	const id = crypto.randomUUID();
 	db.prepare(
@@ -355,7 +371,7 @@ function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): Epi
 		trim(input.speaker),
 		assertedAt,
 		clamp01(input.confidence),
-		JSON.stringify(evidence),
+		JSON.stringify(storedEvidence),
 		sourceKind,
 		sourceId,
 		trim(input.sourcePath),

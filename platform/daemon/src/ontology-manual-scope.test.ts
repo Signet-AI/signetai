@@ -165,6 +165,49 @@ describe("manual ontology compartment boundaries", () => {
 		).toEqual([{ evidence_kind: "memory", evidence_id: "m-hr" }]);
 	});
 
+	it("keeps assertion target lineage through reclassification and rebuild", async () => {
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(`
+		INSERT INTO classifications(id,name) VALUES('cls_hr','HR'),('cls_new','New');
+		INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('memory','m-hr','team','cls_hr','test','now');
+		INSERT INTO entities(id,name,entity_type,agent_id,compartment_id,created_at,updated_at) VALUES('e-hr','Classified subject','project','team',91,'now','now');
+		INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('entity','e-hr','team','memory','m-hr');
+		INSERT INTO memories(id,content,memory_kind,visibility,agent_id,created_at,updated_at) VALUES('m-public','Public observation.','episodic','normal','team','now','now');`),
+		);
+		const assertion = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "team",
+			readScope: readableScope,
+			entityId: "e-hr",
+			predicate: "observed",
+			content: "Public observation about a classified subject.",
+			evidence: [{ source_kind: "memory", source_id: "m-public", quote: "Public observation." }],
+		});
+		getDbAccessor().withWriteTx((db) =>
+			db.exec(
+				"INSERT INTO classification_assignments(target_kind,target_id,agent_id,classification_id,applied_by,applied_at) VALUES('memory','m-hr','team','cls_new','test','now')",
+			),
+		);
+		await getDbAccessor().withWriteDbAsync((db) => executeClassification(db, { op: "rebuild", agentId: "team" }));
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT a.compartment_id=m.compartment_id AS inherited FROM epistemic_assertions a JOIN memories m ON m.id='m-hr' AND m.agent_id=a.agent_id WHERE a.id=?",
+					)
+					.get(assertion.id),
+			),
+		).toEqual({ inherited: 1 });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT evidence_id FROM evidence_citations WHERE derived_kind='assertion' AND derived_id=? ORDER BY evidence_id",
+					)
+					.all(assertion.id),
+			),
+		).toEqual([{ evidence_id: "m-hr" }, { evidence_id: "m-public" }]);
+	});
+
 	it("refuses a NULL-label assertion mutation pointing at a classified subject", () => {
 		getDbAccessor().withWriteTx((db) =>
 			db.exec(`INSERT INTO entities(id,name,entity_type,agent_id,compartment_id,created_at,updated_at) VALUES ('e-hr','HR','project','team',91,'now','now');
