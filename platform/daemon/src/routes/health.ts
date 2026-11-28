@@ -176,7 +176,7 @@ export function mountHealthRoutes(app: Hono): void {
 		const checkedAtMs = dbOwner?.lastMeasuredAtMs ?? null;
 		const ageMs = checkedAtMs === null ? null : Math.max(0, Date.now() - checkedAtMs);
 		const dbOwnerLiveness = { checkedAtMs, ageMs, stale: ageMs === null || ageMs > DB_OWNER_LIVENESS_STALE_MS };
-		dbOk = dbOwner?.state === "ready" && !dbOwnerLiveness.stale;
+		dbOk = dbOwner?.state === "ready" && dbOwner.databaseReady && !dbOwnerLiveness.stale;
 		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
 		const eventLoop = getEventLoopLiveness();
 		const ownerState = getDbOwnerMaintenanceState();

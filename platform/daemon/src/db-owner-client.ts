@@ -43,6 +43,7 @@ export const MAX_DB_OWNER_DEADLINE_MS = DB_OWNER_MAX_DEADLINE_MS;
 export const MAX_DB_OWNER_RESULT_BYTES = DB_OWNER_MAX_RESULT_BYTES;
 const dbOwnerWallClockNow = Date.now.bind(Date);
 export const DB_OWNER_LIVENESS_STALE_MS = 5_000;
+export const DB_OWNER_HARD_DEADLINE_GRACE_MS = 1_000;
 const DB_OWNER_CLOSE_WAIT_MS = 1_000;
 const DB_OWNER_CLOSE_FORCE_KILL_AFTER_MS = 250;
 
@@ -135,6 +136,13 @@ export class DbOwnerDeadlineError extends DbOwnerError {
 	constructor(jobId: string) {
 		super("DB_OWNER_DEADLINE", `DB owner job ${jobId} exceeded its deadline`);
 		this.name = "DbOwnerDeadlineError";
+	}
+}
+
+export class DbOwnerRetiredError extends DbOwnerError {
+	constructor(jobId: string) {
+		super("owner_retired", `DB owner generation retired after job ${jobId} exceeded its hard deadline`);
+		this.name = "DbOwnerRetiredError";
 	}
 }
 
@@ -274,6 +282,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let livenessTimer: ReturnType<typeof setInterval> | null = null;
 	let livenessPending = false;
 	let initialization: DbOwnerInitializationState = "not_started";
+	let initializationAgentsDir: string | undefined;
+	let recovery: Promise<void> | null = null;
+	const hardDeadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let sequence = 0;
 	const input = new DbOwnerLineBuffer();
 	let stderr = "";
@@ -391,6 +402,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		dispatchedOnly = false,
 	): void {
 		if (owner !== null && child !== owner) return;
+		for (const timer of hardDeadlineTimers.values()) clearTimeout(timer);
+		hardDeadlineTimers.clear();
 		const retired = child;
 		const retiredClose = activeChildClose;
 		child = null;
@@ -476,7 +489,38 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			return;
 		}
 		if (event.type === "started") {
-			if (pending.has(event.jobId)) activeJobId = event.jobId;
+			const entry = pending.get(event.jobId);
+			if (entry !== undefined) {
+				activeJobId = event.jobId;
+				const timer = setTimeout(
+					() => {
+						if (closed || child !== owner || !hardDeadlineTimers.has(event.jobId)) return;
+						const reinitialize = initialization === "ready";
+						retireOwner(new DbOwnerRetiredError(event.jobId), owner, "failed");
+						initialization = "not_started";
+						const replacement = (async () => {
+							await start();
+							if (reinitialize && !closed) await initialize(initializationAgentsDir);
+						})();
+						recovery = replacement;
+						void replacement.then(
+							() => {
+								if (recovery === replacement) recovery = null;
+							},
+							(error: unknown) => {
+								if (recovery === replacement) recovery = null;
+								if (!closed) {
+									state = "failed";
+									initialization = "failed";
+									lastError = error instanceof Error ? error.message : String(error);
+								}
+							},
+						);
+					},
+					Math.max(0, entry.job.deadlineAt + DB_OWNER_HARD_DEADLINE_GRACE_MS - dbOwnerWallClockNow()),
+				);
+				hardDeadlineTimers.set(event.jobId, timer);
+			}
 			return;
 		}
 		if (event.type === "fatal") {
@@ -489,6 +533,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			);
 			return;
 		}
+		const hardTimer = hardDeadlineTimers.get(event.jobId);
+		if (hardTimer !== undefined) clearTimeout(hardTimer);
+		hardDeadlineTimers.delete(event.jobId);
 		const pendingJob = pending.get(event.jobId);
 		pendingJob?.resolveMetrics(event.metrics);
 		const abandonedResolveMetrics = abandonedMetrics.get(event.jobId);
@@ -666,7 +713,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	}
 
 	function dispatch(jobId: string): void {
-		void start().then(
+		const prepared =
+			recovery !== null && pending.get(jobId)?.job.request.kind !== "initialize" ? recovery.then(start) : start();
+		void prepared.then(
 			() => {
 				const entry = pending.get(jobId);
 				if (entry === undefined || entry.settled) return;
@@ -896,6 +945,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	async function close(): Promise<void> {
 		if (closePromise !== null) return closePromise;
+		for (const timer of hardDeadlineTimers.values()) clearTimeout(timer);
+		hardDeadlineTimers.clear();
 		if (livenessTimer !== null) clearInterval(livenessTimer);
 		livenessTimer = null;
 		migrationControl.beginDrain();
@@ -961,6 +1012,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	}
 
 	async function initialize(agentsDir?: string): Promise<DbOwnerInitializationResult> {
+		initializationAgentsDir = agentsDir;
 		const handle = submit<DbOwnerInitializationResult>(
 			{ kind: "initialize", agentsDir },
 			{ operation: "db.initialize", lane: "maintenance", deadlineMs: 60_000, estimatedWorkUnits: 10_000 },
