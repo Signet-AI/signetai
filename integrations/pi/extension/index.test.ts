@@ -181,6 +181,7 @@ describe("recallMemories", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				capturedMethod = req.method;
 				capturedPath = new URL(req.url).pathname;
 				if (capturedPath === "/api/memory/recall") {
@@ -263,6 +264,7 @@ describe("recallMemories", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				capturedBody = (await req.json()) as Record<string, unknown>;
 				return Response.json({ results: [] });
 			},
@@ -281,6 +283,7 @@ describe("Signet search helpers", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				capturedPath = new URL(req.url).pathname;
 				capturedBody = (await req.json()) as Record<string, unknown>;
 				return Response.json({ results: [] });
@@ -310,6 +313,7 @@ describe("Signet search helpers", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				capturedPath = new URL(req.url).pathname;
 				capturedBody = (await req.json()) as Record<string, unknown>;
 				return Response.json({ results: [{ sessionKey: "session-pi" }] });
@@ -369,6 +373,7 @@ describe("rememberContent", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				capturedMethod = req.method;
 				capturedPath = new URL(req.url).pathname;
 				capturedBody = (await req.json()) as Record<string, unknown>;
@@ -388,11 +393,13 @@ describe("rememberContent", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				capturedBody = (await req.json()) as Record<string, unknown>;
 				return new Response(null, { status: 200 });
 			},
 		});
 		servers.push(server);
+		await fetch(`http://127.0.0.1:${server.port}`, { method: "HEAD" });
 
 		await rememberContent(`http://127.0.0.1:${server.port}`, "test memory", {
 			critical: true,
@@ -428,8 +435,8 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
-				if (new URL(req.url).pathname === "/health" || (req.method === "HEAD" && new URL(req.url).pathname === "/"))
-					return new Response(null, { status: 200 });
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
+				if (new URL(req.url).pathname === "/health") return new Response(null, { status: 200 });
 				bodies.push(await req.json());
 				return Response.json({ id: "memory" });
 			},
@@ -521,6 +528,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
 				requests.push({ method: req.method, path, body });
@@ -585,6 +593,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
 				requests.push({ path, body });
@@ -648,6 +657,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
 				requests.push({ method: req.method, path, body });
@@ -704,6 +714,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
 				requests.push({ method: req.method, path, body });
@@ -805,6 +816,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/health") return new Response(null, { status: 200 });
 				if (path === "/api/memory/recall") {
@@ -886,6 +898,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/health") return new Response(null, { status: 200 });
 				if (path === "/api/memory/recall") {
@@ -955,6 +968,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/health") return new Response(null, { status: 200 });
 				if (path === "/api/memory/recall") {
@@ -1070,6 +1084,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/api/hooks/session-start") {
 					return Response.json({
@@ -1169,6 +1184,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/api/hooks/session-start") return Response.json({ dynamicContext: "session-context-content" });
 				if (path === "/api/hooks/user-prompt-submit") {
@@ -1225,6 +1241,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/api/hooks/session-start") return Response.json({});
 				if (path === "/api/hooks/user-prompt-submit") {
@@ -1287,6 +1304,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				if (path === "/api/hooks/session-start") return Response.json({});
 				if (path === "/api/hooks/user-prompt-submit") {
@@ -1356,8 +1374,8 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
-				if (req.method === "HEAD" && path === "/") return new Response(null);
 				const body = req.method === "POST" ? ((await req.json()) as unknown) : undefined;
 				requests.push({ path, body });
 
@@ -1433,6 +1451,7 @@ describe("SignetPiExtension", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const path = new URL(req.url).pathname;
 				const body = req.method === "POST" ? ((await req.json()) as unknown) : undefined;
 				requests.push({ path, body });
@@ -1512,6 +1531,7 @@ describe("collaboration tools", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
+				if (req.method === "HEAD" && new URL(req.url).pathname === "/") return new Response(null);
 				const url = new URL(req.url);
 				if (url.pathname === "/health" || (url.pathname === "/" && req.method === "HEAD"))
 					return new Response(null, { status: 200 });
