@@ -3,15 +3,77 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chmod, mkdtemp, mkdir, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { workspaceSocketPath } from "@signet/core/local-endpoint";
+import { Command } from "commander";
+import { createCliNodeTransport } from "./socket-transport.js";
+import { registerOrganizationTarget } from "./organization-target.js";
 import { createDaemonClient } from "./daemon.js";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+	registerOrganizationTarget(new Command());
 });
 
 describe("createDaemonClient", () => {
+	test("all shared request forms automatically use the owned workspace socket", async () => {
+		const root = await mkdtemp(join(tmpdir(), ""));
+		const previousRuntime = process.env.XDG_RUNTIME_DIR;
+		const previousPath = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
+		const previousUrl = process.env.SIGNET_DAEMON_URL;
+		process.env.XDG_RUNTIME_DIR = root;
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+		const path = workspaceSocketPath(root);
+		await mkdir(join(root, "signet"), { mode: 0o700 });
+		const server = createServer((_req, res) => {
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ transport: "socket" }));
+		});
+		try {
+			await new Promise<void>((resolve) => server.listen(path, resolve));
+			await chmod(path, 0o600);
+			const client = createDaemonClient(1, root);
+			expect(await client.fetchDaemonResult("/api/git/status")).toEqual({ ok: true, data: { transport: "socket" } });
+			expect(await client.secretApiCall("POST", "/api/secrets/exec", { command: "test" })).toEqual({
+				ok: true,
+				data: { transport: "socket" },
+			});
+			const stream = await client.fetchDaemonStream("/stream");
+			expect(stream.ok).toBe(true);
+			if (!stream.ok) throw new Error("Socket stream failed");
+			expect(await stream.response.json()).toEqual({ transport: "socket" });
+			const node = createCliNodeTransport({
+				url: "http://127.0.0.1:1",
+				origin: "http://127.0.0.1:1",
+				remote: false,
+				credential: { source: "none", get: async () => null },
+			});
+			expect(await node.get<{ transport: string }>("/api/org/remote-features")).toEqual({ transport: "socket" });
+			const program = new Command();
+			registerOrganizationTarget(program);
+			program.command("probe").action(async () => {
+				globalThis.fetch = async () => Response.json({ transport: "tcp" });
+				expect(await client.fetchDaemonResult("/api/git/status")).toEqual({ ok: true, data: { transport: "tcp" } });
+			});
+			await program.parseAsync(["--local", "--no-socket", "probe"], { from: "user" });
+			await chmod(path, 0o666);
+			registerOrganizationTarget(new Command());
+			await expect(client.fetchDaemonResult("/api/git/status")).rejects.toThrow("Unsafe local socket");
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+			else process.env.SIGNET_PATH = previousPath;
+			if (previousRuntime === undefined) Reflect.deleteProperty(process.env, "XDG_RUNTIME_DIR");
+			else process.env.XDG_RUNTIME_DIR = previousRuntime;
+			if (previousUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+			else process.env.SIGNET_DAEMON_URL = previousUrl;
+			await rm(root, { recursive: true, force: true });
+		}
+	});
 	test("fetchDaemonResult sends SIGNET_API_KEY as bearer auth", async () => {
 		const previous = process.env.SIGNET_API_KEY;
 		process.env.SIGNET_API_KEY = "sig_sk_test_secret";

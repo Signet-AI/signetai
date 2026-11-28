@@ -11,6 +11,7 @@ import {
 export interface CliTargetOptions {
 	readonly json?: boolean;
 	readonly local?: boolean;
+	readonly socket?: string | false;
 	readonly org?: boolean;
 	readonly url?: string;
 	readonly agent?: string;
@@ -20,6 +21,10 @@ export interface CliTargetOptions {
 let selected: ResolvedTarget | undefined;
 let transport: NodeTransport | undefined;
 let selectedAgent: string | undefined;
+let selectedSocket: string | false | undefined;
+export function cliSocket(): string | false | undefined {
+	return selectedSocket;
+}
 export function cliTarget(): ResolvedTarget | undefined {
 	return selected;
 }
@@ -86,12 +91,15 @@ function registerTargetFlags(command: Command): void {
 		["local", "--local", "Use the local workspace"],
 		["url", "--url <url>", "Override the instance URL"],
 		["agent", "--agent <id>", "Agent for this request"],
+		["socket", "--socket <path>", "Use a private local daemon socket"],
 		["nonInteractive", "--non-interactive", "Never open a browser or prompt"],
 	] as const) {
 		if (!command.options.some((option) => option.attributeName() === key)) command.option(flags, description);
 		const value = inherited?.[key];
 		if (value !== undefined) command.setOptionValueWithSource(key, value, "cli");
 	}
+	if (!command.options.some((option) => option.long === "--no-socket"))
+		command.option("--no-socket", "Force TCP instead of the local socket");
 	command.hook("preSubcommand", (_parent, child) => registerTargetFlags(child));
 }
 const targetOwningCommands = new Set([
@@ -170,6 +178,9 @@ const remoteCommands = new Set([
 	"auth devices rename",
 	"auth sessions",
 	"auth sessions revoke",
+	"org remote-features list",
+	"org remote-features allow",
+	"org remote-features deny",
 	"org users list",
 	"org users invite",
 	"org users role",
@@ -195,6 +206,7 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 	selected = undefined;
 	transport = undefined;
 	selectedAgent = undefined;
+	selectedSocket = undefined;
 	registerTargetFlags(program);
 	program.hook("preAction", async (_root, command) => {
 		for (const name of ["json", "nonInteractive"]) {
@@ -210,6 +222,9 @@ export function registerOrganizationTarget(program: Command, deps: ResolveTarget
 			throw new SignetError("Browser opening is disabled by --non-interactive", "non_interactive");
 		selected = await resolveCliTarget({ ...options, url: options.join ?? options.url }, deps);
 		selectedAgent = options.agent;
+		selectedSocket = options.socket;
+		if (selected.remote && typeof selectedSocket === "string")
+			throw new Error("--socket cannot target a remote instance");
 		transport = selected.remote ? new NodeTransport(selected, { env: deps.env }) : undefined;
 		if (selected.remote && top.name() === "import" && !selectedAgent)
 			throw new Error("Organization imports require --agent <id>.");

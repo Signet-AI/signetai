@@ -24,6 +24,7 @@ export interface RequestOptions extends RequestControl {
 }
 export interface TransportConfig {
 	readonly baseUrl: string;
+	readonly fetch?: (url: string, options: RequestInit) => Promise<Response>;
 	readonly timeoutMs?: number;
 	readonly retries?: number;
 	readonly retryDelayMs?: number;
@@ -180,7 +181,7 @@ export class SignetTransport {
 					}
 					fetching = true;
 					const response = await abortable(
-						fetch(url, {
+						(this.config.fetch ?? fetch)(url.toString(), {
 							method,
 							headers,
 							body,

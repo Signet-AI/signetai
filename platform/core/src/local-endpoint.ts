@@ -8,7 +8,7 @@ export function workspaceSocketPath(
 ): string {
 	if (process.platform === "win32" || !process.getuid)
 		throw new Error("Current-user-only local endpoint unavailable on Windows");
-	const hash = createHash("sha256").update(resolve(workspace)).digest("hex").slice(0, 16);
+	const hash = createHash("sha256").update(resolve(workspace)).digest("hex").slice(0, 24);
 	const limit = process.platform === "darwin" ? 104 : 108;
 	const runtime = env.XDG_RUNTIME_DIR;
 	if (runtime) {
