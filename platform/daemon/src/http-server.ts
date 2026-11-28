@@ -49,7 +49,14 @@ export function createSignetHttpServer(opts: SignetHttpServerOptions): ReturnTyp
 				"x-signet-os-user",
 			])
 				request.headers.delete(header);
-			return opts.fetch(request, env);
+			const bodyless = request.method === "GET" || request.method === "HEAD";
+			const native = new Request(request.url, {
+				method: request.method,
+				headers: request.headers,
+				signal: request.signal,
+				...(bodyless ? {} : { body: request.body, duplex: "half" }),
+			});
+			return opts.fetch(native, env);
 		},
 	});
 	const state: HttpLifecycle = { pending: new Set(), closeWhenIdle: null, closing: null };
